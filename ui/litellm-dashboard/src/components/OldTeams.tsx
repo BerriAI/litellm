@@ -3,12 +3,7 @@ import AvailableTeamsPanel from "@/components/team/available_teams";
 import TeamInfoView from "@/components/team/TeamInfo";
 import TeamSSOSettings from "@/components/TeamSSOSettings";
 import { isProxyAdminRole } from "@/utils/roles";
-import {
-  InfoCircleOutlined,
-  PlusOutlined,
-  TeamOutlined,
-  ReloadOutlined,
-} from "@ant-design/icons";
+import { Info as InfoCircleOutlined, Plus as PlusOutlined, Users as TeamOutlined, RefreshCcw as ReloadOutlined } from "lucide-react";
 // eslint-disable-next-line litellm-ui/no-banned-ui-imports
 import {
   Accordion,

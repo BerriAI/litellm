@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useQuery, keepPreviousData } from "@tanstack/react-query";
 import { Table, Tag, Input, Select, Button, Pagination, Spin } from "antd";
-import { ReloadOutlined, LoadingOutlined } from "@ant-design/icons";
+import { RefreshCcw as ReloadOutlined, Loader2 as LoadingOutlined } from "lucide-react";
 import type { ColumnsType } from "antd/es/table";
 import moment from "moment";
 import { uiAuditLogsCall } from "../networking";
@@ -263,7 +263,7 @@ export default function AuditLogs({
             {/* Pagination + refresh pushed to the right */}
             <div className="ml-auto flex items-center gap-2">
               <Button
-                icon={<ReloadOutlined spin={query.isFetching} />}
+                icon={<ReloadOutlined className="animate-spin" />}
                 onClick={() => query.refetch()}
                 disabled={query.isFetching}
               />
@@ -287,7 +287,7 @@ export default function AuditLogs({
           rowKey="id"
           loading={{
             spinning: query.isLoading,
-            indicator: <Spin indicator={<LoadingOutlined spin />} size="small" />,
+            indicator: <Spin indicator={<LoadingOutlined className="animate-spin" />} size="small" />,
           }}
           size="small"
           pagination={false}

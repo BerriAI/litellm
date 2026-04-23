@@ -2,7 +2,7 @@
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { Spin, Input, Button, Skeleton } from "antd";
-import { SearchOutlined, ArrowLeftOutlined, RightOutlined, ToolOutlined, CheckCircleOutlined } from "@ant-design/icons";
+import { Search as SearchOutlined, ArrowLeft as ArrowLeftOutlined, ChevronRight as RightOutlined, Wrench as ToolOutlined, CheckCircle2 as CheckCircleOutlined } from "lucide-react";
 import { deleteMCPOAuthUserCredential, fetchMCPServers, getMCPOAuthUserCredentialStatus, listMCPTools } from "../networking";
 import { AUTH_TYPE, MCPServer, MCPTool, handleTransport } from "../mcp_tools/types";
 import MessageManager from "@/components/molecules/message_manager";

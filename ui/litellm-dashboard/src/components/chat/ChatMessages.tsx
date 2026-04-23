@@ -1,6 +1,6 @@
 "use client";
 
-import { ToolOutlined, CopyOutlined, CheckOutlined, EditOutlined } from "@ant-design/icons";
+import { Wrench as ToolOutlined, Copy as CopyOutlined, Check as CheckOutlined, Pencil as EditOutlined } from "lucide-react";
 import { Collapse, Tooltip } from "antd";
 import React, { useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";

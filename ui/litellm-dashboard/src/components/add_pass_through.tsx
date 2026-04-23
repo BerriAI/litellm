@@ -20,10 +20,7 @@ import {
   Alert,
 } from "antd";
 import NumericalInput from "./shared/numerical_input";
-import {
-  InfoCircleOutlined,
-  ApiOutlined,
-} from "@ant-design/icons";
+import { Info as InfoCircleOutlined, Plug as ApiOutlined } from "lucide-react";
 import KeyValueInput from "./key_value_input";
 import QueryParamInput from "./query_param_input";
 import { passThroughItem } from "./pass_through_settings";

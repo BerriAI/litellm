@@ -1,11 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Button, Drawer } from "antd";
-import {
-  CheckOutlined,
-  CopyOutlined,
-  LeftOutlined,
-  RightOutlined,
-} from "@ant-design/icons";
+import { Check as CheckOutlined, Copy as CopyOutlined, ChevronLeft as LeftOutlined, ChevronRight as RightOutlined } from "lucide-react";
 import { Bot, Sparkles, Wrench } from "lucide-react";
 import { LogEntry } from "../columns";
 import { AGENT_CALL_TYPES, MCP_CALL_TYPES } from "../constants";

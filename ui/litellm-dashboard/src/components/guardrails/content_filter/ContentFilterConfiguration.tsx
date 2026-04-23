@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { Typography, Space, Upload, Card, Button } from "antd";
-import { PlusOutlined, UploadOutlined } from "@ant-design/icons";
+import { Plus as PlusOutlined, Upload as UploadOutlined } from "lucide-react";
 import { validateBlockedWordsFile } from "../../networking";
 import NotificationsManager from "../../molecules/notifications_manager";
 import PatternModal from "./PatternModal";

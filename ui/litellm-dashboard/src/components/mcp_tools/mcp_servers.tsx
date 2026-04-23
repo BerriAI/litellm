@@ -1,5 +1,5 @@
 import { isAdminRole } from "@/utils/roles";
-import { QuestionCircleOutlined } from "@ant-design/icons";
+import { HelpCircle as QuestionCircleOutlined } from "lucide-react";
 // eslint-disable-next-line litellm-ui/no-banned-ui-imports
 import { Button, Tab, TabGroup, TabList, TabPanel, TabPanels, Text, Title } from "@tremor/react";
 import NewBadge from "../common_components/NewBadge";

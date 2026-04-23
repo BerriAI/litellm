@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { Modal, Spin, Checkbox, Select, Input, Typography, Tooltip } from "antd";
 // eslint-disable-next-line litellm-ui/no-banned-ui-imports
 import { Button, Card } from "@tremor/react";
-import { CheckCircleOutlined, CloseCircleOutlined, InfoCircleOutlined, DownOutlined, RightOutlined } from "@ant-design/icons";
+import { CheckCircle2 as CheckCircleOutlined, XCircle as CloseCircleOutlined, Info as InfoCircleOutlined, ChevronDown as DownOutlined, ChevronRight as RightOutlined } from "lucide-react";
 import { suggestPolicyTemplates, modelHubCall, testPolicyTemplate, enrichPolicyTemplateStream } from "../networking";
 
 const { TextArea } = Input;

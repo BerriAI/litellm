@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 // eslint-disable-next-line litellm-ui/no-banned-ui-imports
 import { Card, Title, Text } from "@tremor/react";
-import { ToolOutlined, CheckCircleOutlined, SearchOutlined, EditOutlined } from "@ant-design/icons";
+import { Wrench as ToolOutlined, CheckCircle2 as CheckCircleOutlined, Search as SearchOutlined, Pencil as EditOutlined } from "lucide-react";
 import { Badge, Spin, Checkbox, Input, Radio } from "antd";
 import { useTestMCPConnection } from "../../hooks/useTestMCPConnection";
 import McpCrudPermissionPanel from "./McpCrudPermissionPanel";

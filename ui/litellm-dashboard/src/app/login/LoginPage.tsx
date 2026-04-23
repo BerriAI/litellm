@@ -7,7 +7,7 @@ import { exchangeLoginCode, getProxyBaseUrl, switchToWorkerUrl } from "@/compone
 import { clearTokenCookies, getCookie } from "@/utils/cookieUtils";
 import { isJwtExpired } from "@/utils/jwtUtils";
 import { consumeReturnUrl, getReturnUrl, isValidReturnUrl } from "@/utils/returnUrlUtils";
-import { InfoCircleOutlined, CloudServerOutlined } from "@ant-design/icons";
+import { Info as InfoCircleOutlined, Server as CloudServerOutlined } from "lucide-react";
 import { Alert, Button, Card, Form, Input, Popover, Select, Space, Typography } from "antd";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";

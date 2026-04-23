@@ -4,7 +4,7 @@ import { Button, TabGroup, TabList, Tab, TabPanels, TabPanel } from "@tremor/rea
 import { Alert } from "antd";
 
 import MessageManager from "@/components/molecules/message_manager";
-import { InfoCircleOutlined } from "@ant-design/icons";
+import { Info as InfoCircleOutlined } from "lucide-react";
 import { isAdminRole } from "@/utils/roles";
 import PolicyTable from "./policy_table";
 import PolicyInfoView from "./policy_info";

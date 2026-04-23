@@ -3,7 +3,7 @@ import React from "react";
 import { Button, TextInput } from "@tremor/react";
 import { MCPTool, InputSchema, InputSchemaProperty } from "./types";
 import { Form, Select, Tooltip } from "antd";
-import { InfoCircleOutlined } from "@ant-design/icons";
+import { Info as InfoCircleOutlined } from "lucide-react";
 import NotificationsManager from "../molecules/notifications_manager";
 
 const isPlainObject = (value: unknown): value is Record<string, any> =>

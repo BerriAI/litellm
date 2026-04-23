@@ -15,7 +15,7 @@ import {
   theme,
   Typography,
 } from "antd";
-import { LoadingOutlined } from "@ant-design/icons";
+import { Loader2 as LoadingOutlined } from "lucide-react";
 // eslint-disable-next-line litellm-ui/no-banned-ui-imports
 import { BarChart } from "@tremor/react";
 import { ArrowLeftIcon, DollarSignIcon, EditIcon, KeyIcon, UsersIcon } from "lucide-react";
@@ -72,7 +72,7 @@ export function ProjectDetail({ projectId, onBack }: ProjectDetailProps) {
         }}
       >
         <Flex justify="center" align="center" style={{ minHeight: 300 }}>
-          <Spin indicator={<LoadingOutlined spin />} size="large" />
+          <Spin indicator={<LoadingOutlined className="animate-spin" />} size="large" />
         </Flex>
       </Content>
     );
@@ -311,7 +311,7 @@ export function ProjectDetail({ projectId, onBack }: ProjectDetailProps) {
               })()
             ) : project.team_id ? (
               <Flex justify="center" align="center" style={{ padding: 16 }}>
-                <Spin indicator={<LoadingOutlined spin />} size="small" />
+                <Spin indicator={<LoadingOutlined className="animate-spin" />} size="small" />
               </Flex>
             ) : (
               <Empty description="No team assigned" image={Empty.PRESENTED_IMAGE_SIMPLE} />

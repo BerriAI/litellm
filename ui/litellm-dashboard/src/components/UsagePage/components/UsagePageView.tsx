@@ -6,7 +6,7 @@
  * Works at 1m+ spend logs, by querying an aggregate table instead.
  */
 
-import { DownOutlined, ExportOutlined, InfoCircleOutlined, LoadingOutlined, RightOutlined } from "@ant-design/icons";
+import { ChevronDown as DownOutlined, Upload as ExportOutlined, Info as InfoCircleOutlined, Loader2 as LoadingOutlined, ChevronRight as RightOutlined } from "lucide-react";
 import { useDebouncedState } from "@tanstack/react-pacer/debouncer";
 // eslint-disable-next-line litellm-ui/no-banned-ui-imports
 import {
@@ -449,7 +449,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
               message={
                 <div className="flex items-center justify-between">
                   <span>
-                    <LoadingOutlined spin className="mr-2" />
+                    <LoadingOutlined className="animate-spin mr-2" />
                     Currently fetching spend data: fetched {paginatedResult.progress.currentPage} /{" "}
                     {paginatedResult.progress.totalPages} pages. Charts will update periodically as data loads. Moving
                     off of this page will stop and reset this. To continue using the UI in the meantime,{" "}
@@ -496,14 +496,14 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                     searchValue={userSearchInput}
                     onPopupScroll={handleUserPopupScroll}
                     loading={isLoadingUsers}
-                    notFoundContent={isLoadingUsers ? <LoadingOutlined spin /> : "No users found"}
+                    notFoundContent={isLoadingUsers ? <LoadingOutlined className="animate-spin" /> : "No users found"}
                     options={userOptions}
                     popupRender={(menu) => (
                       <>
                         {menu}
                         {isFetchingNextUsersPage && (
                           <div style={{ textAlign: "center", padding: 8 }}>
-                            <LoadingOutlined spin />
+                            <LoadingOutlined className="animate-spin" />
                           </div>
                         )}
                       </>

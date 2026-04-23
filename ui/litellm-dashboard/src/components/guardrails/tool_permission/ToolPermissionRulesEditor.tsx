@@ -2,8 +2,7 @@ import React from "react";
 // eslint-disable-next-line litellm-ui/no-banned-ui-imports
 import { Card, Text } from "@tremor/react";
 import { Button, Divider, Empty, Input, Select, Space, Tooltip } from "antd";
-import { InfoCircleOutlined, PlusOutlined, DeleteOutlined } from "@ant-design/icons";
-
+import { Info as InfoCircleOutlined, Plus as PlusOutlined, Trash2 as DeleteOutlined } from "lucide-react";
 export type ToolPermissionDecision = "allow" | "deny";
 export type ToolPermissionDefaultAction = "allow" | "deny";
 export type ToolPermissionOnDisallowedAction = "block" | "rewrite";

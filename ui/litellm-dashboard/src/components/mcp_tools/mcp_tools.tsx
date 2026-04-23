@@ -6,7 +6,7 @@ import { listMCPTools, callMCPTool } from "../networking";
 
 // eslint-disable-next-line litellm-ui/no-banned-ui-imports
 import { Card, Title, Text } from "@tremor/react";
-import { RobotOutlined, ToolOutlined, SearchOutlined, KeyOutlined } from "@ant-design/icons";
+import { Bot as RobotOutlined, Wrench as ToolOutlined, Search as SearchOutlined, Key as KeyOutlined } from "lucide-react";
 import { Input, Button as AntdButton } from "antd";
 
 const MCPToolsViewer = ({

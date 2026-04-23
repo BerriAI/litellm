@@ -6,7 +6,7 @@ import { useTags } from "@/app/(dashboard)/hooks/tags/useTags";
 import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
-import { InfoCircleOutlined } from "@ant-design/icons";
+import { Info as InfoCircleOutlined } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 // eslint-disable-next-line litellm-ui/no-banned-ui-imports
 import { Accordion, AccordionBody, AccordionHeader, Button, Col, Grid, Text, TextInput, Title } from "@tremor/react";

@@ -3,7 +3,7 @@ import React, { useState } from "react";
 import { Card, Title, Text } from "@tremor/react";
 import { Upload, Button, Select, Form, Alert, Tooltip, Input } from "antd";
 import MessageManager from "@/components/molecules/message_manager";
-import { InboxOutlined, InfoCircleOutlined } from "@ant-design/icons";
+import { Inbox as InboxOutlined, Info as InfoCircleOutlined } from "lucide-react";
 import type { UploadProps } from "antd";
 import { ragIngestCall } from "../networking";
 import { DocumentUpload, RAGIngestResponse } from "./types";

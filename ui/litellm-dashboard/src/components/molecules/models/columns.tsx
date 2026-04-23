@@ -1,4 +1,4 @@
-import { EditOutlined, InfoCircleOutlined, SyncOutlined } from "@ant-design/icons";
+import { Pencil as EditOutlined, Info as InfoCircleOutlined, RefreshCcw as SyncOutlined } from "lucide-react";
 import { Trash2 } from "lucide-react";
 import { ColumnDef } from "@tanstack/react-table";
 // eslint-disable-next-line litellm-ui/no-banned-ui-imports

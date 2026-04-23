@@ -1,6 +1,6 @@
 import React from "react";
 import { Card, Typography, Select, Table, Tag, Collapse, Button } from "antd";
-import { DeleteOutlined, PlusOutlined, FileTextOutlined } from "@ant-design/icons";
+import { Trash2 as DeleteOutlined, Plus as PlusOutlined, FileText as FileTextOutlined } from "lucide-react";
 import { getCategoryYaml } from "../../networking";
 
 const { Title, Text } = Typography;

@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { Modal, Tooltip, Form, Select, Input, Switch, Collapse } from "antd";
-import { InfoCircleOutlined } from "@ant-design/icons";
+import { Info as InfoCircleOutlined } from "lucide-react";
 // eslint-disable-next-line litellm-ui/no-banned-ui-imports
 import { Button, TextInput } from "@tremor/react";
 import { createMCPServer, registerMCPServer } from "../networking";

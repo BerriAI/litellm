@@ -3,7 +3,7 @@ import { Modal, Form, Select, Input, Steps, Radio, Tag, Divider, Switch, InputNu
 // eslint-disable-next-line litellm-ui/no-banned-ui-imports
 import MessageManager from "@/components/molecules/message_manager";
 import { Button } from "@tremor/react";
-import { CheckCircleFilled, KeyOutlined, RobotOutlined, AppstoreOutlined, InfoCircleOutlined } from "@ant-design/icons";
+import { CheckCircle2 as CheckCircleFilled, Key as KeyOutlined, Bot as RobotOutlined, LayoutGrid as AppstoreOutlined, Info as InfoCircleOutlined } from "lucide-react";
 import CreatedKeyDisplay from "../shared/CreatedKeyDisplay";
 import {
   createAgentCall,
@@ -396,7 +396,7 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({
         label={
           <span>
             Allowed MCP Servers{" "}
-            <InfoCircleOutlined title="Select which MCP servers or access groups this agent can access" style={{ marginLeft: "4px" }} />
+            <InfoCircleOutlined aria-label="Select which MCP servers or access groups this agent can access" className="ml-1 inline h-3 w-3" />
           </span>
         }
         name="allowed_mcp_servers_and_groups"

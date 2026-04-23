@@ -25,7 +25,7 @@ import {
   TableRow,
   Text,
 } from "@tremor/react";
-import { InfoCircleOutlined } from "@ant-design/icons";
+import { Info as InfoCircleOutlined } from "lucide-react";
 import { Popover, Skeleton, Tooltip } from "antd";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { getModelDisplayName } from "../key_team_helpers/fetch_available_models_team_key";

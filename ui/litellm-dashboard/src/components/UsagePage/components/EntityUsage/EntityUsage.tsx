@@ -23,7 +23,7 @@ import {
   Text,
   Title,
 } from "@tremor/react";
-import { ExportOutlined, LoadingOutlined } from "@ant-design/icons";
+import { Upload as ExportOutlined, Loader2 as LoadingOutlined } from "lucide-react";
 import { Alert, Button } from "antd";
 import React, { useMemo, useState } from "react";
 import TeamMultiSelect from "../../../common_components/team_multi_select";
@@ -406,7 +406,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
           message={
             <div className="flex items-center justify-between">
               <span>
-                <LoadingOutlined spin className="mr-2" />
+                <LoadingOutlined className="animate-spin mr-2" />
                 Currently fetching spend data: fetched {progress.currentPage} / {progress.totalPages} pages. Charts will
                 update periodically as data loads. Moving off of this page will stop and reset this. To continue using
                 the UI in the meantime,{" "}
@@ -442,7 +442,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
           message={
             <div className="flex items-center justify-between">
               <span>
-                <LoadingOutlined spin className="mr-2" />
+                <LoadingOutlined className="animate-spin mr-2" />
                 Currently fetching agent data: fetched {agentProgress.currentPage} / {agentProgress.totalPages} pages.
                 Charts will update periodically as data loads. Moving off of this page will stop and reset this. To
                 continue using the UI in the meantime,{" "}

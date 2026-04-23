@@ -10,7 +10,7 @@ import {
 } from "@tremor/react";
 import { Row, Col, Typography } from "antd";
 import TextArea from "antd/es/input/TextArea";
-import { InfoCircleOutlined } from "@ant-design/icons";
+import { Info as InfoCircleOutlined } from "lucide-react";
 import { Team } from "../key_team_helpers/key_list";
 import CacheControlSettings from "./cache_control_settings";
 import VectorStoreSelector from "../vector_store_management/VectorStoreSelector";

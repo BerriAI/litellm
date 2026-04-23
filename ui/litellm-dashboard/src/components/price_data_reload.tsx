@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { Button, Popconfirm, Modal, InputNumber, Space, Typography, Tag, Card, Tooltip, Divider } from "antd";
-import { ReloadOutlined, ClockCircleOutlined, StopOutlined, CloudOutlined, DatabaseOutlined, InfoCircleOutlined, WarningOutlined } from "@ant-design/icons";
+import { RefreshCcw as ReloadOutlined, Clock as ClockCircleOutlined, Ban as StopOutlined, Cloud as CloudOutlined, Database as DatabaseOutlined, Info as InfoCircleOutlined, AlertTriangle as WarningOutlined } from "lucide-react";
 import {
   reloadModelCostMap,
   scheduleModelCostMapReload,

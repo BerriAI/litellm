@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { ArrowLeftOutlined, CopyOutlined, CheckOutlined, LinkOutlined } from "@ant-design/icons";
+import { ArrowLeft as ArrowLeftOutlined, Copy as CopyOutlined, Check as CheckOutlined, Link as LinkOutlined } from "lucide-react";
 import { formatInstallCommand } from "./helpers";
 import { Plugin } from "./types";
 

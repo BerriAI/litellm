@@ -11,8 +11,7 @@ import { fetchAvailableModels, ModelGroup } from "../playground/llm_calls/fetch_
 import RouterConfigBuilder from "./RouterConfigBuilder";
 import ComplexityRouterConfig from "./ComplexityRouterConfig";
 import NotificationManager from "../molecules/notifications_manager";
-import { ThunderboltOutlined, BranchesOutlined } from "@ant-design/icons";
-
+import { Zap as ThunderboltOutlined, GitBranch as BranchesOutlined } from "lucide-react";
 interface AddAutoRouterTabProps {
   form: FormInstance;
   handleOk: () => void;

@@ -5,7 +5,7 @@ import {
   updateGuardrailCall,
 } from "@/components/networking";
 import { copyToClipboard as utilCopyToClipboard } from "@/utils/dataUtils";
-import { CodeOutlined, EyeInvisibleOutlined, InfoCircleOutlined, StopOutlined } from "@ant-design/icons";
+import { Code as CodeOutlined, EyeOff as EyeInvisibleOutlined, Info as InfoCircleOutlined, Ban as StopOutlined } from "lucide-react";
 import { ArrowLeft as ArrowLeftIcon } from "lucide-react";
 // eslint-disable-next-line litellm-ui/no-banned-ui-imports
 import {

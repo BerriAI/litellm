@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { Form, Select, Button as AntdButton, Tooltip, Input, InputNumber } from "antd";
-import { InfoCircleOutlined } from "@ant-design/icons";
+import { Info as InfoCircleOutlined } from "lucide-react";
 // eslint-disable-next-line litellm-ui/no-banned-ui-imports
 import { Button, TabGroup, TabList, Tab, TabPanels, TabPanel } from "@tremor/react";
 import { AUTH_TYPE, OAUTH_FLOW, MCPServer, MCPServerCostInfo, TRANSPORT } from "./types";

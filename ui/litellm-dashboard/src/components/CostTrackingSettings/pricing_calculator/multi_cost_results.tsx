@@ -2,7 +2,7 @@ import React, { useState } from "react";
 // eslint-disable-next-line litellm-ui/no-banned-ui-imports
 import { Text, Button } from "@tremor/react";
 import { Card, Statistic, Row, Col, Divider, Spin, Table, Tag } from "antd";
-import { LoadingOutlined, DownOutlined, RightOutlined } from "@ant-design/icons";
+import { Loader2 as LoadingOutlined, ChevronDown as DownOutlined, ChevronRight as RightOutlined } from "lucide-react";
 import { CostEstimateResponse } from "../types";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { MultiModelResult } from "./types";
@@ -42,7 +42,7 @@ const SingleModelBreakdown: React.FC<{
     <div className="space-y-3 bg-gray-50 p-4 rounded-lg">
       {loading && (
         <div className="flex items-center gap-2 text-gray-500 text-sm">
-          <Spin indicator={<LoadingOutlined spin />} size="small" />
+          <Spin indicator={<LoadingOutlined className="animate-spin" />} size="small" />
           <span>Updating...</span>
         </div>
       )}
@@ -134,7 +134,7 @@ const MultiCostResults: React.FC<MultiCostResultsProps> = ({ multiResult, timePe
   if (!hasAnyResult && isAnyLoading && !hasAnyError) {
     return (
       <div className="py-6 text-center">
-        <Spin indicator={<LoadingOutlined spin />} />
+        <Spin indicator={<LoadingOutlined className="animate-spin" />} />
         <Text className="text-gray-500 block mt-2">Calculating costs...</Text>
       </div>
     );
@@ -147,7 +147,7 @@ const MultiCostResults: React.FC<MultiCostResultsProps> = ({ multiResult, timePe
         <Divider className="my-4" />
         <div className="flex items-center justify-between">
           <Text className="text-base font-semibold text-gray-900">Cost Estimates</Text>
-          {isAnyLoading && <Spin indicator={<LoadingOutlined spin />} size="small" />}
+          {isAnyLoading && <Spin indicator={<LoadingOutlined className="animate-spin" />} size="small" />}
         </div>
         {/* Error Messages */}
         {errorEntries.map((e) => (
@@ -192,7 +192,7 @@ const MultiCostResults: React.FC<MultiCostResultsProps> = ({ multiResult, timePe
               </Tag>
             )}
             {record.loading && (
-              <Spin indicator={<LoadingOutlined spin />} size="small" />
+              <Spin indicator={<LoadingOutlined className="animate-spin" />} size="small" />
             )}
           </div>
           {record.error && (
@@ -281,7 +281,7 @@ const MultiCostResults: React.FC<MultiCostResultsProps> = ({ multiResult, timePe
       <div className="flex items-center justify-between">
         <Text className="text-base font-semibold text-gray-900">Cost Estimates</Text>
         <div className="flex items-center gap-2">
-          {isAnyLoading && <Spin indicator={<LoadingOutlined spin />} size="small" />}
+          {isAnyLoading && <Spin indicator={<LoadingOutlined className="animate-spin" />} size="small" />}
           <MultiExportDropdown multiResult={multiResult} />
         </div>
       </div>

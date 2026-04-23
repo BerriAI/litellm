@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import { Button, Input, Typography, Spin } from "antd";
 import MessageManager from "@/components/molecules/message_manager";
-import { SearchOutlined, LoadingOutlined } from "@ant-design/icons";
+import { Search as SearchOutlined, Loader2 as LoadingOutlined } from "lucide-react";
 import { searchToolQueryCall } from "../networking";
 import NotificationsManager from "../molecules/notifications_manager";
 // eslint-disable-next-line litellm-ui/no-banned-ui-imports
@@ -88,7 +88,7 @@ export const SearchToolTester: React.FC<SearchToolTesterProps> = ({ searchToolNa
     }));
   };
 
-  const antIcon = <LoadingOutlined style={{ fontSize: 24 }} spin />;
+  const antIcon = <LoadingOutlined style={{ fontSize: 24 }} className="animate-spin" />;
 
   const latestResults = searchHistory.length > 0 ? searchHistory[0] : null;
 

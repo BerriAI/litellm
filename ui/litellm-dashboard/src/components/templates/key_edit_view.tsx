@@ -3,7 +3,7 @@ import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrgan
 import { useProjects } from "@/app/(dashboard)/hooks/projects/useProjects";
 import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
 import PolicySelector from "@/components/policies/PolicySelector";
-import { InfoCircleOutlined } from "@ant-design/icons";
+import { Info as InfoCircleOutlined } from "lucide-react";
 // eslint-disable-next-line litellm-ui/no-banned-ui-imports
 import { TextInput, Button as TremorButton } from "@tremor/react";
 import { Form, Input, Select, Switch, Tooltip } from "antd";
