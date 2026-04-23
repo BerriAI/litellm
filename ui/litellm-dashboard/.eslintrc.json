@@ -79,6 +79,7 @@
         "src/components/vector_store_management/VectorStoreTable.tsx",
         "src/components/vector_store_management/vector_store_info.tsx",
         "src/components/vector_store_management/DocumentsTable.tsx",
+        "src/components/common_components/MemberTable.tsx",
         "src/components/permissions/VectorStorePermissions.tsx",
         "src/components/permissions/AgentPermissions.tsx",
         "src/components/permissions/MCPServerPermissions.tsx",

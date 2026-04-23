@@ -1,11 +1,17 @@
 import { Member } from "@/components/networking";
-import { CrownOutlined, InfoCircleOutlined, UserAddOutlined, UserOutlined } from "@ant-design/icons";
-import { Button, Space, Table, Tag, Tooltip, Typography } from "antd";
+import { Table } from "antd";
 import type { ColumnsType } from "antd/es/table";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import { Crown, Info, User, UserPlus } from "lucide-react";
 import React from "react";
 import TableIconActionButton from "./IconActionButton/TableIconActionButtons/TableIconActionButton";
-
-const { Text } = Typography;
 
 export interface MemberTableProps {
   members: Member[];
@@ -37,7 +43,7 @@ export default function MemberTable({
       title: "User Email",
       dataIndex: "user_email",
       key: "user_email",
-      render: (email: string | null) => <Text>{email || "-"}</Text>,
+      render: (email: string | null) => <span>{email || "-"}</span>,
     },
     {
       title: "User ID",
@@ -45,33 +51,41 @@ export default function MemberTable({
       key: "user_id",
       render: (userId: string | null) =>
         userId === "default_user_id" ? (
-          <Tag color="blue">Default Proxy Admin</Tag>
+          <Badge className="bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300">
+            Default Proxy Admin
+          </Badge>
         ) : (
-          <Text>{userId || "-"}</Text>
+          <span>{userId || "-"}</span>
         ),
     },
     {
       title: roleTooltip ? (
-        <Space direction="horizontal">
+        <div className="flex items-center gap-2">
           {roleColumnTitle}
-          <Tooltip title={roleTooltip}>
-            <InfoCircleOutlined />
-          </Tooltip>
-        </Space>
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Info className="h-3 w-3 text-muted-foreground" />
+              </TooltipTrigger>
+              <TooltipContent>{roleTooltip}</TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
+        </div>
       ) : (
         roleColumnTitle
       ),
       dataIndex: "role",
       key: "role",
       render: (role: string) => (
-        <Space>
-          {role?.toLowerCase() === "admin" || role?.toLowerCase() === "org_admin" ? (
-            <CrownOutlined />
+        <div className="flex items-center gap-2">
+          {role?.toLowerCase() === "admin" ||
+          role?.toLowerCase() === "org_admin" ? (
+            <Crown className="h-3.5 w-3.5" />
           ) : (
-            <UserOutlined />
+            <User className="h-3.5 w-3.5" />
           )}
-          <Text style={{ textTransform: "capitalize" }}>{role || "-"}</Text>
-        </Space>
+          <span className="capitalize">{role || "-"}</span>
+        </div>
       ),
     },
     ...extraColumns,
@@ -82,7 +96,7 @@ export default function MemberTable({
       width: 120,
       render: (_: unknown, record: Member) =>
         canEdit ? (
-          <Space>
+          <div className="flex items-center gap-2">
             <TableIconActionButton
               variant="Edit"
               tooltipText="Edit member"
@@ -97,30 +111,35 @@ export default function MemberTable({
                 onClick={() => onDelete(record)}
               />
             )}
-          </Space>
+          </div>
         ) : null,
     },
   ];
 
   return (
-    <Space direction="vertical" style={{ width: "100%" }}>
-      <span className="inline-flex text-sm text-gray-700">
+    <div className="w-full flex flex-col gap-2">
+      <span className="inline-flex text-sm text-foreground/80">
         {members.length} Member{members.length !== 1 ? "s" : ""}
       </span>
       <Table
         columns={baseColumns}
         dataSource={members}
-        rowKey={(record) => record.user_id ?? record.user_email ?? JSON.stringify(record)}
+        rowKey={(record) =>
+          record.user_id ?? record.user_email ?? JSON.stringify(record)
+        }
         pagination={false}
         size="small"
         scroll={{ x: "max-content" }}
         locale={emptyText ? { emptyText } : undefined}
       />
       {onAddMember && canEdit && (
-        <Button icon={<UserAddOutlined />} type="primary" onClick={onAddMember}>
-          Add Member
-        </Button>
+        <div>
+          <Button onClick={onAddMember}>
+            <UserPlus className="h-4 w-4" />
+            Add Member
+          </Button>
+        </div>
       )}
-    </Space>
+    </div>
   );
 }
