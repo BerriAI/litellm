@@ -134,4 +134,48 @@ async def test_ahealth_check_failure_masks_raw_request_headers():
     if "Content-Type" in headers:
         assert headers["Content-Type"] == "application/json"
     
-    print(f"Masked Authorization header: {headers.get('Authorization', 'NOT FOUND')}") 
+    print(f"Masked Authorization header: {headers.get('Authorization', 'NOT FOUND')}")
+
+
+def test_get_mode_handlers_responses_wraps_input_in_list():
+    """
+    Regression: the ChatGPT/Codex responses backend rejects string input
+    with ``{"detail": "Input must be a list"}``. OpenAI's public Responses
+    API accepts either shape, so we always pass a list from the health
+    check to keep both backends happy.
+
+    See ``litellm/proxy/health_endpoints/_health_endpoints.py`` —
+    ``test_connection`` calls ``ahealth_check`` with
+    ``input=["test from litellm"]``; that must flow through unchanged,
+    and the ``prompt``-only fallback must still produce a list.
+    """
+    import asyncio
+
+    handlers = HealthCheckHelpers.get_mode_handlers(
+        model="chatgpt/gpt-5.4-codex",
+        custom_llm_provider="chatgpt",
+        model_params={"model": "chatgpt/gpt-5.4-codex"},
+        prompt="test from litellm",
+        input=["test from litellm"],
+    )
+    assert "responses" in handlers
+
+    with patch(
+        "litellm.aresponses", new=AsyncMock(return_value=MagicMock())
+    ) as mock_ar:
+        asyncio.get_event_loop().run_until_complete(handlers["responses"]())
+        assert mock_ar.call_args.kwargs["input"] == ["test from litellm"]
+
+    # Fallback: no ``input`` provided, prompt-only → still a list.
+    prompt_only_handlers = HealthCheckHelpers.get_mode_handlers(
+        model="chatgpt/gpt-5.4-codex",
+        custom_llm_provider="chatgpt",
+        model_params={"model": "chatgpt/gpt-5.4-codex"},
+        prompt="hello",
+        input=None,
+    )
+    with patch(
+        "litellm.aresponses", new=AsyncMock(return_value=MagicMock())
+    ) as mock_ar:
+        asyncio.get_event_loop().run_until_complete(prompt_only_handlers["responses"]())
+        assert mock_ar.call_args.kwargs["input"] == ["hello"]

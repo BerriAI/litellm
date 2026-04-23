@@ -206,8 +206,11 @@ class HealthCheckHelpers:
                 filtered_model_params=_filter_model_params(model_params=model_params),
             ),
             "responses": lambda: litellm.aresponses(
+                # The ChatGPT/Codex backend rejects string input with
+                # ``{"detail": "Input must be a list"}``; OpenAI's own
+                # Responses API accepts either, so a list works for both.
                 **_filter_model_params(model_params=model_params),
-                input=prompt or "test",
+                input=input or [prompt or "test"],
             ),
             "ocr": lambda: litellm.aocr(
                 **_filter_model_params(model_params=model_params),
