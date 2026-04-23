@@ -1554,9 +1554,9 @@ async def _safe_fetch(label: str, awaitable):
 
 def _team_obj_from_token(valid_token: UserAPIKeyAuth) -> LiteLLM_TeamTableCachedObj:
     """Reconstruct a cached team object from the fields already on the
-    UserAPIKeyAuth. Used as a last resort when the team DB row can't be
-    fetched (e.g. outage) — enforcement still runs against the token's
-    own team_* fields."""
+    UserAPIKeyAuth. Only called when valid_token.team_id is known to be
+    non-None (the caller gates on it)."""
+    assert valid_token.team_id is not None
     return LiteLLM_TeamTableCachedObj(
         team_id=valid_token.team_id,
         max_budget=valid_token.team_max_budget,
@@ -1603,12 +1603,17 @@ async def _run_centralized_common_checks(
         user_custom_auth,
     )
 
-    # master_key unset = no-auth dev mode. The builder returns an
-    # INTERNAL_USER token for any api_key and the proxy is
-    # unauthenticated by configuration; running common_checks would
-    # block every admin route on these deployments where that was
-    # previously not the contract.
-    if master_key is None:
+    # No-auth dev mode: master_key unset AND no JWT/OAuth2 auth
+    # configured. The builder returns an INTERNAL_USER token for any
+    # api_key; the proxy is unauthenticated by configuration.
+    # Running common_checks would block every admin route on these
+    # deployments where that was previously not the contract. If any
+    # authn is enabled (JWT, OAuth2, OAuth2-proxy), authz must run.
+    if master_key is None and not (
+        general_settings.get("enable_jwt_auth", False)
+        or general_settings.get("enable_oauth2_auth", False)
+        or general_settings.get("enable_oauth2_proxy_auth", False)
+    ):
         return
 
     if user_custom_auth is not None and not general_settings.get(
