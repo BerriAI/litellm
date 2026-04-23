@@ -1,17 +1,33 @@
 import {
-  BankOutlined,
-  BarChartOutlined,
-  GlobalOutlined,
-  LineChartOutlined,
-  RobotOutlined,
-  ShoppingCartOutlined,
-  TagsOutlined,
-  TeamOutlined,
-  UserOutlined,
-} from "@ant-design/icons";
-import { Badge, Select } from "antd";
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
+  BarChart3,
+  Bot,
+  Building2,
+  Globe,
+  LineChart,
+  ShoppingCart,
+  Tags,
+  User,
+  Users,
+} from "lucide-react";
 import React from "react";
-export type UsageOption = "global" | "organization" | "team" | "customer" | "tag" | "agent" | "user" | "user-agent-activity";
+
+export type UsageOption =
+  | "global"
+  | "organization"
+  | "team"
+  | "customer"
+  | "tag"
+  | "agent"
+  | "user"
+  | "user-agent-activity";
+
 export interface UsageViewSelectProps {
   value: UsageOption;
   onChange: (value: UsageOption) => void;
@@ -20,6 +36,7 @@ export interface UsageViewSelectProps {
   description?: string;
   "data-id"?: string;
 }
+
 interface OptionConfig {
   value: UsageOption;
   label: string;
@@ -32,6 +49,9 @@ interface OptionConfig {
   descriptionForNonAdmin?: string;
   badgeText?: string;
 }
+
+const ICON_CLASS = "h-4 w-4";
+
 const OPTIONS: OptionConfig[] = [
   {
     value: "global",
@@ -41,7 +61,7 @@ const OPTIONS: OptionConfig[] = [
     description: "View usage across all resources",
     descriptionForAdmin: "View usage across all resources",
     descriptionForNonAdmin: "View your usage",
-    icon: <GlobalOutlined style={{ fontSize: "16px" }} />,
+    icon: <Globe className={ICON_CLASS} />,
   },
   {
     value: "organization",
@@ -51,50 +71,51 @@ const OPTIONS: OptionConfig[] = [
     description: "View organization-level usage",
     descriptionForAdmin: "View usage across all organizations",
     descriptionForNonAdmin: "View your organization's usage",
-    icon: <BankOutlined style={{ fontSize: "16px" }} />,
+    icon: <Building2 className={ICON_CLASS} />,
   },
   {
     value: "team",
     label: "Team Usage",
     description: "View usage by team",
-    icon: <TeamOutlined style={{ fontSize: "16px" }} />,
+    icon: <Users className={ICON_CLASS} />,
   },
   {
     value: "customer",
     label: "Customer Usage",
     description: "View usage by customer accounts",
-    icon: <ShoppingCartOutlined style={{ fontSize: "16px" }} />,
+    icon: <ShoppingCart className={ICON_CLASS} />,
     adminOnly: true,
   },
   {
     value: "tag",
     label: "Tag Usage",
     description: "View usage grouped by tags",
-    icon: <TagsOutlined style={{ fontSize: "16px" }} />,
+    icon: <Tags className={ICON_CLASS} />,
     adminOnly: true,
   },
   {
     value: "agent",
     label: "Agent Usage (A2A)",
     description: "View usage by AI agents",
-    icon: <RobotOutlined style={{ fontSize: "16px" }} />,
+    icon: <Bot className={ICON_CLASS} />,
     adminOnly: true,
   },
   {
     value: "user",
     label: "User Usage",
     description: "View usage by individual users",
-    icon: <UserOutlined style={{ fontSize: "16px" }} />,
+    icon: <User className={ICON_CLASS} />,
     adminOnly: true,
   },
   {
     value: "user-agent-activity",
     label: "User Agent Activity",
     description: "View detailed user agent activity logs",
-    icon: <LineChartOutlined style={{ fontSize: "16px" }} />,
+    icon: <LineChart className={ICON_CLASS} />,
     adminOnly: true,
   },
 ];
+
 export const UsageViewSelect: React.FC<UsageViewSelectProps> = ({
   value,
   onChange,
@@ -103,82 +124,70 @@ export const UsageViewSelect: React.FC<UsageViewSelectProps> = ({
   description = "Select the usage data you want to view",
   "data-id": dataId,
 }) => {
-  const getFilteredOptions = () => {
-    return OPTIONS.filter((option) => {
-      if (option.adminOnly && !isAdmin) {
-        return false;
-      }
-      return true;
-    }).map((option) => {
-      let label = option.label;
-      let desc = option.description;
-      if (option.showForAdmin && option.showForNonAdmin) {
-        label = isAdmin ? option.showForAdmin : option.showForNonAdmin;
-      }
-      if (option.descriptionForAdmin && option.descriptionForNonAdmin) {
-        desc = isAdmin ? option.descriptionForAdmin : option.descriptionForNonAdmin;
-      }
-      return {
-        value: option.value,
-        label,
-        description: desc,
-        icon: option.icon,
-        badgeText: option.badgeText,
-      };
-    });
-  };
-  const filteredOptions = getFilteredOptions();
+  const filteredOptions = OPTIONS.filter((option) => {
+    if (option.adminOnly && !isAdmin) return false;
+    return true;
+  }).map((option) => {
+    let label = option.label;
+    let desc = option.description;
+    if (option.showForAdmin && option.showForNonAdmin) {
+      label = isAdmin ? option.showForAdmin : option.showForNonAdmin;
+    }
+    if (option.descriptionForAdmin && option.descriptionForNonAdmin) {
+      desc = isAdmin
+        ? option.descriptionForAdmin
+        : option.descriptionForNonAdmin;
+    }
+    return {
+      value: option.value,
+      label,
+      description: desc,
+      icon: option.icon,
+    };
+  });
+
   return (
     <div className="w-full" data-id={dataId}>
       <div className="flex flex-wrap items-center justify-start gap-4">
         <div className="flex items-stretch gap-2 min-w-0">
           <div className="flex-shrink-0 flex items-center">
-            <BarChartOutlined style={{ fontSize: "32px" }} />
+            <BarChart3 className="h-8 w-8" />
           </div>
           <div className="flex-1 min-w-0">
-            <h3 className="text-sm font-semibold text-gray-900 mb-0.5 leading-tight">{title}</h3>
-            <p className="text-xs text-gray-600 leading-tight">{description}</p>
+            <h3 className="text-sm font-semibold text-foreground mb-0.5 leading-tight">
+              {title}
+            </h3>
+            <p className="text-xs text-muted-foreground leading-tight">
+              {description}
+            </p>
           </div>
         </div>
         <div className="flex-shrink-0">
           <Select
             value={value}
-            onChange={onChange}
-            className="w-54 sm:w-64 md:w-72"
-            size="large"
-            options={filteredOptions.map((opt) => ({
-              value: opt.value,
-              label: opt.label,
-            }))}
-            optionRender={(option) => {
-              const opt = filteredOptions.find((o) => o.value === option.value);
-              if (!opt) return option.label;
-              return (
-                <div className="flex items-center gap-2 py-1">
-                  <div className="flex-shrink-0 mt-0.5">{opt.icon}</div>
-                  <div className="flex-1 min-w-0">
-                    <div className="text-sm font-medium text-gray-900">{opt.label}</div>
-                    <div className="text-xs text-gray-600 mt-0.5">{opt.description}</div>
-                  </div>
-                  {opt.badgeText && (
-                    <div className="items-center">
-                      <Badge color="blue" count={opt.badgeText} />
+            onValueChange={(v) => onChange(v as UsageOption)}
+          >
+            <SelectTrigger className="w-[216px] sm:w-64 md:w-72 h-10">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {filteredOptions.map((opt) => (
+                <SelectItem key={opt.value} value={opt.value}>
+                  <div className="flex items-center gap-2 py-1">
+                    <div className="flex-shrink-0 mt-0.5">{opt.icon}</div>
+                    <div className="flex-1 min-w-0">
+                      <div className="text-sm font-medium text-foreground">
+                        {opt.label}
+                      </div>
+                      <div className="text-xs text-muted-foreground mt-0.5">
+                        {opt.description}
+                      </div>
                     </div>
-                  )}
-                </div>
-              );
-            }}
-            labelRender={(props) => {
-              const opt = filteredOptions.find((o) => o.value === props.value);
-              if (!opt) return props.label;
-              return (
-                <div className="flex items-center gap-2">
-                  <div>{opt.icon}</div>
-                  <span className="text-sm">{opt.label}</span>
-                </div>
-              );
-            }}
-          />
+                  </div>
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         </div>
       </div>
     </div>
