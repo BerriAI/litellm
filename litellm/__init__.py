@@ -148,6 +148,7 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "vantage",
     "posthog",
     "levo",
+    "compression_interception",
 ]
 cold_storage_custom_logger: Optional[_custom_logger_compatible_callbacks_literal] = None
 logged_real_time_event_types: Optional[Union[List[str], Literal["*"]]] = None
@@ -1500,6 +1501,9 @@ if TYPE_CHECKING:
     )
     from .llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation import (
         AmazonAnthropicClaudeMessagesConfig as AmazonAnthropicClaudeMessagesConfig,
+    )
+    from .llms.bedrock.messages.mantle_transformation import (
+        AmazonMantleMessagesConfig as AmazonMantleMessagesConfig,
     )
     from .llms.together_ai.chat import TogetherAIConfig as TogetherAIConfig
     from .llms.nlp_cloud.chat.handler import NLPCloudConfig as NLPCloudConfig

@@ -253,6 +253,7 @@ def validate_redacted_message_span_attributes(span):
             or attr.startswith("gen_ai.cost.")
             or attr.startswith("gen_ai.operation.")
             or attr.startswith("gen_ai.request.")
+            or attr.startswith("litellm.")
         ), f"Non-metadata attribute found: {attr}"
 
     pass

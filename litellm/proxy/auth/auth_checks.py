@@ -626,11 +626,17 @@ async def common_checks(  # noqa: PLR0915
             and user_object.max_budget is not None
         ):
             user_budget = user_object.max_budget
-            if user_budget < user_object.spend:
+            from litellm.proxy.proxy_server import get_current_spend
+
+            user_spend = await get_current_spend(
+                counter_key=f"spend:user:{user_object.user_id}",
+                fallback_spend=user_object.spend or 0.0,
+            )
+            if user_spend >= user_budget:
                 raise litellm.BudgetExceededError(
-                    current_cost=user_object.spend,
+                    current_cost=user_spend,
                     max_budget=user_budget,
-                    message=f"ExceededBudget: User={user_object.user_id} over budget. Spend={user_object.spend}, Budget={user_budget}",
+                    message=f"ExceededBudget: User={user_object.user_id} over budget. Spend={user_spend}, Budget={user_budget}",
                 )
 
         ## 4.2 check team member budget, if team key
@@ -3126,9 +3132,7 @@ async def _virtual_key_max_budget_alert_check(
         alert_email_config: Optional[Dict[str, List[str]]] = (
             _merge_budget_alert_email_configs(
                 global_cfg=litellm.default_key_max_budget_alert_emails,
-                per_key_cfg=(valid_token.metadata or {}).get(
-                    "max_budget_alert_emails"
-                ),
+                per_key_cfg=(valid_token.metadata or {}).get("max_budget_alert_emails"),
             )
         )
 
@@ -3138,7 +3142,9 @@ async def _virtual_key_max_budget_alert_check(
                 (int(k) for k in alert_email_config if k.isdigit()),
                 default=None,
             )
-            if min_pct is None or valid_token.spend < valid_token.max_budget * (min_pct / 100.0):
+            if min_pct is None or valid_token.spend < valid_token.max_budget * (
+                min_pct / 100.0
+            ):
                 return
 
             call_info = CallInfo(
@@ -3164,8 +3170,7 @@ async def _virtual_key_max_budget_alert_check(
         else:
             # Old path: existing single 80% threshold — completely unchanged
             alert_threshold = (
-                valid_token.max_budget
-                * EMAIL_BUDGET_ALERT_MAX_SPEND_ALERT_PERCENTAGE
+                valid_token.max_budget * EMAIL_BUDGET_ALERT_MAX_SPEND_ALERT_PERCENTAGE
             )
 
             if (
@@ -3666,12 +3671,20 @@ async def _organization_max_budget_check(
     if org_max_budget is None or org_max_budget <= 0:
         return
 
+    # Read spend from cross-pod counter (Redis-first) or cached object (fallback)
+    from litellm.proxy.proxy_server import get_current_spend
+
+    org_spend = await get_current_spend(
+        counter_key=f"spend:org:{org_id}",
+        fallback_spend=org_table.spend or 0.0,
+    )
+
     # Check if organization spend exceeds max budget
-    if org_table.spend >= org_max_budget:
+    if org_spend >= org_max_budget:
         # Trigger budget alert
         call_info = CallInfo(
             token=valid_token.token,
-            spend=org_table.spend,
+            spend=org_spend,
             max_budget=org_max_budget,
             user_id=valid_token.user_id,
             team_id=valid_token.team_id,
@@ -3687,9 +3700,9 @@ async def _organization_max_budget_check(
         )
 
         raise litellm.BudgetExceededError(
-            current_cost=org_table.spend,
+            current_cost=org_spend,
             max_budget=org_max_budget,
-            message=f"Budget has been exceeded! Organization={org_id} Current cost: {org_table.spend}, Max budget: {org_max_budget}",
+            message=f"Budget has been exceeded! Organization={org_id} Current cost: {org_spend}, Max budget: {org_max_budget}",
         )
 
 

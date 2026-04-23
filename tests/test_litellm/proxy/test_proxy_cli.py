@@ -744,7 +744,9 @@ class TestHealthAppFactory:
             # Test 1: Without --use_prisma_db_push flag (default behavior)
             # use_prisma_db_push should be False (default), so use_migrate should be True
             run_server.main(["--local", "--skip_server_startup"], standalone_mode=False)
-            mock_setup_database.assert_called_with(use_migrate=True)
+            mock_setup_database.assert_called_with(
+                use_migrate=True, use_v2_resolver=False
+            )
 
             # Reset mocks
             mock_setup_database.reset_mock()
@@ -757,7 +759,9 @@ class TestHealthAppFactory:
                 ["--local", "--skip_server_startup", "--use_prisma_db_push"],
                 standalone_mode=False,
             )
-            mock_setup_database.assert_called_with(use_migrate=False)
+            mock_setup_database.assert_called_with(
+                use_migrate=False, use_v2_resolver=False
+            )
 
     @patch("subprocess.run")
     @patch("atexit.register")
@@ -822,7 +826,9 @@ class TestHealthAppFactory:
                     standalone_mode=False,
                 )
             assert exc_info.value.code == 1
-            mock_setup_database.assert_called_once_with(use_migrate=True)
+            mock_setup_database.assert_called_once_with(
+                use_migrate=True, use_v2_resolver=False
+            )
 
 
 # --- Module-level helpers for worker startup hook tests ---

@@ -1,0 +1,23 @@
+[
+  {
+    "user_content": "how do I read a file in python",
+    "assistant_content": "Use the open() function with a context manager.",
+    "tool_calls": [],
+    "tool_results": [],
+    "response_status": 200
+  },
+  {
+    "user_content": "can you show an example",
+    "assistant_content": "with open('file.txt') as f: data = f.read()",
+    "tool_calls": [],
+    "tool_results": [],
+    "response_status": 200
+  },
+  {
+    "user_content": "thanks, that worked!",
+    "assistant_content": "Glad to hear it.",
+    "tool_calls": [],
+    "tool_results": [],
+    "response_status": 200
+  }
+]

@@ -8472,6 +8472,12 @@ class ProviderConfigManager:
             )
 
             return OVHCloudAudioTranscriptionConfig()
+        elif litellm.LlmProviders.SCALEWAY == provider:
+            from litellm.llms.scaleway.audio_transcription.transformation import (
+                ScalewayAudioTranscriptionConfig,
+            )
+
+            return ScalewayAudioTranscriptionConfig()
         elif litellm.LlmProviders.MISTRAL == provider:
             from litellm.llms.mistral.audio_transcription.transformation import (
                 MistralAudioTranscriptionConfig,

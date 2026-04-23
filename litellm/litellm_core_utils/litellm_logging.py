@@ -5512,6 +5512,8 @@ def get_standard_logging_object_payload(
 
         payload: StandardLoggingPayload = StandardLoggingPayload(
             id=str(id),
+            litellm_call_id=kwargs.get("litellm_call_id")
+            or litellm_params.get("litellm_call_id"),
             trace_id=StandardLoggingPayloadSetup._get_standard_logging_payload_trace_id(
                 logging_obj=logging_obj,
                 litellm_params=litellm_params,

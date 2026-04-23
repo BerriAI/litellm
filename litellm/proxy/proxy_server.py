@@ -952,6 +952,17 @@ async def proxy_startup_event(app: FastAPI):  # noqa: PLR0915
             _run_background_health_check()
         )  # start the background health check coroutine.
 
+    # Start adaptive-router queue flusher unconditionally — adaptive routers
+    # may be added later via `/config/reload`, and the flusher is a no-op when
+    # `llm_router.adaptive_routers` is empty. Per-router DB state is loaded
+    # lazily by the flusher on first tick (see `_state_loaded` flag) so
+    # hot-reloaded routers also get their persisted priors.
+    if llm_router is not None and getattr(llm_router, "adaptive_routers", None):
+        for _ar in llm_router.adaptive_routers.values():
+            await _ar.load_state_from_db(prisma_client)
+            _ar._state_loaded = True
+    asyncio.create_task(_adaptive_router_flusher_loop())
+
     ## [Optional] Initialize dd tracer
     ProxyStartupEvent._init_dd_tracer()
 
@@ -1795,6 +1806,7 @@ async def increment_spend_counters(
     team_id: Optional[str],
     user_id: Optional[str],
     response_cost: Optional[float],
+    org_id: Optional[str] = None,
 ):
     """
     Atomically increment spend counters for budget enforcement.
@@ -1878,6 +1890,20 @@ async def increment_spend_counters(
         await _init_and_increment_spend_counter(
             counter_key=f"spend:team_member:{user_id}:{team_id}",
             source_cache_key=f"team_membership:{user_id}:{team_id}",
+            increment=response_cost,
+        )
+
+    if user_id is not None:
+        await _init_and_increment_spend_counter(
+            counter_key=f"spend:user:{user_id}",
+            source_cache_key=user_id,
+            increment=response_cost,
+        )
+
+    if org_id is not None:
+        await _init_and_increment_spend_counter(
+            counter_key=f"spend:org:{org_id}",
+            source_cache_key=f"org_id:{org_id}",
             increment=response_cost,
         )
 
@@ -2425,6 +2451,38 @@ def _write_health_state_to_router_cache(
         verbose_proxy_logger.warning(
             "Failed to write health state to router cache: %s", str(e)
         )
+
+
+_ADAPTIVE_ROUTER_FLUSH_INTERVAL_SECONDS = 10
+
+
+async def _adaptive_router_flusher_loop():
+    """
+    Drain every AdaptiveRouter's in-memory state + session aggregators into
+    Postgres on a fixed cadence. Hot-path writes go to memory; this loop is
+    the only writer to the adaptive router DB tables.
+    """
+    global llm_router, prisma_client
+    while True:
+        try:
+            await asyncio.sleep(_ADAPTIVE_ROUTER_FLUSH_INTERVAL_SECONDS)
+            adaptive_routers = getattr(llm_router, "adaptive_routers", None) or {}
+            if not adaptive_routers or prisma_client is None:
+                continue
+            for ar in adaptive_routers.values():
+                # Lazy state load: covers adaptive routers registered via
+                # `/config/reload` after proxy boot.
+                if not getattr(ar, "_state_loaded", False):
+                    try:
+                        await ar.load_state_from_db(prisma_client)
+                    finally:
+                        ar._state_loaded = True
+                await ar.queue.flush_state_to_db(prisma_client)
+                await ar.queue.flush_session_to_db(prisma_client)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            verbose_proxy_logger.exception("adaptive_router flusher iteration failed")
 
 
 async def _run_background_health_check():
@@ -13951,6 +14009,38 @@ async def get_anthropic_beta_headers_reload_status(
 @router.get("/", dependencies=[Depends(user_api_key_auth)])
 async def home(request: Request):
     return "LiteLLM: RUNNING"
+
+
+@router.get(
+    "/adaptive_router/state",
+    tags=["adaptive_router"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def get_adaptive_router_state(
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """Return live bandit posteriors + queue depth for every configured adaptive router.
+
+    Admin-only. Returns 404 if no adaptive router is configured.
+
+    Response shape: `{"routers": [<snapshot>, ...]}` — one snapshot per
+    adaptive-router deployment. Each snapshot's `router_name` field identifies
+    which deployment it came from.
+    """
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+        raise HTTPException(
+            status_code=403,
+            detail={"error": CommonProxyErrors.not_allowed_access.value},
+        )
+    if llm_router is None or not llm_router.adaptive_routers:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": "No adaptive_router is configured on this proxy."},
+        )
+    snapshots = [
+        await ar.get_state_snapshot() for ar in llm_router.adaptive_routers.values()
+    ]
+    return {"routers": snapshots}
 
 
 @router.get("/routes", dependencies=[Depends(user_api_key_auth)])

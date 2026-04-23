@@ -2410,3 +2410,29 @@ def test_get_additional_headers_reset_fields_preserved():
     assert result is not None
     assert result["x_ratelimit_reset_requests"] == "1s"  # type: ignore
     assert result["x_ratelimit_reset_tokens"] == "100ms"  # type: ignore
+
+
+# ── litellm_call_id propagation ───────────────────────────────────────────────
+
+
+def test_get_standard_logging_object_payload_includes_litellm_call_id(logging_obj):
+    """litellm_call_id from kwargs must appear in the returned StandardLoggingPayload."""
+    import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import (
+        get_standard_logging_object_payload,
+    )
+
+    call_id = "test-call-id-abc-123"
+    now = datetime.datetime.now()
+    payload = get_standard_logging_object_payload(
+        kwargs={"litellm_call_id": call_id, "model": "gpt-4o", "messages": []},
+        init_response_obj={},
+        start_time=now,
+        end_time=now,
+        logging_obj=logging_obj,
+        status="success",
+    )
+
+    assert payload is not None
+    assert payload["litellm_call_id"] == call_id

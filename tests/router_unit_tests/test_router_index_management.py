@@ -244,6 +244,7 @@ class TestRouterIndexManagement:
         # Methods that are allowed to iterate through self.model_list
         ALLOWED_METHODS = [
             "_get_deployment_by_litellm_model",  # Edge case: lookup by litellm_params.model (not indexed)
+            "_finalize_adaptive_router_if_configured",  # Init-time prefix scan for "auto_router/adaptive_router" (no index for prefix match)
         ]
 
         # Get path to router.py

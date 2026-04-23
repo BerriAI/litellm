@@ -32,6 +32,7 @@
   },
   "devDependencies": {
     "@docusaurus/module-type-aliases": "3.8.1",
+    "ajv": "^8.18.0",
     "dotenv": "16.6.1"
   },
   "browserslist": {

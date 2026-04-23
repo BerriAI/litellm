@@ -536,6 +536,7 @@ const sidebars = {
           description: "Modify requests, responses, and more",
           items: [
             "proxy/call_hooks",
+            "proxy/agentic_loop_hook",
             "proxy/rules",
           ]
         },
@@ -1059,6 +1060,7 @@ const sidebars = {
       },
       items: [
         "routing",
+        "adaptive_router",
         "scheduler",
         "proxy/auto_routing",
         "proxy/load_balancing",

@@ -77,7 +77,7 @@ class TestAnthropicDirectAPI(BaseAnthropicMessagesTest):
     @property
     def model_config(self) -> Dict[str, Any]:
         return {
-            "model": "claude-3-haiku-20240307",
+            "model": "claude-haiku-4-5-20251001",
             "api_key": os.getenv("ANTHROPIC_API_KEY"),
         }
 
@@ -86,7 +86,7 @@ class TestAnthropicDirectAPI(BaseAnthropicMessagesTest):
         """
         This is the model name that is expected to be in the logging payload
         """
-        return "claude-3-haiku-20240307"
+        return "claude-haiku-4-5-20251001"
 
 
 class TestAnthropicBedrockAPI(BaseAnthropicMessagesTest):
@@ -140,7 +140,7 @@ async def test_anthropic_messages_streaming_with_bad_request():
         response = await litellm.anthropic.messages.acreate(
             messages=[{"role": "user", "content": "hi"}],
             api_key=os.getenv("ANTHROPIC_API_KEY"),
-            model="claude-3-haiku-20240307",
+            model="claude-haiku-4-5-20251001",
             max_tokens=100,
             stream=True,
         )
@@ -168,7 +168,7 @@ async def test_anthropic_messages_router_streaming_with_bad_request():
                 {
                     "model_name": "claude-special-alias",
                     "litellm_params": {
-                        "model": "claude-3-haiku-20240307",
+                        "model": "claude-haiku-4-5-20251001",
                         "api_key": os.getenv("ANTHROPIC_API_KEY"),
                     },
                 }
@@ -205,7 +205,7 @@ async def test_anthropic_messages_litellm_router_non_streaming():
             {
                 "model_name": "claude-special-alias",
                 "litellm_params": {
-                    "model": "claude-3-haiku-20240307",
+                    "model": "claude-haiku-4-5-20251001",
                     "api_key": os.getenv("ANTHROPIC_API_KEY"),
                 },
             }
@@ -243,7 +243,7 @@ async def test_anthropic_messages_litellm_router_routing_strategy():
             {
                 "model_name": "claude-special-alias",
                 "litellm_params": {
-                    "model": "claude-3-haiku-20240307",
+                    "model": "claude-haiku-4-5-20251001",
                     "api_key": os.getenv("ANTHROPIC_API_KEY"),
                 },
             }
@@ -341,7 +341,7 @@ async def test_anthropic_messages_litellm_router_latency_metadata_tracking():
             "type": "message",
             "role": "assistant",
             "content": [{"type": "text", "text": "Here's a joke for you!"}],
-            "model": "claude-3-haiku-20240307",
+            "model": "claude-haiku-4-5-20251001",
             "stop_reason": "end_turn",
             "usage": {"input_tokens": 10, "output_tokens": 20},
         }
@@ -355,7 +355,7 @@ async def test_anthropic_messages_litellm_router_latency_metadata_tracking():
                 {
                     "model_name": MODEL_GROUP,
                     "litellm_params": {
-                        "model": "claude-3-haiku-20240307",
+                        "model": "claude-haiku-4-5-20251001",
                         "api_key": os.getenv("ANTHROPIC_API_KEY"),
                     },
                 }
@@ -419,7 +419,7 @@ async def test_anthropic_messages_litellm_router_latency_metadata_tracking():
         assert "model_info" in litellm_metadata
 
         # Verify other call parameters
-        assert call_kwargs["model"] == "claude-3-haiku-20240307"
+        assert call_kwargs["model"] == "claude-haiku-4-5-20251001"
         assert call_kwargs["messages"] == messages
         assert call_kwargs["max_tokens"] == 100
         assert call_kwargs["metadata"] == {"user_id": "hello"}
@@ -459,7 +459,7 @@ async def test_anthropic_messages_litellm_router_non_streaming_with_logging():
             {
                 "model_name": MODEL_GROUP,
                 "litellm_params": {
-                    "model": "claude-3-haiku-20240307",
+                    "model": "claude-haiku-4-5-20251001",
                     "api_key": os.getenv("ANTHROPIC_API_KEY"),
                 },
             }
@@ -496,7 +496,7 @@ async def test_anthropic_messages_litellm_router_non_streaming_with_logging():
     assert test_custom_logger.logged_standard_logging_payload["response"] is not None
     assert (
         test_custom_logger.logged_standard_logging_payload["model"]
-        == "claude-3-haiku-20240307"
+        == "claude-haiku-4-5-20251001"
     )
 
     # check logged usage + spend
@@ -543,7 +543,7 @@ async def test_anthropic_messages_with_extra_headers():
                 "text": "Why did the chicken cross the road? To get to the other side!",
             }
         ],
-        "model": "claude-3-haiku-20240307",
+        "model": "claude-haiku-4-5-20251001",
         "stop_reason": "end_turn",
         "usage": {"input_tokens": 10, "output_tokens": 20},
     }
@@ -556,7 +556,7 @@ async def test_anthropic_messages_with_extra_headers():
     response = await litellm.anthropic.messages.acreate(
         messages=messages,
         api_key=api_key,
-        model="claude-3-haiku-20240307",
+        model="claude-haiku-4-5-20251001",
         max_tokens=100,
         client=mock_client,
         provider_specific_header={
@@ -689,7 +689,7 @@ async def test_anthropic_messages_with_thinking():
                 "text": "Why did the chicken cross the road? To get to the other side!",
             }
         ],
-        "model": "claude-3-haiku-20240307",
+        "model": "claude-haiku-4-5-20251001",
         "stop_reason": "end_turn",
         "usage": {"input_tokens": 10, "output_tokens": 20},
     }
@@ -702,7 +702,7 @@ async def test_anthropic_messages_with_thinking():
     response = await litellm.anthropic.messages.acreate(
         messages=messages,
         api_key=api_key,
-        model="claude-3-haiku-20240307",
+        model="claude-haiku-4-5-20251001",
         max_tokens=100,
         client=mock_client,
         thinking={"budget_tokens": 100},
@@ -717,7 +717,7 @@ async def test_anthropic_messages_with_thinking():
     request_body = json.loads(call_kwargs.get("data", {}))
     print("REQUEST BODY", request_body)
     assert request_body["max_tokens"] == 100
-    assert request_body["model"] == "claude-3-haiku-20240307"
+    assert request_body["model"] == "claude-haiku-4-5-20251001"
     assert request_body["messages"] == messages
     assert request_body["thinking"] == {"budget_tokens": 100}
 
