@@ -1,6 +1,13 @@
 import React from "react";
-import { Form, Input, Tooltip } from "antd";
-import { InfoCircleOutlined } from "@ant-design/icons";
+import { Form } from "antd";
+import { Textarea } from "@/components/ui/textarea";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import { Info } from "lucide-react";
 
 interface StdioConfigurationProps {
   isVisible: boolean;
@@ -11,22 +18,36 @@ interface StdioConfigurationProps {
   required?: boolean;
 }
 
-const StdioConfiguration: React.FC<StdioConfigurationProps> = ({ isVisible, required = true }) => {
+const StdioConfiguration: React.FC<StdioConfigurationProps> = ({
+  isVisible,
+  required = true,
+}) => {
   if (!isVisible) return null;
 
   return (
     <Form.Item
       label={
-        <span className="text-sm font-medium text-gray-700 flex items-center">
+        <span className="text-sm font-medium text-foreground flex items-center">
           Stdio Configuration (JSON)
-          <Tooltip title="Paste your stdio MCP server configuration in JSON format. You can use the full mcpServers structure from config.yaml or just the inner server configuration.">
-            <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
-          </Tooltip>
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Info className="ml-2 h-3 w-3 inline text-primary cursor-help" />
+              </TooltipTrigger>
+              <TooltipContent className="max-w-xs">
+                Paste your stdio MCP server configuration in JSON format. You
+                can use the full mcpServers structure from config.yaml or just
+                the inner server configuration.
+              </TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
         </span>
       }
       name="stdio_config"
       rules={[
-        ...(required ? [{ required: true, message: "Please enter stdio configuration" }] : []),
+        ...(required
+          ? [{ required: true, message: "Please enter stdio configuration" }]
+          : []),
         {
           validator: (_, value) => {
             if (!value) return Promise.resolve();
@@ -40,7 +61,7 @@ const StdioConfiguration: React.FC<StdioConfigurationProps> = ({ isVisible, requ
         },
       ]}
     >
-      <Input.TextArea
+      <Textarea
         placeholder={`{
   "mcpServers": {
     "circleci-mcp-server": {
@@ -54,7 +75,7 @@ const StdioConfiguration: React.FC<StdioConfigurationProps> = ({ isVisible, requ
   }
 }`}
         rows={12}
-        className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500 font-mono text-sm"
+        className="rounded-lg font-mono text-sm"
       />
     </Form.Item>
   );
