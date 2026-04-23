@@ -219,10 +219,11 @@ def get_image_dimensions(
             max_bytes = int(MAX_IMAGE_URL_DOWNLOAD_SIZE_MB * 1024 * 1024)
             content_length = response.headers.get("Content-Length")
             if content_length is not None and int(content_length) > max_bytes:
-                raise ValueError("Image response exceeds size limit")
-            img_data = response.read()
-            if len(img_data) > max_bytes:
-                raise ValueError("Image response exceeds size limit")
+                pass  # skip download; img_data stays None
+            else:
+                body = response.read()
+                if len(body) <= max_bytes:
+                    img_data = body
         except Exception:
             pass
     if img_data is None:
