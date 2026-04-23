@@ -17,7 +17,6 @@ from typing import (
     Union,
     cast,
 )
-from urllib.parse import urlparse
 from urllib.request import url2pathname
 
 import httpx  # type: ignore
