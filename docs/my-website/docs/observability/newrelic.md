@@ -32,7 +32,7 @@ In order for the New Relic Python Agent to report telemetry to New Relic, there 
 
 The `NEW_RELIC_APP_NAME` environment variable should have a value for the name that you wish the LiteLLM server to appear as in New Relic’s UI. The `NEW_RELIC_LICENSE_KEY` environment variable value is a license key for the New Relic account you want the telemetry to be reported to.
 
-The `USE_NEWRELIC` is required in order to enable the New Relic Python Agent with the LiteLLM proxy. This must be sent in order for the New Relic Python Agent to report telemetry to New Relic.
+When running the LiteLLM proxy container image, `USE_NEWRELIC=true` is required to enable the New Relic Python Agent. This instructs the container entrypoint to start the proxy via `newrelic-admin`, which initializes the agent before the proxy process begins. If you are running the proxy outside of the container image, you will need to start the process with `newrelic-admin run-program` instead.
 
 ```shell
 NEW_RELIC_APP_NAME=<app name>

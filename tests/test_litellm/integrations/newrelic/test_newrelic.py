@@ -18,10 +18,13 @@ _mock_newrelic.agent = _mock_newrelic_agent
 sys.modules["newrelic"] = _mock_newrelic
 sys.modules["newrelic.agent"] = _mock_newrelic_agent
 
-sys.path.insert(0, os.path.abspath("../.."))
-
 import litellm.integrations.newrelic.newrelic as nr_module
 from litellm.integrations.newrelic.newrelic import NewRelicLogger
+
+# The module may have been imported before sys.modules was patched (e.g. via
+# litellm's own startup imports), leaving _newrelic_agent=None. Point it at
+# the mock agent so all tests see a non-None agent.
+nr_module._newrelic_agent = _mock_newrelic_agent
 
 
 # ---------------------------------------------------------------------------
@@ -93,7 +96,7 @@ def make_response(
 
 
 # ---------------------------------------------------------------------------
-# 1. Init / configuration
+# Init / configuration
 # ---------------------------------------------------------------------------
 
 
@@ -177,7 +180,7 @@ class TestNewRelicLoggerInit:
 
 
 # ---------------------------------------------------------------------------
-# 2. _parse_bool_env
+# _parse_bool_env
 # ---------------------------------------------------------------------------
 
 
@@ -204,7 +207,7 @@ class TestParseBoolEnv:
 
 
 # ---------------------------------------------------------------------------
-# 3. _get_trace_context
+# _get_trace_context
 # ---------------------------------------------------------------------------
 
 
@@ -246,7 +249,7 @@ class TestGetTraceContext:
 
 
 # ---------------------------------------------------------------------------
-# 4. _extract_message_content edge cases
+# _extract_message_content edge cases
 # ---------------------------------------------------------------------------
 
 
@@ -285,7 +288,7 @@ class TestExtractMessageContent:
 
 
 # ---------------------------------------------------------------------------
-# 5. _extract_all_messages — record_content=False path
+# _extract_all_messages — record_content=False path
 # ---------------------------------------------------------------------------
 
 
@@ -353,7 +356,125 @@ class TestExtractAllMessagesTimestamps:
 
 
 # ---------------------------------------------------------------------------
-# 6. Explicit-None defensive tests
+# Streaming response handling
+# ---------------------------------------------------------------------------
+
+
+def make_streaming_response(
+    model="gpt-4",
+    response_id="chatcmpl-stream123",
+    content="Hello from streaming!",
+    finish_reason="stop",
+    prompt_tokens=8,
+    completion_tokens=15,
+):
+    """Build a streaming-assembled response dict using 'delta' instead of 'message'."""
+    return {
+        "id": response_id,
+        "model": model,
+        "choices": [
+            {
+                "delta": {"role": "assistant", "content": content},
+                "finish_reason": finish_reason,
+            }
+        ],
+        "usage": {
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": prompt_tokens + completion_tokens,
+        },
+    }
+
+
+class TestStreamingResponse:
+    """Verify graceful handling of streaming-assembled responses.
+
+    When LiteLLM assembles a streaming response, some providers produce a
+    final choice dict with a 'delta' key instead of 'message'. The integration
+    must extract content from either key without raising.
+    """
+
+    def setup_method(self):
+        self.logger = make_logger()
+
+    def test_extracts_content_from_delta_key(self):
+        kwargs = make_kwargs(messages=[{"role": "user", "content": "Hi"}])
+        response = make_streaming_response(content="Streamed reply")
+
+        messages = self.logger._extract_all_messages(
+            kwargs, response, response_model="gpt-4", vendor="openai"
+        )
+
+        response_msgs = [m for m in messages if m.get("is_response")]
+        assert len(response_msgs) == 1
+        assert response_msgs[0]["content"] == "Streamed reply"
+        assert response_msgs[0]["role"] == "assistant"
+
+    def test_streaming_response_records_summary_and_message_events(self):
+        mock_app = MagicMock()
+        mock_app.enabled = True
+
+        kwargs = make_kwargs(
+            traceparent="00-aabbccddeeff00112233445566778899-0011223344556677-01",
+            messages=[{"role": "user", "content": "Hi"}],
+        )
+        response = make_streaming_response(
+            response_id="chatcmpl-stream123",
+            content="Streamed reply",
+            finish_reason="stop",
+            prompt_tokens=8,
+            completion_tokens=15,
+        )
+
+        with patch("newrelic.agent.application", return_value=mock_app):
+            self.logger._process_success(kwargs, response, start_time=1.0, end_time=2.0)
+
+        calls = mock_app.record_custom_event.call_args_list
+        event_types = [c[0][0] for c in calls]
+        assert "LlmChatCompletionSummary" in event_types
+        assert "LlmChatCompletionMessage" in event_types
+
+        message_events = [
+            c[0][1] for c in calls if c[0][0] == "LlmChatCompletionMessage"
+        ]
+        response_msg = next((e for e in message_events if e.get("is_response")), None)
+        assert response_msg is not None
+        assert response_msg["content"] == "Streamed reply"
+
+    @pytest.mark.asyncio
+    async def test_async_log_success_event_streaming(self):
+        """async_log_success_event is the primary entry point for streaming calls."""
+        mock_app = MagicMock()
+        mock_app.enabled = True
+
+        kwargs = make_kwargs(messages=[{"role": "user", "content": "Hi"}])
+        response = make_streaming_response()
+
+        with patch("newrelic.agent.application", return_value=mock_app):
+            await self.logger.async_log_success_event(
+                kwargs, response, start_time=1.0, end_time=2.0
+            )
+
+        calls = mock_app.record_custom_event.call_args_list
+        event_types = [c[0][0] for c in calls]
+        assert "LlmChatCompletionSummary" in event_types
+        assert "LlmChatCompletionMessage" in event_types
+
+    def test_no_content_when_recording_disabled_streaming(self):
+        logger = make_logger(turn_off_message_logging=True)
+        kwargs = make_kwargs(messages=[{"role": "user", "content": "secret"}])
+        response = make_streaming_response(content="also secret")
+
+        messages = logger._extract_all_messages(
+            kwargs, response, response_model="gpt-4", vendor="openai"
+        )
+
+        for msg in messages:
+            assert "content" not in msg
+
+
+# ---------------------------------------------------------------------------
+# Explicit-None defensive tests
 # ---------------------------------------------------------------------------
 
 
@@ -422,7 +543,7 @@ class TestExplicitNoneValues:
 
 
 # ---------------------------------------------------------------------------
-# 7. Helper edge cases
+# Helper edge cases
 # ---------------------------------------------------------------------------
 
 
@@ -514,7 +635,7 @@ class TestGetRequestParams:
 
 
 # ---------------------------------------------------------------------------
-# 8. _process_success — comprehensive happy-path
+# _process_success — comprehensive happy-path
 # ---------------------------------------------------------------------------
 
 
@@ -582,7 +703,7 @@ class TestProcessSuccess:
 
 
 # ---------------------------------------------------------------------------
-# 9. _record_error_metric
+# _record_error_metric
 # ---------------------------------------------------------------------------
 
 
@@ -621,14 +742,14 @@ class TestRecordErrorMetric:
 
 
 # ---------------------------------------------------------------------------
-# 10. _emit_supportability_metric
+# _emit_supportability_metric
 # ---------------------------------------------------------------------------
 
 
 class TestEmitSupportabilityMetric:
     def setup_method(self):
         self.logger = make_logger()
-        nr_module._last_metric_emission_time = 0.0
+        NewRelicLogger._last_metric_emission_time = 0.0
 
     def test_records_metric_with_correct_name_and_value(self):
         mock_app = MagicMock()
@@ -652,7 +773,7 @@ class TestEmitSupportabilityMetric:
                 return_value=fake_now,
             ):
                 self.logger._emit_supportability_metric()
-        assert nr_module._last_metric_emission_time == fake_now
+        assert NewRelicLogger._last_metric_emission_time == fake_now
 
     def test_skips_when_app_disabled(self):
         mock_app = MagicMock()
@@ -661,25 +782,25 @@ class TestEmitSupportabilityMetric:
             self.logger._emit_supportability_metric()
         mock_app.record_custom_metric.assert_not_called()
         # Timestamp is still updated to back off lock contention during registration.
-        assert nr_module._last_metric_emission_time != 0.0
+        assert NewRelicLogger._last_metric_emission_time != 0.0
 
     def test_skips_when_no_app(self):
         with patch("newrelic.agent.application", return_value=None):
             self.logger._emit_supportability_metric()
         # Timestamp is updated even when app is None to back off lock contention
         # if the agent never starts or is slow to initialise.
-        assert nr_module._last_metric_emission_time != 0.0
+        assert NewRelicLogger._last_metric_emission_time != 0.0
 
 
 # ---------------------------------------------------------------------------
-# 11. _check_and_emit_periodic_metric
+# _check_and_emit_periodic_metric
 # ---------------------------------------------------------------------------
 
 
 class TestCheckAndEmitPeriodicMetric:
     def setup_method(self):
         self.logger = make_logger()
-        nr_module._last_metric_emission_time = 0.0
+        NewRelicLogger._last_metric_emission_time = 0.0
 
     def test_emits_on_first_call(self):
         """_last_metric_emission_time starts at 0.0; any real time satisfies 27-hour window."""
@@ -693,7 +814,7 @@ class TestCheckAndEmitPeriodicMetric:
 
     def test_does_not_re_emit_within_27_hours(self):
         recent = 1_000_000.0
-        nr_module._last_metric_emission_time = recent
+        NewRelicLogger._last_metric_emission_time = recent
         with patch.object(self.logger, "_emit_supportability_metric") as mock_emit:
             with patch(
                 "litellm.integrations.newrelic.newrelic.time.time",
@@ -704,7 +825,7 @@ class TestCheckAndEmitPeriodicMetric:
 
     def test_re_emits_after_27_hours(self):
         old = 1_000_000.0
-        nr_module._last_metric_emission_time = old
+        NewRelicLogger._last_metric_emission_time = old
         with patch.object(self.logger, "_emit_supportability_metric") as mock_emit:
             with patch(
                 "litellm.integrations.newrelic.newrelic.time.time",
@@ -715,7 +836,7 @@ class TestCheckAndEmitPeriodicMetric:
 
     def test_boundary_exactly_27_hours_triggers_emission(self):
         old = 1_000_000.0
-        nr_module._last_metric_emission_time = old
+        NewRelicLogger._last_metric_emission_time = old
         with patch.object(self.logger, "_emit_supportability_metric") as mock_emit:
             with patch(
                 "litellm.integrations.newrelic.newrelic.time.time",
