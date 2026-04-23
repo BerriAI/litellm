@@ -1,40 +1,44 @@
 import React, { useState, useEffect } from "react";
-import { Card, Text, Button } from "@tremor/react";
-import { Typography, Divider, Spin, Checkbox } from "antd";
+import { Card } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Separator } from "@/components/ui/separator";
+import { Skeleton } from "@/components/ui/skeleton";
 import NotificationsManager from "../molecules/notifications_manager";
-import { getEmailEventSettings, updateEmailEventSettings, resetEmailEventSettings } from "../networking";
+import {
+  getEmailEventSettings,
+  updateEmailEventSettings,
+  resetEmailEventSettings,
+} from "../networking";
 import { EmailEvent } from "../../types";
 import { EmailEventSetting } from "./types";
-
-const { Title } = Typography;
 
 interface EmailEventSettingsProps {
   accessToken: string | null;
 }
 
-const EmailEventSettings: React.FC<EmailEventSettingsProps> = ({ accessToken }) => {
+const EmailEventSettings: React.FC<EmailEventSettingsProps> = ({
+  accessToken,
+}) => {
   const [loading, setLoading] = useState(true);
   const [eventSettings, setEventSettings] = useState<EmailEventSetting[]>([]);
 
-  // Fetch email event settings on component mount
   useEffect(() => {
+    const fetchEventSettings = async () => {
+      if (!accessToken) return;
+      setLoading(true);
+      try {
+        const response = await getEmailEventSettings(accessToken);
+        setEventSettings(response.settings);
+      } catch (error) {
+        console.error("Failed to fetch email event settings:", error);
+        NotificationsManager.fromBackend(error);
+      } finally {
+        setLoading(false);
+      }
+    };
     fetchEventSettings();
   }, [accessToken]);
-
-  const fetchEventSettings = async () => {
-    if (!accessToken) return;
-
-    setLoading(true);
-    try {
-      const response = await getEmailEventSettings(accessToken);
-      setEventSettings(response.settings);
-    } catch (error) {
-      console.error("Failed to fetch email event settings:", error);
-      NotificationsManager.fromBackend(error);
-    } finally {
-      setLoading(false);
-    }
-  };
 
   const handleCheckboxChange = (event: EmailEvent, checked: boolean) => {
     const updatedSettings = eventSettings.map((setting) =>
@@ -45,7 +49,6 @@ const EmailEventSettings: React.FC<EmailEventSettingsProps> = ({ accessToken }) 
 
   const handleSaveSettings = async () => {
     if (!accessToken) return;
-
     try {
       await updateEmailEventSettings(accessToken, { settings: eventSettings });
       NotificationsManager.success("Email event settings updated successfully");
@@ -57,27 +60,26 @@ const EmailEventSettings: React.FC<EmailEventSettingsProps> = ({ accessToken }) 
 
   const handleResetSettings = async () => {
     if (!accessToken) return;
-
     try {
       await resetEmailEventSettings(accessToken);
       NotificationsManager.success("Email event settings reset to defaults");
-      // Refresh settings after reset
-      fetchEventSettings();
+      // Refresh
+      setLoading(true);
+      const response = await getEmailEventSettings(accessToken);
+      setEventSettings(response.settings);
+      setLoading(false);
     } catch (error) {
       console.error("Failed to reset email event settings:", error);
       NotificationsManager.fromBackend(error);
     }
   };
 
-  // Helper function to get a description for each event type
   const getEventDescription = (event: EmailEvent): string => {
-    // Convert event name to a sentence with more context
     if (event.includes("Virtual Key Created")) {
       return "An email will be sent to the user when a new virtual key is created with their user ID";
     } else if (event.includes("New User Invitation")) {
       return "An email will be sent to the email address of the user when a new user is created";
     } else {
-      // Handle any other event type from the API
       const words = event
         .split(/(?=[A-Z])/)
         .join(" ")
@@ -87,37 +89,54 @@ const EmailEventSettings: React.FC<EmailEventSettingsProps> = ({ accessToken }) 
   };
 
   return (
-    <Card>
-      <Title level={4}>Email Notifications</Title>
-      <Text>Select which events should trigger email notifications.</Text>
-      <Divider />
+    <Card className="p-6">
+      <h4 className="text-lg font-semibold m-0">Email Notifications</h4>
+      <p className="text-sm text-muted-foreground">
+        Select which events should trigger email notifications.
+      </p>
+      <Separator className="my-4" />
 
       {loading ? (
-        <div style={{ textAlign: "center", padding: "20px" }}>
-          <Spin size="large" />
+        <div className="py-5 flex justify-center">
+          <Skeleton className="h-8 w-48" />
         </div>
       ) : (
         <div className="space-y-4">
           {eventSettings.map((setting) => (
-            <div key={setting.event} className="flex items-center">
+            <div key={setting.event} className="flex items-start gap-3">
               <Checkbox
+                id={`email-event-${setting.event}`}
                 checked={setting.enabled}
-                onChange={(e) => handleCheckboxChange(setting.event, e.target.checked)}
+                onCheckedChange={(checked) =>
+                  handleCheckboxChange(setting.event, !!checked)
+                }
+                className="mt-1"
               />
-              <div className="ml-3">
-                <Text>{setting.event}</Text>
-                <div className="text-sm text-gray-500 block">{getEventDescription(setting.event)}</div>
+              <div>
+                <label
+                  htmlFor={`email-event-${setting.event}`}
+                  className="text-sm font-medium cursor-pointer"
+                >
+                  {setting.event}
+                </label>
+                <div className="text-sm text-muted-foreground block">
+                  {getEventDescription(setting.event)}
+                </div>
               </div>
             </div>
           ))}
         </div>
       )}
 
-      <div className="mt-6 flex space-x-4">
+      <div className="mt-6 flex gap-3">
         <Button onClick={handleSaveSettings} disabled={loading}>
           Save Changes
         </Button>
-        <Button onClick={handleResetSettings} variant="secondary" disabled={loading}>
+        <Button
+          onClick={handleResetSettings}
+          variant="secondary"
+          disabled={loading}
+        >
           Reset to Defaults
         </Button>
       </div>

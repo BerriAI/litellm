@@ -52,3 +52,21 @@ Layer abbreviations: **TS** (tsc --noEmit), **Lint** (eslint), **Vitest**
 - Scope: PolicySelect.tsx only (the single banned-import file under ToolPolicies/). The ToolPoliciesView.tsx top-level wrapper has no antd imports already. Top-level ToolPolicies.tsx legacy wrapper is not in scope.
 - Section decision: keep amber/emerald/red categorical colors for policy badges (not theme-semantic). Documented in DEVIATIONS.md.
 
+## 21. Logging & Alerts / 32-a: Alerting `DynamicForm`
+
+- Cycles used: 1 / 7
+- Layer outcomes per cycle:
+  - cycle 1: TS ✓ | Lint ✓ | Vitest n/a (no colocated tests) | Build ✓ | Parity ⏭ | Snap ⏭
+- Final status: **done (partial — single file within the Logging & Alerts section)**
+- Scope: `src/components/alerting/dynamic_form.tsx` only. The broader
+  Logging & Alerts section (alerting_settings.tsx, email_events/*) still
+  has files that will be picked up by subsequent runs.
+
+## 21-b. Email Event Settings
+
+- Cycles used: 1 / 7
+- Layer outcomes per cycle:
+  - cycle 1: TS ✓ | Lint ✓ | Vitest n/a | Build ✓ | Parity ⏭ | Snap ⏭
+- Final status: **done (partial)**
+- Scope: `src/components/email_events/email_event_settings.tsx` only.
+
