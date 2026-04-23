@@ -10000,7 +10000,7 @@ export const createLiteLLMEval = async (
     max_iterations?: number;
   }
 ): Promise<any> => {
-  const url = proxyBaseUrl ? `${proxyBaseUrl}/v1/evals/config` : `/v1/evals/config`;
+  const url = proxyBaseUrl ? `${proxyBaseUrl}/litellm_evals/config` : `/litellm_evals/config`;
   const response = await fetch(url, {
     method: "POST",
     headers: {
@@ -10017,7 +10017,7 @@ export const createLiteLLMEval = async (
 };
 
 export const listLiteLLMEvals = async (accessToken: string): Promise<any[]> => {
-  const url = proxyBaseUrl ? `${proxyBaseUrl}/v1/evals/config` : `/v1/evals/config`;
+  const url = proxyBaseUrl ? `${proxyBaseUrl}/litellm_evals/config` : `/litellm_evals/config`;
   const response = await fetch(url, {
     headers: { [globalLitellmHeaderName]: `Bearer ${accessToken}` },
   });
@@ -10029,7 +10029,7 @@ export const deleteLiteLLMEval = async (
   accessToken: string,
   evalId: string
 ): Promise<any> => {
-  const url = proxyBaseUrl ? `${proxyBaseUrl}/v1/evals/config/${evalId}` : `/v1/evals/config/${evalId}`;
+  const url = proxyBaseUrl ? `${proxyBaseUrl}/litellm_evals/config/${evalId}` : `/litellm_evals/config/${evalId}`;
   const response = await fetch(url, {
     method: "DELETE",
     headers: { [globalLitellmHeaderName]: `Bearer ${accessToken}` },
@@ -10044,8 +10044,8 @@ export const attachEvalToAgent = async (
   payload: { eval_id: string; on_failure: "block" | "log"; overall_threshold_override?: number }
 ): Promise<any> => {
   const url = proxyBaseUrl
-    ? `${proxyBaseUrl}/v1/agents/${agentId}/evals`
-    : `/v1/agents/${agentId}/evals`;
+    ? `${proxyBaseUrl}/litellm_evals/agents/${agentId}/evals`
+    : `/litellm_evals/agents/${agentId}/evals`;
   const response = await fetch(url, {
     method: "POST",
     headers: {
@@ -10064,8 +10064,8 @@ export const detachEvalFromAgent = async (
   evalId: string
 ): Promise<any> => {
   const url = proxyBaseUrl
-    ? `${proxyBaseUrl}/v1/agents/${agentId}/evals/${evalId}`
-    : `/v1/agents/${agentId}/evals/${evalId}`;
+    ? `${proxyBaseUrl}/litellm_evals/agents/${agentId}/evals/${evalId}`
+    : `/litellm_evals/agents/${agentId}/evals/${evalId}`;
   const response = await fetch(url, {
     method: "DELETE",
     headers: { [globalLitellmHeaderName]: `Bearer ${accessToken}` },
@@ -10079,8 +10079,8 @@ export const getAgentEvals = async (
   agentId: string
 ): Promise<any[]> => {
   const url = proxyBaseUrl
-    ? `${proxyBaseUrl}/v1/agents/${agentId}/evals`
-    : `/v1/agents/${agentId}/evals`;
+    ? `${proxyBaseUrl}/litellm_evals/agents/${agentId}/evals`
+    : `/litellm_evals/agents/${agentId}/evals`;
   const response = await fetch(url, {
     headers: { [globalLitellmHeaderName]: `Bearer ${accessToken}` },
   });
