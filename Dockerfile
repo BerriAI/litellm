@@ -69,22 +69,13 @@ FROM $LITELLM_RUNTIME_IMAGE AS runtime
 USER root
 
 RUN apk add --no-cache bash openssl tzdata nodejs npm python3 libsndfile supervisor && \
-    npm install -g npm@11.12.1 tar@7.5.11 glob@11.1.0 @isaacs/brace-expansion@5.0.1 minimatch@10.2.4 diff@8.0.3 && \
+    npm install -g npm@11.12.1 tar@7.5.11 glob@13.0.6 @isaacs/brace-expansion@5.0.5 minimatch@10.2.4 diff@8.0.3 picomatch@4.0.4 && \
     GLOBAL="$(npm root -g)" && \
-    find "$GLOBAL/npm" -type d -name "tar" -path "*/node_modules/tar" | while read d; do \
-        rm -rf "$d" && cp -rL "$GLOBAL/tar" "$d"; \
-    done && \
-    find "$GLOBAL/npm" -type d -name "glob" -path "*/node_modules/glob" | while read d; do \
-        rm -rf "$d" && cp -rL "$GLOBAL/glob" "$d"; \
-    done && \
-    find "$GLOBAL/npm" -type d -name "brace-expansion" -path "*/node_modules/@isaacs/brace-expansion" | while read d; do \
-        rm -rf "$d" && cp -rL "$GLOBAL/@isaacs/brace-expansion" "$d"; \
-    done && \
-    find "$GLOBAL/npm" -type d -name "minimatch" -path "*/node_modules/minimatch" | while read d; do \
-        rm -rf "$d" && cp -rL "$GLOBAL/minimatch" "$d"; \
-    done && \
-    find "$GLOBAL/npm" -type d -name "diff" -path "*/node_modules/diff" | while read d; do \
-        rm -rf "$d" && cp -rL "$GLOBAL/diff" "$d"; \
+    for pkg in tar glob @isaacs/brace-expansion minimatch diff picomatch; do \
+        name="${pkg##*/}"; \
+        find "$GLOBAL/npm" -type d -name "$name" -path "*/node_modules/$pkg" | while read d; do \
+            rm -rf "$d" && cp -rL "$GLOBAL/$pkg" "$d"; \
+        done; \
     done && \
     find /usr/local/lib /usr/lib -path "*/node_modules/npm/package.json" -exec \
         sed -i 's/"tar": "\^7\.5\.[0-9]*"/"tar": "^7.5.10"/g; s/"minimatch": "\^10\.[0-9.]*"/"minimatch": "^10.2.4"/g' {} + 2>/dev/null && \
