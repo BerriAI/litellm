@@ -1841,9 +1841,6 @@ jobs:
             ls
             uv run --no-sync python -m pytest -vv tests/spend_tracking_tests -x --junitxml=test-results/junit.xml --durations=5
           no_output_timeout: 15m
-            # Clean up first container
-      - run:
-          name: Stop and remove first container
       - run:
           name: Stop and remove first container
           when: always
