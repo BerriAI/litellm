@@ -14,7 +14,9 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 import httpx
 from httpx._types import RequestFiles
 
+import litellm
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
+from litellm.litellm_core_utils.url_utils import safe_get
 from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.images.main import ImageEditOptionalRequestParams
@@ -206,14 +208,14 @@ class BlackForestLabsImageEditConfig(BaseImageEditConfig):
             )
         elif isinstance(image, str):
             if image.startswith(("http://", "https://")):
-                # Download image from URL
-                response = httpx.get(image, timeout=60.0)
+                response = safe_get(litellm.module_level_client, image, timeout=60.0)
                 response.raise_for_status()
                 return response.content
             else:
-                # Assume it's a file path
-                with open(image, "rb") as f:
-                    return f.read()
+                raise ValueError(
+                    f"Unsupported image input: plain string values that are not URLs are not accepted. "
+                    "Provide image bytes or a file-like object."
+                )
         elif hasattr(image, "read"):
             # File-like object
             pos = getattr(image, "tell", lambda: 0)()
