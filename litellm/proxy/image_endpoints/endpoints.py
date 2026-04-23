@@ -285,6 +285,13 @@ async def image_edit_api(
     if mask_files:
         data["mask"] = mask_files
 
+    for field in ("image", "mask"):
+        if isinstance(data.get(field), str):
+            raise HTTPException(
+                status_code=422,
+                detail=f"'{field}' must be a file upload. Use multipart/form-data to upload files.",
+            )
+
     # Ensure prompt exists in data (default to None for models that don't require it)
     if "prompt" not in data:
         data["prompt"] = None

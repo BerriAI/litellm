@@ -349,12 +349,10 @@ class VertexAIImagenImageEditConfig(BaseImageEditConfig, VertexLLM):
                 image.seek(stream_pos)
             return data
         if isinstance(image, (str, Path)):
-            path_obj = Path(image)
-            if not path_obj.exists():
-                raise ValueError(
-                    f"Mask/image path does not exist for Vertex AI Imagen image edit: {path_obj}"
-                )
-            return path_obj.read_bytes()
+            raise ValueError(
+                "String file paths are not accepted for Vertex AI Imagen image edit. "
+                "Provide image data as bytes or a file-like object."
+            )
         if hasattr(image, "read"):
             data = image.read()
             if isinstance(data, str):
