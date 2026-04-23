@@ -1,20 +1,24 @@
 import React from "react";
-import { Form, Input, Switch, Collapse } from "antd";
+import { Form, Input, Switch, Collapse, Select, Space, Tooltip } from "antd";
 import { Button as AntButton } from "antd";
-import { PlusOutlined, MinusCircleOutlined } from "@ant-design/icons";
+import { PlusOutlined, MinusCircleOutlined, InfoCircleOutlined } from "@ant-design/icons";
 import { AGENT_FORM_CONFIG, SKILL_FIELD_CONFIG } from "./agent_config";
+
+import CostConfigFields from "./cost_config_fields";
 
 const { Panel } = Collapse;
 
 interface AgentFormFieldsProps {
   showAgentName?: boolean;
+  visiblePanels?: string[];
 }
 
 /**
  * Reusable form fields component for agent forms
  * Uses shared configuration from agent_config.ts
  */
-const AgentFormFields: React.FC<AgentFormFieldsProps> = ({ showAgentName = true }) => {
+const AgentFormFields: React.FC<AgentFormFieldsProps> = ({ showAgentName = true, visiblePanels }) => {
+  const shouldShow = (key: string) => !visiblePanels || visiblePanels.includes(key);
   return (
     <>
       {showAgentName && (
@@ -30,6 +34,7 @@ const AgentFormFields: React.FC<AgentFormFieldsProps> = ({ showAgentName = true 
 
       <Collapse defaultActiveKey={['basic']} style={{ marginBottom: 16 }}>
         {/* Basic Information */}
+        {shouldShow(AGENT_FORM_CONFIG.basic.key) && (
         <Panel header={`${AGENT_FORM_CONFIG.basic.title} (Required)`} key={AGENT_FORM_CONFIG.basic.key}>
           {AGENT_FORM_CONFIG.basic.fields.map((field) => (
             <Form.Item
@@ -47,8 +52,10 @@ const AgentFormFields: React.FC<AgentFormFieldsProps> = ({ showAgentName = true 
             </Form.Item>
           ))}
         </Panel>
+        )}
 
         {/* Skills */}
+        {shouldShow(AGENT_FORM_CONFIG.skills.key) && (
         <Panel header={`${AGENT_FORM_CONFIG.skills.title} (Required)`} key={AGENT_FORM_CONFIG.skills.key}>
           <Form.List name="skills">
             {(fields, { add, remove }) => (
@@ -125,8 +132,10 @@ const AgentFormFields: React.FC<AgentFormFieldsProps> = ({ showAgentName = true 
             )}
           </Form.List>
         </Panel>
+        )}
 
         {/* Capabilities */}
+        {shouldShow(AGENT_FORM_CONFIG.capabilities.key) && (
         <Panel header={AGENT_FORM_CONFIG.capabilities.title} key={AGENT_FORM_CONFIG.capabilities.key}>
           {AGENT_FORM_CONFIG.capabilities.fields.map((field) => (
             <Form.Item
@@ -139,8 +148,10 @@ const AgentFormFields: React.FC<AgentFormFieldsProps> = ({ showAgentName = true 
             </Form.Item>
           ))}
         </Panel>
+        )}
 
         {/* Optional Settings */}
+        {shouldShow(AGENT_FORM_CONFIG.optional.key) && (
         <Panel header={AGENT_FORM_CONFIG.optional.title} key={AGENT_FORM_CONFIG.optional.key}>
           {AGENT_FORM_CONFIG.optional.fields.map((field) => (
             <Form.Item
@@ -153,8 +164,17 @@ const AgentFormFields: React.FC<AgentFormFieldsProps> = ({ showAgentName = true 
             </Form.Item>
           ))}
         </Panel>
+        )}
+
+        {/* Cost Configuration */}
+        {shouldShow(AGENT_FORM_CONFIG.cost.key) && (
+        <Panel header={AGENT_FORM_CONFIG.cost.title} key={AGENT_FORM_CONFIG.cost.key}>
+          <CostConfigFields />
+        </Panel>
+        )}
 
         {/* LiteLLM Parameters */}
+        {shouldShow(AGENT_FORM_CONFIG.litellm.key) && (
         <Panel header={AGENT_FORM_CONFIG.litellm.title} key={AGENT_FORM_CONFIG.litellm.key}>
           {AGENT_FORM_CONFIG.litellm.fields.map((field) => (
             <Form.Item
@@ -167,6 +187,73 @@ const AgentFormFields: React.FC<AgentFormFieldsProps> = ({ showAgentName = true 
             </Form.Item>
           ))}
         </Panel>
+        )}
+
+        {/* Authentication Headers */}
+        {shouldShow("auth_headers") && (
+        <Panel header="Authentication Headers" key="auth_headers">
+          {/* Static Headers */}
+          <Form.Item
+            label={
+              <span>
+                Static Headers{" "}
+                <Tooltip title="Headers always sent to the backend agent, regardless of the client request. Admin-configured, static wins on conflict.">
+                  <InfoCircleOutlined style={{ color: "#8c8c8c" }} />
+                </Tooltip>
+              </span>
+            }
+          >
+            <Form.List name="static_headers">
+              {(fields, { add, remove }) => (
+                <>
+                  {fields.map(({ key, name, ...restField }) => (
+                    <Space key={key} style={{ display: "flex", marginBottom: 8 }} align="baseline">
+                      <Form.Item
+                        {...restField}
+                        name={[name, "header"]}
+                        rules={[{ required: true, message: "Header name required" }]}
+                      >
+                        <Input placeholder="Header name (e.g. Authorization)" style={{ width: 220 }} />
+                      </Form.Item>
+                      <Form.Item
+                        {...restField}
+                        name={[name, "value"]}
+                        rules={[{ required: true, message: "Value required" }]}
+                      >
+                        <Input placeholder="Value (e.g. Bearer token123)" style={{ width: 260 }} />
+                      </Form.Item>
+                      <MinusCircleOutlined onClick={() => remove(name)} style={{ color: "#ff4d4f" }} />
+                    </Space>
+                  ))}
+                  <AntButton type="dashed" onClick={() => add()} icon={<PlusOutlined />} style={{ width: "100%" }}>
+                    Add Static Header
+                  </AntButton>
+                </>
+              )}
+            </Form.List>
+          </Form.Item>
+
+          {/* Extra Headers (dynamic forwarding) */}
+          <Form.Item
+            label={
+              <span>
+                Forward Client Headers{" "}
+                <Tooltip title="Header names to extract from the client's request and forward to the agent. Type a name and press Enter.">
+                  <InfoCircleOutlined style={{ color: "#8c8c8c" }} />
+                </Tooltip>
+              </span>
+            }
+            name="extra_headers"
+          >
+            <Select
+              mode="tags"
+              style={{ width: "100%" }}
+              placeholder="e.g. x-api-key, Authorization"
+              tokenSeparators={[","]}
+            />
+          </Form.Item>
+        </Panel>
+        )}
       </Collapse>
     </>
   );

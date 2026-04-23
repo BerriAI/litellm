@@ -67,6 +67,8 @@ class BaseImageEditConfig(ABC):
         headers: dict,
         model: str,
         api_key: Optional[str] = None,
+        litellm_params: Optional[dict] = None,
+        api_base: Optional[str] = None,
     ) -> dict:
         return {}
 
@@ -92,8 +94,8 @@ class BaseImageEditConfig(ABC):
     def transform_image_edit_request(
         self,
         model: str,
-        prompt: str,
-        image: FileTypes,
+        prompt: Optional[str],
+        image: Optional[FileTypes],
         image_edit_optional_request_params: Dict,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
@@ -108,6 +110,15 @@ class BaseImageEditConfig(ABC):
         logging_obj: LiteLLMLoggingObj,
     ) -> ImageResponse:
         pass
+
+    def use_multipart_form_data(self) -> bool:
+        """
+        Return True if the provider uses multipart/form-data for image edit requests.
+        Return False if the provider uses JSON requests.
+
+        Default is True for backwards compatibility with OpenAI-style providers.
+        """
+        return True
 
     def get_error_class(
         self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]

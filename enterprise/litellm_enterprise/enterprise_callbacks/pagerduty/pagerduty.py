@@ -13,7 +13,7 @@ However, this is under the enterprise license
 import asyncio
 import os
 from datetime import datetime, timedelta, timezone
-from typing import List, Literal, Optional, Union
+from typing import List, Optional, Union
 
 from litellm._logging import verbose_logger
 from litellm.caching import DualCache
@@ -114,7 +114,10 @@ class PagerDutyAlerting(SlackAlerting):
                 user_api_key_max_budget=_meta.get("user_api_key_max_budget"),
                 user_api_key_budget_reset_at=_meta.get("user_api_key_budget_reset_at"),
                 user_api_key_org_id=_meta.get("user_api_key_org_id"),
+                user_api_key_org_alias=_meta.get("user_api_key_org_alias"),
                 user_api_key_team_id=_meta.get("user_api_key_team_id"),
+                user_api_key_project_id=_meta.get("user_api_key_project_id"),
+                user_api_key_project_alias=_meta.get("user_api_key_project_alias"),
                 user_api_key_user_id=_meta.get("user_api_key_user_id"),
                 user_api_key_team_alias=_meta.get("user_api_key_team_alias"),
                 user_api_key_end_user_id=_meta.get("user_api_key_end_user_id"),
@@ -194,7 +197,10 @@ class PagerDutyAlerting(SlackAlerting):
                     else None
                 ),
                 user_api_key_org_id=user_api_key_dict.org_id,
+                user_api_key_org_alias=user_api_key_dict.organization_alias,
                 user_api_key_team_id=user_api_key_dict.team_id,
+                user_api_key_project_id=user_api_key_dict.project_id,
+                user_api_key_project_alias=user_api_key_dict.project_alias,
                 user_api_key_user_id=user_api_key_dict.user_id,
                 user_api_key_team_alias=user_api_key_dict.team_alias,
                 user_api_key_end_user_id=user_api_key_dict.end_user_id,

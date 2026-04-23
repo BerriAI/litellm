@@ -37,6 +37,7 @@ from litellm.utils import (
     trim_messages,
     validate_environment,
 )
+from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from unittest.mock import AsyncMock, MagicMock, patch
 
 
@@ -270,7 +271,7 @@ def test_trimming_should_not_change_original_messages():
     assert messages == messages_copy
 
 
-@pytest.mark.parametrize("model", ["gpt-4-0125-preview", "claude-3-opus-20240229"])
+@pytest.mark.parametrize("model", ["gpt-4-0125-preview", "claude-sonnet-4-6"])
 def test_trimming_with_model_cost_max_input_tokens(model):
     messages = [
         {"role": "system", "content": "This is a normal system message"},
@@ -520,7 +521,7 @@ def test_function_to_dict():
         ("gpt-3.5-turbo", True),
         ("azure/gpt-4-1106-preview", True),
         ("groq/gemma-7b-it", True),
-        ("gemini/gemini-1.5-flash", True),
+        ("gemini/gemini-2.5-flash", True),
     ],
 )
 def test_supports_function_calling(model, expected_bool):
@@ -972,11 +973,11 @@ def test_logging_trace_id(langfuse_trace_id, langfuse_existing_trace_id):
             litellm_logging_obj._get_trace_id(service_name="langfuse")
             == langfuse_trace_id
         )
-    ## if existing_trace_id exists
+    ## if no trace_id or existing_trace_id is provided, use litellm_trace_id
     else:
         assert (
             litellm_logging_obj._get_trace_id(service_name="langfuse")
-            == litellm_call_id
+            == litellm_logging_obj.litellm_trace_id
         )
 
 
@@ -1043,6 +1044,11 @@ def test_convert_model_response_object():
             "I am thinking here",
             "The sky is a canvas of blue",
         ),
+        (
+            "<budget:thinking>I am thinking here</budget:thinking>The sky is a canvas of blue",
+            "I am thinking here",
+            "The sky is a canvas of blue",
+        ),
         ("I am a regular response", None, "I am a regular response"),
     ],
 )
@@ -1056,18 +1062,19 @@ def test_parse_content_for_reasoning(content, expected_reasoning, expected_conte
 @pytest.mark.parametrize(
     "model, expected_bool",
     [
-        ("vertex_ai/gemini-1.5-pro", True),
-        ("gemini/gemini-1.5-pro", True),
+        ("vertex_ai/gemini-2.5-pro", True),
+        ("gemini/gemini-2.5-pro", True),
         ("predibase/llama3-8b-instruct", True),
+        ("databricks/databricks-meta-llama-3-1-70b-instruct", True),
         ("gpt-3.5-turbo", False),
-        ("groq/llama-3.3-70b-versatile", True),
+        ("groq/llama-3.3-70b-versatile", False),
     ],
 )
 def test_supports_response_schema(model, expected_bool):
     """
     Unit tests for 'supports_response_schema' helper function.
 
-    Should be true for gemini-1.5-pro on google ai studio / vertex ai AND predibase models
+    Should be true for gemini-2.5-pro on google ai studio / vertex ai AND predibase models
     Should be false otherwise
     """
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
@@ -1086,7 +1093,7 @@ def test_supports_response_schema(model, expected_bool):
         ("gpt-3.5-turbo", True),
         ("gpt-4", True),
         ("command-nightly", False),
-        ("gemini-pro", True),
+        ("gemini-2.5-pro", True),
     ],
 )
 def test_supports_function_calling_v2(model, expected_bool):
@@ -1102,10 +1109,10 @@ def test_supports_function_calling_v2(model, expected_bool):
 @pytest.mark.parametrize(
     "model, expected_bool",
     [
-        ("gpt-4-vision-preview", True),
+        ("gpt-4o", True),
         ("gpt-3.5-turbo", False),
-        ("claude-3-opus-20240229", True),
-        ("gemini-pro-vision", True),
+        ("claude-sonnet-4-6", True),
+        ("gemini-2.5-flash", True),
         ("command-nightly", False),
     ],
 )
@@ -1378,7 +1385,9 @@ def test_models_by_provider():
             providers.add(v["litellm_provider"])
 
     for provider in providers:
-        assert provider in models_by_provider.keys()
+        assert provider in models_by_provider.keys() or JSONProviderRegistry.exists(
+            provider
+        )
 
 
 @pytest.mark.parametrize(
@@ -1429,20 +1438,47 @@ def test_get_end_user_id_for_cost_tracking_prometheus_only(
     "litellm_params, expected_end_user_id",
     [
         # Test with only metadata field (old behavior)
-        ({"metadata": {"user_api_key_end_user_id": "user_from_metadata"}}, "user_from_metadata"),
+        (
+            {"metadata": {"user_api_key_end_user_id": "user_from_metadata"}},
+            "user_from_metadata",
+        ),
         # Test with only litellm_metadata field (new behavior)
-        ({"litellm_metadata": {"user_api_key_end_user_id": "user_from_litellm_metadata"}}, "user_from_litellm_metadata"),
+        (
+            {
+                "litellm_metadata": {
+                    "user_api_key_end_user_id": "user_from_litellm_metadata"
+                }
+            },
+            "user_from_litellm_metadata",
+        ),
         # Test with both fields - metadata should take precedence for user_api_key fields
-        ({"metadata": {"user_api_key_end_user_id": "user_from_metadata"}, 
-          "litellm_metadata": {"user_api_key_end_user_id": "user_from_litellm_metadata"}}, 
-         "user_from_metadata"),
+        (
+            {
+                "metadata": {"user_api_key_end_user_id": "user_from_metadata"},
+                "litellm_metadata": {
+                    "user_api_key_end_user_id": "user_from_litellm_metadata"
+                },
+            },
+            "user_from_metadata",
+        ),
         # Test with user_api_key_end_user_id in litellm_params (should take precedence over metadata)
-        ({"user_api_key_end_user_id": "user_from_params", 
-          "metadata": {"user_api_key_end_user_id": "user_from_metadata"}}, 
-         "user_from_params"),
+        (
+            {
+                "user_api_key_end_user_id": "user_from_params",
+                "metadata": {"user_api_key_end_user_id": "user_from_metadata"},
+            },
+            "user_from_params",
+        ),
         # Test with empty metadata but valid litellm_metadata
-        ({"metadata": {}, "litellm_metadata": {"user_api_key_end_user_id": "user_from_litellm_metadata"}}, 
-         "user_from_litellm_metadata"),
+        (
+            {
+                "metadata": {},
+                "litellm_metadata": {
+                    "user_api_key_end_user_id": "user_from_litellm_metadata"
+                },
+            },
+            "user_from_litellm_metadata",
+        ),
         # Test with no metadata fields
         ({}, None),
     ],
@@ -1455,10 +1491,10 @@ def test_get_end_user_id_for_cost_tracking_metadata_handling(
     fields using the get_litellm_metadata_from_kwargs helper function.
     """
     from litellm.utils import get_end_user_id_for_cost_tracking
-    
+
     # Ensure cost tracking is enabled for this test
     litellm.disable_end_user_cost_tracking = False
-    
+
     result = get_end_user_id_for_cost_tracking(litellm_params=litellm_params)
     assert result == expected_end_user_id
 
@@ -1720,7 +1756,7 @@ def test_supports_vision_gemini():
     litellm.model_cost = litellm.get_model_cost_map(url="")
     from litellm.utils import supports_vision
 
-    assert supports_vision("gemini-1.5-pro") is True
+    assert supports_vision("gemini-2.5-pro") is True
 
 
 def test_pick_cheapest_chat_model_from_llm_provider():
@@ -2341,7 +2377,7 @@ def test_get_valid_models_from_dynamic_api_key():
         check_provider_endpoint=True,
     )
     assert len(valid_models) > 0
-    assert "anthropic/claude-3-7-sonnet-20250219" in valid_models
+    assert "anthropic/claude-sonnet-4-6" in valid_models
 
 
 def test_get_whitelisted_models():
@@ -2380,10 +2416,7 @@ def test_delta_tool_calls_sequential_indices():
     tool_calls_without_indices = [
         {
             "id": "call_1",
-            "function": {
-                "name": "get_weather_for_dallas",
-                "arguments": json.dumps({})
-            },
+            "function": {"name": "get_weather_for_dallas", "arguments": json.dumps({})},
             "type": "function",
             # Note: no "index" field - simulates provider response
         },
@@ -2391,28 +2424,30 @@ def test_delta_tool_calls_sequential_indices():
             "id": "call_2",
             "function": {
                 "name": "get_weather_precise",
-                "arguments": json.dumps({"location": "Dallas, TX"})
+                "arguments": json.dumps({"location": "Dallas, TX"}),
             },
             "type": "function",
             # Note: no "index" field - simulates provider response
-        }
+        },
     ]
 
     # Create Delta object as LiteLLM would when processing streaming response
-    delta = Delta(
-        content=None,
-        tool_calls=tool_calls_without_indices
-    )
+    delta = Delta(content=None, tool_calls=tool_calls_without_indices)
 
     # Verify tool calls have sequential indices
     assert delta.tool_calls is not None, "Tool calls should not be None"
     assert len(delta.tool_calls) == 2
-    assert delta.tool_calls[0].index == 0, f"First tool call should have index 0, got {delta.tool_calls[0].index}"
-    assert delta.tool_calls[1].index == 1, f"Second tool call should have index 1, got {delta.tool_calls[1].index}"
+    assert (
+        delta.tool_calls[0].index == 0
+    ), f"First tool call should have index 0, got {delta.tool_calls[0].index}"
+    assert (
+        delta.tool_calls[1].index == 1
+    ), f"Second tool call should have index 1, got {delta.tool_calls[1].index}"
 
     # Verify tool call details are preserved
     assert delta.tool_calls[0].function.name == "get_weather_for_dallas"
     assert delta.tool_calls[1].function.name == "get_weather_precise"
+
 
 def test_completion_with_no_model():
     """
@@ -2420,7 +2455,9 @@ def test_completion_with_no_model():
     """
     # test on empty
     with pytest.raises(TypeError):
-        response = litellm.completion(messages=[{"role": "user", "content": "Hello, how are you?"}])
+        response = litellm.completion(
+            messages=[{"role": "user", "content": "Hello, how are you?"}]
+        )
 
 
 def test_get_base_model_from_metadata():
@@ -2434,13 +2471,7 @@ def test_get_base_model_from_metadata():
 
     # Test 1: base_model in metadata (Chat Completions API pattern)
     model_call_details_with_metadata = {
-        "litellm_params": {
-            "metadata": {
-                "model_info": {
-                    "base_model": "azure/gpt-4"
-                }
-            }
-        }
+        "litellm_params": {"metadata": {"model_info": {"base_model": "azure/gpt-4"}}}
     }
     result = _get_base_model_from_metadata(model_call_details_with_metadata)
     assert result == "azure/gpt-4", f"Expected 'azure/gpt-4', got {result}"
@@ -2448,11 +2479,7 @@ def test_get_base_model_from_metadata():
     # Test 2: base_model in litellm_metadata (Responses API and generic API calls pattern)
     model_call_details_with_litellm_metadata = {
         "litellm_params": {
-            "litellm_metadata": {
-                "model_info": {
-                    "base_model": "azure/gpt-5-mini"
-                }
-            }
+            "litellm_metadata": {"model_info": {"base_model": "azure/gpt-5-mini"}}
         }
     }
     result = _get_base_model_from_metadata(model_call_details_with_litellm_metadata)
@@ -2460,41 +2487,32 @@ def test_get_base_model_from_metadata():
 
     # Test 3: base_model in litellm_params (direct base_model)
     model_call_details_with_direct_base_model = {
-        "litellm_params": {
-            "base_model": "azure/gpt-3.5-turbo"
-        }
+        "litellm_params": {"base_model": "azure/gpt-3.5-turbo"}
     }
     result = _get_base_model_from_metadata(model_call_details_with_direct_base_model)
-    assert result == "azure/gpt-3.5-turbo", f"Expected 'azure/gpt-3.5-turbo', got {result}"
+    assert (
+        result == "azure/gpt-3.5-turbo"
+    ), f"Expected 'azure/gpt-3.5-turbo', got {result}"
 
     # Test 4: metadata takes precedence over litellm_metadata
     model_call_details_with_both = {
         "litellm_params": {
-            "metadata": {
-                "model_info": {
-                    "base_model": "azure/gpt-4-from-metadata"
-                }
-            },
+            "metadata": {"model_info": {"base_model": "azure/gpt-4-from-metadata"}},
             "litellm_metadata": {
-                "model_info": {
-                    "base_model": "azure/gpt-4-from-litellm-metadata"
-                }
-            }
+                "model_info": {"base_model": "azure/gpt-4-from-litellm-metadata"}
+            },
         }
     }
     result = _get_base_model_from_metadata(model_call_details_with_both)
-    assert result == "azure/gpt-4-from-metadata", f"Expected metadata to take precedence, got {result}"
+    assert (
+        result == "azure/gpt-4-from-metadata"
+    ), f"Expected metadata to take precedence, got {result}"
 
     # Test 5: No base_model present
-    model_call_details_without_base_model = {
-        "litellm_params": {
-            "metadata": {}
-        }
-    }
+    model_call_details_without_base_model = {"litellm_params": {"metadata": {}}}
     result = _get_base_model_from_metadata(model_call_details_without_base_model)
     assert result is None, f"Expected None when no base_model present, got {result}"
 
     # Test 6: None input
     result = _get_base_model_from_metadata(None)
     assert result is None, f"Expected None for None input, got {result}"
-

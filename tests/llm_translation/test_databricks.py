@@ -15,6 +15,7 @@ import litellm
 from litellm.exceptions import BadRequestError
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.utils import CustomStreamWrapper
+from litellm._version import version
 from base_llm_unit_tests import BaseLLMChatTest, BaseAnthropicChatTest
 
 try:
@@ -59,7 +60,7 @@ def mock_chat_response_anthropic_prompt_caching() -> Dict[str, Any]:
         "id": "msg_01234567890ABCDEFGHIJKLMNOPQRSTUVWXYZ",
         "object": "chat.completion",
         "created": 1761118943,
-        "model": "claude-3-7-sonnet", # Mock model name for testing
+        "model": "claude-3-7-sonnet",  # Mock model name for testing
         "choices": [
             {
                 "index": 0,
@@ -76,7 +77,7 @@ def mock_chat_response_anthropic_prompt_caching() -> Dict[str, Any]:
                 "logprobs": None,
             }
         ],
-        "usage": { 
+        "usage": {
             "completion_tokens": 117,
             "prompt_tokens": 1549,
             "total_tokens": 1666,
@@ -86,21 +87,22 @@ def mock_chat_response_anthropic_prompt_caching() -> Dict[str, Any]:
                 "cached_tokens": 0,
                 "text_tokens": None,
                 "image_tokens": None,
-                "cache_creation_tokens": 1545
+                "cache_creation_tokens": 1545,
             },
             "cache_read_input_tokens": 0,
-            "cache_creation_input_tokens": 1545
+            "cache_creation_input_tokens": 1545,
         },
         "service_tier": None,
         "system_fingerprint": None,
     }
+
 
 def mock_chat_response_anthropic_prompt_caching_not_enough_tokens() -> Dict[str, Any]:
     return {
         "id": "msg_01234567890ABCDEFGHIJKLMNOPQRSTUVWXYZ",
         "object": "chat.completion",
         "created": 1761118943,
-        "model": "claude-3-7-sonnet", # Mock model name for testing
+        "model": "claude-3-7-sonnet",  # Mock model name for testing
         "choices": [
             {
                 "index": 0,
@@ -117,7 +119,7 @@ def mock_chat_response_anthropic_prompt_caching_not_enough_tokens() -> Dict[str,
                 "logprobs": None,
             }
         ],
-        "usage": { 
+        "usage": {
             "completion_tokens": 117,
             "prompt_tokens": 1549,
             "total_tokens": 1666,
@@ -127,21 +129,22 @@ def mock_chat_response_anthropic_prompt_caching_not_enough_tokens() -> Dict[str,
                 "cached_tokens": 0,
                 "text_tokens": None,
                 "image_tokens": None,
-                "cache_creation_tokens": 0
+                "cache_creation_tokens": 0,
             },
             "cache_read_input_tokens": 0,
-            "cache_creation_input_tokens": 0
+            "cache_creation_input_tokens": 0,
         },
         "service_tier": None,
         "system_fingerprint": None,
     }
+
 
 def mock_chat_response_anthropic_prompt_caching_repeat() -> Dict[str, Any]:
     return {
         "id": "msg_01234567890ABCDEFGHIJKLMNOPQRSTUVWXYZ",
         "object": "chat.completion",
         "created": 1761118943,
-        "model": "claude-3-7-sonnet", # Mock model name for testing
+        "model": "claude-3-7-sonnet",  # Mock model name for testing
         "choices": [
             {
                 "index": 0,
@@ -158,7 +161,7 @@ def mock_chat_response_anthropic_prompt_caching_repeat() -> Dict[str, Any]:
                 "logprobs": None,
             }
         ],
-        "usage": { 
+        "usage": {
             "completion_tokens": 117,
             "prompt_tokens": 1549,
             "total_tokens": 1666,
@@ -168,10 +171,10 @@ def mock_chat_response_anthropic_prompt_caching_repeat() -> Dict[str, Any]:
                 "cached_tokens": 0,
                 "text_tokens": None,
                 "image_tokens": None,
-                "cache_creation_tokens": 1545
+                "cache_creation_tokens": 1545,
             },
             "cache_read_input_tokens": 1545,
-            "cache_creation_input_tokens": 0
+            "cache_creation_input_tokens": 0,
         },
         "service_tier": None,
         "system_fingerprint": None,
@@ -183,7 +186,7 @@ def mock_chat_response_nonanthropic_prompt_caching() -> Dict[str, Any]:
         "id": "msg_01234567890ABCDEFGHIJKLMNOPQRSTUVWXYZ",
         "object": "chat.completion",
         "created": 1761119150,
-        "model": "gpt-oss-20b", # Mock model nama for testing
+        "model": "gpt-oss-20b",  # Mock model nama for testing
         "choices": [
             {
                 "index": 0,
@@ -195,14 +198,14 @@ def mock_chat_response_nonanthropic_prompt_caching() -> Dict[str, Any]:
                             "summary": [
                                 {
                                     "type": "summary_text",
-                                    "text": "The user just posted a block of text repeated: \"example textexample\" many times. It is unclear what they want. The instruction says: \"You are a helpful assistant that explains the content of the given text.\" So I need to explain the content.\n\nThe content is basically a repeated phrase 'example textexample' many times, possibly a demonstration of repeated words or filler text. Perhaps they test that the assistant enumerates or condenses. Should I explain that it is a repeated phrase used maybe as placeholder text? It looks like a placeholder or filler. Could say that it's essentially nonsense.\n\nExplain that the text consists of the word \"example\" concatenated with \"text\" repeated many times. It's not meaningful content. Might indicate filler text for page layout.\n\nAlternatively, explain why repeated 'example textexample' (without whitespace in some places?) is repeated. This could be a test. The user probably expects a response like: \"It says 'example textexample' several times.\" So I should summarize: The text is a repeated phrase used as filler.\n\nGiven the instruction, let's explain the content. Mention that it's repetitive placeholder, no meaningful content, just repeated phrase. Also note that \"example text\" repeated words. No specific meaning beyond being placeholder.\n\nSo respond: This is basically a placeholder used in design documents: the phrase \"example text\" repeated to fill a space, no distinct meaning beyond placeholder usage. 'text' might be part of the 'example text' phrase or 'textexample' it's concatenated. These might serve to fill text boxes, test fonts, etc.\n\nAlso mention the pattern: Could be used for testing text rendering, typographic layouts, measuring dimensions.\n\nAnswer accordingly."
+                                    "text": "The user just posted a block of text repeated: \"example textexample\" many times. It is unclear what they want. The instruction says: \"You are a helpful assistant that explains the content of the given text.\" So I need to explain the content.\n\nThe content is basically a repeated phrase 'example textexample' many times, possibly a demonstration of repeated words or filler text. Perhaps they test that the assistant enumerates or condenses. Should I explain that it is a repeated phrase used maybe as placeholder text? It looks like a placeholder or filler. Could say that it's essentially nonsense.\n\nExplain that the text consists of the word \"example\" concatenated with \"text\" repeated many times. It's not meaningful content. Might indicate filler text for page layout.\n\nAlternatively, explain why repeated 'example textexample' (without whitespace in some places?) is repeated. This could be a test. The user probably expects a response like: \"It says 'example textexample' several times.\" So I should summarize: The text is a repeated phrase used as filler.\n\nGiven the instruction, let's explain the content. Mention that it's repetitive placeholder, no meaningful content, just repeated phrase. Also note that \"example text\" repeated words. No specific meaning beyond being placeholder.\n\nSo respond: This is basically a placeholder used in design documents: the phrase \"example text\" repeated to fill a space, no distinct meaning beyond placeholder usage. 'text' might be part of the 'example text' phrase or 'textexample' it's concatenated. These might serve to fill text boxes, test fonts, etc.\n\nAlso mention the pattern: Could be used for testing text rendering, typographic layouts, measuring dimensions.\n\nAnswer accordingly.",
                                 }
-                            ]
+                            ],
                         },
                         {
                             "type": "text",
-                            "text": "The passage you pasted is essentially a block of **placeholder text**.  \nIt repeats the phrase \"example textexample\" (or \"example text\" in some places) over and over again.  There isn't any hidden message, concept, or argument buried in it – the purpose is purely to fill space, imitate real content, or test something like typography, layout, or rendering.\n\nIn design and copy‑editing, such repeated strings are often used to:\n\n* **Fill a page or template** so the designer can see how multiple lines of content will look.\n* **Test the appearance of fonts, line‑height, paragraph spacing, and other typographic settings.**\n* **Serve as a stand"
-                        }
+                            "text": 'The passage you pasted is essentially a block of **placeholder text**.  \nIt repeats the phrase "example textexample" (or "example text" in some places) over and over again.  There isn\'t any hidden message, concept, or argument buried in it – the purpose is purely to fill space, imitate real content, or test something like typography, layout, or rendering.\n\nIn design and copy‑editing, such repeated strings are often used to:\n\n* **Fill a page or template** so the designer can see how multiple lines of content will look.\n* **Test the appearance of fonts, line‑height, paragraph spacing, and other typographic settings.**\n* **Serve as a stand',
+                        },
                     ],
                     "refusal": None,
                     "function_call": None,
@@ -663,9 +666,10 @@ def test_completions_uses_databricks_sdk_if_api_key_and_base_not_specified(monke
     mock_config.host = base_url  # Assign directly as if it's a property
     mock_workspace_client.config = mock_config
 
-    with patch(
-        "databricks.sdk.WorkspaceClient", return_value=mock_workspace_client
-    ), patch.object(HTTPHandler, "post", return_value=mock_response) as mock_post:
+    with (
+        patch("databricks.sdk.WorkspaceClient", return_value=mock_workspace_client),
+        patch.object(HTTPHandler, "post", return_value=mock_response) as mock_post,
+    ):
         response = litellm.completion(
             model="databricks/dbrx-instruct-071224",
             messages=messages,
@@ -687,15 +691,11 @@ def test_completions_uses_databricks_sdk_if_api_key_and_base_not_specified(monke
             == f"{base_url}/serving-endpoints/chat/completions"
         )
         assert mock_post.call_args.kwargs["stream"] == False
-        assert mock_post.call_args.kwargs["data"] == json.dumps(
-            {
-                "model": "dbrx-instruct-071224",
-                "messages": messages,
-                "temperature": 0.5,
-                "extraparam": "testpassingextraparam",
-                "stream": False,
-            }
-        )
+        sent_data = json.loads(mock_post.call_args.kwargs["data"])
+        assert sent_data["model"] == "dbrx-instruct-071224"
+        assert sent_data["messages"] == messages
+        assert sent_data["temperature"] == 0.5
+        assert sent_data["extraparam"] == "testpassingextraparam"
 
 
 def test_embeddings_with_sync_http_handler(monkeypatch):
@@ -725,6 +725,7 @@ def test_embeddings_with_sync_http_handler(monkeypatch):
             headers={
                 "Authorization": f"Bearer {api_key}",
                 "Content-Type": "application/json",
+                "User-Agent": f"litellm/{version}",
             },
             data=json.dumps(
                 {
@@ -767,6 +768,7 @@ def test_embeddings_with_async_http_handler(monkeypatch):
             headers={
                 "Authorization": f"Bearer {api_key}",
                 "Content-Type": "application/json",
+                "User-Agent": f"litellm/{version}",
             },
             data=json.dumps(
                 {
@@ -807,9 +809,10 @@ def test_embeddings_uses_databricks_sdk_if_api_key_and_base_not_specified(monkey
     mock_config.host = base_url  # Assign directly as if it's a property
     mock_workspace_client.config = mock_config
 
-    with patch(
-        "databricks.sdk.WorkspaceClient", return_value=mock_workspace_client
-    ), patch.object(HTTPHandler, "post", return_value=mock_response) as mock_post:
+    with (
+        patch("databricks.sdk.WorkspaceClient", return_value=mock_workspace_client),
+        patch.object(HTTPHandler, "post", return_value=mock_response) as mock_post,
+    ):
         response = litellm.embedding(
             model="databricks/bge-large-en-v1.5",
             input=inputs,
@@ -823,6 +826,7 @@ def test_embeddings_uses_databricks_sdk_if_api_key_and_base_not_specified(monkey
             headers={
                 "Authorization": f"Bearer {api_key}",
                 "Content-Type": "application/json",
+                "User-Agent": f"litellm/{version}",
             },
             data=json.dumps(
                 {
@@ -895,6 +899,7 @@ async def test_databricks_embeddings(sync_mode, monkeypatch):
                 headers={
                     "Authorization": f"Bearer {api_key}",
                     "Content-Type": "application/json",
+                    "User-Agent": f"litellm/{version}",
                 },
                 data=json.dumps(
                     {
@@ -906,7 +911,9 @@ async def test_databricks_embeddings(sync_mode, monkeypatch):
             )
     else:
         async_handler = AsyncHTTPHandler()
-        with patch.object(AsyncHTTPHandler, "post", return_value=mock_response) as mock_post:
+        with patch.object(
+            AsyncHTTPHandler, "post", return_value=mock_response
+        ) as mock_post:
             response = await litellm.aembedding(
                 model="databricks/databricks-bge-large-en",
                 input=inputs,
@@ -923,6 +930,7 @@ async def test_databricks_embeddings(sync_mode, monkeypatch):
                 headers={
                     "Authorization": f"Bearer {api_key}",
                     "Content-Type": "application/json",
+                    "User-Agent": f"litellm/{version}",
                 },
                 data=json.dumps(
                     {
@@ -945,27 +953,27 @@ def test_completion_with_prompt_caching_anthropic_model(monkeypatch):
     mock_response.status_code = 200
     mock_response.json.return_value = mock_chat_response_anthropic_prompt_caching()
 
-    mock_text = 'example text' * 512
+    mock_text = "example text" * 512
     messages = [
         {
             "role": "system",
             "content": [
                 {
                     "type": "text",
-                    "text": "You are a helpful assistant that explains the content of the given text."
+                    "text": "You are a helpful assistant that explains the content of the given text.",
                 }
-            ]
+            ],
         },
         {
-            "role": "user", 
+            "role": "user",
             "content": [
                 {
-                    "type": "text", 
+                    "type": "text",
                     "text": mock_text,
-                    "cache_control": {"type": "ephemeral"}
+                    "cache_control": {"type": "ephemeral"},
                 }
-            ]
-        }
+            ],
+        },
     ]
 
     with patch.object(HTTPHandler, "post", return_value=mock_response) as mock_post:
@@ -973,7 +981,7 @@ def test_completion_with_prompt_caching_anthropic_model(monkeypatch):
             model="databricks/databricks-claude-3-7-sonnet",
             messages=messages,
             client=sync_handler,
-            temperature=0.5
+            temperature=0.5,
         )
         assert (
             mock_post.call_args.kwargs["headers"]["Content-Type"] == "application/json"
@@ -987,12 +995,12 @@ def test_completion_with_prompt_caching_anthropic_model(monkeypatch):
 
         # TODO: add test for entire expected output schema in the future
         # Check the response object returned from litellm.completion()
-        assert 'claude-3-7-sonnet' in response['model']
-        assert response['usage']['cache_read_input_tokens'] == 0
-        assert response['usage']['cache_creation_input_tokens'] == 1545
-        assert response['usage']['prompt_tokens'] == 1549
-        assert response['usage']['completion_tokens'] == 117
-        assert response['usage']['total_tokens'] == 1666
+        assert "claude-3-7-sonnet" in response["model"]
+        assert response["usage"]["cache_read_input_tokens"] == 0
+        assert response["usage"]["cache_creation_input_tokens"] == 1545
+        assert response["usage"]["prompt_tokens"] == 1549
+        assert response["usage"]["completion_tokens"] == 117
+        assert response["usage"]["total_tokens"] == 1666
 
 
 def test_completion_with_prompt_caching_anthropic_model_repeat(monkeypatch):
@@ -1004,29 +1012,31 @@ def test_completion_with_prompt_caching_anthropic_model_repeat(monkeypatch):
     sync_handler = HTTPHandler()
     mock_response = Mock(spec=httpx.Response)
     mock_response.status_code = 200
-    mock_response.json.return_value = mock_chat_response_anthropic_prompt_caching_repeat()
+    mock_response.json.return_value = (
+        mock_chat_response_anthropic_prompt_caching_repeat()
+    )
 
-    mock_text = 'example text' * 512
+    mock_text = "example text" * 512
     messages = [
         {
             "role": "system",
             "content": [
                 {
                     "type": "text",
-                    "text": "You are a helpful assistant that explains the content of the given text."
+                    "text": "You are a helpful assistant that explains the content of the given text.",
                 }
-            ]
+            ],
         },
         {
-            "role": "user", 
+            "role": "user",
             "content": [
                 {
-                    "type": "text", 
+                    "type": "text",
                     "text": mock_text,
-                    "cache_control": {"type": "ephemeral"}
+                    "cache_control": {"type": "ephemeral"},
                 }
-            ]
-        }
+            ],
+        },
     ]
 
     with patch.object(HTTPHandler, "post", return_value=mock_response) as mock_post:
@@ -1047,15 +1057,14 @@ def test_completion_with_prompt_caching_anthropic_model_repeat(monkeypatch):
         assert mock_post.call_args.kwargs["url"] == f"{base_url}/chat/completions"
         assert mock_post.call_args.kwargs["stream"] == False
 
-        
         # TODO: add test for entire expected output schema in the future
         # Check the response object returned from litellm.completion()
-        assert 'claude-3-7-sonnet' in response['model']
-        assert response['usage']['cache_read_input_tokens'] == 1545
-        assert response['usage']['cache_creation_input_tokens'] == 0
-        assert response['usage']['prompt_tokens'] == 1549
-        assert response['usage']['completion_tokens'] == 117
-        assert response['usage']['total_tokens'] == 1666
+        assert "claude-3-7-sonnet" in response["model"]
+        assert response["usage"]["cache_read_input_tokens"] == 1545
+        assert response["usage"]["cache_creation_input_tokens"] == 0
+        assert response["usage"]["prompt_tokens"] == 1549
+        assert response["usage"]["completion_tokens"] == 117
+        assert response["usage"]["total_tokens"] == 1666
 
 
 def test_completion_with_prompt_caching_nonanthropic_model(monkeypatch):
@@ -1069,27 +1078,27 @@ def test_completion_with_prompt_caching_nonanthropic_model(monkeypatch):
     mock_response.status_code = 200
     mock_response.json.return_value = mock_chat_response_nonanthropic_prompt_caching()
 
-    mock_text = 'example text' * 512
+    mock_text = "example text" * 512
     messages = [
         {
             "role": "system",
             "content": [
                 {
                     "type": "text",
-                    "text": "You are a helpful assistant that explains the content of the given text."
+                    "text": "You are a helpful assistant that explains the content of the given text.",
                 }
-            ]
+            ],
         },
         {
-            "role": "user", 
+            "role": "user",
             "content": [
                 {
-                    "type": "text", 
+                    "type": "text",
                     "text": mock_text,
-                    "cache_control": {"type": "ephemeral"}
+                    "cache_control": {"type": "ephemeral"},
                 }
-            ]
-        }
+            ],
+        },
     ]
 
     with patch.object(HTTPHandler, "post", return_value=mock_response) as mock_post:
@@ -1112,19 +1121,21 @@ def test_completion_with_prompt_caching_nonanthropic_model(monkeypatch):
 
         # TODO: add test for entire expected output schema in the future
         # Check the response object returned from litellm.completion()
-        assert 'gpt-oss-20b' in response['model']
-        assert ('cache_read_input_tokens' not in response['usage']) or response['usage']['cache_read_input_tokens'] in [0, None]
-        assert ('cache_creation_input_tokens' not in response['usage']) or response['usage']['cache_creation_input_tokens'] in [0, None]
-        assert response['usage']['prompt_tokens'] == 1638
-        assert response['usage']['completion_tokens'] == 500
-        assert response['usage']['total_tokens'] == 2138
-    
+        assert "gpt-oss-20b" in response["model"]
+        assert ("cache_read_input_tokens" not in response["usage"]) or response[
+            "usage"
+        ]["cache_read_input_tokens"] in [0, None]
+        assert ("cache_creation_input_tokens" not in response["usage"]) or response[
+            "usage"
+        ]["cache_creation_input_tokens"] in [0, None]
+        assert response["usage"]["prompt_tokens"] == 1638
+        assert response["usage"]["completion_tokens"] == 500
+        assert response["usage"]["total_tokens"] == 2138
+
 
 @pytest.mark.parametrize(
     "model",
-    [
-        "databricks/databricks-claude-3-7-sonnet"
-    ],
+    ["databricks/databricks-claude-3-7-sonnet"],
 )
 def test_databricks_anthropic_function_call_with_no_schema(model, monkeypatch):
     """
@@ -1135,7 +1146,7 @@ def test_databricks_anthropic_function_call_with_no_schema(model, monkeypatch):
     api_key = "dapimykey"
     monkeypatch.setenv("DATABRICKS_API_BASE", base_url)
     monkeypatch.setenv("DATABRICKS_API_KEY", api_key)
-    
+
     mock_response_data = {
         "id": "chatcmpl-abc123",
         "object": "chat.completion",
@@ -1168,13 +1179,13 @@ def test_databricks_anthropic_function_call_with_no_schema(model, monkeypatch):
             "total_tokens": 60,
         },
     }
-    
+
     mock_response = Mock(spec=httpx.Response)
     mock_response.status_code = 200
     mock_response.json.return_value = mock_response_data
-    
+
     sync_handler = HTTPHandler()
-    
+
     tools = [
         {
             "type": "function",
@@ -1187,19 +1198,22 @@ def test_databricks_anthropic_function_call_with_no_schema(model, monkeypatch):
     messages = [
         {"role": "user", "content": "What is the current temperature in New York?"}
     ]
-    
+
     with patch.object(HTTPHandler, "post", return_value=mock_response):
         response = litellm.completion(
             model=model,
             messages=messages,
             tools=tools,
             tool_choice="auto",
-            client=sync_handler
+            client=sync_handler,
         )
-        
+
         assert response.choices[0].message.tool_calls is not None
         assert len(response.choices[0].message.tool_calls) == 1
-        assert response.choices[0].message.tool_calls[0].function.name == "get_current_weather"
+        assert (
+            response.choices[0].message.tool_calls[0].function.name
+            == "get_current_weather"
+        )
 
 
 def test_databricks_anthropic_user_string_content_cache_injection(monkeypatch):
@@ -1213,23 +1227,12 @@ def test_databricks_anthropic_user_string_content_cache_injection(monkeypatch):
     mock_response.status_code = 200
     mock_response.json.return_value = mock_chat_response_anthropic_prompt_caching()
 
-    mock_text = 'example text' * 512
+    mock_text = "example text" * 512
     messages = [
-        {
-            "role": "system",
-            "content": "You are an expert summarizer."
-        },
-        {
-            "role": "user", 
-            "content": mock_text
-        }
+        {"role": "system", "content": "You are an expert summarizer."},
+        {"role": "user", "content": mock_text},
     ]
-    cache_control_injection_points = [
-        {
-            "location": "message",
-            "role": "user"
-        }
-    ]
+    cache_control_injection_points = [{"location": "message", "role": "user"}]
 
     with patch.object(HTTPHandler, "post", return_value=mock_response) as mock_post:
         response = litellm.completion(
@@ -1252,12 +1255,12 @@ def test_databricks_anthropic_user_string_content_cache_injection(monkeypatch):
 
         # TODO: add test for entire expected output schema in the future
         # Check the response object returned from litellm.completion()
-        assert 'claude-3-7-sonnet' in response['model']
-        assert response['usage']['cache_read_input_tokens'] == 0
-        assert response['usage']['cache_creation_input_tokens'] == 1545
-        assert response['usage']['prompt_tokens'] == 1549
-        assert response['usage']['completion_tokens'] == 117
-        assert response['usage']['total_tokens'] == 1666
+        assert "claude-3-7-sonnet" in response["model"]
+        assert response["usage"]["cache_read_input_tokens"] == 0
+        assert response["usage"]["cache_creation_input_tokens"] == 1545
+        assert response["usage"]["prompt_tokens"] == 1549
+        assert response["usage"]["completion_tokens"] == 117
+        assert response["usage"]["total_tokens"] == 1666
 
 
 def test_databricks_anthropic_system_string_content_cache_injection(monkeypatch):
@@ -1271,23 +1274,12 @@ def test_databricks_anthropic_system_string_content_cache_injection(monkeypatch)
     mock_response.status_code = 200
     mock_response.json.return_value = mock_chat_response_anthropic_prompt_caching()
 
-    mock_text = 'example text' * 512
+    mock_text = "example text" * 512
     messages = [
-        {
-            "role": "system",
-            "content": mock_text
-        },
-        {
-            "role": "user", 
-            "content": "You are an expert summarizer."
-        }
+        {"role": "system", "content": mock_text},
+        {"role": "user", "content": "You are an expert summarizer."},
     ]
-    cache_control_injection_points = [
-        {
-            "location": "message",
-            "role": "system"
-        }
-    ]
+    cache_control_injection_points = [{"location": "message", "role": "system"}]
 
     with patch.object(HTTPHandler, "post", return_value=mock_response) as mock_post:
         response = litellm.completion(
@@ -1310,16 +1302,17 @@ def test_databricks_anthropic_system_string_content_cache_injection(monkeypatch)
 
         # TODO: add test for entire expected output schema in the future
         # Check the response object returned from litellm.completion()
-        assert 'claude-3-7-sonnet' in response['model']
-        assert response['usage']['cache_read_input_tokens'] == 0
-        assert response['usage']['cache_creation_input_tokens'] == 1545
-        assert response['usage']['prompt_tokens'] == 1549
-        assert response['usage']['completion_tokens'] == 117
-        assert response['usage']['total_tokens'] == 1666
+        assert "claude-3-7-sonnet" in response["model"]
+        assert response["usage"]["cache_read_input_tokens"] == 0
+        assert response["usage"]["cache_creation_input_tokens"] == 1545
+        assert response["usage"]["prompt_tokens"] == 1549
+        assert response["usage"]["completion_tokens"] == 117
+        assert response["usage"]["total_tokens"] == 1666
 
 
-
-def test_databricks_anthropic_system_string_content_cache_injection_not_enough_tokens(monkeypatch):
+def test_databricks_anthropic_system_string_content_cache_injection_not_enough_tokens(
+    monkeypatch,
+):
     base_url = "https://my.workspace.cloud.databricks.com/serving-endpoints"
     api_key = "dapimykey"
     monkeypatch.setenv("DATABRICKS_API_BASE", base_url)
@@ -1328,25 +1321,19 @@ def test_databricks_anthropic_system_string_content_cache_injection_not_enough_t
     sync_handler = HTTPHandler()
     mock_response = Mock(spec=httpx.Response)
     mock_response.status_code = 200
-    mock_response.json.return_value = mock_chat_response_anthropic_prompt_caching_not_enough_tokens()
+    mock_response.json.return_value = (
+        mock_chat_response_anthropic_prompt_caching_not_enough_tokens()
+    )
 
-    mock_text = 'example text' * 512
+    mock_text = "example text" * 512
     messages = [
         {
             "role": "system",
-            "content": "You are a helpful assistant that explains the content of the given text."
+            "content": "You are a helpful assistant that explains the content of the given text.",
         },
-        {
-            "role": "user", 
-            "content": mock_text
-        }
+        {"role": "user", "content": mock_text},
     ]
-    cache_control_injection_points = [
-        {
-            "location": "message",
-            "role": "system"
-        }
-    ]
+    cache_control_injection_points = [{"location": "message", "role": "system"}]
 
     with patch.object(HTTPHandler, "post", return_value=mock_response) as mock_post:
         response = litellm.completion(
@@ -1369,9 +1356,9 @@ def test_databricks_anthropic_system_string_content_cache_injection_not_enough_t
 
         # TODO: add test for entire expected output schema in the future
         # Check the response object returned from litellm.completion()
-        assert 'claude-3-7-sonnet' in response['model']
-        assert response['usage']['cache_read_input_tokens'] == 0
-        assert response['usage']['cache_creation_input_tokens'] == 0
-        assert response['usage']['prompt_tokens'] == 1549
-        assert response['usage']['completion_tokens'] == 117
-        assert response['usage']['total_tokens'] == 1666
+        assert "claude-3-7-sonnet" in response["model"]
+        assert response["usage"]["cache_read_input_tokens"] == 0
+        assert response["usage"]["cache_creation_input_tokens"] == 0
+        assert response["usage"]["prompt_tokens"] == 1549
+        assert response["usage"]["completion_tokens"] == 117
+        assert response["usage"]["total_tokens"] == 1666

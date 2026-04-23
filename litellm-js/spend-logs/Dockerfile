@@ -8,7 +8,7 @@ WORKDIR /app
 COPY ./litellm-js/spend-logs/package*.json ./
 
 # Install dependencies
-RUN npm install
+RUN npm ci
 
 # Install Prisma globally
 RUN npm install -g prisma

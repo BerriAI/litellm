@@ -1,10 +1,10 @@
 import React, { useState, useEffect } from "react";
-import { Form, Select, Spin } from "antd";
-import { TextInput } from "@tremor/react";
+import { Form, Select, Spin, Input, Slider } from "antd";
 import {
   guardrail_provider_map,
   populateGuardrailProviders,
   populateGuardrailProviderMap,
+  shouldRenderContentFilterConfigSettings,
 } from "./guardrail_info_helpers";
 import { getGuardrailProviderSpecificParams } from "../networking";
 import NumericalInput from "../shared/numerical_input";
@@ -20,12 +20,15 @@ interface ProviderParam {
   param: string;
   description: string;
   required: boolean;
-  default_value?: string;
+  default_value?: string | number;
   options?: string[];
   type?: string;
   fields?: { [key: string]: ProviderParam };
   dict_key_options?: string[];
   dict_value_type?: string;
+  min?: number;
+  max?: number;
+  step?: number;
 }
 
 interface ProviderParamsResponse {
@@ -107,6 +110,20 @@ const GuardrailProviderFields: React.FC<GuardrailProviderFieldsProps> = ({
   }
 
   console.log("Value:", value);
+  
+  // Fields to skip for content filter provider (handled in dedicated steps)
+  const contentFilterFieldsToSkip = new Set([
+    "patterns",
+    "blocked_words",
+    "blocked_words_file",
+    "categories",
+    "severity_threshold",
+    "pattern_redaction_format",
+    "keyword_redaction_tag",
+  ]);
+  
+  const isContentFilterProvider = shouldRenderContentFilterConfigSettings(selectedProvider);
+  
   // Convert object to array of entries and render fields
   const renderFields = (fields: { [key: string]: ProviderParam }, parentKey = "", parentValue?: any) => {
     return Object.entries(fields).map(([fieldKey, field]) => {
@@ -123,6 +140,11 @@ const GuardrailProviderFields: React.FC<GuardrailProviderFieldsProps> = ({
         return null;
       }
 
+      // Skip content filter specific fields when it's a content filter provider (handled in dedicated steps)
+      if (isContentFilterProvider && contentFilterFieldsToSkip.has(fieldKey)) {
+        return null;
+      }
+
       // Handle other nested fields (like azure/text_moderations optional_params)
       if (field.type === "nested" && field.fields) {
         return (
@@ -135,6 +157,11 @@ const GuardrailProviderFields: React.FC<GuardrailProviderFieldsProps> = ({
         );
       }
 
+      const resolvedInitialValue =
+        fieldValue !== undefined
+          ? fieldValue
+          : (field.default_value ?? (field.type === "percentage" ? 0.5 : undefined));
+
       return (
         <Form.Item
           key={fullFieldKey}
@@ -142,6 +169,7 @@ const GuardrailProviderFields: React.FC<GuardrailProviderFieldsProps> = ({
           label={fieldKey}
           tooltip={field.description}
           rules={field.required ? [{ required: true, message: `${fieldKey} is required` }] : undefined}
+          initialValue={resolvedInitialValue}
         >
           {field.type === "select" && field.options ? (
             <Select placeholder={field.description} defaultValue={fieldValue || field.default_value}>
@@ -160,13 +188,21 @@ const GuardrailProviderFields: React.FC<GuardrailProviderFieldsProps> = ({
               ))}
             </Select>
           ) : field.type === "bool" || field.type === "boolean" ? (
-            <Select
-              placeholder={field.description}
-              defaultValue={fieldValue !== undefined ? String(fieldValue) : field.default_value}
-            >
-              <Select.Option value="true">True</Select.Option>
-              <Select.Option value="false">False</Select.Option>
+            <Select placeholder={field.description}>
+              <Select.Option value={true}>True</Select.Option>
+              <Select.Option value={false}>False</Select.Option>
             </Select>
+          ) : field.type === "percentage" && field.min != null && field.max != null ? (
+            <Slider
+              min={field.min}
+              max={field.max}
+              step={field.step ?? 0.1}
+              marks={{
+                [field.min]: "0%",
+                [(field.min + field.max) / 2]: "50%",
+                [field.max]: "100%",
+              }}
+            />
           ) : field.type === "number" ? (
             <NumericalInput
               step={1}
@@ -175,9 +211,9 @@ const GuardrailProviderFields: React.FC<GuardrailProviderFieldsProps> = ({
               defaultValue={fieldValue !== undefined ? Number(fieldValue) : undefined}
             />
           ) : fieldKey.includes("password") || fieldKey.includes("secret") || fieldKey.includes("key") ? (
-            <TextInput placeholder={field.description} type="password" defaultValue={fieldValue || ""} />
+            <Input.Password placeholder={field.description} defaultValue={fieldValue || ""} />
           ) : (
-            <TextInput placeholder={field.description} type="text" defaultValue={fieldValue || ""} />
+            <Input placeholder={field.description} defaultValue={fieldValue || ""} />
           )}
         </Form.Item>
       );

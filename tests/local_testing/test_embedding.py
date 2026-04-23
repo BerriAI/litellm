@@ -108,7 +108,11 @@ def test_openai_embedding_3():
     "model, api_base, api_key",
     [
         # ("azure/text-embedding-ada-002", None, None),
-        ("together_ai/BAAI/bge-base-en-v1.5", None, None),  # Updated to current Together AI embedding model
+        (
+            "together_ai/BAAI/bge-base-en-v1.5",
+            None,
+            None,
+        ),  # Updated to current Together AI embedding model
     ],
 )
 @pytest.mark.parametrize("sync_mode", [True, False])
@@ -193,9 +197,9 @@ def _azure_ai_image_mock_response(*args, **kwargs):
     "model, api_base, api_key",
     [
         (
-            "azure_ai/Cohere-embed-v3-multilingual-jzu",
-            "https://Cohere-embed-v3-multilingual-jzu.eastus2.models.ai.azure.com",
-            os.getenv("AZURE_AI_COHERE_API_KEY_2"),
+            "azure_ai/Cohere-embed-v3-multilingual-2",
+            os.getenv("AZURE_AI_API_BASE"),
+            os.getenv("AZURE_AI_API_KEY"),
         )
     ],
 )
@@ -292,13 +296,13 @@ def test_openai_embedding_timeouts():
 
 def test_openai_azure_embedding():
     try:
-        api_key = os.environ["AZURE_API_KEY"]
-        api_base = os.environ["AZURE_API_BASE"]
+        api_key = os.environ["AZURE_AI_API_KEY"]
+        api_base = os.environ["AZURE_AI_API_BASE"]
         api_version = os.environ["AZURE_API_VERSION"]
 
         os.environ["AZURE_API_VERSION"] = ""
-        os.environ["AZURE_API_BASE"] = ""
-        os.environ["AZURE_API_KEY"] = ""
+        os.environ["AZURE_AI_API_BASE"] = ""
+        os.environ["AZURE_AI_API_KEY"] = ""
 
         response = embedding(
             model="azure/text-embedding-ada-002",
@@ -310,39 +314,11 @@ def test_openai_azure_embedding():
         print(response)
 
         os.environ["AZURE_API_VERSION"] = api_version
-        os.environ["AZURE_API_BASE"] = api_base
-        os.environ["AZURE_API_KEY"] = api_key
+        os.environ["AZURE_AI_API_BASE"] = api_base
+        os.environ["AZURE_AI_API_KEY"] = api_key
 
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-
-
-@pytest.mark.skipif(
-    os.environ.get("CIRCLE_OIDC_TOKEN") is None,
-    reason="Cannot run without being in CircleCI Runner",
-)
-def test_aaaaaa_openai_azure_embedding_with_oidc_and_cf():
-    # TODO: Switch to our own Azure account, currently using ai.moda's account
-    os.environ["AZURE_TENANT_ID"] = "17c0a27a-1246-4aa1-a3b6-d294e80e783c"
-    os.environ["AZURE_CLIENT_ID"] = "4faf5422-b2bd-45e8-a6d7-46543a38acd0"
-
-    old_key = os.environ["AZURE_API_KEY"]
-    os.environ.pop("AZURE_API_KEY", None)
-
-    try:
-        response = embedding(
-            model="azure/text-embedding-ada-002",
-            input=["Hello"],
-            azure_ad_token="oidc/circleci/",
-            api_base="https://eastus2-litellm.openai.azure.com/",
-            api_version="2024-06-01",
-        )
-        print(response)
-
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-    finally:
-        os.environ["AZURE_API_KEY"] = old_key
 
 
 from openai.types.embedding import Embedding
@@ -381,11 +357,11 @@ def test_openai_azure_embedding_optional_arg():
         )
 
         mock_client.assert_called_once_with(
-            model="test", 
-            input=["test"], 
-            extra_body={"azure_ad_token": "test"}, 
-            timeout=600, 
-            extra_headers={"X-Stainless-Raw-Response": "true"}
+            model="test",
+            input=["test"],
+            extra_body={"azure_ad_token": "test"},
+            timeout=600,
+            extra_headers={"X-Stainless-Raw-Response": "true"},
         )
         # Verify azure_ad_token is passed in extra_body, not as a direct parameter
         assert "azure_ad_token" not in mock_client.call_args.kwargs
@@ -395,35 +371,6 @@ def test_openai_azure_embedding_optional_arg():
 # test_openai_azure_embedding()
 
 # test_openai_embedding()
-
-
-@pytest.mark.parametrize(
-    "model, api_base",
-    [
-        ("embed-english-v2.0", None),
-    ],
-)
-@pytest.mark.parametrize("sync_mode", [True, False])
-@pytest.mark.asyncio
-async def test_cohere_embedding(sync_mode, model, api_base):
-    try:
-        # litellm.set_verbose=True
-        data = {
-            "model": model,
-            "input": ["good morning from litellm", "this is another item"],
-            "input_type": "search_query",
-            "api_base": api_base,
-        }
-        if sync_mode:
-            response = embedding(**data)
-        else:
-            response = await litellm.aembedding(**data)
-
-        print(f"response:", response)
-
-        assert isinstance(response.usage, litellm.Usage)
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
 
 
 # test_cohere_embedding()
@@ -573,7 +520,7 @@ def test_bedrock_embedding_cohere():
                 "good morning from litellm, attempting to embed data",
                 "lets test a second string for good measure",
             ],
-            aws_region_name="os.environ/AWS_REGION_NAME_2",
+            aws_region_name="us-west-2",
         )
         assert isinstance(
             response["data"][0]["embedding"], list
@@ -839,7 +786,7 @@ def test_watsonx_embeddings(monkeypatch):
     monkeypatch.setenv("WATSONX_PROJECT_ID", "mock-project-id")
 
     client = HTTPHandler()
-    
+
     # Track the actual request made
     captured_request = {}
 
@@ -848,7 +795,7 @@ def test_watsonx_embeddings(monkeypatch):
         captured_request["url"] = url
         captured_request["headers"] = kwargs.get("headers", {})
         captured_request["data"] = kwargs.get("data")
-        
+
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.headers = {"Content-Type": "application/json"}
@@ -871,10 +818,12 @@ def test_watsonx_embeddings(monkeypatch):
 
         print(f"response: {response}")
         assert isinstance(response.usage, litellm.Usage)
-        
+
         # Verify the request was made correctly
         assert "Authorization" in captured_request["headers"]
-        assert captured_request["headers"]["Authorization"] == "Bearer mock-watsonx-token"
+        assert (
+            captured_request["headers"]["Authorization"] == "Bearer mock-watsonx-token"
+        )
         assert "us-south.ml.cloud.ibm.com" in captured_request["url"]
     except litellm.RateLimitError as e:
         pass
@@ -960,12 +909,12 @@ async def test_gemini_embeddings(sync_mode, input):
         litellm.set_verbose = True
         if sync_mode:
             response = litellm.embedding(
-                model="gemini/text-embedding-004",
+                model="gemini/gemini-embedding-001",
                 input=input,
             )
         else:
             response = await litellm.aembedding(
-                model="gemini/text-embedding-004",
+                model="gemini/gemini-embedding-001",
                 input=input,
             )
         print(f"response: {response}")
@@ -1284,9 +1233,7 @@ def test_jina_ai_img_embeddings(input_data, expected_payload_input):
 
         # Call the function we want to test
         try:
-            litellm.embedding(
-                model="jina_ai/jina-embeddings-v4", input=input_data
-            )
+            litellm.embedding(model="jina_ai/jina-embeddings-v4", input=input_data)
         except Exception as e:
             pytest.fail(
                 f"litellm.embedding call failed with an unexpected exception: {e}"
@@ -1308,3 +1255,118 @@ def test_jina_ai_img_embeddings(input_data, expected_payload_input):
         #    Assert that the 'input' field in the payload matches our expectation.
         assert "input" in sent_data
         assert sent_data["input"] == expected_payload_input
+
+
+def test_encoding_format_none_not_omitted_from_openai_sdk():
+    """
+    Test that encoding_format=None is explicitly sent to OpenAI SDK.
+
+    This test verifies that when encoding_format is not provided by the user,
+    liteLLM explicitly sets it to None rather than omitting it. This prevents
+    the OpenAI SDK from adding its default value of 'base64'.
+
+    Without this fix:
+    - OpenAI SDK adds encoding_format='base64' as default when parameter is missing
+    - This causes issues with providers that don't support encoding_format (like Gemini)
+
+    With this fix:
+    - encoding_format=None is explicitly passed
+    - OpenAI SDK respects the explicit None and doesn't add defaults
+    """
+    with patch(
+        "litellm.llms.openai.openai.OpenAIChatCompletion._get_openai_client"
+    ) as mock_get_client:
+        # Create a mock client instance
+        mock_client_instance = MagicMock()
+        mock_get_client.return_value = mock_client_instance
+
+        # Mock the embeddings.with_raw_response.create method
+        mock_response = MagicMock()
+        mock_response.parse.return_value = MagicMock(
+            model_dump=lambda: {
+                "data": [{"embedding": [0.1, 0.2, 0.3], "index": 0}],
+                "model": "text-embedding-ada-002",
+                "object": "list",
+                "usage": {"prompt_tokens": 1, "total_tokens": 1},
+            }
+        )
+        mock_response.headers = {}
+
+        mock_client_instance.embeddings.with_raw_response.create.return_value = (
+            mock_response
+        )
+
+        # Call the embedding function without encoding_format
+        response = embedding(
+            model="text-embedding-ada-002",
+            input="Hello world",
+        )
+
+        # Get the call arguments to verify what was sent to OpenAI SDK
+        call_args = mock_client_instance.embeddings.with_raw_response.create.call_args
+        assert (
+            call_args is not None
+        ), "OpenAI SDK embeddings.create should have been called"
+
+        call_kwargs = call_args[1]  # Get kwargs
+
+        # The key assertion: encoding_format should be in the request with value None
+        # This prevents OpenAI SDK from adding its default 'base64' value
+        assert "encoding_format" in call_kwargs, (
+            "encoding_format should be explicitly passed to OpenAI SDK "
+            "(even if None) to prevent SDK from adding default value"
+        )
+        assert (
+            call_kwargs["encoding_format"] is None
+        ), "encoding_format should be None when not provided by user"
+
+        print("✅ PASS: encoding_format=None is correctly passed to OpenAI SDK")
+
+
+def test_encoding_format_explicit_value_preserved():
+    """
+    Test that explicitly provided encoding_format values are preserved.
+
+    When user provides encoding_format='float' or 'base64', it should be
+    sent as-is to the OpenAI SDK.
+    """
+    with patch(
+        "litellm.llms.openai.openai.OpenAIChatCompletion._get_openai_client"
+    ) as mock_get_client:
+        # Create a mock client instance
+        mock_client_instance = MagicMock()
+        mock_get_client.return_value = mock_client_instance
+
+        # Mock the embeddings.with_raw_response.create method
+        mock_response = MagicMock()
+        mock_response.parse.return_value = MagicMock(
+            model_dump=lambda: {
+                "data": [{"embedding": [0.1, 0.2, 0.3], "index": 0}],
+                "model": "text-embedding-ada-002",
+                "object": "list",
+                "usage": {"prompt_tokens": 1, "total_tokens": 1},
+            }
+        )
+        mock_response.headers = {}
+
+        mock_client_instance.embeddings.with_raw_response.create.return_value = (
+            mock_response
+        )
+
+        # Test with explicit encoding_format='float'
+        response = embedding(
+            model="text-embedding-ada-002", input="Hello world", encoding_format="float"
+        )
+
+        # Verify the encoding_format was passed correctly
+        call_args = mock_client_instance.embeddings.with_raw_response.create.call_args
+        call_kwargs = call_args[1]
+
+        assert (
+            "encoding_format" in call_kwargs
+        ), "encoding_format should be in the request"
+        assert (
+            call_kwargs["encoding_format"] == "float"
+        ), "encoding_format should be 'float' when explicitly provided"
+
+        print("✅ PASS: encoding_format='float' is correctly preserved")

@@ -188,6 +188,28 @@ My email is [EMAIL] and my phone number is [PHONE_NUMBER]
 
 This helps protect sensitive information while still allowing the model to understand the context of the request.
 
+## Experimental: Only Send Latest User Message
+
+When you're chaining long conversations through Bedrock guardrails, you can opt into a lighter, experimental behavior by setting `experimental_use_latest_role_message_only: true` in the guardrail's `litellm_params`. When enabled, LiteLLM only sends the most recent `user` message (or assistant output during post-call checks) to Bedrock, which:
+
+- prevents unintended blocks on older system/dev messages
+- keeps Bedrock payloads smaller, reducing latency and cost
+- applies to proxy hooks (`pre_call`, `during_call`) and the `/guardrails/apply_guardrail` testing endpoint
+
+```yaml showLineNumbers title="litellm proxy config.yaml"
+guardrails:
+  - guardrail_name: "bedrock-pre-guard"
+    litellm_params:
+      guardrail: bedrock
+      mode: "pre_call"
+      guardrailIdentifier: wf0hkdb5x07f
+      guardrailVersion: "DRAFT"
+      aws_region_name: os.environ/AWS_REGION
+      experimental_use_latest_role_message_only: true  # NEW
+```
+
+> ⚠️ This flag is currently experimental and defaults to `false` to preserve the legacy behavior (entire message history). We'll be listening to user feedback to decide if this becomes the default or rolls out more broadly.
+
 ## Disabling Exceptions on Bedrock BLOCK
 
 By default, when Bedrock guardrails block content, LiteLLM raises an HTTP 400 exception. However, you can disable this behavior by setting `disable_exception_on_block: true`. This is particularly useful when integrating with **OpenWebUI**, where exceptions can interrupt the chat flow and break the user experience.

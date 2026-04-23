@@ -1,0 +1,95 @@
+# EU AI Act Article 5.1(a) — Subliminal Manipulation & Deceptive Techniques
+# Prohibits AI systems that deploy subliminal, manipulative, or deceptive techniques
+# to distort behavior and impair informed decision-making.
+# Reference: https://artificialintelligenceact.eu/article/5/
+category_name: "eu_ai_act_art5_manipulation"
+description: "Art. 5.1(a) — Blocks subliminal manipulation, deceptive AI techniques, and covert behavioral influence"
+default_action: "BLOCK"
+
+identifier_words:
+  # System development actions
+  - "build"
+  - "create"
+  - "develop"
+  - "design"
+  - "implement"
+  - "deploy"
+  - "launch"
+  - "use"
+
+  # Influence actions
+  - "manipulate"
+  - "influence"
+  - "persuade"
+  - "nudge"
+  - "coerce"
+  - "exploit"
+  - "target"
+  - "embed"
+  - "inject"
+  - "insert"
+
+additional_block_words:
+  # Subliminal techniques
+  - "subliminal"
+  - "subliminal message"
+  - "subliminal advertising"
+  - "subliminal technique"
+  - "subliminal signal"
+  - "subliminal stimulus"
+  - "subliminal perception"
+  - "subliminal cue"
+
+  # Subconscious manipulation
+  - "subconscious"
+  - "subconscious manipulation"
+  - "subconscious influence"
+  - "subconscious persuasion"
+  - "below conscious awareness"
+
+  # Behavioral manipulation
+  - "behavior manipulation"
+  - "behavioral manipulation"
+  - "behavioral distortion"
+  - "manipulative design"
+  - "dark pattern"
+  - "deceptive pattern"
+  - "deceptive design"
+  - "coercive design"
+
+  # Decision impairment
+  - "impair decision"
+  - "distort decision"
+  - "undermine autonomy"
+  - "override consent"
+  - "bypass rational"
+
+always_block_keywords:
+  - keyword: "subliminal manipulation system"
+    severity: "high"
+  - keyword: "subliminal advertising system"
+    severity: "high"
+  - keyword: "covert behavioral manipulation"
+    severity: "high"
+  - keyword: "subconscious manipulation tool"
+    severity: "high"
+  - keyword: "deceptive AI manipulation"
+    severity: "high"
+  - keyword: "dark pattern AI system"
+    severity: "high"
+
+exceptions:
+  - "research on"
+  - "study on"
+  - "academic"
+  - "thesis on"
+  - "explain"
+  - "what is"
+  - "article 5"
+  - "prohibited by"
+  - "detect dark pattern"
+  - "audit for"
+  - "compliance monitoring"
+  - "ethical review"
+  - "how to prevent"
+  - "how to avoid"

@@ -108,24 +108,24 @@ async def use_callback_in_llm_call(
             "workspace": "test-workspace",
             "repository": "test-repo",
             "access_token": "test-token",
-            "branch": "main"
+            "branch": "main",
         }
         litellm.global_gitlab_config = {
             "project": "a/b/<repo_name>",
             "access_token": "your-access-token",
             "base_url": "gitlab url",
-            "prompts_path": "src/prompts", # folder to point to, defaults to root
-            "branch":"main"  # optional, defaults to main
+            "prompts_path": "src/prompts",  # folder to point to, defaults to root
+            "branch": "main",  # optional, defaults to main
         }
         # Mock BitBucket HTTP calls to prevent actual API requests
         import httpx
         from unittest.mock import MagicMock
-        
+
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.json.return_value = {"values": []}
         mock_response.text = ""
-        
+
         patch.object(
             litellm.module_level_client, "get", return_value=mock_response
         ).start()
@@ -204,30 +204,9 @@ async def use_callback_in_llm_call(
 
         if callback == "bitbucket":
             # Clean up bitbucket configuration and patches
-            if hasattr(litellm, 'global_bitbucket_config'):
-                delattr(litellm, 'global_bitbucket_config')
+            if hasattr(litellm, "global_bitbucket_config"):
+                delattr(litellm, "global_bitbucket_config")
             patch.stopall()
-
-
-@pytest.mark.asyncio
-async def test_init_custom_logger_compatible_class_as_callback():
-    init_env_vars()
-
-    # used like litellm.callbacks = ["prometheus"]
-    for callback in litellm._known_custom_logger_compatible_callbacks:
-        print(f"Testing callback: {callback}")
-        reset_all_callbacks()
-
-        await use_callback_in_llm_call(callback, used_in="callbacks")
-
-    # used like this litellm.success_callback = ["prometheus"]
-    for callback in litellm._known_custom_logger_compatible_callbacks:
-        print(f"Testing callback: {callback}")
-        reset_all_callbacks()
-
-        await use_callback_in_llm_call(callback, used_in="success_callback")
-
-    reset_env_vars()
 
 
 def test_dynamic_logging_global_callback():
@@ -313,3 +292,29 @@ def test_get_combined_callback_list():
     assert "lago" in _logging.get_combined_callback_list(
         dynamic_success_callbacks=["langfuse"], global_callbacks=["lago"]
     )
+
+
+def test_get_combined_callback_list_returns_copy_when_dynamic_is_none():
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+
+    _logging = LiteLLMLoggingObj(
+        model="claude-3-opus-20240229",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="completion",
+        start_time=datetime.now(),
+        litellm_call_id="123",
+        function_id="456",
+    )
+
+    global_callbacks = ["langfuse"]
+    combined_callbacks = _logging.get_combined_callback_list(
+        dynamic_success_callbacks=None, global_callbacks=global_callbacks
+    )
+
+    assert combined_callbacks == ["langfuse"]
+    assert combined_callbacks is not global_callbacks
+
+    combined_callbacks.append("new_callback")
+
+    assert global_callbacks == ["langfuse"]

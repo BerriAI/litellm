@@ -5,6 +5,7 @@ https://docs.aws.amazon.com/bedrock/latest/APIReference/API_agentcore_InvokeAgen
 """
 
 import json
+from collections.abc import AsyncGenerator
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union, cast
 from urllib.parse import quote
 
@@ -15,9 +16,10 @@ from litellm._uuid import uuid
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     convert_content_list_to_str,
 )
+from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
-from litellm.llms.bedrock.chat.agentcore.sse_iterator import AgentCoreSSEStreamIterator
+from litellm.llms.a2a.common_utils import extract_text_from_a2a_response
 from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.types.llms.bedrock_agentcore import (
     AgentCoreMessage,
@@ -25,19 +27,25 @@ from litellm.types.llms.bedrock_agentcore import (
     AgentCoreUsage,
 )
 from litellm.types.llms.openai import AllMessageValues
-from litellm.types.utils import Choices, Message, ModelResponse, Usage
+from litellm.types.utils import (
+    Choices,
+    Delta,
+    Message,
+    ModelResponse,
+    ModelResponseStream,
+    StreamingChoices,
+    Usage,
+)
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
-    from litellm.utils import CustomStreamWrapper
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
     HTTPHandler = Any
     AsyncHTTPHandler = Any
-    CustomStreamWrapper = Any
 
 
 class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
@@ -115,8 +123,14 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
         stream: Optional[bool] = None,
         fake_stream: Optional[bool] = None,
     ) -> Tuple[dict, Optional[bytes]]:
+        # Set Accept header required by MCP servers on AgentCore
+        # Per MCP spec (Streamable HTTP transport): client MUST include Accept header
+        # listing both application/json and text/event-stream as supported content types
+        headers["Accept"] = "application/json, text/event-stream"
+
         # Check if api_key (bearer token) is provided for Cognito authentication
-        jwt_token = optional_params.get("api_key")
+        # Priority: api_key parameter first, then optional_params
+        jwt_token = api_key or optional_params.get("api_key")
         if jwt_token:
             verbose_logger.debug(
                 f"AgentCore: Using Bearer token authentication (Cognito/JWT) - token: {jwt_token[:50]}..."
@@ -329,24 +343,78 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
         """
         Parse direct JSON response (non-streaming).
 
-        JSON response structure:
-        {
-            "result": {
-                "role": "assistant",
-                "content": [{"text": "..."}]
-            }
-        }
+        Supports multiple agent response schemas:
+        0. {"jsonrpc": "2.0", "result": {"message": {"parts": [...]}}} - A2A JSON-RPC
+        1. {"result": {"role": "assistant", "content": [{"text": "..."}]}} - standard AgentCore
+        2. {"response": [{"text": "..."}]} - Strands agent format
+        3. {"result": "plain text"} or {"response": "plain text"} - simple string
+        4. Fallback: raw JSON as content string
         """
-        result = response_json.get("result", {})
+        # Guard: if json.loads() returned a non-dict (e.g. array or primitive),
+        # skip strategy matching and fall back to raw JSON string
+        if not isinstance(response_json, dict):
+            verbose_logger.warning(
+                "AgentCore: JSON response is not a dict. "
+                "Returning raw JSON as content."
+            )
+            return AgentCoreParsedResponse(
+                content=json.dumps(response_json),
+                usage=None,
+                final_message=None,
+            )
 
-        # Extract content using the same helper as SSE parsing
-        content = self._extract_content_from_message(result)  # type: ignore
+        # Strategy 0: A2A JSON-RPC format
+        # {"jsonrpc": "2.0", "result": {"message": {"parts": [{"kind": "text", "text": "..."}]}}}
+        if "jsonrpc" in response_json:
+            content = extract_text_from_a2a_response(response_json)
+            if content:
+                return AgentCoreParsedResponse(
+                    content=content,
+                    usage=None,
+                    final_message=None,
+                )
+            # Fall through to other strategies if A2A extraction returned empty
 
-        # JSON responses don't include usage data
+        # Strategy 1: {"result": {"content": [{"text": "..."}]}} - standard AgentCore format
+        if "result" in response_json and isinstance(response_json["result"], dict):
+            result = response_json["result"]
+            content = self._extract_content_from_message(result)  # type: ignore
+            return AgentCoreParsedResponse(
+                content=content,
+                usage=None,
+                final_message=result,  # type: ignore
+            )
+
+        # Strategy 2: {"response": [{"text": "..."}]} - Strands agent content blocks
+        if "response" in response_json and isinstance(response_json["response"], list):
+            content = self._extract_content_from_message(
+                {"content": response_json["response"]}  # type: ignore
+            )
+            return AgentCoreParsedResponse(
+                content=content,
+                usage=None,
+                final_message=None,
+            )
+
+        # Strategy 3: string values - {"result": "text"} or {"response": "text"}
+        for key in ("result", "response"):
+            val = response_json.get(key)
+            if isinstance(val, str):
+                return AgentCoreParsedResponse(
+                    content=val,
+                    usage=None,
+                    final_message=None,
+                )
+
+        # Strategy 4: fallback - return raw JSON as content
+        verbose_logger.warning(
+            f"AgentCore: Could not extract content from JSON response keys "
+            f"{list(response_json.keys())}. Returning raw JSON as content."
+        )
         return AgentCoreParsedResponse(
-            content=content,
+            content=json.dumps(response_json),
             usage=None,
-            final_message=result,  # type: ignore
+            final_message=None,
         )
 
     def _get_parsed_response(
@@ -437,22 +505,108 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
             content=content, usage=usage_data, final_message=final_message
         )
 
-    def get_streaming_response(
+    def _stream_agentcore_response_sync(
         self,
+        response: httpx.Response,
         model: str,
-        raw_response: httpx.Response,
-    ) -> AgentCoreSSEStreamIterator:
+    ):
         """
-        Return a streaming iterator for SSE responses.
-
-        Args:
-            model: The model name
-            raw_response: Raw HTTP response with streaming data
-
-        Returns:
-            AgentCoreSSEStreamIterator: Iterator that yields ModelResponse chunks
+        Internal sync generator that parses SSE and yields ModelResponse chunks.
         """
-        return AgentCoreSSEStreamIterator(response=raw_response, model=model)
+        buffer = ""
+        for text_chunk in response.iter_text():
+            buffer += text_chunk
+
+            # Process complete lines
+            while "\n" in buffer:
+                line, buffer = buffer.split("\n", 1)
+                line = line.strip()
+
+                if not line or not line.startswith("data:"):
+                    continue
+
+                json_str = line[5:].strip()
+                if not json_str:
+                    continue
+
+                try:
+                    data_obj = json.loads(json_str)
+                    if not isinstance(data_obj, dict):
+                        continue
+
+                    # Process contentBlockDelta events
+                    if "event" in data_obj and isinstance(data_obj["event"], dict):
+                        event_payload = data_obj["event"]
+                        content_block_delta = event_payload.get("contentBlockDelta")
+
+                        if content_block_delta:
+                            delta = content_block_delta.get("delta", {})
+                            text = delta.get("text", "")
+
+                            if text:
+                                chunk = ModelResponseStream(
+                                    id=f"chatcmpl-{uuid.uuid4()}",
+                                    created=0,
+                                    model=model,
+                                    object="chat.completion.chunk",
+                                )
+                                chunk.choices = [
+                                    StreamingChoices(
+                                        finish_reason=None,
+                                        index=0,
+                                        delta=Delta(content=text, role="assistant"),
+                                    )
+                                ]
+                                yield chunk
+
+                        # Process metadata/usage
+                        metadata = event_payload.get("metadata")
+                        if metadata and "usage" in metadata:
+                            chunk = ModelResponseStream(
+                                id=f"chatcmpl-{uuid.uuid4()}",
+                                created=0,
+                                model=model,
+                                object="chat.completion.chunk",
+                            )
+                            chunk.choices = [
+                                StreamingChoices(
+                                    finish_reason="stop",
+                                    index=0,
+                                    delta=Delta(),
+                                )
+                            ]
+                            usage_data: AgentCoreUsage = metadata["usage"]  # type: ignore
+                            setattr(
+                                chunk,
+                                "usage",
+                                Usage(
+                                    prompt_tokens=usage_data.get("inputTokens", 0),
+                                    completion_tokens=usage_data.get("outputTokens", 0),
+                                    total_tokens=usage_data.get("totalTokens", 0),
+                                ),
+                            )
+                            yield chunk
+
+                    # Process final message
+                    if "message" in data_obj and isinstance(data_obj["message"], dict):
+                        chunk = ModelResponseStream(
+                            id=f"chatcmpl-{uuid.uuid4()}",
+                            created=0,
+                            model=model,
+                            object="chat.completion.chunk",
+                        )
+                        chunk.choices = [
+                            StreamingChoices(
+                                finish_reason="stop",
+                                index=0,
+                                delta=Delta(),
+                            )
+                        ]
+                        yield chunk
+
+                except json.JSONDecodeError:
+                    verbose_logger.debug(f"Skipping non-JSON SSE line: {line[:100]}")
+                    continue
 
     def get_sync_custom_stream_wrapper(
         self,
@@ -466,17 +620,14 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
         client: Optional[Union[HTTPHandler, "AsyncHTTPHandler"]] = None,
         json_mode: Optional[bool] = None,
         signed_json_body: Optional[bytes] = None,
-    ) -> CustomStreamWrapper:
+    ) -> "CustomStreamWrapper":
         """
-        Get a CustomStreamWrapper for synchronous streaming.
-
-        This is called when stream=True is passed to completion().
+        Simplified sync streaming - returns a generator that yields ModelResponse chunks.
         """
         from litellm.llms.custom_httpx.http_handler import (
             HTTPHandler,
             _get_httpx_client,
         )
-        from litellm.utils import CustomStreamWrapper
 
         if client is None or not isinstance(client, HTTPHandler):
             client = _get_httpx_client(params={})
@@ -488,7 +639,7 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
             api_base,
             headers=headers,
             data=signed_json_body if signed_json_body else json.dumps(data),
-            stream=True,  # THIS IS KEY - tells httpx to not buffer
+            stream=True,
             logging_obj=logging_obj,
         )
 
@@ -496,18 +647,6 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
             raise BedrockError(
                 status_code=response.status_code, message=str(response.read())
             )
-
-        # Create iterator for SSE stream
-        completion_stream = self.get_streaming_response(
-            model=model, raw_response=response
-        )
-
-        streaming_response = CustomStreamWrapper(
-            completion_stream=completion_stream,
-            model=model,
-            custom_llm_provider=custom_llm_provider,
-            logging_obj=logging_obj,
-        )
 
         # LOGGING
         logging_obj.post_call(
@@ -517,7 +656,173 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
             additional_args={"complete_input_dict": data},
         )
 
-        return streaming_response
+        # Check if response is JSON (agent used sync return) instead of SSE
+        content_type = response.headers.get("content-type", "").lower()
+        if "application/json" in content_type:
+            verbose_logger.debug(
+                "AgentCore streaming: received JSON response instead of SSE, "
+                "converting to single-chunk stream"
+            )
+            try:
+                body = response.read()
+                response_json = json.loads(body)
+            except (json.JSONDecodeError, Exception) as e:
+                raise BedrockError(
+                    status_code=response.status_code,
+                    message=f"AgentCore: Failed to read/parse JSON response body: {e}",
+                )
+            parsed = self._parse_json_response(response_json)
+
+            def _json_as_sync_stream():
+                # Content chunk
+                content_chunk = ModelResponseStream(
+                    id=f"chatcmpl-{uuid.uuid4()}",
+                    created=0,
+                    model=model,
+                    object="chat.completion.chunk",
+                )
+                content_chunk.choices = [
+                    StreamingChoices(
+                        finish_reason=None,
+                        index=0,
+                        delta=Delta(content=parsed["content"], role="assistant"),
+                    )
+                ]
+                yield content_chunk
+
+                # Stop sentinel chunk (matches SSE path convention)
+                stop_chunk = ModelResponseStream(
+                    id=f"chatcmpl-{uuid.uuid4()}",
+                    created=0,
+                    model=model,
+                    object="chat.completion.chunk",
+                )
+                stop_chunk.choices = [
+                    StreamingChoices(
+                        finish_reason="stop",
+                        index=0,
+                        delta=Delta(),
+                    )
+                ]
+                yield stop_chunk
+
+            return CustomStreamWrapper(
+                completion_stream=_json_as_sync_stream(),
+                model=model,
+                custom_llm_provider="bedrock",
+                logging_obj=logging_obj,
+            )
+
+        # SSE stream (text/event-stream or default) - use existing SSE parser
+        return CustomStreamWrapper(
+            completion_stream=self._stream_agentcore_response_sync(response, model),
+            model=model,
+            custom_llm_provider="bedrock",
+            logging_obj=logging_obj,
+        )
+
+    async def _stream_agentcore_response(
+        self,
+        response: httpx.Response,
+        model: str,
+    ) -> AsyncGenerator[ModelResponseStream, None]:
+        """
+        Internal async generator that parses SSE and yields ModelResponse chunks.
+        """
+        buffer = ""
+        async for text_chunk in response.aiter_text():
+            buffer += text_chunk
+
+            # Process complete lines
+            while "\n" in buffer:
+                line, buffer = buffer.split("\n", 1)
+                line = line.strip()
+
+                if not line or not line.startswith("data:"):
+                    continue
+
+                json_str = line[5:].strip()
+                if not json_str:
+                    continue
+
+                try:
+                    data_obj = json.loads(json_str)
+                    if not isinstance(data_obj, dict):
+                        continue
+
+                    # Process contentBlockDelta events
+                    if "event" in data_obj and isinstance(data_obj["event"], dict):
+                        event_payload = data_obj["event"]
+                        content_block_delta = event_payload.get("contentBlockDelta")
+
+                        if content_block_delta:
+                            delta = content_block_delta.get("delta", {})
+                            text = delta.get("text", "")
+
+                            if text:
+                                chunk = ModelResponseStream(
+                                    id=f"chatcmpl-{uuid.uuid4()}",
+                                    created=0,
+                                    model=model,
+                                    object="chat.completion.chunk",
+                                )
+                                chunk.choices = [
+                                    StreamingChoices(
+                                        finish_reason=None,
+                                        index=0,
+                                        delta=Delta(content=text, role="assistant"),
+                                    )
+                                ]
+                                yield chunk
+
+                        # Process metadata/usage
+                        metadata = event_payload.get("metadata")
+                        if metadata and "usage" in metadata:
+                            chunk = ModelResponseStream(
+                                id=f"chatcmpl-{uuid.uuid4()}",
+                                created=0,
+                                model=model,
+                                object="chat.completion.chunk",
+                            )
+                            chunk.choices = [
+                                StreamingChoices(
+                                    finish_reason="stop",
+                                    index=0,
+                                    delta=Delta(),
+                                )
+                            ]
+                            usage_data: AgentCoreUsage = metadata["usage"]  # type: ignore
+                            setattr(
+                                chunk,
+                                "usage",
+                                Usage(
+                                    prompt_tokens=usage_data.get("inputTokens", 0),
+                                    completion_tokens=usage_data.get("outputTokens", 0),
+                                    total_tokens=usage_data.get("totalTokens", 0),
+                                ),
+                            )
+                            yield chunk
+
+                    # Process final message
+                    if "message" in data_obj and isinstance(data_obj["message"], dict):
+                        chunk = ModelResponseStream(
+                            id=f"chatcmpl-{uuid.uuid4()}",
+                            created=0,
+                            model=model,
+                            object="chat.completion.chunk",
+                        )
+                        chunk.choices = [
+                            StreamingChoices(
+                                finish_reason="stop",
+                                index=0,
+                                delta=Delta(),
+                            )
+                        ]
+                        yield chunk
+
+                except json.JSONDecodeError:
+                    verbose_logger.debug(f"Skipping non-JSON SSE line: {line[:100]}")
+                    continue
 
     async def get_async_custom_stream_wrapper(
         self,
@@ -531,17 +836,14 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
         client: Optional["AsyncHTTPHandler"] = None,
         json_mode: Optional[bool] = None,
         signed_json_body: Optional[bytes] = None,
-    ) -> CustomStreamWrapper:
+    ) -> "CustomStreamWrapper":
         """
-        Get a CustomStreamWrapper for asynchronous streaming.
-
-        This is called when stream=True is passed to acompletion().
+        Simplified async streaming - returns an async generator that yields ModelResponse chunks.
         """
         from litellm.llms.custom_httpx.http_handler import (
             AsyncHTTPHandler,
             get_async_httpx_client,
         )
-        from litellm.utils import CustomStreamWrapper
 
         if client is None or not isinstance(client, AsyncHTTPHandler):
             client = get_async_httpx_client(
@@ -555,7 +857,7 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
             api_base,
             headers=headers,
             data=signed_json_body if signed_json_body else json.dumps(data),
-            stream=True,  # THIS IS KEY - tells httpx to not buffer
+            stream=True,
             logging_obj=logging_obj,
         )
 
@@ -563,18 +865,6 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
             raise BedrockError(
                 status_code=response.status_code, message=str(await response.aread())
             )
-
-        # Create iterator for SSE stream
-        completion_stream = self.get_streaming_response(
-            model=model, raw_response=response
-        )
-
-        streaming_response = CustomStreamWrapper(
-            completion_stream=completion_stream,
-            model=model,
-            custom_llm_provider=custom_llm_provider,
-            logging_obj=logging_obj,
-        )
 
         # LOGGING
         logging_obj.post_call(
@@ -584,7 +874,72 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
             additional_args={"complete_input_dict": data},
         )
 
-        return streaming_response
+        # Check if response is JSON (agent used sync return) instead of SSE
+        content_type = response.headers.get("content-type", "").lower()
+        if "application/json" in content_type:
+            verbose_logger.debug(
+                "AgentCore streaming: received JSON response instead of SSE, "
+                "converting to single-chunk stream"
+            )
+            try:
+                body = await response.aread()
+                response_json = json.loads(body)
+            except (json.JSONDecodeError, Exception) as e:
+                raise BedrockError(
+                    status_code=response.status_code,
+                    message=f"AgentCore: Failed to read/parse JSON response body: {e}",
+                )
+            parsed = self._parse_json_response(response_json)
+
+            async def _json_as_async_stream() -> (
+                AsyncGenerator[ModelResponseStream, None]
+            ):
+                # Content chunk
+                content_chunk = ModelResponseStream(
+                    id=f"chatcmpl-{uuid.uuid4()}",
+                    created=0,
+                    model=model,
+                    object="chat.completion.chunk",
+                )
+                content_chunk.choices = [
+                    StreamingChoices(
+                        finish_reason=None,
+                        index=0,
+                        delta=Delta(content=parsed["content"], role="assistant"),
+                    )
+                ]
+                yield content_chunk
+
+                # Stop sentinel chunk (matches SSE path convention)
+                stop_chunk = ModelResponseStream(
+                    id=f"chatcmpl-{uuid.uuid4()}",
+                    created=0,
+                    model=model,
+                    object="chat.completion.chunk",
+                )
+                stop_chunk.choices = [
+                    StreamingChoices(
+                        finish_reason="stop",
+                        index=0,
+                        delta=Delta(),
+                    )
+                ]
+                yield stop_chunk
+
+            return CustomStreamWrapper(
+                completion_stream=_json_as_async_stream(),
+                model=model,
+                custom_llm_provider="bedrock",
+                logging_obj=logging_obj,
+            )
+
+        # SSE stream (text/event-stream or default) - use existing SSE parser
+        return CustomStreamWrapper(
+            completion_stream=self._stream_agentcore_response(response, model),
+            model=model,
+            custom_llm_provider="bedrock",
+            logging_obj=logging_obj,
+        )
 
     @property
     def has_custom_stream_wrapper(self) -> bool:
@@ -692,4 +1047,5 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
         stream: Optional[bool],
         custom_llm_provider: Optional[str] = None,
     ) -> bool:
-        return True
+        # AgentCore supports true streaming - don't buffer
+        return False

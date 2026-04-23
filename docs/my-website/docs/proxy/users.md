@@ -10,6 +10,8 @@ import TabItem from '@theme/TabItem';
 
 **Team member budgets**: Set individual spending limits within the team's shared budget
 
+**Agent budgets**: Set rate limits (tpm/rpm) and session-level caps (iterations, dollar budget) on agents [**Jump**](#agents)
+
 ***If a key belongs to a team, the team budget is applied, not the user's personal budget.***
 :::
 
@@ -67,13 +69,6 @@ You can:
 :::info
 
 **Step-by step tutorial on setting, resetting budgets on Teams here (API or using Admin UI)**
-
-> **Prerequisite:**
-> To enable team member rate limits, you must set the environment variable `EXPERIMENTAL_MULTI_INSTANCE_RATE_LIMITING=true` before starting the proxy server. Without this, team member rate limits will not be enforced.
-
-👉 [https://docs.litellm.ai/docs/proxy/team_budgets](https://docs.litellm.ai/docs/proxy/team_budgets)
-
-:::
 
 
 #### **Add budgets to teams**
@@ -338,6 +333,67 @@ curl 'http://0.0.0.0:4000/key/generate' \
 }'
 ```
 
+#### **Set multiple budget windows on a key**
+
+Apply multiple concurrent budget limits at different time scales on the same key — for example, cap a key at **$10/day** AND **$100/month**.
+
+**When is this useful?**
+
+A single `budget_duration` window can't prevent a bad day from burning your entire month. Multiple budget windows let you:
+
+- Block a runaway usage spike within the day while still allowing normal monthly spend.
+- Give Claude Code rollouts a daily guardrail (`24h`) and a monthly ceiling (`30d`) so a single heavy session doesn't exhaust the whole month.
+- Layer fine-grained hourly limits for bursty workloads on top of a weekly cap.
+
+:::info
+
+See [User Budget docs](https://docs.litellm.ai/docs/proxy/users) for more on how budgets work across keys, teams, and users.
+
+:::
+
+**Via API**
+
+Pass `budget_limits` as a list of `{budget_duration, max_budget}` objects:
+
+```bash
+curl 'http://0.0.0.0:4000/key/generate' \
+--header 'Authorization: Bearer <your-master-key>' \
+--header 'Content-Type: application/json' \
+--data-raw '{
+  "budget_limits": [
+    {"budget_duration": "24h",  "max_budget": 10},
+    {"budget_duration": "30d",  "max_budget": 100}
+  ]
+}'
+```
+
+Each window is tracked independently and resets on its own schedule:
+
+| `budget_duration` | Resets |
+|---|---|
+| `1h`  | Every hour |
+| `24h` | Daily at midnight UTC |
+| `7d`  | Every Sunday at midnight UTC |
+| `30d` | 1st of every month at midnight UTC |
+
+**Via Dashboard**
+
+Open **Virtual Keys → Create Key → Optional Settings → Budget Windows**.
+
+![Step 1 - open key settings](https://colony-recorder.s3.amazonaws.com/files/2026-04-01/18930ba5-67c0-4031-afc0-57f37b4e59e4/ascreenshot_ef79d8a000bb41cdacf1bd9827732ee8_text_export.jpeg)
+
+Click **+ Add Budget Window** to add a row, choose the period from the dropdown, and enter the spend cap.
+
+![Step 2 - add a window](https://colony-recorder.s3.amazonaws.com/files/2026-04-01/5ae8c0b3-2d03-41ad-a63c-47b20c350dfe/ascreenshot_1a7dc6c7d65544f38fd8a65604674f22_text_export.jpeg)
+
+Add a second row for a different time period (e.g. monthly $100 on top of a daily $10).
+
+![Step 3 - add second window](https://colony-recorder.s3.amazonaws.com/files/2026-04-01/cbded3a7-1086-4e20-8f0f-de154b76146c/ascreenshot_c51c18752c3b4f8b976d28799b2638b6_text_export.jpeg)
+
+Each window shows the reset schedule below the input so it's always clear when spend resets.
+
+![Step 4 - reset hints](https://colony-recorder.s3.amazonaws.com/files/2026-04-01/8754f121-1640-4892-9dd0-fd4a870418bf/ascreenshot_8079eb0df2194e8f99e5258ba4b3c082_text_export.jpeg)
+
 
 ### ✨ Virtual Key (Model Specific)
 
@@ -425,6 +481,109 @@ Expected response on failure
 
 </TabItem>
 </Tabs>
+
+
+### Agents
+
+Set budgets and rate limits on agents registered with LiteLLM's [Agent Gateway](../a2a.md). You can control:
+- **Per-agent rate limits**: `tpm_limit` and `rpm_limit` on the agent itself
+- **Per-session rate limits**: `session_tpm_limit` and `session_rpm_limit` applied per session
+- **Per-session iteration cap**: `max_iterations` in agent `litellm_params`
+- **Per-session budget cap**: `max_budget_per_session` in agent `litellm_params`
+
+<Tabs>
+<TabItem value="agent-rate-limits" label="Agent Rate Limits">
+
+Set `tpm_limit` and `rpm_limit` on the agent to cap total throughput across all sessions.
+
+```bash
+curl -X POST 'http://localhost:4000/v1/agents' \
+  -H 'Authorization: Bearer sk-1234' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "agent_name": "my-research-agent",
+    "agent_card_params": {
+      "name": "my-research-agent",
+      "description": "A research agent",
+      "url": "http://my-agent:8080",
+      "version": "1.0.0"
+    },
+    "tpm_limit": 100000,
+    "rpm_limit": 100
+  }'
+```
+
+</TabItem>
+<TabItem value="session-rate-limits" label="Session Rate Limits">
+
+Set `session_tpm_limit` and `session_rpm_limit` to cap throughput per individual session.
+
+```bash
+curl -X POST 'http://localhost:4000/v1/agents' \
+  -H 'Authorization: Bearer sk-1234' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "agent_name": "my-research-agent",
+    "agent_card_params": {
+      "name": "my-research-agent",
+      "description": "A research agent",
+      "url": "http://my-agent:8080",
+      "version": "1.0.0"
+    },
+    "session_tpm_limit": 50000,
+    "session_rpm_limit": 50
+  }'
+```
+
+</TabItem>
+<TabItem value="session-budgets" label="Session Budgets">
+
+Set `max_iterations` and `max_budget_per_session` in agent `litellm_params` to cap individual sessions. Requires `require_trace_id_on_calls_by_agent` so LiteLLM can track calls per session.
+
+```bash
+curl -X POST 'http://localhost:4000/v1/agents' \
+  -H 'Authorization: Bearer sk-1234' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "agent_name": "my-research-agent",
+    "agent_card_params": {
+      "name": "my-research-agent",
+      "description": "A research agent",
+      "url": "http://my-agent:8080",
+      "version": "1.0.0"
+    },
+    "litellm_params": {
+      "require_trace_id_on_calls_by_agent": true,
+      "max_iterations": 25,
+      "max_budget_per_session": 5.00
+    }
+  }'
+```
+
+When a session exceeds the limit, requests receive a **429 Too Many Requests** response.
+
+See the [Agent Iteration Budgets](../a2a_iteration_budgets) guide for full details.
+
+</TabItem>
+</Tabs>
+
+:::info
+
+You can also update rate limits on existing agents using `PATCH /v1/agents/{agent_id}`:
+
+```bash
+curl -X PATCH 'http://localhost:4000/v1/agents/<agent_id>' \
+  -H 'Authorization: Bearer sk-1234' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "tpm_limit": 200000,
+    "rpm_limit": 200,
+    "session_tpm_limit": 50000,
+    "session_rpm_limit": 50
+  }'
+```
+
+:::
 
 
 ### Customers
@@ -543,7 +702,27 @@ You can set:
 - tpm limits (tokens per minute)
 - rpm limits (requests per minute)
 - max parallel requests
-- rpm / tpm limits per model for a given key
+- rpm / tpm limits per model for a given key or team
+
+### TPM Rate Limit Type (Input/Output/Total)
+
+By default, TPM (tokens per minute) rate limits count **total tokens** (input + output). You can configure this to count only input tokens or only output tokens instead.
+
+Set `token_rate_limit_type` in your `config.yaml`:
+
+```yaml
+general_settings:
+  master_key: sk-1234
+  token_rate_limit_type: "output"  # Options: "input", "output", "total" (default)
+```
+
+| Value | Description |
+|-------|-------------|
+| `total` | Count total tokens (prompt + completion). **Default behavior.** |
+| `input` | Count only prompt/input tokens |
+| `output` | Count only completion/output tokens |
+
+This setting applies globally to all TPM rate limit checks (keys, users, teams, etc.).
 
 
 <Tabs>
@@ -570,6 +749,62 @@ curl --location 'http://0.0.0.0:4000/team/new' \
     "team_id": "my-prod-team",
 }
 ```
+
+</TabItem>
+<TabItem value="per-team-model" label="Per Team Per Model">
+
+**Set rate limits per model for a team**
+
+Use `model_rpm_limit` and `model_tpm_limit` to set rate limits per model for all keys belonging to a team. These limits apply across all keys in the team and are inherited by keys unless overridden at the key level.
+
+Use `/team/new` or `/team/update` with `model_rpm_limit` and `model_tpm_limit` as dictionaries mapping model names to their limits:
+
+```shell
+curl --location 'http://0.0.0.0:4000/team/new' \
+--header 'Authorization: Bearer sk-1234' \
+--header 'Content-Type: application/json' \
+--data '{
+  "team_id": "my-prod-team",
+  "model_rpm_limit": {"gpt-4": 100, "gpt-3.5-turbo": 200},
+  "model_tpm_limit": {"gpt-4": 10000, "gpt-3.5-turbo": 20000}
+}'
+```
+
+**Update existing team with per-model limits:**
+
+```shell
+curl --location 'http://0.0.0.0:4000/team/update' \
+--header 'Authorization: Bearer sk-1234' \
+--header 'Content-Type: application/json' \
+--data '{
+  "team_id": "my-prod-team",
+  "model_rpm_limit": {"gpt-4": 100, "gpt-3.5-turbo": 200},
+  "model_tpm_limit": {"gpt-4": 10000, "gpt-3.5-turbo": 20000}
+}'
+```
+
+**Alternative: Use metadata**
+
+You can also pass per-model limits via the `metadata` field:
+
+```shell
+curl --location 'http://0.0.0.0:4000/team/update' \
+--header 'Authorization: Bearer sk-1234' \
+--header 'Content-Type: application/json' \
+--data '{
+  "team_id": "my-prod-team",
+  "metadata": {
+    "model_rpm_limit": {"gpt-4": 100, "gpt-3.5-turbo": 200},
+    "model_tpm_limit": {"gpt-4": 10000, "gpt-3.5-turbo": 20000}
+  }
+}'
+```
+
+**Resolution order:** When a key belongs to a team, rate limits are resolved as: **Key metadata > Key model_max_budget > Team metadata**. Keys can override team-level per-model limits with their own `model_rpm_limit` or `model_tpm_limit`.
+
+**Verify:** Make a `/chat/completions` request and check response headers `x-litellm-key-remaining-requests-{model}` and `x-litellm-key-remaining-tokens-{model}` for the model-specific limits.
+
+[**See Swagger**](https://litellm-api.up.railway.app/#/team%20management/new_team_team_new_post)
 
 </TabItem>
 <TabItem value="per-user" label="Per Internal User">
@@ -671,6 +906,31 @@ These headers indicate:
 
 - 1 request remaining for the GPT-4 model for key=`sk-ulGNRXWtv7M0lFnnsQk0wQ`
 - 179 tokens remaining for the GPT-4 model for key=`sk-ulGNRXWtv7M0lFnnsQk0wQ`
+
+</TabItem>
+<TabItem value="per-agent" label="Per Agent">
+
+Set rate limits on agents registered with the [Agent Gateway](../a2a.md).
+
+**Agent-level limits** cap total throughput across all sessions:
+
+```shell
+curl -X POST 'http://0.0.0.0:4000/v1/agents' \
+--header 'Authorization: Bearer sk-1234' \
+--header 'Content-Type: application/json' \
+--data '{"agent_name": "my-agent", "agent_card_params": {"name": "my-agent", "description": "My agent", "url": "http://my-agent:8080", "version": "1.0.0"}, "tpm_limit": 100000, "rpm_limit": 100}'
+```
+
+**Session-level limits** cap throughput per individual session:
+
+```shell
+curl -X POST 'http://0.0.0.0:4000/v1/agents' \
+--header 'Authorization: Bearer sk-1234' \
+--header 'Content-Type: application/json' \
+--data '{"agent_name": "my-agent", "agent_card_params": {"name": "my-agent", "description": "My agent", "url": "http://my-agent:8080", "version": "1.0.0"}, "session_tpm_limit": 50000, "session_rpm_limit": 50}'
+```
+
+You can also set **max_iterations** (call count cap) and **max_budget_per_session** (dollar cap) per session via `litellm_params`. See [Agent Iteration Budgets](../a2a_iteration_budgets) for details.
 
 </TabItem>
 <TabItem value="per-end-user" label="For customers">
@@ -802,12 +1062,10 @@ Expected Response:
 }
 ```
 
-### [BETA] Multi-instance rate limiting
+### Multi-instance rate limiting
 
-Enable multi-instance rate limiting with the env var `EXPERIMENTAL_MULTI_INSTANCE_RATE_LIMITING="True"`
 
 **Important Notes:**
-- Setting `EXPERIMENTAL_MULTI_INSTANCE_RATE_LIMITING="True"` is required for team member rate limits to function, not just for multi-instance scenarios.
 - **Rate limits do not apply to proxy admin users.** 
 - When testing rate limits, use internal user roles (non-admin) to ensure limits are enforced as expected.
 

@@ -30,7 +30,7 @@ class TestOCICohereToolCalls:
     def test_cohere_tool_definition_transformation(self):
         """Test that OpenAI tool definitions are correctly transformed to Cohere format"""
         config = OCIChatConfig()
-        
+
         # OpenAI format tools
         openai_tools = [
             {
@@ -43,17 +43,17 @@ class TestOCICohereToolCalls:
                         "properties": {
                             "location": {
                                 "type": "string",
-                                "description": "The city or location to get weather for"
+                                "description": "The city or location to get weather for",
                             },
                             "unit": {
                                 "type": "string",
                                 "description": "Temperature unit (celsius or fahrenheit)",
-                                "enum": ["celsius", "fahrenheit"]
-                            }
+                                "enum": ["celsius", "fahrenheit"],
+                            },
                         },
-                        "required": ["location"]
-                    }
-                }
+                        "required": ["location"],
+                    },
+                },
             },
             {
                 "type": "function",
@@ -65,46 +65,46 @@ class TestOCICohereToolCalls:
                         "properties": {
                             "expression": {
                                 "type": "string",
-                                "description": "Mathematical expression to evaluate"
+                                "description": "Mathematical expression to evaluate",
                             }
                         },
-                        "required": ["expression"]
-                    }
-                }
-            }
+                        "required": ["expression"],
+                    },
+                },
+            },
         ]
-        
+
         # Transform tools
         cohere_tools = config.adapt_tool_definitions_to_cohere_standard(openai_tools)
-        
+
         # Verify transformation
         assert len(cohere_tools) == 2
-        
+
         # Check first tool
         weather_tool = cohere_tools[0]
         assert weather_tool.name == "get_weather"
         assert weather_tool.description == "Get current weather for a location"
         assert "location" in weather_tool.parameterDefinitions
         assert "unit" in weather_tool.parameterDefinitions
-        
+
         # Check location parameter
         location_param = weather_tool.parameterDefinitions["location"]
         assert location_param.description == "The city or location to get weather for"
         assert location_param.type == "string"
         assert location_param.isRequired == True
-        
+
         # Check unit parameter
         unit_param = weather_tool.parameterDefinitions["unit"]
         assert unit_param.description == "Temperature unit (celsius or fahrenheit)"
         assert unit_param.type == "string"
         assert unit_param.isRequired == False
-        
+
         # Check second tool
         calc_tool = cohere_tools[1]
         assert calc_tool.name == "calculate"
         assert calc_tool.description == "Perform mathematical calculations"
         assert "expression" in calc_tool.parameterDefinitions
-        
+
         expression_param = calc_tool.parameterDefinitions["expression"]
         assert expression_param.description == "Mathematical expression to evaluate"
         assert expression_param.type == "string"
@@ -125,12 +125,12 @@ class TestOCICohereToolCalls:
                         "properties": {
                             "location": {
                                 "type": "string",
-                                "description": "The city or location to get weather for"
+                                "description": "The city or location to get weather for",
                             }
                         },
-                        "required": ["location"]
-                    }
-                }
+                        "required": ["location"],
+                    },
+                },
             }
         ]
         optional_params = {
@@ -150,20 +150,20 @@ class TestOCICohereToolCalls:
         assert transformed_request["compartmentId"] == TEST_COMPARTMENT_ID
         assert transformed_request["servingMode"]["servingType"] == "ON_DEMAND"
         assert transformed_request["servingMode"]["modelId"] == "cohere.command-latest"
-        
+
         # Verify Cohere-specific structure
         chat_request = transformed_request["chatRequest"]
         assert chat_request["apiFormat"] == "COHERE"
         assert chat_request["message"] == "What's the weather like in Tokyo?"
         assert chat_request["chatHistory"] == []
-        
+
         # Verify default parameters are included
         assert chat_request["maxTokens"] == 600
         assert chat_request["temperature"] == 1
         assert chat_request["topK"] == 0
         assert chat_request["topP"] == 0.75
         assert chat_request["frequencyPenalty"] == 0
-        
+
         # Verify tools are transformed correctly
         assert "tools" in chat_request
         assert len(chat_request["tools"]) == 1
@@ -176,7 +176,7 @@ class TestOCICohereToolCalls:
     def test_cohere_response_with_tool_calls(self):
         """Test response transformation for Cohere models with tool calls"""
         config = OCIChatConfig()
-        
+
         # Mock Cohere response with tool calls
         mock_cohere_response = {
             "modelId": "cohere.command-latest",
@@ -186,27 +186,22 @@ class TestOCICohereToolCalls:
                 "text": "I will look up the weather in Tokyo.",
                 "finishReason": "COMPLETE",
                 "toolCalls": [
-                    {
-                        "name": "get_weather",
-                        "parameters": {
-                            "location": "Tokyo"
-                        }
-                    }
+                    {"name": "get_weather", "parameters": {"location": "Tokyo"}}
                 ],
                 "usage": {
                     "promptTokens": 26,
                     "completionTokens": 22,
-                    "totalTokens": 48
-                }
-            }
+                    "totalTokens": 48,
+                },
+            },
         }
 
         response = httpx.Response(
-            status_code=200, 
-            json=mock_cohere_response, 
-            headers={"Content-Type": "application/json"}
+            status_code=200,
+            json=mock_cohere_response,
+            headers={"Content-Type": "application/json"},
         )
-        
+
         result = config.transform_response(
             model="cohere.command-latest",
             raw_response=response,
@@ -222,31 +217,135 @@ class TestOCICohereToolCalls:
         # Verify response structure
         assert isinstance(result, ModelResponse)
         assert result.model == "cohere.command-latest"
-        assert result.choices[0].message.content == "I will look up the weather in Tokyo."
-        
+        assert (
+            result.choices[0].message.content == "I will look up the weather in Tokyo."
+        )
+
         # Verify tool calls are present
         assert result.choices[0].message.tool_calls is not None
         assert len(result.choices[0].message.tool_calls) == 1
-        
+
         tool_call = result.choices[0].message.tool_calls[0]
         assert tool_call.id == "call_0"
         assert tool_call.type == "function"
         assert tool_call.function.name == "get_weather"
         assert tool_call.function.arguments == '{"location": "Tokyo"}'
-        
+
         # Verify usage
         assert result.usage.prompt_tokens == 26
         assert result.usage.completion_tokens == 22
         assert result.usage.total_tokens == 48
 
+    def test_cohere_request_preserves_json_schema_response_format(self):
+        """Ensure Cohere requests retain JSON schema payloads in responseFormat."""
+        config = OCIChatConfig()
+        messages = [{"role": "user", "content": "Return structured info"}]
+        response_format = {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "test_schema",
+                "strict": True,
+                "schema": {
+                    "type": "object",
+                    "properties": {"foo": {"type": "string"}},
+                    "required": ["foo"],
+                },
+            },
+        }
+        optional_params = {
+            "oci_compartment_id": TEST_COMPARTMENT_ID,
+            "response_format": response_format,
+        }
+
+        transformed_request = config.transform_request(
+            model="cohere.command-rplus",
+            messages=messages,  # type: ignore[arg-type]
+            optional_params=optional_params,
+            litellm_params={},
+            headers={},
+        )
+
+        chat_request = transformed_request["chatRequest"]
+        assert chat_request["apiFormat"] == "COHERE"
+        assert "responseFormat" in chat_request
+
+        cohere_response_format = chat_request["responseFormat"]
+        assert cohere_response_format["type"] == "json_schema"
+        assert "json_schema" not in cohere_response_format
+        assert "jsonSchema" in cohere_response_format
+        assert cohere_response_format["jsonSchema"] == response_format["json_schema"]
+
+    def test_cohere_request_response_format_text_stays_lowercase(self):
+        """Ensure Cohere keeps response_format type lowercase (e.g. 'text' not 'TEXT')."""
+        config = OCIChatConfig()
+        messages = [{"role": "user", "content": "Hello"}]
+        optional_params = {
+            "oci_compartment_id": TEST_COMPARTMENT_ID,
+            "response_format": {"type": "text"},
+        }
+
+        transformed_request = config.transform_request(
+            model="cohere.command-latest",
+            messages=messages,  # type: ignore
+            optional_params=optional_params,
+            litellm_params={},
+            headers={},
+        )
+
+        chat_request = transformed_request["chatRequest"]
+        assert chat_request["apiFormat"] == "COHERE"
+        assert "responseFormat" in chat_request
+        assert chat_request["responseFormat"]["type"] == "text"
+
+    def test_cohere_tool_call_only_message_no_text(self):
+        """Test chat history with an assistant message that has tool calls but no text content."""
+        config = OCIChatConfig()
+
+        messages = [
+            {"role": "user", "content": "What's the weather?"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {
+                            "name": "get_weather",
+                            "arguments": '{"location": "Paris"}',
+                        },
+                    }
+                ],
+            },
+            {
+                "role": "tool",
+                "content": "Sunny, 25C",
+                "tool_call_id": "call_1",
+            },
+        ]
+
+        chat_history = config.adapt_messages_to_cohere_standard(messages)
+
+        # First message is the user message
+        assert chat_history[0].role == "USER"
+        assert chat_history[0].message == "What's the weather?"
+
+        # Second message is the assistant with tool calls and no text
+        assistant_msg = chat_history[1]
+        assert assistant_msg.role == "CHATBOT"
+        assert assistant_msg.message is None or assistant_msg.message == ""
+        assert assistant_msg.toolCalls is not None
+        assert len(assistant_msg.toolCalls) == 1
+        assert assistant_msg.toolCalls[0].name == "get_weather"
+
     def test_cohere_chat_history_with_tool_calls(self):
         """Test chat history transformation with tool calls"""
         config = OCIChatConfig()
-        
+
         messages = [
             {"role": "user", "content": "What's the weather like in Tokyo?"},
             {
-                "role": "assistant", 
+                "role": "assistant",
                 "content": "I will look up the weather in Tokyo.",
                 "tool_calls": [
                     {
@@ -254,28 +353,28 @@ class TestOCICohereToolCalls:
                         "type": "function",
                         "function": {
                             "name": "get_weather",
-                            "arguments": '{"location": "Tokyo"}'
-                        }
+                            "arguments": '{"location": "Tokyo"}',
+                        },
                     }
-                ]
+                ],
             },
             {
                 "role": "tool",
                 "content": "The weather in Tokyo is 22°C with partly cloudy skies.",
-                "tool_call_id": "call_0"
-            }
+                "tool_call_id": "call_0",
+            },
         ]
-        
+
         chat_history = config.adapt_messages_to_cohere_standard(messages)
-        
+
         # Verify chat history structure (excludes last message)
         assert len(chat_history) == 2
-        
+
         # Check user message
         user_msg = chat_history[0]
         assert user_msg.role == "USER"
         assert user_msg.message == "What's the weather like in Tokyo?"
-        
+
         # Check assistant message with tool calls
         assistant_msg = chat_history[1]
         assert assistant_msg.role == "CHATBOT"
@@ -285,7 +384,7 @@ class TestOCICohereToolCalls:
         assert assistant_msg.toolCalls[0].name == "get_weather"
         # The parameters should be parsed as JSON
         assert assistant_msg.toolCalls[0].parameters == {"location": "Tokyo"}
-        
+
         # Note: The tool message (last message) is excluded from chat history
         # This is the expected behavior for Cohere models
 
@@ -295,23 +394,21 @@ class TestOCICohereToolCalls:
         mock_stream = MagicMock()
         mock_model = "cohere.command-latest"
         mock_logging = MagicMock()
-        
+
         stream_wrapper = OCIStreamWrapper(
-            completion_stream=mock_stream,
-            model=mock_model,
-            logging_obj=mock_logging
+            completion_stream=mock_stream, model=mock_model, logging_obj=mock_logging
         )
-        
+
         # Mock Cohere streaming chunk
         cohere_chunk = {
             "apiFormat": "COHERE",
             "text": "I will look up the weather",
-            "index": 0
+            "index": 0,
         }
-        
+
         chunk_data = f"data: {json.dumps(cohere_chunk)}"
         result = stream_wrapper.chunk_creator(chunk_data)
-        
+
         # Verify streaming chunk structure
         assert result.choices[0].delta.content == "I will look up the weather"
         assert result.choices[0].index == 0
@@ -323,24 +420,22 @@ class TestOCICohereToolCalls:
         mock_stream = MagicMock()
         mock_model = "cohere.command-latest"
         mock_logging = MagicMock()
-        
+
         stream_wrapper = OCIStreamWrapper(
-            completion_stream=mock_stream,
-            model=mock_model,
-            logging_obj=mock_logging
+            completion_stream=mock_stream, model=mock_model, logging_obj=mock_logging
         )
-        
+
         # Mock Cohere finish chunk
         cohere_finish_chunk = {
             "apiFormat": "COHERE",
             "text": ".",
             "index": 0,
-            "finishReason": "COMPLETE"
+            "finishReason": "COMPLETE",
         }
-        
+
         chunk_data = f"data: {json.dumps(cohere_finish_chunk)}"
         result = stream_wrapper.chunk_creator(chunk_data)
-        
+
         # Verify finish chunk structure
         assert result.choices[0].delta.content == "."
         assert result.choices[0].index == 0
@@ -350,14 +445,14 @@ class TestOCICohereToolCalls:
         """Test that tool_choice is excluded from Cohere parameter mapping"""
         config = OCIChatConfig()
         supported_params = config.get_supported_openai_params("cohere.command-latest")
-        
+
         # Should support standard parameters
         assert "stream" in supported_params
         assert "max_tokens" in supported_params
         assert "temperature" in supported_params
         assert "tools" in supported_params
         assert "top_p" in supported_params
-        
+
         # Should NOT support tool_choice (removed for Cohere)
         assert "tool_choice" not in supported_params
 
@@ -376,7 +471,7 @@ class TestOCICohereToolCalls:
         )
 
         chat_request = transformed_request["chatRequest"]
-        
+
         # Verify all required default parameters are present
         assert chat_request["maxTokens"] == 600
         assert chat_request["temperature"] == 1
@@ -403,11 +498,11 @@ class TestOCICohereToolCalls:
         )
 
         chat_request = transformed_request["chatRequest"]
-        
+
         # Verify user parameters override defaults
         assert chat_request["temperature"] == 0.5
         assert chat_request["maxTokens"] == 1000
-        
+
         # Verify other defaults are still present
         assert chat_request["topK"] == 0
         assert chat_request["topP"] == 0.75
@@ -418,25 +513,27 @@ class TestOCICohereToolCalls:
         assert get_vendor_from_model("cohere.command-latest") == OCIVendors.COHERE
         assert get_vendor_from_model("cohere.command-a-03-2025") == OCIVendors.COHERE
         assert get_vendor_from_model("cohere.command-plus-latest") == OCIVendors.COHERE
-        assert get_vendor_from_model("cohere.command-r-plus-08-2024") == OCIVendors.COHERE
+        assert (
+            get_vendor_from_model("cohere.command-r-plus-08-2024") == OCIVendors.COHERE
+        )
         assert get_vendor_from_model("cohere.command-r-08-2024") == OCIVendors.COHERE
 
     def test_cohere_error_handling_invalid_tool_format(self):
         """Test error handling for invalid tool format"""
         config = OCIChatConfig()
-        
+
         # Invalid tool format (missing function key)
         invalid_tools = [
             {
                 "type": "function",
                 "name": "get_weather",  # Missing "function" wrapper
-                "description": "Get weather"
+                "description": "Get weather",
             }
         ]
-        
+
         # The function should handle missing function key gracefully
         cohere_tools = config.adapt_tool_definitions_to_cohere_standard(invalid_tools)
-        
+
         # Should create a tool with empty name and description
         assert len(cohere_tools) == 1
         assert cohere_tools[0].name == ""
@@ -445,7 +542,7 @@ class TestOCICohereToolCalls:
     def test_cohere_response_without_tool_calls(self):
         """Test response transformation without tool calls"""
         config = OCIChatConfig()
-        
+
         mock_cohere_response = {
             "modelId": "cohere.command-latest",
             "modelVersion": "1.0",
@@ -456,17 +553,17 @@ class TestOCICohereToolCalls:
                 "usage": {
                     "promptTokens": 10,
                     "completionTokens": 15,
-                    "totalTokens": 25
-                }
-            }
+                    "totalTokens": 25,
+                },
+            },
         }
 
         response = httpx.Response(
-            status_code=200, 
-            json=mock_cohere_response, 
-            headers={"Content-Type": "application/json"}
+            status_code=200,
+            json=mock_cohere_response,
+            headers={"Content-Type": "application/json"},
         )
-        
+
         result = config.transform_response(
             model="cohere.command-latest",
             raw_response=response,
@@ -489,41 +586,145 @@ class TestOCICohereToolCalls:
         assert result.usage.total_tokens == 25
 
 
+class TestOCICoherePreambleOverride:
+    """Test Cohere system message handling via preambleOverride"""
+
+    def test_single_system_message_sets_preamble_override(self):
+        """Test that a single system message is extracted into preambleOverride"""
+        config = OCIChatConfig()
+        messages = [
+            {"role": "system", "content": "You are a helpful assistant."},
+            {"role": "user", "content": "Hello"},
+        ]
+        optional_params = {"oci_compartment_id": TEST_COMPARTMENT_ID}
+
+        result = config.transform_request(
+            model="cohere.command-latest",
+            messages=messages,  # type: ignore
+            optional_params=optional_params,
+            litellm_params={},
+            headers={},
+        )
+
+        chat_request = result["chatRequest"]
+        assert chat_request["preambleOverride"] == "You are a helpful assistant."
+
+    def test_multiple_system_messages_combined(self):
+        """Test that multiple system messages are joined with newlines"""
+        config = OCIChatConfig()
+        messages = [
+            {"role": "system", "content": "You are a helpful assistant."},
+            {"role": "system", "content": "Always respond in JSON."},
+            {"role": "user", "content": "Hello"},
+        ]
+        optional_params = {"oci_compartment_id": TEST_COMPARTMENT_ID}
+
+        result = config.transform_request(
+            model="cohere.command-latest",
+            messages=messages,  # type: ignore
+            optional_params=optional_params,
+            litellm_params={},
+            headers={},
+        )
+
+        chat_request = result["chatRequest"]
+        assert (
+            chat_request["preambleOverride"]
+            == "You are a helpful assistant.\nAlways respond in JSON."
+        )
+
+    def test_system_message_with_content_array(self):
+        """Test system message with list-style content (text blocks)"""
+        config = OCIChatConfig()
+        messages = [
+            {
+                "role": "system",
+                "content": [
+                    {"type": "text", "text": "You are a coding assistant."},
+                ],
+            },
+            {"role": "user", "content": "Hello"},
+        ]
+        optional_params = {"oci_compartment_id": TEST_COMPARTMENT_ID}
+
+        result = config.transform_request(
+            model="cohere.command-latest",
+            messages=messages,  # type: ignore
+            optional_params=optional_params,
+            litellm_params={},
+            headers={},
+        )
+
+        chat_request = result["chatRequest"]
+        assert chat_request["preambleOverride"] == "You are a coding assistant."
+
+    def test_no_system_message_omits_preamble_override(self):
+        """Test that preambleOverride is omitted when there are no system messages"""
+        config = OCIChatConfig()
+        messages = [
+            {"role": "user", "content": "Hello"},
+        ]
+        optional_params = {"oci_compartment_id": TEST_COMPARTMENT_ID}
+
+        result = config.transform_request(
+            model="cohere.command-latest",
+            messages=messages,  # type: ignore
+            optional_params=optional_params,
+            litellm_params={},
+            headers={},
+        )
+
+        chat_request = result["chatRequest"]
+        assert "preambleOverride" not in chat_request
+
+    def test_system_messages_excluded_from_chat_history(self):
+        """Test that system messages do not appear in chatHistory"""
+        config = OCIChatConfig()
+        messages = [
+            {"role": "system", "content": "You are a helpful assistant."},
+            {"role": "user", "content": "First question"},
+            {"role": "assistant", "content": "First answer"},
+            {"role": "user", "content": "Second question"},
+        ]
+
+        chat_history = config.adapt_messages_to_cohere_standard(messages)
+
+        # Should contain user and assistant only, no system
+        # Note: adapt_messages_to_cohere_standard excludes the last message
+        roles = [msg.role for msg in chat_history]
+        assert "SYSTEM" not in roles
+        assert roles == ["USER", "CHATBOT"]
+
+
 class TestOCICohereStreaming:
     """Test Cohere streaming functionality"""
-    
+
     def _create_stream_wrapper(self):
         """Helper to create OCIStreamWrapper with required parameters"""
         mock_stream = MagicMock()
         mock_model = "cohere.command-latest"
         mock_logging = MagicMock()
-        
+
         return OCIStreamWrapper(
-            completion_stream=mock_stream,
-            model=mock_model,
-            logging_obj=mock_logging
+            completion_stream=mock_stream, model=mock_model, logging_obj=mock_logging
         )
 
     def test_cohere_streaming_wrapper_initialization(self):
         """Test OCIStreamWrapper initialization"""
         stream_wrapper = self._create_stream_wrapper()
-        
-        assert hasattr(stream_wrapper, 'chunk_creator')
-        assert hasattr(stream_wrapper, '_handle_cohere_stream_chunk')
-        assert hasattr(stream_wrapper, '_handle_generic_stream_chunk')
+
+        assert hasattr(stream_wrapper, "chunk_creator")
+        assert hasattr(stream_wrapper, "_handle_cohere_stream_chunk")
+        assert hasattr(stream_wrapper, "_handle_generic_stream_chunk")
 
     def test_cohere_streaming_chunk_parsing(self):
         """Test parsing of Cohere streaming chunks"""
         stream_wrapper = self._create_stream_wrapper()
-        
+
         # Test valid Cohere chunk
-        cohere_chunk = {
-            "apiFormat": "COHERE",
-            "text": "Hello",
-            "index": 0
-        }
+        cohere_chunk = {"apiFormat": "COHERE", "text": "Hello", "index": 0}
         chunk_data = f"data: {json.dumps(cohere_chunk)}"
-        
+
         result = stream_wrapper.chunk_creator(chunk_data)
         assert result.choices[0].delta.content == "Hello"
         assert result.choices[0].index == 0
@@ -531,7 +732,7 @@ class TestOCICohereStreaming:
     def test_cohere_streaming_invalid_chunk_format(self):
         """Test error handling for invalid chunk format"""
         stream_wrapper = self._create_stream_wrapper()
-        
+
         # Test invalid chunk (not starting with "data:")
         with pytest.raises(ValueError, match="Chunk does not start with 'data:'"):
             stream_wrapper.chunk_creator("invalid chunk")
@@ -539,7 +740,7 @@ class TestOCICohereStreaming:
     def test_cohere_streaming_non_json_chunk(self):
         """Test error handling for non-JSON chunk"""
         stream_wrapper = self._create_stream_wrapper()
-        
+
         # Test non-JSON chunk
         with pytest.raises(json.JSONDecodeError):
             stream_wrapper.chunk_creator("data: invalid json")
@@ -547,15 +748,12 @@ class TestOCICohereStreaming:
     def test_cohere_streaming_generic_chunk_fallback(self):
         """Test fallback to generic chunk handling for non-Cohere chunks"""
         stream_wrapper = self._create_stream_wrapper()
-        
+
         # Test generic chunk (no apiFormat or different apiFormat)
-        generic_chunk = {
-            "apiFormat": "GEMINI",
-            "text": "Hello from Gemini"
-        }
+        generic_chunk = {"apiFormat": "GEMINI", "text": "Hello from Gemini"}
         chunk_data = f"data: {json.dumps(generic_chunk)}"
-        
+
         # This should fall back to generic handling
         result = stream_wrapper.chunk_creator(chunk_data)
         # The exact structure depends on the generic handler implementation
-        assert hasattr(result, 'choices')
+        assert hasattr(result, "choices")

@@ -51,7 +51,7 @@ LiteLLM has two types of roles:
 | Role Name | Permissions |
 |-----------|-------------|
 | `org_admin` | Admin over a specific organization. Can create teams and users within their organization ✨ **Premium Feature** |
-| `team_admin` | Admin over a specific team. Can manage team members, update team settings, and create keys for their team. ✨ **Premium Feature** |
+| `team_admin` | Admin over a specific team. Can manage team members, update team member permissions, and create keys for their team. ✨ **Premium Feature** |
 
 ## What Can Each Role Do?
 

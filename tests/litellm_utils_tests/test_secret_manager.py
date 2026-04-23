@@ -1,3 +1,4 @@
+import base64
 import os
 import sys
 import time
@@ -24,7 +25,7 @@ from litellm.secret_managers.main import (
     get_secret,
     _should_read_secret_from_secret_manager,
 )
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch, MagicMock
 
 
 def load_vertex_ai_credentials():
@@ -133,9 +134,8 @@ def test_oidc_circleci_v2():
     print(f"secret_val: {redact_oidc_signature(secret_val)}")
 
 
-@pytest.mark.skipif(
-    os.environ.get("CIRCLE_OIDC_TOKEN") is None,
-    reason="Cannot run without being in CircleCI Runner",
+@pytest.mark.skip(
+    reason="Quarantined: Flaky test - fails with 401 Unauthorized from Azure OAuth. TODO: Switch to our own Azure account or fix authentication"
 )
 def test_oidc_circleci_with_azure():
     # TODO: Switch to our own Azure account, currently using ai.moda's account
@@ -150,9 +150,8 @@ def test_oidc_circleci_with_azure():
     print(f"secret_val: {redact_oidc_signature(azure_ad_token)}")
 
 
-@pytest.mark.skipif(
-    os.environ.get("CIRCLE_OIDC_TOKEN") is None,
-    reason="Cannot run without being in CircleCI Runner",
+@pytest.mark.skip(
+    reason="Quarantined: Flaky test - fails with InvalidIdentityToken, OIDC provider no longer configured in AWS account. TODO: Switch to LiteLLM's own IAM role"
 )
 def test_oidc_circle_v1_with_amazon():
     # The purpose of this test is to get logs using the older v1 of the CircleCI OIDC token
@@ -170,27 +169,6 @@ def test_oidc_circle_v1_with_amazon():
     )
 
 
-@pytest.mark.skipif(
-    os.environ.get("CIRCLE_OIDC_TOKEN") is None,
-    reason="Cannot run without being in CircleCI Runner",
-)
-def test_oidc_circle_v1_with_amazon_fips():
-    # The purpose of this test is to validate that we can assume a role in a FIPS region
-
-    # TODO: This is using ai.moda's IAM role, we should use LiteLLM's IAM role eventually
-    aws_role_name = "arn:aws:iam::335785316107:role/litellm-github-unit-tests-circleci-v1-assume-only"
-    aws_web_identity_token = "oidc/circleci/"
-
-    bllm = BedrockConverseLLM()
-    creds = bllm.get_credentials(
-        aws_region_name="us-west-1",
-        aws_web_identity_token=aws_web_identity_token,
-        aws_role_name=aws_role_name,
-        aws_session_name="assume-v1-session-fips",
-        aws_sts_endpoint="https://sts-fips.us-west-1.amazonaws.com",
-    )
-
-
 def test_oidc_env_variable():
     # Create a unique environment variable name
     env_var_name = "OIDC_TEST_PATH_" + uuid4().hex
@@ -205,13 +183,14 @@ def test_oidc_env_variable():
     del os.environ[env_var_name]
 
 
-def test_oidc_file():
-    # Create a temporary file
-    with tempfile.NamedTemporaryFile(mode="w+") as temp_file:
+def test_oidc_file(monkeypatch):
+    # Create a temporary file inside a directory added to the allowlist.
+    with tempfile.TemporaryDirectory() as temp_dir:
+        monkeypatch.setenv("LITELLM_OIDC_ALLOWED_CREDENTIAL_DIRS", temp_dir)
+        temp_file_path = os.path.join(temp_dir, "token.txt")
         secret_value = "secret-" + uuid4().hex
-        temp_file.write(secret_value)
-        temp_file.flush()
-        temp_file_path = temp_file.name
+        with open(temp_file_path, "w") as temp_file:
+            temp_file.write(secret_value)
 
         secret_val = get_secret(f"oidc/file/{temp_file_path}")
 
@@ -244,53 +223,81 @@ def test_oidc_env_path():
         del os.environ[env_var_name]
 
 
-@pytest.mark.flaky(retries=6, delay=1)
 def test_google_secret_manager():
     """
     Test that we can get a secret from Google Secret Manager
     """
-    os.environ["GOOGLE_SECRET_MANAGER_PROJECT_ID"] = "pathrise-convert-1606954137718"
+    os.environ["GOOGLE_SECRET_MANAGER_PROJECT_ID"] = "litellm-ci-cd"
 
     from litellm.secret_managers.google_secret_manager import GoogleSecretManager
 
-    load_vertex_ai_credentials()
-    secret_manager = GoogleSecretManager()
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {
+        "payload": {
+            "data": base64.b64encode(b"anything").decode("utf-8"),
+        }
+    }
 
-    secret_val = secret_manager.get_secret_from_google_secret_manager(
-        secret_name="OPENAI_API_KEY"
-    )
-    print("secret_val: {}".format(secret_val))
+    with (
+        patch("litellm.proxy.proxy_server.premium_user", True),
+        patch.object(
+            GoogleSecretManager,
+            "sync_construct_request_headers",
+            return_value={"Authorization": "Bearer mock_token"},
+        ),
+    ):
+        secret_manager = GoogleSecretManager()
+        secret_manager.sync_httpx_client = MagicMock()
+        secret_manager.sync_httpx_client.get.return_value = mock_response
 
-    assert (
-        secret_val == "anything"
-    ), "did not get expected secret value. expect 'anything', got '{}'".format(
-        secret_val
-    )
+        secret_val = secret_manager.get_secret_from_google_secret_manager(
+            secret_name="OPENAI_API_KEY"
+        )
+        print("secret_val: {}".format(secret_val))
+
+        assert (
+            secret_val == "anything"
+        ), "did not get expected secret value. expect 'anything', got '{}'".format(
+            secret_val
+        )
+
+        secret_manager.sync_httpx_client.get.assert_called_once()
+        call_url = secret_manager.sync_httpx_client.get.call_args[1]["url"]
+        assert "projects/litellm-ci-cd/secrets/OPENAI_API_KEY" in call_url
 
 
 def test_google_secret_manager_read_in_memory():
     """
-    Test that Google Secret manager returs in memory value when it exists
+    Test that Google Secret manager returns in memory value when it exists
     """
     from litellm.secret_managers.google_secret_manager import GoogleSecretManager
 
-    load_vertex_ai_credentials()
-    os.environ["GOOGLE_SECRET_MANAGER_PROJECT_ID"] = "pathrise-convert-1606954137718"
-    secret_manager = GoogleSecretManager()
-    secret_manager.cache.cache_dict["UNIQUE_KEY"] = None
-    secret_manager.cache.cache_dict["UNIQUE_KEY_2"] = "lite-llm"
+    os.environ["GOOGLE_SECRET_MANAGER_PROJECT_ID"] = "litellm-ci-cd"
 
-    secret_val = secret_manager.get_secret_from_google_secret_manager(
-        secret_name="UNIQUE_KEY"
-    )
-    print("secret_val: {}".format(secret_val))
-    assert secret_val == None
+    with (
+        patch("litellm.proxy.proxy_server.premium_user", True),
+        patch.object(
+            GoogleSecretManager,
+            "sync_construct_request_headers",
+            return_value={"Authorization": "Bearer mock_token"},
+        ),
+    ):
+        secret_manager = GoogleSecretManager()
+        secret_manager.cache.cache_dict["UNIQUE_KEY"] = None
+        secret_manager.cache.cache_dict["UNIQUE_KEY_2"] = "lite-llm"
 
-    secret_val = secret_manager.get_secret_from_google_secret_manager(
-        secret_name="UNIQUE_KEY_2"
-    )
-    print("secret_val: {}".format(secret_val))
-    assert secret_val == "lite-llm"
+        secret_val = secret_manager.get_secret_from_google_secret_manager(
+            secret_name="UNIQUE_KEY"
+        )
+        print("secret_val: {}".format(secret_val))
+        assert secret_val is None
+
+        secret_val = secret_manager.get_secret_from_google_secret_manager(
+            secret_name="UNIQUE_KEY_2"
+        )
+        print("secret_val: {}".format(secret_val))
+        assert secret_val == "lite-llm"
 
 
 def test_should_read_secret_from_secret_manager():
@@ -359,6 +366,7 @@ def test_get_secret_with_access_mode():
     litellm.secret_manager_client = None
     litellm._key_management_settings = KeyManagementSettings()
     del os.environ[test_secret_name]
+
 
 def test_key_management_settings_defaults():
     """

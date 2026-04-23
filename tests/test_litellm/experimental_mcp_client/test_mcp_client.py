@@ -9,8 +9,9 @@ import pytest
 # Add the parent directory to the path so we can import litellm
 sys.path.insert(0, "../../../")
 
+import litellm.experimental_mcp_client.client as mcp_client_module
 from litellm.experimental_mcp_client.client import MCPClient
-from litellm.types.mcp import MCPStdioConfig, MCPTransport
+from litellm.types.mcp import MCPAuth, MCPStdioConfig, MCPTransport
 
 
 class TestMCPClient:
@@ -39,6 +40,7 @@ class TestMCPClient:
         with pytest.raises(
             ValueError, match="stdio_config is required for stdio transport"
         ):
+
             async def _noop(session):
                 return None
 
@@ -51,16 +53,19 @@ class TestMCPClient:
         self, mock_session, mock_stdio_client
     ):
         """Test successful stdio connection"""
-        # Setup mocks
+        # Setup mocks - create proper async context manager
         mock_transport = (MagicMock(), MagicMock())
-        mock_stdio_client.return_value.__aenter__ = AsyncMock(
-            return_value=mock_transport
-        )
+        mock_stdio_ctx = AsyncMock()
+        mock_stdio_ctx.__aenter__.return_value = mock_transport
+        mock_stdio_ctx.__aexit__.return_value = None
+        mock_stdio_client.return_value = mock_stdio_ctx
 
-        mock_session_instance = MagicMock()
-        mock_session_instance.__aenter__ = AsyncMock(return_value=mock_session_instance)
+        mock_session_instance = AsyncMock()
         mock_session_instance.initialize = AsyncMock()
-        mock_session.return_value = mock_session_instance
+        mock_session_ctx = AsyncMock()
+        mock_session_ctx.__aenter__.return_value = mock_session_instance
+        mock_session_ctx.__aexit__.return_value = None
+        mock_session.return_value = mock_session_ctx
 
         stdio_config = MCPStdioConfig(
             command="python", args=["-m", "my_mcp_server"], env={"DEBUG": "1"}
@@ -81,7 +86,7 @@ class TestMCPClient:
         assert call_args.env == {"DEBUG": "1"}
 
     @pytest.mark.asyncio
-    @patch("litellm.experimental_mcp_client.client.streamablehttp_client")
+    @patch.object(mcp_client_module, "streamable_http_client")
     @patch.dict(
         os.environ,
         {
@@ -90,25 +95,26 @@ class TestMCPClient:
         },
     )
     async def test_mcp_client_ssl_configuration_from_env(
-        self, mock_streamablehttp_client
+        self, mock_streamable_http_client
     ):
         """Test that MCP client uses SSL configuration from environment variables"""
-        # Setup mocks
+        # Setup mocks - create proper async context manager
         mock_transport = (MagicMock(), MagicMock())
-        mock_streamablehttp_client.return_value.__aenter__ = AsyncMock(
-            return_value=mock_transport
-        )
+        mock_http_ctx = AsyncMock()
+        mock_http_ctx.__aenter__.return_value = mock_transport
+        mock_http_ctx.__aexit__.return_value = None
+        mock_streamable_http_client.return_value = mock_http_ctx
 
         # Mock the session
         with patch(
             "litellm.experimental_mcp_client.client.ClientSession"
         ) as mock_session:
-            mock_session_instance = MagicMock()
-            mock_session_instance.__aenter__ = AsyncMock(
-                return_value=mock_session_instance
-            )
+            mock_session_instance = AsyncMock()
             mock_session_instance.initialize = AsyncMock()
-            mock_session.return_value = mock_session_instance
+            mock_session_ctx = AsyncMock()
+            mock_session_ctx.__aenter__.return_value = mock_session_instance
+            mock_session_ctx.__aexit__.return_value = None
+            mock_session.return_value = mock_session_ctx
 
             client = MCPClient(
                 server_url="https://mcp-server.example.com",
@@ -121,43 +127,42 @@ class TestMCPClient:
             await client.run_with_session(_operation)
 
             # Verify streamablehttp_client was called
-            mock_streamablehttp_client.assert_called_once()
-            call_kwargs = mock_streamablehttp_client.call_args[1]
+            mock_streamable_http_client.assert_called_once()
+            call_kwargs = mock_streamable_http_client.call_args[1]
+            assert "http_client" in call_kwargs
+            http_client = call_kwargs["http_client"]
+            assert isinstance(http_client, httpx.AsyncClient)
 
-            # Verify httpx_client_factory was passed
-            assert "httpx_client_factory" in call_kwargs
-            httpx_factory = call_kwargs["httpx_client_factory"]
-
-            # Test the factory creates a client with proper SSL config
-            # When SSL_CERT_FILE is set, the factory should use get_ssl_configuration
+            # Test the factory still creates a client with proper SSL config
+            httpx_factory = client._create_httpx_client_factory()
             test_client = httpx_factory(headers={"test": "header"})
 
-            # Verify the client was created successfully with SSL configuration
             assert test_client is not None
             assert isinstance(test_client, httpx.AsyncClient)
-            # Verify it has the expected properties
             assert test_client.headers is not None
-            # Clean up
             await test_client.aclose()
 
     @pytest.mark.asyncio
-    @patch("litellm.experimental_mcp_client.client.sse_client")
+    @patch.object(mcp_client_module, "sse_client")
     async def test_mcp_client_ssl_verify_parameter(self, mock_sse_client):
         """Test that MCP client uses ssl_verify parameter when provided"""
-        # Setup mocks
+        # Setup mocks - create proper async context manager
         mock_transport = (MagicMock(), MagicMock())
-        mock_sse_client.return_value.__aenter__ = AsyncMock(return_value=mock_transport)
+        mock_sse_ctx = AsyncMock()
+        mock_sse_ctx.__aenter__.return_value = mock_transport
+        mock_sse_ctx.__aexit__.return_value = None
+        mock_sse_client.return_value = mock_sse_ctx
 
         # Mock the session
         with patch(
             "litellm.experimental_mcp_client.client.ClientSession"
         ) as mock_session:
-            mock_session_instance = MagicMock()
-            mock_session_instance.__aenter__ = AsyncMock(
-                return_value=mock_session_instance
-            )
+            mock_session_instance = AsyncMock()
             mock_session_instance.initialize = AsyncMock()
-            mock_session.return_value = mock_session_instance
+            mock_session_ctx = AsyncMock()
+            mock_session_ctx.__aenter__.return_value = mock_session_instance
+            mock_session_ctx.__aexit__.return_value = None
+            mock_session.return_value = mock_session_ctx
 
             # Test with ssl_verify=False
             client = MCPClient(
@@ -192,25 +197,26 @@ class TestMCPClient:
             await test_client.aclose()
 
     @pytest.mark.asyncio
-    @patch("litellm.experimental_mcp_client.client.streamablehttp_client")
-    async def test_mcp_client_ssl_verify_custom_path(self, mock_streamablehttp_client):
+    @patch.object(mcp_client_module, "streamable_http_client")
+    async def test_mcp_client_ssl_verify_custom_path(self, mock_streamable_http_client):
         """Test that MCP client uses custom CA bundle path from ssl_verify parameter"""
-        # Setup mocks
+        # Setup mocks - create proper async context manager
         mock_transport = (MagicMock(), MagicMock())
-        mock_streamablehttp_client.return_value.__aenter__ = AsyncMock(
-            return_value=mock_transport
-        )
+        mock_http_ctx = AsyncMock()
+        mock_http_ctx.__aenter__.return_value = mock_transport
+        mock_http_ctx.__aexit__.return_value = None
+        mock_streamable_http_client.return_value = mock_http_ctx
 
         # Mock the session
         with patch(
             "litellm.experimental_mcp_client.client.ClientSession"
         ) as mock_session:
-            mock_session_instance = MagicMock()
-            mock_session_instance.__aenter__ = AsyncMock(
-                return_value=mock_session_instance
-            )
+            mock_session_instance = AsyncMock()
             mock_session_instance.initialize = AsyncMock()
-            mock_session.return_value = mock_session_instance
+            mock_session_ctx = AsyncMock()
+            mock_session_ctx.__aenter__.return_value = mock_session_instance
+            mock_session_ctx.__aexit__.return_value = None
+            mock_session.return_value = mock_session_ctx
 
             # Test with custom CA bundle path
             custom_ca_path = "/custom/path/to/ca-bundle.pem"
@@ -226,24 +232,160 @@ class TestMCPClient:
             await client.run_with_session(_operation)
 
             # Verify streamablehttp_client was called
-            mock_streamablehttp_client.assert_called_once()
-            call_kwargs = mock_streamablehttp_client.call_args[1]
+            mock_streamable_http_client.assert_called_once()
+            call_kwargs = mock_streamable_http_client.call_args[1]
+            assert "http_client" in call_kwargs
+            http_client = call_kwargs["http_client"]
+            assert isinstance(http_client, httpx.AsyncClient)
 
-            # Verify httpx_client_factory was passed
-            assert "httpx_client_factory" in call_kwargs
-            httpx_factory = call_kwargs["httpx_client_factory"]
-
-            # Test the factory creates a client with custom CA bundle path
-            # When ssl_verify is a path, the factory should use that path for SSL verification
+            httpx_factory = client._create_httpx_client_factory()
             test_client = httpx_factory(headers={"test": "header"})
 
-            # Verify the client was created successfully
             assert test_client is not None
             assert isinstance(test_client, httpx.AsyncClient)
-            # Verify it has the expected properties
             assert test_client.headers is not None
-            # Clean up
             await test_client.aclose()
+
+    def test_token_auth_header_generation(self):
+        """Test that token auth generates correct Authorization header"""
+        client = MCPClient(
+            server_url="http://example.com/sse",
+            transport_type="sse",
+            auth_type=MCPAuth.token,
+            auth_value="my-secret-token",
+        )
+
+        headers = client._get_auth_headers()
+
+        assert "Authorization" in headers
+        assert headers["Authorization"] == "token my-secret-token"
+
+    def test_token_auth_compatibility_with_existing_auth_types(self):
+        """Verify existing auth types are not affected by token auth addition"""
+        # Test bearer token
+        client = MCPClient(
+            server_url="http://example.com/sse",
+            transport_type="sse",
+            auth_type=MCPAuth.bearer_token,
+            auth_value="bearer-token",
+        )
+        headers = client._get_auth_headers()
+        assert headers["Authorization"] == "Bearer bearer-token"
+
+        # Test API key
+        client = MCPClient(
+            server_url="http://example.com/sse",
+            transport_type="sse",
+            auth_type=MCPAuth.api_key,
+            auth_value="api-key",
+        )
+        headers = client._get_auth_headers()
+        assert headers["X-API-Key"] == "api-key"
+
+        # Test basic auth (gets base64 encoded)
+        client = MCPClient(
+            server_url="http://example.com/sse",
+            transport_type="sse",
+            auth_type=MCPAuth.basic,
+            auth_value="user:pass",
+        )
+        headers = client._get_auth_headers()
+        assert headers["Authorization"].startswith("Basic ")
+
+    def test_token_auth_with_extra_headers(self):
+        """Test that token auth works alongside extra headers"""
+        client = MCPClient(
+            server_url="http://example.com/sse",
+            transport_type="sse",
+            auth_type=MCPAuth.token,
+            auth_value="my-token",
+            extra_headers={"X-Custom-Header": "custom-value"},
+        )
+
+        headers = client._get_auth_headers()
+
+        assert headers["Authorization"] == "token my-token"
+        assert headers["X-Custom-Header"] == "custom-value"
+
+    def test_token_auth_enum_value(self):
+        """Test that MCPAuth.token enum exists and has correct value"""
+        assert hasattr(MCPAuth, "token")
+        assert MCPAuth.token.value == "token"
+
+
+# ---------------------------------------------------------------------------
+# _last_initialize_instructions capture
+# ---------------------------------------------------------------------------
+
+
+class TestMCPClientInstructionsCapture:
+    """Tests for _last_initialize_instructions capture during session init."""
+
+    def test_initial_value_is_none(self):
+        """Fresh client has no cached instructions."""
+        client = MCPClient(
+            server_url="http://example.com/mcp",
+            transport_type="http",
+        )
+        assert client._last_initialize_instructions is None
+
+    @pytest.mark.asyncio
+    @patch("litellm.experimental_mcp_client.client.ClientSession")
+    async def test_captures_instructions_from_initialize(self, mock_session_cls):
+        """Instructions from upstream initialize() are captured and stripped."""
+        client = MCPClient(
+            server_url="http://example.com/mcp",
+            transport_type="http",
+        )
+
+        mock_session = AsyncMock()
+        init_result = MagicMock()
+        init_result.instructions = "  upstream says hello  "
+        mock_session.initialize = AsyncMock(return_value=init_result)
+
+        session_ctx = MagicMock()
+        session_ctx.__aenter__ = AsyncMock(return_value=mock_session)
+        session_ctx.__aexit__ = AsyncMock(return_value=False)
+        mock_session_cls.return_value = session_ctx
+
+        transport_ctx = MagicMock()
+        transport_ctx.__aenter__ = AsyncMock(return_value=(MagicMock(), MagicMock()))
+        transport_ctx.__aexit__ = AsyncMock(return_value=False)
+
+        async def _op(session):
+            return "done"
+
+        await client._execute_session_operation(transport_ctx, _op)
+        assert client._last_initialize_instructions == "upstream says hello"
+
+    @pytest.mark.asyncio
+    @patch("litellm.experimental_mcp_client.client.ClientSession")
+    async def test_none_instructions_stays_none(self, mock_session_cls):
+        """When upstream returns no instructions the field stays None."""
+        client = MCPClient(
+            server_url="http://example.com/mcp",
+            transport_type="http",
+        )
+
+        mock_session = AsyncMock()
+        init_result = MagicMock()
+        init_result.instructions = None
+        mock_session.initialize = AsyncMock(return_value=init_result)
+
+        session_ctx = MagicMock()
+        session_ctx.__aenter__ = AsyncMock(return_value=mock_session)
+        session_ctx.__aexit__ = AsyncMock(return_value=False)
+        mock_session_cls.return_value = session_ctx
+
+        transport_ctx = MagicMock()
+        transport_ctx.__aenter__ = AsyncMock(return_value=(MagicMock(), MagicMock()))
+        transport_ctx.__aexit__ = AsyncMock(return_value=False)
+
+        async def _op(session):
+            return "done"
+
+        await client._execute_session_operation(transport_ctx, _op)
+        assert client._last_initialize_instructions is None
 
 
 if __name__ == "__main__":

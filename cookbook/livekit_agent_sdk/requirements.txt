@@ -1,0 +1,2 @@
+livekit-agents[xai]>=1.3.12
+websockets>=15.0.1

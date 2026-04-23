@@ -12,6 +12,11 @@ interface PassThroughRoutesSelectorProps {
   teamId?: string | null;
 }
 
+interface PassThroughEndpoint {
+  path: string;
+  methods?: string[];
+}
+
 const PassThroughRoutesSelector: React.FC<PassThroughRoutesSelectorProps> = ({
   onChange,
   value,
@@ -21,7 +26,7 @@ const PassThroughRoutesSelector: React.FC<PassThroughRoutesSelectorProps> = ({
   disabled = false,
   teamId,
 }) => {
-  const [passThroughRoutes, setPassThroughRoutes] = useState<string[]>([]);
+  const [passThroughRoutes, setPassThroughRoutes] = useState<Array<{ label: string; value: string }>>([]);
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
@@ -32,7 +37,24 @@ const PassThroughRoutesSelector: React.FC<PassThroughRoutesSelectorProps> = ({
       try {
         const response = await getPassThroughEndpointsCall(accessToken, teamId);
         if (response.endpoints) {
-          const routes = response.endpoints.map((route: { path: string }) => route.path);
+          const routes = response.endpoints.flatMap((endpoint: PassThroughEndpoint) => {
+            const path = endpoint.path;
+            const methods = endpoint.methods;
+            
+            // If methods are specified, create one entry per method
+            if (methods && methods.length > 0) {
+              return methods.map((method) => ({
+                label: `${method} ${path}`,
+                value: path, // Keep value as path for backward compatibility
+              }));
+            }
+            
+            // If no methods specified, show just the path (all methods supported)
+            return [{
+              label: path,
+              value: path,
+            }];
+          });
           setPassThroughRoutes(routes);
         }
       } catch (error) {
@@ -53,10 +75,8 @@ const PassThroughRoutesSelector: React.FC<PassThroughRoutesSelectorProps> = ({
       value={value}
       loading={loading}
       className={className}
-      options={passThroughRoutes.map((route) => ({
-        label: route,
-        value: route,
-      }))}
+      allowClear
+      options={passThroughRoutes}
       optionFilterProp="label"
       showSearch
       style={{ width: "100%" }}

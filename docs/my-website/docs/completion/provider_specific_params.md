@@ -450,7 +450,7 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 import litellm
 
 response = litellm.completion(
-    model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+    model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
     messages=[{"role": "user", "content": "Hello!"}],
     requestMetadata={"cost_center": "engineering"}
 )

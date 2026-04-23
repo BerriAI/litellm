@@ -172,6 +172,97 @@ curl http://localhost:4000/v1/batches \
 </TabItem>
 </Tabs>
 
+### 4. Retrieve batch results
+
+Once the batch job is completed, download the results from S3:
+
+<Tabs>
+<TabItem value="python" label="Python">
+
+```python showLineNumbers title="bedrock_batch.py"
+...
+# Wait for batch completion (check status periodically)
+batch_status = client.batches.retrieve(batch_id=batch.id)
+
+if batch_status.status == "completed":
+    # Download the output file
+    result = client.files.content(
+        file_id=batch_status.output_file_id,
+        extra_headers={"custom-llm-provider": "bedrock"}
+    )
+    
+    # Save or process the results
+    with open("batch_output.jsonl", "wb") as f:
+        f.write(result.content)
+    
+    # Parse JSONL results
+    for line in result.text.strip().split('\n'):
+        record = json.loads(line)
+        print(f"Record ID: {record['recordId']}")
+        print(f"Output: {record.get('modelOutput', {})}")
+```
+
+</TabItem>
+<TabItem value="curl" label="Curl">
+
+```bash showLineNumbers title="Download Batch Results"
+# First retrieve batch to get output_file_id
+curl http://localhost:4000/v1/batches/batch_abc123 \
+    -H "Authorization: Bearer sk-1234"
+
+# Then download the output file
+curl http://localhost:4000/v1/files/{output_file_id}/content \
+    -H "Authorization: Bearer sk-1234" \
+    -H "custom-llm-provider: bedrock" \
+    -o batch_output.jsonl
+```
+
+</TabItem>
+<TabItem value="litellm-direct" label="LiteLLM Direct">
+
+```python showLineNumbers title="bedrock_batch.py"
+import litellm
+from litellm import file_content
+
+# Download using litellm directly (bypasses proxy managed files)
+result = file_content(
+    file_id=batch_status.output_file_id,  # Can be S3 URI or unified file ID
+    custom_llm_provider="bedrock",
+    aws_region_name="us-west-2",
+)
+
+# Process results
+print(result.text)
+```
+
+</TabItem>
+</Tabs>
+
+**Output Format:**
+
+The batch output file is in JSONL format with each line containing:
+
+```json
+{
+  "recordId": "request-1",
+  "modelInput": {
+    "messages": [...],
+    "max_tokens": 1000
+  },
+  "modelOutput": {
+    "content": [...],
+    "id": "msg_abc123",
+    "model": "claude-3-5-sonnet-20240620-v1:0",
+    "role": "assistant",
+    "stop_reason": "end_turn",
+    "usage": {
+      "input_tokens": 15,
+      "output_tokens": 10
+    }
+  }
+}
+```
+
 ## FAQ
 
 ### Where are my files written?

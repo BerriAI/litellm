@@ -1,6 +1,7 @@
 """
 Test for response_format to text.format conversion in completion -> responses bridge
 """
+
 import pytest
 from litellm.completion_extras.litellm_responses_transformation.transformation import (
     LiteLLMResponsesTransformationHandler,
@@ -18,15 +19,12 @@ def test_transform_response_format_to_text_format_json_schema():
             "name": "person_schema",
             "schema": {
                 "type": "object",
-                "properties": {
-                    "name": {"type": "string"},
-                    "age": {"type": "integer"}
-                },
+                "properties": {"name": {"type": "string"}, "age": {"type": "integer"}},
                 "required": ["name", "age"],
-                "additionalProperties": False
+                "additionalProperties": False,
             },
-            "strict": True
-        }
+            "strict": True,
+        },
     }
 
     # Convert to Responses API format
@@ -47,9 +45,7 @@ def test_transform_response_format_to_text_format_json_object():
     """Test conversion of response_format with json_object to text.format"""
     handler = LiteLLMResponsesTransformationHandler()
 
-    response_format = {
-        "type": "json_object"
-    }
+    response_format = {"type": "json_object"}
 
     result = handler._transform_response_format_to_text_format(response_format)
 
@@ -62,9 +58,7 @@ def test_transform_response_format_to_text_format_text():
     """Test conversion of response_format with text to text.format"""
     handler = LiteLLMResponsesTransformationHandler()
 
-    response_format = {
-        "type": "text"
-    }
+    response_format = {"type": "text"}
 
     result = handler._transform_response_format_to_text_format(response_format)
 
@@ -99,13 +93,13 @@ def test_transform_request_with_response_format():
                     "type": "object",
                     "properties": {
                         "name": {"type": "string"},
-                        "age": {"type": "integer"}
+                        "age": {"type": "integer"},
                     },
                     "required": ["name", "age"],
-                    "additionalProperties": False
+                    "additionalProperties": False,
                 },
-                "strict": True
-            }
+                "strict": True,
+            },
         }
     }
 
@@ -134,3 +128,105 @@ def test_transform_request_with_response_format():
     assert result["text"]["format"]["type"] == "json_schema"
     assert result["text"]["format"]["name"] == "person_schema"
     assert "schema" in result["text"]["format"]
+
+
+def test_transform_request_includes_extra_headers():
+    """Test that transform_request forwards headers as extra_headers for upstream call."""
+    handler = LiteLLMResponsesTransformationHandler()
+    messages = [{"role": "user", "content": "Hello"}]
+    optional_params = {}
+    litellm_params = {}
+
+    class MockLoggingObj:
+        pass
+
+    headers = {"cf-aig-authorization": "secret-token"}
+    result = handler.transform_request(
+        model="gpt-5-pro",
+        messages=messages,
+        optional_params=optional_params,
+        litellm_params=litellm_params,
+        headers=headers,
+        litellm_logging_obj=MockLoggingObj(),
+    )
+    assert result.get("extra_headers") == headers
+
+
+def test_transform_request_strips_internal_metadata_to_litellm_metadata():
+    handler = LiteLLMResponsesTransformationHandler()
+    messages = [{"role": "user", "content": "Hello"}]
+    optional_params = {}
+    litellm_params = {
+        "metadata": {"user_api_key_auth": {"id": "abc"}},
+        "litellm_metadata": {"trace_id": "trace-1"},
+        "api_key": "sk-test",
+    }
+
+    class MockLoggingObj:
+        pass
+
+    result = handler.transform_request(
+        model="gpt-5-pro",
+        messages=messages,
+        optional_params=optional_params,
+        litellm_params=litellm_params,
+        headers={},
+        litellm_logging_obj=MockLoggingObj(),
+    )
+
+    assert "metadata" not in result
+    assert result["litellm_metadata"]["user_api_key_auth"]["id"] == "abc"
+    assert result["litellm_metadata"]["trace_id"] == "trace-1"
+
+
+def test_transform_request_preserves_user_metadata():
+    handler = LiteLLMResponsesTransformationHandler()
+    messages = [{"role": "user", "content": "Hello"}]
+    optional_params = {"metadata": {"customer_id": "cust-123"}}
+    litellm_params = {"metadata": {"internal_key": "secret"}}
+
+    class MockLoggingObj:
+        pass
+
+    result = handler.transform_request(
+        model="gpt-5-pro",
+        messages=messages,
+        optional_params=optional_params,
+        litellm_params=litellm_params,
+        headers={},
+        litellm_logging_obj=MockLoggingObj(),
+    )
+
+    assert result["metadata"] == {"customer_id": "cust-123"}
+    assert "internal_key" not in result["metadata"]
+    assert result["litellm_metadata"]["internal_key"] == "secret"
+
+
+def test_transform_request_drops_user_metadata_with_additional_drop_params():
+    from litellm.utils import get_optional_params
+
+    handler = LiteLLMResponsesTransformationHandler()
+    messages = [{"role": "user", "content": "Hello"}]
+    optional_params = get_optional_params(
+        model="gpt-4o",
+        messages=messages,
+        metadata={"customer_id": "cust-123"},
+        additional_drop_params=["metadata"],
+        custom_llm_provider="openai",
+    )
+    litellm_params = {"metadata": {"internal_key": "secret"}}
+
+    class MockLoggingObj:
+        pass
+
+    result = handler.transform_request(
+        model="gpt-4o",
+        messages=messages,
+        optional_params=optional_params,
+        litellm_params=litellm_params,
+        headers={},
+        litellm_logging_obj=MockLoggingObj(),
+    )
+
+    assert "metadata" not in result
+    assert result["litellm_metadata"]["internal_key"] == "secret"

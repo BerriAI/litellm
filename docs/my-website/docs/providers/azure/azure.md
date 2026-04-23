@@ -549,7 +549,8 @@ print(response)
 
 ### Entra ID - use `azure_ad_token`
 
-This is a walkthrough on how to use Azure Active Directory Tokens - Microsoft Entra ID to make `litellm.completion()` calls 
+This is a walkthrough on how to use Azure Active Directory Tokens - Microsoft Entra ID to make `litellm.completion()` calls.  
+> **Note:** You can follow the same process below to use Azure Active Directory Tokens for all other Azure endpoints (e.g., chat, embeddings, image, audio, etc.) with LiteLLM.
 
 Step 1 - Download Azure CLI 
 Installation instructions: https://learn.microsoft.com/en-us/cli/azure/install-azure-cli
@@ -1031,7 +1032,7 @@ print("list_batches_response=", list_batches_response)
 </TabItem>
 </Tabs>
 
-### [Health Check Azure Batch models](./proxy/health.md#batch-models-azure-only)
+### [Health Check Azure Batch models](../../proxy/health.md#batch-models-azure-only)
 
 
 ### [BETA] Loadbalance Multiple Azure Deployments 
@@ -1142,7 +1143,7 @@ In production, [Router connects to a Redis Cache](#redis-queue) to track usage a
 #### Quick Start
 
 ```python
-pip install litellm
+uv add litellm
 ```
 
 ```python

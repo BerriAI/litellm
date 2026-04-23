@@ -21,7 +21,8 @@ class SMTPEmailLogger(BaseEmailLogger):
     - SMTP_SENDER_EMAIL
     """
 
-    def __init__(self):
+    def __init__(self, internal_usage_cache=None, **kwargs):
+        super().__init__(internal_usage_cache=internal_usage_cache, **kwargs)
         verbose_logger.debug("SMTP Email Logger initialized....")
 
     async def send_email(

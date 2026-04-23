@@ -31,16 +31,16 @@ def test_router_timeouts():
             "model_name": "openai-gpt-4",
             "litellm_params": {
                 "model": "azure/gpt-4.1-mini",
-                "api_key": "os.environ/AZURE_API_KEY",
-                "api_base": "os.environ/AZURE_API_BASE",
+                "api_key": "os.environ/AZURE_AI_API_KEY",
+                "api_base": "os.environ/AZURE_AI_API_BASE",
                 "api_version": "os.environ/AZURE_API_VERSION",
             },
             "tpm": 80000,
         },
         {
-            "model_name": "anthropic-claude-3-5-haiku-20241022",
+            "model_name": "anthropic-claude-haiku-4-5",
             "litellm_params": {
-                "model": "claude-3-5-haiku-20241022",
+                "model": "claude-haiku-4-5",
                 "api_key": "os.environ/ANTHROPIC_API_KEY",
                 "mock_response": "hello world",
             },
@@ -49,7 +49,7 @@ def test_router_timeouts():
     ]
 
     fallbacks_list = [
-        {"openai-gpt-4": ["anthropic-claude-3-5-haiku-20241022"]},
+        {"openai-gpt-4": ["anthropic-claude-haiku-4-5"]},
     ]
 
     # Configure router
@@ -105,7 +105,7 @@ async def test_router_timeouts_bedrock():
         {
             "model_name": "bedrock",
             "litellm_params": {
-                "model": "bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+                "model": "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
                 "timeout": 0.00001,
             },
             "tpm": 80000,
@@ -160,7 +160,7 @@ def test_router_timeout_with_retries_anthropic_model(num_retries, expected_call_
             {
                 "model_name": "claude-3-haiku",
                 "litellm_params": {
-                    "model": "anthropic/claude-3-haiku-20240307",
+                    "model": f"anthropic/{os.environ.get('CI_CD_DEFAULT_ANTHROPIC_MODEL', 'claude-haiku-4-5-20251001')}",
                 },
             }
         ],

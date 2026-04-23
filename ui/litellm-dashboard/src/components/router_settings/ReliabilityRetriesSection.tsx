@@ -1,5 +1,5 @@
 import React from "react";
-import { TextInput } from "@tremor/react";
+import { Input } from "antd";
 
 interface ReliabilityRetriesSectionProps {
   routerSettings: { [key: string]: any };
@@ -16,7 +16,7 @@ const ReliabilityRetriesSection: React.FC<ReliabilityRetriesSectionProps> = ({
         <h3 className="text-sm font-medium text-gray-900">Reliability & Retries</h3>
         <p className="text-xs text-gray-500 mt-1">Configure retry logic and failure handling</p>
       </div>
-      
+
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2 xl:grid-cols-3">
         {Object.entries(routerSettings)
           .filter(
@@ -36,10 +36,14 @@ const ReliabilityRetriesSection: React.FC<ReliabilityRetriesSectionProps> = ({
                 <p className="text-xs text-gray-500 mt-0.5 mb-2">
                   {routerFieldsMetadata[param]?.field_description || ""}
                 </p>
-                <TextInput
+                <Input
                   name={param}
                   defaultValue={
-                    typeof value === "object" ? JSON.stringify(value, null, 2) : value?.toString() || ""
+                    value === null || value === undefined || value === "null"
+                      ? ""
+                      : typeof value === "object"
+                        ? JSON.stringify(value, null, 2)
+                        : value?.toString() || ""
                   }
                   placeholder="—"
                   className="font-mono text-sm w-full"

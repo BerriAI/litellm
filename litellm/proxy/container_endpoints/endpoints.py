@@ -1,6 +1,7 @@
 #### Container Endpoints #####
 
 from typing import Any, Dict
+
 from fastapi import APIRouter, Depends, Request, Response
 from fastapi.responses import ORJSONResponse
 
@@ -9,9 +10,9 @@ from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_au
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
 from litellm.proxy.common_utils.openai_endpoint_utils import (
+    get_custom_llm_provider_from_request_body,
     get_custom_llm_provider_from_request_headers,
     get_custom_llm_provider_from_request_query,
-    get_custom_llm_provider_from_request_body,
 )
 
 router = APIRouter()
@@ -90,10 +91,10 @@ async def create_container(
         or await get_custom_llm_provider_from_request_body(request=request)
         or "openai"
     )
-    
+
     # Add custom_llm_provider to data
     data["custom_llm_provider"] = custom_llm_provider
-    
+
     # Process request using ProxyBaseLLMRequestProcessing
     processor = ProxyBaseLLMRequestProcessing(data=data)
     try:
@@ -183,7 +184,7 @@ async def list_containers(
         or get_custom_llm_provider_from_request_query(request=request)
         or "openai"
     )
-    
+
     # Add custom_llm_provider to data
     data["custom_llm_provider"] = custom_llm_provider
 
@@ -277,7 +278,7 @@ async def retrieve_container(
         or get_custom_llm_provider_from_request_query(request=request)
         or "openai"
     )
-    
+
     # Add custom_llm_provider to data
     data["custom_llm_provider"] = custom_llm_provider
 
@@ -371,7 +372,7 @@ async def delete_container(
         or get_custom_llm_provider_from_request_query(request=request)
         or "openai"
     )
-    
+
     # Add custom_llm_provider to data
     data["custom_llm_provider"] = custom_llm_provider
 
@@ -404,3 +405,10 @@ async def delete_container(
             version=version,
         )
 
+
+# Register JSON-configured container file endpoints
+from litellm.proxy.container_endpoints.handler_factory import (
+    register_container_file_endpoints,
+)
+
+register_container_file_endpoints(router)

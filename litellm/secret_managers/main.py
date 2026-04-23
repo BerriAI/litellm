@@ -16,6 +16,68 @@ from litellm.secret_managers.secret_manager_handler import get_secret_from_manag
 
 oidc_cache = DualCache()
 
+_DEFAULT_OIDC_ALLOWED_CREDENTIAL_DIRS = ("/var/run/secrets", "/run/secrets")
+
+
+def _get_oidc_allowed_credential_dirs() -> list[str]:
+    """
+    Return the absolute, normalized list of directories from which
+    ``oidc/file/`` is permitted to read token files.
+
+    Defaults to standard container credential mount points. Operators can
+    override via the ``LITELLM_OIDC_ALLOWED_CREDENTIAL_DIRS`` environment
+    variable (comma-separated list of absolute paths).
+    """
+    override = os.getenv("LITELLM_OIDC_ALLOWED_CREDENTIAL_DIRS")
+    raw_dirs = (
+        [d.strip() for d in override.split(",") if d.strip()]
+        if override
+        else list(_DEFAULT_OIDC_ALLOWED_CREDENTIAL_DIRS)
+    )
+    return [os.path.realpath(d) for d in raw_dirs]
+
+
+def _resolve_oidc_file_path(requested_path: str) -> str:
+    """
+    Resolve ``requested_path`` and verify it falls within one of the allowed
+    credential directories. Raises ``ValueError`` otherwise.
+    """
+    if not os.path.isabs(requested_path):
+        raise ValueError(
+            "oidc/file path must be absolute. Use the format "
+            "'oidc/file//var/run/secrets/<name>' (note the leading slash "
+            "after 'oidc/file/')."
+        )
+    resolved = os.path.realpath(requested_path)
+    for allowed in _get_oidc_allowed_credential_dirs():
+        try:
+            if os.path.commonpath([resolved, allowed]) == allowed:
+                return resolved
+        except ValueError:
+            # commonpath raises when paths are on different drives (Windows);
+            # treat as not-matching and continue.
+            continue
+    raise ValueError(
+        "oidc/file path is outside the allowed credential directories. "
+        "Set LITELLM_OIDC_ALLOWED_CREDENTIAL_DIRS to extend the allowlist."
+    )
+
+
+def _get_oidc_http_handler(timeout: Optional[httpx.Timeout] = None) -> HTTPHandler:
+    """
+    Factory function to create HTTPHandler for OIDC requests.
+    This function can be mocked in tests.
+
+    Args:
+        timeout: Optional timeout for HTTP requests. Defaults to 600.0 seconds with 5.0 connect timeout.
+
+    Returns:
+        HTTPHandler instance configured for OIDC requests.
+    """
+    if timeout is None:
+        timeout = httpx.Timeout(timeout=600.0, connect=5.0)
+    return HTTPHandler(timeout=timeout)
+
 
 ######### Secret Manager ############################
 # checks if user has passed in a secret manager client
@@ -103,7 +165,7 @@ def get_secret(  # noqa: PLR0915
             if oidc_token is not None:
                 return oidc_token
 
-            oidc_client = HTTPHandler(timeout=httpx.Timeout(timeout=600.0, connect=5.0))
+            oidc_client = _get_oidc_http_handler()
             # https://cloud.google.com/compute/docs/instances/verifying-instance-identity#request_signature
             response = oidc_client.get(
                 "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/identity",
@@ -132,7 +194,10 @@ def get_secret(  # noqa: PLR0915
             # https://docs.github.com/en/actions/deployment/security-hardening-your-deployments/configuring-openid-connect-in-cloud-providers#using-custom-actions
             actions_id_token_request_url = os.getenv("ACTIONS_ID_TOKEN_REQUEST_URL")
             actions_id_token_request_token = os.getenv("ACTIONS_ID_TOKEN_REQUEST_TOKEN")
-            if actions_id_token_request_url is None or actions_id_token_request_token is None:
+            if (
+                actions_id_token_request_url is None
+                or actions_id_token_request_token is None
+            ):
                 raise ValueError(
                     "ACTIONS_ID_TOKEN_REQUEST_URL or ACTIONS_ID_TOKEN_REQUEST_TOKEN not found in environment"
                 )
@@ -141,7 +206,7 @@ def get_secret(  # noqa: PLR0915
             if oidc_token is not None:
                 return oidc_token
 
-            oidc_client = HTTPHandler(timeout=httpx.Timeout(timeout=600.0, connect=5.0))
+            oidc_client = _get_oidc_http_handler()
             response = oidc_client.get(
                 actions_id_token_request_url,
                 params={"audience": oidc_aud},
@@ -177,8 +242,9 @@ def get_secret(  # noqa: PLR0915
                 oidc_token = f.read()
                 return oidc_token
         elif oidc_provider == "file":
-            # Load token from a file
-            with open(oidc_aud, "r") as f:
+            # Load token from a file within an allowed credential directory.
+            safe_path = _resolve_oidc_file_path(oidc_aud)
+            with open(safe_path, "r") as f:
                 oidc_token = f.read()
                 return oidc_token
         elif oidc_provider == "env":
@@ -199,7 +265,10 @@ def get_secret(  # noqa: PLR0915
             raise ValueError("Unsupported OIDC provider")
 
     try:
-        if _should_read_secret_from_secret_manager() and litellm.secret_manager_client is not None:
+        if (
+            _should_read_secret_from_secret_manager()
+            and litellm.secret_manager_client is not None
+        ):
             try:
                 client = litellm.secret_manager_client
                 key_manager = "local"
@@ -237,7 +306,9 @@ def get_secret(  # noqa: PLR0915
         else:
             secret = os.environ.get(secret_name)
             secret_value_as_bool = str_to_bool(secret) if secret is not None else None
-            if secret_value_as_bool is not None and isinstance(secret_value_as_bool, bool):
+            if secret_value_as_bool is not None and isinstance(
+                secret_value_as_bool, bool
+            ):
                 return secret_value_as_bool
             else:
                 return secret

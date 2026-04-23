@@ -2,6 +2,13 @@ import json
 import os
 from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple, Union
 
+from litellm.integrations.gcs_bucket.gcs_bucket_mock_client import (
+    should_use_gcs_mock,
+    create_mock_gcs_client,
+    mock_vertex_auth_methods,
+)
+
+
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
 from litellm.llms.custom_httpx.http_handler import (
@@ -20,6 +27,12 @@ IAM_AUTH_KEY = "IAM_AUTH"
 
 class GCSBucketBase(CustomBatchLogger):
     def __init__(self, bucket_name: Optional[str] = None, **kwargs) -> None:
+        self.is_mock_mode = should_use_gcs_mock()
+
+        if self.is_mock_mode:
+            mock_vertex_auth_methods()
+            create_mock_gcs_client()
+
         self.async_httpx_client = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.LoggingCallback
         )
@@ -57,7 +70,9 @@ class GCSBucketBase(CustomBatchLogger):
             custom_llm_provider="vertex_ai",
             api_base=None,
         )
-        verbose_logger.debug("constructed auth_header %s", auth_header)
+        verbose_logger.debug(
+            "constructed auth_header [set=%s]", auth_header is not None
+        )
         headers = {
             "Authorization": f"Bearer {auth_header}",  # auth_header
             "Content-Type": "application/json",
@@ -72,10 +87,10 @@ class GCSBucketBase(CustomBatchLogger):
         from litellm import vertex_chat_completion
 
         # Get project_id from environment if available, otherwise None
-        # This helps support use of this library to auth to pull secrets 
+        # This helps support use of this library to auth to pull secrets
         # from Secret Manager.
         project_id = os.getenv("GOOGLE_SECRET_MANAGER_PROJECT_ID")
-        
+
         _auth_header, vertex_project = vertex_chat_completion._ensure_access_token(
             credentials=self.path_service_account_json,
             project_id=project_id,
@@ -93,7 +108,9 @@ class GCSBucketBase(CustomBatchLogger):
             custom_llm_provider="vertex_ai",
             api_base=None,
         )
-        verbose_logger.debug("constructed auth_header %s", auth_header)
+        verbose_logger.debug(
+            "constructed auth_header [set=%s]", auth_header is not None
+        )
         headers = {
             "Authorization": f"Bearer {auth_header}",  # auth_header
             "Content-Type": "application/json",
@@ -133,9 +150,9 @@ class GCSBucketBase(CustomBatchLogger):
         if kwargs is None:
             kwargs = {}
 
-        standard_callback_dynamic_params: Optional[
-            StandardCallbackDynamicParams
-        ] = kwargs.get("standard_callback_dynamic_params", None)
+        standard_callback_dynamic_params: Optional[StandardCallbackDynamicParams] = (
+            kwargs.get("standard_callback_dynamic_params", None)
+        )
 
         bucket_name: str
         path_service_account: Optional[str]

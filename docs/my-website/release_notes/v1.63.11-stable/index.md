@@ -36,7 +36,7 @@ This release is primarily focused on:
 docker run
 -e STORE_MODEL_IN_DB=True
 -p 4000:4000
-ghcr.io/berriai/litellm:main-v1.63.11-stable
+docker.litellm.ai/berriai/litellm:main-v1.63.11-stable
 ```
 
 ## Demo Instance

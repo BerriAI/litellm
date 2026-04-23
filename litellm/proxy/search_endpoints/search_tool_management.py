@@ -1,6 +1,7 @@
 """
 CRUD ENDPOINTS FOR SEARCH TOOLS
 """
+
 from datetime import datetime
 from typing import Any, Dict, List, Union
 
@@ -26,10 +27,10 @@ SEARCH_TOOL_REGISTRY = SearchToolRegistry()
 def _convert_datetime_to_str(value: Union[datetime, str, None]) -> Union[str, None]:
     """
     Convert datetime object to ISO format string.
-    
+
     Args:
         value: datetime object, string, or None
-        
+
     Returns:
         ISO format string or original value if already string or None
     """
@@ -48,7 +49,7 @@ def _convert_datetime_to_str(value: Union[datetime, str, None]) -> Union[str, No
 )
 async def list_search_tools():
     """
-    List all search tools that are available in the database.
+    List all search tools that are available in the database and config file.
 
     Example Request:
     ```bash
@@ -71,38 +72,99 @@ async def list_search_tools():
                     "description": "Perplexity search tool"
                 },
                 "created_at": "2023-11-09T12:34:56.789Z",
-                "updated_at": "2023-11-09T12:34:56.789Z"
+                "updated_at": "2023-11-09T12:34:56.789Z",
+                "is_from_config": false
+            },
+            {
+                "search_tool_name": "config-search-tool",
+                "litellm_params": {
+                    "search_provider": "tavily",
+                    "api_key": "tvly-***"
+                },
+                "is_from_config": true
             }
         ]
     }
     ```
     """
-    from litellm.proxy.proxy_server import prisma_client
+    from litellm.litellm_core_utils.litellm_logging import _get_masked_values
+    from litellm.proxy.proxy_server import prisma_client, proxy_config
 
     if prisma_client is None:
         raise HTTPException(status_code=500, detail="Prisma client not initialized")
 
     try:
-        search_tools = await SEARCH_TOOL_REGISTRY.get_all_search_tools_from_db(
+        search_tools_from_db = await SEARCH_TOOL_REGISTRY.get_all_search_tools_from_db(
             prisma_client=prisma_client
         )
 
+        db_tool_names = {tool.get("search_tool_name") for tool in search_tools_from_db}
+
         search_tool_configs: List[SearchToolInfoResponse] = []
-        for search_tool in search_tools:
+
+        config_search_tools = []
+
+        try:
+            config = await proxy_config.get_config()
+            parsed_tools = proxy_config.parse_search_tools(config)
+            if parsed_tools:
+                config_search_tools = parsed_tools
+        except Exception as e:
+            verbose_proxy_logger.debug(
+                f"Could not get config-defined search tools: {e}"
+            )
+
+        for search_tool in config_search_tools:
+            tool_name = search_tool.get("search_tool_name")
+            if tool_name:
+                litellm_params_dict = dict(search_tool.get("litellm_params", {}))
+                masked_litellm_params_dict = _get_masked_values(
+                    litellm_params_dict,
+                    unmasked_length=4,
+                    number_of_asterisks=4,
+                )
+
+                search_tool_configs.append(
+                    SearchToolInfoResponse(
+                        search_tool_id=None,
+                        search_tool_name=tool_name,
+                        litellm_params=masked_litellm_params_dict,
+                        search_tool_info=search_tool.get("search_tool_info"),
+                        created_at=None,
+                        updated_at=None,
+                        is_from_config=True,
+                    )
+                )
+
+        search_tool_configs = [
+            tool
+            for tool in search_tool_configs
+            if tool.get("search_tool_name") not in db_tool_names
+        ]
+
+        for search_tool in search_tools_from_db:
+            litellm_params_dict = dict(search_tool.get("litellm_params", {}))
+            masked_litellm_params_dict = _get_masked_values(
+                litellm_params_dict,
+                unmasked_length=4,
+                number_of_asterisks=4,
+            )
+
             search_tool_configs.append(
                 SearchToolInfoResponse(
                     search_tool_id=search_tool.get("search_tool_id"),
                     search_tool_name=search_tool.get("search_tool_name", ""),
-                    litellm_params=dict(search_tool.get("litellm_params", {})),
+                    litellm_params=masked_litellm_params_dict,
                     search_tool_info=search_tool.get("search_tool_info"),
                     created_at=_convert_datetime_to_str(search_tool.get("created_at")),
                     updated_at=_convert_datetime_to_str(search_tool.get("updated_at")),
+                    is_from_config=False,
                 )
             )
 
         return ListSearchToolsResponse(search_tools=search_tool_configs)
     except Exception as e:
-        verbose_proxy_logger.exception(f"Error getting search tools from db: {e}")
+        verbose_proxy_logger.exception(f"Error getting search tools: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -382,6 +444,7 @@ async def get_search_tool_info(search_tool_id: str):
             search_tool_info=result.get("search_tool_info"),
             created_at=_convert_datetime_to_str(result.get("created_at")),
             updated_at=_convert_datetime_to_str(result.get("updated_at")),
+            is_from_config=False,  # This endpoint only returns DB tools
         )
     except HTTPException as e:
         raise e
@@ -445,17 +508,16 @@ async def test_search_tool_connection(request: TestSearchToolConnectionRequest):
         search_provider = litellm_params.get("search_provider")
         api_key = litellm_params.get("api_key")
         api_base = litellm_params.get("api_base")
-        
+
         if not search_provider:
             raise HTTPException(
-                status_code=400,
-                detail="search_provider is required in litellm_params"
+                status_code=400, detail="search_provider is required in litellm_params"
             )
-        
+
         verbose_proxy_logger.debug(
             f"Testing connection to search provider: {search_provider}"
         )
-        
+
         # Make a simple test search query with max_results=1 to minimize cost
         test_query = "test"
         response = await asearch(
@@ -466,26 +528,28 @@ async def test_search_tool_connection(request: TestSearchToolConnectionRequest):
             max_results=1,  # Minimize results to reduce cost
             timeout=10.0,  # 10 second timeout for test
         )
-        
+
         verbose_proxy_logger.debug(
             f"Successfully tested connection to {search_provider} search provider"
         )
-        
+
         return {
             "status": "success",
             "message": f"Successfully connected to {search_provider} search provider",
             "test_query": test_query,
-            "results_count": len(response.results) if response and response.results else 0,
+            "results_count": (
+                len(response.results) if response and response.results else 0
+            ),
         }
-        
+
     except Exception as e:
         error_message = str(e)
         error_type = type(e).__name__
-        
+
         verbose_proxy_logger.exception(
             f"Failed to connect to search provider: {error_message}"
         )
-        
+
         # Return error details in a structured format
         return {
             "status": "error",
@@ -529,31 +593,34 @@ async def get_available_search_providers():
     """
     try:
         from litellm.utils import ProviderConfigManager
-        
+
         available_providers = []
-        
+
         # Auto-discover providers from SearchProviders enum
         for provider in SearchProviders:
             try:
                 # Get the config class for this provider
-                config = ProviderConfigManager.get_provider_search_config(provider=provider)
-                
+                config = ProviderConfigManager.get_provider_search_config(
+                    provider=provider
+                )
+
                 if config is not None:
                     # Get the UI-friendly name from the config class
                     ui_name = config.ui_friendly_name()
-                    
-                    available_providers.append({
-                        "provider_name": provider.value,
-                        "ui_friendly_name": ui_name,
-                    })
+
+                    available_providers.append(
+                        {
+                            "provider_name": provider.value,
+                            "ui_friendly_name": ui_name,
+                        }
+                    )
             except Exception as e:
                 verbose_proxy_logger.debug(
                     f"Could not get config for search provider {provider.value}: {e}"
                 )
                 continue
-        
+
         return {"providers": available_providers}
     except Exception as e:
         verbose_proxy_logger.exception(f"Error getting available search providers: {e}")
         raise HTTPException(status_code=500, detail=str(e))
-

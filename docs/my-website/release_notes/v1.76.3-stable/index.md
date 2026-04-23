@@ -35,7 +35,7 @@ This release has a known issue where startup is leading to Out of Memory errors 
 docker run \
 -e STORE_MODEL_IN_DB=True \
 -p 4000:4000 \
-ghcr.io/berriai/litellm:v1.76.3
+docker.litellm.ai/berriai/litellm:v1.76.3
 ```
 </TabItem>
 

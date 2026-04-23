@@ -19,7 +19,7 @@
 """Database connection and data extraction for LiteLLM."""
 
 from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import Any, Optional, List
 
 import polars as pl
 
@@ -46,19 +46,9 @@ class LiteLLMDatabase:
         """Retrieve usage data from LiteLLM daily user spend table."""
         client = self._ensure_prisma_client()
 
-        # Build WHERE clause for time filtering
-        where_conditions = []
-        if start_time_utc:
-            where_conditions.append(f"dus.updated_at >= '{start_time_utc.isoformat()}'")
-        if end_time_utc:
-            where_conditions.append(f"dus.updated_at <= '{end_time_utc.isoformat()}'")
-
-        where_clause = ""
-        if where_conditions:
-            where_clause = "WHERE " + " AND ".join(where_conditions)
-
-        # Query to get user spend data with team information
-        query = f"""
+        # Query to get user spend data with team information. Use parameter binding to
+        # avoid SQL injection from user-supplied timestamps or limits.
+        query = """
         SELECT
             dus.id,
             dus.date,
@@ -79,167 +69,33 @@ class LiteLLMDatabase:
             dus.updated_at,
             vt.team_id,
             vt.key_alias as api_key_alias,
-            tt.team_alias
+            tt.team_alias,
+            ut.user_email as user_email
         FROM "LiteLLM_DailyUserSpend" dus
         LEFT JOIN "LiteLLM_VerificationToken" vt ON dus.api_key = vt.token
         LEFT JOIN "LiteLLM_TeamTable" tt ON vt.team_id = tt.team_id
-        {where_clause}
+        LEFT JOIN "LiteLLM_UserTable" ut ON dus.user_id = ut.user_id
+        WHERE ($1::timestamptz IS NULL OR dus.updated_at >= $1::timestamptz)
+          AND ($2::timestamptz IS NULL OR dus.updated_at <= $2::timestamptz)
         ORDER BY dus.date DESC, dus.created_at DESC
         """
 
-        if limit:
-            query += f" LIMIT {limit}"
+        params: List[Any] = [
+            start_time_utc,
+            end_time_utc,
+        ]
+
+        if limit is not None:
+            try:
+                params.append(int(limit))
+            except (TypeError, ValueError):
+                raise ValueError("limit must be an integer")
+            query += " LIMIT $3"
 
         try:
-            db_response = await client.db.query_raw(query)
+            db_response = await client.db.query_raw(query, *params)
             # Convert the response to polars DataFrame with full schema inference
             # This prevents schema mismatch errors when data types vary across rows
             return pl.DataFrame(db_response, infer_schema_length=None)
         except Exception as e:
             raise Exception(f"Error retrieving usage data: {str(e)}")
-
-    async def get_table_info(self) -> Dict[str, Any]:
-        """Get information about the daily user spend table."""
-        client = self._ensure_prisma_client()
-
-        try:
-            # Get row count from user spend table
-            user_count = await self._get_table_row_count("LiteLLM_DailyUserSpend")
-
-            # Get column structure from user spend table
-            query = """
-            SELECT column_name, data_type, is_nullable
-            FROM information_schema.columns
-            WHERE table_name = 'LiteLLM_DailyUserSpend'
-            ORDER BY ordinal_position;
-            """
-            columns_response = await client.db.query_raw(query)
-
-            return {
-                "columns": columns_response,
-                "row_count": user_count,
-                "table_name": "LiteLLM_DailyUserSpend",
-            }
-        except Exception as e:
-            raise Exception(f"Error getting table info: {str(e)}")
-
-    async def _get_table_row_count(self, table_name: str) -> int:
-        """Get row count from specified table."""
-        client = self._ensure_prisma_client()
-
-        try:
-            query = f'SELECT COUNT(*) as count FROM "{table_name}"'
-            response = await client.db.query_raw(query)
-
-            if response and len(response) > 0:
-                return response[0].get("count", 0)
-            return 0
-        except Exception:
-            return 0
-
-    async def discover_all_tables(self) -> Dict[str, Any]:
-        """Discover all tables in the LiteLLM database and their schemas."""
-        client = self._ensure_prisma_client()
-
-        try:
-            # Get all LiteLLM tables
-            litellm_tables_query = """
-            SELECT table_name 
-            FROM information_schema.tables 
-            WHERE table_schema = 'public' 
-            AND table_name LIKE 'LiteLLM_%'
-            ORDER BY table_name;
-            """
-            tables_response = await client.db.query_raw(litellm_tables_query)
-            table_names = [row["table_name"] for row in tables_response]
-
-            # Get detailed schema for each table
-            tables_info = {}
-            for table_name in table_names:
-                # Get column information
-                columns_query = """
-                SELECT 
-                    column_name,
-                    data_type,
-                    is_nullable,
-                    column_default,
-                    character_maximum_length,
-                    numeric_precision,
-                    numeric_scale,
-                    ordinal_position
-                FROM information_schema.columns 
-                WHERE table_name = $1
-                AND table_schema = 'public'
-                ORDER BY ordinal_position;
-                """
-                columns_response = await client.db.query_raw(columns_query, table_name)
-
-                # Get primary key information
-                pk_query = """
-                SELECT a.attname
-                FROM pg_index i
-                JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey)
-                WHERE i.indrelid = $1::regclass AND i.indisprimary;
-                """
-                pk_response = await client.db.query_raw(pk_query, f'"{table_name}"')
-                primary_keys = (
-                    [row["attname"] for row in pk_response] if pk_response else []
-                )
-
-                # Get foreign key information
-                fk_query = """
-                SELECT
-                    tc.constraint_name,
-                    kcu.column_name,
-                    ccu.table_name AS foreign_table_name,
-                    ccu.column_name AS foreign_column_name
-                FROM information_schema.table_constraints AS tc
-                JOIN information_schema.key_column_usage AS kcu
-                    ON tc.constraint_name = kcu.constraint_name
-                JOIN information_schema.constraint_column_usage AS ccu
-                    ON ccu.constraint_name = tc.constraint_name
-                WHERE tc.constraint_type = 'FOREIGN KEY'
-                AND tc.table_name = $1;
-                """
-                fk_response = await client.db.query_raw(fk_query, table_name)
-                foreign_keys = fk_response if fk_response else []
-
-                # Get indexes
-                indexes_query = """
-                SELECT
-                    i.relname AS index_name,
-                    array_agg(a.attname ORDER BY a.attnum) AS column_names,
-                    ix.indisunique AS is_unique
-                FROM pg_class t
-                JOIN pg_index ix ON t.oid = ix.indrelid
-                JOIN pg_class i ON i.oid = ix.indexrelid
-                JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = ANY(ix.indkey)
-                WHERE t.relname = $1
-                AND t.relkind = 'r'
-                GROUP BY i.relname, ix.indisunique
-                ORDER BY i.relname;
-                """
-                indexes_response = await client.db.query_raw(indexes_query, table_name)
-                indexes = indexes_response if indexes_response else []
-
-                # Get row count
-                try:
-                    row_count = await self._get_table_row_count(table_name)
-                except Exception:
-                    row_count = 0
-
-                tables_info[table_name] = {
-                    "columns": columns_response,
-                    "primary_keys": primary_keys,
-                    "foreign_keys": foreign_keys,
-                    "indexes": indexes,
-                    "row_count": row_count,
-                }
-
-            return {
-                "tables": tables_info,
-                "table_count": len(table_names),
-                "table_names": table_names,
-            }
-        except Exception as e:
-            raise Exception(f"Error discovering tables: {str(e)}")

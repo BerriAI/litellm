@@ -5,7 +5,7 @@
 This is an Enterprise feature.
 [Enterprise Pricing](https://www.litellm.ai/#pricing)
 
-[Contact us here to get a free trial](https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat)
+[Contact us here to get a free trial](https://enterprise.litellm.ai/demo)
 
 :::
 
@@ -26,7 +26,7 @@ curl -L -X POST 'http://0.0.0.0:4000/model/new' \
     "model": "openai/gpt-4o",
     "custom_llm_provider": "openai",
     "api_key": "******ccb07",
-    "api_base": "https://my-endpoint-sweden-berri992.openai.azure.com",
+    "api_base": "https://my-azure-endpoint.openai.azure.com",
     "api_version": "2023-12-01-preview"
   },
   "model_info": {

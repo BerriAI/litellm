@@ -37,31 +37,3 @@ body {
 .custom-border {
   border: 1px solid var(--neutral-border);
 }
-
-/* Custom dropdown styles */
-.ant-dropdown-menu-item {
-  padding: 0 !important;
-}
-
-.ant-dropdown-menu-item > div {
-  transition: all 0.2s ease;
-}
-
-/* Don't apply hover to user info section */
-.ant-dropdown-menu-item[data-menu-id$="user-info"]:hover {
-  background-color: transparent !important;
-  cursor: default;
-}
-
-.ant-dropdown-menu-item[data-menu-id$="user-info"] > div {
-  cursor: default;
-}
-
-.ant-dropdown-menu {
-  padding: 4px !important;
-  min-width: 280px !important;
-}
-
-.ant-dropdown-menu-item-divider {
-  margin: 4px 0;
-}

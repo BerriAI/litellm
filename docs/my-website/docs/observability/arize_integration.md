@@ -68,6 +68,7 @@ environment_variables:
     ARIZE_API_KEY: "141a****"
     ARIZE_ENDPOINT: "https://otlp.arize.com/v1" # OPTIONAL - your custom arize GRPC api endpoint
     ARIZE_HTTP_ENDPOINT: "https://otlp.arize.com/v1" # OPTIONAL - your custom arize HTTP api endpoint. Set either this or ARIZE_ENDPOINT or Neither (defaults to https://otlp.arize.com/v1 on grpc)
+    ARIZE_PROJECT_NAME: "my-litellm-project" # OPTIONAL - sets the arize project name
 ```
 
 2. Start the proxy
@@ -193,5 +194,4 @@ print(response)
 
 - [Schedule Demo 👋](https://calendly.com/d/4mp-gd3-k5k/berriai-1-1-onboarding-litellm-hosted-version)
 - [Community Discord 💭](https://discord.gg/wuPM9dRgDw)
-- Our numbers 📞 +1 (770) 8783-106 / +1 (412) 618-6238
 - Our emails ✉️ ishaan@berri.ai / krrish@berri.ai

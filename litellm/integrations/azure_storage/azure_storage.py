@@ -1,5 +1,4 @@
 import asyncio
-import json
 import os
 import time
 from litellm._uuid import uuid
@@ -15,6 +14,7 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
+from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.types.utils import StandardLoggingPayload
 
 
@@ -168,7 +168,7 @@ class AzureBlobStorageLogger(CustomBatchLogger):
                     llm_provider=httpxSpecialProvider.LoggingCallback
                 )
                 json_payload = (
-                    json.dumps(payload) + "\n"
+                    safe_dumps(payload) + "\n"
                 )  # Add newline for each log entry
                 payload_bytes = json_payload.encode("utf-8")
                 filename = f"{payload.get('id') or str(uuid.uuid4())}.json"
@@ -275,12 +275,11 @@ class AzureBlobStorageLogger(CustomBatchLogger):
         """
         Gets Azure AD token to use for Azure Storage API requests
         """
-        verbose_logger.debug("Getting Azure AD Token from Azure Storage")
         verbose_logger.debug(
-            "tenant_id %s, client_id %s, client_secret %s",
+            "Getting Azure AD Token from Azure Storage, tenant_id=%s, client_id=%s, client_secret=[set=%s]",
             tenant_id,
             client_id,
-            client_secret,
+            client_secret is not None,
         )
         if tenant_id is None:
             raise ValueError(
@@ -384,7 +383,7 @@ class AzureBlobStorageLogger(CustomBatchLogger):
             await file_client.create_file()
 
             # Content to append
-            content = json.dumps(payload).encode("utf-8")
+            content = safe_dumps(payload).encode("utf-8")
 
             # Append content to the file
             await file_client.append_data(data=content, offset=0, length=len(content))

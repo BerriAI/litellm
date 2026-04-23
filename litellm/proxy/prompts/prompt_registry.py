@@ -174,5 +174,30 @@ class InMemoryPromptRegistry:
         """
         return self.prompt_id_to_custom_prompt.get(prompt_id)
 
+    def delete_prompts_by_base_id(self, base_prompt_id: str) -> list[str]:
+        """
+        Delete all prompts matching the given base prompt ID from memory.
+
+        Args:
+            base_prompt_id: The base prompt ID (without version suffix)
+
+        Returns:
+            List of prompt IDs that were deleted
+        """
+        from litellm.proxy.prompts.prompt_endpoints import get_base_prompt_id
+
+        prompts_to_delete = [
+            pid
+            for pid in self.IN_MEMORY_PROMPTS.keys()
+            if get_base_prompt_id(prompt_id=pid) == base_prompt_id
+        ]
+
+        for pid in prompts_to_delete:
+            del self.IN_MEMORY_PROMPTS[pid]
+            if pid in self.prompt_id_to_custom_prompt:
+                del self.prompt_id_to_custom_prompt[pid]
+
+        return prompts_to_delete
+
 
 IN_MEMORY_PROMPT_REGISTRY = InMemoryPromptRegistry()

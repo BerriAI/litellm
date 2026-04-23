@@ -84,7 +84,7 @@ def test_arize_set_attributes():
     ArizeLogger.set_arize_attributes(span, kwargs, response_obj)
 
     # Validate that the expected number of attributes were set
-    assert span.set_attribute.call_count == 28
+    assert span.set_attribute.call_count == 26
 
     # Metadata attached to the span
     span.set_attribute.assert_any_call(
@@ -108,7 +108,8 @@ def test_arize_set_attributes():
     # Response metadata
     span.set_attribute.assert_any_call("llm.response.id", "chatcmpl-ID")
     span.set_attribute.assert_any_call("llm.response.model", "gpt-4o")
-    span.set_attribute.assert_any_call(SpanAttributes.OPENINFERENCE_SPAN_KIND, "LLM")
+    # Span kind is set to TOOL when tools are present
+    span.set_attribute.assert_any_call(SpanAttributes.OPENINFERENCE_SPAN_KIND, "TOOL")
 
     # Request message content and metadata
     span.set_attribute.assert_any_call(
@@ -125,14 +126,14 @@ def test_arize_set_attributes():
 
     # Tool call definitions and function names
     span.set_attribute.assert_any_call(
-        f"{SpanAttributes.LLM_TOOLS}.0.{SpanAttributes.TOOL_NAME}", "get_weather"
+        f"{SpanAttributes.LLM_TOOLS}.0.name", "get_weather"
     )
     span.set_attribute.assert_any_call(
-        f"{SpanAttributes.LLM_TOOLS}.0.{SpanAttributes.TOOL_DESCRIPTION}",
+        f"{SpanAttributes.LLM_TOOLS}.0.description",
         "Fetches weather details.",
     )
     span.set_attribute.assert_any_call(
-        f"{SpanAttributes.LLM_TOOLS}.0.{SpanAttributes.TOOL_PARAMETERS}",
+        f"{SpanAttributes.LLM_TOOLS}.0.parameters",
         json.dumps(
             {
                 "type": "object",
@@ -142,16 +143,6 @@ def test_arize_set_attributes():
                 "required": ["location"],
             }
         ),
-    )
-
-    # Tool calls captured from optional_params
-    span.set_attribute.assert_any_call(
-        f"{MessageAttributes.MESSAGE_TOOL_CALLS}.0.{ToolCallAttributes.TOOL_CALL_FUNCTION_NAME}",
-        "get_weather",
-    )
-    span.set_attribute.assert_any_call(
-        f"{MessageAttributes.MESSAGE_TOOL_CALLS}.1.{ToolCallAttributes.TOOL_CALL_FUNCTION_NAME}",
-        "get_stock_price",
     )
 
     # Invocation parameters
@@ -187,8 +178,16 @@ def test_arize_set_attributes_responses_api():
     Verifies that multiple output types are correctly handled.
     """
     from unittest.mock import MagicMock
-    from litellm.types.llms.openai import ResponsesAPIResponse, ResponseAPIUsage, OutputTokensDetails
-    from openai.types.responses import ResponseReasoningItem, ResponseOutputMessage, ResponseOutputText
+    from litellm.types.llms.openai import (
+        ResponsesAPIResponse,
+        ResponseAPIUsage,
+        OutputTokensDetails,
+    )
+    from openai.types.responses import (
+        ResponseReasoningItem,
+        ResponseOutputMessage,
+        ResponseOutputText,
+    )
     from openai.types.responses.response_reasoning_item import Summary
 
     span = MagicMock()  # Mocked tracing span to test attribute setting
@@ -221,11 +220,8 @@ def test_arize_set_attributes_responses_api():
                 id="reasoning-001",
                 type="reasoning",
                 summary=[
-                    Summary(
-                        text="First, I need to analyze...",
-                        type="summary_text"
-                    )
-                ]
+                    Summary(text="First, I need to analyze...", type="summary_text")
+                ],
             ),
             ResponseOutputMessage(
                 id="msg-001",
@@ -238,17 +234,15 @@ def test_arize_set_attributes_responses_api():
                         text="The answer is 42",
                         type="output_text",
                     )
-                ]
-            )
+                ],
+            ),
         ],
         usage=ResponseAPIUsage(
             input_tokens=120,
             output_tokens=250,
             total_tokens=370,
-            output_tokens_details=OutputTokensDetails(
-                reasoning_tokens=180
-            )
-        )
+            output_tokens_details=OutputTokensDetails(reasoning_tokens=180),
+        ),
     )
 
     ArizeLogger.set_arize_attributes(span, kwargs, response_obj)
@@ -256,21 +250,18 @@ def test_arize_set_attributes_responses_api():
     # Verify reasoning summary was set (index 0)
     span.set_attribute.assert_any_call(
         f"{SpanAttributes.LLM_OUTPUT_MESSAGES}.0.{MessageAttributes.MESSAGE_REASONING_SUMMARY}",
-        "First, I need to analyze..."
+        "First, I need to analyze...",
     )
 
     # Verify message content was set (index 1)
-    span.set_attribute.assert_any_call(
-        SpanAttributes.OUTPUT_VALUE,
-        "The answer is 42"
-    )
+    span.set_attribute.assert_any_call(SpanAttributes.OUTPUT_VALUE, "The answer is 42")
     span.set_attribute.assert_any_call(
         f"{SpanAttributes.LLM_OUTPUT_MESSAGES}.1.{MessageAttributes.MESSAGE_CONTENT}",
-        "The answer is 42"
+        "The answer is 42",
     )
     span.set_attribute.assert_any_call(
         f"{SpanAttributes.LLM_OUTPUT_MESSAGES}.1.{MessageAttributes.MESSAGE_ROLE}",
-        "assistant"
+        "assistant",
     )
 
     # Verify token counts including reasoning tokens
@@ -344,42 +335,34 @@ def test_construct_dynamic_arize_headers():
 
     # Test with all parameters present
     dynamic_params_full = StandardCallbackDynamicParams(
-        arize_api_key="test_api_key", 
-        arize_space_id="test_space_id"
+        arize_api_key="test_api_key", arize_space_id="test_space_id"
     )
     arize_logger = ArizeLogger()
-    
+
     headers = arize_logger.construct_dynamic_otel_headers(dynamic_params_full)
-    expected_headers = {
-        "api_key": "test_api_key",
-        "arize-space-id": "test_space_id"
-    }
+    expected_headers = {"api_key": "test_api_key", "arize-space-id": "test_space_id"}
     assert headers == expected_headers
-        
+
     # Test with only space_id
     dynamic_params_space_id_only = StandardCallbackDynamicParams(
         arize_space_id="test_space_id"
     )
-    
+
     headers = arize_logger.construct_dynamic_otel_headers(dynamic_params_space_id_only)
-    expected_headers = {
-        "arize-space-id": "test_space_id"
-    }
+    expected_headers = {"arize-space-id": "test_space_id"}
     assert headers == expected_headers
-    
+
     # Test with empty parameters dict
     dynamic_params_empty = StandardCallbackDynamicParams()
-    
+
     headers = arize_logger.construct_dynamic_otel_headers(dynamic_params_empty)
     assert headers == {}
 
     # test with space key and api key
     dynamic_params_space_key_and_api_key = StandardCallbackDynamicParams(
-        arize_space_key="test_space_key",
-        arize_api_key="test_api_key"
+        arize_space_key="test_space_key", arize_api_key="test_api_key"
     )
-    headers = arize_logger.construct_dynamic_otel_headers(dynamic_params_space_key_and_api_key)
-    expected_headers = {
-        "arize-space-id": "test_space_key",
-        "api_key": "test_api_key"
-    }
+    headers = arize_logger.construct_dynamic_otel_headers(
+        dynamic_params_space_key_and_api_key
+    )
+    expected_headers = {"arize-space-id": "test_space_key", "api_key": "test_api_key"}

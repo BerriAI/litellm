@@ -2,6 +2,7 @@
 Integration tests for DeepInfra rerank functionality.
 Tests the full rerank flow following the repository patterns.
 """
+
 import asyncio
 import json
 from unittest.mock import AsyncMock, MagicMock, patch

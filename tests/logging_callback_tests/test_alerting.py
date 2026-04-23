@@ -355,11 +355,12 @@ async def test_daily_reports_redis_cache_scheduler():
         ]
     )
 
-    with patch.object(
-        slack_alerting, "send_alert", new=AsyncMock()
-    ) as mock_send_alert, patch.object(
-        redis_cache, "async_set_cache", new=AsyncMock()
-    ) as mock_redis_set_cache:
+    with (
+        patch.object(slack_alerting, "send_alert", new=AsyncMock()) as mock_send_alert,
+        patch.object(
+            redis_cache, "async_set_cache", new=AsyncMock()
+        ) as mock_redis_set_cache,
+    ):
         # initial call - expect empty
         await slack_alerting._run_scheduler_helper(llm_router=router)
 
@@ -477,6 +478,7 @@ async def test_send_daily_reports_all_zero_or_none():
         "token_budget",
         "user_budget",
         "team_budget",
+        "organization_budget",
         "proxy_budget",
         "projected_limit_exceeded",
     ],
@@ -487,7 +489,7 @@ async def test_send_token_budget_crossed_alerts(alerting_type):
 
     with patch.object(slack_alerting, "send_alert", new=AsyncMock()) as mock_send_alert:
         user_info = {
-            "token": "50e55ca5bfbd0759697538e8d23c0cd5031f52d9e19e176d7233b20c7c4d3403",
+            "token": "sk-test-mock-token-606",
             "spend": 86,
             "max_budget": 100,
             "user_id": "ishaan@berri.ai",
@@ -514,6 +516,7 @@ async def test_send_token_budget_crossed_alerts(alerting_type):
         "token_budget",
         "user_budget",
         "team_budget",
+        "organization_budget",
         "proxy_budget",
         "projected_limit_exceeded",
     ],
@@ -526,7 +529,7 @@ async def test_webhook_alerting(alerting_type):
         slack_alerting, "send_webhook_alert", new=AsyncMock()
     ) as mock_send_alert:
         user_info = {
-            "token": "50e55ca5bfbd0759697538e8d23c0cd5031f52d9e19e176d7233b20c7c4d3403",
+            "token": "sk-test-mock-token-606",
             "spend": 1,
             "max_budget": 0,
             "user_id": "ishaan@berri.ai",
@@ -557,7 +560,7 @@ async def test_webhook_alerting(alerting_type):
 #         slack_alerting, "send_webhook_alert", new=AsyncMock()
 #     ) as mock_send_alert:
 #         user_info = {
-#             "token": "50e55ca5bfbd0759697538e8d23c0cd5031f52d9e19e176d7233b20c7c4d3403",
+#             "token": "sk-test-mock-token-606",
 #             "spend": 1,
 #             "max_budget": 0,
 #             "user_id": "ishaan@berri.ai",
@@ -587,7 +590,7 @@ async def test_webhook_alerting(alerting_type):
             None,
             None,
         ),
-        ("gemini-pro", None, "vertex_ai", "hardy-device-38811", "us-central1"),
+        ("gemini-2.0-flash", None, "vertex_ai", "hardy-device-38811", "us-central1"),
     ],
 )
 @pytest.mark.parametrize("error_code", [500, 408, 400])
@@ -639,7 +642,7 @@ async def test_outage_alerting_called(
                 "model_name": model,
                 "litellm_params": {
                     "model": model,
-                    "api_key": os.getenv("AZURE_API_KEY"),
+                    "api_key": os.getenv("AZURE_AI_API_KEY"),
                     "api_base": api_base,
                     "vertex_location": vertex_location,
                     "vertex_project": vertex_project,
@@ -693,7 +696,7 @@ async def test_outage_alerting_called(
             None,
             None,
         ),
-        ("gemini-pro", None, "vertex_ai", "hardy-device-38811", "us-central1"),
+        ("gemini-2.0-flash", None, "vertex_ai", "hardy-device-38811", "us-central1"),
     ],
 )
 @pytest.mark.parametrize("error_code", [500, 408, 400])
@@ -747,7 +750,7 @@ async def test_region_outage_alerting_called(
                 "model_name": model,
                 "litellm_params": {
                     "model": model,
-                    "api_key": os.getenv("AZURE_API_KEY"),
+                    "api_key": os.getenv("AZURE_AI_API_KEY"),
                     "api_base": api_base,
                     "vertex_location": vertex_location,
                     "vertex_project": vertex_project,
@@ -758,7 +761,7 @@ async def test_region_outage_alerting_called(
                 "model_name": model,
                 "litellm_params": {
                     "model": model,
-                    "api_key": os.getenv("AZURE_API_KEY"),
+                    "api_key": os.getenv("AZURE_AI_API_KEY"),
                     "api_base": api_base,
                     "vertex_location": vertex_location,
                     "vertex_project": "vertex_project-2",
@@ -780,44 +783,10 @@ async def test_region_outage_alerting_called(
             await slack_alerting.region_outage_alerts(
                 exception=error_to_raise, deployment_id=deployment_id  # type: ignore
             )
-        if model == "gemini-pro" and (error_code == 500 or error_code == 408):
+        if model == "gemini-2.0-flash" and (error_code == 500 or error_code == 408):
             mock_send_alert.assert_called_once()
         else:
             mock_send_alert.assert_not_called()
-
-
-@pytest.mark.asyncio
-@pytest.mark.skip(reason="test only needs to run locally ")
-async def test_alerting():
-    router = litellm.Router(
-        model_list=[
-            {
-                "model_name": "gpt-3.5-turbo",
-                "litellm_params": {
-                    "model": "gpt-3.5-turbo",
-                    "api_key": "bad_key",
-                },
-            }
-        ],
-        debug_level="DEBUG",
-        set_verbose=True,
-        alerting_config=AlertingConfig(
-            alerting_threshold=10,  # threshold for slow / hanging llm responses (in seconds). Defaults to 300 seconds
-            webhook_url=os.getenv(
-                "SLACK_WEBHOOK_URL"
-            ),  # webhook you want to send alerts to
-        ),
-    )
-    try:
-        await router.acompletion(
-            model="gpt-3.5-turbo",
-            messages=[{"role": "user", "content": "Hey, how's it going?"}],
-        )
-
-    except Exception:
-        pass
-    finally:
-        await asyncio.sleep(3)
 
 
 @pytest.mark.asyncio
@@ -864,10 +833,10 @@ async def test_langfuse_trace_id():
 
     assert trace_url is not None
 
-    returned_trace_id = int(trace_url.split("/")[-1])
+    returned_trace_id = trace_url.split("/")[-1]
 
-    assert returned_trace_id == int(
-        litellm_logging_obj._get_trace_id(service_name="langfuse")
+    assert returned_trace_id == litellm_logging_obj._get_trace_id(
+        service_name="langfuse"
     )
 
 
@@ -1007,7 +976,7 @@ async def test_soft_budget_alerts():
 
         # Verify alert message contains correct percentage
         alert_message = mock_send_alert.call_args[1]["message"]
-        
+
         print("GOT MESSAGE\n\n", alert_message)
 
         expected_message = (
@@ -1077,10 +1046,10 @@ key_no_max_budget_info = CallInfo(
 async def test_soft_budget_alerts_webhook(entity_info):
     """
     Tests that soft budget alerts are triggered for different entity types.
-    
+
     Tests:
     - Key with max budget
-    - Team 
+    - Team
     - User
     - Key without max budget
     """
@@ -1097,7 +1066,7 @@ async def test_soft_budget_alerts_webhook(entity_info):
         # Verify the webhook event
         call_args = mock_send_alert.call_args[1]
         logged_webhook_event: WebhookEvent = call_args["user_info"]
-        
+
         # Validate the webhook event has all expected fields
         assert logged_webhook_event.spend == entity_info.spend
         assert logged_webhook_event.soft_budget == entity_info.soft_budget
@@ -1106,10 +1075,3 @@ async def test_soft_budget_alerts_webhook(entity_info):
         assert logged_webhook_event.user_email == entity_info.user_email
         assert logged_webhook_event.key_alias == entity_info.key_alias
         assert logged_webhook_event.event_group == entity_info.event_group
-        
-        
-        
-        
-        
-        
-        

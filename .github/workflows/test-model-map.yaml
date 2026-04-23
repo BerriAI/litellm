@@ -1,0 +1,24 @@
+name: Validate model_prices_and_context_window.json
+
+on:
+  pull_request:
+    branches:
+      - main
+      - litellm_internal_staging
+      - litellm_oss_branch
+      - "litellm_**"
+
+permissions:
+  contents: read
+
+jobs:
+  validate-model-prices-json:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          persist-credentials: false
+
+      - name: Validate model_prices_and_context_window.json
+        run: |
+          jq empty model_prices_and_context_window.json

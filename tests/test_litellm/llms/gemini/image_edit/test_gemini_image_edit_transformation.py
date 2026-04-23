@@ -61,7 +61,7 @@ class TestGeminiImageEditTransformation:
         assert base64.b64decode(inline_data["data"]) == image_bytes
 
         generation_config = request_body["generationConfig"]
-        assert generation_config["aspectRatio"] == "16:9"
+        assert generation_config["imageConfig"]["aspectRatio"] == "16:9"
 
     def test_transform_image_edit_request_multiple_images(self) -> None:
         image_one = BytesIO(b"image_one")
@@ -93,7 +93,9 @@ class TestGeminiImageEditTransformation:
                             {
                                 "inlineData": {
                                     "mimeType": "image/png",
-                                    "data": base64.b64encode(b"image-one").decode("utf-8"),
+                                    "data": base64.b64encode(b"image-one").decode(
+                                        "utf-8"
+                                    ),
                                 }
                             }
                         ]
@@ -105,7 +107,9 @@ class TestGeminiImageEditTransformation:
                             {
                                 "inlineData": {
                                     "mimeType": "image/png",
-                                    "data": base64.b64encode(b"image-two").decode("utf-8"),
+                                    "data": base64.b64encode(b"image-two").decode(
+                                        "utf-8"
+                                    ),
                                 }
                             }
                         ]
@@ -147,3 +151,13 @@ class TestGeminiImageEditTransformation:
                 headers={},
             )
 
+    def test_use_multipart_form_data_returns_false(self) -> None:
+        """
+        Gemini uses JSON requests, not multipart/form-data.
+        This is critical because httpx sends data differently:
+        - data=dict sends form-encoded
+        - json=dict sends JSON
+
+        Without this, Gemini returns: "Invalid JSON payload received. Unexpected token."
+        """
+        assert self.config.use_multipart_form_data() is False

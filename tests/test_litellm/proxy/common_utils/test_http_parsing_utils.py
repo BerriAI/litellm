@@ -24,6 +24,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (
     get_form_data,
     get_request_body,
     get_tags_from_request_body,
+    populate_request_with_path_params,
 )
 
 
@@ -74,6 +75,7 @@ async def test_form_data_parsing():
     mock_request.form = AsyncMock(return_value=test_data)
     mock_request.headers = {"content-type": "application/x-www-form-urlencoded"}
     mock_request.scope = {}
+    mock_request.state._cached_headers = None
 
     # Parse the form data
     result = await _read_request_body(mock_request)
@@ -97,31 +99,34 @@ async def test_form_data_parsing():
 async def test_form_data_with_json_metadata():
     """
     Test that form data with a JSON-encoded metadata field is correctly parsed.
-    
+
     When form data includes a 'metadata' field, it comes as a JSON string that needs
     to be parsed into a Python dictionary (lines 42-43 of http_parsing_utils.py).
     """
     # Create a mock request with form data containing JSON metadata
     mock_request = MagicMock()
-    
+
     # Metadata is sent as a JSON string in form data
-    metadata_json_string = json.dumps({
-        "user_id": "12345",
-        "request_type": "audio_transcription",
-        "tags": ["urgent", "production"],
-        "custom_field": {"nested": "value"}
-    })
-    
+    metadata_json_string = json.dumps(
+        {
+            "user_id": "12345",
+            "request_type": "audio_transcription",
+            "tags": ["urgent", "production"],
+            "custom_field": {"nested": "value"},
+        }
+    )
+
     test_data = {
         "model": "whisper-1",
         "file": "audio.mp3",
-        "metadata": metadata_json_string  # This is a JSON string, not a dict
+        "metadata": metadata_json_string,  # This is a JSON string, not a dict
     }
 
     # Mock the form method to return the test data as an awaitable
     mock_request.form = AsyncMock(return_value=test_data)
     mock_request.headers = {"content-type": "multipart/form-data"}
     mock_request.scope = {}
+    mock_request.state._cached_headers = None
 
     # Parse the form data
     result = await _read_request_body(mock_request)
@@ -133,11 +138,11 @@ async def test_form_data_with_json_metadata():
     assert result["metadata"]["request_type"] == "audio_transcription"
     assert result["metadata"]["tags"] == ["urgent", "production"]
     assert result["metadata"]["custom_field"] == {"nested": "value"}
-    
+
     # Verify other fields remain unchanged
     assert result["model"] == "whisper-1"
     assert result["file"] == "audio.mp3"
-    
+
     # Verify form() was called
     mock_request.form.assert_called_once()
 
@@ -146,22 +151,23 @@ async def test_form_data_with_json_metadata():
 async def test_form_data_with_invalid_json_metadata():
     """
     Test that form data with invalid JSON in metadata field raises an exception.
-    
+
     This tests error handling when the metadata field contains malformed JSON.
     """
     # Create a mock request with form data containing invalid JSON metadata
     mock_request = MagicMock()
-    
+
     test_data = {
         "model": "whisper-1",
         "file": "audio.mp3",
-        "metadata": '{"invalid": json}'  # Invalid JSON - unquoted value
+        "metadata": '{"invalid": json}',  # Invalid JSON - unquoted value
     }
 
     # Mock the form method to return the test data
     mock_request.form = AsyncMock(return_value=test_data)
     mock_request.headers = {"content-type": "multipart/form-data"}
     mock_request.scope = {}
+    mock_request.state._cached_headers = None
 
     # Should raise JSONDecodeError when trying to parse invalid JSON metadata
     with pytest.raises(json.JSONDecodeError):
@@ -172,22 +178,19 @@ async def test_form_data_with_invalid_json_metadata():
 async def test_form_data_without_metadata():
     """
     Test that form data without metadata field works correctly.
-    
+
     Ensures the metadata parsing logic doesn't break when metadata is absent.
     """
     # Create a mock request with form data without metadata
     mock_request = MagicMock()
-    
-    test_data = {
-        "model": "whisper-1",
-        "file": "audio.mp3",
-        "language": "en"
-    }
+
+    test_data = {"model": "whisper-1", "file": "audio.mp3", "language": "en"}
 
     # Mock the form method to return the test data
     mock_request.form = AsyncMock(return_value=test_data)
     mock_request.headers = {"content-type": "application/x-www-form-urlencoded"}
     mock_request.scope = {}
+    mock_request.state._cached_headers = None
 
     # Parse the form data
     result = await _read_request_body(mock_request)
@@ -207,17 +210,18 @@ async def test_form_data_with_empty_metadata():
     """
     # Create a mock request with form data containing empty metadata
     mock_request = MagicMock()
-    
+
     test_data = {
         "model": "whisper-1",
         "file": "audio.mp3",
-        "metadata": "{}"  # Empty JSON object as string
+        "metadata": "{}",  # Empty JSON object as string
     }
 
     # Mock the form method to return the test data
     mock_request.form = AsyncMock(return_value=test_data)
     mock_request.headers = {"content-type": "multipart/form-data"}
     mock_request.scope = {}
+    mock_request.state._cached_headers = None
 
     # Parse the form data
     result = await _read_request_body(mock_request)
@@ -233,28 +237,26 @@ async def test_form_data_with_empty_metadata():
 async def test_form_data_with_dict_metadata():
     """
     Test that form data with metadata already as a dict is not parsed again.
-    
+
     This handles edge cases where metadata might already be a dictionary
     (shouldn't happen in normal form data, but defensive coding).
     """
     # Create a mock request with form data where metadata is already a dict
     mock_request = MagicMock()
-    
-    metadata_dict = {
-        "user_id": "12345",
-        "tags": ["test"]
-    }
-    
+
+    metadata_dict = {"user_id": "12345", "tags": ["test"]}
+
     test_data = {
         "model": "whisper-1",
         "file": "audio.mp3",
-        "metadata": metadata_dict  # Already a dict, not a string
+        "metadata": metadata_dict,  # Already a dict, not a string
     }
 
     # Mock the form method to return the test data
     mock_request.form = AsyncMock(return_value=test_data)
     mock_request.headers = {"content-type": "multipart/form-data"}
     mock_request.scope = {}
+    mock_request.state._cached_headers = None
 
     # Parse the form data
     result = await _read_request_body(mock_request)
@@ -274,17 +276,18 @@ async def test_form_data_with_none_metadata():
     """
     # Create a mock request with form data where metadata is None
     mock_request = MagicMock()
-    
+
     test_data = {
         "model": "whisper-1",
         "file": "audio.mp3",
-        "metadata": None  # None value
+        "metadata": None,  # None value
     }
 
     # Mock the form method to return the test data
     mock_request.form = AsyncMock(return_value=test_data)
     mock_request.headers = {"content-type": "multipart/form-data"}
     mock_request.scope = {}
+    mock_request.state._cached_headers = None
 
     # Parse the form data
     result = await _read_request_body(mock_request)
@@ -365,7 +368,7 @@ async def test_json_parsing_error_handling():
     """
     # Test case 1: Trailing comma error
     mock_request = MagicMock()
-    invalid_json_with_trailing_comma = b'''{
+    invalid_json_with_trailing_comma = b"""{
         "model": "gpt-4o",
         "tools": [
             {
@@ -377,8 +380,8 @@ async def test_json_parsing_error_handling():
             }
         ],
         "input": "Run available tools"
-    }'''
-    
+    }"""
+
     mock_request.body = AsyncMock(return_value=invalid_json_with_trailing_comma)
     mock_request.headers = {"content-type": "application/json"}
     mock_request.scope = {}
@@ -386,14 +389,14 @@ async def test_json_parsing_error_handling():
     # Should raise ProxyException for trailing comma
     with pytest.raises(ProxyException) as exc_info:
         await _read_request_body(mock_request)
-    
+
     assert exc_info.value.code == "400"
     assert "Invalid JSON payload" in exc_info.value.message
     assert "trailing comma" in exc_info.value.message
 
     # Test case 2: Unquoted property name error
     mock_request2 = MagicMock()
-    invalid_json_unquoted_property = b'''{
+    invalid_json_unquoted_property = b"""{
         "model": "gpt-4o",
         "tools": [
             {
@@ -402,8 +405,8 @@ async def test_json_parsing_error_handling():
             }
         ],
         "input": "Run available tools"
-    }'''
-    
+    }"""
+
     mock_request2.body = AsyncMock(return_value=invalid_json_unquoted_property)
     mock_request2.headers = {"content-type": "application/json"}
     mock_request2.scope = {}
@@ -411,13 +414,13 @@ async def test_json_parsing_error_handling():
     # Should raise ProxyException for unquoted property
     with pytest.raises(ProxyException) as exc_info2:
         await _read_request_body(mock_request2)
-    
+
     assert exc_info2.value.code == "400"
     assert "Invalid JSON payload" in exc_info2.value.message
 
     # Test case 3: Valid JSON should work normally
     mock_request3 = MagicMock()
-    valid_json = b'''{
+    valid_json = b"""{
         "model": "gpt-4o",
         "tools": [
             {
@@ -429,8 +432,8 @@ async def test_json_parsing_error_handling():
             }
         ],
         "input": "Run available tools"
-    }'''
-    
+    }"""
+
     mock_request3.body = AsyncMock(return_value=valid_json)
     mock_request3.headers = {"content-type": "application/json"}
     mock_request3.scope = {}
@@ -497,15 +500,10 @@ def test_get_tags_from_request_body_with_metadata_tags():
     """
     Test that tags are correctly extracted from request body metadata.
     """
-    request_body = {
-        "model": "gpt-4",
-        "metadata": {
-            "tags": ["tag1", "tag2", "tag3"]
-        }
-    }
-    
+    request_body = {"model": "gpt-4", "metadata": {"tags": ["tag1", "tag2", "tag3"]}}
+
     result = get_tags_from_request_body(request_body=request_body)
-    
+
     assert result == ["tag1", "tag2", "tag3"]
 
 
@@ -515,13 +513,11 @@ def test_get_tags_from_request_body_with_litellm_metadata_tags():
     """
     request_body = {
         "model": "gpt-4",
-        "litellm_metadata": {
-            "tags": ["tag1", "tag2", "tag3"]
-        }
+        "litellm_metadata": {"tags": ["tag1", "tag2", "tag3"]},
     }
-    
+
     result = get_tags_from_request_body(request_body=request_body)
-    
+
     assert result == ["tag1", "tag2", "tag3"]
 
 
@@ -529,13 +525,10 @@ def test_get_tags_from_request_body_with_root_tags():
     """
     Test that tags are correctly extracted from root level of request body.
     """
-    request_body = {
-        "model": "gpt-4",
-        "tags": ["tag1", "tag2"]
-    }
-    
+    request_body = {"model": "gpt-4", "tags": ["tag1", "tag2"]}
+
     result = get_tags_from_request_body(request_body=request_body)
-    
+
     assert result == ["tag1", "tag2"]
 
 
@@ -545,14 +538,12 @@ def test_get_tags_from_request_body_with_combined_tags():
     """
     request_body = {
         "model": "gpt-4",
-        "metadata": {
-            "tags": ["tag1", "tag2"]
-        },
-        "tags": ["tag3", "tag4"]
+        "metadata": {"tags": ["tag1", "tag2"]},
+        "tags": ["tag3", "tag4"],
     }
-    
+
     result = get_tags_from_request_body(request_body=request_body)
-    
+
     assert result == ["tag1", "tag2", "tag3", "tag4"]
 
 
@@ -562,13 +553,11 @@ def test_get_tags_from_request_body_filters_non_strings():
     """
     request_body = {
         "model": "gpt-4",
-        "metadata": {
-            "tags": ["tag1", 123, "tag2", None, "tag3", {"nested": "dict"}]
-        }
+        "metadata": {"tags": ["tag1", 123, "tag2", None, "tag3", {"nested": "dict"}]},
     }
-    
+
     result = get_tags_from_request_body(request_body=request_body)
-    
+
     assert result == ["tag1", "tag2", "tag3"]
 
 
@@ -576,13 +565,10 @@ def test_get_tags_from_request_body_no_tags():
     """
     Test that empty list is returned when no tags are present.
     """
-    request_body = {
-        "model": "gpt-4",
-        "metadata": {}
-    }
-    
+    request_body = {"model": "gpt-4", "metadata": {}}
+
     result = get_tags_from_request_body(request_body=request_body)
-    
+
     assert result == []
 
 
@@ -593,21 +579,277 @@ def test_get_tags_from_request_body_with_dict_tags():
     """
     request_body = {
         "model": "aws/anthropic/bedrock-claude-3-5-sonnet-v1",
-        "messages": [
-            {
-                "role": "user",
-                "content": "aloha"
-            }
-        ],
+        "messages": [{"role": "user", "content": "aloha"}],
         "metadata": {
             "tags": {
                 "litellm_id": "litellm_ratelimit_test",
-                "llm_id": "llmid_ratelimit_test"
+                "llm_id": "llmid_ratelimit_test",
             }
-        }
+        },
     }
-    
+
     result = get_tags_from_request_body(request_body=request_body)
-    
+
     assert result == []
     assert isinstance(result, list)
+
+
+def test_get_tags_from_request_body_with_null_metadata():
+    """
+    Test that function handles null metadata gracefully without crashing.
+
+    This is a regression test for https://github.com/BerriAI/litellm/issues/17263
+    When metadata is explicitly set to null/None, the function should return
+    an empty list instead of raising AttributeError.
+    """
+    request_body = {
+        "model": "gpt-4",
+        "metadata": None,  # OpenAI API accepts metadata: null
+    }
+
+    result = get_tags_from_request_body(request_body=request_body)
+
+    assert result == []
+    assert isinstance(result, list)
+
+
+def test_populate_request_with_path_params_adds_query_params():
+    """
+    Test that populate_request_with_path_params correctly adds query parameters
+    like organization_id to the request data.
+    """
+    # Create a mock request with query parameters
+    mock_request = MagicMock()
+    # Mock query_params as a dict-like object that can be converted to dict
+    mock_request.query_params = {"organization_id": "org-123", "user_id": "user-456"}
+    mock_request.path_params = {}
+    # Mock url.path to avoid errors in _add_vector_store_id_from_path
+    mock_request.url.path = "/v1/chat/completions"
+
+    # Initial request data without query params
+    request_data = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "Hello"}],
+    }
+
+    # Call the function
+    result = populate_request_with_path_params(request_data, mock_request)
+
+    # Verify query params were added
+    assert result["organization_id"] == "org-123"
+    assert result["user_id"] == "user-456"
+    # Verify original data is preserved
+    assert result["model"] == "gpt-4"
+    assert result["messages"] == [{"role": "user", "content": "Hello"}]
+
+
+def test_populate_request_with_path_params_does_not_overwrite_existing_values():
+    """
+    Test that populate_request_with_path_params does not overwrite existing values
+    in request_data when query params contain the same keys.
+    """
+    # Create a mock request with query parameters
+    mock_request = MagicMock()
+    # Mock query_params as a dict-like object that can be converted to dict
+    mock_request.query_params = {
+        "organization_id": "org-query-param",
+        "model": "gpt-3.5-turbo",
+    }
+    mock_request.path_params = {}
+    # Mock url.path to avoid errors in _add_vector_store_id_from_path
+    mock_request.url.path = "/v1/chat/completions"
+
+    # Initial request data with existing values
+    request_data = {
+        "model": "gpt-4",  # This should NOT be overwritten
+        "organization_id": "org-existing",  # This should NOT be overwritten
+        "messages": [{"role": "user", "content": "Hello"}],
+    }
+
+    # Call the function
+    result = populate_request_with_path_params(request_data, mock_request)
+
+    # Verify existing values were NOT overwritten
+    assert result["model"] == "gpt-4"  # Should keep original, not "gpt-3.5-turbo"
+    assert (
+        result["organization_id"] == "org-existing"
+    )  # Should keep original, not "org-query-param"
+    # Verify other data is preserved
+    assert result["messages"] == [{"role": "user", "content": "Hello"}]
+
+
+@pytest.mark.asyncio
+async def test_request_body_with_html_script_tags():
+    """
+    Test that JSON request bodies containing HTML tags like <script> are
+    parsed correctly without being blocked or modified.
+
+    Regression test for GitHub issue #20441:
+    https://github.com/BerriAI/litellm/issues/20441
+
+    LLM message content frequently contains HTML/code snippets.
+    The HTTP parsing layer must not interfere with such content.
+    """
+    test_messages = [
+        {
+            "role": "user",
+            "content": "<script>alert('hello')</script>",
+        },
+        {
+            "role": "user",
+            "content": "<script> test </script>",
+        },
+        {
+            "role": "user",
+            "content": "Can you explain what <script> tags do in HTML?",
+        },
+        {
+            "role": "user",
+            "content": "Here is code: <div><script src='app.js'></script></div>",
+        },
+        {
+            "role": "user",
+            "content": "<img onerror='alert(1)' src='x'>",
+        },
+        {
+            "role": "user",
+            "content": "<iframe src='https://example.com'></iframe>",
+        },
+    ]
+
+    for msg in test_messages:
+        test_payload = {
+            "model": "gpt-4o",
+            "messages": [
+                {"role": "user", "content": "hi"},
+                {"role": "assistant", "content": "Hello! How can I help?"},
+                msg,
+            ],
+        }
+
+        mock_request = MagicMock()
+        mock_request.body = AsyncMock(return_value=orjson.dumps(test_payload))
+        mock_request.headers = {"content-type": "application/json"}
+        mock_request.scope = {}
+
+        result = await _read_request_body(mock_request)
+
+        assert result["model"] == "gpt-4o"
+        assert len(result["messages"]) == 3
+        assert result["messages"][2]["content"] == msg["content"], (
+            f"Message content with HTML was modified during parsing: "
+            f"expected={msg['content']!r}, got={result['messages'][2]['content']!r}"
+        )
+
+
+def test_safe_get_request_headers_caches_on_request_state():
+    """
+    Test that _safe_get_request_headers caches the result on request.state
+    and returns the same object on subsequent calls.
+    """
+    mock_request = MagicMock()
+    mock_request.headers = {
+        "content-type": "application/json",
+        "authorization": "Bearer sk-123",
+    }
+    mock_request.state = MagicMock(spec=[])  # empty spec so getattr returns default
+
+    # First call — should create and cache
+    result1 = _safe_get_request_headers(mock_request)
+    assert result1 == {
+        "content-type": "application/json",
+        "authorization": "Bearer sk-123",
+    }
+    assert mock_request.state._cached_headers is result1
+
+    # Second call — should return the cached object (same identity)
+    result2 = _safe_get_request_headers(mock_request)
+    assert result2 is result1
+
+
+def test_safe_get_request_headers_none_request():
+    """
+    Test that _safe_get_request_headers returns empty dict for None request.
+    """
+    result = _safe_get_request_headers(None)
+    assert result == {}
+
+
+def test_safe_get_request_headers_copy_protects_cache():
+    """
+    Test that callers using .copy() before mutation do not corrupt the cache.
+    """
+    mock_request = MagicMock()
+    mock_request.headers = {"authorization": "Bearer sk-123", "host": "localhost"}
+    mock_request.state = MagicMock(spec=[])
+
+    original = _safe_get_request_headers(mock_request)
+
+    # Simulate what mutation call sites do: copy then pop
+    mutable = _safe_get_request_headers(mock_request).copy()
+    mutable.pop("authorization", None)
+
+    # Cache must be unaffected
+    assert "authorization" in _safe_get_request_headers(mock_request)
+    assert _safe_get_request_headers(mock_request) is original
+
+
+def test_safe_get_request_headers_state_unavailable():
+    """
+    Test that _safe_get_request_headers still returns headers when
+    request.state rejects attribute writes (the except path on the cache-write).
+    """
+
+    class ReadOnlyState:
+        """State object that allows reads but raises on writes."""
+
+        def __setattr__(self, name, value):
+            raise AttributeError("read-only state")
+
+        def __getattr__(self, name):
+            return None  # _cached_headers not found → triggers fresh read
+
+    mock_request = MagicMock()
+    mock_request.headers = {"content-type": "application/json"}
+    mock_request.state = ReadOnlyState()
+
+    result = _safe_get_request_headers(mock_request)
+    assert result == {"content-type": "application/json"}
+
+
+class TestGetTagsFromRequestBodyStringCoerce:
+    """Regression: the auth-time tag helper used `metadata.get("tags", ...)`
+    directly, which raised AttributeError when metadata arrived as a JSON
+    string (multipart/form-data or extra_body). That turned into a DoS at
+    auth time and potentially bypassed tag-based RBAC if the caller caught
+    the exception and fell through with empty tags.
+    """
+
+    def test_json_string_metadata_is_coerced_to_dict(self):
+        from litellm.proxy.common_utils.http_parsing_utils import (
+            get_tags_from_request_body,
+        )
+
+        metadata_json = json.dumps({"tags": ["a", "b"]})
+        # Must not raise
+        tags = get_tags_from_request_body({"metadata": metadata_json})
+        assert tags == ["a", "b"]
+
+    def test_unparseable_string_metadata_is_ignored(self):
+        from litellm.proxy.common_utils.http_parsing_utils import (
+            get_tags_from_request_body,
+        )
+
+        # Must not raise; must yield no metadata tags but keep root tags
+        tags = get_tags_from_request_body(
+            {"metadata": "not-json", "tags": ["root-only"]}
+        )
+        assert tags == ["root-only"]
+
+    def test_dict_metadata_still_works(self):
+        from litellm.proxy.common_utils.http_parsing_utils import (
+            get_tags_from_request_body,
+        )
+
+        tags = get_tags_from_request_body({"metadata": {"tags": ["x"]}})
+        assert tags == ["x"]

@@ -4,9 +4,8 @@ Translates from OpenAI's `/v1/chat/completions` to DashScope's `/v1/chat/complet
 
 from typing import Any, Coroutine, List, Literal, Optional, Tuple, Union, overload
 
-from litellm.litellm_core_utils.prompt_templates.common_utils import (
-    handle_messages_with_content_list_to_str_conversion,
-)
+from litellm.types.llms.openai import ChatCompletionToolParam
+
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
 
@@ -14,11 +13,22 @@ from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 
 
 class DashScopeChatConfig(OpenAIGPTConfig):
+    def remove_cache_control_flag_from_messages_and_tools(
+        self,
+        model: str,
+        messages: List[AllMessageValues],
+        tools: Optional[List[ChatCompletionToolParam]] = None,
+    ) -> Tuple[List[AllMessageValues], Optional[List[ChatCompletionToolParam]]]:
+        """
+        Override to preserve cache_control for DashScope.
+        DashScope supports cache_control - don't strip it.
+        """
+        return messages, tools
+
     @overload
     def _transform_messages(
         self, messages: List[AllMessageValues], model: str, is_async: Literal[True]
-    ) -> Coroutine[Any, Any, List[AllMessageValues]]:
-        ...
+    ) -> Coroutine[Any, Any, List[AllMessageValues]]: ...
 
     @overload
     def _transform_messages(
@@ -26,16 +36,11 @@ class DashScopeChatConfig(OpenAIGPTConfig):
         messages: List[AllMessageValues],
         model: str,
         is_async: Literal[False] = False,
-    ) -> List[AllMessageValues]:
-        ...
+    ) -> List[AllMessageValues]: ...
 
     def _transform_messages(
         self, messages: List[AllMessageValues], model: str, is_async: bool = False
     ) -> Union[List[AllMessageValues], Coroutine[Any, Any, List[AllMessageValues]]]:
-        """
-        DashScope does not support content in list format.
-        """
-        messages = handle_messages_with_content_list_to_str_conversion(messages)
         if is_async:
             return super()._transform_messages(
                 messages=messages, model=model, is_async=True
@@ -51,7 +56,7 @@ class DashScopeChatConfig(OpenAIGPTConfig):
         api_base = (
             api_base
             or get_secret_str("DASHSCOPE_API_BASE")
-            or "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
+            or "https://dashscope.aliyuncs.com/compatible-mode/v1"
         )  # type: ignore
         dynamic_api_key = api_key or get_secret_str("DASHSCOPE_API_KEY")
         return api_base, dynamic_api_key

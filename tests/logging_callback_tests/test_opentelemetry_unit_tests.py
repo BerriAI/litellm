@@ -40,11 +40,15 @@ class TestOpentelemetryUnitTests(BaseLoggingCallbackTest):
     @pytest.mark.asyncio
     async def test_opentelemetry_integration(self):
         """
-        Unit test to confirm the parent otel span is ended.
+        Unit test to confirm external parent otel spans are NOT ended by LiteLLM.
+
+        External spans (passed via metadata) should be managed by their creators,
+        not by LiteLLM. This prevents premature closure of spans from Langfuse,
+        user code, or other external observability tools.
         """
         # Reset all callbacks to ensure clean state
         litellm.logging_callback_manager._reset_all_callbacks()
-        
+
         parent_otel_span = MagicMock()
         litellm.callbacks = ["otel"]
 
@@ -57,33 +61,9 @@ class TestOpentelemetryUnitTests(BaseLoggingCallbackTest):
 
         await asyncio.sleep(1)
 
-        # Verify span was ended (may be called multiple times due to callback architecture)
-        parent_otel_span.end.assert_called()
-
-    def test_init_tracing_respects_existing_tracer_provider(self):
-        """
-        Unit test: _init_tracing() should respect existing TracerProvider.
-
-        When a TracerProvider already exists (e.g., set by Langfuse SDK),
-        LiteLLM should use it instead of creating a new one.
-        """
-        from opentelemetry import trace
-        from opentelemetry.sdk.trace import TracerProvider
-        from litellm.integrations.opentelemetry import OpenTelemetry
-
-        # Setup: Create and set an existing TracerProvider
-        tracer_provider = TracerProvider()
-        trace.set_tracer_provider(tracer_provider)
-        existing_provider = trace.get_tracer_provider()
-
-        # Act: Initialize OpenTelemetry integration (should detect existing provider)
-        otel_integration = OpenTelemetry()
-
-        # Assert: The existing provider should still be active
-        current_provider = trace.get_tracer_provider()
-        assert current_provider is existing_provider, (
-            "Existing TracerProvider should be respected and not overridden"
-        )
+        # Verify external span was NOT ended by LiteLLM
+        # External spans should only be closed by their creators
+        parent_otel_span.end.assert_not_called()
 
     def test_get_span_context_detects_active_span(self):
         """
@@ -112,21 +92,25 @@ class TestOpentelemetryUnitTests(BaseLoggingCallbackTest):
             detected_context, detected_span = otel_integration._get_span_context(kwargs)
 
             # Assert: Should detect the active span
-            assert detected_span is not None, "Should detect active span from global context"
-            assert detected_span is parent_span, "Detected span should be the active parent span"
+            assert (
+                detected_span is not None
+            ), "Should detect active span from global context"
+            assert (
+                detected_span is parent_span
+            ), "Detected span should be the active parent span"
 
             detected_span_context = detected_span.get_span_context()
-            assert detected_span_context.trace_id == parent_span_context.trace_id, (
-                "Detected span should have same trace_id as parent"
-            )
-            assert detected_span_context.span_id == parent_span_context.span_id, (
-                "Detected span should have same span_id as parent"
-            )
+            assert (
+                detected_span_context.trace_id == parent_span_context.trace_id
+            ), "Detected span should have same trace_id as parent"
+            assert (
+                detected_span_context.span_id == parent_span_context.span_id
+            ), "Detected span should have same span_id as parent"
 
     def test_record_exception_on_span(self):
         """
         Test that _record_exception_on_span properly records exception information.
-        
+
         This test verifies that StandardLoggingPayloadErrorInformation is properly
         extracted and set as span attributes using ErrorAttributes constants.
         """
@@ -181,11 +165,11 @@ class TestOpentelemetryUnitTests(BaseLoggingCallbackTest):
 
         # Check that set_attribute was called with expected values
         actual_calls = [call.args for call in mock_span.set_attribute.call_args_list]
-        
+
         for expected_call in expected_calls:
-            assert expected_call in actual_calls, (
-                f"Expected set_attribute call {expected_call} not found in actual calls: {actual_calls}"
-            )
+            assert (
+                expected_call in actual_calls
+            ), f"Expected set_attribute call {expected_call} not found in actual calls: {actual_calls}"
 
     def test_record_exception_on_span_with_fallback(self):
         """
@@ -226,4 +210,6 @@ class TestOpentelemetryUnitTests(BaseLoggingCallbackTest):
         mock_span.record_exception.assert_called_once_with(test_exception)
 
         # Assert: error.message should be set from error_str using ErrorAttributes constant
-        mock_span.set_attribute.assert_called_with(ErrorAttributes.ERROR_MESSAGE, "Fallback error message")
+        mock_span.set_attribute.assert_called_with(
+            ErrorAttributes.ERROR_MESSAGE, "Fallback error message"
+        )

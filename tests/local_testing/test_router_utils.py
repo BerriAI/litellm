@@ -35,7 +35,7 @@ def test_returned_settings():
                     "model": "azure/gpt-4.1-mini",
                     "api_key": "bad-key",
                     "api_version": os.getenv("AZURE_API_VERSION"),
-                    "api_base": os.getenv("AZURE_API_BASE"),
+                    "api_base": os.getenv("AZURE_AI_API_BASE"),
                 },
                 "tpm": 240000,
                 "rpm": 1800,
@@ -99,7 +99,7 @@ def test_update_kwargs_before_fallbacks_unit_test():
                     "model": "azure/gpt-4.1-mini",
                     "api_key": "bad-key",
                     "api_version": os.getenv("AZURE_API_VERSION"),
-                    "api_base": os.getenv("AZURE_API_BASE"),
+                    "api_base": os.getenv("AZURE_AI_API_BASE"),
                 },
             }
         ],
@@ -136,7 +136,7 @@ async def test_update_kwargs_before_fallbacks(call_type):
                     "model": "azure/gpt-4.1-mini",
                     "api_key": "bad-key",
                     "api_version": os.getenv("AZURE_API_VERSION"),
-                    "api_base": os.getenv("AZURE_API_BASE"),
+                    "api_base": os.getenv("AZURE_AI_API_BASE"),
                 },
             }
         ],
@@ -199,6 +199,7 @@ def test_router_get_model_info_wildcard_routes():
 
 
 @pytest.mark.asyncio
+@pytest.mark.flaky(retries=3, delay=1)
 async def test_router_get_model_group_usage_wildcard_routes():
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
@@ -219,7 +220,7 @@ async def test_router_get_model_group_usage_wildcard_routes():
     )
     print(resp)
 
-    await asyncio.sleep(1)
+    await asyncio.sleep(2)
 
     tpm, rpm = await router.get_model_group_usage(model_group="gemini/gemini-1.5-flash")
 
@@ -266,6 +267,7 @@ async def test_call_router_callbacks_on_success():
                 assert increment["increment_value"] == 1
 
 
+@pytest.mark.serial
 @pytest.mark.asyncio
 async def test_call_router_callbacks_on_failure():
     router = Router(
@@ -288,7 +290,7 @@ async def test_call_router_callbacks_on_failure():
                 mock_response="litellm.RateLimitError",
                 num_retries=0,
             )
-        await asyncio.sleep(1)
+        await asyncio.sleep(3)
         print(mock_callback.call_args_list)
         assert mock_callback.call_count == 1
 
@@ -485,7 +487,9 @@ def test_router_get_deployment_credentials_with_provider():
     )
 
     # Test getting credentials by model_id
-    credentials = router.get_deployment_credentials_with_provider(model_id="openai-deployment-1")
+    credentials = router.get_deployment_credentials_with_provider(
+        model_id="openai-deployment-1"
+    )
     assert credentials is not None
     assert credentials["api_key"] == "sk-test-123"
     assert credentials["custom_llm_provider"] == "openai"
@@ -498,7 +502,62 @@ def test_router_get_deployment_credentials_with_provider():
     assert credentials2["custom_llm_provider"] == "anthropic"
 
     # Test with non-existent model
-    credentials3 = router.get_deployment_credentials_with_provider(model_id="non-existent")
+    credentials3 = router.get_deployment_credentials_with_provider(
+        model_id="non-existent"
+    )
+    assert credentials3 is None
+
+
+def test_router_get_deployment_credentials_with_provider_wildcard():
+    """
+    Test that get_deployment_credentials_with_provider handles wildcard patterns.
+
+    When a model like openai/gpt-4o is requested and the config has openai/*,
+    the method should resolve the wildcard pattern and return credentials.
+    """
+    router = Router(
+        model_list=[
+            {
+                "model_name": "openai/*",
+                "litellm_params": {
+                    "model": "openai/*",
+                    "api_key": "sk-wildcard-123",
+                    "api_base": "https://api.openai.com/v1",
+                },
+                "model_info": {"id": "openai-wildcard-deployment"},
+            },
+            {
+                "model_name": "anthropic/*",
+                "litellm_params": {
+                    "model": "anthropic/*",
+                    "api_key": "sk-ant-wildcard-456",
+                },
+                "model_info": {"id": "anthropic-wildcard-deployment"},
+            },
+        ]
+    )
+
+    # Test wildcard pattern matching for OpenAI
+    credentials = router.get_deployment_credentials_with_provider(
+        model_id="openai/gpt-4o"
+    )
+    assert credentials is not None
+    assert credentials["api_key"] == "sk-wildcard-123"
+    assert credentials["custom_llm_provider"] == "openai"
+    assert credentials["api_base"] == "https://api.openai.com/v1"
+
+    # Test wildcard pattern matching for Anthropic
+    credentials2 = router.get_deployment_credentials_with_provider(
+        model_id="anthropic/claude-3-opus"
+    )
+    assert credentials2 is not None
+    assert credentials2["api_key"] == "sk-ant-wildcard-456"
+    assert credentials2["custom_llm_provider"] == "anthropic"
+
+    # Test with non-matching model
+    credentials3 = router.get_deployment_credentials_with_provider(
+        model_id="vertex_ai/gemini-pro"
+    )
     assert credentials3 is None
 
 

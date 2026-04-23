@@ -2,6 +2,7 @@ from base_llm_unit_tests import BaseLLMChatTest
 import pytest
 import litellm
 
+
 # Test implementations
 @pytest.mark.skip(reason="Deepseek API is hanging")
 class TestDeepSeekChatCompletion(BaseLLMChatTest):
@@ -30,6 +31,7 @@ def test_deepseek_mock_completion(stream):
         messages=[{"role": "user", "content": "Hello, world!"}],
         api_base="https://exampleopenaiendpoint-production.up.railway.app/v1/chat/completions",
         stream=stream,
+        mock_response="Hello! How can I help you today?",
     )
     print(f"response: {response}")
     if stream:
@@ -103,7 +105,6 @@ async def test_deepseek_provider_async_completion(stream):
     )  # Model name should be stripped of provider prefix
     assert request_body["messages"] == messages
     assert request_body["stream"] == stream
-
 
 
 def test_completion_cost_deepseek():

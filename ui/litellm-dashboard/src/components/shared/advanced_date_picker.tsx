@@ -1,7 +1,7 @@
-import React, { useCallback, useState, useRef, useEffect } from "react";
-import { DateRangePickerValue, Text, Button } from "@tremor/react";
 import { CalendarOutlined, ClockCircleOutlined } from "@ant-design/icons";
+import { Button, DateRangePickerValue, Text } from "@tremor/react";
 import moment from "moment";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 
 interface AdvancedDatePickerProps {
   value: DateRangePickerValue;
@@ -299,7 +299,7 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
 
         {/* Dropdown panel */}
         {isOpen && (
-          <div className="absolute top-full left-0 z-[9999] min-w-[600px] mt-1 bg-white border border-gray-200 rounded-lg shadow-xl">
+          <div className="absolute top-full right-0 z-[9999] min-w-[600px] mt-1 bg-white border border-gray-200 rounded-lg shadow-xl">
             <div className="flex">
               {/* Left side - Relative time options */}
               <div className="w-1/2 border-r border-gray-200">

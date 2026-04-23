@@ -72,7 +72,7 @@ docker run -p 4317:4317 -p 4318:4318 \
 ### 3. Install OpenTelemetry Dependencies
 
 ```bash
-pip install opentelemetry-api opentelemetry-sdk opentelemetry-exporter-otlp
+uv add opentelemetry-api opentelemetry-sdk opentelemetry-exporter-otlp
 ```
 
 ### 4. Configure LiteLLM
@@ -221,7 +221,7 @@ services:
       - elasticsearch
       
   litellm:
-    image: ghcr.io/berriai/litellm:main-latest
+    image: docker.litellm.ai/berriai/litellm:main-latest
     ports:
       - "4000:4000"
     environment:

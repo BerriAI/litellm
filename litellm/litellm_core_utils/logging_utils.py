@@ -1,10 +1,13 @@
 import asyncio
 import functools
+import inspect
+import re
 import time
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, List, Optional, Union
 
 from litellm._logging import verbose_logger
+from litellm.constants import MAX_BASE64_LENGTH_FOR_LOGGING
 from litellm.types.utils import (
     ModelResponse,
     ModelResponseStream,
@@ -32,6 +35,110 @@ import litellm
 """
 Helper utils used for logging callbacks
 """
+
+_BYTES_PER_KIB = 1024
+_BYTES_PER_MIB = 1024 * 1024
+
+# Regex matching data-URI base64 content: "data:<mime>;base64,<payload>"
+# Captures: group(1)=mime_type, group(2)=base64_payload
+_DATA_URI_RE = re.compile(r"data:([^;]+);base64,([A-Za-z0-9+/=]+)")
+
+# Maximum nesting depth for _truncate_base64_in_value to guard against
+# pathological payloads. OpenAI message format is typically 3-4 levels deep.
+_MAX_TRUNCATION_DEPTH = 20
+
+
+def _format_base64_size(num_chars: int) -> str:
+    """Return a human-readable byte-size estimate from a base64 character count."""
+    num_bytes = num_chars * 3 / 4
+    if num_bytes >= _BYTES_PER_MIB:
+        return f"{num_bytes / _BYTES_PER_MIB:.2f}MB"
+    if num_bytes >= _BYTES_PER_KIB:
+        return f"{num_bytes / _BYTES_PER_KIB:.1f}KB"
+    return f"{int(num_bytes)}B"
+
+
+def _base64_data_uri_replacer(match: re.Match) -> str:
+    """Replace a single base64 data-URI match with a size placeholder if too long."""
+    mime_type = match.group(1)
+    payload = match.group(2)
+    if len(payload) <= MAX_BASE64_LENGTH_FOR_LOGGING:
+        return match.group(0)
+    size_str = _format_base64_size(len(payload))
+    return f"data:{mime_type};base64,[base64_data truncated: {size_str}]"
+
+
+def _truncate_base64_in_string(value: str) -> str:
+    """Replace long base64 data-URI payloads in a string with a size placeholder."""
+    if MAX_BASE64_LENGTH_FOR_LOGGING <= 0:
+        return value
+    return _DATA_URI_RE.sub(_base64_data_uri_replacer, value)
+
+
+def _truncate_base64_in_value(value: Any) -> Any:
+    """Iteratively truncate base64 data URIs in a JSON-like value (str/list/dict).
+
+    Uses an explicit stack instead of recursion to satisfy the project's
+    recursive-function detector and avoid stack-overflow on deep payloads.
+    """
+    # Stack entries: (source_value, depth, parent_container, key_or_index)
+    # We mutate *copies* of dicts/lists in-place via parent references.
+    if isinstance(value, str):
+        return _truncate_base64_in_string(value)
+    if not isinstance(value, (dict, list)):
+        return value
+
+    # Shallow-copy the root so we don't mutate the caller's data.
+    root = {k: v for k, v in value.items()} if isinstance(value, dict) else list(value)
+    stack: list = [(root, 0)]
+
+    while stack:
+        container, depth = stack.pop()
+        if depth > _MAX_TRUNCATION_DEPTH:
+            continue
+        if isinstance(container, dict):
+            for k, v in container.items():
+                if isinstance(v, str):
+                    container[k] = _truncate_base64_in_string(v)
+                elif isinstance(v, dict):
+                    copy: Union[dict, list] = {ck: cv for ck, cv in v.items()}
+                    container[k] = copy
+                    stack.append((copy, depth + 1))
+                elif isinstance(v, list):
+                    copy = list(v)
+                    container[k] = copy
+                    stack.append((copy, depth + 1))
+        elif isinstance(container, list):
+            for i, v in enumerate(container):
+                if isinstance(v, str):
+                    container[i] = _truncate_base64_in_string(v)
+                elif isinstance(v, dict):
+                    copy = {ck: cv for ck, cv in v.items()}
+                    container[i] = copy
+                    stack.append((copy, depth + 1))
+                elif isinstance(v, list):
+                    copy = list(v)
+                    container[i] = copy
+                    stack.append((copy, depth + 1))
+
+    return root
+
+
+def truncate_base64_in_messages(
+    messages: Optional[Union[str, list, dict]],
+) -> Optional[Union[str, list, dict]]:
+    """
+    Return a copy of *messages* with long base64 data-URI payloads replaced
+    by human-readable size placeholders.
+    """
+    if messages is None or MAX_BASE64_LENGTH_FOR_LOGGING <= 0:
+        return messages
+    try:
+        return _truncate_base64_in_value(messages)
+    except Exception as e:
+        verbose_logger.debug("Failed to truncate base64 in messages: %s", e)
+        return messages
+
 
 # Global service logger instance to avoid recreating it
 _service_logger = None
@@ -270,7 +377,7 @@ def track_llm_api_timing():
                     verbose_logger.debug(f"Error in service logging: {str(e)}")
 
         # Check if the function is async or sync
-        if asyncio.iscoroutinefunction(func):
+        if inspect.iscoroutinefunction(func):
             return async_wrapper
         return sync_wrapper
 

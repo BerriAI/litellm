@@ -31,9 +31,7 @@ class LowestLatencyLoggingHandler(CustomLogger):
     logged_success: int = 0
     logged_failure: int = 0
 
-    def __init__(
-        self, router_cache: DualCache, routing_args: dict = {}
-    ):
+    def __init__(self, router_cache: DualCache, routing_args: dict = {}):
         self.router_cache = router_cache
         self.routing_args = RoutingArgs(**routing_args)
 
@@ -52,7 +50,7 @@ class LowestLatencyLoggingHandler(CustomLogger):
                     "model_group", None
                 )
 
-                id = kwargs["litellm_params"].get("model_info", {}).get("id", None)
+                id = (kwargs["litellm_params"].get("model_info") or {}).get("id", None)
                 if model_group is None or id is None:
                     return
                 elif isinstance(id, int):
@@ -96,14 +94,16 @@ class LowestLatencyLoggingHandler(CustomLogger):
                     if _usage is not None:
                         completion_tokens = _usage.completion_tokens
                         total_tokens = _usage.total_tokens
-                        
+
                         # Handle both timedelta and float response times
                         if isinstance(response_ms, timedelta):
                             response_seconds = response_ms.total_seconds()
                         else:
                             response_seconds = response_ms
-                            
-                        final_value = safe_divide_seconds(response_seconds, completion_tokens)
+
+                        final_value = safe_divide_seconds(
+                            response_seconds, completion_tokens
+                        )
                         if final_value is not None:
                             final_value = float(final_value)
                         else:
@@ -111,7 +111,9 @@ class LowestLatencyLoggingHandler(CustomLogger):
 
                         if time_to_first_token_response_time is not None:
                             if isinstance(time_to_first_token_response_time, timedelta):
-                                ttft_seconds = time_to_first_token_response_time.total_seconds()
+                                ttft_seconds = (
+                                    time_to_first_token_response_time.total_seconds()
+                                )
                             else:
                                 ttft_seconds = time_to_first_token_response_time
                             time_to_first_token = safe_divide_seconds(
@@ -141,7 +143,7 @@ class LowestLatencyLoggingHandler(CustomLogger):
                 else:
                     request_count_dict[id]["latency"] = request_count_dict[id][
                         "latency"
-                    ][: self.routing_args.max_latency_list_size - 1] + [final_value]
+                    ][1:] + [final_value]
 
                 ## Time to first token
                 if time_to_first_token is not None:
@@ -153,13 +155,10 @@ class LowestLatencyLoggingHandler(CustomLogger):
                             "time_to_first_token", []
                         ).append(time_to_first_token)
                     else:
-                        request_count_dict[id][
-                            "time_to_first_token"
-                        ] = request_count_dict[id]["time_to_first_token"][
-                            : self.routing_args.max_latency_list_size - 1
-                        ] + [
-                            time_to_first_token
-                        ]
+                        request_count_dict[id]["time_to_first_token"] = (
+                            request_count_dict[id]["time_to_first_token"][1:]
+                            + [time_to_first_token]
+                        )
 
                 if precise_minute not in request_count_dict[id]:
                     request_count_dict[id][precise_minute] = {}
@@ -204,7 +203,9 @@ class LowestLatencyLoggingHandler(CustomLogger):
                         "model_group", None
                     )
 
-                    id = kwargs["litellm_params"].get("model_info", {}).get("id", None)
+                    id = (kwargs["litellm_params"].get("model_info") or {}).get(
+                        "id", None
+                    )
                     if model_group is None or id is None:
                         return
                     elif isinstance(id, int):
@@ -240,7 +241,7 @@ class LowestLatencyLoggingHandler(CustomLogger):
                     else:
                         request_count_dict[id]["latency"] = request_count_dict[id][
                             "latency"
-                        ][: self.routing_args.max_latency_list_size - 1] + [1000.0]
+                        ][1:] + [1000.0]
 
                     await self.router_cache.async_set_cache(
                         key=latency_key,
@@ -273,7 +274,7 @@ class LowestLatencyLoggingHandler(CustomLogger):
                     "model_group", None
                 )
 
-                id = kwargs["litellm_params"].get("model_info", {}).get("id", None)
+                id = (kwargs["litellm_params"].get("model_info") or {}).get("id", None)
                 if model_group is None or id is None:
                     return
                 elif isinstance(id, int):
@@ -317,14 +318,16 @@ class LowestLatencyLoggingHandler(CustomLogger):
                     if _usage is not None:
                         completion_tokens = _usage.completion_tokens
                         total_tokens = _usage.total_tokens
-                        
+
                         # Handle both timedelta and float response times
                         if isinstance(response_ms, timedelta):
                             response_seconds = response_ms.total_seconds()
                         else:
                             response_seconds = response_ms
-                            
-                        final_value = safe_divide_seconds(response_seconds, completion_tokens)
+
+                        final_value = safe_divide_seconds(
+                            response_seconds, completion_tokens
+                        )
                         if final_value is not None:
                             final_value = float(final_value)
                         else:
@@ -332,7 +335,9 @@ class LowestLatencyLoggingHandler(CustomLogger):
 
                         if time_to_first_token_response_time is not None:
                             if isinstance(time_to_first_token_response_time, timedelta):
-                                ttft_seconds = time_to_first_token_response_time.total_seconds()
+                                ttft_seconds = (
+                                    time_to_first_token_response_time.total_seconds()
+                                )
                             else:
                                 ttft_seconds = time_to_first_token_response_time
                             time_to_first_token = safe_divide_seconds(
@@ -363,7 +368,7 @@ class LowestLatencyLoggingHandler(CustomLogger):
                 else:
                     request_count_dict[id]["latency"] = request_count_dict[id][
                         "latency"
-                    ][: self.routing_args.max_latency_list_size - 1] + [final_value]
+                    ][1:] + [final_value]
 
                 ## Time to first token
                 if time_to_first_token is not None:
@@ -375,13 +380,10 @@ class LowestLatencyLoggingHandler(CustomLogger):
                             "time_to_first_token", []
                         ).append(time_to_first_token)
                     else:
-                        request_count_dict[id][
-                            "time_to_first_token"
-                        ] = request_count_dict[id]["time_to_first_token"][
-                            : self.routing_args.max_latency_list_size - 1
-                        ] + [
-                            time_to_first_token
-                        ]
+                        request_count_dict[id]["time_to_first_token"] = (
+                            request_count_dict[id]["time_to_first_token"][1:]
+                            + [time_to_first_token]
+                        )
 
                 if precise_minute not in request_count_dict[id]:
                     request_count_dict[id][precise_minute] = {}
@@ -490,20 +492,22 @@ class LowestLatencyLoggingHandler(CustomLogger):
 
             # get average latency or average ttft (depending on streaming/non-streaming)
             total: float = 0.0
-            if (
+            use_ttft = (
                 request_kwargs is not None
                 and request_kwargs.get("stream", None) is not None
                 and request_kwargs["stream"] is True
                 and len(item_ttft_latency) > 0
-            ):
+            )
+            if use_ttft:
                 for _call_latency in item_ttft_latency:
                     if isinstance(_call_latency, float):
                         total += _call_latency
+                item_latency = total / len(item_ttft_latency)
             else:
                 for _call_latency in item_latency:
                     if isinstance(_call_latency, float):
                         total += _call_latency
-            item_latency = total / len(item_latency)
+                item_latency = total / len(item_latency)
 
             # -------------- #
             # Debugging Logic

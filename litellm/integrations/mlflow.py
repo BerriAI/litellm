@@ -129,8 +129,11 @@ class MlflowLogger(CustomLogger):
         self._add_chunk_events(span, response_obj)
 
         # If this is the final chunk, end the span. The final chunk
-        # has complete_streaming_response that gathers the full response.
-        if final_response := kwargs.get("complete_streaming_response"):
+        # has the assembled streaming response (key differs between sync/async paths).
+        final_response = kwargs.get("complete_streaming_response") or kwargs.get(
+            "async_complete_streaming_response"
+        )
+        if final_response:
             end_time_ns = int(end_time.timestamp() * 1e9)
 
             self._extract_and_set_chat_attributes(span, kwargs, final_response)
@@ -153,7 +156,9 @@ class MlflowLogger(CustomLogger):
                 span.add_event(
                     SpanEvent(
                         name="streaming_chunk",
-                        attributes={"delta": json.dumps(choice.delta.model_dump())},
+                        attributes={
+                            "delta": json.dumps(choice.delta.model_dump, default=str)
+                        },
                     )
                 )
         except Exception:

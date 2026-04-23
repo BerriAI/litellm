@@ -9,6 +9,7 @@ You can now override the default api key auth.
 Make sure the response type follows the `UserAPIKeyAuth` pydantic object. This is used by for logging usage specific to that user key.
 
 ```python
+from fastapi import Request
 from litellm.proxy._types import UserAPIKeyAuth
 
 async def user_api_key_auth(request: Request, api_key: str) -> UserAPIKeyAuth: 
@@ -114,6 +115,29 @@ UserAPIKeyAuth(
 )
 ```
 
+### Object Permission Example (MCP, agents, etc.)
+
+```python
+from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+    global_mcp_server_manager,
+)
+
+def _server_id(name: str) -> str:
+    server = global_mcp_server_manager.get_mcp_server_by_name(name)
+    if not server:
+        raise ValueError(f"Unknown MCP server '{name}'")
+    return server.server_id
+
+object_permission = LiteLLM_ObjectPermissionTable(
+    mcp_servers=[_server_id("deepwiki"), _server_id("everything")], # MCP servers this key is allowed to use
+    mcp_tool_permissions={"deepwiki": ["search", "read_doc"]},      # optional per-server tool allow-list
+)
+
+UserAPIKeyAuth(
+    object_permission=object_permission,
+)
+```
+
 ### Advanced Configuration
 ```python
 UserAPIKeyAuth(
@@ -139,6 +163,7 @@ UserAPIKeyAuth(
 ### Complete Example
 
 ```python
+from fastapi import Request
 from datetime import datetime, timedelta
 from litellm.proxy._types import UserAPIKeyAuth, LitellmUserRoles
 

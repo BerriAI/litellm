@@ -13,7 +13,7 @@ LiteLLM Server (LLM Gateway) manages:
 * **Load Balancing**: between [Multiple Models](#multiple-models---quick-start) + [Deployments of the same model](#multiple-instances-of-1-model) - LiteLLM proxy can handle 1.5k+ requests/second during load tests.
 
 ```shell
-$ pip install 'litellm[proxy]'
+$ uv tool install 'litellm[proxy]'
 ```
 
 ## Quick Start - LiteLLM Proxy CLI
@@ -400,7 +400,7 @@ from anthropic import Anthropic
 
 client = Anthropic(
     base_url="http://localhost:4000", # proxy endpoint
-    api_key="sk-s4xN1IiLTCytwtZFJaYQrA", # litellm proxy virtual key
+    api_key="sk-test-proxy-key-123", # litellm proxy virtual key (example)
 )
 
 message = client.messages.create(

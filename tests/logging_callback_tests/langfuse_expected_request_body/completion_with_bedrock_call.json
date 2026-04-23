@@ -31,14 +31,14 @@
                         "model_id": null,
                         "cache_key": null,
                         "api_base": null,
-                        "response_cost": 0.00018,
+                        "response_cost": 6e-05,
                         "additional_headers": {},
                         "litellm_overhead_time_ms": null,
                         "batch_models": null,
-                        "litellm_model_name": "bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+                        "litellm_model_name": "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
                         "usage_object": null
                     },
-                    "litellm_response_cost": 0.00018,
+                    "litellm_response_cost": 6e-05,
                     "cache_hit": false,
                     "requester_metadata": {}
                 },
@@ -54,7 +54,7 @@
                 "id": "time-14-13-16-469836_chatcmpl-3803a9e9-aa68-4493-94d9-247f354830d6",
                 "endTime": "2025-05-26T14:13:16.795438-07:00",
                 "completionStartTime": "2025-05-26T14:13:16.795438-07:00",
-                "model": "anthropic.claude-3-5-sonnet-20240620-v1:0",
+                "model": "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
                 "modelParameters": {
                     "aws_region": "us-east-1"
                 },
@@ -62,7 +62,7 @@
                     "input": 10,
                     "output": 10,
                     "unit": "TOKENS",
-                    "totalCost": 0.00018
+                    "totalCost": 6e-05
                 },
                 "usageDetails": {
                     "input": 10,

@@ -123,66 +123,8 @@ async def test_create_fine_tune_jobs_async():
     pass
 
 
-@pytest.mark.asyncio
-async def test_azure_create_fine_tune_jobs_async():
-    try:
-        verbose_logger.setLevel(logging.DEBUG)
-        file_name = "azure_fine_tune.jsonl"
-        _current_dir = os.path.dirname(os.path.abspath(__file__))
-        file_path = os.path.join(_current_dir, file_name)
-
-        file_id = "file-5e4b20ecbd724182b9964f3cd2ab7212"
-
-        create_fine_tuning_response = await litellm.acreate_fine_tuning_job(
-            model="gpt-35-turbo-1106",
-            training_file=file_id,
-            custom_llm_provider="azure",
-            api_base="https://exampleopenaiendpoint-production.up.railway.app",
-        )
-
-        print(
-            "response from litellm.create_fine_tuning_job=", create_fine_tuning_response
-        )
-
-        assert create_fine_tuning_response.id is not None
-
-        # response from Example/mocked endpoint
-        assert create_fine_tuning_response.model == "davinci-002"
-
-        # list fine tuning jobs
-        print("listing ft jobs")
-        ft_jobs = await litellm.alist_fine_tuning_jobs(
-            limit=2,
-            custom_llm_provider="azure",
-            api_base="https://exampleopenaiendpoint-production.up.railway.app",
-        )
-        print("response from litellm.list_fine_tuning_jobs=", ft_jobs)
-
-        # cancel ft job
-        response = await litellm.acancel_fine_tuning_job(
-            fine_tuning_job_id=create_fine_tuning_response.id,
-            custom_llm_provider="azure",
-            api_key=os.getenv("AZURE_SWEDEN_API_KEY"),
-            api_base="https://exampleopenaiendpoint-production.up.railway.app",
-        )
-
-        print("response from litellm.cancel_fine_tuning_job=", response)
-
-        assert response.status == "cancelled"
-        assert response.id == create_fine_tuning_response.id
-    except openai.RateLimitError:
-        pass
-    except Exception as e:
-        if "Job has already completed" in str(e):
-            pass
-        else:
-            pytest.fail(f"Error occurred: {e}")
-    pass
-
-
 @pytest.mark.asyncio()
 async def test_create_vertex_fine_tune_jobs_mocked():
-    load_vertex_ai_credentials()
     # Define reusable variables for the test
     project_id = "633608382793"
     location = "us-central1"
@@ -208,53 +150,79 @@ async def test_create_vertex_fine_tune_jobs_mocked():
         }
     )
 
-    with patch(
-        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
-        return_value=mock_response,
-    ) as mock_post:
-        create_fine_tuning_response = await litellm.acreate_fine_tuning_job(
-            model=base_model,
-            custom_llm_provider="vertex_ai",
-            training_file=training_file,
-            vertex_project=project_id,
-            vertex_location=location,
-        )
+    # Save original callbacks to restore later
+    original_callbacks = litellm.callbacks
+    original_success_callback = litellm.success_callback
+    original_async_success_callback = litellm._async_success_callback
+    # Disable all callbacks to avoid Datadog/other loggers interfering with the mock
+    litellm.callbacks = []
+    litellm.success_callback = []
+    litellm._async_success_callback = []
 
-        # Verify the request
-        mock_post.assert_called_once()
+    try:
+        with (
+            patch(
+                "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+                return_value=mock_response,
+            ) as mock_post,
+            patch(
+                "litellm.llms.vertex_ai.vertex_llm_base.VertexBase._ensure_access_token",
+                return_value=("fake-token", project_id),
+            ),
+        ):
+            create_fine_tuning_response = await litellm.acreate_fine_tuning_job(
+                model=base_model,
+                custom_llm_provider="vertex_ai",
+                training_file=training_file,
+                vertex_project=project_id,
+                vertex_location=location,
+            )
 
-        # Validate the request
-        assert mock_post.call_args.kwargs["json"] == {
-            "baseModel": base_model,
-            "supervisedTuningSpec": {"training_dataset_uri": training_file},
-            "tunedModelDisplayName": None,
-        }
+            # Verify the request - filter to only Vertex AI calls (Datadog batch logger
+            # may flush in the background and make additional POST calls)
+            vertex_calls = [
+                c
+                for c in mock_post.call_args_list
+                if "aiplatform.googleapis.com" in str(c.kwargs.get("url", ""))
+            ]
+            assert len(vertex_calls) == 1
 
-        # Verify the response
-        response_json = json.loads(create_fine_tuning_response.model_dump_json())
-        assert (
-            response_json["id"]
-            == f"projects/{project_id}/locations/{location}/tuningJobs/{job_id}"
-        )
-        assert response_json["model"] == base_model
-        assert response_json["object"] == "fine_tuning.job"
-        assert response_json["fine_tuned_model"] == tuned_model_name
-        assert response_json["status"] == "queued"
-        assert response_json["training_file"] == training_file
-        assert (
-            response_json["created_at"] == 1735684820
-        )  # Unix timestamp for create_time
-        assert response_json["error"] is None
-        assert response_json["finished_at"] is None
-        assert response_json["validation_file"] is None
-        assert response_json["trained_tokens"] is None
-        assert response_json["estimated_finish"] is None
-        assert response_json["integrations"] == []
+            # Validate the request
+            assert vertex_calls[0].kwargs["json"] == {
+                "baseModel": base_model,
+                "supervisedTuningSpec": {"training_dataset_uri": training_file},
+                "tunedModelDisplayName": None,
+            }
+
+            # Verify the response
+            response_json = json.loads(create_fine_tuning_response.model_dump_json())
+            assert (
+                response_json["id"]
+                == f"projects/{project_id}/locations/{location}/tuningJobs/{job_id}"
+            )
+            assert response_json["model"] == base_model
+            assert response_json["object"] == "fine_tuning.job"
+            assert response_json["fine_tuned_model"] == tuned_model_name
+            assert response_json["status"] == "queued"
+            assert response_json["training_file"] == training_file
+            assert (
+                response_json["created_at"] == 1735684820
+            )  # Unix timestamp for create_time
+            assert response_json["error"] is None
+            assert response_json["finished_at"] is None
+            assert response_json["validation_file"] is None
+            assert response_json["trained_tokens"] is None
+            assert response_json["estimated_finish"] is None
+            assert response_json["integrations"] == []
+    finally:
+        # Restore original callbacks
+        litellm.callbacks = original_callbacks
+        litellm.success_callback = original_success_callback
+        litellm._async_success_callback = original_async_success_callback
 
 
 @pytest.mark.asyncio()
 async def test_create_vertex_fine_tune_jobs_mocked_with_hyperparameters():
-    load_vertex_ai_credentials()
     # Define reusable variables for the test
     project_id = "633608382793"
     location = "us-central1"
@@ -280,60 +248,87 @@ async def test_create_vertex_fine_tune_jobs_mocked_with_hyperparameters():
         }
     )
 
-    with patch(
-        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
-        return_value=mock_response,
-    ) as mock_post:
-        create_fine_tuning_response = await litellm.acreate_fine_tuning_job(
-            model=base_model,
-            custom_llm_provider="vertex_ai",
-            training_file=training_file,
-            vertex_project=project_id,
-            vertex_location=location,
-            hyperparameters={
-                "n_epochs": 5,
-                "learning_rate_multiplier": 0.2,
-                "adapter_size": "SMALL",
-            },
-        )
+    # Save original callbacks to restore later
+    original_callbacks = litellm.callbacks
+    original_success_callback = litellm.success_callback
+    original_async_success_callback = litellm._async_success_callback
+    # Disable all callbacks to avoid Datadog/other loggers interfering with the mock
+    litellm.callbacks = []
+    litellm.success_callback = []
+    litellm._async_success_callback = []
 
-        # Verify the request
-        mock_post.assert_called_once()
-
-        # Validate the request
-        assert mock_post.call_args.kwargs["json"] == {
-            "baseModel": base_model,
-            "supervisedTuningSpec": {
-                "training_dataset_uri": training_file,
-                "hyperParameters": {
-                    "epoch_count": 5,
+    try:
+        with (
+            patch(
+                "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+                return_value=mock_response,
+            ) as mock_post,
+            patch(
+                "litellm.llms.vertex_ai.vertex_llm_base.VertexBase._ensure_access_token",
+                return_value=("fake-token", project_id),
+            ),
+        ):
+            create_fine_tuning_response = await litellm.acreate_fine_tuning_job(
+                model=base_model,
+                custom_llm_provider="vertex_ai",
+                training_file=training_file,
+                vertex_project=project_id,
+                vertex_location=location,
+                hyperparameters={
+                    "n_epochs": 5,
                     "learning_rate_multiplier": 0.2,
                     "adapter_size": "SMALL",
                 },
-            },
-            "tunedModelDisplayName": None,
-        }
+            )
 
-        # Verify the response
-        response_json = json.loads(create_fine_tuning_response.model_dump_json())
-        assert (
-            response_json["id"]
-            == f"projects/{project_id}/locations/{location}/tuningJobs/{job_id}"
-        )
-        assert response_json["model"] == base_model
-        assert response_json["object"] == "fine_tuning.job"
-        assert response_json["fine_tuned_model"] == tuned_model_name
-        assert response_json["status"] == "queued"
-        assert response_json["training_file"] == training_file
-        assert (
-            response_json["created_at"] == 1735684820
-        )  # Unix timestamp for create_time
-        assert response_json["error"] is None
-        assert response_json["finished_at"] is None
-        assert response_json["validation_file"] is None
-        assert response_json["trained_tokens"] is None
-        assert response_json["estimated_finish"] is None
-        assert response_json["integrations"] == []
+            # Verify the request - filter to only Vertex AI calls (Datadog batch logger
+            # may flush in the background and make additional POST calls)
+            vertex_calls = [
+                c
+                for c in mock_post.call_args_list
+                if "aiplatform.googleapis.com" in str(c.kwargs.get("url", ""))
+            ]
+            assert len(vertex_calls) == 1
+
+            # Validate the request
+            assert vertex_calls[0].kwargs["json"] == {
+                "baseModel": base_model,
+                "supervisedTuningSpec": {
+                    "training_dataset_uri": training_file,
+                    "hyperParameters": {
+                        "epoch_count": 5,
+                        "learning_rate_multiplier": 0.2,
+                        "adapter_size": "SMALL",
+                    },
+                },
+                "tunedModelDisplayName": None,
+            }
+
+            # Verify the response
+            response_json = json.loads(create_fine_tuning_response.model_dump_json())
+            assert (
+                response_json["id"]
+                == f"projects/{project_id}/locations/{location}/tuningJobs/{job_id}"
+            )
+            assert response_json["model"] == base_model
+            assert response_json["object"] == "fine_tuning.job"
+            assert response_json["fine_tuned_model"] == tuned_model_name
+            assert response_json["status"] == "queued"
+            assert response_json["training_file"] == training_file
+            assert (
+                response_json["created_at"] == 1735684820
+            )  # Unix timestamp for create_time
+            assert response_json["error"] is None
+            assert response_json["finished_at"] is None
+            assert response_json["validation_file"] is None
+            assert response_json["trained_tokens"] is None
+            assert response_json["estimated_finish"] is None
+            assert response_json["integrations"] == []
+    finally:
+        # Restore original callbacks
+        litellm.callbacks = original_callbacks
+        litellm.success_callback = original_success_callback
+        litellm._async_success_callback = original_async_success_callback
 
 
 # Testing OpenAI -> Vertex AI param mapping
@@ -419,29 +414,6 @@ def test_convert_basic_openai_request_to_vertex_request():
         result["supervisedTuningSpec"]["training_dataset_uri"]
         == "gs://bucket/train.jsonl"
     )
-
-
-@pytest.mark.asyncio()
-@pytest.mark.skip(reason="skipping - we run mock tests for vertex ai")
-async def test_create_vertex_fine_tune_jobs():
-    verbose_logger.setLevel(logging.DEBUG)
-    # load_vertex_ai_credentials()
-
-    vertex_credentials = os.getenv("GCS_PATH_SERVICE_ACCOUNT")
-    print("creating fine tuning job")
-    create_fine_tuning_response = await litellm.acreate_fine_tuning_job(
-        model="gemini-1.0-pro-002",
-        custom_llm_provider="vertex_ai",
-        training_file="gs://cloud-samples-data/ai-platform/generative_ai/sft_train_data.jsonl",
-        vertex_project="pathrise-convert-1606954137718",
-        vertex_location="us-central1",
-        vertex_credentials=vertex_credentials,
-    )
-    print("vertex ai create fine tuning response=", create_fine_tuning_response)
-
-    assert create_fine_tuning_response.id is not None
-    assert create_fine_tuning_response.model == "gemini-1.0-pro-002"
-    assert create_fine_tuning_response.object == "fine_tuning.job"
 
 
 @pytest.mark.asyncio
@@ -551,6 +523,66 @@ async def test_mock_openai_retrieve_fine_tune_job():
         except Exception as e:
             print("error=", e)
 
-
         # Verify the request
         mock_retrieve.assert_called_once_with(fine_tuning_job_id="ft-123")
+
+
+@pytest.mark.asyncio
+async def test_mock_azure_create_fine_tune_job_with_azure_specific_params():
+    """Test that Azure-specific parameters are passed through extra_body"""
+    from openai.types.fine_tuning.fine_tuning_job import (
+        Hyperparameters as OAIHyperparameters,
+    )
+    from litellm.types.utils import LiteLLMFineTuningJob
+
+    mock_response = LiteLLMFineTuningJob(
+        id="ft-azure-123",
+        model="gpt-4.1-mini-2025-04-14",
+        created_at=1677610602,
+        status="validating_files",
+        fine_tuned_model=None,
+        object="fine_tuning.job",
+        hyperparameters=OAIHyperparameters(n_epochs=3),
+        organization_id="org-123",
+        seed=42,
+        training_file="file-123",
+        result_files=[],
+    )
+
+    async def mock_async_create(*args, **kwargs):
+        return mock_response
+
+    with patch(
+        "litellm.llms.azure.fine_tuning.handler.AzureOpenAIFineTuningAPI.create_fine_tuning_job"
+    ) as mock_create:
+        mock_create.return_value = mock_async_create()
+
+        response = await litellm.acreate_fine_tuning_job(
+            model="gpt-4.1-mini-2025-04-14",
+            training_file="file-123",
+            custom_llm_provider="azure",
+            api_base="https://test.openai.azure.com",
+            api_key="test-key",
+            api_version="2025-04-01-preview",
+            trainingType=1,
+            hyperparameters={"n_epochs": 3, "prompt_loss_weight": 0.1},
+        )
+
+        # Verify the request
+        mock_create.assert_called_once()
+        request_params = mock_create.call_args.kwargs
+
+        # Check that create_fine_tuning_job_data contains the correct structure
+        create_data = request_params["create_fine_tuning_job_data"]
+        assert create_data["model"] == "gpt-4.1-mini-2025-04-14"
+        assert create_data["training_file"] == "file-123"
+        assert create_data["hyperparameters"] == {"n_epochs": 3}
+
+        # Azure-specific parameters should be in extra_body
+        assert "extra_body" in create_data
+        assert create_data["extra_body"]["trainingType"] == 1
+        assert create_data["extra_body"]["prompt_loss_weight"] == 0.1
+
+        # Verify the response
+        assert response.id == "ft-azure-123"
+        assert response.model == "gpt-4.1-mini-2025-04-14"

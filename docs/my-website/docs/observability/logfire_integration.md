@@ -17,11 +17,11 @@ join our [discord](https://discord.gg/wuPM9dRgDw)
 Ensure you have installed the following packages to use this integration
 
 ```shell
-pip install litellm
+uv add litellm
 
-pip install opentelemetry-api==1.25.0
-pip install opentelemetry-sdk==1.25.0
-pip install opentelemetry-exporter-otlp==1.25.0
+uv add opentelemetry-api==1.25.0
+uv add opentelemetry-sdk==1.25.0
+uv add opentelemetry-exporter-otlp==1.25.0
 ```
 
 ## Quick Start
@@ -33,12 +33,16 @@ litellm.callbacks = ["logfire"]
 ```
 
 ```python
-# pip install logfire
+# uv add logfire
 import litellm
 import os
 
 # from https://logfire.pydantic.dev/
 os.environ["LOGFIRE_TOKEN"] = ""
+
+# Optionally customize the base url
+# from https://logfire.pydantic.dev/
+os.environ["LOGFIRE_BASE_URL"] = ""
 
 # LLM API Keys
 os.environ['OPENAI_API_KEY']=""
@@ -59,5 +63,4 @@ response = litellm.completion(
 
 - [Schedule Demo 👋](https://calendly.com/d/4mp-gd3-k5k/berriai-1-1-onboarding-litellm-hosted-version)
 - [Community Discord 💭](https://discord.gg/wuPM9dRgDw)
-- Our numbers 📞 +1 (770) 8783-106 / ‭+1 (412) 618-6238‬
 - Our emails ✉️ ishaan@berri.ai / krrish@berri.ai

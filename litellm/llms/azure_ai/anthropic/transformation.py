@@ -1,8 +1,8 @@
 """
 Azure Anthropic transformation config - extends AnthropicConfig with Azure authentication
 """
-from typing import TYPE_CHECKING, Dict, List, Optional, Union
 
+from typing import TYPE_CHECKING, Dict, List, Optional, Union
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.llms.azure.common_utils import BaseAzureLLM
 from litellm.types.llms.openai import AllMessageValues
@@ -50,16 +50,11 @@ class AzureAnthropicConfig(AnthropicConfig):
             # Set api_key if provided and not already set
             if api_key and not litellm_params_obj.api_key:
                 litellm_params_obj.api_key = api_key
-        
+
         # Use Azure authentication logic
         headers = BaseAzureLLM._base_validate_azure_environment(
             headers=headers, litellm_params=litellm_params_obj
         )
-        
-        # Azure Anthropic uses x-api-key header (not api-key)
-        # Convert api-key to x-api-key if present
-        if "api-key" in headers and "x-api-key" not in headers:
-            headers["x-api-key"] = headers.pop("api-key")
 
         # Get tools and other anthropic-specific setup
         tools = optional_params.get("tools")
@@ -103,8 +98,8 @@ class AzureAnthropicConfig(AnthropicConfig):
         headers: dict,
     ) -> dict:
         """
-        Transform request using parent AnthropicConfig, then remove extra_body if present.
-        Azure Anthropic doesn't support extra_body parameter.
+        Transform request using parent AnthropicConfig, then remove unsupported params.
+        Azure Anthropic doesn't support extra_body, max_retries, or stream_options parameters.
         """
         # Call parent transform_request
         data = super().transform_request(
@@ -114,9 +109,10 @@ class AzureAnthropicConfig(AnthropicConfig):
             litellm_params=litellm_params,
             headers=headers,
         )
-        
-        # Remove extra_body if present (Azure Anthropic doesn't support it)
-        data.pop("extra_body", None)
-        
-        return data
 
+        # Remove unsupported parameters for Azure AI Anthropic
+        data.pop("extra_body", None)
+        data.pop("max_retries", None)
+        data.pop("stream_options", None)
+
+        return data

@@ -11,8 +11,8 @@ class GraySwanGuardrailConfigModelOptionalParams(BaseModel):
     """Optional parameters for the Gray Swan guardrail."""
 
     on_flagged_action: Optional[str] = Field(
-        default="monitor",
-        description="Action when a violation is detected: 'block' rejects the call, 'monitor' logs only, 'passthrough' includes detection info in response without blocking.",
+        default="passthrough",
+        description="Action when a violation is detected: 'block' rejects the call (400 error), 'monitor' logs only, 'passthrough' replaces response content with violation message (200 status).",
     )
     violation_threshold: Optional[float] = Field(
         default=0.5,
@@ -31,6 +31,14 @@ class GraySwanGuardrailConfigModelOptionalParams(BaseModel):
     categories: Optional[Dict[str, str]] = Field(
         default=None,
         description="Default Gray Swan category definitions to send with each request.",
+    )
+    fail_open: Optional[bool] = Field(
+        default=True,
+        description="If true (default), errors contacting Gray Swan are logged and the request proceeds. If false, errors propagate and block the request.",
+    )
+    guardrail_timeout: Optional[float] = Field(
+        default=30.0,
+        description="Timeout in seconds for calling the Gray Swan guardrail service.",
     )
 
 

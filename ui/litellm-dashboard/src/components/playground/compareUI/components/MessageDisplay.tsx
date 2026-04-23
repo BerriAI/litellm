@@ -1,8 +1,9 @@
+import { Bot, Loader2, UserRound } from "lucide-react";
 import React from "react";
 import ReactMarkdown from "react-markdown";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { coy } from "react-syntax-highlighter/dist/esm/styles/prism";
-import { Bot, Loader2, UserRound } from "lucide-react";
+import ChatImageRenderer from "../../chat_ui/ChatImageRenderer";
 import ReasoningContent from "../../chat_ui/ReasoningContent";
 import ResponseMetrics from "../../chat_ui/ResponseMetrics";
 import { SearchResultsDisplay } from "../../chat_ui/SearchResultsDisplay";
@@ -56,6 +57,7 @@ export function MessageDisplay({ messages, isLoading }: MessageDisplayProps) {
         hyphens: "auto",
       }}
     >
+      <ChatImageRenderer message={message} />
       <ReactMarkdown
         components={{
           code({

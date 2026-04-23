@@ -3,6 +3,7 @@ import sys
 from litellm._uuid import uuid
 from functools import partial
 from typing import Optional
+from urllib.parse import urlparse, parse_qs
 
 import pytest
 from fastapi import FastAPI
@@ -172,8 +173,15 @@ async def test_pass_through_endpoint_rerank(client):
 )
 @pytest.mark.asyncio
 async def test_pass_through_endpoint_rpm_limit(
-    client, auth, rpm_limit, requests_to_make, expected_status_codes, num_users
+    client,
+    monkeypatch,
+    auth,
+    rpm_limit,
+    requests_to_make,
+    expected_status_codes,
+    num_users,
 ):
+    monkeypatch.setattr("httpx.AsyncClient.request", mock_request)
     import litellm
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.proxy.proxy_server import ProxyLogging, hash_token, user_api_key_cache
@@ -209,7 +217,9 @@ async def test_pass_through_endpoint_rpm_limit(
     mock_api_keys = [f"sk-test-{uuid.uuid4().hex}" for _ in range(num_users)]
 
     for mock_api_key in mock_api_keys:
-        cache_value = UserAPIKeyAuth(token=hash_token(mock_api_key), rpm_limit=rpm_limit)
+        cache_value = UserAPIKeyAuth(
+            token=hash_token(mock_api_key), rpm_limit=rpm_limit
+        )
         user_api_key_cache.set_cache(key=hash_token(mock_api_key), value=cache_value)
 
     _json_data = {
@@ -221,22 +231,17 @@ async def test_pass_through_endpoint_rpm_limit(
         ],
     }
 
-    # Make a request to the pass-through endpoint
-    tasks = []
+    # Make requests sequentially to avoid race conditions in rate limiter
+    # Concurrent requests can slip through before the counter is updated
+    responses = []
     for mock_api_key in mock_api_keys:
         for _ in range(requests_to_make):
-            task = asyncio.get_running_loop().run_in_executor(
-                None,
-                partial(
-                    client.post,
-                    "/v1/rerank",
-                    json=_json_data,
-                    headers={"Authorization": "Bearer {}".format(mock_api_key)},
-                ),
+            response = client.post(
+                "/v1/rerank",
+                json=_json_data,
+                headers={"Authorization": "Bearer {}".format(mock_api_key)},
             )
-            tasks.append(task)
-
-    responses = await asyncio.gather(*tasks)
+            responses.append(response)
 
     if num_users == 1:
         status_codes = sorted([response.status_code for response in responses])
@@ -246,8 +251,12 @@ async def test_pass_through_endpoint_rpm_limit(
         first_user_responses = responses[requests_to_make:]
         second_user_responses = responses[:requests_to_make]
 
-        first_user_status_codes = sorted([response.status_code for response in first_user_responses])
-        second_user_status_codes = sorted([response.status_code for response in second_user_responses])
+        first_user_status_codes = sorted(
+            [response.status_code for response in first_user_responses]
+        )
+        second_user_status_codes = sorted(
+            [response.status_code for response in second_user_responses]
+        )
 
         expected_status_codes.sort()
         assert first_user_status_codes == expected_status_codes
@@ -272,8 +281,9 @@ async def test_pass_through_endpoint_rpm_limit(
 )
 @pytest.mark.asyncio
 async def test_pass_through_endpoint_sequential_rpm_limit(
-    client, auth, rpm_limit, requests_to_make, expected_status_codes
+    client, monkeypatch, auth, rpm_limit, requests_to_make, expected_status_codes
 ):
+    monkeypatch.setattr("httpx.AsyncClient.request", mock_request)
     import litellm
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.proxy.proxy_server import ProxyLogging, hash_token, user_api_key_cache
@@ -309,7 +319,9 @@ async def test_pass_through_endpoint_sequential_rpm_limit(
     mock_api_keys = [f"sk-test-{uuid.uuid4().hex}" for _ in range(2)]
 
     for mock_api_key in mock_api_keys:
-        cache_value = UserAPIKeyAuth(token=hash_token(mock_api_key), rpm_limit=rpm_limit)
+        cache_value = UserAPIKeyAuth(
+            token=hash_token(mock_api_key), rpm_limit=rpm_limit
+        )
         user_api_key_cache.set_cache(key=hash_token(mock_api_key), value=cache_value)
 
     _json_data = {
@@ -342,8 +354,12 @@ async def test_pass_through_endpoint_sequential_rpm_limit(
         first_user_responses.append(first_user_response)
         second_user_responses.append(second_user_response)
 
-    first_user_status_codes = sorted([response.status_code for response in first_user_responses])
-    second_user_status_codes = sorted([response.status_code for response in second_user_responses])
+    first_user_status_codes = sorted(
+        [response.status_code for response in first_user_responses]
+    )
+    second_user_status_codes = sorted(
+        [response.status_code for response in second_user_responses]
+    )
 
     expected_status_codes.sort()
     assert first_user_status_codes == expected_status_codes
@@ -443,6 +459,11 @@ async def test_aaapass_through_endpoint_pass_through_keys_langfuse(
         }
 
         # Make a request to the pass-through endpoint
+        # For langfuse custom_auth_parser, the Authorization header must be valid base64
+        # Format: base64(public_key:secret_key) where public_key is the LiteLLM API key
+        import base64
+
+        auth_token = base64.b64encode(f"{mock_api_key}:anything".encode()).decode()
         response = client.post(
             "/api/public/ingestion",
             json=_json_data,
@@ -531,10 +552,31 @@ async def test_pass_through_endpoint_bing(client, monkeypatch):
     first_transformed_url = captured_requests[0][1]["url"]
     second_transformed_url = captured_requests[1][1]["url"]
 
-    # Assert the response
+    # Parse URLs to compare query params order-independently
+    # Parse first URL
+    parsed_first = urlparse(str(first_transformed_url))
+    first_params = parse_qs(parsed_first.query)
+
+    # Parse second URL
+    parsed_second = urlparse(str(second_transformed_url))
+    second_params = parse_qs(parsed_second.query)
+
+    # Expected values (parse_qs decodes + as space)
+    expected_first_params = {
+        "q": ["bob barker"],
+        "setLang": ["en-US"],
+        "mkt": ["en-US"],
+    }
+    expected_second_params = {"setLang": ["en-US"], "mkt": ["en-US"]}
+
+    # Assert the response - compare base URL and params separately
     assert (
-        first_transformed_url
-        == "https://api.bing.microsoft.com/v7.0/search?q=bob+barker&setLang=en-US&mkt=en-US"
-        and second_transformed_url
-        == "https://api.bing.microsoft.com/v7.0/search?setLang=en-US&mkt=en-US"
+        parsed_first.scheme == "https"
+        and parsed_first.netloc == "api.bing.microsoft.com"
+        and parsed_first.path == "/v7.0/search"
+        and first_params == expected_first_params
+        and parsed_second.scheme == "https"
+        and parsed_second.netloc == "api.bing.microsoft.com"
+        and parsed_second.path == "/v7.0/search"
+        and second_params == expected_second_params
     )

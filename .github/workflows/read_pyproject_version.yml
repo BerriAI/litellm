@@ -3,7 +3,10 @@ name: Read Version from pyproject.toml
 on:
   push:
     branches:
-      - main  # Change this to the default branch of your repository
+      - main # Change this to the default branch of your repository
+
+permissions:
+  contents: read
 
 jobs:
   read-version:
@@ -11,20 +14,14 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v2
-
-      - name: Set up Python
-        uses: actions/setup-python@v2
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
         with:
-          python-version: 3.8  # Adjust the Python version as needed
-
-      - name: Install dependencies
-        run: pip install toml
+          persist-credentials: false
 
       - name: Read version from pyproject.toml
         id: read-version
         run: |
-          version=$(python -c 'import toml; print(toml.load("pyproject.toml")["tool"]["commitizen"]["version"])')
+          version=$(grep -m1 '^version' pyproject.toml | sed 's/version = "\(.*\)"/\1/')
           printf "LITELLM_VERSION=%s" "$version" >> $GITHUB_ENV
 
       - name: Display version

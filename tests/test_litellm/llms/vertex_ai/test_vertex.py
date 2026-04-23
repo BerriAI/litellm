@@ -19,7 +19,7 @@ import pytest
 
 import litellm
 from litellm import get_optional_params
-from litellm.llms.vertex_ai.gemini.transformation import _process_gemini_image
+from litellm.llms.vertex_ai.gemini.transformation import _process_gemini_media
 from litellm.types.llms.vertex_ai import BlobType
 
 
@@ -55,33 +55,30 @@ def test_completion_pydantic_obj_2():
         ],
         "generationConfig": {
             "response_mime_type": "application/json",
-            "response_schema": {
+            "response_json_schema": {
+                "$defs": {
+                    "CalendarEvent": {
+                        "properties": {
+                            "name": {"title": "Name", "type": "string"},
+                            "date": {"title": "Date", "type": "string"},
+                            "participants": {
+                                "items": {"type": "string"},
+                                "title": "Participants",
+                                "type": "array",
+                            },
+                        },
+                        "required": ["name", "date", "participants"],
+                        "title": "CalendarEvent",
+                        "type": "object",
+                    }
+                },
                 "properties": {
                     "events": {
-                        "items": {
-                            "properties": {
-                                "name": {"title": "Name", "type": "string"},
-                                "date": {"title": "Date", "type": "string"},
-                                "participants": {
-                                    "items": {"type": "string"},
-                                    "title": "Participants",
-                                    "type": "array",
-                                },
-                            },
-                            "propertyOrdering": [
-                                "name",
-                                "date",
-                                "participants",
-                            ],
-                            "required": ["name", "date", "participants"],
-                            "title": "CalendarEvent",
-                            "type": "object",
-                        },
+                        "items": {"$ref": "#/$defs/CalendarEvent"},
                         "title": "Events",
                         "type": "array",
                     }
                 },
-                "propertyOrdering": ["events"],
                 "required": ["events"],
                 "title": "EventsList",
                 "type": "object",
@@ -93,9 +90,10 @@ def test_completion_pydantic_obj_2():
         mock_post.return_value = expected_request_body
         try:
             response = litellm.completion(
-                model="gemini/gemini-1.5-pro",
+                model="gemini/gemini-2.5-flash",
                 messages=messages,
                 response_format=EventsList,
+                api_key="test-api-key",
                 client=client,
             )
             # print(response)
@@ -207,22 +205,22 @@ def test_vertex_tool_type_field_removal():
     """
     # Test with Google Search tool that has 'type' field
     tools_with_type = [{"type": "google_search", "googleSearch": {}}]
-    
+
     optional_params = get_optional_params(
         model="gemini-1.5-pro",
         custom_llm_provider="vertex_ai",
         tools=tools_with_type,
     )
-    
+
     # Verify the tool is processed correctly
     assert "tools" in optional_params
     assert len(optional_params["tools"]) == 1
     assert "googleSearch" in optional_params["tools"][0]
     assert optional_params["tools"][0]["googleSearch"] == {}
-    
+
     # Verify the 'type' field is not present in the final result
     assert "type" not in optional_params["tools"][0]
-    
+
     # Test with function tool that has 'type' field
     function_tools_with_type = [
         {
@@ -232,25 +230,28 @@ def test_vertex_tool_type_field_removal():
                 "description": "A test function",
                 "parameters": {
                     "type": "object",
-                    "properties": {"param": {"type": "string"}}
-                }
-            }
+                    "properties": {"param": {"type": "string"}},
+                },
+            },
         }
     ]
-    
+
     optional_params_function = get_optional_params(
         model="gemini-1.5-pro",
         custom_llm_provider="vertex_ai",
         tools=function_tools_with_type,
     )
-    
+
     # Verify function tool is processed correctly
     assert "tools" in optional_params_function
     assert len(optional_params_function["tools"]) == 1
     assert "function_declarations" in optional_params_function["tools"][0]
     assert len(optional_params_function["tools"][0]["function_declarations"]) == 1
-    assert optional_params_function["tools"][0]["function_declarations"][0]["name"] == "test_function"
-    
+    assert (
+        optional_params_function["tools"][0]["function_declarations"][0]["name"]
+        == "test_function"
+    )
+
     # Verify the 'type' field is not present in the final result
     assert "type" not in optional_params_function["tools"][0]
 
@@ -288,6 +289,7 @@ def test_function_calling_with_gemini():
                         },
                     },
                 ],
+                api_key="test-api-key",
                 client=client,
             )
         except Exception as e:
@@ -375,7 +377,10 @@ def test_multiple_function_call():
 
     with patch.object(client, "post", return_value=mock_response) as mock_post:
         r = litellm.completion(
-            messages=messages, model="gemini/gemini-1.5-flash-002", client=client
+            messages=messages,
+            model="gemini/gemini-1.5-flash-002",
+            api_key="test-api-key",
+            client=client,
         )
         assert len(r.choices) > 0
 
@@ -393,6 +398,7 @@ def test_multiple_function_call():
                     ],
                 },
                 {
+                    "role": "user",
                     "parts": [
                         {
                             "function_response": {
@@ -406,11 +412,10 @@ def test_multiple_function_call():
                                 "response": {"content": "15"},
                             }
                         },
-                    ]
+                    ],
                 },
                 {"role": "user", "parts": [{"text": "tell me the results."}]},
             ],
-            "generationConfig": {},
         }
 
 
@@ -481,7 +486,10 @@ def test_multiple_function_call_changed_text_pos():
 
     with patch.object(client, "post", return_value=mock_response) as mock_post:
         resp = litellm.completion(
-            messages=messages, model="gemini/gemini-1.5-flash-002", client=client
+            messages=messages,
+            model="gemini/gemini-1.5-flash-002",
+            api_key="test-api-key",
+            client=client,
         )
         assert len(resp.choices) > 0
         mock_post.assert_called_once()
@@ -499,6 +507,7 @@ def test_multiple_function_call_changed_text_pos():
                 ],
             },
             {
+                "role": "user",
                 "parts": [
                     {
                         "function_response": {
@@ -512,7 +521,7 @@ def test_multiple_function_call_changed_text_pos():
                             "response": {"content": "42"},
                         }
                     },
-                ]
+                ],
             },
             {"role": "user", "parts": [{"text": "tell me the results."}]},
         ]
@@ -601,6 +610,7 @@ def test_function_calling_with_gemini_multiple_results():
             messages=messages,
             tools=tools,
             tool_choice="required",
+            api_key="test-api-key",
             client=client,
         )
         print("Response\n", response)
@@ -1184,6 +1194,7 @@ def test_logprobs():
                 {"role": "user", "content": "What's the weather like in San Francisco?"}
             ],
             logprobs=True,
+            api_key="test-api-key",
             client=client,
         )
         print(resp)
@@ -1191,46 +1202,46 @@ def test_logprobs():
         assert resp.choices[0].logprobs is not None
 
 
-def test_process_gemini_image():
-    """Test the _process_gemini_image function for different image sources"""
-    from litellm.llms.vertex_ai.gemini.transformation import _process_gemini_image
+def test_process_gemini_media():
+    """Test the _process_gemini_media function for different image sources"""
+    from litellm.llms.vertex_ai.gemini.transformation import _process_gemini_media
     from litellm.types.llms.vertex_ai import FileDataType
 
     # Test GCS URI
-    gcs_result = _process_gemini_image("gs://bucket/image.png")
+    gcs_result = _process_gemini_media("gs://bucket/image.png")
     assert gcs_result["file_data"] == FileDataType(
         mime_type="image/png", file_uri="gs://bucket/image.png"
     )
 
     # Test gs url with format specified
-    gcs_result = _process_gemini_image("gs://bucket/image", format="image/jpeg")
+    gcs_result = _process_gemini_media("gs://bucket/image", format="image/jpeg")
     assert gcs_result["file_data"] == FileDataType(
         mime_type="image/jpeg", file_uri="gs://bucket/image"
     )
 
     # Test HTTPS JPG URL
-    https_result = _process_gemini_image("https://example.com/image.jpg")
+    https_result = _process_gemini_media("https://example.com/image.jpg")
     print("https_result JPG", https_result)
     assert https_result["file_data"] == FileDataType(
         mime_type="image/jpeg", file_uri="https://example.com/image.jpg"
     )
 
     # Test HTTPS PNG URL
-    https_result = _process_gemini_image("https://example.com/image.png")
+    https_result = _process_gemini_media("https://example.com/image.png")
     print("https_result PNG", https_result)
     assert https_result["file_data"] == FileDataType(
         mime_type="image/png", file_uri="https://example.com/image.png"
     )
 
     # Test HTTPS VIDEO URL
-    https_result = _process_gemini_image("https://cloud-samples-data/video/animals.mp4")
+    https_result = _process_gemini_media("https://cloud-samples-data/video/animals.mp4")
     print("https_result PNG", https_result)
     assert https_result["file_data"] == FileDataType(
         mime_type="video/mp4", file_uri="https://cloud-samples-data/video/animals.mp4"
     )
 
     # Test HTTPS PDF URL
-    https_result = _process_gemini_image("https://cloud-samples-data/pdf/animals.pdf")
+    https_result = _process_gemini_media("https://cloud-samples-data/pdf/animals.pdf")
     print("https_result PDF", https_result)
     assert https_result["file_data"] == FileDataType(
         mime_type="application/pdf",
@@ -1239,9 +1250,9 @@ def test_process_gemini_image():
 
     # Test base64 image
     base64_image = "data:image/jpeg;base64,/9j/4AAQSkZJRg..."
-    base64_result = _process_gemini_image(base64_image)
+    base64_result = _process_gemini_media(base64_image)
     print("base64_result", base64_result)
-    assert base64_result["inline_data"]["mimeType"] == "image/jpeg"
+    assert base64_result["inline_data"]["mime_type"] == "image/jpeg"
     assert base64_result["inline_data"]["data"] == "/9j/4AAQSkZJRg..."
 
 
@@ -1368,11 +1379,11 @@ def mock_blob():
         "http://subdomain.domain.com/path/to/image.png",
     ],
 )
-def test_process_gemini_image_http_url(
+def test_process_gemini_media_http_url(
     http_url: str, mock_convert_url_to_base64: Mock, mock_blob: Mock
 ) -> None:
     """
-    Test that _process_gemini_image correctly handles HTTP URLs.
+    Test that _process_gemini_media correctly handles HTTP URLs.
 
     Args:
         http_url: Test HTTP URL
@@ -1384,7 +1395,7 @@ def test_process_gemini_image_http_url(
     expected_image_data = "data:image/jpeg;base64,/9j/4AAQSkZJRg..."
     mock_convert_url_to_base64.return_value = expected_image_data
     # Act
-    result = _process_gemini_image(http_url)
+    result = _process_gemini_media(http_url)
     # assert result["file_data"]["file_uri"] == http_url
 
 
@@ -1415,10 +1426,13 @@ def test_aaavertex_embeddings_distances(
     def mock_auth_token(*args, **kwargs):
         return "my-fake-token", "pathrise-project"
 
-    with patch.object(vertex_client, "post", return_value=mock_response), patch.object(
-        litellm.main.vertex_multimodal_embedding,
-        "_ensure_access_token",
-        side_effect=mock_auth_token,
+    with (
+        patch.object(vertex_client, "post", return_value=mock_response),
+        patch.object(
+            litellm.main.vertex_multimodal_embedding,
+            "_ensure_access_token",
+            side_effect=mock_auth_token,
+        ),
     ):
         for idx, encoded_image in enumerate(encoded_images):
             mock_response.json.return_value = {
@@ -1442,12 +1456,13 @@ def test_aaavertex_embeddings_distances(
         "predictions": [{"imageEmbedding": mock_text_embedding}]
     }
     text_mock_response.status_code = 200
-    with patch.object(
-        vertex_client, "post", return_value=text_mock_response
-    ), patch.object(
-        litellm.main.vertex_multimodal_embedding,
-        "_ensure_access_token",
-        side_effect=mock_auth_token,
+    with (
+        patch.object(vertex_client, "post", return_value=text_mock_response),
+        patch.object(
+            litellm.main.vertex_multimodal_embedding,
+            "_ensure_access_token",
+            side_effect=mock_auth_token,
+        ),
     ):
         text_response = litellm.embedding(
             model="vertex_ai/multimodalembedding@001",
@@ -1552,7 +1567,6 @@ def test_system_prompt_only_adds_blank_user_message():
     first_content = data["contents"][0]
     assert first_content["role"] == "user"
     assert len(first_content["parts"]) == 1
-
 
     #########################################################
     # system message was passed in

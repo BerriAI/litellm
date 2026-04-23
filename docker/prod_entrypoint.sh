@@ -2,6 +2,7 @@
 
 if [ "$SEPARATE_HEALTH_APP" = "1" ]; then
     export LITELLM_ARGS="$@"
+    export SUPERVISORD_STOPWAITSECS="${SUPERVISORD_STOPWAITSECS:-3600}"
     exec supervisord -c /etc/supervisord.conf
 fi
 

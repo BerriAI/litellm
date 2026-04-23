@@ -1,25 +1,27 @@
-import React, { useEffect, useState, useRef, useMemo } from "react";
-import {
-  modelHubPublicModelsCall,
-  getPublicModelHubInfo,
-  agentHubPublicModelsCall,
-  mcpHubPublicServersCall,
-  getUiConfig,
-} from "./networking";
-import { ModelDataTable } from "./model_dashboard/table";
-import { ColumnDef } from "@tanstack/react-table";
-import { Card, Text, Title, Button } from "@tremor/react";
-import { Tag, Tooltip, Modal, Select, Tabs } from "antd";
+import { ThemeProvider } from "@/contexts/ThemeContext";
 import { ExternalLinkIcon, SearchIcon } from "@heroicons/react/outline";
+import { ColumnDef } from "@tanstack/react-table";
+import { Button, Card, Text, Title } from "@tremor/react";
+import { Modal, Select, Tabs, Tag, Tooltip } from "antd";
 import { Copy, Info } from "lucide-react";
-import { Table as TableInstance } from "@tanstack/react-table";
+import React, { useEffect, useMemo, useState } from "react";
+import { ModelDataTable } from "./model_dashboard/table";
+import NotificationsManager from "./molecules/notifications_manager";
+import Navbar from "./navbar";
+import {
+  agentHubPublicModelsCall,
+  skillHubPublicCall,
+  getPublicModelHubInfo,
+  getUiConfig,
+  mcpHubPublicServersCall,
+  modelHubPublicModelsCall,
+} from "./networking";
+import { Plugin } from "./claude_code_plugins/types";
+import SkillHubDashboard from "./AIHub/SkillHubDashboard";
 import { generateCodeSnippet } from "./playground/chat_ui/CodeSnippets";
 import { getEndpointType } from "./playground/chat_ui/mode_endpoint_mapping";
 import { MessageType } from "./playground/chat_ui/types";
 import { getProviderLogoAndName } from "./provider_info_helpers";
-import Navbar from "./navbar";
-import { ThemeProvider } from "@/contexts/ThemeContext";
-import NotificationsManager from "./molecules/notifications_manager";
 
 const { TabPane } = Tabs;
 
@@ -37,6 +39,9 @@ interface ModelGroupInfo {
   supports_vision: boolean;
   supports_function_calling: boolean;
   supported_openai_params?: string[];
+  health_status?: string;
+  health_response_time?: number;
+  health_checked_at?: string;
   [key: string]: any;
 }
 
@@ -97,7 +102,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
   const [pageTitle, setPageTitle] = useState<string>("LiteLLM Gateway");
   const [customDocsDescription, setCustomDocsDescription] = useState<string | null>(null);
   const [litellmVersion, setLitellmVersion] = useState<string>("");
-  const [usefulLinks, setUsefulLinks] = useState<Record<string, string>>({});
+  const [usefulLinks, setUsefulLinks] = useState<Record<string, string | { url: string; index: number }>>({});
   const [loading, setLoading] = useState<boolean>(true);
   const [agentLoading, setAgentLoading] = useState<boolean>(true);
   const [mcpLoading, setMcpLoading] = useState<boolean>(true);
@@ -118,9 +123,8 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
   const [selectedMcpServer, setSelectedMcpServer] = useState<null | MCPServerData>(null);
   const [proxySettings, setProxySettings] = useState<any>({});
   const [activeTab, setActiveTab] = useState<string>("models");
-  const tableRef = useRef<TableInstance<any>>(null);
-  const agentTableRef = useRef<TableInstance<any>>(null);
-  const mcpTableRef = useRef<TableInstance<any>>(null);
+  const [skillHubData, setSkillHubData] = useState<Plugin[]>([]);
+  const [skillLoading, setSkillLoading] = useState<boolean>(false);
 
   useEffect(() => {
     const initializeAndFetch = async () => {
@@ -137,7 +141,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
           setLoading(true);
           const _modelHubData = await modelHubPublicModelsCall();
           console.log("ModelHubData:", _modelHubData);
-          setModelHubData(_modelHubData);
+          setModelHubData(Array.isArray(_modelHubData) ? _modelHubData : []);
         } catch (error) {
           console.error("There was an error fetching the public model data", error);
           setServiceStatus("Service unavailable");
@@ -151,7 +155,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
           setAgentLoading(true);
           const _agentHubData = await agentHubPublicModelsCall();
           console.log("AgentHubData:", _agentHubData);
-          setAgentHubData(_agentHubData);
+          setAgentHubData(Array.isArray(_agentHubData) ? _agentHubData : []);
         } catch (error) {
           console.error("There was an error fetching the public agent data", error);
         } finally {
@@ -164,7 +168,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
           setMcpLoading(true);
           const _mcpHubData = await mcpHubPublicServersCall();
           console.log("MCPHubData:", _mcpHubData);
-          setMcpHubData(_mcpHubData);
+          setMcpHubData(Array.isArray(_mcpHubData) ? _mcpHubData : []);
         } catch (error) {
           console.error("There was an error fetching the public MCP server data", error);
         } finally {
@@ -181,11 +185,24 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
         setUsefulLinks(publicModelHubInfo.useful_links || {});
       };
 
+      const fetchSkillData = async () => {
+        try {
+          setSkillLoading(true);
+          const response = await skillHubPublicCall();
+          setSkillHubData(response.plugins ?? []);
+        } catch (error) {
+          console.error("There was an error fetching the public skill data", error);
+        } finally {
+          setSkillLoading(false);
+        }
+      };
+
       fetchPublicModelHubInfo();
 
       fetchPublicData();
       fetchAgentData();
       fetchMcpData();
+      fetchSkillData();
     };
 
     initializeAndFetch();
@@ -200,7 +217,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
   const getUniqueProviders = (data: ModelGroupInfo[]) => {
     const providers = new Set<string>();
     data.forEach((model) => {
-      model.providers.forEach((provider) => providers.add(provider));
+      (model.providers ?? []).forEach((provider) => providers.add(provider));
     });
     return Array.from(providers);
   };
@@ -251,7 +268,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
   };
 
   const filteredData = useMemo(() => {
-    if (!modelHubData) return [];
+    if (!modelHubData || !Array.isArray(modelHubData)) return [];
 
     let searchResults = modelHubData;
 
@@ -325,7 +342,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
   }, [modelHubData, searchTerm, selectedProviders, selectedModes, selectedFeatures]);
 
   const filteredAgentData = useMemo(() => {
-    if (!agentHubData) return [];
+    if (!agentHubData || !Array.isArray(agentHubData)) return [];
 
     let searchResults = agentHubData;
 
@@ -376,7 +393,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
   }, [agentHubData, agentSearchTerm, selectedAgentSkills]);
 
   const filteredMcpData = useMemo(() => {
-    if (!mcpHubData) return [];
+    if (!mcpHubData || !Array.isArray(mcpHubData)) return [];
 
     let searchResults = mcpHubData;
 
@@ -533,7 +550,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
       accessorKey: "providers",
       enableSorting: true,
       cell: ({ row }) => {
-        const providers = row.original.providers;
+        const providers = row.original.providers ?? [];
 
         return (
           <div className="flex flex-wrap gap-1">
@@ -692,6 +709,38 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
       size: 120,
     },
     {
+      header: "Health Status",
+      accessorKey: "health_status",
+      enableSorting: true,
+      cell: ({ row }) => {
+        const original = row.original;
+        const tagColor =
+          original.health_status === "healthy" ? "green" : original.health_status === "unhealthy" ? "red" : "default";
+        const responseTimeLabel = original.health_response_time
+          ? `Response Time: ${Number(original.health_response_time).toFixed(2)}ms`
+          : "N/A";
+        const lastCheckedLabel = original.health_checked_at
+          ? `Last Checked: ${new Date(original.health_checked_at).toLocaleString()}`
+          : "N/A";
+
+        return (
+          <Tooltip
+            title={
+              <>
+                <div>{responseTimeLabel}</div>
+                <div>{lastCheckedLabel}</div>
+              </>
+            }
+          >
+            <Tag key={original.model_group} color={tagColor}>
+              <span className="capitalize">{original.health_status ?? "Unknown"}</span>
+            </Tag>
+          </Tooltip>
+        );
+      },
+      size: 100,
+    },
+    {
       header: "Limits",
       accessorKey: "rpm",
       enableSorting: true,
@@ -729,7 +778,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
       accessorKey: "description",
       enableSorting: false,
       cell: ({ row }) => {
-        const description = row.original.description;
+        const description = row.original.description ?? "";
         const truncated = description.length > 80 ? description.substring(0, 80) + "..." : description;
         return (
           <Tooltip title={description}>
@@ -866,7 +915,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
       accessorKey: "mcp_info.description",
       enableSorting: false,
       cell: ({ row }) => {
-        const description = row.original.mcp_info?.description || "-";
+        const description = String(row.original.mcp_info?.description ?? "-");
         const truncated = description.length > 80 ? description.substring(0, 80) + "..." : description;
         return (
           <Tooltip title={description}>
@@ -881,7 +930,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
       accessorKey: "url",
       enableSorting: false,
       cell: ({ row }) => {
-        const url = row.original.url;
+        const url = row.original.url ?? "";
         const truncated = url.length > 40 ? url.substring(0, 40) + "..." : url;
         return (
           <Tooltip title={url}>
@@ -942,6 +991,8 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
             proxySettings={proxySettings}
             accessToken={accessToken || null}
             isPublicPage={true}
+            isDarkMode={false}
+            toggleDarkMode={() => {}}
           />
         )}
 
@@ -976,16 +1027,24 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
             <Card className="mb-10 p-8 bg-white border border-gray-200 rounded-lg shadow-sm">
               <Title className="text-2xl font-semibold mb-6 text-gray-900">Useful Links</Title>
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                {Object.entries(usefulLinks || {}).map(([title, url]) => (
-                  <button
-                    key={title}
-                    onClick={() => window.open(url, "_blank")}
-                    className="flex items-center space-x-3 text-blue-600 hover:text-blue-800 transition-colors p-3 rounded-lg hover:bg-blue-50 border border-gray-200"
-                  >
-                    <ExternalLinkIcon className="w-4 h-4" />
-                    <Text className="text-sm font-medium">{title}</Text>
-                  </button>
-                ))}
+                {Object.entries(usefulLinks || {})
+                  .map(([title, value]) => {
+                    // Handle both old format (string) and new format ({url, index})
+                    const url = typeof value === "string" ? value : value.url;
+                    const index = typeof value === "string" ? 0 : value.index ?? 0;
+                    return { title, url, index };
+                  })
+                  .sort((a, b) => a.index - b.index)
+                  .map(({ title, url }) => (
+                    <button
+                      key={title}
+                      onClick={() => window.open(url, "_blank")}
+                      className="flex items-center space-x-3 text-blue-600 hover:text-blue-800 transition-colors p-3 rounded-lg hover:bg-blue-50 border border-gray-200"
+                    >
+                      <ExternalLinkIcon className="w-4 h-4" />
+                      <Text className="text-sm font-medium">{title}</Text>
+                    </button>
+                  ))}
               </div>
             </Card>
           )}
@@ -1062,6 +1121,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                       }}
                     >
                       {modelHubData &&
+                        Array.isArray(modelHubData) &&
                         getUniqueProviders(modelHubData).map((provider) => (
                           <Select.Option key={provider} value={provider}>
                             {provider}
@@ -1081,6 +1141,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                       allowClear
                     >
                       {modelHubData &&
+                        Array.isArray(modelHubData) &&
                         getUniqueModes(modelHubData).map((mode) => (
                           <Select.Option key={mode} value={mode}>
                             {mode}
@@ -1100,6 +1161,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                       allowClear
                     >
                       {modelHubData &&
+                        Array.isArray(modelHubData) &&
                         getUniqueFeatures(modelHubData).map((feature) => (
                           <Select.Option key={feature} value={feature}>
                             {feature}
@@ -1113,7 +1175,6 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                   columns={publicModelHubColumns()}
                   data={filteredData}
                   isLoading={loading}
-                  table={tableRef}
                   defaultSorting={[{ id: "model_group", desc: false }]}
                 />
 
@@ -1125,7 +1186,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
               </TabPane>
 
               {/* Agents Tab */}
-              {agentHubData && agentHubData.length > 0 && (
+              {agentHubData && Array.isArray(agentHubData) && agentHubData.length > 0 && (
                 <TabPane tab="Agent Hub" key="agents">
                   <div className="flex justify-between items-center mb-8">
                     <Title className="text-2xl font-semibold text-gray-900">Available Agents</Title>
@@ -1163,6 +1224,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                         allowClear
                       >
                         {agentHubData &&
+                          Array.isArray(agentHubData) &&
                           getUniqueAgentSkills(agentHubData).map((skill) => (
                             <Select.Option key={skill} value={skill}>
                               {skill}
@@ -1176,7 +1238,6 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                     columns={publicAgentHubColumns()}
                     data={filteredAgentData}
                     isLoading={agentLoading}
-                    table={agentTableRef}
                     defaultSorting={[{ id: "name", desc: false }]}
                   />
 
@@ -1189,7 +1250,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
               )}
 
               {/* MCP Servers Tab */}
-              {mcpHubData && mcpHubData.length > 0 && (
+              {mcpHubData && Array.isArray(mcpHubData) && mcpHubData.length > 0 && (
                 <TabPane tab="MCP Hub" key="mcp">
                   <div className="flex justify-between items-center mb-8">
                     <Title className="text-2xl font-semibold text-gray-900">Available MCP Servers</Title>
@@ -1227,6 +1288,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                         allowClear
                       >
                         {mcpHubData &&
+                          Array.isArray(mcpHubData) &&
                           getUniqueMcpTransports(mcpHubData).map((transport) => (
                             <Select.Option key={transport} value={transport}>
                               {transport}
@@ -1240,7 +1302,6 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                     columns={publicMCPHubColumns()}
                     data={filteredMcpData}
                     isLoading={mcpLoading}
-                    table={mcpTableRef}
                     defaultSorting={[{ id: "server_name", desc: false }]}
                   />
 
@@ -1251,6 +1312,15 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                   </div>
                 </TabPane>
               )}
+
+              {/* Skill Hub Tab */}
+              <TabPane tab="Skill Hub" key="skills">
+                <SkillHubDashboard
+                  skills={skillHubData}
+                  isLoading={skillLoading}
+                  publicPage={true}
+                />
+              </TabPane>
             </Tabs>
           </Card>
         </div>
@@ -1293,7 +1363,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                   <div>
                     <Text className="font-medium">Providers:</Text>
                     <div className="flex flex-wrap gap-1 mt-1">
-                      {selectedModel.providers.map((provider) => {
+                      {(selectedModel.providers ?? []).map((provider) => {
                         const { logo } = getProviderLogoAndName(provider);
                         return (
                           <Tag key={provider} color="blue">
@@ -1333,7 +1403,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                           <code className="bg-blue-100 px-1 py-0.5 rounded text-xs">{selectedModel.model_group}</code>,
                           you can use any string (
                           <code className="bg-blue-100 px-1 py-0.5 rounded text-xs">
-                            {selectedModel.model_group.replace("*", "my-custom-value")}
+                            {selectedModel.model_group.replaceAll("*", "my-custom-value")}
                           </code>
                           ) that matches this pattern.
                         </Text>
@@ -1417,7 +1487,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
               )}
 
               {/* Supported OpenAI Parameters */}
-              {selectedModel.supported_openai_params && (
+              {selectedModel.supported_openai_params && selectedModel.supported_openai_params.length > 0 && (
                 <div>
                   <Text className="text-lg font-semibold mb-4">Supported OpenAI Parameters</Text>
                   <div className="flex flex-wrap gap-2">
@@ -1445,7 +1515,8 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                         selectedTags: [],
                         selectedVectorStores: [],
                         selectedGuardrails: [],
-                        selectedMCPTools: [],
+                        selectedPolicies: [],
+                        selectedMCPServers: [],
                         endpointType: getEndpointType(selectedModel.mode || "chat"),
                         selectedModel: selectedModel.model_group,
                         selectedSdk: "openai",
@@ -1466,7 +1537,8 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                         selectedTags: [],
                         selectedVectorStores: [],
                         selectedGuardrails: [],
-                        selectedMCPTools: [],
+                        selectedPolicies: [],
+                        selectedMCPServers: [],
                         endpointType: getEndpointType(selectedModel.mode || "chat"),
                         selectedModel: selectedModel.model_group,
                         selectedSdk: "openai",
@@ -1589,7 +1661,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                   <div>
                     <Text className="font-medium">Input Modes:</Text>
                     <div className="flex flex-wrap gap-1 mt-1">
-                      {selectedAgent.defaultInputModes?.map((mode) => (
+                      {(selectedAgent.defaultInputModes ?? []).map((mode) => (
                         <Tag key={mode} color="blue">
                           {mode}
                         </Tag>
@@ -1599,7 +1671,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                   <div>
                     <Text className="font-medium">Output Modes:</Text>
                     <div className="flex flex-wrap gap-1 mt-1">
-                      {selectedAgent.defaultOutputModes?.map((mode) => (
+                      {(selectedAgent.defaultOutputModes ?? []).map((mode) => (
                         <Tag key={mode} color="blue">
                           {mode}
                         </Tag>

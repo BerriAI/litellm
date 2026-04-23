@@ -8,6 +8,17 @@ from .in_memory_cache import InMemoryCache
 
 
 class LLMClientCache(InMemoryCache):
+    """Cache for LLM HTTP clients (OpenAI, Azure, httpx, etc.).
+
+    IMPORTANT: This cache intentionally does NOT close clients on eviction.
+    Evicted clients may still be in use by in-flight requests. Closing them
+    eagerly causes ``RuntimeError: Cannot send a request, as the client has
+    been closed.`` errors in production after the TTL (1 hour) expires.
+
+    Clients that are no longer referenced will be garbage-collected normally.
+    For explicit shutdown cleanup, use ``close_litellm_async_clients()``.
+    """
+
     def update_cache_key_with_event_loop(self, key):
         """
         Add the event loop to the cache key, to prevent event loop closed errors.

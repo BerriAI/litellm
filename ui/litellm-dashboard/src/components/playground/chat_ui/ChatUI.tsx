@@ -10,6 +10,7 @@ import {
   FilePdfOutlined,
   InfoCircleOutlined,
   KeyOutlined,
+  LinkOutlined,
   LoadingOutlined,
   PictureOutlined,
   RobotOutlined,
@@ -27,31 +28,41 @@ import ReactMarkdown from "react-markdown";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { coy } from "react-syntax-highlighter/dist/esm/styles/prism";
 import { v4 as uuidv4 } from "uuid";
-import { truncateString } from "../../../utils/textUtils";
 import GuardrailSelector from "../../guardrails/GuardrailSelector";
+import PolicySelector from "../../policies/PolicySelector";
+import MCPToolArgumentsForm, { MCPToolArgumentsFormRef } from "../../mcp_tools/MCPToolArgumentsForm";
+import { MCPServer } from "../../mcp_tools/types";
+import { ByokCredentialModal } from "../../mcp_tools/ByokCredentialModal";
 import NotificationsManager from "../../molecules/notifications_manager";
+import { callMCPTool, fetchMCPServers, fetchMCPToolsets, listMCPTools } from "../../networking";
+import { MCPToolset } from "../../mcp_tools/types";
 import TagSelector from "../../tag_management/TagSelector";
 import VectorStoreSelector from "../../vector_store_management/VectorStoreSelector";
+import { makeA2ASendMessageRequest } from "../llm_calls/a2a_send_message";
+import { makeAnthropicMessagesRequest } from "../llm_calls/anthropic_messages";
+import { makeOpenAIAudioSpeechRequest } from "../llm_calls/audio_speech";
+import { makeOpenAIAudioTranscriptionRequest } from "../llm_calls/audio_transcriptions";
+import { makeOpenAIChatCompletionRequest } from "../llm_calls/chat_completion";
+import { makeOpenAIEmbeddingsRequest } from "../llm_calls/embeddings_api";
+import { Agent, fetchAvailableAgents } from "../llm_calls/fetch_agents";
+import { fetchAvailableModels, ModelGroup } from "../llm_calls/fetch_models";
+import { makeOpenAIImageEditsRequest } from "../llm_calls/image_edits";
+import { makeOpenAIImageGenerationRequest } from "../llm_calls/image_generation";
+import { makeOpenAIResponsesRequest } from "../llm_calls/responses_api";
+import A2AMetrics from "./A2AMetrics";
 import AdditionalModelSettings from "./AdditionalModelSettings";
 import AudioRenderer from "./AudioRenderer";
 import { OPEN_AI_VOICE_SELECT_OPTIONS, OpenAIVoice } from "./chatConstants";
 import ChatImageRenderer from "./ChatImageRenderer";
 import ChatImageUpload from "./ChatImageUpload";
 import { createChatDisplayMessage, createChatMultimodalMessage } from "./ChatImageUtils";
+import CodeInterpreterOutput from "./CodeInterpreterOutput";
+import CodeInterpreterTool from "./CodeInterpreterTool";
 import { generateCodeSnippet } from "./CodeSnippets";
 import EndpointSelector from "./EndpointSelector";
-import { makeAnthropicMessagesRequest } from "../llm_calls/anthropic_messages";
-import { makeOpenAIAudioSpeechRequest } from "../llm_calls/audio_speech";
-import { makeOpenAIAudioTranscriptionRequest } from "../llm_calls/audio_transcriptions";
-import { makeOpenAIChatCompletionRequest } from "../llm_calls/chat_completion";
-import { makeOpenAIEmbeddingsRequest } from "../llm_calls/embeddings_api";
-import type { MCPTool } from "../llm_calls/fetch_mcp_tools";
-import { fetchAvailableMCPTools } from "../llm_calls/fetch_mcp_tools";
-import { fetchAvailableModels, ModelGroup } from "../llm_calls/fetch_models";
-import { makeOpenAIImageEditsRequest } from "../llm_calls/image_edits";
-import { makeOpenAIImageGenerationRequest } from "../llm_calls/image_generation";
-import { makeOpenAIResponsesRequest } from "../llm_calls/responses_api";
-import MCPEventsDisplay, { MCPEvent } from "./MCPEventsDisplay";
+import FilePreviewCard from "./FilePreviewCard";
+import ChatMessageBubble from "./ChatMessageBubble";
+import MCPEventsDisplay from "./MCPEventsDisplay";
 import { EndpointType, getEndpointType } from "./mode_endpoint_mapping";
 import ReasoningContent from "./ReasoningContent";
 import ResponseMetrics, { TokenUsage } from "./ResponseMetrics";
@@ -60,7 +71,11 @@ import ResponsesImageUpload from "./ResponsesImageUpload";
 import { createDisplayMessage, createMultimodalMessage } from "./ResponsesImageUtils";
 import { SearchResultsDisplay } from "./SearchResultsDisplay";
 import SessionManagement from "./SessionManagement";
-import { MessageType } from "./types";
+import RealtimePlayground from "./RealtimePlayground";
+import { A2ATaskMetadata, MessageType } from "./types";
+import { useCodeInterpreter } from "./useCodeInterpreter";
+import { useChatHistory } from "./useChatHistory";
+import { getSecureItem, setSecureItem } from "@/utils/secureStorage";
 
 const { TextArea } = Input;
 const { Dragger } = Upload;
@@ -75,7 +90,17 @@ interface ChatUIProps {
     PROXY_BASE_URL?: string;
     LITELLM_UI_API_DOC_BASE_URL?: string | null;
   };
+  /** When true, hide configuration sidebar and use fixedModel only (e.g. embedded in Agent Builder). */
+  simplified?: boolean;
+  /** When simplified is true, use this as the model and do not show model selector. */
+  fixedModel?: string;
 }
+
+const MCP_SUPPORTED_ENDPOINTS = new Set<EndpointType>([
+  EndpointType.CHAT,
+  EndpointType.RESPONSES,
+  EndpointType.MCP,
+]);
 
 const ChatUI: React.FC<ChatUIProps> = ({
   accessToken,
@@ -84,23 +109,66 @@ const ChatUI: React.FC<ChatUIProps> = ({
   userID,
   disabledPersonalKeyCreation,
   proxySettings,
+  simplified = false,
+  fixedModel,
 }) => {
-  const [isMCPToolsModalVisible, setIsMCPToolsModalVisible] = useState(false);
-  const [mcpTools, setMCPTools] = useState<MCPTool[]>([]);
-  const [selectedMCPTools, setSelectedMCPTools] = useState<string[]>(() => {
-    const saved = sessionStorage.getItem("selectedMCPTools");
+  const [mcpServers, setMCPServers] = useState<MCPServer[]>([]);
+  const [mcpToolsets, setMCPToolsets] = useState<MCPToolset[]>([]);
+  const [isToolsetsInfoModalVisible, setIsToolsetsInfoModalVisible] = useState(false);
+  const [byokModalServer, setByokModalServer] = useState<MCPServer | null>(null);
+  const [selectedMCPServers, setSelectedMCPServers] = useState<string[]>(() => {
+    const saved = sessionStorage.getItem("selectedMCPServers");
     try {
-      const parsed = saved ? JSON.parse(saved) : [];
-      // Convert from single string to array if needed for backward compatibility
-      return Array.isArray(parsed) ? parsed : parsed ? [parsed] : [];
+      return saved ? JSON.parse(saved) : [];
     } catch (error) {
-      console.error("Error parsing selectedMCPTools from sessionStorage", error);
+      console.error("Error parsing selectedMCPServers from sessionStorage", error);
       return [];
     }
   });
-  const [isLoadingMCPTools, setIsLoadingMCPTools] = useState(false);
+  const [isLoadingMCPServers, setIsLoadingMCPServers] = useState(false);
+  const [serverToolsMap, setServerToolsMap] = useState<Record<string, any[]>>({});
+  const [selectedMCPDirectTool, setSelectedMCPDirectTool] = useState<string | undefined>(undefined);
+  const mcpToolArgsFormRef = useRef<MCPToolArgumentsFormRef>(null);
+  const [mcpServerToolRestrictions, setMCPServerToolRestrictions] = useState<Record<string, string[]>>(() => {
+    const saved = sessionStorage.getItem("mcpServerToolRestrictions");
+    try {
+      return saved ? JSON.parse(saved) : {};
+    } catch (error) {
+      console.error("Error parsing mcpServerToolRestrictions from sessionStorage", error);
+      return {};
+    }
+  });
+  const {
+    chatHistory,
+    setChatHistory,
+    mcpEvents,
+    setMCPEvents,
+    messageTraceId,
+    setMessageTraceId,
+    responsesSessionId,
+    setResponsesSessionId,
+    useApiSessionManagement,
+    setUseApiSessionManagement,
+    updateTextUI,
+    updateReasoningContent,
+    updateTimingData,
+    updateUsageData,
+    updateA2AMetadata,
+    updateTotalLatency,
+    updateSearchResults,
+    handleResponseId,
+    handleToggleSessionManagement,
+    handleMCPEvent,
+    updateImageUI,
+    updateEmbeddingsUI,
+    updateAudioUI,
+    updateChatImageUI,
+    clearChatHistory: clearChatHistoryHook,
+    clearMCPEvents,
+  } = useChatHistory({ simplified });
+  // codeql[js/clear-text-storage-of-sensitive-data]
   const [apiKeySource, setApiKeySource] = useState<"session" | "custom">(() => {
-    const saved = sessionStorage.getItem("apiKeySource");
+    const saved = getSecureItem("apiKeySource");
     if (saved) {
       try {
         return JSON.parse(saved) as "session" | "custom";
@@ -110,20 +178,16 @@ const ChatUI: React.FC<ChatUIProps> = ({
     }
     return disabledPersonalKeyCreation ? "custom" : "session";
   });
-  const [apiKey, setApiKey] = useState<string>(() => sessionStorage.getItem("apiKey") || "");
+  const [apiKey, setApiKey] = useState<string>(() => getSecureItem("apiKey") || "");
+  const [customProxyBaseUrl, setCustomProxyBaseUrl] = useState<string>(
+    () => sessionStorage.getItem("customProxyBaseUrl") || "",
+  );
   const [inputMessage, setInputMessage] = useState("");
-  const [chatHistory, setChatHistory] = useState<MessageType[]>(() => {
-    try {
-      const saved = sessionStorage.getItem("chatHistory");
-      return saved ? JSON.parse(saved) : [];
-    } catch (error) {
-      console.error("Error parsing chatHistory from sessionStorage", error);
-      return [];
-    }
-  });
-  const [selectedModel, setSelectedModel] = useState<string | undefined>(undefined);
+  const [selectedModel, setSelectedModel] = useState<string | undefined>(simplified ? fixedModel : undefined);
   const [showCustomModelInput, setShowCustomModelInput] = useState<boolean>(false);
   const [modelInfo, setModelInfo] = useState<ModelGroup[]>([]);
+  const [agentInfo, setAgentInfo] = useState<Agent[]>([]);
+  const [selectedAgent, setSelectedAgent] = useState<string | undefined>(undefined);
   const customModelTimeout = useRef<NodeJS.Timeout | null>(null);
   const [endpointType, setEndpointType] = useState<string>(
     () => sessionStorage.getItem("endpointType") || EndpointType.CHAT,
@@ -167,15 +231,14 @@ const ChatUI: React.FC<ChatUIProps> = ({
       return [];
     }
   });
-  const [messageTraceId, setMessageTraceId] = useState<string | null>(
-    () => sessionStorage.getItem("messageTraceId") || null,
-  );
-  const [responsesSessionId, setResponsesSessionId] = useState<string | null>(
-    () => sessionStorage.getItem("responsesSessionId") || null,
-  );
-  const [useApiSessionManagement, setUseApiSessionManagement] = useState<boolean>(() => {
-    const saved = sessionStorage.getItem("useApiSessionManagement");
-    return saved ? JSON.parse(saved) : true; // Default to API session management
+  const [selectedPolicies, setSelectedPolicies] = useState<string[]>(() => {
+    const saved = sessionStorage.getItem("selectedPolicies");
+    try {
+      return saved ? JSON.parse(saved) : [];
+    } catch (error) {
+      console.error("Error parsing selectedPolicies from sessionStorage", error);
+      return [];
+    }
   });
   const [uploadedImages, setUploadedImages] = useState<File[]>([]);
   const [imagePreviewUrls, setImagePreviewUrls] = useState<string[]>([]);
@@ -187,34 +250,59 @@ const ChatUI: React.FC<ChatUIProps> = ({
   const [isGetCodeModalVisible, setIsGetCodeModalVisible] = useState(false);
   const [generatedCode, setGeneratedCode] = useState("");
   const [selectedSdk, setSelectedSdk] = useState<"openai" | "azure">("openai");
-  const [mcpEvents, setMCPEvents] = useState<MCPEvent[]>([]);
   const [temperature, setTemperature] = useState<number>(1.0);
   const [maxTokens, setMaxTokens] = useState<number>(2048);
   const [useAdvancedParams, setUseAdvancedParams] = useState<boolean>(false);
+  const [mockTestFallbacks, setMockTestFallbacks] = useState<boolean>(false);
+
+  // Code Interpreter state (using custom hook)
+  const codeInterpreter = useCodeInterpreter();
 
   const chatEndRef = useRef<HTMLDivElement>(null);
 
-  // Fetch MCP tools
-  const loadMCPTools = async () => {
+  // Fetch MCP servers and toolsets
+  const loadMCPServers = async () => {
     const userApiKey = apiKeySource === "session" ? accessToken : apiKey;
     if (!userApiKey) return;
 
-    setIsLoadingMCPTools(true);
+    setIsLoadingMCPServers(true);
     try {
-      const tools = await fetchAvailableMCPTools(userApiKey);
-      setMCPTools(tools);
+      const [servers, toolsets] = await Promise.all([
+        fetchMCPServers(userApiKey),
+        fetchMCPToolsets(userApiKey).catch(() => []),
+      ]);
+      setMCPServers(Array.isArray(servers) ? servers : servers.data || []);
+      setMCPToolsets(Array.isArray(toolsets) ? toolsets : []);
     } catch (error) {
-      console.error("Error fetching MCP tools:", error);
+      console.error("Error fetching MCP servers:", error);
     } finally {
-      setIsLoadingMCPTools(false);
+      setIsLoadingMCPServers(false);
     }
   };
 
+  // When simplified, keep selectedModel and endpointType in sync with fixedModel / chat-only
   useEffect(() => {
-    if (isMCPToolsModalVisible) {
-      loadMCPTools();
+    if (simplified && fixedModel) {
+      setSelectedModel(fixedModel);
+      setEndpointType(EndpointType.CHAT);
     }
-  }, [isMCPToolsModalVisible, accessToken, apiKey, apiKeySource]);
+  }, [simplified, fixedModel]);
+
+  // Fetch tools for a specific server
+  const loadServerTools = async (serverId: string) => {
+    const userApiKey = apiKeySource === "session" ? accessToken : apiKey;
+    if (!userApiKey || serverToolsMap[serverId]) return;
+
+    try {
+      const response = await listMCPTools(userApiKey, serverId);
+      setServerToolsMap((prev) => ({
+        ...prev,
+        [serverId]: response.tools || [],
+      }));
+    } catch (error) {
+      console.error(`Error fetching tools for server ${serverId}:`, error);
+    }
+  };
 
   useEffect(() => {
     if (isGetCodeModalVisible) {
@@ -227,7 +315,10 @@ const ChatUI: React.FC<ChatUIProps> = ({
         selectedTags,
         selectedVectorStores,
         selectedGuardrails,
-        selectedMCPTools,
+        selectedPolicies,
+        selectedMCPServers,
+        mcpServers,
+        mcpServerToolRestrictions,
         endpointType,
         selectedModel,
         selectedSdk,
@@ -247,49 +338,42 @@ const ChatUI: React.FC<ChatUIProps> = ({
     selectedTags,
     selectedVectorStores,
     selectedGuardrails,
-    selectedMCPTools,
+    selectedPolicies,
+    selectedMCPServers,
+    mcpServers,
+    mcpServerToolRestrictions,
     endpointType,
     selectedModel,
     proxySettings,
   ]);
 
   useEffect(() => {
-    const handler = setTimeout(() => {
-      sessionStorage.setItem("chatHistory", JSON.stringify(chatHistory));
-    }, 500); // Debounce by 500ms
-
-    return () => {
-      clearTimeout(handler);
-    };
-  }, [chatHistory]);
-
-  useEffect(() => {
-    sessionStorage.setItem("apiKeySource", JSON.stringify(apiKeySource));
-    sessionStorage.setItem("apiKey", apiKey);
+    try {
+      setSecureItem("apiKeySource", JSON.stringify(apiKeySource));
+      setSecureItem("apiKey", apiKey);
+    } catch {
+      // Storage full or unavailable — non-critical, skip persisting.
+    }
     sessionStorage.setItem("endpointType", endpointType);
     sessionStorage.setItem("selectedTags", JSON.stringify(selectedTags));
     sessionStorage.setItem("selectedVectorStores", JSON.stringify(selectedVectorStores));
     sessionStorage.setItem("selectedGuardrails", JSON.stringify(selectedGuardrails));
-    sessionStorage.setItem("selectedMCPTools", JSON.stringify(selectedMCPTools));
+    sessionStorage.setItem("selectedPolicies", JSON.stringify(selectedPolicies));
+    sessionStorage.setItem("selectedMCPServers", JSON.stringify(selectedMCPServers));
+    sessionStorage.setItem("mcpServerToolRestrictions", JSON.stringify(mcpServerToolRestrictions));
     sessionStorage.setItem("selectedVoice", selectedVoice);
+    sessionStorage.removeItem("selectedMCPTools"); // Clean up old key
 
-    if (selectedModel) {
-      sessionStorage.setItem("selectedModel", selectedModel);
-    } else {
-      sessionStorage.removeItem("selectedModel");
+    if (!simplified) {
+      if (selectedModel) {
+        sessionStorage.setItem("selectedModel", selectedModel);
+      } else {
+        sessionStorage.removeItem("selectedModel");
+      }
     }
-    if (messageTraceId) {
-      sessionStorage.setItem("messageTraceId", messageTraceId);
-    } else {
-      sessionStorage.removeItem("messageTraceId");
-    }
-    if (responsesSessionId) {
-      sessionStorage.setItem("responsesSessionId", responsesSessionId);
-    } else {
-      sessionStorage.removeItem("responsesSessionId");
-    }
-    sessionStorage.setItem("useApiSessionManagement", JSON.stringify(useApiSessionManagement));
+    // Note: codeInterpreterEnabled and selectedContainerId are persisted by useCodeInterpreter hook
   }, [
+    simplified,
     apiKeySource,
     apiKey,
     selectedModel,
@@ -297,10 +381,9 @@ const ChatUI: React.FC<ChatUIProps> = ({
     selectedTags,
     selectedVectorStores,
     selectedGuardrails,
-    messageTraceId,
-    responsesSessionId,
-    useApiSessionManagement,
-    selectedMCPTools,
+    selectedPolicies,
+    selectedMCPServers,
+    mcpServerToolRestrictions,
     selectedVoice,
   ]);
 
@@ -311,7 +394,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
       return;
     }
 
-    // Fetch model info and set the default selected model
+    // Fetch model info and set the default selected model (skip in simplified mode; we use fixedModel)
     const loadModels = async () => {
       try {
         if (!userApiKey) {
@@ -336,9 +419,58 @@ const ChatUI: React.FC<ChatUIProps> = ({
       }
     };
 
-    loadModels();
-    loadMCPTools();
-  }, [accessToken, userID, userRole, apiKeySource, apiKey, token]);
+    if (!simplified) {
+      loadModels();
+    }
+    loadMCPServers();
+  }, [accessToken, userID, userRole, apiKeySource, apiKey, token, simplified]);
+
+  // Load tools when MCP direct mode has a server (or toolset) selected
+  useEffect(() => {
+    if (
+      endpointType === EndpointType.MCP &&
+      selectedMCPServers.length === 1 &&
+      selectedMCPServers[0] !== "__all__"
+    ) {
+      const selected = selectedMCPServers[0];
+      if (selected.startsWith("toolset:")) {
+        // For a toolset, load tools for each server in it
+        const toolsetId = selected.slice("toolset:".length);
+        const toolset = mcpToolsets.find((t) => t.toolset_id === toolsetId);
+        if (toolset) {
+          const uniqueServerIds = [...new Set(toolset.tools.map((t) => t.server_id))];
+          uniqueServerIds.forEach((sid) => {
+            if (!serverToolsMap[sid]) loadServerTools(sid);
+          });
+        }
+      } else if (!serverToolsMap[selected]) {
+        loadServerTools(selected);
+      }
+    }
+  }, [endpointType, selectedMCPServers, serverToolsMap, mcpToolsets]);
+
+  // Fetch agents when A2A endpoint is selected
+  useEffect(() => {
+    const userApiKey = apiKeySource === "session" ? accessToken : apiKey;
+    if (!userApiKey || endpointType !== EndpointType.A2A_AGENTS) {
+      return;
+    }
+
+    const loadAgents = async () => {
+      try {
+        const agents = await fetchAvailableAgents(userApiKey, customProxyBaseUrl || undefined);
+        setAgentInfo(agents);
+        // Clear selection if current agent not in list
+        if (selectedAgent && !agents.some((a) => a.agent_name === selectedAgent)) {
+          setSelectedAgent(undefined);
+        }
+      } catch (error) {
+        console.error("Error fetching agents:", error);
+      }
+    };
+
+    loadAgents();
+  }, [accessToken, apiKeySource, apiKey, endpointType, customProxyBaseUrl, selectedAgent]);
 
   useEffect(() => {
     // Scroll to the bottom of the chat whenever chatHistory updates
@@ -352,243 +484,6 @@ const ChatUI: React.FC<ChatUIProps> = ({
       }, 100);
     }
   }, [chatHistory]);
-
-  const updateTextUI = (role: string, chunk: string, model?: string) => {
-    console.log("updateTextUI called with:", role, chunk, model);
-    setChatHistory((prev) => {
-      const last = prev[prev.length - 1];
-      // if the last message is already from this same role, append
-      if (last && last.role === role && !last.isImage && !last.isAudio) {
-        // build a new object, but only set `model` if it wasn't there already
-        const updated: MessageType = {
-          ...last,
-          content: last.content + chunk,
-          model: last.model ?? model, // ← only use the passed‐in model on the first chunk
-        };
-        return [...prev.slice(0, -1), updated];
-      } else {
-        // otherwise start a brand new assistant bubble
-        return [
-          ...prev,
-          {
-            role,
-            content: chunk,
-            model, // model set exactly once here
-          },
-        ];
-      }
-    });
-  };
-
-  const updateReasoningContent = (chunk: string) => {
-    setChatHistory((prevHistory) => {
-      const lastMessage = prevHistory[prevHistory.length - 1];
-
-      if (lastMessage && lastMessage.role === "assistant" && !lastMessage.isImage && !lastMessage.isAudio) {
-        return [
-          ...prevHistory.slice(0, prevHistory.length - 1),
-          {
-            ...lastMessage,
-            reasoningContent: (lastMessage.reasoningContent || "") + chunk,
-          },
-        ];
-      } else {
-        // If there's no assistant message yet, we'll create one with empty content
-        // but with reasoning content
-        if (prevHistory.length > 0 && prevHistory[prevHistory.length - 1].role === "user") {
-          return [
-            ...prevHistory,
-            {
-              role: "assistant",
-              content: "",
-              reasoningContent: chunk,
-            },
-          ];
-        }
-
-        return prevHistory;
-      }
-    });
-  };
-
-  const updateTimingData = (timeToFirstToken: number) => {
-    console.log("updateTimingData called with:", timeToFirstToken);
-    setChatHistory((prevHistory) => {
-      const lastMessage = prevHistory[prevHistory.length - 1];
-      console.log("Current last message:", lastMessage);
-
-      if (lastMessage && lastMessage.role === "assistant") {
-        console.log("Updating assistant message with timeToFirstToken:", timeToFirstToken);
-        const updatedHistory = [
-          ...prevHistory.slice(0, prevHistory.length - 1),
-          {
-            ...lastMessage,
-            timeToFirstToken,
-          },
-        ];
-        console.log("Updated chat history:", updatedHistory);
-        return updatedHistory;
-      }
-      // If the last message is a user message and no assistant message exists yet,
-      // create a new assistant message with empty content
-      else if (lastMessage && lastMessage.role === "user") {
-        console.log("Creating new assistant message with timeToFirstToken:", timeToFirstToken);
-        return [
-          ...prevHistory,
-          {
-            role: "assistant",
-            content: "",
-            timeToFirstToken,
-          },
-        ];
-      }
-
-      console.log("No appropriate message found to update timing");
-      return prevHistory;
-    });
-  };
-
-  const updateUsageData = (usage: TokenUsage, toolName?: string) => {
-    console.log("Received usage data:", usage);
-    setChatHistory((prevHistory) => {
-      const lastMessage = prevHistory[prevHistory.length - 1];
-
-      if (lastMessage && lastMessage.role === "assistant") {
-        console.log("Updating message with usage data:", usage);
-        const updatedMessage = {
-          ...lastMessage,
-          usage,
-          toolName,
-        };
-        console.log("Updated message:", updatedMessage);
-
-        return [...prevHistory.slice(0, prevHistory.length - 1), updatedMessage];
-      }
-
-      return prevHistory;
-    });
-  };
-
-  const updateTotalLatency = (totalLatency: number) => {
-    setChatHistory((prevHistory) => {
-      const lastMessage = prevHistory[prevHistory.length - 1];
-
-      if (lastMessage && lastMessage.role === "assistant") {
-        return [
-          ...prevHistory.slice(0, prevHistory.length - 1),
-          {
-            ...lastMessage,
-            totalLatency,
-          },
-        ];
-      }
-
-      return prevHistory;
-    });
-  };
-
-  const updateSearchResults = (searchResults: any[]) => {
-    console.log("Received search results:", searchResults);
-    setChatHistory((prevHistory) => {
-      const lastMessage = prevHistory[prevHistory.length - 1];
-
-      if (lastMessage && lastMessage.role === "assistant") {
-        console.log("Updating message with search results");
-        const updatedMessage = {
-          ...lastMessage,
-          searchResults,
-        };
-
-        return [...prevHistory.slice(0, prevHistory.length - 1), updatedMessage];
-      }
-
-      return prevHistory;
-    });
-  };
-
-  const handleResponseId = (responseId: string) => {
-    console.log("Received response ID for session management:", responseId);
-    if (useApiSessionManagement) {
-      setResponsesSessionId(responseId);
-    }
-  };
-
-  const handleToggleSessionManagement = (useApi: boolean) => {
-    setUseApiSessionManagement(useApi);
-    if (!useApi) {
-      // Clear API session when switching to UI mode
-      setResponsesSessionId(null);
-    }
-  };
-
-  const handleMCPEvent = (event: MCPEvent) => {
-    console.log("ChatUI: Received MCP event:", event);
-    setMCPEvents((prev) => {
-      // Check if this is a duplicate event (same item_id and type)
-      const isDuplicate = prev.some(
-        (existingEvent) =>
-          existingEvent.item_id === event.item_id &&
-          existingEvent.type === event.type &&
-          existingEvent.sequence_number === event.sequence_number,
-      );
-
-      if (isDuplicate) {
-        console.log("ChatUI: Duplicate MCP event, skipping");
-        return prev;
-      }
-
-      const newEvents = [...prev, event];
-      console.log("ChatUI: Updated MCP events:", newEvents);
-      return newEvents;
-    });
-  };
-
-  const updateImageUI = (imageUrl: string, model: string) => {
-    setChatHistory((prevHistory) => [...prevHistory, { role: "assistant", content: imageUrl, model, isImage: true }]);
-  };
-
-  const updateEmbeddingsUI = (embeddings: string, model?: string) => {
-    setChatHistory((prevHistory) => [
-      ...prevHistory,
-      { role: "assistant", content: truncateString(embeddings, 100), model, isEmbeddings: true },
-    ]);
-  };
-
-  const updateAudioUI = (audioUrl: string, model: string) => {
-    setChatHistory((prevHistory) => [...prevHistory, { role: "assistant", content: audioUrl, model, isAudio: true }]);
-  };
-
-  const updateChatImageUI = (imageUrl: string, model?: string) => {
-    setChatHistory((prev) => {
-      const last = prev[prev.length - 1];
-      // If the last message is from assistant and has content, add image to it
-      if (last && last.role === "assistant" && !last.isImage && !last.isAudio) {
-        const updated = {
-          ...last,
-          image: {
-            url: imageUrl,
-            detail: "auto",
-          },
-          model: last.model ?? model,
-        };
-        return [...prev.slice(0, -1), updated];
-      } else {
-        // Otherwise create a new assistant message with just the image
-        return [
-          ...prev,
-          {
-            role: "assistant",
-            content: "",
-            model,
-            image: {
-              url: imageUrl,
-              detail: "auto",
-            },
-          },
-        ];
-      }
-    });
-  };
 
   const handleKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key === "Enter" && !event.shiftKey) {
@@ -609,7 +504,9 @@ const ChatUI: React.FC<ChatUIProps> = ({
 
   const handleImageUpload = (file: File) => {
     setUploadedImages((prev) => [...prev, file]);
-    const previewUrl = URL.createObjectURL(file);
+    const rawPreviewUrl = URL.createObjectURL(file);
+    // Sanitize: only allow blob: URLs to prevent XSS via img src injection.
+    const previewUrl = rawPreviewUrl.startsWith("blob:") ? rawPreviewUrl : "";
     setImagePreviewUrls((prev) => [...prev, previewUrl]);
     return false; // Prevent default upload behavior
   };
@@ -669,8 +566,13 @@ const ChatUI: React.FC<ChatUIProps> = ({
     setUploadedAudio(null);
   };
 
-  const handleSendMessage = async () => {
-    if (inputMessage.trim() === "" && endpointType !== EndpointType.TRANSCRIPTION) return;
+    const handleSendMessage = async () => {
+    if (
+      inputMessage.trim() === "" &&
+      endpointType !== EndpointType.TRANSCRIPTION &&
+      endpointType !== EndpointType.MCP
+    )
+      return;
 
     // For image edits, require both image and prompt
     if (endpointType === EndpointType.IMAGE_EDITS && uploadedImages.length === 0) {
@@ -684,14 +586,84 @@ const ChatUI: React.FC<ChatUIProps> = ({
       return;
     }
 
+    // For A2A agents, require agent selection
+    if (endpointType === EndpointType.A2A_AGENTS && !selectedAgent) {
+      NotificationsManager.fromBackend("Please select an agent to send a message");
+      return;
+    }
+
+    // For MCP direct mode, require server and tool selection, and get form values early
+    let mcpToolArguments: Record<string, any> = {};
+    if (endpointType === EndpointType.MCP) {
+      const rawSelected =
+        selectedMCPServers.length === 1 && selectedMCPServers[0] !== "__all__"
+          ? selectedMCPServers[0]
+          : null;
+      if (!rawSelected) {
+        NotificationsManager.fromBackend("Please select an MCP server to test");
+        return;
+      }
+      // Resolve the real server ID (toolsets use toolset: prefix)
+      const mcpServerId = rawSelected.startsWith("toolset:") ? rawSelected : rawSelected;
+      if (!selectedMCPDirectTool) {
+        NotificationsManager.fromBackend("Please select an MCP tool to call");
+        return;
+      }
+      // For toolsets, find the tool in the servers that back this toolset
+      const toolsetForSelected = rawSelected.startsWith("toolset:")
+        ? mcpToolsets.find((t) => t.toolset_id === rawSelected.slice("toolset:".length))
+        : null;
+      let searchPool: any[] = [];
+      if (toolsetForSelected) {
+        const uniqueServerIds = [...new Set(toolsetForSelected.tools.map((t) => t.server_id))];
+        uniqueServerIds.forEach((sid) => {
+          searchPool = searchPool.concat(serverToolsMap[sid] || []);
+        });
+      } else {
+        searchPool = serverToolsMap[rawSelected] || [];
+      }
+      const mcpTool = searchPool.find(
+        (t: any) => t.name === selectedMCPDirectTool,
+      );
+      if (!mcpTool) {
+        NotificationsManager.fromBackend("Please wait for tool schema to load");
+        return;
+      }
+      try {
+        mcpToolArguments = (await mcpToolArgsFormRef.current?.getSubmitValues()) ?? {};
+      } catch (err) {
+        NotificationsManager.fromBackend(
+          err instanceof Error ? err.message : "Please fill in all required parameters",
+        );
+        return;
+      }
+    }
+
+    // Require model selection for all model-based endpoints (MCP direct mode does not need a model)
+    const modelRequiredEndpoints = [
+      EndpointType.CHAT,
+      EndpointType.IMAGE,
+      EndpointType.SPEECH,
+      EndpointType.IMAGE_EDITS,
+      EndpointType.RESPONSES,
+      EndpointType.ANTHROPIC_MESSAGES,
+      EndpointType.EMBEDDINGS,
+      EndpointType.TRANSCRIPTION,
+    ];
+
+    if (modelRequiredEndpoints.includes(endpointType as EndpointType) && !selectedModel) {
+      NotificationsManager.fromBackend("Please select a model before sending a request");
+      return;
+    }
+
     if (!token || !userRole || !userID) {
       return;
     }
 
-    const effectiveApiKey = apiKeySource === "session" ? accessToken : apiKey;
+    const effectiveApiKey = simplified ? accessToken : apiKeySource === "session" ? accessToken : apiKey;
 
     if (!effectiveApiKey) {
-      NotificationsManager.fromBackend("Please provide an API key or select Current UI Session");
+      NotificationsManager.fromBackend("Please provide a Virtual Key or select Current UI Session");
       return;
     }
 
@@ -751,12 +723,17 @@ const ChatUI: React.FC<ChatUIProps> = ({
         ? `🎵 Audio file: ${uploadedAudio.name}\nPrompt: ${inputMessage}`
         : `🎵 Audio file: ${uploadedAudio.name}`;
       displayMessage = createDisplayMessage(audioMessage, false);
+    } else if (endpointType === EndpointType.MCP && selectedMCPDirectTool) {
+      // For MCP direct mode, show tool name and arguments from form
+      const mcpMessage = `🔧 MCP Tool: ${selectedMCPDirectTool}\nArguments: ${JSON.stringify(mcpToolArguments, null, 2)}`;
+      displayMessage = createDisplayMessage(mcpMessage, false);
     } else {
       displayMessage = createDisplayMessage(inputMessage, false);
     }
 
     setChatHistory([...chatHistory, displayMessage]);
-    setMCPEvents([]); // Clear previous MCP events for new conversation turn
+    clearMCPEvents(); // Clear previous MCP events for new conversation turn
+    codeInterpreter.clearResult(); // Clear previous code interpreter results
     setIsLoading(true);
 
     try {
@@ -774,6 +751,10 @@ const ChatUI: React.FC<ChatUIProps> = ({
             newUserMessage,
           ];
 
+          const requestProxyBaseUrl =
+            simplified && proxySettings
+              ? (proxySettings.LITELLM_UI_API_DOC_BASE_URL ?? proxySettings.PROXY_BASE_URL ?? undefined)
+              : (customProxyBaseUrl || undefined);
           await makeOpenAIChatCompletionRequest(
             apiChatHistory,
             (chunk, model) => updateTextUI("assistant", chunk, model),
@@ -787,12 +768,19 @@ const ChatUI: React.FC<ChatUIProps> = ({
             traceId,
             selectedVectorStores.length > 0 ? selectedVectorStores : undefined,
             selectedGuardrails.length > 0 ? selectedGuardrails : undefined,
-            selectedMCPTools,
+            selectedPolicies.length > 0 ? selectedPolicies : undefined,
+            selectedMCPServers,
             updateChatImageUI,
             updateSearchResults,
             useAdvancedParams ? temperature : undefined,
             useAdvancedParams ? maxTokens : undefined,
             updateTotalLatency,
+            requestProxyBaseUrl,
+            mcpServers,
+            mcpServerToolRestrictions,
+            handleMCPEvent,
+            mockTestFallbacks,
+            mcpToolsets,
           );
         } else if (endpointType === EndpointType.IMAGE) {
           // For image generation
@@ -803,6 +791,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
             effectiveApiKey,
             selectedTags,
             signal,
+            customProxyBaseUrl || undefined,
           );
         } else if (endpointType === EndpointType.SPEECH) {
           // For audio speech
@@ -814,6 +803,9 @@ const ChatUI: React.FC<ChatUIProps> = ({
             effectiveApiKey,
             selectedTags,
             signal,
+            undefined, // responseFormat
+            undefined, // speed
+            customProxyBaseUrl || undefined,
           );
         } else if (endpointType === EndpointType.IMAGE_EDITS) {
           // For image edits
@@ -826,6 +818,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
               effectiveApiKey,
               selectedTags,
               signal,
+              customProxyBaseUrl || undefined,
             );
           }
         } else if (endpointType === EndpointType.RESPONSES) {
@@ -858,10 +851,17 @@ const ChatUI: React.FC<ChatUIProps> = ({
             traceId,
             selectedVectorStores.length > 0 ? selectedVectorStores : undefined,
             selectedGuardrails.length > 0 ? selectedGuardrails : undefined,
-            selectedMCPTools, // Pass the selected tools array
+            selectedPolicies.length > 0 ? selectedPolicies : undefined,
+            selectedMCPServers, // Pass the selected servers array
             useApiSessionManagement ? responsesSessionId : null, // Only pass session ID if API mode is enabled
             handleResponseId, // Pass callback to capture new response ID
             handleMCPEvent, // Pass MCP event handler
+            codeInterpreter.enabled, // Enable Code Interpreter tool
+            codeInterpreter.setResult, // Handle code interpreter output
+            customProxyBaseUrl || undefined,
+            mcpServers,
+            mcpServerToolRestrictions,
+            mcpToolsets,
           );
         } else if (endpointType === EndpointType.ANTHROPIC_MESSAGES) {
           const apiChatHistory = [
@@ -884,7 +884,9 @@ const ChatUI: React.FC<ChatUIProps> = ({
             traceId,
             selectedVectorStores.length > 0 ? selectedVectorStores : undefined,
             selectedGuardrails.length > 0 ? selectedGuardrails : undefined,
-            selectedMCPTools, // Pass the selected tools array
+            selectedPolicies.length > 0 ? selectedPolicies : undefined,
+            selectedMCPServers, // Pass the selected tools array
+            customProxyBaseUrl || undefined,
           );
         } else if (endpointType === EndpointType.EMBEDDINGS) {
           await makeOpenAIEmbeddingsRequest(
@@ -893,6 +895,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
             selectedModel,
             effectiveApiKey,
             selectedTags,
+            customProxyBaseUrl || undefined,
           );
         } else if (endpointType === EndpointType.TRANSCRIPTION) {
           // For audio transcriptions
@@ -904,9 +907,64 @@ const ChatUI: React.FC<ChatUIProps> = ({
               effectiveApiKey,
               selectedTags,
               signal,
+              undefined, // language
+              undefined, // prompt
+              undefined, // responseFormat
+              undefined, // temperature
+              customProxyBaseUrl || undefined,
             );
           }
         }
+      }
+
+      // Handle MCP direct tool calls (no chat completions)
+      if (endpointType === EndpointType.MCP) {
+        const rawSelected =
+          selectedMCPServers.length === 1 && selectedMCPServers[0] !== "__all__"
+            ? selectedMCPServers[0]
+            : null;
+        // For toolsets, resolve the real server_id from the toolset's tool list
+        let resolvedServerId = rawSelected;
+        if (rawSelected?.startsWith("toolset:")) {
+          const toolsetId = rawSelected.slice("toolset:".length);
+          const toolset = mcpToolsets.find((t) => t.toolset_id === toolsetId);
+          const toolEntry = toolset?.tools.find((t) => t.tool_name === selectedMCPDirectTool);
+          resolvedServerId = toolEntry?.server_id ?? rawSelected;
+        }
+        if (resolvedServerId && !resolvedServerId.startsWith("toolset:") && selectedMCPDirectTool) {
+          const result = await callMCPTool(
+            effectiveApiKey,
+            resolvedServerId,
+            selectedMCPDirectTool,
+            mcpToolArguments,
+            selectedGuardrails.length > 0 ? { guardrails: selectedGuardrails } : undefined,
+          );
+          const resultText =
+            result?.content?.length > 0
+              ? JSON.stringify(
+                  result.content.map((c: any) => (c.type === "text" ? c.text : c)).filter(Boolean),
+                  null,
+                  2,
+                )
+              : JSON.stringify(result, null, 2);
+          updateTextUI("assistant", resultText || "Tool executed successfully.");
+        }
+      }
+
+      // Handle A2A agent calls (separate from model-based calls) - use streaming
+      if (endpointType === EndpointType.A2A_AGENTS && selectedAgent) {
+        await makeA2ASendMessageRequest(
+          selectedAgent,
+          inputMessage,
+          (chunk, model) => updateTextUI("assistant", chunk, model),
+          effectiveApiKey,
+          signal,
+          updateTimingData,
+          updateTotalLatency,
+          updateA2AMetadata,
+          customProxyBaseUrl || undefined,
+          selectedGuardrails.length > 0 ? selectedGuardrails : undefined,
+        );
       }
     } catch (error) {
       if (signal.aborted) {
@@ -940,24 +998,11 @@ const ChatUI: React.FC<ChatUIProps> = ({
   };
 
   const clearChatHistory = () => {
-    // Clean up audio object URLs before clearing history
-    chatHistory.forEach((message) => {
-      if (message.isAudio && typeof message.content === "string") {
-        URL.revokeObjectURL(message.content);
-      }
-    });
-
-    setChatHistory([]);
-    setMessageTraceId(null);
-    setResponsesSessionId(null); // Clear responses session ID
-    setMCPEvents([]); // Clear MCP events
-    handleRemoveAllImages(); // Clear any uploaded images for image edits
-    handleRemoveResponsesImage(); // Clear any uploaded images for responses
-    handleRemoveChatImage(); // Clear any uploaded images for chat completions
-    handleRemoveAudio(); // Clear any uploaded audio for transcription
-    sessionStorage.removeItem("chatHistory");
-    sessionStorage.removeItem("messageTraceId");
-    sessionStorage.removeItem("responsesSessionId");
+    clearChatHistoryHook();
+    handleRemoveAllImages();
+    handleRemoveResponsesImage();
+    handleRemoveChatImage();
+    handleRemoveAudio();
     NotificationsManager.success("Chat history cleared.");
   };
 
@@ -994,16 +1039,17 @@ const ChatUI: React.FC<ChatUIProps> = ({
   const antIcon = <LoadingOutlined style={{ fontSize: 24 }} spin />;
 
   return (
-    <div className="w-full p-4 pb-0 bg-white">
-      <Card className="w-full rounded-xl shadow-md overflow-hidden">
-        <div className="flex h-[80vh] w-full gap-4">
-          {/* Left Sidebar with Controls */}
+    <div className={`w-full bg-white ${simplified ? "h-full flex flex-col" : "p-4 pb-0"}`}>
+      <Card className={`w-full rounded-xl shadow-md overflow-hidden ${simplified ? "h-full flex flex-col" : ""}`}>
+        <div className={`flex w-full gap-4 ${simplified ? "h-full" : "h-[80vh]"}`}>
+          {/* Left Sidebar with Controls - hidden in simplified mode */}
+          {!simplified && (
           <div className="w-1/4 p-4 bg-gray-50 overflow-y-auto">
             <Title className="text-xl font-semibold mb-6 mt-2">Configurations</Title>
             <div className="space-y-4">
               <div>
                 <Text className="font-medium block mb-2 text-gray-700 flex items-center">
-                  <KeyOutlined className="mr-2" /> API Key Source
+                  <KeyOutlined className="mr-2" /> Virtual Key Source
                 </Text>
                 <Select
                   disabled={disabledPersonalKeyCreation}
@@ -1021,12 +1067,60 @@ const ChatUI: React.FC<ChatUIProps> = ({
                 {apiKeySource === "custom" && (
                   <TextInput
                     className="mt-2"
-                    placeholder="Enter custom API key"
+                    placeholder="Enter custom Virtual Key"
                     type="password"
                     onValueChange={setApiKey}
                     value={apiKey}
                     icon={KeyOutlined}
                   />
+                )}
+              </div>
+
+              <div>
+                <div className="flex items-center justify-between mb-2">
+                  <Text className="font-medium block text-gray-700 flex items-center">
+                    <SettingOutlined className="mr-2" /> Custom Proxy Base URL
+                  </Text>
+                  {proxySettings?.LITELLM_UI_API_DOC_BASE_URL && !customProxyBaseUrl && (
+                    <Button
+                      type="link"
+                      size="small"
+                      icon={<LinkOutlined />}
+                      onClick={() => {
+                        setCustomProxyBaseUrl(proxySettings.LITELLM_UI_API_DOC_BASE_URL || "");
+                        sessionStorage.setItem("customProxyBaseUrl", proxySettings.LITELLM_UI_API_DOC_BASE_URL || "");
+                      }}
+                      className="text-gray-500 hover:text-gray-700"
+                    >
+                      Fill
+                    </Button>
+                  )}
+                  {customProxyBaseUrl && (
+                    <Button
+                      type="link"
+                      size="small"
+                      icon={<ClearOutlined />}
+                      onClick={() => {
+                        setCustomProxyBaseUrl("");
+                        sessionStorage.removeItem("customProxyBaseUrl");
+                      }}
+                      className="text-gray-500 hover:text-gray-700"
+                    >
+                      Clear
+                    </Button>
+                  )}
+                </div>
+                <TextInput
+                  placeholder="Optional: Enter custom proxy URL (e.g., http://localhost:5000)"
+                  onValueChange={(value) => {
+                    setCustomProxyBaseUrl(value);
+                    sessionStorage.setItem("customProxyBaseUrl", value);
+                  }}
+                  value={customProxyBaseUrl}
+                  icon={ApiOutlined}
+                />
+                {customProxyBaseUrl && (
+                  <Text className="text-xs text-gray-500 mt-1">API calls will be sent to: {customProxyBaseUrl}</Text>
                 )}
               </div>
 
@@ -1038,11 +1132,20 @@ const ChatUI: React.FC<ChatUIProps> = ({
                   endpointType={endpointType}
                   onEndpointChange={(value) => {
                     setEndpointType(value);
-                    // Clear model selection when switching endpoint type
+                    // Clear model/agent selection when switching endpoint type
                     setSelectedModel(undefined);
+                    setSelectedAgent(undefined);
                     setShowCustomModelInput(false);
+                    setSelectedMCPDirectTool(undefined);
+                    // For MCP direct mode, require single server (clear __all__ or multiple)
+                    if (value === EndpointType.MCP) {
+                      setSelectedMCPServers((prev) =>
+                        prev.length === 1 && prev[0] !== "__all__" ? prev : [],
+                      );
+                    }
                     try {
                       sessionStorage.removeItem("selectedModel");
+                      sessionStorage.removeItem("selectedAgent");
                     } catch {}
                   }}
                   className="mb-4"
@@ -1077,103 +1180,153 @@ const ChatUI: React.FC<ChatUIProps> = ({
                 />
               </div>
 
-              <div>
-                <Text className="font-medium block mb-2 text-gray-700 flex items-center justify-between">
-                  <span className="flex items-center">
-                    <RobotOutlined className="mr-2" /> Select Model
-                  </span>
-                  {isChatModel() ? (
-                    <Popover
-                      content={
-                        <AdditionalModelSettings
-                          temperature={temperature}
-                          maxTokens={maxTokens}
-                          useAdvancedParams={useAdvancedParams}
-                          onTemperatureChange={setTemperature}
-                          onMaxTokensChange={setMaxTokens}
-                          onUseAdvancedParamsChange={setUseAdvancedParams}
+              {/* Model Selector - shown when NOT using A2A Agents or MCP direct mode */}
+              {endpointType !== EndpointType.A2A_AGENTS && endpointType !== EndpointType.MCP && (
+                <div>
+                  <Text className="font-medium block mb-2 text-gray-700 flex items-center justify-between">
+                    <span className="flex items-center">
+                      <RobotOutlined className="mr-2" /> Select Model
+                    </span>
+                    {isChatModel() ? (
+                      <Popover
+                        content={
+                          <AdditionalModelSettings
+                            temperature={temperature}
+                            maxTokens={maxTokens}
+                            useAdvancedParams={useAdvancedParams}
+                            onTemperatureChange={setTemperature}
+                            onMaxTokensChange={setMaxTokens}
+                            onUseAdvancedParamsChange={setUseAdvancedParams}
+                            mockTestFallbacks={mockTestFallbacks}
+                            onMockTestFallbacksChange={setMockTestFallbacks}
+                          />
+                        }
+                        title="Model Settings"
+                        trigger="click"
+                        placement="right"
+                      >
+                        <Button
+                          type="text"
+                          size="small"
+                          icon={<SettingOutlined />}
+                          className="text-gray-500 hover:text-gray-700"
+                          aria-label="Model Settings"
+                          data-testid="model-settings-button"
                         />
-                      }
-                      title="Model Settings"
-                      trigger="click"
-                      placement="right"
-                    >
-                      <Button
-                        type="text"
-                        size="small"
-                        icon={<SettingOutlined />}
-                        className="text-gray-500 hover:text-gray-700"
-                      />
-                    </Popover>
-                  ) : (
-                    <Tooltip title="Advanced parameters are only supported for chat models currently">
-                      <Button
-                        type="text"
-                        size="small"
-                        icon={<SettingOutlined />}
-                        className="text-gray-300 cursor-not-allowed"
-                        disabled
-                      />
-                    </Tooltip>
-                  )}
-                </Text>
-                <Select
-                  value={selectedModel}
-                  placeholder="Select a Model"
-                  onChange={onModelChange}
-                  options={[
-                    ...Array.from(
-                      new Set(
-                        modelInfo
-                          .filter((option) => {
-                            if (!option.mode) {
-                              //If no mode, show all models
-                              return true;
-                            }
-                            const optionEndpoint = getEndpointType(option.mode);
-                            // Show chat models for responses/anthropic_messages endpoints as they are compatible
-                            if (
-                              endpointType === EndpointType.RESPONSES ||
-                              endpointType === EndpointType.ANTHROPIC_MESSAGES
-                            ) {
-                              return optionEndpoint === endpointType || optionEndpoint === EndpointType.CHAT;
-                            }
-                            // Show image models for image_edits endpoint as they are compatible
-                            if (endpointType === EndpointType.IMAGE_EDITS) {
-                              return optionEndpoint === endpointType || optionEndpoint === EndpointType.IMAGE;
-                            }
-                            return optionEndpoint === endpointType;
-                          })
-                          .map((option) => option.model_group),
-                      ),
-                    ).map((model_group, index) => ({
-                      value: model_group,
-                      label: model_group,
-                      key: index,
-                    })),
-                    { value: "custom", label: "Enter custom model", key: "custom" },
-                  ]}
-                  style={{ width: "100%" }}
-                  showSearch={true}
-                  className="rounded-md"
-                />
-                {showCustomModelInput && (
-                  <TextInput
-                    className="mt-2"
-                    placeholder="Enter custom model name"
-                    onValueChange={(value) => {
-                      // Using setTimeout to create a simple debounce effect
-                      if (customModelTimeout.current) {
-                        clearTimeout(customModelTimeout.current);
-                      }
-
-                      customModelTimeout.current = setTimeout(() => {
-                        setSelectedModel(value);
-                      }, 500); // 500ms delay after typing stops
-                    }}
+                      </Popover>
+                    ) : (
+                      <Tooltip title="Advanced parameters are only supported for chat models currently">
+                        <Button
+                          type="text"
+                          size="small"
+                          icon={<SettingOutlined />}
+                          className="text-gray-300 cursor-not-allowed"
+                          disabled
+                        />
+                      </Tooltip>
+                    )}
+                  </Text>
+                  <Select
+                    value={selectedModel}
+                    placeholder="Select a Model"
+                    onChange={onModelChange}
+                    options={[
+                      { value: "custom", label: "Enter custom model", key: "custom" },
+                      ...Array.from(
+                        new Set(
+                          modelInfo
+                            .filter((option) => {
+                              if (!option.mode) {
+                                //If no mode, show all models
+                                return true;
+                              }
+                              const optionEndpoint = getEndpointType(option.mode);
+                              // Show chat models for responses/anthropic_messages endpoints as they are compatible
+                              if (
+                                endpointType === EndpointType.RESPONSES ||
+                                endpointType === EndpointType.ANTHROPIC_MESSAGES
+                              ) {
+                                return optionEndpoint === endpointType || optionEndpoint === EndpointType.CHAT;
+                              }
+                              // Show image models for image_edits endpoint as they are compatible
+                              if (endpointType === EndpointType.IMAGE_EDITS) {
+                                return optionEndpoint === endpointType || optionEndpoint === EndpointType.IMAGE;
+                              }
+                              return optionEndpoint === endpointType;
+                            })
+                            .map((option) => option.model_group),
+                        ),
+                      ).map((model_group, index) => ({
+                        value: model_group,
+                        label: model_group,
+                        key: index,
+                      })),
+                    ]}
+                    style={{ width: "100%" }}
+                    showSearch={true}
+                    className="rounded-md"
                   />
-                )}
-              </div>
+                  {showCustomModelInput && (
+                    <TextInput
+                      className="mt-2"
+                      placeholder="Enter custom model name"
+                      onValueChange={(value) => {
+                        // Using setTimeout to create a simple debounce effect
+                        if (customModelTimeout.current) {
+                          clearTimeout(customModelTimeout.current);
+                        }
+
+                        customModelTimeout.current = setTimeout(() => {
+                          setSelectedModel(value);
+                        }, 500); // 500ms delay after typing stops
+                      }}
+                    />
+                  )}
+                </div>
+              )}
+
+              {/* Agent Selector - shown ONLY for A2A Agents endpoint */}
+              {endpointType === EndpointType.A2A_AGENTS && (
+                <div>
+                  <Text className="font-medium block mb-2 text-gray-700 flex items-center">
+                    <RobotOutlined className="mr-2" /> Select Agent
+                  </Text>
+                  <Select
+                    value={selectedAgent}
+                    placeholder="Select an Agent"
+                    onChange={(value) => setSelectedAgent(value)}
+                    options={agentInfo.map((agent) => ({
+                      value: agent.agent_name,
+                      label: agent.agent_name || agent.agent_id,
+                      key: agent.agent_id,
+                    }))}
+                    style={{ width: "100%" }}
+                    showSearch={true}
+                    className="rounded-md"
+                    optionLabelProp="label"
+                  >
+                    {agentInfo.map((agent) => (
+                      <Select.Option
+                        key={agent.agent_id}
+                        value={agent.agent_name}
+                        label={agent.agent_name || agent.agent_id}
+                      >
+                        <div className="flex flex-col py-1">
+                          <span className="font-medium">{agent.agent_name || agent.agent_id}</span>
+                          {agent.agent_card_params?.description && (
+                            <span className="text-xs text-gray-500 mt-1">{agent.agent_card_params.description}</span>
+                          )}
+                        </div>
+                      </Select.Option>
+                    ))}
+                  </Select>
+                  {agentInfo.length === 0 && (
+                    <Text className="text-xs text-gray-500 mt-2 block">
+                      No agents found. Create agents via /v1/agents endpoint.
+                    </Text>
+                  )}
+                </div>
+              )}
 
               <div>
                 <Text className="font-medium block mb-2 text-gray-700 flex items-center">
@@ -1187,44 +1340,289 @@ const ChatUI: React.FC<ChatUIProps> = ({
                 />
               </div>
 
-              {/* MCP Tool Selection */}
+              {/* MCP Server Selection */}
               <div>
                 <Text className="font-medium block mb-2 text-gray-700 flex items-center">
-                  <ToolOutlined className="mr-2" /> MCP Tool
+                  <ToolOutlined className="mr-2" />
+                  {endpointType === EndpointType.MCP ? "MCP Server" : "MCP Servers"}
                   <Tooltip
                     className="ml-1"
-                    title="Select MCP tools to use in your conversation, only available for /v1/responses endpoint"
+                    title={
+                      endpointType === EndpointType.MCP
+                        ? "Select an MCP server or toolset to test tools directly."
+                        : "Select MCP servers or toolsets to use in your conversation."
+                    }
                   >
-                    <InfoCircleOutlined />
+                    <InfoCircleOutlined
+                      className="cursor-pointer"
+                      onClick={() => setIsToolsetsInfoModalVisible(true)}
+                    />
                   </Tooltip>
                 </Text>
                 <Select
-                  mode="multiple"
+                  mode={endpointType === EndpointType.MCP ? undefined : "multiple"}
                   style={{ width: "100%" }}
-                  placeholder="Select MCP tools"
-                  value={selectedMCPTools}
-                  onChange={(value) => setSelectedMCPTools(value)}
-                  loading={isLoadingMCPTools}
-                  className="mb-4"
+                  placeholder={
+                    endpointType === EndpointType.MCP ? "Select MCP server" : "Select MCP servers"
+                  }
+                  value={
+                    endpointType === EndpointType.MCP
+                      ? selectedMCPServers[0] !== "__all__" && selectedMCPServers.length === 1
+                        ? selectedMCPServers[0]
+                        : undefined
+                      : selectedMCPServers
+                  }
+                  onChange={(value) => {
+                    if (endpointType === EndpointType.MCP) {
+                      const serverId = value as string | undefined;
+                      setSelectedMCPServers(serverId ? [serverId] : []);
+                      setSelectedMCPDirectTool(undefined);
+                      if (serverId && !serverToolsMap[serverId]) {
+                        loadServerTools(serverId);
+                      }
+                    } else {
+                      if ((value as string[]).includes("__all__")) {
+                        setSelectedMCPServers(["__all__"]);
+                        setMCPServerToolRestrictions({});
+                      } else {
+                        setSelectedMCPServers(value as string[]);
+                        setMCPServerToolRestrictions((prev) => {
+                          const updated = { ...prev };
+                          Object.keys(updated).forEach((serverId) => {
+                            if (!(value as string[]).includes(serverId)) delete updated[serverId];
+                          });
+                          return updated;
+                        });
+                        (value as string[]).forEach((serverId) => {
+                          if (!serverToolsMap[serverId]) {
+                            loadServerTools(serverId);
+                          }
+                        });
+                      }
+                    }
+                  }}
+                  loading={isLoadingMCPServers}
+                  className="mb-2"
                   allowClear
+                  showSearch
                   optionLabelProp="label"
-                  disabled={!(endpointType === EndpointType.RESPONSES)}
-                  maxTagCount="responsive"
+                  disabled={!MCP_SUPPORTED_ENDPOINTS.has(endpointType as EndpointType)}
+                  maxTagCount={endpointType === EndpointType.MCP ? 1 : "responsive"}
+                  filterOption={(input, option) => {
+                    if (option?.value === "__all__") {
+                      return "All MCP Servers".toLowerCase().includes(input.toLowerCase());
+                    }
+                    const val = option?.value as string | undefined;
+                    if (val?.startsWith("toolset:")) {
+                      const toolsetId = val.slice("toolset:".length);
+                      const toolset = mcpToolsets.find((t) => t.toolset_id === toolsetId);
+                      if (!toolset) return false;
+                      return [toolset.toolset_name, toolset.description]
+                        .filter(Boolean)
+                        .join(" ")
+                        .toLowerCase()
+                        .includes(input.toLowerCase());
+                    }
+                    const server = mcpServers.find((s) => s.server_id === val);
+                    if (!server) return false;
+                    const searchText = [
+                      server.server_name,
+                      server.alias,
+                      server.server_id,
+                      server.description,
+                    ]
+                      .filter(Boolean)
+                      .join(" ")
+                      .toLowerCase();
+                    return searchText.includes(input.toLowerCase());
+                  }}
                 >
-                  {Array.isArray(mcpTools) &&
-                    mcpTools.map((tool) => (
-                      <Select.Option
-                        key={tool.name}
-                        value={tool.name}
-                        label={<div className="font-medium">{tool.name}</div>}
-                      >
-                        <div className="flex flex-col py-1">
-                          <span className="font-medium">{tool.name}</span>
-                          <span className="text-xs text-gray-500 mt-1">{tool.description}</span>
-                        </div>
-                      </Select.Option>
-                    ))}
+                  {/* All MCP Servers option - hidden for MCP direct mode */}
+                  {endpointType !== EndpointType.MCP && (
+                    <Select.Option key="__all__" value="__all__" label="All MCP Servers">
+                      <div className="flex flex-col py-1">
+                        <span className="font-medium">All MCP Servers</span>
+                        <span className="text-xs text-gray-500 mt-1">Use all available MCP servers</span>
+                      </div>
+                    </Select.Option>
+                  )}
+
+                  {/* Toolsets (purple badge) */}
+                  {mcpToolsets.length > 0 && (
+                    <Select.OptGroup label="Toolsets">
+                      {mcpToolsets.map((toolset) => (
+                        <Select.Option
+                          key={`toolset:${toolset.toolset_id}`}
+                          value={`toolset:${toolset.toolset_id}`}
+                          label={toolset.toolset_name}
+                          disabled={
+                            endpointType === EndpointType.MCP ? false : selectedMCPServers.includes("__all__")
+                          }
+                        >
+                          <div className="flex flex-col py-1">
+                            <div className="flex items-center gap-1">
+                              <span className="font-medium">{toolset.toolset_name}</span>
+                              <span
+                                className="text-xs px-1 rounded"
+                                style={{ background: "#ede9fe", color: "#7c3aed" }}
+                              >
+                                Toolset
+                              </span>
+                              <span className="text-xs text-gray-500">
+                                ({toolset.tools.length} tools)
+                              </span>
+                            </div>
+                            {toolset.description && (
+                              <span className="text-xs text-gray-500 mt-1">{toolset.description}</span>
+                            )}
+                          </div>
+                        </Select.Option>
+                      ))}
+                    </Select.OptGroup>
+                  )}
+
+                  {/* Individual servers */}
+                  {mcpServers.length > 0 && (
+                    <Select.OptGroup label="Servers">
+                      {mcpServers.map((server) => (
+                        <Select.Option
+                          key={server.server_id}
+                          value={server.server_id}
+                          label={server.alias || server.server_name || server.server_id}
+                          disabled={
+                            endpointType === EndpointType.MCP ? false : selectedMCPServers.includes("__all__")
+                          }
+                        >
+                          <div className="flex flex-col py-1">
+                            <span className="font-medium">{server.alias || server.server_name || server.server_id}</span>
+                            {server.description && <span className="text-xs text-gray-500 mt-1">{server.description}</span>}
+                          </div>
+                        </Select.Option>
+                      ))}
+                    </Select.OptGroup>
+                  )}
                 </Select>
+
+                {/* MCP Tool selector - only for MCP direct mode */}
+                {endpointType === EndpointType.MCP &&
+                  selectedMCPServers.length === 1 &&
+                  selectedMCPServers[0] !== "__all__" && (() => {
+                    const rawSel = selectedMCPServers[0];
+                    const isToolset = rawSel.startsWith("toolset:");
+                    let toolOptions: { value: string; label: string }[] = [];
+                    if (isToolset) {
+                      const toolsetId = rawSel.slice("toolset:".length);
+                      const toolset = mcpToolsets.find((t) => t.toolset_id === toolsetId);
+                      if (toolset) {
+                        toolOptions = toolset.tools.map((t) => ({
+                          value: t.tool_name,
+                          label: t.tool_name,
+                        }));
+                      }
+                    } else {
+                      toolOptions = (serverToolsMap[rawSel] || []).map((tool: any) => ({
+                        value: tool.name,
+                        label: tool.name,
+                      }));
+                    }
+                    return (
+                      <div className="mt-3">
+                        <Text className="text-xs text-gray-600 mb-1 block">Select Tool</Text>
+                        <Select
+                          style={{ width: "100%" }}
+                          placeholder="Select a tool to call"
+                          value={selectedMCPDirectTool}
+                          onChange={(value) => setSelectedMCPDirectTool(value)}
+                          options={toolOptions}
+                          allowClear
+                          className="rounded-md"
+                        />
+                      </div>
+                    );
+                  })()}
+
+                {/* Tool restrictions UI (optional) - hidden for MCP direct mode */}
+                {selectedMCPServers.length > 0 &&
+                  !selectedMCPServers.includes("__all__") &&
+                  endpointType !== EndpointType.MCP &&
+                  MCP_SUPPORTED_ENDPOINTS.has(endpointType as EndpointType) && (
+                    <div className="mt-3 space-y-2">
+                      {selectedMCPServers.map((serverId) => {
+                        const server = mcpServers.find((s) => s.server_id === serverId);
+                        const tools = serverToolsMap[serverId] || [];
+                        if (tools.length === 0) return null;
+
+                        return (
+                          <div key={serverId} className="border rounded p-2">
+                            <Text className="text-xs text-gray-600 mb-1">
+                              Limit tools for {server?.alias || server?.server_name || serverId}:
+                            </Text>
+                            <Select
+                              mode="multiple"
+                              size="small"
+                              style={{ width: "100%" }}
+                              placeholder="All tools (default)"
+                              value={mcpServerToolRestrictions[serverId] || []}
+                              onChange={(selectedTools) => {
+                                setMCPServerToolRestrictions((prev) => ({
+                                  ...prev,
+                                  [serverId]: selectedTools,
+                                }));
+                              }}
+                              options={tools.map((tool) => ({
+                                value: tool.name,
+                                label: tool.name,
+                              }))}
+                              maxTagCount={2}
+                            />
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+
+                {/* BYOK credential status for selected servers */}
+                {selectedMCPServers.length > 0 &&
+                  !selectedMCPServers.includes("__all__") &&
+                  selectedMCPServers.some((serverId) => {
+                    const server = mcpServers.find((s) => s.server_id === serverId);
+                    return server?.is_byok;
+                  }) && (
+                    <div className="mt-3 space-y-2">
+                      {selectedMCPServers.map((serverId) => {
+                        const server = mcpServers.find((s) => s.server_id === serverId);
+                        if (!server?.is_byok) return null;
+                        const serverName = server.alias || server.server_name || serverId;
+                        return (
+                          <div key={serverId} className="border border-blue-100 rounded p-2 bg-blue-50 flex items-center justify-between">
+                            <Text className="text-xs text-blue-700">
+                              {serverName} requires your API key
+                            </Text>
+                            {server.has_user_credential ? (
+                              <div className="flex items-center gap-2">
+                                <span className="text-green-600 text-xs font-medium flex items-center gap-1">
+                                  <KeyOutlined /> Connected
+                                </span>
+                                <button
+                                  className="text-xs text-gray-400 hover:text-blue-500 underline"
+                                  onClick={() => setByokModalServer(server)}
+                                >
+                                  Reconnect
+                                </button>
+                              </div>
+                            ) : (
+                              <button
+                                className="text-xs bg-blue-500 hover:bg-blue-600 text-white px-3 py-1 rounded-lg font-medium"
+                                onClick={() => setByokModalServer(server)}
+                              >
+                                Connect
+                              </button>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
               </div>
 
               <div>
@@ -1278,13 +1676,63 @@ const ChatUI: React.FC<ChatUIProps> = ({
                   accessToken={accessToken || ""}
                 />
               </div>
+
+              <div>
+                <Text className="font-medium block mb-2 text-gray-700 flex items-center">
+                  <SafetyOutlined className="mr-2" /> Policies
+                  <Tooltip
+                    className="ml-1"
+                    title={
+                      <span>
+                        Select policy/policies to apply to this LLM API call. Policies define which guardrails are applied based on conditions. You can set up your policies{" "}
+                        <a href="?page=policies" style={{ color: "#1890ff" }}>
+                          here
+                        </a>
+                        .
+                      </span>
+                    }
+                  >
+                    <InfoCircleOutlined />
+                  </Tooltip>
+                </Text>
+                <PolicySelector
+                  value={selectedPolicies}
+                  onChange={setSelectedPolicies}
+                  className="mb-4"
+                  accessToken={accessToken || ""}
+                />
+              </div>
+
+              {/* Code Interpreter Toggle - Only for Responses endpoint */}
+              {endpointType === EndpointType.RESPONSES && (
+                <div>
+                  <CodeInterpreterTool
+                    accessToken={apiKeySource === "session" ? accessToken || "" : apiKey}
+                    enabled={codeInterpreter.enabled}
+                    onEnabledChange={codeInterpreter.setEnabled}
+                    selectedContainerId={null}
+                    onContainerChange={() => { }}
+                    selectedModel={selectedModel || ""}
+                  />
+                </div>
+              )}
             </div>
           </div>
+          )}
 
           {/* Main Chat Area */}
-          <div className="w-3/4 flex flex-col bg-white">
+          <div className={`flex flex-col bg-white ${simplified ? "flex-1 w-full" : "w-3/4"}`}>
+            {endpointType === EndpointType.REALTIME ? (
+              <RealtimePlayground
+                accessToken={apiKeySource === "session" ? accessToken || "" : apiKey}
+                selectedModel={selectedModel || ""}
+                customProxyBaseUrl={customProxyBaseUrl || undefined}
+                selectedGuardrails={selectedGuardrails.length > 0 ? selectedGuardrails : undefined}
+              />
+            ) : (
+            <>
             <div className="p-4 border-b border-gray-200 flex justify-between items-center">
-              <Title className="text-xl font-semibold mb-0">Test Key</Title>
+              <Title className="text-xl font-semibold mb-0">{simplified ? "Chat" : "Test Key"}</Title>
               <div className="flex gap-2">
                 <TremorButton
                   onClick={clearChatHistory}
@@ -1293,6 +1741,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
                 >
                   Clear Chat
                 </TremorButton>
+                {!simplified && (
                 <TremorButton
                   onClick={() => setIsGetCodeModalVisible(true)}
                   className="bg-gray-100 hover:bg-gray-200 text-gray-700 border-gray-300"
@@ -1300,6 +1749,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
                 >
                   Get Code
                 </TremorButton>
+                )}
               </div>
             </div>
             <div className="flex-1 overflow-auto p-4 pb-0">
@@ -1312,152 +1762,21 @@ const ChatUI: React.FC<ChatUIProps> = ({
 
               {chatHistory.map((message, index) => (
                 <div key={index}>
-                  <div className={`mb-4 ${message.role === "user" ? "text-right" : "text-left"}`}>
-                    <div
-                      className="inline-block max-w-[80%] rounded-lg shadow-sm p-3.5 px-4"
-                      style={{
-                        backgroundColor: message.role === "user" ? "#f0f8ff" : "#ffffff",
-                        border: message.role === "user" ? "1px solid #e6f0fa" : "1px solid #f0f0f0",
-                        textAlign: "left",
-                      }}
-                    >
-                      <div className="flex items-center gap-2 mb-1.5">
-                        <div
-                          className="flex items-center justify-center w-6 h-6 rounded-full mr-1"
-                          style={{
-                            backgroundColor: message.role === "user" ? "#e6f0fa" : "#f5f5f5",
-                          }}
-                        >
-                          {message.role === "user" ? (
-                            <UserOutlined style={{ fontSize: "12px", color: "#2563eb" }} />
-                          ) : (
-                            <RobotOutlined style={{ fontSize: "12px", color: "#4b5563" }} />
-                          )}
-                        </div>
-                        <strong className="text-sm capitalize">{message.role}</strong>
-                        {message.role === "assistant" && message.model && (
-                          <span className="text-xs px-2 py-0.5 rounded bg-gray-100 text-gray-600 font-normal">
-                            {message.model}
-                          </span>
-                        )}
-                      </div>
-                      {message.reasoningContent && <ReasoningContent reasoningContent={message.reasoningContent} />}
-
-                      {/* Show MCP events at the start of assistant messages */}
-                      {message.role === "assistant" &&
-                        index === chatHistory.length - 1 &&
-                        mcpEvents.length > 0 &&
-                        endpointType === EndpointType.RESPONSES && (
-                          <div className="mb-3">
-                            <MCPEventsDisplay events={mcpEvents} />
-                          </div>
-                        )}
-
-                      {/* Show search results at the start of assistant messages */}
-                      {message.role === "assistant" && message.searchResults && (
-                        <SearchResultsDisplay searchResults={message.searchResults} />
-                      )}
-
-                      <div
-                        className="whitespace-pre-wrap break-words max-w-full message-content"
-                        style={{
-                          wordWrap: "break-word",
-                          overflowWrap: "break-word",
-                          wordBreak: "break-word",
-                          hyphens: "auto",
-                        }}
-                      >
-                        {message.isImage ? (
-                          <img
-                            src={typeof message.content === "string" ? message.content : ""}
-                            alt="Generated image"
-                            className="max-w-full rounded-md border border-gray-200 shadow-sm"
-                            style={{ maxHeight: "500px" }}
-                          />
-                        ) : message.isAudio ? (
-                          <AudioRenderer message={message} />
-                        ) : (
-                          <>
-                            {/* Show attached image for user messages based on current endpoint */}
-                            {endpointType === EndpointType.RESPONSES && <ResponsesImageRenderer message={message} />}
-                            {endpointType === EndpointType.CHAT && <ChatImageRenderer message={message} />}
-
-                            <ReactMarkdown
-                              components={{
-                                code({
-                                  node,
-                                  inline,
-                                  className,
-                                  children,
-                                  ...props
-                                }: React.ComponentPropsWithoutRef<"code"> & {
-                                  inline?: boolean;
-                                  node?: any;
-                                }) {
-                                  const match = /language-(\w+)/.exec(className || "");
-                                  return !inline && match ? (
-                                    <SyntaxHighlighter
-                                      style={coy as any}
-                                      language={match[1]}
-                                      PreTag="div"
-                                      className="rounded-md my-2"
-                                      wrapLines={true}
-                                      wrapLongLines={true}
-                                      {...props}
-                                    >
-                                      {String(children).replace(/\n$/, "")}
-                                    </SyntaxHighlighter>
-                                  ) : (
-                                    <code
-                                      className={`${className} px-1.5 py-0.5 rounded bg-gray-100 text-sm font-mono`}
-                                      style={{ wordBreak: "break-word" }}
-                                      {...props}
-                                    >
-                                      {children}
-                                    </code>
-                                  );
-                                },
-                                pre: ({ node, ...props }) => (
-                                  <pre style={{ overflowX: "auto", maxWidth: "100%" }} {...props} />
-                                ),
-                              }}
-                            >
-                              {typeof message.content === "string" ? message.content : ""}
-                            </ReactMarkdown>
-
-                            {/* Show generated image from chat completions */}
-                            {message.image && (
-                              <div className="mt-3">
-                                <img
-                                  src={message.image.url}
-                                  alt="Generated image"
-                                  className="max-w-full rounded-md border border-gray-200 shadow-sm"
-                                  style={{ maxHeight: "500px" }}
-                                />
-                              </div>
-                            )}
-                          </>
-                        )}
-
-                        {message.role === "assistant" &&
-                          (message.timeToFirstToken || message.totalLatency || message.usage) && (
-                            <ResponseMetrics
-                              timeToFirstToken={message.timeToFirstToken}
-                              totalLatency={message.totalLatency}
-                              usage={message.usage}
-                              toolName={message.toolName}
-                            />
-                          )}
-                      </div>
-                    </div>
-                  </div>
+                  <ChatMessageBubble
+                    message={message}
+                    isLastMessage={index === chatHistory.length - 1}
+                    endpointType={endpointType as EndpointType}
+                    mcpEvents={mcpEvents}
+                    codeInterpreterResult={codeInterpreter.result}
+                    accessToken={apiKeySource === "session" ? accessToken || "" : apiKey}
+                  />
                 </div>
               ))}
 
               {/* Show MCP events during loading if no assistant message exists yet */}
               {isLoading &&
                 mcpEvents.length > 0 &&
-                endpointType === EndpointType.RESPONSES &&
+                (endpointType === EndpointType.RESPONSES || endpointType === EndpointType.CHAT) &&
                 chatHistory.length > 0 &&
                 chatHistory[chatHistory.length - 1].role === "user" && (
                   <div className="text-left mb-4">
@@ -1512,7 +1831,16 @@ const ChatUI: React.FC<ChatUIProps> = ({
                       {uploadedImages.map((file, index) => (
                         <div key={index} className="relative inline-block">
                           <img
-                            src={imagePreviewUrls[index] || ""}
+                            src={(() => {
+                              const url = imagePreviewUrls[index];
+                              if (!url) return "";
+                              try {
+                                const parsed = new URL(url);
+                                return parsed.protocol === "blob:" ? parsed.href : "";
+                              } catch {
+                                return "";
+                              }
+                            })()}
                             alt={`Upload preview ${index + 1}`}
                             className="max-w-32 max-h-32 rounded-md border border-gray-200 object-cover"
                           />
@@ -1589,73 +1917,89 @@ const ChatUI: React.FC<ChatUIProps> = ({
 
               {/* Show file previews above input when files are uploaded */}
               {endpointType === EndpointType.RESPONSES && responsesUploadedImage && (
-                <div className="mb-2">
-                  <div className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg border border-gray-200">
-                    <div className="relative inline-block">
-                      {responsesUploadedImage.name.toLowerCase().endsWith(".pdf") ? (
-                        <div className="w-10 h-10 rounded-md bg-red-500 flex items-center justify-center">
-                          <FilePdfOutlined style={{ fontSize: "16px", color: "white" }} />
-                        </div>
-                      ) : (
-                        <img
-                          src={responsesImagePreviewUrl || ""}
-                          alt="Upload preview"
-                          className="w-10 h-10 rounded-md border border-gray-200 object-cover"
-                        />
-                      )}
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="text-sm font-medium text-gray-900 truncate">{responsesUploadedImage.name}</div>
-                      <div className="text-xs text-gray-500">
-                        {responsesUploadedImage.name.toLowerCase().endsWith(".pdf") ? "PDF" : "Image"}
-                      </div>
-                    </div>
-                    <button
-                      className="flex items-center justify-center w-6 h-6 text-gray-400 hover:text-gray-600 hover:bg-gray-200 rounded-full transition-colors"
-                      onClick={handleRemoveResponsesImage}
-                    >
-                      <DeleteOutlined style={{ fontSize: "12px" }} />
-                    </button>
-                  </div>
-                </div>
+                <FilePreviewCard
+                  file={responsesUploadedImage}
+                  previewUrl={responsesImagePreviewUrl}
+                  onRemove={handleRemoveResponsesImage}
+                />
               )}
 
               {endpointType === EndpointType.CHAT && chatUploadedImage && (
-                <div className="mb-2">
-                  <div className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg border border-gray-200">
-                    <div className="relative inline-block">
-                      {chatUploadedImage.name.toLowerCase().endsWith(".pdf") ? (
-                        <div className="w-10 h-10 rounded-md bg-red-500 flex items-center justify-center">
-                          <FilePdfOutlined style={{ fontSize: "16px", color: "white" }} />
-                        </div>
+                <FilePreviewCard
+                  file={chatUploadedImage}
+                  previewUrl={chatImagePreviewUrl}
+                  onRemove={handleRemoveChatImage}
+                />
+              )}
+
+              {/* Code Interpreter indicator and sample prompts when enabled */}
+              {endpointType === EndpointType.RESPONSES && codeInterpreter.enabled && (
+                <div className="mb-2 space-y-2">
+                  <div className="px-3 py-2 bg-gradient-to-r from-blue-50 to-purple-50 rounded-lg border border-blue-200 flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      {isLoading ? (
+                        <>
+                          <LoadingOutlined className="text-blue-500" spin />
+                          <span className="text-sm text-blue-700 font-medium">Running Python code...</span>
+                        </>
                       ) : (
-                        <img
-                          src={chatImagePreviewUrl || ""}
-                          alt="Upload preview"
-                          className="w-10 h-10 rounded-md border border-gray-200 object-cover"
-                        />
+                        <>
+                          <CodeOutlined className="text-blue-500" />
+                          <span className="text-sm text-blue-700 font-medium">Code Interpreter Active</span>
+                        </>
                       )}
                     </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="text-sm font-medium text-gray-900 truncate">{chatUploadedImage.name}</div>
-                      <div className="text-xs text-gray-500">
-                        {chatUploadedImage.name.toLowerCase().endsWith(".pdf") ? "PDF" : "Image"}
-                      </div>
-                    </div>
                     <button
-                      className="flex items-center justify-center w-6 h-6 text-gray-400 hover:text-gray-600 hover:bg-gray-200 rounded-full transition-colors"
-                      onClick={handleRemoveChatImage}
+                      className="text-xs text-blue-500 hover:text-blue-700"
+                      onClick={() => codeInterpreter.setEnabled(false)}
                     >
-                      <DeleteOutlined style={{ fontSize: "12px" }} />
+                      Disable
                     </button>
                   </div>
+                  {/* Sample prompts - only show when not loading */}
+                  {!isLoading && (
+                    <div className="flex flex-wrap gap-2">
+                      {[
+                        "Generate sample sales data CSV and create a chart",
+                        "Create a PNG bar chart comparing AI gateway providers including LiteLLM",
+                        "Generate a CSV of LLM pricing data and visualize it as a line chart",
+                      ].map((prompt, idx) => (
+                        <button
+                          key={idx}
+                          className="text-xs px-3 py-1.5 bg-white border border-gray-200 rounded-full hover:bg-blue-50 hover:border-blue-300 hover:text-blue-600 transition-colors"
+                          onClick={() => setInputMessage(prompt)} // lgtm[js/xss-through-dom]
+                        >
+                          {prompt}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Suggested prompts - show when chat is empty and not loading (skip for MCP - uses structured form) */}
+              {chatHistory.length === 0 && !isLoading && endpointType !== EndpointType.MCP && (
+                <div className="flex items-center gap-2 mb-3 overflow-x-auto">
+                  {(endpointType === EndpointType.A2A_AGENTS
+                    ? ["What can you help me with?", "Tell me about yourself", "What tasks can you perform?"]
+                    : ["Write me a poem", "Explain quantum computing", "Draft a polite email requesting a meeting"]
+                  ).map((prompt) => (
+                    <button
+                      key={prompt}
+                      type="button"
+                      className="shrink-0 rounded-full border border-gray-200 px-3 py-1 text-xs font-medium text-gray-600 transition-colors hover:bg-blue-50 hover:border-blue-300 hover:text-blue-600 cursor-pointer"
+                      onClick={() => setInputMessage(prompt)} // lgtm[js/xss-through-dom]
+                    >
+                      {prompt}
+                    </button>
+                  ))}
                 </div>
               )}
 
               <div className="flex items-center gap-2">
                 <div className="flex items-center flex-1 bg-white border border-gray-300 rounded-xl px-3 py-1 min-h-[44px]">
-                  {/* Left: paperclip icon */}
-                  <div className="flex-shrink-0 mr-2">
+                  {/* Left: attachment and code interpreter icons */}
+                  <div className="flex-shrink-0 mr-2 flex items-center gap-1">
                     {endpointType === EndpointType.RESPONSES && !responsesUploadedImage && (
                       <ResponsesImageUpload
                         responsesUploadedImage={responsesUploadedImage}
@@ -1672,46 +2016,120 @@ const ChatUI: React.FC<ChatUIProps> = ({
                         onRemoveImage={handleRemoveChatImage}
                       />
                     )}
+                    {/* Quick Code Interpreter toggle for Responses */}
+                    {endpointType === EndpointType.RESPONSES && (
+                      <Tooltip
+                        title={
+                          codeInterpreter.enabled
+                            ? "Code Interpreter enabled (click to disable)"
+                            : "Enable Code Interpreter"
+                        }
+                      >
+                        <button
+                          className={`p-1.5 rounded-md transition-colors ${codeInterpreter.enabled
+                            ? "bg-blue-100 text-blue-600"
+                            : "text-gray-400 hover:text-gray-600 hover:bg-gray-100"
+                            }`}
+                          onClick={() => {
+                            codeInterpreter.toggle();
+                            if (!codeInterpreter.enabled) {
+                              NotificationsManager.success("Code Interpreter enabled!");
+                            }
+                          }}
+                        >
+                          <CodeOutlined style={{ fontSize: "16px" }} />
+                        </button>
+                      </Tooltip>
+                    )}
                   </div>
 
-                  {/* Middle: input field */}
-                  <TextArea
-                    value={inputMessage}
-                    onChange={(e) => setInputMessage(e.target.value)}
-                    onKeyDown={handleKeyDown}
-                    placeholder={
-                      endpointType === EndpointType.CHAT ||
-                      endpointType === EndpointType.EMBEDDINGS ||
-                      endpointType === EndpointType.RESPONSES ||
-                      endpointType === EndpointType.ANTHROPIC_MESSAGES
-                        ? "Type your message... (Shift+Enter for new line)"
-                        : endpointType === EndpointType.IMAGE_EDITS
-                          ? "Describe how you want to edit the image..."
-                          : endpointType === EndpointType.SPEECH
-                            ? "Enter text to convert to speech..."
-                            : endpointType === EndpointType.TRANSCRIPTION
-                              ? "Optional: Add context or prompt for transcription..."
-                              : "Describe the image you want to generate..."
-                    }
-                    disabled={isLoading}
-                    className="flex-1"
-                    autoSize={{ minRows: 1, maxRows: 4 }}
-                    style={{
-                      resize: "none",
-                      border: "none",
-                      boxShadow: "none",
-                      background: "transparent",
-                      padding: "4px 0",
-                      fontSize: "14px",
-                      lineHeight: "20px",
-                    }}
-                  />
+                  {/* Middle: input field or MCP structured form */}
+                  {endpointType === EndpointType.MCP &&
+                  selectedMCPServers.length === 1 &&
+                  selectedMCPServers[0] !== "__all__" &&
+                  selectedMCPDirectTool ? (
+                    <div className="flex-1 overflow-y-auto max-h-48 min-h-[44px] p-2 border border-gray-200 rounded-lg bg-gray-50/50">
+                      {(() => {
+                        const rawSel = selectedMCPServers[0];
+                        let toolPool: any[] = [];
+                        if (rawSel.startsWith("toolset:")) {
+                          const toolsetId = rawSel.slice("toolset:".length);
+                          const toolset = mcpToolsets.find((t) => t.toolset_id === toolsetId);
+                          if (toolset) {
+                            const uniqueServerIds = [...new Set(toolset.tools.map((t) => t.server_id))];
+                            uniqueServerIds.forEach((sid) => {
+                              toolPool = toolPool.concat(serverToolsMap[sid] || []);
+                            });
+                          }
+                        } else {
+                          toolPool = serverToolsMap[rawSel] || [];
+                        }
+                        const mcpTool = toolPool.find(
+                          (t: any) => t.name === selectedMCPDirectTool,
+                        );
+                        return mcpTool ? (
+                          <MCPToolArgumentsForm
+                            ref={mcpToolArgsFormRef}
+                            tool={mcpTool}
+                            className="space-y-2"
+                          />
+                        ) : (
+                          <div className="flex items-center justify-center h-10 text-sm text-gray-500">
+                            Loading tool schema...
+                          </div>
+                        );
+                      })()}
+                    </div>
+                  ) : (
+                    <TextArea
+                      value={inputMessage}
+                      onChange={(e) => setInputMessage(e.target.value)}
+                      onKeyDown={handleKeyDown}
+                      placeholder={
+                        endpointType === EndpointType.CHAT ||
+                        endpointType === EndpointType.EMBEDDINGS ||
+                        endpointType === EndpointType.RESPONSES ||
+                        endpointType === EndpointType.ANTHROPIC_MESSAGES
+                          ? "Type your message... (Shift+Enter for new line)"
+                          : endpointType === EndpointType.A2A_AGENTS
+                            ? "Send a message to the A2A agent..."
+                            : endpointType === EndpointType.IMAGE_EDITS
+                              ? "Describe how you want to edit the image..."
+                              : endpointType === EndpointType.SPEECH
+                                ? "Enter text to convert to speech..."
+                                : endpointType === EndpointType.TRANSCRIPTION
+                                  ? "Optional: Add context or prompt for transcription..."
+                                  : "Describe the image you want to generate..."
+                      }
+                      disabled={isLoading}
+                      className="flex-1"
+                      autoSize={{ minRows: 1, maxRows: 4 }}
+                      style={{
+                        resize: "none",
+                        border: "none",
+                        boxShadow: "none",
+                        background: "transparent",
+                        padding: "4px 0",
+                        fontSize: "14px",
+                        lineHeight: "20px",
+                      }}
+                    />
+                  )}
 
                   {/* Right: send button - matching blue theme */}
                   <TremorButton
                     onClick={handleSendMessage}
                     disabled={
-                      isLoading || (endpointType === EndpointType.TRANSCRIPTION ? !uploadedAudio : !inputMessage.trim())
+                      isLoading ||
+                      (endpointType === EndpointType.MCP
+                        ? !(
+                            selectedMCPServers.length === 1 &&
+                            selectedMCPServers[0] !== "__all__" &&
+                            selectedMCPDirectTool
+                          )
+                        : endpointType === EndpointType.TRANSCRIPTION
+                          ? !uploadedAudio
+                          : !inputMessage.trim())
                     }
                     className="flex-shrink-0 ml-2 !w-8 !h-8 !min-w-8 !p-0 !rounded-full !bg-blue-600 hover:!bg-blue-700 disabled:!bg-gray-300 !border-none !text-white disabled:!text-gray-500 !flex !items-center !justify-center"
                   >
@@ -1730,12 +2148,14 @@ const ChatUI: React.FC<ChatUIProps> = ({
                 )}
               </div>
             </div>
+          </>
+          )}
           </div>
         </div>
       </Card>
       <Modal
         title="Generated Code"
-        visible={isGetCodeModalVisible}
+        open={isGetCodeModalVisible}
         onCancel={() => setIsGetCodeModalVisible(false)}
         footer={null}
         width={800}
@@ -1776,53 +2196,61 @@ const ChatUI: React.FC<ChatUIProps> = ({
           {generatedCode}
         </SyntaxHighlighter>
       </Modal>
-      {apiKeySource === "custom" && (
-        <Modal
-          title="Select MCP Tool"
-          visible={isMCPToolsModalVisible}
-          onCancel={() => setIsMCPToolsModalVisible(false)}
-          onOk={() => {
-            setIsMCPToolsModalVisible(false);
-            NotificationsManager.success("MCP tool selection updated");
+
+      {byokModalServer && (
+        <ByokCredentialModal
+          server={byokModalServer}
+          open={!!byokModalServer}
+          onClose={() => setByokModalServer(null)}
+          onSuccess={(_serverId) => {
+            // Refresh MCP servers to pick up updated has_user_credential
+            loadMCPServers();
+            setByokModalServer(null);
           }}
-          width={800}
-        >
-          {isLoadingMCPTools ? (
-            <div className="flex justify-center items-center py-8">
-              <Spin indicator={<LoadingOutlined style={{ fontSize: 24 }} spin />} />
-            </div>
-          ) : (
-            <div className="space-y-4">
-              <Text className="text-gray-600 block mb-4">
-                Select the MCP tools you want to use in your conversation.
-              </Text>
-              <Select
-                mode="multiple"
-                style={{ width: "100%" }}
-                placeholder="Select MCP tools"
-                value={selectedMCPTools}
-                onChange={(value) => setSelectedMCPTools(value)}
-                optionLabelProp="label"
-                allowClear
-                maxTagCount="responsive"
-              >
-                {mcpTools.map((tool) => (
-                  <Select.Option
-                    key={tool.name}
-                    value={tool.name}
-                    label={<div className="font-medium">{tool.name}</div>}
-                  >
-                    <div className="flex flex-col py-1">
-                      <span className="font-medium">{tool.name}</span>
-                      <span className="text-xs text-gray-500 mt-1">{tool.description}</span>
-                    </div>
-                  </Select.Option>
-                ))}
-              </Select>
-            </div>
-          )}
-        </Modal>
+          accessToken={accessToken || ""}
+        />
       )}
+
+      {/* Toolsets info modal */}
+      <Modal
+        title="How Toolsets Work"
+        open={isToolsetsInfoModalVisible}
+        onCancel={() => setIsToolsetsInfoModalVisible(false)}
+        footer={[
+          <Button key="close" onClick={() => setIsToolsetsInfoModalVisible(false)}>
+            Close
+          </Button>,
+        ]}
+        width={600}
+      >
+        <div className="space-y-4 py-2">
+          <p className="text-gray-700">
+            <strong>Toolsets</strong> are named collections of specific tools from one or more MCP servers.
+            Instead of exposing all tools from a server, a toolset gives an agent exactly the tools it needs.
+          </p>
+          <div>
+            <h4 className="font-semibold text-gray-800 mb-2">How to use a toolset:</h4>
+            <ol className="list-decimal list-inside space-y-2 text-gray-700">
+              <li>Select a <span style={{ color: "#7c3aed", fontWeight: 600 }}>Toolset</span> (purple badge) from the MCP Servers dropdown.</li>
+              <li>The tool picker will show only the tools included in that toolset.</li>
+              <li>Select a tool and fill in its parameters, then send.</li>
+              <li>The tool call is routed to the correct underlying MCP server automatically.</li>
+            </ol>
+          </div>
+          <div className="bg-purple-50 border border-purple-200 rounded p-3">
+            <p className="text-sm text-purple-800">
+              <strong>Example:</strong> A &quot;GitHub Read-only&quot; toolset might include only <code>list_repos</code> and <code>get_file</code> from a GitHub MCP server — preventing agents from making writes.
+            </p>
+          </div>
+          <div>
+            <h4 className="font-semibold text-gray-800 mb-1">Creating toolsets:</h4>
+            <p className="text-sm text-gray-600">
+              Admins can create and manage toolsets from the <strong>MCP</strong> page → <strong>Toolsets</strong> tab.
+              Toolsets can then be assigned to keys and teams to scope their tool access.
+            </p>
+          </div>
+        </div>
+      </Modal>
     </div>
   );
 };

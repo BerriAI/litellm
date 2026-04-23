@@ -1,16 +1,9 @@
-import json
 from enum import Enum
-from typing import Any, Dict, List, Literal, Optional, Tuple, Union
+from typing import Any, Dict, List, Literal, Optional, Union
 
 from typing_extensions import (
-    Protocol,
     Required,
-    Self,
     TypedDict,
-    TypeGuard,
-    get_origin,
-    override,
-    runtime_checkable,
 )
 
 
@@ -32,7 +25,6 @@ class FileDataType(TypedDict):
 class BlobType(TypedDict, total=False):
     mime_type: Required[str]
     data: Required[str]
-    media_resolution: Literal["low", "medium", "high"]
 
 
 class PartType(TypedDict, total=False):
@@ -43,6 +35,7 @@ class PartType(TypedDict, total=False):
     function_response: FunctionResponse
     thought: bool
     thoughtSignature: str
+    media_resolution: Literal["low", "medium", "high"]
 
 
 class HttpxFunctionCall(TypedDict):
@@ -63,7 +56,18 @@ class HttpxCodeExecutionResult(TypedDict):
 class HttpxBlobType(TypedDict, total=False):
     mimeType: str
     data: str
-    mediaResolution: Literal["low", "medium", "high"]
+
+
+class HttpxServerSideToolCall(TypedDict, total=False):
+    toolType: str
+    id: str
+    args: dict
+
+
+class HttpxServerSideToolResponse(TypedDict, total=False):
+    toolType: str
+    id: str
+    response: Union[str, dict]
 
 
 class HttpxPartType(TypedDict, total=False):
@@ -72,10 +76,13 @@ class HttpxPartType(TypedDict, total=False):
     fileData: FileDataType
     functionCall: HttpxFunctionCall
     functionResponse: FunctionResponse
+    toolCall: HttpxServerSideToolCall
+    toolResponse: HttpxServerSideToolResponse
     executableCode: HttpxExecutableCode
     codeExecutionResult: HttpxCodeExecutionResult
     thought: bool
     thoughtSignature: str
+    mediaResolution: Literal["low", "medium", "high"]
 
 
 class HttpxContentType(TypedDict, total=False):
@@ -176,12 +183,14 @@ class SafetSettingsConfig(TypedDict, total=False):
 class GeminiThinkingConfig(TypedDict, total=False):
     includeThoughts: bool
     thinkingBudget: int
-    thinkingLevel: Literal["low", "medium", "high"]
+    thinkingLevel: Literal["minimal", "low", "medium", "high"]
 
 
 GeminiResponseModalities = Literal["TEXT", "IMAGE", "AUDIO", "VIDEO"]
 
-GeminiImageAspectRatio = Literal["1:1", "2:3", "3:2", "3:4", "4:3", "9:16", "16:9", "21:9"]
+GeminiImageAspectRatio = Literal[
+    "1:1", "2:3", "3:2", "3:4", "4:3", "9:16", "16:9", "21:9"
+]
 
 GeminiImageSize = Literal["1K", "2K", "4K"]
 
@@ -214,22 +223,27 @@ class GenerationConfig(TypedDict, total=False):
     frequency_penalty: float
     response_mime_type: Literal["text/plain", "application/json"]
     response_schema: dict
+    response_json_schema: dict
     seed: int
     responseLogprobs: bool
     logprobs: int
     responseModalities: List[GeminiResponseModalities]
     imageConfig: GeminiImageConfig
     thinkingConfig: GeminiThinkingConfig
+    mediaResolution: str
+    speechConfig: SpeechConfig
 
 
 class VertexToolName(str, Enum):
     """Enum for Vertex AI tool field names."""
+
     GOOGLE_SEARCH = "googleSearch"
     GOOGLE_SEARCH_RETRIEVAL = "googleSearchRetrieval"
     ENTERPRISE_WEB_SEARCH = "enterpriseWebSearch"
     URL_CONTEXT = "url_context"
     CODE_EXECUTION = "code_execution"
     GOOGLE_MAPS = "googleMaps"
+    COMPUTER_USE = "computerUse"
 
 
 class Tools(TypedDict, total=False):
@@ -240,11 +254,13 @@ class Tools(TypedDict, total=False):
     url_context: dict
     code_execution: dict
     googleMaps: dict
+    computerUse: dict
     retrieval: Retrieval
 
 
-class ToolConfig(TypedDict):
+class ToolConfig(TypedDict, total=False):
     functionCallingConfig: FunctionCallingConfig
+    includeServerSideToolInvocations: bool
 
 
 class TTL(TypedDict, total=False):
@@ -264,9 +280,12 @@ class UsageMetadata(TypedDict, total=False):
     responseTokenCount: int
     cachedContentTokenCount: int
     promptTokensDetails: List[PromptTokensDetails]
+    cacheTokensDetails: List[PromptTokensDetails]
     thoughtsTokenCount: int
     responseTokensDetails: List[PromptTokensDetails]
-    candidatesTokensDetails: List[PromptTokensDetails]  # Alternative key name used in some responses
+    candidatesTokensDetails: List[
+        PromptTokensDetails
+    ]  # Alternative key name used in some responses
 
 
 class TokenCountDetailsResponse(TypedDict):
@@ -306,7 +325,7 @@ class RequestBody(TypedDict, total=False):
     generationConfig: GenerationConfig
     cachedContent: str
     labels: Dict[str, str]
-    speechConfig: SpeechConfig
+    serviceTier: str
 
 
 class CachedContentRequestBody(TypedDict, total=False):
@@ -399,6 +418,8 @@ class Candidates(TypedDict, total=False):
         "BLOCKLIST",
         "PROHIBITED_CONTENT",
         "SPII",
+        "MALFORMED_FUNCTION_CALL",
+        "IMAGE_SAFETY",
     ]
     safetyRatings: List[SafetyRatings]
     citationMetadata: CitationMetadata
@@ -557,11 +578,22 @@ class VertexAIBatchEmbeddingsResponseObject(TypedDict):
     embeddings: List[ContentEmbeddings]
 
 
+class GeminiEmbedContentRequestBody(TypedDict, total=False):
+    content: Required[ContentType]
+    taskType: TaskTypeEnum
+    title: str
+    outputDimensionality: int
+
+
+class GeminiEmbedContentResponseObject(TypedDict):
+    embedding: ContentEmbeddings
+
+
 # Vertex AI Batch Prediction
 
 
 class GcsSource(TypedDict):
-    uris: str
+    uris: List[str]
 
 
 class InputConfig(TypedDict):

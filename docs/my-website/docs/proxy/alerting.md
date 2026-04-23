@@ -215,16 +215,16 @@ general_settings:
   alerting: ["slack"]
   alerting_threshold: 0.0001 # (Seconds) set an artificially low threshold for testing alerting
   alert_to_webhook_url: {
-    "llm_exceptions": "https://hooks.slack.com/services/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",
-    "llm_too_slow": "https://hooks.slack.com/services/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",
-    "llm_requests_hanging": "https://hooks.slack.com/services/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",
-    "budget_alerts": "https://hooks.slack.com/services/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",
-    "db_exceptions": "https://hooks.slack.com/services/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",
-    "daily_reports": "https://hooks.slack.com/services/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",
-    "spend_reports": "https://hooks.slack.com/services/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",
-    "cooldown_deployment": "https://hooks.slack.com/services/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",
-    "new_model_added": "https://hooks.slack.com/services/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",
-    "outage_alerts": "https://hooks.slack.com/services/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",
+    "llm_exceptions": "example-slack-webhook-url",
+    "llm_too_slow": "example-slack-webhook-url",
+    "llm_requests_hanging": "example-slack-webhook-url",
+    "budget_alerts": "example-slack-webhook-url",
+    "db_exceptions": "example-slack-webhook-url",
+    "daily_reports": "example-slack-webhook-url",
+    "spend_reports": "example-slack-webhook-url",
+    "cooldown_deployment": "example-slack-webhook-url",
+    "new_model_added": "example-slack-webhook-url",
+    "outage_alerts": "example-slack-webhook-url",
   }
 
 litellm_settings:
@@ -399,7 +399,7 @@ curl -X GET --location 'http://0.0.0.0:4000/health/services?service=webhook' \
 {
   "spend": 1, # the spend for the 'event_group'
   "max_budget": 0, # the 'max_budget' set for the 'event_group'
-  "token": "88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b",
+  "token": "example-api-key-123",
   "user_id": "default_user_id",
   "team_id": null,
   "user_email": null,
@@ -437,6 +437,59 @@ curl -X GET --location 'http://0.0.0.0:4000/health/services?service=webhook' \
     * "proxy": The event is related to a proxy.
 
 - `event_message` *str*: A human-readable description of the event.
+
+### Digest Mode (Reducing Alert Noise)
+
+By default, LiteLLM sends a separate Slack message for **every** alert event. For high-frequency alert types like `llm_requests_hanging` or `llm_too_slow`, this can produce hundreds of duplicate messages per day.
+
+**Digest mode** aggregates duplicate alerts within a configurable time window and emits a single summary message with the total count and time range.
+
+#### Configuration
+
+Use `alert_type_config` in `general_settings` to enable digest mode per alert type:
+
+```yaml
+general_settings:
+  alerting: ["slack"]
+  alert_type_config:
+    llm_requests_hanging:
+      digest: true
+      digest_interval: 86400  # 24 hours (default)
+    llm_too_slow:
+      digest: true
+      digest_interval: 3600   # 1 hour
+    llm_exceptions:
+      digest: true
+      # uses default interval (86400 seconds / 24 hours)
+```
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `digest` | bool | `false` | Enable digest mode for this alert type |
+| `digest_interval` | int | `86400` (24h) | Time window in seconds. Alerts are aggregated within this interval. |
+
+#### How It Works
+
+1. When an alert fires for a digest-enabled type, it is **grouped** by `(alert_type, request_model, api_base)` instead of being sent immediately
+2. A counter tracks how many times the alert fires within the interval
+3. When the interval expires, a **single summary message** is sent:
+
+```
+Alert type: `llm_requests_hanging` (Digest)
+Level: `Medium`
+Start: `2026-02-19 03:27:39`
+End: `2026-02-20 03:27:39`
+Count: `847`
+
+Message: `Requests are hanging - 600s+ request time`
+Request Model: `gemini-2.5-flash`
+API Base: `None`
+```
+
+#### Limitations
+
+- **Per-instance**: Digest state is held in memory per proxy instance. If you run multiple instances (e.g., Cloud Run with autoscaling), each instance maintains its own digest and emits its own summary.
+- **Not durable**: If an instance is terminated before the digest interval expires, the aggregated alerts for that instance are lost.
 
 ## Region-outage alerting (✨ Enterprise feature)
 

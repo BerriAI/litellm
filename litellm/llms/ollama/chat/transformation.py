@@ -16,6 +16,7 @@ from httpx._models import Headers, Response
 from pydantic import BaseModel
 
 import litellm
+from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     _extract_reasoning_content,
     convert_content_list_to_str,
@@ -190,46 +191,14 @@ class OllamaChatConfig(BaseConfig):
                 else:
                     optional_params["think"] = value in {"low", "medium", "high"}
             ### FUNCTION CALLING LOGIC ###
+            # Ollama 0.4+ supports native tool calling - pass tools directly
+            # and let Ollama handle model capability detection
+            # Fixes: https://github.com/BerriAI/litellm/issues/18922
             if param == "tools":
-                ## CHECK IF MODEL SUPPORTS TOOL CALLING ##
-                try:
-                    model_info = litellm.get_model_info(
-                        model=model, custom_llm_provider="ollama"
-                    )
-                    if model_info.get("supports_function_calling") is True:
-                        optional_params["tools"] = value
-                    else:
-                        raise Exception
-                except Exception:
-                    optional_params["format"] = "json"
-                    litellm.add_function_to_prompt = (
-                        True  # so that main.py adds the function call to the prompt
-                    )
-                    optional_params["functions_unsupported_model"] = value
-
-                    if len(optional_params["functions_unsupported_model"]) == 1:
-                        optional_params["function_name"] = optional_params[
-                            "functions_unsupported_model"
-                        ][0]["function"]["name"]
+                optional_params["tools"] = value
 
             if param == "functions":
-                ## CHECK IF MODEL SUPPORTS TOOL CALLING ##
-                try:
-                    model_info = litellm.get_model_info(
-                        model=model, custom_llm_provider="ollama"
-                    )
-                    if model_info.get("supports_function_calling") is True:
-                        optional_params["tools"] = value
-                    else:
-                        raise Exception
-                except Exception:
-                    optional_params["format"] = "json"
-                    litellm.add_function_to_prompt = (
-                        True  # so that main.py adds the function call to the prompt
-                    )
-                    optional_params["functions_unsupported_model"] = (
-                        non_default_params.get("functions")
-                    )
+                optional_params["tools"] = value
         non_default_params.pop("tool_choice", None)  # causes ollama requests to hang
         non_default_params.pop("functions", None)  # causes ollama requests to hang
         return optional_params
@@ -381,7 +350,8 @@ class OllamaChatConfig(BaseConfig):
         response_json = raw_response.json()
 
         ## RESPONSE OBJECT
-        model_response.choices[0].finish_reason = "stop"
+        _done_reason = map_finish_reason(response_json.get("done_reason") or "stop")
+        model_response.choices[0].finish_reason = _done_reason
         response_json_message = response_json.get("message")
         if response_json_message is not None:
             if "thinking" in response_json_message:
@@ -428,9 +398,12 @@ class OllamaChatConfig(BaseConfig):
             model_response.choices[0].message = message  # type: ignore
             model_response.choices[0].finish_reason = "tool_calls"
         else:
-
             _message = litellm.Message(**response_json_message)
             model_response.choices[0].message = _message  # type: ignore
+            # Set finish_reason to "tool_calls" when tool_calls are present
+            # Fixes: https://github.com/BerriAI/litellm/issues/18922
+            if _message.tool_calls:
+                model_response.choices[0].finish_reason = "tool_calls"
         model_response.created = int(time.time())
         model_response.model = "ollama_chat/" + model
         prompt_tokens = response_json.get("prompt_eval_count", litellm.token_counter(messages=messages))  # type: ignore
@@ -530,13 +503,15 @@ class OllamaChatCompletionResponseIterator(BaseModelResponseIterator):
             reasoning_content: Optional[str] = None
             content: Optional[str] = None
             if chunk["message"].get("thinking") is not None:
-                if self.started_reasoning_content is False:
-                    reasoning_content = chunk["message"].get("thinking")
-                    self.started_reasoning_content = True
-                elif self.finished_reasoning_content is False:
-                    reasoning_content = chunk["message"].get("thinking")
-                    self.finished_reasoning_content = True
+                reasoning_content = chunk["message"].get("thinking")
+                self.started_reasoning_content = True
             elif chunk["message"].get("content") is not None:
+                if (
+                    self.started_reasoning_content
+                    and not self.finished_reasoning_content
+                ):
+                    self.finished_reasoning_content = True
+
                 message_content = chunk["message"].get("content")
                 if "<think>" in message_content:
                     message_content = message_content.replace("<think>", "")
@@ -562,7 +537,11 @@ class OllamaChatCompletionResponseIterator(BaseModelResponseIterator):
             )
 
             if chunk["done"] is True:
-                finish_reason = chunk.get("done_reason", "stop")
+                finish_reason = chunk.get("done_reason") or "stop"
+                # Override finish_reason when tool_calls are present
+                # Fixes: https://github.com/BerriAI/litellm/issues/18922
+                if tool_calls is not None:
+                    finish_reason = "tool_calls"
                 choices = [
                     StreamingChoices(
                         delta=delta,

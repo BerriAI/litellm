@@ -7,9 +7,13 @@ sys.path.insert(
     0, os.path.abspath("../../../../..")
 )  # Adds the parent directory to the system path
 from litellm.llms.vertex_ai.gemini import transformation
+from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+    VertexGeminiConfig,
+)
 from litellm.types.llms import openai
 from litellm.types import completion
 from litellm.types.llms.vertex_ai import RequestBody
+
 
 @pytest.mark.asyncio
 async def test__transform_request_body_labels():
@@ -25,9 +29,7 @@ async def test__transform_request_body_labels():
         {"role": "assistant", "content": "Hello! How can I assist you today?"},
         {"role": "user", "content": "hi"},
     ]
-    optional_params = {
-        "labels": {"lparam1": "lvalue1", "lparam2": "lvalue2"}
-    }
+    optional_params = {"labels": {"lparam1": "lvalue1", "lparam2": "lvalue2"}}
     litellm_params = {}
     transform_request_params = {
         "messages": messages,
@@ -41,8 +43,16 @@ async def test__transform_request_body_labels():
     rb: RequestBody = transformation._transform_request_body(**transform_request_params)
 
     # Check URL
-    assert rb["contents"] == [{'parts': [{'text': 'hi'}], 'role': 'user'}, {'parts': [{'text': 'Hello! How can I assist you today?'}], 'role': 'model'}, {'parts': [{'text': 'hi'}], 'role': 'user'}]
-    assert "labels" in rb and rb["labels"] == {"lparam1": "lvalue1", "lparam2": "lvalue2"}
+    assert rb["contents"] == [
+        {"parts": [{"text": "hi"}], "role": "user"},
+        {"parts": [{"text": "Hello! How can I assist you today?"}], "role": "model"},
+        {"parts": [{"text": "hi"}], "role": "user"},
+    ]
+    assert "labels" in rb and rb["labels"] == {
+        "lparam1": "lvalue1",
+        "lparam2": "lvalue2",
+    }
+
 
 @pytest.mark.asyncio
 async def test__transform_request_body_metadata():
@@ -60,9 +70,7 @@ async def test__transform_request_body_metadata():
     ]
     optional_params = {}
     litellm_params = {
-        "metadata": {
-            "requester_metadata": {"rparam1": "rvalue1", "rparam2": "rvalue2"}
-        }
+        "metadata": {"requester_metadata": {"rparam1": "rvalue1", "rparam2": "rvalue2"}}
     }
     transform_request_params = {
         "messages": messages,
@@ -76,8 +84,16 @@ async def test__transform_request_body_metadata():
     rb: RequestBody = transformation._transform_request_body(**transform_request_params)
 
     # Check URL
-    assert rb["contents"] == [{'parts': [{'text': 'hi'}], 'role': 'user'}, {'parts': [{'text': 'Hello! How can I assist you today?'}], 'role': 'model'}, {'parts': [{'text': 'hi'}], 'role': 'user'}]
-    assert "labels" in rb and rb["labels"] == {"rparam1": "rvalue1", "rparam2": "rvalue2"}
+    assert rb["contents"] == [
+        {"parts": [{"text": "hi"}], "role": "user"},
+        {"parts": [{"text": "Hello! How can I assist you today?"}], "role": "model"},
+        {"parts": [{"text": "hi"}], "role": "user"},
+    ]
+    assert "labels" in rb and rb["labels"] == {
+        "rparam1": "rvalue1",
+        "rparam2": "rvalue2",
+    }
+
 
 @pytest.mark.asyncio
 async def test__transform_request_body_labels_and_metadata():
@@ -95,13 +111,9 @@ async def test__transform_request_body_labels_and_metadata():
         {"role": "assistant", "content": "Hello! How can I assist you today?"},
         {"role": "user", "content": "hi"},
     ]
-    optional_params = {
-        "labels": {"lparam1": "lvalue1", "lparam2": "lvalue2"}
-    }
+    optional_params = {"labels": {"lparam1": "lvalue1", "lparam2": "lvalue2"}}
     litellm_params = {
-        "metadata": {
-            "requester_metadata": {"rparam1": "rvalue1", "rparam2": "rvalue2"}
-        }
+        "metadata": {"requester_metadata": {"rparam1": "rvalue1", "rparam2": "rvalue2"}}
     }
     transform_request_params = {
         "messages": messages,
@@ -115,8 +127,16 @@ async def test__transform_request_body_labels_and_metadata():
     rb: RequestBody = transformation._transform_request_body(**transform_request_params)
 
     # Check URL
-    assert rb["contents"] == [{'parts': [{'text': 'hi'}], 'role': 'user'}, {'parts': [{'text': 'Hello! How can I assist you today?'}], 'role': 'model'}, {'parts': [{'text': 'hi'}], 'role': 'user'}]
-    assert "labels" in rb and rb["labels"] == {"lparam1": "lvalue1", "lparam2": "lvalue2"}
+    assert rb["contents"] == [
+        {"parts": [{"text": "hi"}], "role": "user"},
+        {"parts": [{"text": "Hello! How can I assist you today?"}], "role": "model"},
+        {"parts": [{"text": "hi"}], "role": "user"},
+    ]
+    assert "labels" in rb and rb["labels"] == {
+        "lparam1": "lvalue1",
+        "lparam2": "lvalue2",
+    }
+
 
 @pytest.mark.asyncio
 async def test__transform_request_body_image_config():
@@ -130,14 +150,14 @@ async def test__transform_request_body_image_config():
             "content": [
                 {
                     "type": "text",
-                    "text": "Create a picture of a nano banana dish in a fancy restaurant with a Gemini theme"
+                    "text": "Create a picture of a nano banana dish in a fancy restaurant with a Gemini theme",
                 }
-            ]
+            ],
         }
     ]
     optional_params = {
         "imageConfig": {"aspectRatio": "16:9"},
-        "responseModalities": ["Image"]
+        "responseModalities": ["Image"],
     }
     litellm_params = {}
     transform_request_params = {
@@ -169,14 +189,12 @@ async def test__transform_request_body_image_config_snake_case():
             "content": [
                 {
                     "type": "text",
-                    "text": "Create a picture of a nano banana dish in a fancy restaurant with a Gemini theme"
+                    "text": "Create a picture of a nano banana dish in a fancy restaurant with a Gemini theme",
                 }
-            ]
+            ],
         }
     ]
-    optional_params = {
-        "image_config": {"aspect_ratio": "16:9"}
-    }
+    optional_params = {"image_config": {"aspect_ratio": "16:9"}}
     litellm_params = {}
     transform_request_params = {
         "messages": messages,
@@ -203,12 +221,12 @@ async def test__transform_request_body_image_config_with_image_size():
             "role": "user",
             "content": [
                 {"type": "text", "text": "Generate a 4K image of Tokyo skyline"}
-            ]
+            ],
         }
     ]
     optional_params = {
         "imageConfig": {"aspectRatio": "16:9", "imageSize": "4K"},
-        "responseModalities": ["Image"]
+        "responseModalities": ["Image"],
     }
     litellm_params = {}
     transform_request_params = {
@@ -226,3 +244,70 @@ async def test__transform_request_body_image_config_with_image_size():
     assert "imageConfig" in rb["generationConfig"]
     assert rb["generationConfig"]["imageConfig"]["aspectRatio"] == "16:9"
     assert rb["generationConfig"]["imageConfig"]["imageSize"] == "4K"
+
+
+def test_map_function_google_search_snake_case():
+    """
+    Test that google_search tool (snake_case) is properly mapped to googleSearch.
+    Fixes issue where tools=[{"google_search": {}}] was being stripped.
+    """
+    config = VertexGeminiConfig()
+    optional_params = {}
+
+    # Test snake_case google_search
+    tools = [{"google_search": {}}]
+    result = config._map_function(tools, optional_params)
+
+    assert len(result) == 1
+    assert "googleSearch" in result[0]
+    assert result[0]["googleSearch"] == {}
+
+
+def test_map_function_google_search_camel_case():
+    """
+    Test that googleSearch tool (camelCase) still works.
+    """
+    config = VertexGeminiConfig()
+    optional_params = {}
+
+    # Test camelCase googleSearch
+    tools = [{"googleSearch": {}}]
+    result = config._map_function(tools, optional_params)
+
+    assert len(result) == 1
+    assert "googleSearch" in result[0]
+    assert result[0]["googleSearch"] == {}
+
+
+def test_map_function_google_search_retrieval_snake_case():
+    """
+    Test that google_search_retrieval tool (snake_case) is properly mapped.
+    """
+    config = VertexGeminiConfig()
+    optional_params = {}
+
+    tools = [
+        {
+            "google_search_retrieval": {
+                "dynamic_retrieval_config": {"mode": "MODE_DYNAMIC"}
+            }
+        }
+    ]
+    result = config._map_function(tools, optional_params)
+
+    assert len(result) == 1
+    assert "googleSearchRetrieval" in result[0]
+
+
+def test_map_function_enterprise_web_search_snake_case():
+    """
+    Test that enterprise_web_search tool (snake_case) is properly mapped.
+    """
+    config = VertexGeminiConfig()
+    optional_params = {}
+
+    tools = [{"enterprise_web_search": {}}]
+    result = config._map_function(tools, optional_params)
+
+    assert len(result) == 1
+    assert "enterpriseWebSearch" in result[0]

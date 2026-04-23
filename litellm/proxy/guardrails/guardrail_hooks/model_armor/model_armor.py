@@ -14,6 +14,8 @@ from fastapi import HTTPException
 if TYPE_CHECKING:
     from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 
+import json
+
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching import DualCache
@@ -203,8 +205,8 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
                 response.text,
             )
             raise HTTPException(
-                status_code=response.status_code,
-                detail=f"Model Armor API error: {response.text}",
+                status_code=400,
+                detail=f"Model Armor API error (upstream {response.status_code}): {response.text}",
             )
 
         json_response = response.json()
@@ -327,6 +329,8 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         start_time: Optional[float] = None,
         end_time: Optional[float] = None,
         duration: Optional[float] = None,
+        event_type: Optional[GuardrailEventHooks] = None,
+        original_inputs: Optional[dict] = None,
     ):
         """
         Override to store only the Model Armor API response, not the entire data dict.
@@ -351,6 +355,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
             duration=duration,
             start_time=start_time,
             end_time=end_time,
+            event_type=event_type,
         )
         return response
 
@@ -417,6 +422,13 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
                     )
                     else "success"
                 )
+
+            # Add guardrail to applied_guardrails BEFORE potential blocking
+            # This ensures guardrail is recorded even when it blocks the request
+            add_guardrail_to_applied_guardrails_header(
+                request_data=data, guardrail_name=self.guardrail_name
+            )
+
             # Check if content should be blocked
             if self._should_block_content(
                 armor_response, allow_sanitization=self.mask_request_content
@@ -451,11 +463,6 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
             # Depending on configuration, either fail or continue
             if self.optional_params.get("fail_on_error", True):
                 raise
-
-        # Add guardrail to headers
-        add_guardrail_to_applied_guardrails_header(
-            request_data=data, guardrail_name=self.guardrail_name
-        )
 
         return data
 
@@ -513,6 +520,12 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
                     else "success"
                 )
 
+            # Add guardrail to applied_guardrails BEFORE potential blocking
+            # This ensures guardrail is recorded even when it blocks the request
+            add_guardrail_to_applied_guardrails_header(
+                request_data=data, guardrail_name=self.guardrail_name
+            )
+
             # Check if content should be blocked
             if self._should_block_content(
                 armor_response, allow_sanitization=self.mask_request_content
@@ -545,11 +558,6 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
             )
             if self.optional_params.get("fail_on_error", True):
                 raise
-
-        # Add guardrail to headers
-        add_guardrail_to_applied_guardrails_header(
-            request_data=data, guardrail_name=self.guardrail_name
-        )
 
         return data
 
@@ -618,6 +626,12 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
                     guardrail_response=standard_logging_guardrail_information,
                 )
 
+            # Add guardrail to applied_guardrails BEFORE potential blocking
+            # This ensures guardrail is recorded even when it blocks the request
+            add_guardrail_to_applied_guardrails_header(
+                request_data=data, guardrail_name=self.guardrail_name
+            )
+
             # Check if content should be blocked
             if self._should_block_content(
                 armor_response, allow_sanitization=self.mask_response_content
@@ -649,11 +663,6 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
             )
             if self.optional_params.get("fail_on_error", True):
                 raise
-
-        # Add guardrail to headers
-        add_guardrail_to_applied_guardrails_header(
-            request_data=data, guardrail_name=self.guardrail_name
-        )
 
         return response
 
@@ -699,6 +708,16 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
                             else "success"
                         )
 
+                    # Add guardrail to applied_guardrails BEFORE potential blocking
+                    # This ensures guardrail is recorded even when it blocks the request
+                    from litellm.proxy.common_utils.callback_utils import (
+                        add_guardrail_to_applied_guardrails_header,
+                    )
+
+                    add_guardrail_to_applied_guardrails_header(
+                        request_data=request_data, guardrail_name=self.guardrail_name
+                    )
+
                     # Check if blocked
                     if self._should_block_content(armor_response):
                         raise HTTPException(
@@ -727,8 +746,23 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
                                 yield chunk
                             return
 
-                except HTTPException:
-                    raise
+                except HTTPException as e:
+                    # Yield error as SSE event so create_response() detects it and
+                    # returns a proper JSON error response with the correct status code.
+                    # (Raising from a generator hits create_response's generic except → 500.)
+                    detail = (
+                        e.detail
+                        if isinstance(e.detail, dict)
+                        else {"message": str(e.detail)}
+                    )
+                    error_value = detail.get("error", detail)
+                    if isinstance(error_value, dict):
+                        error_obj = dict(error_value)
+                    else:
+                        error_obj = {"message": str(error_value)}
+                    error_obj["code"] = str(e.status_code)
+                    yield f"data: {json.dumps({'error': error_obj})}\n\n"  # type: ignore[misc]
+                    return
                 except Exception as e:
                     verbose_proxy_logger.error(
                         "Model Armor streaming error: %s", str(e), exc_info=True

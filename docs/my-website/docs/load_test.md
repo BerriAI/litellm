@@ -4,8 +4,9 @@ import Image from '@theme/IdealImage';
 
 ## Locust Load Test LiteLLM Proxy 
 
-1. Add `fake-openai-endpoint` to your proxy config.yaml and start your litellm proxy
-litellm provides a free hosted `fake-openai-endpoint` you can load test against
+1. Add `fake-openai-endpoint` to your proxy config.yaml and start your litellm proxy.
+
+LiteLLM provides a free hosted `fake-openai-endpoint` you can load test against. You can also self-host your own fake OpenAI proxy server using [github.com/BerriAI/example_openai_endpoint](https://github.com/BerriAI/example_openai_endpoint).
 
 ```yaml
 model_list:
@@ -16,7 +17,7 @@ model_list:
       api_base: https://exampleopenaiendpoint-production.up.railway.app/
 ```
 
-2. `pip install locust`
+2. `uv add locust`
 
 3. Create a file called `locustfile.py` on your local machine. Copy the contents from the litellm load test located [here](https://github.com/BerriAI/litellm/blob/main/.github/workflows/locustfile.py)
 

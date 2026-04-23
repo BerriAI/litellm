@@ -285,7 +285,7 @@ from anthropic import Anthropic
 
 client = Anthropic(
     base_url="http://localhost:4000", # proxy endpoint
-    api_key="sk-s4xN1IiLTCytwtZFJaYQrA", # litellm proxy virtual key
+    api_key="sk-test-proxy-key-123", # litellm proxy virtual key (example)
 )
 
 message = client.messages.create(
@@ -881,7 +881,7 @@ Credits [@vividfog](https://github.com/ollama/ollama/issues/305#issuecomment-175
 <TabItem value="aider" label="Aider">
 
 ```shell
-$ pip install aider 
+$ uv add aider 
 
 $ aider --openai-api-base http://0.0.0.0:4000 --openai-api-key fake-key
 ```
@@ -889,7 +889,7 @@ $ aider --openai-api-base http://0.0.0.0:4000 --openai-api-key fake-key
 <TabItem value="autogen" label="AutoGen">
 
 ```python
-pip install pyautogen
+uv add pyautogen
 ```
 
 ```python
