@@ -1,8 +1,13 @@
 "use client";
 
 import React from "react";
-import { Select } from "antd";
-import { CloudServerOutlined } from "@ant-design/icons";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { useWorker } from "@/hooks/useWorker";
 
 interface WorkerDropdownProps {
@@ -16,22 +21,24 @@ const WorkerDropdown: React.FC<WorkerDropdownProps> = ({ onWorkerSwitch }) => {
 
   return (
     <Select
-      showSearch
-      filterOption={(input, option) =>
-        (option?.label as string ?? "").toLowerCase().includes(input.toLowerCase())
-      }
       value={selectedWorker.worker_id}
-      style={{ minWidth: 180 }}
-      suffixIcon={<CloudServerOutlined />}
-      options={workers.map((w) => ({
-        label: w.name,
-        value: w.worker_id,
-        disabled: w.worker_id === selectedWorker.worker_id,
-      }))}
-      onChange={(newWorkerId) => {
-        onWorkerSwitch(newWorkerId);
-      }}
-    />
+      onValueChange={onWorkerSwitch}
+    >
+      <SelectTrigger className="min-w-[180px]">
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent>
+        {workers.map((w) => (
+          <SelectItem
+            key={w.worker_id}
+            value={w.worker_id}
+            disabled={w.worker_id === selectedWorker.worker_id}
+          >
+            {w.name}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
   );
 };
 

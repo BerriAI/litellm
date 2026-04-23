@@ -1,6 +1,7 @@
+// eslint-disable-next-line litellm-ui/no-banned-ui-imports
 import { Icon, Tab, TabGroup, TabList, TabPanels, Text } from "@tremor/react";
 import { isAdminRole } from "@/utils/roles";
-import { RefreshIcon } from "@heroicons/react/outline";
+import { RefreshCw } from "lucide-react";
 import React from "react";
 
 type TeamsHeaderTabsProps = {
@@ -10,7 +11,12 @@ type TeamsHeaderTabsProps = {
   children: React.ReactNode;
 };
 
-const TeamsHeaderTabs = ({ lastRefreshed, onRefresh, userRole, children }: TeamsHeaderTabsProps) => {
+const TeamsHeaderTabs = ({
+  lastRefreshed,
+  onRefresh,
+  userRole,
+  children,
+}: TeamsHeaderTabsProps) => {
   return (
     <TabGroup className="gap-2 h-[75vh] w-full">
       <TabList className="flex justify-between mt-2 w-full items-center">
@@ -22,7 +28,7 @@ const TeamsHeaderTabs = ({ lastRefreshed, onRefresh, userRole, children }: Teams
         <div className="flex items-center space-x-2">
           {lastRefreshed && <Text>Last Refreshed: {lastRefreshed}</Text>}
           <Icon
-            icon={RefreshIcon} // Modify as necessary for correct icon name
+            icon={RefreshCw}
             variant="shadow"
             size="xs"
             className="self-center"
