@@ -1,8 +1,19 @@
 import React from "react";
-import { Form, Select, Tooltip } from "antd";
-import { InfoCircleOutlined } from "@ant-design/icons";
-
-const { Option } = Select;
+import { Form } from "antd";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import { Info } from "lucide-react";
 
 interface RateLimitTypeFormItemProps {
   /** The type of rate limit - either 'tpm' or 'rpm' */
@@ -16,6 +27,7 @@ interface RateLimitTypeFormItemProps {
   /** Initial value for the field */
   initialValue?: string | null;
   /** Form instance for setting field values */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   form?: any;
   /** Custom onChange handler */
   onChange?: (value: string) => void;
@@ -49,9 +61,16 @@ export const RateLimitTypeFormItem: React.FC<RateLimitTypeFormItemProps> = ({
       label={
         <span>
           {limitTypeUpper} Rate Limit Type{" "}
-          <Tooltip title={tooltipTitle}>
-            <InfoCircleOutlined style={{ marginLeft: "4px" }} />
-          </Tooltip>
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Info className="ml-1 h-3 w-3 inline" />
+              </TooltipTrigger>
+              <TooltipContent className="max-w-xs">
+                {tooltipTitle}
+              </TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
         </span>
       }
       name={name}
@@ -60,48 +79,58 @@ export const RateLimitTypeFormItem: React.FC<RateLimitTypeFormItemProps> = ({
     >
       <Select
         defaultValue={showDetailedDescriptions ? "default" : undefined}
-        placeholder="Select rate limit type"
-        style={{ width: "100%" }}
-        optionLabelProp={showDetailedDescriptions ? "label" : undefined}
-        onChange={handleChange}
+        onValueChange={handleChange}
       >
-        {showDetailedDescriptions ? (
-          <>
-            <Option value="best_effort_throughput" label="Default">
-              <div style={{ padding: "4px 0" }}>
-                <div style={{ fontWeight: 500 }}>Default</div>
-                <div style={{ fontSize: "11px", color: "#6b7280", marginTop: "2px" }}>
-                  Best effort throughput - no error if we&apos;re overallocating {limitTypeLower} (Team/Key Limits
-                  checked at runtime).
+        <SelectTrigger className="w-full">
+          <SelectValue placeholder="Select rate limit type" />
+        </SelectTrigger>
+        <SelectContent>
+          {showDetailedDescriptions ? (
+            <>
+              <SelectItem value="best_effort_throughput">
+                <div className="py-1">
+                  <div className="font-medium">Default</div>
+                  <div className="text-[11px] text-muted-foreground mt-0.5">
+                    Best effort throughput - no error if we&apos;re
+                    overallocating {limitTypeLower} (Team/Key Limits checked at
+                    runtime).
+                  </div>
                 </div>
-              </div>
-            </Option>
-            <Option value="guaranteed_throughput" label="Guaranteed throughput">
-              <div style={{ padding: "4px 0" }}>
-                <div style={{ fontWeight: 500 }}>Guaranteed throughput</div>
-                <div style={{ fontSize: "11px", color: "#6b7280", marginTop: "2px" }}>
-                  Guaranteed throughput - raise an error if we&apos;re overallocating {limitTypeLower} (also checks
-                  model-specific limits)
+              </SelectItem>
+              <SelectItem value="guaranteed_throughput">
+                <div className="py-1">
+                  <div className="font-medium">Guaranteed throughput</div>
+                  <div className="text-[11px] text-muted-foreground mt-0.5">
+                    Guaranteed throughput - raise an error if we&apos;re
+                    overallocating {limitTypeLower} (also checks model-specific
+                    limits)
+                  </div>
                 </div>
-              </div>
-            </Option>
-            <Option value="dynamic" label="Dynamic">
-              <div style={{ padding: "4px 0" }}>
-                <div style={{ fontWeight: 500 }}>Dynamic</div>
-                <div style={{ fontSize: "11px", color: "#6b7280", marginTop: "2px" }}>
-                  If the key has a set {limitTypeUpper} (e.g. 2 {limitTypeUpper}) and there are no 429 errors, it can
-                  dynamically exceed the limit when the model being called is not erroring.
+              </SelectItem>
+              <SelectItem value="dynamic">
+                <div className="py-1">
+                  <div className="font-medium">Dynamic</div>
+                  <div className="text-[11px] text-muted-foreground mt-0.5">
+                    If the key has a set {limitTypeUpper} (e.g. 2{" "}
+                    {limitTypeUpper}) and there are no 429 errors, it can
+                    dynamically exceed the limit when the model being called is
+                    not erroring.
+                  </div>
                 </div>
-              </div>
-            </Option>
-          </>
-        ) : (
-          <>
-            <Option value="best_effort_throughput">Best effort throughput</Option>
-            <Option value="guaranteed_throughput">Guaranteed throughput</Option>
-            <Option value="dynamic">Dynamic</Option>
-          </>
-        )}
+              </SelectItem>
+            </>
+          ) : (
+            <>
+              <SelectItem value="best_effort_throughput">
+                Best effort throughput
+              </SelectItem>
+              <SelectItem value="guaranteed_throughput">
+                Guaranteed throughput
+              </SelectItem>
+              <SelectItem value="dynamic">Dynamic</SelectItem>
+            </>
+          )}
+        </SelectContent>
       </Select>
     </Form.Item>
   );

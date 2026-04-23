@@ -1,8 +1,19 @@
 import React from "react";
-import { TextInput, Button } from "@tremor/react";
-import { Select as AntdSelect, Form, Tooltip } from "antd";
-import { InfoCircleOutlined } from "@ant-design/icons";
-import { Providers, provider_map, providerLogoMap } from "../provider_info_helpers";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import { Select as AntdSelect, Form } from "antd";
+import { Info } from "lucide-react";
+import {
+  Providers,
+  provider_map,
+  providerLogoMap,
+} from "../provider_info_helpers";
 import { DiscountConfig } from "./types";
 import { handleImageError } from "./provider_display_helpers";
 
@@ -27,11 +38,18 @@ const AddProviderForm: React.FC<AddProviderFormProps> = ({
     <div className="space-y-6">
       <Form.Item
         label={
-          <span className="text-sm font-medium text-gray-700 flex items-center">
+          <span className="text-sm font-medium text-foreground flex items-center">
             Provider
-            <Tooltip title="Select the LLM provider you want to configure a discount for">
-              <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
-            </Tooltip>
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Info className="ml-2 h-3 w-3 text-primary cursor-help" />
+                </TooltipTrigger>
+                <TooltipContent className="max-w-xs">
+                  Select the LLM provider you want to configure a discount for
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
           </span>
         }
         rules={[{ required: true, message: "Please select a provider" }]}
@@ -45,58 +63,73 @@ const AddProviderForm: React.FC<AddProviderFormProps> = ({
           size="large"
           optionFilterProp="children"
           filterOption={(input, option) =>
-            String(option?.label ?? "").toLowerCase().includes(input.toLowerCase())
+            String(option?.label ?? "")
+              .toLowerCase()
+              .includes(input.toLowerCase())
           }
         >
-          {Object.entries(Providers).map(([providerEnum, providerDisplayName]) => {
-            const providerValue = provider_map[providerEnum as keyof typeof provider_map];
-            // Only show providers that don't already have a discount configured
-            if (providerValue && discountConfig[providerValue]) {
-              return null;
-            }
-            return (
-              <AntdSelect.Option key={providerEnum} value={providerEnum} label={providerDisplayName}>
-                <div className="flex items-center space-x-2">
-                  <img
-                    src={providerLogoMap[providerDisplayName]}
-                    alt={`${providerEnum} logo`}
-                    className="w-5 h-5"
-                    onError={(e) => handleImageError(e, providerDisplayName)}
-                  />
-                  <span>{providerDisplayName}</span>
-                </div>
-              </AntdSelect.Option>
-            );
-          })}
+          {Object.entries(Providers).map(
+            ([providerEnum, providerDisplayName]) => {
+              const providerValue =
+                provider_map[providerEnum as keyof typeof provider_map];
+              if (providerValue && discountConfig[providerValue]) {
+                return null;
+              }
+              return (
+                <AntdSelect.Option
+                  key={providerEnum}
+                  value={providerEnum}
+                  label={providerDisplayName}
+                >
+                  <div className="flex items-center space-x-2">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={providerLogoMap[providerDisplayName]}
+                      alt={`${providerEnum} logo`}
+                      className="w-5 h-5"
+                      onError={(e) => handleImageError(e, providerDisplayName)}
+                    />
+                    <span>{providerDisplayName}</span>
+                  </div>
+                </AntdSelect.Option>
+              );
+            },
+          )}
         </AntdSelect>
       </Form.Item>
 
       <Form.Item
         label={
-          <span className="text-sm font-medium text-gray-700 flex items-center">
+          <span className="text-sm font-medium text-foreground flex items-center">
             Discount Percentage
-            <Tooltip title="Enter a percentage value (e.g., 5 for 5% discount)">
-              <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
-            </Tooltip>
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Info className="ml-2 h-3 w-3 text-primary cursor-help" />
+                </TooltipTrigger>
+                <TooltipContent className="max-w-xs">
+                  Enter a percentage value (e.g., 5 for 5% discount)
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
           </span>
         }
         rules={[{ required: true, message: "Please enter a discount percentage" }]}
       >
         <div className="flex items-center gap-2">
-          <TextInput
+          <Input
             placeholder="5"
             value={newDiscount}
-            onValueChange={onDiscountChange}
-            className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500 flex-1"
+            onChange={(e) => onDiscountChange(e.target.value)}
+            className="rounded-lg flex-1"
           />
-          <span className="text-gray-600">%</span>
+          <span className="text-muted-foreground">%</span>
         </div>
       </Form.Item>
 
-      <div className="flex items-center justify-end space-x-3 pt-6 border-t border-gray-100">
-        <Button 
-          variant="primary"
-          onClick={onAddProvider} 
+      <div className="flex items-center justify-end space-x-3 pt-6 border-t border-border">
+        <Button
+          onClick={onAddProvider}
           disabled={!selectedProvider || !newDiscount}
         >
           Add Provider Discount
@@ -107,4 +140,3 @@ const AddProviderForm: React.FC<AddProviderFormProps> = ({
 };
 
 export default AddProviderForm;
-
