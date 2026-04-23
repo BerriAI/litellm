@@ -309,8 +309,9 @@ def handle_generic_response(
     model_response.created = int(dt.timestamp())
     model_response.model = completion_response.modelId
 
+    oci_choice = completion_response.chatResponse.choices[0]
     message = model_response.choices[0].message  # type: ignore
-    response_message = completion_response.chatResponse.choices[0].message
+    response_message = oci_choice.message
     if response_message is not None:
         if (
             response_message.content
@@ -322,6 +323,18 @@ def handle_generic_response(
             message.tool_calls = adapt_tools_to_openai_standard(
                 response_message.toolCalls
             )
+
+    oci_finish_reason = oci_choice.finishReason
+    if oci_finish_reason in ("COMPLETE", "STOP"):
+        finish_reason: Optional[str] = "stop"
+    elif oci_finish_reason == "MAX_TOKENS":
+        finish_reason = "length"
+    elif oci_finish_reason in ("TOOL_CALLS", "TOOL_CALL"):
+        finish_reason = "tool_calls"
+    else:
+        finish_reason = oci_finish_reason
+    if finish_reason is not None:
+        model_response.choices[0].finish_reason = finish_reason  # type: ignore[union-attr,assignment]
 
     oci_usage = completion_response.chatResponse.usage
     model_response.usage = Usage(  # type: ignore[attr-defined]

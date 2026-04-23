@@ -244,6 +244,38 @@ class TestHandleGenericResponse:
         result = handle_generic_response(body, "xai.grok-4", ModelResponse(), raw)
         assert result.choices[0].message.tool_calls is not None
 
+    def _body_with_finish_reason(self, reason):
+        body = self._valid_body(
+            message={"role": "ASSISTANT", "content": [{"type": "TEXT", "text": "hi"}]}
+        )
+        body["chatResponse"]["choices"][0]["finishReason"] = reason
+        return body
+
+    def test_complete_maps_to_stop(self):
+        body = self._body_with_finish_reason("COMPLETE")
+        result = handle_generic_response(body, "xai.grok-4", ModelResponse(), self._make_response(body))
+        assert result.choices[0].finish_reason == "stop"
+
+    def test_max_tokens_maps_to_length(self):
+        body = self._body_with_finish_reason("MAX_TOKENS")
+        result = handle_generic_response(body, "xai.grok-4", ModelResponse(), self._make_response(body))
+        assert result.choices[0].finish_reason == "length"
+
+    def test_tool_calls_plural_maps_to_tool_calls(self):
+        body = self._body_with_finish_reason("TOOL_CALLS")
+        result = handle_generic_response(body, "xai.grok-4", ModelResponse(), self._make_response(body))
+        assert result.choices[0].finish_reason == "tool_calls"
+
+    def test_tool_call_singular_maps_to_tool_calls(self):
+        body = self._body_with_finish_reason("TOOL_CALL")
+        result = handle_generic_response(body, "xai.grok-4", ModelResponse(), self._make_response(body))
+        assert result.choices[0].finish_reason == "tool_calls"
+
+    def test_unknown_finish_reason_passes_through(self):
+        body = self._body_with_finish_reason("SOMETHING_ELSE")
+        result = handle_generic_response(body, "xai.grok-4", ModelResponse(), self._make_response(body))
+        assert result.choices[0].finish_reason == "SOMETHING_ELSE"
+
 
 # ---------------------------------------------------------------------------
 # handle_generic_stream_chunk — finish reasons and error paths
