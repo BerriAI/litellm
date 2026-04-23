@@ -174,3 +174,18 @@ LiteLLM is a unified interface for 100+ LLM providers with two main components:
 1. **Create a Prisma migration** (permanent) — run `prisma migrate dev --name <description>` in the worktree. The generated file will be picked up by `prisma migrate deploy` on next startup.
 2. **Apply manually for local dev** — `psql -d litellm -c "ALTER TABLE ... ADD COLUMN IF NOT EXISTS ..."` after each proxy start. Fine for dev, not for production.
 3. **Update litellm-proxy-extras** — if the package is installed from PyPI, its migration directory must include the new file. Either update the package or run the migration manually until the next release ships it.
+
+### LLM-as-a-Judge Guardrail: eval_information format
+When the `llm_as_a_judge` guardrail writes judge results to `request_data["metadata"]["eval_information"]`, it must use the `StandardLoggingEvalInformation` TypedDict from `litellm.types.utils`. This is what the `EvalViewer` component on the logs page reads. Fields:
+```python
+from litellm.types.utils import StandardLoggingEvalInformation
+eval_info = cast("StandardLoggingEvalInformation", {
+    "eval_name": guardrail_name,     # str — shown as the result title
+    "overall_score": float,          # 0–100
+    "passed": bool,
+    "judge_model": str,              # model used for judging
+    "threshold": float,              # the min-score threshold configured
+    "verdicts": list,                # per-criterion [{criterion_name, score, reasoning, passed, weight}]
+})
+```
+The `eval_information` field on `StandardLoggingPayload` accepts `Optional[List[StandardLoggingEvalInformation]]`. When writing a single result, write the dict directly — the logs page normalises it to a list.
