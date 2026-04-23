@@ -197,3 +197,118 @@ def test_azure_model_router_response_shows_actual_model():
         f"Expected model to be 'azure_ai/gpt-5-nano-2025-08-07' (actual model used), "
         f"but got '{result.model}'"
     )
+
+
+def test_azure_ai_map_openai_params_renames_max_completion_tokens():
+    """
+    Azure AI Foundry's Model Inference endpoint only accepts `max_tokens`, so
+    `max_completion_tokens` must be rewritten before the request is sent.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/26322
+    """
+    config = AzureAIStudioConfig()
+    optional_params = config.map_openai_params(
+        non_default_params={"max_completion_tokens": 1000},
+        optional_params={},
+        model="mistral-large-3",
+        drop_params=False,
+    )
+    assert optional_params.get("max_tokens") == 1000
+    assert "max_completion_tokens" not in optional_params
+
+
+def test_azure_ai_map_openai_params_preserves_max_tokens():
+    """
+    Plain `max_tokens` must still pass through unchanged.
+    """
+    config = AzureAIStudioConfig()
+    optional_params = config.map_openai_params(
+        non_default_params={"max_tokens": 500},
+        optional_params={},
+        model="mistral-large-3",
+        drop_params=False,
+    )
+    assert optional_params.get("max_tokens") == 500
+    assert "max_completion_tokens" not in optional_params
+
+
+def test_azure_ai_map_openai_params_max_completion_tokens_takes_priority():
+    """
+    When both are provided, `max_completion_tokens` should win — matching
+    `MistralConfig.map_openai_params` precedence.
+    """
+    config = AzureAIStudioConfig()
+    optional_params = config.map_openai_params(
+        non_default_params={"max_tokens": 500, "max_completion_tokens": 1000},
+        optional_params={},
+        model="mistral-large-3",
+        drop_params=False,
+    )
+    assert optional_params.get("max_tokens") == 1000
+    assert "max_completion_tokens" not in optional_params
+
+
+def test_azure_ai_map_openai_params_does_not_mutate_caller_dict():
+    """
+    The incoming non_default_params dict belongs to the caller — the rename must
+    not mutate it.
+    """
+    config = AzureAIStudioConfig()
+    non_default_params = {"max_completion_tokens": 1000}
+    config.map_openai_params(
+        non_default_params=non_default_params,
+        optional_params={},
+        model="mistral-large-3",
+        drop_params=False,
+    )
+    assert non_default_params == {"max_completion_tokens": 1000}
+
+
+@pytest.mark.parametrize(
+    "model,non_default_params",
+    [
+        # o-series models: parent dispatches to openaiOSeriesConfig which
+        # actively maps max_tokens → max_completion_tokens; our post-super
+        # normalization must still land on max_tokens for the Foundry endpoint.
+        ("o3-mini", {"max_completion_tokens": 1000}),
+        ("o3-mini", {"max_tokens": 1000}),
+        # gpt-5 models: parent dispatches to openAIGPT5Config with the same
+        # max_tokens → max_completion_tokens rename.
+        ("gpt-5-mini", {"max_completion_tokens": 1000}),
+        ("gpt-5-mini", {"max_tokens": 1000}),
+    ],
+)
+def test_azure_ai_map_openai_params_handles_openai_family_models(
+    model, non_default_params
+):
+    """
+    Azure AI Foundry can host OpenAI-family model names (o-series, gpt-5) whose
+    parent configs flip max_tokens ↔ max_completion_tokens internally. The
+    override must normalize to max_tokens regardless of which direction the
+    parent dispatch took.
+    """
+    config = AzureAIStudioConfig()
+    optional_params = config.map_openai_params(
+        non_default_params=dict(non_default_params),
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+    assert optional_params.get("max_tokens") == 1000
+    assert "max_completion_tokens" not in optional_params
+
+
+def test_azure_model_router_inherits_max_completion_tokens_rewrite():
+    """
+    `AzureModelRouterConfig` subclasses `AzureAIStudioConfig` and shares the same
+    Model Inference endpoint, so it must also rewrite `max_completion_tokens`.
+    """
+    config = AzureModelRouterConfig()
+    optional_params = config.map_openai_params(
+        non_default_params={"max_completion_tokens": 1000},
+        optional_params={},
+        model="model-router",
+        drop_params=False,
+    )
+    assert optional_params.get("max_tokens") == 1000
+    assert "max_completion_tokens" not in optional_params

@@ -46,6 +46,31 @@ class AzureAIStudioConfig(OpenAIConfig):
 
         return supported_params
 
+    def map_openai_params(
+        self,
+        non_default_params: dict,
+        optional_params: dict,
+        model: str,
+        drop_params: bool,
+    ) -> dict:
+        # Azure AI Foundry's Model Inference endpoint (/models/chat/completions)
+        # accepts `max_tokens` but not `max_completion_tokens` — requests using
+        # the newer OpenAI name are rejected with 422. Normalize AFTER the parent
+        # mapping so this applies regardless of how the parent dispatched
+        # internally: the default OpenAI-compatible path copies through, but
+        # o-series and gpt-5 configs actively rename `max_tokens` →
+        # `max_completion_tokens`, which would otherwise re-introduce the wrong
+        # name for Foundry-hosted deployments.
+        optional_params = super().map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=model,
+            drop_params=drop_params,
+        )
+        if "max_completion_tokens" in optional_params:
+            optional_params["max_tokens"] = optional_params.pop("max_completion_tokens")
+        return optional_params
+
     def _supports_stop_reason(self, model: str) -> bool:
         """
         Check if the model supports stop tokens.
