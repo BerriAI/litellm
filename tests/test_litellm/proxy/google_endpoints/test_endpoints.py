@@ -1,7 +1,6 @@
 """
 Test for google_endpoints/endpoints.py
 """
-
 import pytest
 import sys, os
 from dotenv import load_dotenv
@@ -13,8 +12,9 @@ from starlette.requests import Request
 
 load_dotenv()
 
-sys.path.insert(0, os.path.abspath("../../../.."))
-
+sys.path.insert(
+    0, os.path.abspath("../../../..")
+)
 
 @pytest.mark.asyncio
 async def test_proxy_gemini_to_openai_like_model_token_counting():
@@ -26,9 +26,21 @@ async def test_proxy_gemini_to_openai_like_model_token_counting():
             scope={
                 "type": "http",
                 "parsed_body": (
-                    ["contents"],
-                    {"contents": [{"parts": [{"text": "Hello, how are you?"}]}]},
-                ),
+                    [
+                        "contents"
+                    ],
+                    {
+                        "contents": [
+                            {
+                                "parts": [
+                                    {
+                                        "text": "Hello, how are you?"
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                )
             }
         ),
         model_name="volcengine/foo",

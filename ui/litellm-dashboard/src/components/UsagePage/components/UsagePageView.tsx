@@ -641,12 +641,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                               <Card>
                                 <Title>Input Tokens</Title>
                                 <Text className="text-2xl font-bold mt-2 text-blue-600">
-                                  {Math.max(
-                                    0,
-                                    (userSpendData.metadata?.total_prompt_tokens || 0) -
-                                      (userSpendData.metadata?.total_cache_read_input_tokens || 0) -
-                                      (userSpendData.metadata?.total_cache_creation_input_tokens || 0)
-                                  ).toLocaleString()}
+                                  {userSpendData.metadata?.total_prompt_tokens?.toLocaleString() || 0}
                                 </Text>
                               </Card>
                               <Card>

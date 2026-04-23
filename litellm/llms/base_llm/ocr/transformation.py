@@ -1,7 +1,6 @@
 """
 Base OCR transformation configuration.
 """
-
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 import httpx

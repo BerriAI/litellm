@@ -5,7 +5,6 @@ CRUD ENDPOINTS FOR GUARDRAILS
 import concurrent.futures
 import inspect
 import json
-import os
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Type, TypeVar, Union, cast
 from urllib.parse import urlparse
@@ -13,17 +12,18 @@ from urllib.parse import urlparse
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from litellm.proxy.common_utils.path_utils import safe_join
-
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.guardrails.guardrail_hooks.custom_code.sandbox import (
-    build_sandbox_globals,
-    compile_sandboxed,
+from litellm.proxy.guardrails.guardrail_hooks.custom_code.code_validator import (
+    CustomCodeValidationError,
+    validate_custom_code,
+)
+from litellm.proxy.guardrails.guardrail_hooks.custom_code.primitives import (
+    get_custom_code_primitives,
 )
 from litellm.proxy.guardrails.guardrail_registry import GuardrailRegistry
 from litellm.proxy.guardrails.usage_endpoints import router as guardrails_usage_router
@@ -60,20 +60,12 @@ def _get_guardrails_list_response(
     """
     Helper function to get the guardrails list response
     """
-    from litellm.litellm_core_utils.litellm_logging import _get_masked_values
-
     guardrail_configs: List[GuardrailInfoResponse] = []
     for guardrail in guardrails_config:
-        litellm_params = guardrail.get("litellm_params") or {}
-        masked_params = _get_masked_values(
-            litellm_params,
-            unmasked_length=4,
-            number_of_asterisks=4,
-        )
         guardrail_configs.append(
             GuardrailInfoResponse(
                 guardrail_name=guardrail.get("guardrail_name"),
-                litellm_params=masked_params,
+                litellm_params=guardrail.get("litellm_params"),
                 guardrail_info=guardrail.get("guardrail_info"),
             )
         )
@@ -575,9 +567,7 @@ class GuardrailSubmissionItem(BaseModel):
     guardrail_name: str
     status: str  # pending_review | active | rejected
     team_id: Optional[str] = None
-    team_guardrail: bool = (
-        False  # True when submitted via team (team_id set); use to distinguish team vs regular guardrails
-    )
+    team_guardrail: bool = False  # True when submitted via team (team_id set); use to distinguish team vs regular guardrails
     litellm_params: Optional[Dict[str, Any]] = None
     guardrail_info: Optional[Dict[str, Any]] = None
     submitted_by_user_id: Optional[str] = None
@@ -684,9 +674,9 @@ async def register_guardrail(
     guardrail_info = dict(request.guardrail_info or {})
     guardrail_info["submitted_by_user_id"] = user_api_key_dict.user_id
     guardrail_info["submitted_by_email"] = user_api_key_dict.user_email
-    guardrail_info["team_guardrail"] = (
-        True  # Mark as team submission for filtering/display
-    )
+    guardrail_info[
+        "team_guardrail"
+    ] = True  # Mark as team submission for filtering/display
     guardrail_info_str = safe_dumps(guardrail_info)
 
     try:
@@ -1351,6 +1341,8 @@ async def get_category_yaml(category_name: str):
     Returns:
         The raw YAML or JSON content of the category file with file type indicator
     """
+    import os
+
     # Get the categories directory path
     categories_dir = os.path.join(
         os.path.dirname(__file__),
@@ -1360,11 +1352,8 @@ async def get_category_yaml(category_name: str):
     )
 
     # Try to find the file with either .yaml or .json extension
-    try:
-        yaml_path = safe_join(categories_dir, f"{category_name}.yaml")
-        json_path = safe_join(categories_dir, f"{category_name}.json")
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid category name")
+    yaml_path = os.path.join(categories_dir, f"{category_name}.yaml")
+    json_path = os.path.join(categories_dir, f"{category_name}.json")
 
     category_file_path = None
     file_type = None
@@ -1407,6 +1396,8 @@ async def get_major_airlines():
     Get the major airlines list from IATA (competitor intent, airline type).
     Returns airline id, match variants (pipe-separated), and tags.
     """
+    import os
+
     airlines_path = os.path.join(
         os.path.dirname(__file__),
         "guardrail_hooks",
@@ -1880,9 +1871,9 @@ async def get_provider_specific_params():
     lakera_v2_fields = _get_fields_from_model(LakeraV2GuardrailConfigModel)
     tool_permission_fields = _get_fields_from_model(ToolPermissionGuardrailConfigModel)
 
-    tool_permission_fields["ui_friendly_name"] = (
-        ToolPermissionGuardrailConfigModel.ui_friendly_name()
-    )
+    tool_permission_fields[
+        "ui_friendly_name"
+    ] = ToolPermissionGuardrailConfigModel.ui_friendly_name()
 
     # Return the provider-specific parameters
     provider_params = {
@@ -2030,11 +2021,25 @@ async def test_custom_code_guardrail(
     EXECUTION_TIMEOUT_SECONDS = 5
 
     try:
-        exec_globals = build_sandbox_globals()
+        # Step 0: Security validation - check for forbidden patterns
 
         try:
-            compiled = compile_sandboxed(request.custom_code)
-            exec(compiled, exec_globals)  # noqa: S102
+            validate_custom_code(request.custom_code)
+        except CustomCodeValidationError as e:
+            return TestCustomCodeGuardrailResponse(
+                success=False,
+                error=str(e),
+                error_type="compilation",
+            )
+
+        # Step 1: Compile the custom code with restricted environment
+        exec_globals = get_custom_code_primitives().copy()
+
+        # Remove access to builtins to prevent escape
+        exec_globals["__builtins__"] = {}
+
+        try:
+            exec(compile(request.custom_code, "<guardrail>", "exec"), exec_globals)
         except SyntaxError as e:
             return TestCustomCodeGuardrailResponse(
                 success=False,
@@ -2141,10 +2146,10 @@ async def apply_guardrail(
     from litellm.proxy.utils import handle_exception_on_proxy
 
     try:
-        active_guardrail: Optional[CustomGuardrail] = (
-            GUARDRAIL_REGISTRY.get_initialized_guardrail_callback(
-                guardrail_name=request.guardrail_name
-            )
+        active_guardrail: Optional[
+            CustomGuardrail
+        ] = GUARDRAIL_REGISTRY.get_initialized_guardrail_callback(
+            guardrail_name=request.guardrail_name
         )
         if active_guardrail is None:
             raise HTTPException(

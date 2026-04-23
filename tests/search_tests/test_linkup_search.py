@@ -1,7 +1,6 @@
 """
 Tests for Linkup Search API integration.
 """
-
 import os
 import sys
 import pytest

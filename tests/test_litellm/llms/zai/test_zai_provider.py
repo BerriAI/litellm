@@ -24,10 +24,7 @@ def zai_response():
         "choices": [
             {
                 "index": 0,
-                "message": {
-                    "role": "assistant",
-                    "content": "Hello! How can I help you today?",
-                },
+                "message": {"role": "assistant", "content": "Hello! How can I help you today?"},
                 "finish_reason": "stop",
             }
         ],
@@ -148,9 +145,7 @@ async def test_zai_completion_call(respx_mock, zai_response, monkeypatch):
     monkeypatch.setenv("ZAI_API_KEY", "test-api-key")
     litellm.disable_aiohttp_transport = True
 
-    respx_mock.post("https://api.z.ai/api/paas/v4/chat/completions").respond(
-        json=zai_response
-    )
+    respx_mock.post("https://api.z.ai/api/paas/v4/chat/completions").respond(json=zai_response)
 
     response = await litellm.acompletion(
         model="zai/glm-4.6",
@@ -174,9 +169,7 @@ def test_zai_sync_completion(respx_mock, zai_response, monkeypatch):
     monkeypatch.setenv("ZAI_API_KEY", "test-api-key")
     litellm.disable_aiohttp_transport = True
 
-    respx_mock.post("https://api.z.ai/api/paas/v4/chat/completions").respond(
-        json=zai_response
-    )
+    respx_mock.post("https://api.z.ai/api/paas/v4/chat/completions").respond(json=zai_response)
 
     response = completion(
         model="zai/glm-4.6",

@@ -33,7 +33,7 @@ export const pageDescriptions: Record<string, string> = {
   "ui-theme": "Customize dashboard appearance",
   "tag-management": "Organize resources with tags",
   prompts: "Manage and version prompt templates",
-  skills: "Browse and manage Claude Code skills",
+  "claude-code-plugins": "Configure Claude Code plugins",
   usage: "View legacy usage dashboard",
   "router-settings": "Configure routing and load balancing settings",
   "logging-and-alerts": "Set up logging and alert configurations",

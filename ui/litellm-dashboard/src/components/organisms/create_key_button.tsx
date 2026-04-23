@@ -28,7 +28,6 @@ import TeamDropdown from "../common_components/team_dropdown";
 import OrganizationDropdown from "../common_components/OrganizationDropdown";
 import ProjectDropdown from "../common_components/ProjectDropdown";
 import { CreateUserButton } from "../CreateUserButton";
-import { BudgetWindowEntry, BudgetWindowsEditor } from "../key_team_helpers/BudgetWindowsEditor";
 import { getModelDisplayName } from "../key_team_helpers/fetch_available_models_team_key";
 import { Team } from "../key_team_helpers/key_list";
 import MCPServerSelector from "../mcp_server_management/MCPServerSelector";
@@ -154,7 +153,6 @@ export const fetchUserModels = async (
   }
 };
 
-
 /**
  * ─────────────────────────────────────────────────────────────────────────
  * @deprecated
@@ -203,7 +201,6 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
   const [autoRotationEnabled, setAutoRotationEnabled] = useState<boolean>(false);
   const [rotationInterval, setRotationInterval] = useState<string>("30d");
   const [routerSettings, setRouterSettings] = useState<RouterSettingsAccordionValue | null>(null);
-  const [budgetLimits, setBudgetLimits] = useState<BudgetWindowEntry[]>([]);
   const [routerSettingsKey, setRouterSettingsKey] = useState<number>(0);
   const [agentsList, setAgentsList] = useState<{ agent_id: string; agent_name: string }[]>([]);
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
@@ -221,7 +218,6 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
     setSelectedAgentId(null);
     setSelectedOrganizationId(null);
     setSelectedProjectId(null);
-    setBudgetLimits([]);
   };
 
   const handleCancel = () => {
@@ -240,7 +236,6 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
     setSelectedAgentId(null);
     setSelectedOrganizationId(null);
     setSelectedProjectId(null);
-    setBudgetLimits([]);
   };
 
   useEffect(() => {
@@ -524,12 +519,6 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
         }
       }
 
-      // Add multi-window budget limits (filter out incomplete entries)
-      const validWindows = budgetLimits.filter((w) => w.budget_duration && w.max_budget !== null && w.max_budget !== undefined);
-      if (validWindows.length > 0) {
-        formValues.budget_limits = validWindows;
-      }
-
       let response;
       if (keyOwner === "service_account") {
         response = await keyCreateServiceAccountCall(accessToken, formValues);
@@ -551,7 +540,6 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
       setSoftBudget(response["soft_budget"]);
       NotificationsManager.success("Virtual Key Created");
       form.resetFields();
-      setBudgetLimits([]);
       localStorage.removeItem("userData" + userID);
     } catch (error) {
       console.log("error in create key:", error);
@@ -678,7 +666,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
   return (
     <div>
       {userRole && rolesWithWriteAccess.includes(userRole) && (
-        <Button className="mx-auto" onClick={() => setIsModalVisible(true)} data-testid="create-key-button">
+        <Button className="mx-auto" onClick={() => setIsModalVisible(true)}>
           + Create New Key
         </Button>
       )}
@@ -1056,22 +1044,6 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                     help={`Team Reset Budget: ${team?.budget_duration !== null && team?.budget_duration !== undefined ? team?.budget_duration : "None"}`}
                   >
                     <BudgetDurationDropdown onChange={(value) => form.setFieldValue("budget_duration", value)} />
-                  </Form.Item>
-                  <Form.Item
-                    className="mt-4"
-                    label={
-                      <span>
-                        Budget Windows{" "}
-                        <Tooltip title="Set multiple independent budget windows (e.g., hourly $10 AND monthly $200). Each window tracks spend separately and resets on its own schedule.">
-                          <InfoCircleOutlined style={{ marginLeft: "4px" }} />
-                        </Tooltip>
-                      </span>
-                    }
-                  >
-                    <BudgetWindowsEditor
-                      value={budgetLimits}
-                      onChange={setBudgetLimits}
-                    />
                   </Form.Item>
                   <Form.Item
                     className="mt-4"

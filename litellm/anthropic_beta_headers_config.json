@@ -1,7 +1,6 @@
 {
   "description": "Mapping of Anthropic beta headers for each provider. Keys are input header names, values are provider-specific header names (or null if unsupported). Only headers present in mapping keys with non-null values can be forwarded.",
   "anthropic": {
-    "advisor-tool-2026-03-01": "advisor-tool-2026-03-01",
     "advanced-tool-use-2025-11-20": "advanced-tool-use-2025-11-20",
     "bash_20241022": null,
     "bash_20250124": null,
@@ -32,7 +31,6 @@
     "web-search-2025-03-05": "web-search-2025-03-05"
   },
   "azure_ai": {
-    "advisor-tool-2026-03-01": null,
     "advanced-tool-use-2025-11-20": "advanced-tool-use-2025-11-20",
     "bash_20241022": null,
     "bash_20250124": null,
@@ -62,7 +60,6 @@
     "web-search-2025-03-05": "web-search-2025-03-05"
   },
   "bedrock_converse": {
-    "advisor-tool-2026-03-01": null,
     "advanced-tool-use-2025-11-20": null,
     "bash_20241022": null,
     "bash_20250124": null,
@@ -71,12 +68,12 @@
     "computer-use-2025-01-24": "computer-use-2025-01-24",
     "computer-use-2025-11-24": "computer-use-2025-11-24",
     "context-1m-2025-08-07": "context-1m-2025-08-07",
-    "context-management-2025-06-27": null,
+    "context-management-2025-06-27": "context-management-2025-06-27",
     "effort-2025-11-24": null,
     "fast-mode-2026-02-01": null,
     "files-api-2025-04-14": null,
     "fine-grained-tool-streaming-2025-05-14": null,
-    "interleaved-thinking-2025-05-14": null,
+    "interleaved-thinking-2025-05-14": "interleaved-thinking-2025-05-14",
     "mcp-client-2025-11-20": null,
     "mcp-client-2025-04-04": null,
     "mcp-servers-2025-12-04": null,
@@ -93,7 +90,6 @@
     "web-search-2025-03-05": null
   },
   "bedrock": {
-    "advisor-tool-2026-03-01": null,
     "advanced-tool-use-2025-11-20": "tool-search-tool-2025-10-19",
     "bash_20241022": null,
     "bash_20250124": null,
@@ -102,12 +98,12 @@
     "computer-use-2025-01-24": "computer-use-2025-01-24",
     "computer-use-2025-11-24": "computer-use-2025-11-24",
     "context-1m-2025-08-07": "context-1m-2025-08-07",
-    "context-management-2025-06-27": null,
+    "context-management-2025-06-27": "context-management-2025-06-27",
     "effort-2025-11-24": null,
     "fast-mode-2026-02-01": null,
     "files-api-2025-04-14": null,
     "fine-grained-tool-streaming-2025-05-14": null,
-    "interleaved-thinking-2025-05-14": null,
+    "interleaved-thinking-2025-05-14": "interleaved-thinking-2025-05-14",
     "mcp-client-2025-11-20": null,
     "mcp-client-2025-04-04": null,
     "mcp-servers-2025-12-04": null,
@@ -124,7 +120,6 @@
     "web-search-2025-03-05": null
   },
   "vertex_ai": {
-    "advisor-tool-2026-03-01": null,
     "advanced-tool-use-2025-11-20": "tool-search-tool-2025-10-19",
     "bash_20241022": null,
     "bash_20250124": null,
@@ -155,7 +150,6 @@
     "web-search-2025-03-05": "web-search-2025-03-05"
   },
   "databricks": {
-    "advisor-tool-2026-03-01": null,
     "advanced-tool-use-2025-11-20": "advanced-tool-use-2025-11-20",
     "bash_20241022": null,
     "bash_20250124": null,

@@ -3,7 +3,7 @@ Simple tutorial for integrating LiteLLM completion calls with streaming Gradio c
 
 ### Install & Import Dependencies
 ```python
-!uv add gradio litellm
+!pip install gradio litellm
 import gradio
 import litellm
 ```

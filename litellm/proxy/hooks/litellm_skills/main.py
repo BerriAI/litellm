@@ -439,11 +439,9 @@ class SkillsInjectionHook(CustomLogger):
                         {
                             "id": tc.id,
                             "name": tc.function.name,
-                            "input": (
-                                json.loads(tc.function.arguments)
-                                if tc.function.arguments
-                                else {}
-                            ),
+                            "input": json.loads(tc.function.arguments)
+                            if tc.function.arguments
+                            else {},
                         }
                     )
 

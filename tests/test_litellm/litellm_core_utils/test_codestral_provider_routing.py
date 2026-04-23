@@ -8,7 +8,6 @@ are correctly routed to different providers:
 
 Related issue: https://github.com/BerriAI/litellm/issues/18464
 """
-
 import pytest
 
 import litellm

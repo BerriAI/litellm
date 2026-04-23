@@ -1,16 +1,13 @@
 #!/bin/bash
-set -euo pipefail
+echo $(pwd)
 
-REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
-VENV_PYTHON="$REPO_ROOT/.venv/bin/python"
-MIGRATION_SCRIPT="$REPO_ROOT/litellm/proxy/prisma_migration.py"
+# Run the Python migration script
+python3 litellm/proxy/prisma_migration.py
 
-if [ -x "$VENV_PYTHON" ]; then
-    "$VENV_PYTHON" "$MIGRATION_SCRIPT"
-elif command -v uv >/dev/null 2>&1; then
-    (cd "$REPO_ROOT" && uv run --no-sync python "$MIGRATION_SCRIPT")
+# Check if the Python script executed successfully
+if [ $? -eq 0 ]; then
+    echo "Migration script ran successfully!"
 else
-    python3 "$MIGRATION_SCRIPT"
+    echo "Migration script failed!"
+    exit 1
 fi
-
-echo "Migration script ran successfully!"

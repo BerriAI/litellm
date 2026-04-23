@@ -136,3 +136,4 @@ class TestCostEstimateEndpoint:
         assert response.model == "my-gpt4-alias"
         assert response.cost_per_request == 0.05
         assert response.provider == "azure"
+

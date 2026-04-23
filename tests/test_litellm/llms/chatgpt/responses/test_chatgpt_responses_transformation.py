@@ -3,7 +3,6 @@ Tests for ChatGPT subscription Responses API transformation
 
 Source: litellm/llms/chatgpt/responses/transformation.py
 """
-
 import json
 import os
 import sys
@@ -14,7 +13,6 @@ import pytest
 
 sys.path.insert(0, os.path.abspath("../../../../.."))
 
-from litellm.llms.openai.common_utils import OpenAIError
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
 from litellm.utils import ProviderConfigManager
@@ -105,7 +103,9 @@ class TestChatGPTResponsesAPITransformation:
 
         assert request["stream"] is True
         assert "reasoning.encrypted_content" in request["include"]
-        assert request["instructions"].startswith("You are Codex, based on GPT-5.")
+        assert request["instructions"].startswith(
+            "You are Codex, based on GPT-5."
+        )
 
     @pytest.mark.parametrize(
         "model_name",
@@ -124,9 +124,7 @@ class TestChatGPTResponsesAPITransformation:
                 "user": "user_123",
                 "temperature": 0.2,
                 "top_p": 0.9,
-                "context_management": [
-                    {"type": "compaction", "compact_threshold": 200000}
-                ],
+                "context_management": [{"type": "compaction", "compact_threshold": 200000}],
                 "metadata": {"foo": "bar"},
                 "max_output_tokens": 123,
                 "stream_options": {"include_usage": True},
@@ -153,10 +151,7 @@ class TestChatGPTResponsesAPITransformation:
         assert request["previous_response_id"] == "resp_123"
         assert request["reasoning"] == {"effort": "medium"}
         assert request["tools"] == [{"type": "function", "function": {"name": "hello"}}]
-        assert request["tool_choice"] == {
-            "type": "function",
-            "function": {"name": "hello"},
-        }
+        assert request["tool_choice"] == {"type": "function", "function": {"name": "hello"}}
 
     @pytest.mark.parametrize(
         ("model_name", "response_model"),
@@ -202,85 +197,3 @@ class TestChatGPTResponsesAPITransformation:
         )
 
         assert parsed.output_text == "Hello!"
-
-    @pytest.mark.parametrize(
-        ("model_name", "response_model"),
-        [
-            ("chatgpt/gpt-5.2-codex", "gpt-5.2-codex"),
-            ("chatgpt/gpt-5.3-codex", "gpt-5.3-codex"),
-        ],
-    )
-    def test_chatgpt_non_stream_sse_response_recovers_output_items(
-        self, model_name: str, response_model: str
-    ):
-        config = ChatGPTResponsesAPIConfig()
-        response_payload = {
-            "id": "resp_test",
-            "object": "response",
-            "created_at": 1700000000,
-            "status": "completed",
-            "model": response_model,
-            "output": [],
-        }
-        streamed_output_item = {
-            "type": "message",
-            "role": "assistant",
-            "content": [{"type": "output_text", "text": "Hello from stream!"}],
-        }
-        sse_body = "\n".join(
-            [
-                f"data: {json.dumps({'type': 'response.output_item.done', 'output_index': 0, 'item': streamed_output_item})}",
-                f"data: {json.dumps({'type': 'response.completed', 'response': response_payload})}",
-                "data: [DONE]",
-                "",
-            ]
-        )
-        raw_response = httpx.Response(
-            200, headers={"content-type": "text/event-stream"}, text=sse_body
-        )
-        logging_obj = MagicMock()
-
-        parsed = config.transform_response_api_response(
-            model=model_name,
-            raw_response=raw_response,
-            logging_obj=logging_obj,
-        )
-
-        assert parsed.output_text == "Hello from stream!"
-
-    @pytest.mark.parametrize(
-        "error_chunk",
-        [
-            {
-                "type": "response.failed",
-                "response": {"error": {"message": "ChatGPT upstream failed"}},
-            },
-            {
-                "type": "error",
-                "error": {"message": "ChatGPT upstream failed"},
-            },
-        ],
-    )
-    def test_chatgpt_non_stream_sse_response_raises_openai_error(self, error_chunk):
-        config = ChatGPTResponsesAPIConfig()
-        sse_body = "\n".join(
-            [
-                f"data: {json.dumps(error_chunk)}",
-                "data: [DONE]",
-                "",
-            ]
-        )
-        raw_response = httpx.Response(
-            502, headers={"content-type": "text/event-stream"}, text=sse_body
-        )
-        logging_obj = MagicMock()
-
-        with pytest.raises(OpenAIError) as exc_info:
-            config.transform_response_api_response(
-                model="chatgpt/gpt-5.4",
-                raw_response=raw_response,
-                logging_obj=logging_obj,
-            )
-
-        assert "ChatGPT upstream failed" in str(exc_info.value)
-        assert exc_info.value.status_code == 502

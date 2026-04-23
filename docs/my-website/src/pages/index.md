@@ -1,10 +1,6 @@
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-:::note Security Update
-The Trivy supply-chain compromise has been contained :tada: . All affected packages have been deleted and current releases are free of the compromised code/component. Please refer to our [Security Townhall](/blog/security-townhall-updates) for a deeper understanding of the problem, and [CI/CD v2](/blog/ci-cd-v2-improvements) for how we're improving moving forward.
-:::
-
 # LiteLLM - Getting Started
 
 https://github.com/BerriAI/litellm
@@ -56,7 +52,7 @@ You can use LiteLLM through either the Proxy Server or Python SDK. Both gives yo
 </a>
 
 ```shell
-uv add litellm
+pip install litellm
 ```
 
 <Tabs>
@@ -695,14 +691,14 @@ Go here for a complete tutorial with keys + rate limits - [**here**](./proxy/doc
 ### Quick Start Proxy - CLI
 
 ```shell
-uv tool install 'litellm[proxy]'
+pip install 'litellm[proxy]'
 ```
 
 #### Step 1: Start litellm proxy
 
 <Tabs>
 
-<TabItem label="LiteLLM CLI" value="cli">
+<TabItem label="pip package" value="pip">
 
 ```shell
 $ litellm --model huggingface/bigcode/starcoder

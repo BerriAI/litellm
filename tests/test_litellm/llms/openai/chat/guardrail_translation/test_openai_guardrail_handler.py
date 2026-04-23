@@ -134,9 +134,7 @@ class TestOpenAIChatCompletionsHandlerToolsInput:
         tool = guardrail.last_inputs["tools"][0]
         assert tool["type"] == "function"
         assert tool["function"]["name"] == "get_weather"
-        assert (
-            tool["function"]["description"] == "Get the current weather in a location"
-        )
+        assert tool["function"]["description"] == "Get the current weather in a location"
         assert "parameters" in tool["function"]
 
     @pytest.mark.asyncio
@@ -191,10 +189,7 @@ class TestOpenAIChatCompletionsHandlerToolsInput:
 
         assert guardrail.last_inputs is not None
         # tools should not be in inputs if not provided
-        assert (
-            "tools" not in guardrail.last_inputs
-            or guardrail.last_inputs.get("tools") is None
-        )
+        assert "tools" not in guardrail.last_inputs or guardrail.last_inputs.get("tools") is None
 
     @pytest.mark.asyncio
     async def test_tools_and_tool_calls_both_passed(self):
@@ -225,10 +220,7 @@ class TestOpenAIChatCompletionsHandlerToolsInput:
                     "type": "function",
                     "function": {
                         "name": "get_weather",
-                        "parameters": {
-                            "type": "object",
-                            "properties": {"location": {"type": "string"}},
-                        },
+                        "parameters": {"type": "object", "properties": {"location": {"type": "string"}}},
                     },
                 }
             ],
@@ -841,9 +833,7 @@ class TestOpenAIChatCompletionsHandlerStreamingOutput:
         assert result == responses_so_far
 
     @pytest.mark.asyncio
-    async def test_process_output_streaming_response_mixed_empty_and_valid_choices_no_finish(
-        self,
-    ):
+    async def test_process_output_streaming_response_mixed_empty_and_valid_choices_no_finish(self):
         """Test streaming response with mix of empty and valid choices chunks (stream not finished)
 
         This tests the has_stream_ended check when iterating through chunks with mixed choices.

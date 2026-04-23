@@ -1,5 +1,5 @@
 #### Analytics Endpoints #####
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import List, Optional
 
 import fastapi
@@ -58,10 +58,8 @@ async def get_global_activity(
             detail={"error": "Please provide start_date and end_date"},
         )
 
-    start_date_obj = datetime.strptime(start_date, "%Y-%m-%d").replace(
-        tzinfo=timezone.utc
-    )
-    end_date_obj = datetime.strptime(end_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+    start_date_obj = datetime.strptime(start_date, "%Y-%m-%d")
+    end_date_obj = datetime.strptime(end_date, "%Y-%m-%d")
 
     from litellm.proxy.proxy_server import prisma_client
 
@@ -85,9 +83,8 @@ async def get_global_activity(
                 SUM(CASE WHEN sl."cache_hit" != 'True' THEN sl."completion_tokens" ELSE 0 END) AS generated_completion_tokens
             FROM "LiteLLM_SpendLogs" sl
             LEFT JOIN "LiteLLM_VerificationToken" vt ON sl."api_key" = vt."token"
-            WHERE
-                sl."startTime" >= ($1::timestamptz AT TIME ZONE 'UTC')
-                AND sl."startTime" <  (($2::timestamptz + INTERVAL '1 day') AT TIME ZONE 'UTC')
+            WHERE 
+                sl."startTime" >= $1::timestamptz AND "startTime" < ($2::timestamptz + INTERVAL \'1 day\')
             GROUP BY 
                 vt."key_alias",
                 sl."call_type",

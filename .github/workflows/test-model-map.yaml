@@ -2,11 +2,7 @@ name: Validate model_prices_and_context_window.json
 
 on:
   pull_request:
-    branches:
-      - main
-      - litellm_internal_staging
-      - litellm_oss_branch
-      - "litellm_**"
+    branches: [main]
 
 permissions:
   contents: read

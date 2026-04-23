@@ -1,5 +1,5 @@
 import React from "react";
-import { Input } from "antd";
+import { TextInput } from "@tremor/react";
 
 interface routingStrategyArgs {
   ttl?: number;
@@ -42,7 +42,7 @@ const LatencyBasedConfiguration: React.FC<LatencyBasedConfigurationProps> = ({
                 <p className="text-xs text-gray-500 mt-0.5 mb-2">
                   {paramExplanation[param] || ""}
                 </p>
-                <Input
+                <TextInput
                   name={param}
                   defaultValue={typeof value === "object" ? JSON.stringify(value, null, 2) : value?.toString()}
                   className="font-mono text-sm w-full"

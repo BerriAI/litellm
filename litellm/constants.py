@@ -1,6 +1,6 @@
 import os
 import sys
-from typing import List, Literal, Optional
+from typing import List, Literal
 
 from litellm.litellm_core_utils.env_utils import get_env_int
 
@@ -135,31 +135,11 @@ MCP_OAUTH2_TOKEN_CACHE_DEFAULT_TTL = int(
 MCP_NPM_CACHE_DIR = os.getenv("MCP_NPM_CACHE_DIR", "/tmp/.npm_mcp_cache")
 MCP_OAUTH2_TOKEN_CACHE_MIN_TTL = int(os.getenv("MCP_OAUTH2_TOKEN_CACHE_MIN_TTL", "10"))
 
-# Per-user OAuth token Redis cache (for server-side token storage)
-MCP_PER_USER_TOKEN_REDIS_KEY_PREFIX = "mcp:per_user_token"
-MCP_PER_USER_TOKEN_DEFAULT_TTL = int(
-    os.getenv("MCP_PER_USER_TOKEN_DEFAULT_TTL", "43200")  # 12 hours
-)
-MCP_PER_USER_TOKEN_EXPIRY_BUFFER_SECONDS = int(
-    os.getenv("MCP_PER_USER_TOKEN_EXPIRY_BUFFER_SECONDS", "60")
-)
-
 # MCP timeout defaults (seconds). Override via env vars for slow/custom MCP servers.
 MCP_CLIENT_TIMEOUT = float(os.getenv("LITELLM_MCP_CLIENT_TIMEOUT", "60.0"))
 MCP_TOOL_LISTING_TIMEOUT = float(os.getenv("LITELLM_MCP_TOOL_LISTING_TIMEOUT", "30.0"))
 MCP_METADATA_TIMEOUT = float(os.getenv("LITELLM_MCP_METADATA_TIMEOUT", "10.0"))
 MCP_HEALTH_CHECK_TIMEOUT = float(os.getenv("LITELLM_MCP_HEALTH_CHECK_TIMEOUT", "10.0"))
-
-# Allowlist of commands permitted for MCP stdio transport.
-# Prevents arbitrary command execution via /mcp-rest/test/* endpoints or server creation.
-# Note: allowlisted runtimes can still execute code via args (e.g. python -c "...").
-# This is an accepted residual risk since these endpoints require PROXY_ADMIN.
-# Extend via LITELLM_MCP_STDIO_EXTRA_COMMANDS env var (comma-separated).
-_MCP_STDIO_EXTRA_COMMANDS = os.getenv("LITELLM_MCP_STDIO_EXTRA_COMMANDS", "")
-MCP_STDIO_ALLOWED_COMMANDS: frozenset = frozenset(
-    {"npx", "uvx", "python", "python3", "node", "docker", "deno"}
-    | (set(_MCP_STDIO_EXTRA_COMMANDS.split(",")) - {""})
-)
 
 LITELLM_UI_ALLOW_HEADERS = [
     "x-litellm-semantic-filter",
@@ -414,20 +394,7 @@ MAX_SIZE_PER_ITEM_IN_MEMORY_CACHE_IN_KB = int(
 )
 DEFAULT_MAX_TOKENS_FOR_TRITON = int(os.getenv("DEFAULT_MAX_TOKENS_FOR_TRITON", 2000))
 #### Networking settings ####
-# Sentinel used when `REQUEST_TIMEOUT` is unset: `litellm.request_timeout` keeps this
-# value so longer-running surfaces (Router `timeout or litellm.request_timeout`,
-# speech/TTS, responses, vector stores, etc.) get a long HTTP deadline. Chat
-# `completion()` maps this sentinel down to 600s when the caller did not set a
-# per-request/model timeout—see ``CompletionTimeout.resolve`` in completion_timeout.py. MCP uses
-# dedicated timeouts (e.g. `MCP_CLIENT_TIMEOUT`), not `request_timeout`.
-DEFAULT_REQUEST_TIMEOUT_SECONDS: float = 6000.0
-# Pair used for default httpx clients when no custom timeout is passed: read/write
-# deadline and connect handshake (see ``http_handler`` cached handler paths).
-COMPLETION_HTTP_FALLBACK_SECONDS: float = 600.0
-HTTP_HANDLER_CONNECT_TIMEOUT_SECONDS: float = 5.0
-request_timeout: float = float(
-    os.getenv("REQUEST_TIMEOUT", str(int(DEFAULT_REQUEST_TIMEOUT_SECONDS)))
-)
+request_timeout: float = float(os.getenv("REQUEST_TIMEOUT", 6000))  # time in seconds
 DEFAULT_A2A_AGENT_TIMEOUT: float = float(
     os.getenv("DEFAULT_A2A_AGENT_TIMEOUT", 6000)
 )  # 10 minutes
@@ -1074,9 +1041,6 @@ WANDB_MODELS: set = set(
         "Qwen/Qwen3-235B-A22B-Thinking-2507",
         # moonshotai
         "moonshotai/Kimi-K2-Instruct",
-        "moonshotai/Kimi-K2.5",
-        # MiniMaxAI
-        "MiniMaxAI/MiniMax-M2.5",
         # meta models
         "meta-llama/Llama-3.1-8B-Instruct",
         "meta-llama/Llama-3.3-70B-Instruct",
@@ -1127,7 +1091,6 @@ BEDROCK_CONVERSE_MODELS = [
     "openai.gpt-oss-120b-1:0",
     "anthropic.claude-haiku-4-5-20251001-v1:0",
     "anthropic.claude-sonnet-4-5-20250929-v1:0",
-    "anthropic.claude-opus-4-7",
     "anthropic.claude-opus-4-6-v1:0",
     "anthropic.claude-opus-4-6-v1",
     "anthropic.claude-sonnet-4-6",
@@ -1345,41 +1308,6 @@ BATCH_STATUS_POLL_MAX_ATTEMPTS = int(
 HEALTH_CHECK_TIMEOUT_SECONDS = int(
     os.getenv("HEALTH_CHECK_TIMEOUT_SECONDS", 60)
 )  # 60 seconds
-_background_health_check_max_tokens_env = os.getenv(
-    "BACKGROUND_HEALTH_CHECK_MAX_TOKENS"
-)
-try:
-    _raw_background_health_check_max_tokens = (
-        _background_health_check_max_tokens_env.strip()
-        if _background_health_check_max_tokens_env is not None
-        else ""
-    )
-    BACKGROUND_HEALTH_CHECK_MAX_TOKENS: Optional[int] = (
-        int(_raw_background_health_check_max_tokens)
-        if _raw_background_health_check_max_tokens
-        else None
-    )
-except (ValueError, TypeError):
-    BACKGROUND_HEALTH_CHECK_MAX_TOKENS = None
-
-
-_background_health_check_max_tokens_reasoning_env = os.getenv(
-    "BACKGROUND_HEALTH_CHECK_MAX_TOKENS_REASONING"
-)
-try:
-    _raw_background_health_check_max_tokens_reasoning = (
-        _background_health_check_max_tokens_reasoning_env.strip()
-        if _background_health_check_max_tokens_reasoning_env is not None
-        else ""
-    )
-    BACKGROUND_HEALTH_CHECK_MAX_TOKENS_REASONING: Optional[int] = (
-        int(_raw_background_health_check_max_tokens_reasoning)
-        if _raw_background_health_check_max_tokens_reasoning
-        else None
-    )
-except (ValueError, TypeError):
-    BACKGROUND_HEALTH_CHECK_MAX_TOKENS_REASONING = None
-
 LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME = "litellm-internal-health-check"
 LITTELM_CLI_SERVICE_ACCOUNT_NAME = "litellm-cli"
 LITELLM_INTERNAL_JOBS_SERVICE_ACCOUNT_NAME = "litellm_internal_jobs"
@@ -1440,9 +1368,6 @@ MAX_OBJECTS_PER_POLL_CYCLE = max(1, int(os.getenv("MAX_OBJECTS_PER_POLL_CYCLE", 
 MANAGED_OBJECT_STALENESS_CUTOFF_DAYS = max(
     1, int(os.getenv("MANAGED_OBJECT_STALENESS_CUTOFF_DAYS", 7))
 )
-STALE_OBJECT_CLEANUP_BATCH_SIZE = max(
-    1, int(os.getenv("STALE_OBJECT_CLEANUP_BATCH_SIZE", 1000))
-)
 # Set PROXY_BATCH_POLLING_ENABLED=false to disable the CheckBatchCost and
 # CheckResponsesCost background polling jobs entirely (e.g. to avoid DB load on
 # installations with large numbers of stale managed objects).
@@ -1474,7 +1399,7 @@ APSCHEDULER_REPLACE_EXISTING = os.getenv(
     "1",
 ]  # always replace existing jobs
 
-# The number of tag entries are higher than number of user, team entries. This leads to a higher QPS.
+# The number of tag entries are higher than number of user, team entries. This leads to a higher QPS. 
 # This will run tag spcific tasks at a later time to smooth QPS
 DAILY_TAG_SPEND_BATCH_MULTIPLIER = 2.3
 
@@ -1634,16 +1559,3 @@ MAX_PAYLOAD_SIZE_FOR_DEBUG_LOG = int(
 MAX_COMPETITOR_NAMES = int(os.getenv("MAX_COMPETITOR_NAMES", 100))
 COMPETITOR_LLM_TEMPERATURE = float(os.getenv("COMPETITOR_LLM_TEMPERATURE", 0.3))
 DEFAULT_COMPETITOR_DISCOVERY_MODEL = "gpt-4o-mini"
-
-# Advisor tool orchestration
-# Providers that support advisor_20260301 natively (no LiteLLM orchestration needed).
-# Add vertex_ai here once verified.
-ADVISOR_NATIVE_PROVIDERS: frozenset = frozenset({"anthropic"})
-# Hard cap on advisor iterations per request to prevent runaway loops.
-ADVISOR_MAX_USES: int = 5
-# Description injected into the synthetic advisor tool definition sent to non-native providers.
-ADVISOR_TOOL_DESCRIPTION: str = (
-    "Consult a highly intelligent advisor model when you need expert guidance, "
-    "want to verify your reasoning, or face a complex decision. "
-    "Describe your question or challenge clearly in the 'question' field."
-)

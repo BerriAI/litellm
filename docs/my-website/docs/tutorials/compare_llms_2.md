@@ -20,7 +20,7 @@ given test set using litellm
 <div class="cell code" id="fBkbl4Qo9pvz">
 
 ``` python
-!uv add litellm
+!pip install litellm
 ```
 
 </div>

@@ -1,5 +1,4 @@
 """Tests for GetBlogPosts utility class."""
-
 import time
 from unittest.mock import MagicMock, patch
 
@@ -81,9 +80,7 @@ def test_parse_rss_to_posts_missing_channel():
 
 
 def test_validate_blog_posts_valid():
-    posts = [
-        {"title": "T", "description": "D", "date": "2026-01-01", "url": "https://x.com"}
-    ]
+    posts = [{"title": "T", "description": "D", "date": "2026-01-01", "url": "https://x.com"}]
     assert GetBlogPosts.validate_blog_posts(posts) is True
 
 
@@ -101,10 +98,7 @@ def test_get_blog_posts_success():
     mock_response.text = SAMPLE_RSS
     mock_response.raise_for_status = MagicMock()
 
-    with patch(
-        "litellm.litellm_core_utils.get_blog_posts.httpx.get",
-        return_value=mock_response,
-    ):
+    with patch("litellm.litellm_core_utils.get_blog_posts.httpx.get", return_value=mock_response):
         posts = get_blog_posts(url=litellm.blog_posts_url)
 
     assert len(posts) == 1
@@ -129,10 +123,7 @@ def test_get_blog_posts_invalid_xml_falls_back_to_local():
     mock_response.text = "not valid xml"
     mock_response.raise_for_status = MagicMock()
 
-    with patch(
-        "litellm.litellm_core_utils.get_blog_posts.httpx.get",
-        return_value=mock_response,
-    ):
+    with patch("litellm.litellm_core_utils.get_blog_posts.httpx.get", return_value=mock_response):
         posts = get_blog_posts(url=litellm.blog_posts_url)
 
     assert isinstance(posts, list)
@@ -141,14 +132,7 @@ def test_get_blog_posts_invalid_xml_falls_back_to_local():
 
 def test_get_blog_posts_ttl_cache_not_refetched():
     """Within TTL window, does not re-fetch."""
-    cached = [
-        {
-            "title": "Cached",
-            "description": "D",
-            "date": "2026-01-01",
-            "url": "https://x.com",
-        }
-    ]
+    cached = [{"title": "Cached", "description": "D", "date": "2026-01-01", "url": "https://x.com"}]
     GetBlogPosts._cached_posts = cached
     GetBlogPosts._last_fetch_time = time.time()  # just now
 
@@ -162,9 +146,7 @@ def test_get_blog_posts_ttl_cache_not_refetched():
         m.raise_for_status = MagicMock()
         return m
 
-    with patch(
-        "litellm.litellm_core_utils.get_blog_posts.httpx.get", side_effect=mock_get
-    ):
+    with patch("litellm.litellm_core_utils.get_blog_posts.httpx.get", side_effect=mock_get):
         posts = get_blog_posts(url=litellm.blog_posts_url)
 
     assert call_count == 0  # cache hit, no fetch
@@ -173,14 +155,7 @@ def test_get_blog_posts_ttl_cache_not_refetched():
 
 def test_get_blog_posts_ttl_expired_refetches():
     """After TTL window, re-fetches from remote."""
-    cached = [
-        {
-            "title": "Cached",
-            "description": "D",
-            "date": "2026-01-01",
-            "url": "https://x.com",
-        }
-    ]
+    cached = [{"title": "Cached", "description": "D", "date": "2026-01-01", "url": "https://x.com"}]
     GetBlogPosts._cached_posts = cached
     GetBlogPosts._last_fetch_time = time.time() - 7200  # 2 hours ago
 
@@ -189,8 +164,7 @@ def test_get_blog_posts_ttl_expired_refetches():
     mock_response.raise_for_status = MagicMock()
 
     with patch(
-        "litellm.litellm_core_utils.get_blog_posts.httpx.get",
-        return_value=mock_response,
+        "litellm.litellm_core_utils.get_blog_posts.httpx.get", return_value=mock_response
     ) as mock_get:
         posts = get_blog_posts(url=litellm.blog_posts_url)
 
@@ -219,8 +193,6 @@ def test_blog_post_pydantic_model():
 
 def test_blog_posts_response_pydantic_model():
     resp = BlogPostsResponse(
-        posts=[
-            BlogPost(title="T", description="D", date="2026-01-01", url="https://x.com")
-        ]
+        posts=[BlogPost(title="T", description="D", date="2026-01-01", url="https://x.com")]
     )
     assert len(resp.posts) == 1

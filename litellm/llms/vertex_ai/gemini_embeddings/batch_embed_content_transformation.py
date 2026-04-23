@@ -292,10 +292,10 @@ def process_response(
     _predictions: VertexAIBatchEmbeddingsResponseObject,
 ) -> EmbeddingResponse:
     openai_embeddings: List[Embedding] = []
-    for idx, embedding in enumerate(_predictions["embeddings"]):
+    for embedding in _predictions["embeddings"]:
         openai_embedding = Embedding(
             embedding=embedding["values"],
-            index=idx,
+            index=0,
             object="embedding",
         )
         openai_embeddings.append(openai_embedding)

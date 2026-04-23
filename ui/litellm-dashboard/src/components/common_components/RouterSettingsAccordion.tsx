@@ -241,13 +241,9 @@ const RouterSettingsAccordion = forwardRef<RouterSettingsAccordionRef, RouterSet
               key !== "fallbacks"
             ) {
               const inputEl = document.querySelector(`input[name="${key}"]`) as HTMLInputElement | null;
-              if (inputEl) {
-                if (inputEl.value !== undefined && inputEl.value !== "") {
-                  const parsed = parseInputValue(key, inputEl.value, value);
-                  return [key, parsed];
-                }
-                // Input exists but is empty — user cleared it, set to null
-                return [key, null];
+              if (inputEl && inputEl.value !== undefined && inputEl.value !== "") {
+                const parsed = parseInputValue(key, inputEl.value, value);
+                return [key, parsed];
               }
               return [key, value];
             } else if (key === "routing_strategy") {

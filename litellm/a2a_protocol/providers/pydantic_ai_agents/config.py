@@ -21,11 +21,11 @@ class PydanticAIProviderConfig(BaseA2AProviderConfig):
         request_id: str,
         params: Dict[str, Any],
         api_base: Optional[str] = None,
-        **kwargs: Any,
+        **kwargs,
     ) -> Dict[str, Any]:
         """Handle non-streaming request to Pydantic AI agent."""
-        if api_base is None:
-            raise ValueError("api_base is required for PydanticAIProviderConfig")
+        if not api_base:
+            raise ValueError("api_base is required for Pydantic AI agents")
         return await PydanticAIHandler.handle_non_streaming(
             request_id=request_id,
             params=params,

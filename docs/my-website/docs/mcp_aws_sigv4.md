@@ -224,7 +224,7 @@ SigV4-authenticated MCP servers skip the standard health check on proxy startup.
 Install the `botocore` package:
 
 ```bash
-uv add botocore
+pip install botocore
 ```
 
 `botocore` is used for SigV4 credential handling and is required when using `aws_sigv4` auth.

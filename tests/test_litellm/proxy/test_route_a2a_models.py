@@ -3,7 +3,6 @@ Test A2A model routing in proxy.
 
 Maps to: litellm/proxy/agent_endpoints/a2a_routing.py
 """
-
 import os
 import sys
 
@@ -40,14 +39,14 @@ async def test_route_a2a_model_bypasses_router():
 
     # Mock agent in registry
     from litellm.types.agents import AgentResponse
-
+    
     mock_agent = AgentResponse(
         agent_id="test-agent-id",
         agent_name="test-agent",
         agent_card_params={"url": "http://agent.example.com"},
         litellm_params=None,
     )
-
+    
     mock_registry = Mock()
     mock_registry.get_agent_by_name = Mock(return_value=mock_agent)
 
@@ -73,7 +72,7 @@ async def test_route_a2a_model_bypasses_router():
             assert call_kwargs["api_base"] == "http://agent.example.com"
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio  
 async def test_route_non_a2a_model_raises_error_if_not_in_router():
     """Test that non-a2a models that aren't in router raise an error"""
 
@@ -96,7 +95,7 @@ async def test_route_non_a2a_model_raises_error_if_not_in_router():
 
     # Should raise ProxyModelNotFoundError
     from litellm.proxy.route_llm_request import ProxyModelNotFoundError
-
+    
     with pytest.raises(ProxyModelNotFoundError):
         await route_request(
             data=data,

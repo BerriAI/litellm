@@ -3,28 +3,24 @@ import { renderWithProviders, screen, waitFor } from "../../../tests/test-utils"
 import userEvent from "@testing-library/user-event";
 import RouterSettings from "./index";
 
-vi.mock("antd", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("antd")>();
-  return {
-    ...actual,
-    Select: Object.assign(
-      ({ value, onChange, children }: any) => (
-        <select
-          data-testid="strategy-select"
-          value={value ?? ""}
-          onChange={(e) => onChange(e.target.value)}
-        >
-          {children}
-        </select>
-      ),
-      {
-        Option: ({ value, children }: any) => (
-          <option value={value}>{children}</option>
-        ),
-      }
+vi.mock("antd", () => ({
+  Select: Object.assign(
+    ({ value, onChange, children }: any) => (
+      <select
+        data-testid="strategy-select"
+        value={value ?? ""}
+        onChange={(e) => onChange(e.target.value)}
+      >
+        {children}
+      </select>
     ),
-  };
-});
+    {
+      Option: ({ value, children }: any) => (
+        <option value={value}>{children}</option>
+      ),
+    }
+  ),
+}));
 
 vi.mock("@/components/networking", () => ({
   getCallbacksCall: vi.fn(),

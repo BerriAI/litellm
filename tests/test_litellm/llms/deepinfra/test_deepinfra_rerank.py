@@ -1,7 +1,6 @@
 """
 Tests for DeepInfra rerank functionality following repository patterns.
 """
-
 import asyncio
 import json
 import os

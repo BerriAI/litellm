@@ -44,12 +44,12 @@ class TestGoogleInteractionsCreate:
         print("SIMPLE RESPONSE: ", response)
         assert response is not None
         assert response.id is not None or response.status is not None
-
+        
         # Check outputs per OpenAPI spec
         if response.outputs:
             assert len(response.outputs) > 0
             print(f"Response outputs: {response.outputs}")
-
+        
         # Check usage per OpenAPI spec
         if response.usage:
             print(f"Usage: {response.usage}")
@@ -61,14 +61,12 @@ class TestGoogleInteractionsCreate:
             input=[
                 {
                     "role": "user",
-                    "content": [
-                        {"type": "text", "text": "What is the capital of France?"}
-                    ],
+                    "content": [{"type": "text", "text": "What is the capital of France?"}]
                 }
             ],
             api_key=api_key,
         )
-
+        
         assert response is not None
         print(f"Response: {response}")
 
@@ -80,7 +78,7 @@ class TestGoogleInteractionsCreate:
             system_instruction="You are a helpful pirate assistant. Always respond like a pirate.",
             api_key=api_key,
         )
-
+        
         assert response is not None
         print(f"Response with system_instruction: {response}")
 
@@ -97,18 +95,15 @@ class TestGoogleInteractionsCreate:
                     "parameters": {
                         "type": "object",
                         "properties": {
-                            "location": {
-                                "type": "string",
-                                "description": "The city name",
-                            }
+                            "location": {"type": "string", "description": "The city name"}
                         },
-                        "required": ["location"],
-                    },
+                        "required": ["location"]
+                    }
                 }
             ],
             api_key=api_key,
         )
-
+        
         assert response is not None
         # Check if status is requires_action (function call)
         print(f"Response status: {response.status}")
@@ -122,7 +117,7 @@ class TestGoogleInteractionsCreate:
             input="What is the speed of light?",
             api_key=api_key,
         )
-
+        
         assert response is not None
         print(f"Async response: {response}")
 
@@ -138,13 +133,13 @@ class TestGoogleInteractionsStreaming:
             stream=True,
             api_key=api_key,
         )
-
+        
         # Collect all chunks
         chunks = []
         for chunk in response_stream:
             chunks.append(chunk)
             print(f"Streaming chunk: {chunk}")
-
+        
         assert len(chunks) > 0
         print(f"Total chunks received: {len(chunks)}")
 
@@ -157,13 +152,13 @@ class TestGoogleInteractionsStreaming:
             stream=True,
             api_key=api_key,
         )
-
+        
         # Collect all chunks
         chunks = []
         async for chunk in response_stream:
             chunks.append(chunk)
             print(f"Async streaming chunk: {chunk}")
-
+        
         assert len(chunks) > 0
         print(f"Total async chunks received: {len(chunks)}")
 
@@ -178,22 +173,20 @@ class TestGoogleInteractionsMultiTurn:
             input=[
                 {
                     "role": "user",
-                    "content": [{"type": "text", "text": "My name is Alice."}],
+                    "content": [{"type": "text", "text": "My name is Alice."}]
                 },
                 {
                     "role": "model",
-                    "content": [
-                        {"type": "text", "text": "Hello Alice! Nice to meet you."}
-                    ],
+                    "content": [{"type": "text", "text": "Hello Alice! Nice to meet you."}]
                 },
                 {
                     "role": "user",
-                    "content": [{"type": "text", "text": "What is my name?"}],
-                },
+                    "content": [{"type": "text", "text": "What is my name?"}]
+                }
             ],
             api_key=api_key,
         )
-
+        
         assert response is not None
         print(f"Multi-turn response: {response}")
 
@@ -209,7 +202,7 @@ class TestGoogleInteractionsAgent:
             input="Research the current state of quantum computing",
             api_key=api_key,
         )
-
+        
         assert response is not None
         print(f"Agent response: {response}")
 
@@ -217,9 +210,7 @@ class TestGoogleInteractionsAgent:
 class TestGoogleInteractionsGetDelete:
     """Tests for get and delete operations."""
 
-    @pytest.mark.skip(
-        reason="Get/Delete require valid interaction IDs from previous calls"
-    )
+    @pytest.mark.skip(reason="Get/Delete require valid interaction IDs from previous calls")
     def test_get_interaction(self, api_key):
         """Test getting an interaction by ID."""
         # First create an interaction
@@ -228,7 +219,7 @@ class TestGoogleInteractionsGetDelete:
             input="Hello",
             api_key=api_key,
         )
-
+        
         if create_response.id:
             # Then get it
             get_response = interactions.get(
@@ -238,9 +229,7 @@ class TestGoogleInteractionsGetDelete:
             assert get_response is not None
             print(f"Get response: {get_response}")
 
-    @pytest.mark.skip(
-        reason="Get/Delete require valid interaction IDs from previous calls"
-    )
+    @pytest.mark.skip(reason="Get/Delete require valid interaction IDs from previous calls")
     def test_delete_interaction(self, api_key):
         """Test deleting an interaction by ID."""
         # First create an interaction
@@ -249,7 +238,7 @@ class TestGoogleInteractionsGetDelete:
             input="Hello",
             api_key=api_key,
         )
-
+        
         if create_response.id:
             # Then delete it
             delete_result = interactions.delete(
@@ -291,32 +280,30 @@ class TestGoogleInteractionsResponseStructure:
             input="Hello",
             api_key=api_key,
         )
-
+        
         # Check fields per OpenAPI spec
-        assert hasattr(response, "id")
-        assert hasattr(response, "object")
-        assert hasattr(response, "status")
-        assert hasattr(response, "outputs")
-        assert hasattr(response, "usage")
-        assert hasattr(response, "model") or hasattr(response, "agent")
-        assert hasattr(response, "role")
-        assert hasattr(response, "created")
-        assert hasattr(response, "updated")
-
-        print(
-            f"Response structure: id={response.id}, status={response.status}, object={response.object}"
-        )
+        assert hasattr(response, 'id')
+        assert hasattr(response, 'object')
+        assert hasattr(response, 'status')
+        assert hasattr(response, 'outputs')
+        assert hasattr(response, 'usage')
+        assert hasattr(response, 'model') or hasattr(response, 'agent')
+        assert hasattr(response, 'role')
+        assert hasattr(response, 'created')
+        assert hasattr(response, 'updated')
+        
+        print(f"Response structure: id={response.id}, status={response.status}, object={response.object}")
 
 
 if __name__ == "__main__":
     # Run a quick smoke test
     print("Running Google Interactions API smoke test...")
-
+    
     api_key = GEMINI_API_KEY
     if not api_key:
         print("GEMINI_API_KEY not set, skipping smoke test")
         exit(1)
-
+    
     print("\n1. Testing basic interaction...")
     response = interactions.create(
         model="gemini/gemini-2.5-flash",
@@ -324,7 +311,7 @@ if __name__ == "__main__":
         api_key=api_key,
     )
     print(f"Response: {response}")
-
+    
     print("\n2. Testing streaming interaction...")
     stream = interactions.create(
         model="gemini/gemini-2.5-flash",
@@ -335,9 +322,8 @@ if __name__ == "__main__":
     print("Streaming response chunks:")
     for chunk in stream:
         print(f"  {chunk}")
-
+    
     print("\n3. Testing async interaction...")
-
     async def test_async():
         response = await interactions.acreate(
             model="gemini/gemini-2.5-flash",
@@ -345,8 +331,8 @@ if __name__ == "__main__":
             api_key=api_key,
         )
         return response
-
+    
     async_response = asyncio.run(test_async())
     print(f"Async response: {async_response}")
-
+    
     print("\nSmoke test complete!")

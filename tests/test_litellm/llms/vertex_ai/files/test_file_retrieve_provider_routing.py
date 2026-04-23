@@ -102,7 +102,9 @@ class TestFileRetrieveProviderRouting:
                     custom_llm_provider="vertex_ai",
                 )
             except litellm.exceptions.BadRequestError as e:
-                pytest.fail(f"file_retrieve raised BadRequestError for vertex_ai: {e}")
+                pytest.fail(
+                    f"file_retrieve raised BadRequestError for vertex_ai: {e}"
+                )
 
     def test_should_not_raise_bad_request_for_gemini(self):
         """Same as above but for 'gemini'."""
@@ -120,4 +122,6 @@ class TestFileRetrieveProviderRouting:
                     custom_llm_provider="gemini",
                 )
             except litellm.exceptions.BadRequestError as e:
-                pytest.fail(f"file_retrieve raised BadRequestError for gemini: {e}")
+                pytest.fail(
+                    f"file_retrieve raised BadRequestError for gemini: {e}"
+                )

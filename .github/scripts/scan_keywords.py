@@ -67,11 +67,12 @@ def send_webhook(webhook_url: str, payload: dict) -> None:
 def _excerpt(text: str, max_len: int = 400) -> str:
     if not text:
         return ""
-
+    
     # Keep original formatting
     if len(text) <= max_len:
         return text
     return text[: max_len - 1] + "…"
+
 
 
 def main() -> int:
@@ -86,19 +87,8 @@ def main() -> int:
 
     # Keywords from env or defaults
     keywords_env = os.environ.get("KEYWORDS", "")
-    default_keywords = [
-        "azure",
-        "openai",
-        "bedrock",
-        "vertexai",
-        "vertex ai",
-        "anthropic",
-    ]
-    keywords = (
-        [k.strip() for k in keywords_env.split(",")]
-        if keywords_env
-        else default_keywords
-    )
+    default_keywords = ["azure", "openai", "bedrock", "vertexai", "vertex ai", "anthropic"]
+    keywords = [k.strip() for k in keywords_env.split(",")] if keywords_env else default_keywords
 
     matches = detect_keywords(combined_text, keywords)
     found = bool(matches)
@@ -139,3 +129,5 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+

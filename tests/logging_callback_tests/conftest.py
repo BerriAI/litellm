@@ -80,9 +80,7 @@ def isolate_litellm_state():
     for attr in _LIST_ATTRS:
         if attr in _DEFAULTS:
             default = _DEFAULTS[attr]
-            setattr(
-                litellm, attr, default.copy() if isinstance(default, list) else default
-            )
+            setattr(litellm, attr, default.copy() if isinstance(default, list) else default)
 
     for attr in _SCALAR_ATTRS:
         if attr in _DEFAULTS:
@@ -99,9 +97,7 @@ def isolate_litellm_state():
     for attr in _LIST_ATTRS:
         if attr in _DEFAULTS:
             default = _DEFAULTS[attr]
-            setattr(
-                litellm, attr, default.copy() if isinstance(default, list) else default
-            )
+            setattr(litellm, attr, default.copy() if isinstance(default, list) else default)
 
     for attr in _SCALAR_ATTRS:
         if attr in _DEFAULTS:

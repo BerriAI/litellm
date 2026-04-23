@@ -1115,11 +1115,11 @@ def delete_responses(
             raise ValueError("custom_llm_provider is required but passed as None")
 
         # get provider config
-        responses_api_provider_config: Optional[BaseResponsesAPIConfig] = (
-            ProviderConfigManager.get_provider_responses_api_config(
-                model=None,
-                provider=custom_llm_provider,
-            )
+        responses_api_provider_config: Optional[
+            BaseResponsesAPIConfig
+        ] = ProviderConfigManager.get_provider_responses_api_config(
+            model=None,
+            provider=custom_llm_provider,
         )
 
         if responses_api_provider_config is None:
@@ -1296,11 +1296,11 @@ def get_responses(
             raise ValueError("custom_llm_provider is required but passed as None")
 
         # get provider config
-        responses_api_provider_config: Optional[BaseResponsesAPIConfig] = (
-            ProviderConfigManager.get_provider_responses_api_config(
-                model=None,
-                provider=custom_llm_provider,
-            )
+        responses_api_provider_config: Optional[
+            BaseResponsesAPIConfig
+        ] = ProviderConfigManager.get_provider_responses_api_config(
+            model=None,
+            provider=custom_llm_provider,
         )
 
         if responses_api_provider_config is None:
@@ -1454,11 +1454,11 @@ def list_input_items(
         if custom_llm_provider is None:
             raise ValueError("custom_llm_provider is required but passed as None")
 
-        responses_api_provider_config: Optional[BaseResponsesAPIConfig] = (
-            ProviderConfigManager.get_provider_responses_api_config(
-                model=None,
-                provider=custom_llm_provider,
-            )
+        responses_api_provider_config: Optional[
+            BaseResponsesAPIConfig
+        ] = ProviderConfigManager.get_provider_responses_api_config(
+            model=None,
+            provider=custom_llm_provider,
         )
 
         if responses_api_provider_config is None:
@@ -1613,11 +1613,11 @@ def cancel_responses(
             raise ValueError("custom_llm_provider is required but passed as None")
 
         # get provider config
-        responses_api_provider_config: Optional[BaseResponsesAPIConfig] = (
-            ProviderConfigManager.get_provider_responses_api_config(
-                model=None,
-                provider=custom_llm_provider,
-            )
+        responses_api_provider_config: Optional[
+            BaseResponsesAPIConfig
+        ] = ProviderConfigManager.get_provider_responses_api_config(
+            model=None,
+            provider=custom_llm_provider,
         )
 
         if responses_api_provider_config is None:
@@ -1801,11 +1801,11 @@ def compact_responses(
             raise ValueError("custom_llm_provider is required but passed as None")
 
         # get provider config
-        responses_api_provider_config: Optional[BaseResponsesAPIConfig] = (
-            ProviderConfigManager.get_provider_responses_api_config(
-                model=model,
-                provider=custom_llm_provider,
-            )
+        responses_api_provider_config: Optional[
+            BaseResponsesAPIConfig
+        ] = ProviderConfigManager.get_provider_responses_api_config(
+            model=model,
+            provider=custom_llm_provider,
         )
 
         if responses_api_provider_config is None:
@@ -1967,18 +1967,11 @@ async def _aresponses_websocket(
     )
 
     # Extract params that we're passing explicitly to avoid duplicates in **kwargs
-    _explicit_keys = {
-        "user_api_key_dict",
-        "litellm_metadata",
-        "custom_llm_provider",
-        "model",
-        "websocket",
-        "litellm_logging_obj",
-        "api_base",
-        "api_key",
-        "timeout",
+    remaining_kwargs = {
+        k: v
+        for k, v in kwargs.items()
+        if k not in {"user_api_key_dict", "litellm_metadata"}
     }
-    remaining_kwargs = {k: v for k, v in kwargs.items() if k not in _explicit_keys}
 
     await base_llm_http_handler.async_responses_websocket(
         model=model,

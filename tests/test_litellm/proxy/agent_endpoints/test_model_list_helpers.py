@@ -3,7 +3,6 @@ Test appending A2A agents to model lists.
 
 Maps to: litellm/proxy/agent_endpoints/model_list_helpers.py
 """
-
 import os
 import sys
 

@@ -26,7 +26,6 @@ _GS_PATH = "litellm.proxy.proxy_server.general_settings"
 # Proxy admin is always allowed
 # ---------------------------------------------------------------------------
 
-
 @pytest.mark.asyncio
 async def test_proxy_admin_always_allowed():
     user = _make_user(LitellmUserRoles.PROXY_ADMIN.value)
@@ -45,7 +44,6 @@ async def test_proxy_admin_view_only_always_allowed():
 # Feature not disabled — everyone allowed
 # ---------------------------------------------------------------------------
 
-
 @pytest.mark.asyncio
 async def test_feature_not_disabled_allows_internal_user():
     user = _make_user(LitellmUserRoles.INTERNAL_USER.value)
@@ -56,9 +54,7 @@ async def test_feature_not_disabled_allows_internal_user():
 @pytest.mark.asyncio
 async def test_feature_not_disabled_allows_vector_stores():
     user = _make_user(LitellmUserRoles.INTERNAL_USER.value)
-    with patch.dict(
-        _GS_PATH, {"disable_vector_stores_for_internal_users": False}, clear=True
-    ):
+    with patch.dict(_GS_PATH, {"disable_vector_stores_for_internal_users": False}, clear=True):
         await check_feature_access_for_user(user, "vector_stores")
 
 
@@ -66,16 +62,12 @@ async def test_feature_not_disabled_allows_vector_stores():
 # Feature disabled, team-admin exemption OFF — internal user blocked
 # ---------------------------------------------------------------------------
 
-
 @pytest.mark.asyncio
 async def test_agents_disabled_blocks_internal_user():
     user = _make_user(LitellmUserRoles.INTERNAL_USER.value)
     with patch.dict(
         _GS_PATH,
-        {
-            "disable_agents_for_internal_users": True,
-            "allow_agents_for_team_admins": False,
-        },
+        {"disable_agents_for_internal_users": True, "allow_agents_for_team_admins": False},
         clear=True,
     ):
         with pytest.raises(HTTPException) as exc_info:
@@ -88,10 +80,7 @@ async def test_vector_stores_disabled_blocks_internal_user():
     user = _make_user(LitellmUserRoles.INTERNAL_USER.value)
     with patch.dict(
         _GS_PATH,
-        {
-            "disable_vector_stores_for_internal_users": True,
-            "allow_vector_stores_for_team_admins": False,
-        },
+        {"disable_vector_stores_for_internal_users": True, "allow_vector_stores_for_team_admins": False},
         clear=True,
     ):
         with pytest.raises(HTTPException) as exc_info:
@@ -103,16 +92,12 @@ async def test_vector_stores_disabled_blocks_internal_user():
 # Feature disabled, allow_team_admins ON — team admin allowed, non-admin blocked
 # ---------------------------------------------------------------------------
 
-
 @pytest.mark.asyncio
 async def test_agents_disabled_team_admin_allowed():
     user = _make_user(LitellmUserRoles.INTERNAL_USER.value, user_id="team-admin-user")
     with patch.dict(
         _GS_PATH,
-        {
-            "disable_agents_for_internal_users": True,
-            "allow_agents_for_team_admins": True,
-        },
+        {"disable_agents_for_internal_users": True, "allow_agents_for_team_admins": True},
         clear=True,
     ):
         with patch(
@@ -127,10 +112,7 @@ async def test_agents_disabled_non_team_admin_blocked():
     user = _make_user(LitellmUserRoles.INTERNAL_USER.value, user_id="regular-user")
     with patch.dict(
         _GS_PATH,
-        {
-            "disable_agents_for_internal_users": True,
-            "allow_agents_for_team_admins": True,
-        },
+        {"disable_agents_for_internal_users": True, "allow_agents_for_team_admins": True},
         clear=True,
     ):
         with patch(
@@ -147,10 +129,7 @@ async def test_vector_stores_disabled_team_admin_allowed():
     user = _make_user(LitellmUserRoles.INTERNAL_USER.value, user_id="team-admin-user")
     with patch.dict(
         _GS_PATH,
-        {
-            "disable_vector_stores_for_internal_users": True,
-            "allow_vector_stores_for_team_admins": True,
-        },
+        {"disable_vector_stores_for_internal_users": True, "allow_vector_stores_for_team_admins": True},
         clear=True,
     ):
         with patch(
@@ -165,10 +144,7 @@ async def test_vector_stores_disabled_non_team_admin_blocked():
     user = _make_user(LitellmUserRoles.INTERNAL_USER.value, user_id="regular-user")
     with patch.dict(
         _GS_PATH,
-        {
-            "disable_vector_stores_for_internal_users": True,
-            "allow_vector_stores_for_team_admins": True,
-        },
+        {"disable_vector_stores_for_internal_users": True, "allow_vector_stores_for_team_admins": True},
         clear=True,
     ):
         with patch(

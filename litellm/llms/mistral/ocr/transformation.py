@@ -1,7 +1,6 @@
 """
 Mistral OCR transformation implementation.
 """
-
 from typing import Any, Dict, Optional
 
 import httpx
@@ -37,12 +36,8 @@ class MistralOCRConfig(BaseOCRConfig):
         - image_min_size: Minimum size of images to include
         - bbox_annotation_format: Format for bounding box annotations
         - document_annotation_format: Format for document annotations
-        - document_annotation_prompt: Prompt for document annotation extraction
         - extract_header: Whether to extract document header
         - extract_footer: Whether to extract document footer
-        - table_format: Table output format ("markdown" or "html")
-        - confidence_scores_granularity: Confidence score level ("word" or "page")
-        - id: Request identifier
         """
         return [
             "pages",
@@ -51,12 +46,8 @@ class MistralOCRConfig(BaseOCRConfig):
             "image_min_size",
             "bbox_annotation_format",
             "document_annotation_format",
-            "document_annotation_prompt",
             "extract_header",
             "extract_footer",
-            "table_format",
-            "confidence_scores_granularity",
-            "id",
         ]
 
     def map_ocr_params(

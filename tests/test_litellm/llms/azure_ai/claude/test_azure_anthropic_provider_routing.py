@@ -53,3 +53,4 @@ class TestAzureAnthropicProviderRouting:
         )
         # Should be routed to regular azure provider
         assert provider == "azure" or provider == "openai"
+

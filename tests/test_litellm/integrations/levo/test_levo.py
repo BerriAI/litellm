@@ -150,7 +150,6 @@ class TestLevoConfig(unittest.TestCase):
 
 class TestLevoIntegration(unittest.TestCase):
     """Integration tests for LevoLogger."""
-
     @patch.dict(
         "os.environ",
         {

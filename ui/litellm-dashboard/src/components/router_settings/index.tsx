@@ -1,4 +1,4 @@
-import { Button } from "antd";
+import { Button } from "@tremor/react";
 import React, { useEffect, useState } from "react";
 import NotificationsManager from "../molecules/notifications_manager";
 import { getCallbacksCall, getRouterSettingsCall, setCallbacksCall } from "../networking";
@@ -191,10 +191,10 @@ const RouterSettings: React.FC<RouterSettingsProps> = ({ accessToken, userRole, 
 
       {/* Actions - Sticky at bottom */}
       <div className="border-t border-gray-200 pt-6 flex justify-end gap-3">
-        <Button onClick={() => window.location.reload()}>
+        <Button variant="secondary" size="sm" onClick={() => window.location.reload()} className="text-sm">
           Reset
         </Button>
-        <Button type="primary" onClick={handleSaveChanges}>
+        <Button size="sm" onClick={handleSaveChanges} className="text-sm font-medium">
           Save Changes
         </Button>
       </div>

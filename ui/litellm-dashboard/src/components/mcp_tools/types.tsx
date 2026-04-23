@@ -223,10 +223,6 @@ export interface MCPServer {
   submitted_at?: string | null;
   reviewed_at?: string | null;
   review_notes?: string | null;
-
-  /** Per-user OAuth token storage settings (interactive OAuth only) */
-  token_validation?: Record<string, any> | null;
-  token_storage_ttl_seconds?: number | null;
 }
 
 export interface MCPServerProps {

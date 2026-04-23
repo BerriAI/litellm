@@ -1,7 +1,6 @@
 """
 Test key rotation manager functionality
 """
-
 import os
 import sys
 from datetime import datetime, timedelta, timezone

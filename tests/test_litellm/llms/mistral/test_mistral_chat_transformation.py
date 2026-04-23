@@ -649,10 +649,9 @@ class TestMistralEmptyContentHandling:
         message = {"role": "assistant", "content": "Hello"}
         assert MistralConfig._is_empty_assistant_message(message) is False
 
-
 class TestMistralFileHandling:
     """Test suite for Mistral file handling functionality."""
-
+    
     def test_handle_file_message_with_file_id(self):
         """Test that file messages with file_id are handled correctly."""
         mistral_config = MistralConfig()
@@ -661,8 +660,8 @@ class TestMistralFileHandling:
                 "role": "user",
                 "content": [
                     {"type": "text", "text": "Please review this file."},
-                    {"type": "file", "file": {"file_id": "file-12345"}},
-                ],
+                    {"type": "file", "file": {"file_id": "file-12345"}}
+                ]
             }
         ]
         casted_message = cast(list[AllMessageValues], messages)
@@ -675,7 +674,7 @@ class TestMistralFileHandling:
         # Check that file type is preserved
         assert result[0]["content"][1]["type"] == "file"
         # Check that file_id is modified to match Mistral's expected format
-        assert result[0]["content"][1]["file_id"] == "file-12345"  # type: ignore
+        assert result[0]["content"][1]["file_id"] == "file-12345" # type: ignore
 
     def test_handle_file_message_without_file_id(self):
         """Test that file messages without file_id are ignored."""
@@ -683,7 +682,9 @@ class TestMistralFileHandling:
         messages = [
             {
                 "role": "user",
-                "content": [{"type": "text", "text": "Please review this file."}],
+                "content": [
+                    {"type": "text", "text": "Please review this file."}
+                ]
             }
         ]
         casted_message = cast(list[AllMessageValues], messages)
@@ -702,8 +703,8 @@ class TestMistralFileHandling:
                 "content": [
                     {"type": "text", "text": "Please review these files."},
                     {"type": "file", "file": {"file_id": "file-12345"}},
-                    {"type": "file", "file": {"file_id": "file-67890"}},
-                ],
+                    {"type": "file", "file": {"file_id": "file-67890"}}
+                ]
             }
         ]
         casted_message = cast(list[AllMessageValues], messages)

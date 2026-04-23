@@ -23,7 +23,9 @@ class TestKeyMaskingInAuthErrors:
         # Simulate the logic from user_api_key_auth.py
         api_key = "my-secret-api-key-1234567890abcdef"
         _masked_key = (
-            "{}****{}".format(api_key[:4], api_key[-4:]) if len(api_key) > 8 else "****"
+            "{}****{}".format(api_key[:4], api_key[-4:])
+            if len(api_key) > 8
+            else "****"
         )
 
         # The masked key should NOT contain the full original key
@@ -37,7 +39,9 @@ class TestKeyMaskingInAuthErrors:
         """
         api_key = " sk-abc123def456ghi789jkl012mno345pqr"
         _masked_key = (
-            "{}****{}".format(api_key[:4], api_key[-4:]) if len(api_key) > 8 else "****"
+            "{}****{}".format(api_key[:4], api_key[-4:])
+            if len(api_key) > 8
+            else "****"
         )
 
         assert api_key not in _masked_key
@@ -47,7 +51,9 @@ class TestKeyMaskingInAuthErrors:
         """Short keys (<=8 chars) should be fully masked."""
         api_key = "short"
         _masked_key = (
-            "{}****{}".format(api_key[:4], api_key[-4:]) if len(api_key) > 8 else "****"
+            "{}****{}".format(api_key[:4], api_key[-4:])
+            if len(api_key) > 8
+            else "****"
         )
         assert _masked_key == "****"
 
@@ -61,7 +67,9 @@ class TestKeyMaskingInAuthErrors:
         """
         api_key = "bad-key-format-1234567890abcdefghijklmnop"
         _masked_key = (
-            "{}****{}".format(api_key[:4], api_key[-4:]) if len(api_key) > 8 else "****"
+            "{}****{}".format(api_key[:4], api_key[-4:])
+            if len(api_key) > 8
+            else "****"
         )
 
         # Build the same message string that user_api_key_auth.py would produce

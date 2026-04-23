@@ -122,7 +122,6 @@ class TestGigaChatCollapseUserMessages:
 
         return GigaChatConfig()
 
-
 class TestGigaChatToolsTransformation:
     """Tests for tools -> functions conversion"""
 
@@ -366,7 +365,6 @@ class TestGigaChatToolChoiceMapping:
     @pytest.fixture
     def config(self):
         from litellm.llms.gigachat.chat.transformation import GigaChatConfig
-
         return GigaChatConfig()
 
     def test_tool_choice_none(self, config):
@@ -386,7 +384,10 @@ class TestGigaChatToolChoiceMapping:
 
     def test_tool_choice_forced_function(self, config):
         """tool_choice with forced function should map to function_call with name"""
-        tool_choice = {"type": "function", "function": {"name": "get_weather"}}
+        tool_choice = {
+            "type": "function",
+            "function": {"name": "get_weather"}
+        }
         result = config._map_tool_choice(tool_choice)
         assert result == {"name": "get_weather"}
 
@@ -396,8 +397,8 @@ class TestGigaChatToolChoiceMapping:
             "type": "function",
             "function": {
                 "name": "weather_forecast",
-                "description": "Get weather forecast",
-            },
+                "description": "Get weather forecast"
+            }
         }
         result = config._map_tool_choice(tool_choice)
         assert result == {"name": "weather_forecast"}
@@ -446,7 +447,7 @@ class TestGigaChatToolChoiceMapping:
         params = {
             "tool_choice": {
                 "type": "function",
-                "function": {"name": "weather_forecast"},
+                "function": {"name": "weather_forecast"}
             }
         }
         result = config.map_openai_params(
@@ -460,17 +461,18 @@ class TestGigaChatToolChoiceMapping:
     def test_tool_choice_with_tools(self, config):
         """tool_choice should work together with tools parameter"""
         params = {
-            "tools": [
-                {
-                    "type": "function",
-                    "function": {
-                        "name": "get_weather",
-                        "description": "Get weather",
-                        "parameters": {"type": "object", "properties": {}},
-                    },
+            "tools": [{
+                "type": "function",
+                "function": {
+                    "name": "get_weather",
+                    "description": "Get weather",
+                    "parameters": {"type": "object", "properties": {}}
                 }
-            ],
-            "tool_choice": {"type": "function", "function": {"name": "get_weather"}},
+            }],
+            "tool_choice": {
+                "type": "function",
+                "function": {"name": "get_weather"}
+            }
         }
         result = config.map_openai_params(
             non_default_params=params,
@@ -485,14 +487,12 @@ class TestGigaChatToolChoiceMapping:
         """Full transform_request should include function_call from tool_choice"""
         messages = [{"role": "user", "content": "What's the weather?"}]
         optional_params = {
-            "functions": [
-                {
-                    "name": "get_weather",
-                    "description": "Get weather",
-                    "parameters": {"type": "object", "properties": {}},
-                }
-            ],
-            "function_call": {"name": "get_weather"},
+            "functions": [{
+                "name": "get_weather",
+                "description": "Get weather",
+                "parameters": {"type": "object", "properties": {}}
+            }],
+            "function_call": {"name": "get_weather"}
         }
         result = config.transform_request(
             model="gigachat/GigaChat",

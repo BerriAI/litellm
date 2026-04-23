@@ -116,7 +116,6 @@ class FireworksAIConfig(OpenAIGPTConfig):
         # Only add tool_choice for models that explicitly support it
         if supports_tool_choice(model=model, custom_llm_provider="fireworks_ai"):
             supported_params.append("tool_choice")
-            supported_params.append("parallel_tool_calls")
 
         # Only add reasoning_effort for models that support it
         if supports_reasoning(model=model, custom_llm_provider="fireworks_ai"):
@@ -249,24 +248,34 @@ class FireworksAIConfig(OpenAIGPTConfig):
 
         return messages
 
-    def _get_model_cost_capability(self, model: str, capability: str) -> Optional[bool]:
-        candidate_keys = [model]
-        if not model.startswith("fireworks_ai/"):
-            candidate_keys.append(f"fireworks_ai/{model}")
-
-        for candidate_key in candidate_keys:
-            model_info = litellm.model_cost.get(candidate_key)
-            if model_info is not None and model_info.get(capability) is not None:
-                return cast(Optional[bool], model_info.get(capability))
-
-        return None
-
     def get_provider_info(self, model: str) -> ProviderSpecificModelInfo:
-        supports_function_calling_value = self._get_model_cost_capability(
-            model=model, capability="supports_function_calling"
-        )
-        supports_reasoning_value = self._get_model_cost_capability(
-            model=model, capability="supports_reasoning"
+        # Models that support reasoning_effort
+        reasoning_supported_models = [
+            "qwen3-8b",
+            "qwen3-32b",
+            "qwen3-coder-480b-a35b-instruct",
+            "deepseek-v3p1",
+            "deepseek-v3p2",
+            "glm-4p5",
+            "glm-4p5-air",
+            "glm-4p6",
+            "gpt-oss-120b",
+            "gpt-oss-20b",
+        ]
+
+        # Normalize model name - remove prefix if present
+        normalized_model = model
+        if model.startswith("fireworks_ai/"):
+            normalized_model = model.replace("fireworks_ai/", "")
+        if normalized_model.startswith("accounts/fireworks/models/"):
+            normalized_model = normalized_model.replace(
+                "accounts/fireworks/models/", ""
+            )
+
+        # Check if model supports reasoning
+        supports_reasoning_value = any(
+            reasoning_model in normalized_model
+            for reasoning_model in reasoning_supported_models
         )
 
         provider_specific_model_info: ProviderSpecificModelInfo = {
@@ -276,16 +285,9 @@ class FireworksAIConfig(OpenAIGPTConfig):
             "supports_vision": True,  # via document inlining
         }
 
-        if supports_function_calling_value is not None:
-            provider_specific_model_info["supports_function_calling"] = (
-                supports_function_calling_value
-            )
-
         # Only include supports_reasoning if True
-        if supports_reasoning_value is not None:
-            provider_specific_model_info["supports_reasoning"] = (
-                supports_reasoning_value
-            )
+        if supports_reasoning_value:
+            provider_specific_model_info["supports_reasoning"] = True
 
         return provider_specific_model_info
 
@@ -390,11 +392,11 @@ class FireworksAIConfig(OpenAIGPTConfig):
 
         ## FIREWORKS AI sends tool calls in the content field instead of tool_calls
         for choice in response.choices:
-            cast(Choices, choice).message = (
-                self._handle_message_content_with_tool_calls(
-                    message=cast(Choices, choice).message,
-                    tool_calls=optional_params.get("tools", None),
-                )
+            cast(
+                Choices, choice
+            ).message = self._handle_message_content_with_tool_calls(
+                message=cast(Choices, choice).message,
+                tool_calls=optional_params.get("tools", None),
             )
 
         response._hidden_params = {"additional_headers": additional_headers}

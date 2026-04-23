@@ -167,7 +167,7 @@ The `sampling_rate` parameter controls what percentage of requests are profiled:
 `line_profiler` must be installed to use the line profiling functionality:
 
 ```bash
-uv add --dev line-profiler
+pip install line_profiler
 ```
 
 On Windows with Python 3.14+, you may need to install Microsoft Visual C++ Build Tools to compile `line_profiler` from source.
@@ -211,3 +211,4 @@ Decorator to sample endpoint hits and save to a profile file using cProfile.
 
 **Args:**
 - `sampling_rate`: Rate of requests to profile (0.0 to 1.0)
+

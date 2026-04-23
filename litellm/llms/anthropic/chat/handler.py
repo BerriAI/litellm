@@ -89,12 +89,7 @@ async def make_call(
 
     try:
         response = await client.post(
-            api_base,
-            headers=headers,
-            data=data,
-            stream=True,
-            timeout=timeout,
-            logging_obj=logging_obj,
+            api_base, headers=headers, data=data, stream=True, timeout=timeout
         )
     except httpx.HTTPStatusError as e:
         error_headers = getattr(e, "headers", None)
@@ -147,12 +142,7 @@ def make_sync_call(
 
     try:
         response = client.post(
-            api_base,
-            headers=headers,
-            data=data,
-            stream=True,
-            timeout=timeout,
-            logging_obj=logging_obj,
+            api_base, headers=headers, data=data, stream=True, timeout=timeout
         )
     except httpx.HTTPStatusError as e:
         error_headers = getattr(e, "headers", None)
@@ -276,11 +266,7 @@ class AnthropicChatCompletion(BaseLLM):
 
         try:
             response = await async_handler.post(
-                api_base,
-                headers=headers,
-                json=data,
-                timeout=timeout,
-                logging_obj=logging_obj,
+                api_base, headers=headers, json=data, timeout=timeout
             )
         except Exception as e:
             ## LOGGING
@@ -483,7 +469,6 @@ class AnthropicChatCompletion(BaseLLM):
                         headers=headers,
                         data=json.dumps(data),
                         timeout=timeout,
-                        logging_obj=logging_obj,
                     )
                 except Exception as e:
                     status_code = getattr(e, "status_code", 500)
@@ -593,7 +578,9 @@ class ModelResponseIterator:
             speed=self.speed,
         )
 
-    def _content_block_delta_helper(self, chunk: dict) -> Tuple[
+    def _content_block_delta_helper(
+        self, chunk: dict
+    ) -> Tuple[
         str,
         Optional[ChatCompletionToolCallChunk],
         List[Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]],
@@ -818,9 +805,9 @@ class ModelResponseIterator:
                         tool_input = content_block_start["content_block"].get(
                             "input", {}
                         )
-                        self._server_tool_inputs[self._current_server_tool_id] = (
-                            tool_input
-                        )
+                        self._server_tool_inputs[
+                            self._current_server_tool_id
+                        ] = tool_input
                     # Include caller information if present (for programmatic tool calling)
                     if "caller" in content_block_start["content_block"]:
                         caller_data = content_block_start["content_block"]["caller"]
@@ -841,9 +828,9 @@ class ModelResponseIterator:
                     # Handle compaction blocks
                     # The full content comes in content_block_start
                     self.compaction_blocks.append(content_block_start["content_block"])
-                    provider_specific_fields["compaction_blocks"] = (
-                        self.compaction_blocks
-                    )
+                    provider_specific_fields[
+                        "compaction_blocks"
+                    ] = self.compaction_blocks
                     provider_specific_fields["compaction_start"] = {
                         "type": "compaction",
                         "content": content_block_start["content_block"].get(
@@ -865,9 +852,9 @@ class ModelResponseIterator:
                         self.web_search_results.append(
                             content_block_start["content_block"]
                         )
-                        provider_specific_fields["web_search_results"] = (
-                            self.web_search_results
-                        )
+                        provider_specific_fields[
+                            "web_search_results"
+                        ] = self.web_search_results
                     elif content_type == "web_fetch_tool_result":
                         # Capture web_fetch_tool_result for multi-turn reconstruction
                         # The full content comes in content_block_start, not in deltas
@@ -875,18 +862,18 @@ class ModelResponseIterator:
                         self.web_search_results.append(
                             content_block_start["content_block"]
                         )
-                        provider_specific_fields["web_search_results"] = (
-                            self.web_search_results
-                        )
+                        provider_specific_fields[
+                            "web_search_results"
+                        ] = self.web_search_results
                     elif content_type != "tool_search_tool_result":
                         # Handle other tool results (code execution, etc.)
                         # Skip tool_search_tool_result as it's internal metadata
                         self.tool_results.append(content_block_start["content_block"])
                         provider_specific_fields["tool_results"] = self.tool_results
                         # Convert to provider-neutral code_interpreter_results
-                        provider_specific_fields["code_interpreter_results"] = (
-                            self._build_code_interpreter_results()
-                        )
+                        provider_specific_fields[
+                            "code_interpreter_results"
+                        ] = self._build_code_interpreter_results()
 
             elif type_chunk == "content_block_stop":
                 ContentBlockStop(**chunk)  # type: ignore
@@ -943,9 +930,9 @@ class ModelResponseIterator:
                     )
                     if container_id and self.tool_results:
                         self._container_id = container_id
-                        provider_specific_fields["code_interpreter_results"] = (
-                            self._build_code_interpreter_results()
-                        )
+                        provider_specific_fields[
+                            "code_interpreter_results"
+                        ] = self._build_code_interpreter_results()
             elif type_chunk == "message_start":
                 """
                 Anthropic

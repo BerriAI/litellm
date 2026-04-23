@@ -17,7 +17,6 @@ import { validateMCPServerUrl, validateMCPServerName } from "./utils";
 import NotificationsManager from "../molecules/notifications_manager";
 import { useMcpOAuthFlow } from "@/hooks/useMcpOAuthFlow";
 import { useTestMCPConnection } from "@/hooks/useTestMCPConnection";
-import { getSecureItem, setSecureItem } from "@/utils/secureStorage";
 
 const asset_logos_folder = "../ui/assets/logos/";
 export const mcpLogoImg = `${asset_logos_folder}mcp_logo.png`;
@@ -95,7 +94,8 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
     }
     try {
       const values = form.getFieldsValue(true);
-      setSecureItem(
+      // codeql[js/clear-text-storage-of-sensitive-data]
+      window.sessionStorage.setItem(
         CREATE_OAUTH_UI_STATE_KEY,
         JSON.stringify({
           modalVisible: isModalVisible,
@@ -178,7 +178,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
     if (typeof window === "undefined") {
       return;
     }
-    const storedState = getSecureItem(CREATE_OAUTH_UI_STATE_KEY);
+    const storedState = window.sessionStorage.getItem(CREATE_OAUTH_UI_STATE_KEY);
     if (!storedState) {
       return;
     }
@@ -284,7 +284,6 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
         credentials: credentialValues,
         allow_all_keys: allowAllKeysRaw,
         available_on_public_internet: availableOnPublicInternetRaw,
-        token_validation_json: rawTokenValidationJson,
         ...restValues
       } = values;
 
@@ -357,18 +356,6 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
         restValues.transport = "http";
       }
 
-      // Parse token_validation JSON if provided
-      let tokenValidation: Record<string, any> | null = null;
-      if (rawTokenValidationJson && rawTokenValidationJson.trim() !== "") {
-        try {
-          tokenValidation = JSON.parse(rawTokenValidationJson);
-        } catch {
-          NotificationsManager.fromBackend("Invalid JSON in Token Validation Rules");
-          setIsLoading(false);
-          return;
-        }
-      }
-
       // Prepare the payload with cost configuration and allowed tools
       const payload: Record<string, any> = {
         ...restValues,
@@ -389,7 +376,6 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
         allow_all_keys: Boolean(allowAllKeysRaw),
         available_on_public_internet: Boolean(availableOnPublicInternetRaw),
         static_headers: staticHeaders,
-        ...(tokenValidation !== null && { token_validation: tokenValidation }),
       };
 
       payload.static_headers = staticHeaders;

@@ -90,7 +90,6 @@ describe("TagFilteringToggle", () => {
 
     await user.click(screen.getByRole("switch"));
 
-    expect(onToggle).toHaveBeenCalledTimes(1);
-    expect(onToggle.mock.calls[0][0]).toBe(true);
+    expect(onToggle).toHaveBeenCalledWith(true);
   });
 });

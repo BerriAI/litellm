@@ -566,7 +566,7 @@ You can use the [LangChain AWS SDK](https://python.langchain.com/docs/integratio
 **1. Install LangChain AWS**:
 
 ```bash showLineNumbers
-uv add langchain-aws
+pip install langchain-aws
 ```
 
 **2. Setup LiteLLM Proxy**:

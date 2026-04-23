@@ -152,9 +152,7 @@ def test_pydantic_base_model():
         inner: InnerModel
         tags: list
 
-    outer = OuterModel(
-        name="test", inner=InnerModel(value=42, label="hello"), tags=["a", "b"]
-    )
+    outer = OuterModel(name="test", inner=InnerModel(value=42, label="hello"), tags=["a", "b"])
 
     # Test a pydantic model at the top level
     result = json.loads(safe_dumps(outer))

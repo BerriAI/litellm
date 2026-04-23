@@ -65,7 +65,7 @@ def test_completion_custom_provider_model_name():
     try:
         litellm.cache = None
         response = completion(
-            model="together_ai/Qwen/Qwen2.5-7B-Instruct-Turbo",
+            model="together_ai/mistralai/Mixtral-8x7B-Instruct-v0.1",
             messages=messages,
             logger_fn=logger_fn,
         )
@@ -2366,6 +2366,7 @@ def test_azure_openai_ad_token():
 # test_azure_openai_ad_token()
 
 
+
 def test_completion_azure2():
     # test if we can pass api_base, api_version and api_key in compleition()
     try:
@@ -2485,6 +2486,8 @@ def test_completion_azure_with_litellm_key():
 
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
+
+
 
 
 import asyncio
@@ -2812,7 +2815,7 @@ def test_customprompt_together_ai():
         print(litellm.success_callback)
         print(litellm._async_success_callback)
         response = completion(
-            model="together_ai/Qwen/Qwen2.5-7B-Instruct-Turbo",
+            model="together_ai/mistralai/Mixtral-8x7B-Instruct-v0.1",
             messages=messages,
             roles={
                 "system": {
@@ -3258,7 +3261,9 @@ def test_completion_deep_infra(drop_params):
             Choice(
                 finish_reason="stop",
                 index=0,
-                message=ChatCompletionMessage(content="It's sunny.", role="assistant"),
+                message=ChatCompletionMessage(
+                    content="It's sunny.", role="assistant"
+                ),
             )
         ],
         created=1234567890,
@@ -3340,7 +3345,9 @@ def test_completion_deep_infra_mistral():
             Choice(
                 finish_reason="stop",
                 index=0,
-                message=ChatCompletionMessage(content="Hello!", role="assistant"),
+                message=ChatCompletionMessage(
+                    content="Hello!", role="assistant"
+                ),
             )
         ],
         created=1234567890,
@@ -3675,7 +3682,7 @@ def test_completion_together_ai_stream():
     messages = [{"content": user_message, "role": "user"}]
     try:
         response = completion(
-            model="together_ai/Qwen/Qwen2.5-7B-Instruct-Turbo",
+            model="together_ai/mistralai/Mixtral-8x7B-Instruct-v0.1",
             messages=messages,
             stream=True,
             max_tokens=5,

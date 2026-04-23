@@ -12,9 +12,7 @@ import sys
 import os
 
 # Add the parent directory to the path so we can import litellm
-sys.path.insert(
-    0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../.."))
-)
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../..")))
 
 import litellm
 from litellm.litellm_core_utils.prompt_templates.factory import (
@@ -43,7 +41,10 @@ class TestMessageSanitization:
         Should add a dummy tool result message
         """
         messages = [
-            {"role": "user", "content": "What is the weather in Nashik?"},
+            {
+                "role": "user",
+                "content": "What is the weather in Nashik?"
+            },
             {
                 "role": "assistant",
                 "content": None,
@@ -53,11 +54,11 @@ class TestMessageSanitization:
                         "type": "function",
                         "function": {
                             "name": "get_weather",
-                            "arguments": '{"location": "Nashik, India"}',
-                        },
+                            "arguments": '{"location": "Nashik, India"}'
+                        }
                     }
-                ],
-            },
+                ]
+            }
         ]
 
         sanitized = sanitize_messages_for_tool_calling(messages)
@@ -68,10 +69,7 @@ class TestMessageSanitization:
         assert sanitized[1]["role"] == "assistant"
         assert sanitized[2]["role"] == "tool"
         assert sanitized[2]["tool_call_id"] == "toolu_01Kus2cC3ydjBW7UK4GJqBP4"
-        assert (
-            "skipped" in sanitized[2]["content"].lower()
-            or "interrupted" in sanitized[2]["content"].lower()
-        )
+        assert "skipped" in sanitized[2]["content"].lower() or "interrupted" in sanitized[2]["content"].lower()
         assert "get_weather" in sanitized[2]["content"]
 
     def test_case_a_orphaned_tool_call_multiple(self):
@@ -79,7 +77,10 @@ class TestMessageSanitization:
         Test Case A: Assistant message with multiple tool_calls, some missing results
         """
         messages = [
-            {"role": "user", "content": "Get weather for Nashik and Mumbai"},
+            {
+                "role": "user",
+                "content": "Get weather for Nashik and Mumbai"
+            },
             {
                 "role": "assistant",
                 "content": None,
@@ -89,24 +90,24 @@ class TestMessageSanitization:
                         "type": "function",
                         "function": {
                             "name": "get_weather",
-                            "arguments": '{"location": "Nashik"}',
-                        },
+                            "arguments": '{"location": "Nashik"}'
+                        }
                     },
                     {
                         "id": "call_2",
                         "type": "function",
                         "function": {
                             "name": "get_weather",
-                            "arguments": '{"location": "Mumbai"}',
-                        },
-                    },
-                ],
+                            "arguments": '{"location": "Mumbai"}'
+                        }
+                    }
+                ]
             },
             {
                 "role": "tool",
                 "tool_call_id": "call_1",
-                "content": "Weather in Nashik: 25°C",
-            },
+                "content": "Weather in Nashik: 25°C"
+            }
         ]
 
         sanitized = sanitize_messages_for_tool_calling(messages)
@@ -115,12 +116,8 @@ class TestMessageSanitization:
         assert len(sanitized) == 4
         assert sanitized[0]["role"] == "user"
         assert sanitized[1]["role"] == "assistant"
-        assert (
-            sanitized[2]["tool_call_id"] == "call_1"
-        )  # Original tool result (first in tool_calls)
-        assert (
-            sanitized[3]["tool_call_id"] == "call_2"
-        )  # Dummy added for missing call_2
+        assert sanitized[2]["tool_call_id"] == "call_1"  # Original tool result (first in tool_calls)
+        assert sanitized[3]["tool_call_id"] == "call_2"  # Dummy added for missing call_2
 
     def test_case_b_orphaned_tool_result(self):
         """
@@ -128,13 +125,19 @@ class TestMessageSanitization:
         Should remove the orphaned tool result
         """
         messages = [
-            {"role": "user", "content": "Hello"},
-            {"role": "assistant", "content": "Hi there!"},
+            {
+                "role": "user",
+                "content": "Hello"
+            },
+            {
+                "role": "assistant",
+                "content": "Hi there!"
+            },
             {
                 "role": "tool",
                 "tool_call_id": "nonexistent_id",
-                "content": "Some result",
-            },
+                "content": "Some result"
+            }
         ]
 
         sanitized = sanitize_messages_for_tool_calling(messages)
@@ -149,7 +152,10 @@ class TestMessageSanitization:
         Test Case B: Valid tool result with matching tool_call should be preserved
         """
         messages = [
-            {"role": "user", "content": "What's the weather?"},
+            {
+                "role": "user",
+                "content": "What's the weather?"
+            },
             {
                 "role": "assistant",
                 "content": None,
@@ -159,12 +165,16 @@ class TestMessageSanitization:
                         "type": "function",
                         "function": {
                             "name": "get_weather",
-                            "arguments": '{"location": "Boston"}',
-                        },
+                            "arguments": '{"location": "Boston"}'
+                        }
                     }
-                ],
+                ]
             },
-            {"role": "tool", "tool_call_id": "call_123", "content": "Weather: 20°C"},
+            {
+                "role": "tool",
+                "tool_call_id": "call_123",
+                "content": "Weather: 20°C"
+            }
         ]
 
         sanitized = sanitize_messages_for_tool_calling(messages)
@@ -180,18 +190,21 @@ class TestMessageSanitization:
         Should replace with placeholder
         """
         messages = [
-            {"role": "user", "content": ""},
-            {"role": "assistant", "content": "Hello!"},
+            {
+                "role": "user",
+                "content": ""
+            },
+            {
+                "role": "assistant",
+                "content": "Hello!"
+            }
         ]
 
         sanitized = sanitize_messages_for_tool_calling(messages)
 
         assert len(sanitized) == 2
         assert sanitized[0]["role"] == "user"
-        assert (
-            sanitized[0]["content"]
-            == "[System: Empty message content sanitised to satisfy protocol]"
-        )
+        assert sanitized[0]["content"] == "[System: Empty message content sanitised to satisfy protocol]"
 
     def test_case_c_whitespace_only_content(self):
         """
@@ -199,29 +212,35 @@ class TestMessageSanitization:
         Should replace with placeholder
         """
         messages = [
-            {"role": "user", "content": "   \n  \t  "},
-            {"role": "assistant", "content": "  "},
+            {
+                "role": "user",
+                "content": "   \n  \t  "
+            },
+            {
+                "role": "assistant",
+                "content": "  "
+            }
         ]
 
         sanitized = sanitize_messages_for_tool_calling(messages)
 
         assert len(sanitized) == 2
-        assert (
-            sanitized[0]["content"]
-            == "[System: Empty message content sanitised to satisfy protocol]"
-        )
-        assert (
-            sanitized[1]["content"]
-            == "[System: Empty message content sanitised to satisfy protocol]"
-        )
+        assert sanitized[0]["content"] == "[System: Empty message content sanitised to satisfy protocol]"
+        assert sanitized[1]["content"] == "[System: Empty message content sanitised to satisfy protocol]"
 
     def test_case_c_valid_content_preserved(self):
         """
         Test Case C: Valid non-empty content should be preserved
         """
         messages = [
-            {"role": "user", "content": "Hello"},
-            {"role": "assistant", "content": "Hi there!"},
+            {
+                "role": "user",
+                "content": "Hello"
+            },
+            {
+                "role": "assistant",
+                "content": "Hi there!"
+            }
         ]
 
         sanitized = sanitize_messages_for_tool_calling(messages)
@@ -235,7 +254,10 @@ class TestMessageSanitization:
         Test combination of multiple cases
         """
         messages = [
-            {"role": "user", "content": "Get weather"},
+            {
+                "role": "user",
+                "content": "Get weather"
+            },
             {
                 "role": "assistant",
                 "content": None,
@@ -245,19 +267,25 @@ class TestMessageSanitization:
                         "type": "function",
                         "function": {
                             "name": "get_weather",
-                            "arguments": '{"location": "NYC"}',
-                        },
+                            "arguments": '{"location": "NYC"}'
+                        }
                     }
-                ],
+                ]
             },
             # Missing tool result for call_1
-            {"role": "user", "content": ""},  # Empty content
-            {"role": "assistant", "content": "Response"},
+            {
+                "role": "user",
+                "content": ""  # Empty content
+            },
+            {
+                "role": "assistant",
+                "content": "Response"
+            },
             {
                 "role": "tool",
                 "tool_call_id": "orphaned_id",  # Orphaned tool result
-                "content": "Some data",
-            },
+                "content": "Some data"
+            }
         ]
 
         sanitized = sanitize_messages_for_tool_calling(messages)
@@ -270,10 +298,7 @@ class TestMessageSanitization:
         assert sanitized[2]["role"] == "tool"
         assert sanitized[2]["tool_call_id"] == "call_1"  # Dummy added
         assert sanitized[3]["role"] == "user"
-        assert (
-            sanitized[3]["content"]
-            == "[System: Empty message content sanitised to satisfy protocol]"
-        )
+        assert sanitized[3]["content"] == "[System: Empty message content sanitised to satisfy protocol]"
         assert sanitized[4]["role"] == "assistant"
 
     def test_modify_params_false_no_sanitization(self):
@@ -283,7 +308,10 @@ class TestMessageSanitization:
         litellm.modify_params = False
 
         messages = [
-            {"role": "user", "content": ""},
+            {
+                "role": "user",
+                "content": ""
+            },
             {
                 "role": "assistant",
                 "content": None,
@@ -291,10 +319,13 @@ class TestMessageSanitization:
                     {
                         "id": "call_1",
                         "type": "function",
-                        "function": {"name": "get_weather", "arguments": "{}"},
+                        "function": {
+                            "name": "get_weather",
+                            "arguments": '{}'
+                        }
                     }
-                ],
-            },
+                ]
+            }
         ]
 
         sanitized = sanitize_messages_for_tool_calling(messages)
@@ -311,7 +342,10 @@ class TestMessageSanitization:
         litellm.modify_params = True
 
         messages = [
-            {"role": "user", "content": "What is the weather in Nashik?"},
+            {
+                "role": "user",
+                "content": "What is the weather in Nashik?"
+            },
             {
                 "role": "assistant",
                 "content": None,
@@ -321,16 +355,18 @@ class TestMessageSanitization:
                         "type": "function",
                         "function": {
                             "name": "get_weather",
-                            "arguments": '{"location": "Nashik, India"}',
-                        },
+                            "arguments": '{"location": "Nashik, India"}'
+                        }
                     }
-                ],
-            },
+                ]
+            }
         ]
 
         # This should not raise an error and should add dummy tool result
         result = anthropic_messages_pt(
-            messages=messages, model="claude-sonnet-4-5", llm_provider="anthropic"
+            messages=messages,
+            model="claude-sonnet-4-5",
+            llm_provider="anthropic"
         )
 
         # Should have at least 2 messages (user and assistant)

@@ -177,9 +177,7 @@ class TestCacheSettingsManager:
         # Mock prisma client
         mock_prisma_client = MagicMock()
         mock_cache_config = MagicMock()
-        mock_cache_config.cache_settings = (
-            '{"type": "redis", "host": "localhost", "port": "6379"}'
-        )
+        mock_cache_config.cache_settings = '{"type": "redis", "host": "localhost", "port": "6379"}'
         mock_prisma_client.db.litellm_cacheconfig.find_unique = AsyncMock(
             return_value=mock_cache_config
         )
@@ -226,9 +224,7 @@ class TestCacheSettingsManager:
         # Mock prisma client
         mock_prisma_client = MagicMock()
         mock_cache_config = MagicMock()
-        mock_cache_config.cache_settings = (
-            '{"type": "redis", "host": "localhost", "port": "6379"}'
-        )
+        mock_cache_config.cache_settings = '{"type": "redis", "host": "localhost", "port": "6379"}'
         mock_prisma_client.db.litellm_cacheconfig.find_unique = AsyncMock(
             return_value=mock_cache_config
         )

@@ -1,7 +1,6 @@
 """
 Unit tests for Prometheus user and team count metrics
 """
-
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -157,12 +156,8 @@ class TestPrometheusUserTeamCountMetrics:
                 metrics[sample.name] = sample.value
 
         # Verify our metrics are in the collected metrics
-        assert (
-            "litellm_total_users" in metrics or "litellm_total_users_total" in metrics
-        )
-        assert (
-            "litellm_teams_count" in metrics or "litellm_teams_count_total" in metrics
-        )
+        assert "litellm_total_users" in metrics or "litellm_total_users_total" in metrics
+        assert "litellm_teams_count" in metrics or "litellm_teams_count_total" in metrics
 
     def test_initialize_user_and_team_count_metrics_method_exists(
         self, prometheus_logger
@@ -294,9 +289,9 @@ async def test_assemble_team_object_uses_db_max_budget_when_metadata_is_none(
             response_cost=0.5,
         )
 
-    assert (
-        team_object.max_budget == 3000.0
-    ), "max_budget should be populated from DB when metadata value is None"
+    assert team_object.max_budget == 3000.0, (
+        "max_budget should be populated from DB when metadata value is None"
+    )
     assert team_object.budget_reset_at == datetime(2026, 3, 1, tzinfo=timezone.utc)
 
 
@@ -321,9 +316,9 @@ async def test_assemble_team_object_does_not_override_metadata_max_budget(
             response_cost=1.0,
         )
 
-    assert (
-        team_object.max_budget == 100.0
-    ), "max_budget from metadata must not be replaced by the DB value"
+    assert team_object.max_budget == 100.0, (
+        "max_budget from metadata must not be replaced by the DB value"
+    )
 
 
 async def test_set_team_budget_metrics_after_api_request_no_inf_when_metadata_budget_none(
@@ -354,17 +349,15 @@ async def test_set_team_budget_metrics_after_api_request_no_inf_when_metadata_bu
     set_call_args = (
         prometheus_logger.litellm_remaining_team_budget_metric.labels().set.call_args
     )
-    assert (
-        set_call_args is not None
-    ), "remaining_team_budget_metric.labels().set was not called"
+    assert set_call_args is not None, "remaining_team_budget_metric.labels().set was not called"
     actual_value = set_call_args[0][0]
-    assert actual_value != float(
-        "inf"
-    ), f"remaining_team_budget_metric must not be +Inf when team has a real budget; got {actual_value}"
+    assert actual_value != float("inf"), (
+        f"remaining_team_budget_metric must not be +Inf when team has a real budget; got {actual_value}"
+    )
     expected = 3000.0 - 1617.02 - 0.5
-    assert (
-        abs(actual_value - expected) < 0.01
-    ), f"Expected remaining budget ~{expected}, got {actual_value}"
+    assert abs(actual_value - expected) < 0.01, (
+        f"Expected remaining budget ~{expected}, got {actual_value}"
+    )
 
 
 async def test_set_team_budget_metrics_after_api_request_inf_when_genuinely_no_budget(
@@ -397,9 +390,9 @@ async def test_set_team_budget_metrics_after_api_request_inf_when_genuinely_no_b
     )
     assert set_call_args is not None
     actual_value = set_call_args[0][0]
-    assert actual_value == float(
-        "inf"
-    ), "remaining_team_budget_metric should be +Inf when team truly has no budget"
+    assert actual_value == float("inf"), (
+        "remaining_team_budget_metric should be +Inf when team truly has no budget"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -429,9 +422,9 @@ async def test_assemble_user_object_uses_db_max_budget_when_metadata_is_none(
             response_cost=0.5,
         )
 
-    assert (
-        user_object.max_budget == 500.0
-    ), "max_budget should be populated from DB when metadata value is None"
+    assert user_object.max_budget == 500.0, (
+        "max_budget should be populated from DB when metadata value is None"
+    )
     assert user_object.budget_reset_at == datetime(2026, 3, 1, tzinfo=timezone.utc)
 
 
@@ -455,9 +448,9 @@ async def test_assemble_user_object_does_not_override_metadata_max_budget(
             response_cost=1.0,
         )
 
-    assert (
-        user_object.max_budget == 100.0
-    ), "max_budget from metadata must not be replaced by the DB value"
+    assert user_object.max_budget == 100.0, (
+        "max_budget from metadata must not be replaced by the DB value"
+    )
 
 
 async def test_set_user_budget_metrics_after_api_request_no_inf_when_metadata_budget_none(
@@ -487,17 +480,15 @@ async def test_set_user_budget_metrics_after_api_request_no_inf_when_metadata_bu
     set_call_args = (
         prometheus_logger.litellm_remaining_user_budget_metric.labels().set.call_args
     )
-    assert (
-        set_call_args is not None
-    ), "remaining_user_budget_metric.labels().set was not called"
+    assert set_call_args is not None, "remaining_user_budget_metric.labels().set was not called"
     actual_value = set_call_args[0][0]
-    assert actual_value != float(
-        "inf"
-    ), f"remaining_user_budget_metric must not be +Inf when user has a real budget; got {actual_value}"
+    assert actual_value != float("inf"), (
+        f"remaining_user_budget_metric must not be +Inf when user has a real budget; got {actual_value}"
+    )
     expected = 500.0 - 120.0 - 0.5
-    assert (
-        abs(actual_value - expected) < 0.01
-    ), f"Expected remaining budget ~{expected}, got {actual_value}"
+    assert abs(actual_value - expected) < 0.01, (
+        f"Expected remaining budget ~{expected}, got {actual_value}"
+    )
 
 
 async def test_set_user_budget_metrics_after_api_request_inf_when_genuinely_no_budget(
@@ -529,70 +520,9 @@ async def test_set_user_budget_metrics_after_api_request_inf_when_genuinely_no_b
     )
     assert set_call_args is not None
     actual_value = set_call_args[0][0]
-    assert actual_value == float(
-        "inf"
-    ), "remaining_user_budget_metric should be +Inf when user truly has no budget"
-
-
-def test_per_request_metrics_emit_all_identity_labels(prometheus_logger):
-    """Verify org labels appear when flag is on and are absent when flag is off."""
-    import litellm
-    from litellm.types.integrations.prometheus import UserAPIKeyLabelValues
-
-    prometheus_logger.litellm_requests_metric = MagicMock()
-    prometheus_logger.litellm_spend_metric = MagicMock()
-
-    enum_values = UserAPIKeyLabelValues(
-        hashed_api_key="hashed-key",
-        api_key_alias="my-key",
-        model="gpt-4",
-        team="team-abc",
-        team_alias="my-team",
-        org_id="org-abc",
-        org_alias="my-org",
-        user="user-1",
+    assert actual_value == float("inf"), (
+        "remaining_user_budget_metric should be +Inf when user truly has no budget"
     )
-
-    common_kwargs = dict(
-        end_user_id=None,
-        user_api_key="hashed-key",
-        user_api_key_alias="my-key",
-        model="gpt-4",
-        user_api_team="team-abc",
-        user_api_team_alias="my-team",
-        user_id="user-1",
-        response_cost=0.001,
-        enum_values=enum_values,
-    )
-
-    try:
-        # org labels are always included in per-request metrics
-        prometheus_logger._increment_top_level_request_and_spend_metrics(
-            **common_kwargs
-        )
-        label_kwargs = prometheus_logger.litellm_requests_metric.labels.call_args.kwargs
-        assert label_kwargs["org_id"] == "org-abc"
-        assert label_kwargs["org_alias"] == "my-org"
-        assert label_kwargs["team"] == "team-abc"
-        assert label_kwargs["user"] == "user-1"
-
-        # Metrics not in the org-emission list must NOT get org labels
-        from litellm.types.integrations.prometheus import PrometheusMetricLabels
-
-        for metric in (
-            "litellm_remaining_api_key_budget_metric",
-            "litellm_remaining_team_budget_metric",
-        ):
-            labels = PrometheusMetricLabels.get_labels(metric)
-            assert "org_id" not in labels, f"{metric} should not have org_id"
-            assert "org_alias" not in labels, f"{metric} should not have org_alias"
-
-        # org_id in custom_prometheus_metadata_labels must not produce duplicate labels
-        litellm.custom_prometheus_metadata_labels = ["org_id"]
-        labels = PrometheusMetricLabels.get_labels("litellm_requests_metric")
-        assert labels.count("org_id") == 1
-    finally:
-        litellm.custom_prometheus_metadata_labels = []
 
 
 # ---------------------------------------------------------------------------
@@ -721,9 +651,7 @@ async def test_set_org_budget_metrics_after_api_request(prometheus_logger):
         )
 
     # remaining budget should reflect spend + response_cost (300 + 50 = 350, remaining = 1000 - 350 = 650)
-    remaining_call = (
-        prometheus_logger.litellm_remaining_org_budget_metric.labels().set.call_args
-    )
+    remaining_call = prometheus_logger.litellm_remaining_org_budget_metric.labels().set.call_args
     assert remaining_call is not None
     assert remaining_call[0][0] == pytest.approx(650.0)
 
@@ -785,42 +713,3 @@ async def test_initialize_org_budget_metrics(prometheus_logger):
     prometheus_logger.litellm_org_max_budget_metric.labels().set.assert_called_once_with(
         500.0
     )
-
-
-def test_default_latency_buckets(prometheus_logger):
-    """PrometheusLogger uses the new reduced default latency buckets."""
-    from litellm.types.integrations.prometheus import LATENCY_BUCKETS
-
-    assert prometheus_logger.latency_buckets == LATENCY_BUCKETS
-    # 420 and 600 should be present
-    assert 420.0 in prometheus_logger.latency_buckets
-    assert 600.0 in prometheus_logger.latency_buckets
-    # dense half-second buckets from old defaults should be gone
-    assert 1.5 not in prometheus_logger.latency_buckets
-    assert 9.5 not in prometheus_logger.latency_buckets
-
-
-def test_custom_latency_buckets():
-    """prometheus_latency_buckets in litellm settings overrides the defaults."""
-    import litellm
-    from prometheus_client import REGISTRY
-
-    custom_buckets = [0.1, 0.5, 1.0, 5.0, 10.0]
-    original = litellm.prometheus_latency_buckets
-    # Clear registry before creating a new PrometheusLogger
-    for collector in list(REGISTRY._collector_to_names.keys()):
-        try:
-            REGISTRY.unregister(collector)
-        except Exception:
-            pass
-    try:
-        litellm.prometheus_latency_buckets = custom_buckets
-        logger = PrometheusLogger()
-        assert logger.latency_buckets == tuple(custom_buckets)
-    finally:
-        litellm.prometheus_latency_buckets = original
-        for collector in list(REGISTRY._collector_to_names.keys()):
-            try:
-                REGISTRY.unregister(collector)
-            except Exception:
-                pass

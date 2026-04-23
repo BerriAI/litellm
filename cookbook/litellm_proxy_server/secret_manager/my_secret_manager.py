@@ -40,10 +40,8 @@ class InMemorySecretManager(CustomSecretManager):
     ) -> Optional[str]:
         """Read secret synchronously"""
         from litellm._logging import verbose_proxy_logger
-
-        verbose_proxy_logger.info(
-            f"CUSTOM SECRET MANAGER: LOOKING FOR SECRET: {secret_name}"
-        )
+        
+        verbose_proxy_logger.info(f"CUSTOM SECRET MANAGER: LOOKING FOR SECRET: {secret_name}")
         value = self.secrets.get(secret_name)
         verbose_proxy_logger.info(f"CUSTOM SECRET MANAGER: READ SECRET: {value}")
         return value
@@ -78,3 +76,4 @@ class InMemorySecretManager(CustomSecretManager):
             del self.secrets[secret_name]
             return {"status": "deleted", "secret_name": secret_name}
         return {"status": "not_found", "secret_name": secret_name}
+

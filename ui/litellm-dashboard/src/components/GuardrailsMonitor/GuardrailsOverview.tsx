@@ -6,7 +6,8 @@ import {
   WarningOutlined,
 } from "@ant-design/icons";
 import { useQuery } from "@tanstack/react-query";
-import { Button, Card, Col, Row, Spin, Table, Typography } from "antd";
+import { Card, Col, Grid, Title } from "@tremor/react";
+import { Button, Spin, Table } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import React, { useMemo, useState } from "react";
 import { getGuardrailsUsageOverview } from "@/components/networking";
@@ -217,11 +218,11 @@ export function GuardrailsOverview({
         </div>
       </div>
 
-      <Row gutter={[16, 16]} className="mb-6">
-        <Col xs={12} sm={12} md={8} flex="1 0 20%">
+      <Grid numItems={2} numItemsLg={5} className="gap-4 mb-6 items-stretch">
+        <Col className="flex flex-col">
           <MetricCard label="Total Evaluations" value={metrics.totalRequests.toLocaleString()} />
         </Col>
-        <Col xs={12} sm={12} md={8} flex="1 0 20%">
+        <Col className="flex flex-col">
           <MetricCard
             label="Blocked Requests"
             value={metrics.totalBlocked.toLocaleString()}
@@ -229,7 +230,7 @@ export function GuardrailsOverview({
             icon={<WarningOutlined className="text-red-400" />}
           />
         </Col>
-        <Col xs={12} sm={12} md={8} flex="1 0 20%">
+        <Col className="flex flex-col">
           <MetricCard
             label="Pass Rate"
             value={`${metrics.passRate}%`}
@@ -237,7 +238,7 @@ export function GuardrailsOverview({
             icon={<RiseOutlined className="text-green-400" />}
           />
         </Col>
-        <Col xs={12} sm={12} md={8} flex="1 0 20%">
+        <Col className="flex flex-col">
           <MetricCard
             label="Avg. latency added"
             value={`${metrics.avgLatency}ms`}
@@ -250,19 +251,19 @@ export function GuardrailsOverview({
             }
           />
         </Col>
-        <Col xs={12} sm={12} md={8} flex="1 0 20%">
-          <MetricCard label="Active Guardrails" value={metrics.count} />
+        <Col className="flex flex-col">
+          <MetricCard
+            label="Active Guardrails"
+            value={metrics.count}
+          />
         </Col>
-      </Row>
+      </Grid>
 
       <div className="mb-6">
         <ScoreChart data={chartData} />
       </div>
 
-      <Card
-        className="border border-gray-200 rounded-lg bg-white"
-        styles={{ body: { padding: 0 } }}
-      >
+      <Card className="bg-white border border-gray-200 rounded-lg">
         {(isLoading || error) && (
           <div className="px-6 py-4 border-b border-gray-200 flex items-center gap-2">
             {isLoading && <Spin size="small" />}
@@ -271,9 +272,9 @@ export function GuardrailsOverview({
         )}
         <div className="px-6 py-4 border-b border-gray-200 flex items-start justify-between gap-4">
           <div>
-            <Typography.Title level={5} className="!mb-0 text-gray-900">
+            <Title className="text-base font-semibold text-gray-900">
               Guardrail Performance
-            </Typography.Title>
+            </Title>
             <p className="text-xs text-gray-500 mt-0.5">
               Click a guardrail to view details, logs, and configuration
             </p>

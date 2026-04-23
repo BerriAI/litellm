@@ -45,7 +45,7 @@ class PartnerModelPrefixes(str, Enum):
 
 class VertexAIPartnerModels(VertexBase):
     def __init__(self) -> None:
-        super().__init__()
+        pass
 
     @staticmethod
     def is_vertex_partner_model(model: str):
@@ -116,6 +116,9 @@ class VertexAIPartnerModels(VertexBase):
                 CodestralTextCompletion,
             )
             from litellm.llms.openai_like.chat.handler import OpenAILikeChatHandler
+            from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+                VertexLLM,
+            )
         except Exception as e:
             raise VertexAIError(
                 status_code=400,
@@ -130,7 +133,9 @@ class VertexAIPartnerModels(VertexBase):
                 message="""Upgrade vertex ai. Run `pip install "google-cloud-aiplatform>=1.38"`""",
             )
         try:
-            access_token, project_id = self._ensure_access_token(
+            vertex_httpx_logic = VertexLLM()
+
+            access_token, project_id = vertex_httpx_logic._ensure_access_token(
                 credentials=vertex_credentials,
                 project_id=vertex_project,
                 custom_llm_provider="vertex_ai",
