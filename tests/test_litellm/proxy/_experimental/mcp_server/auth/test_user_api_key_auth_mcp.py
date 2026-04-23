@@ -1391,55 +1391,73 @@ async def test_get_allowed_mcp_servers_for_team_uses_helper():
     Test that _get_allowed_mcp_servers_for_team properly uses _get_team_object_permission
     helper which handles both loaded and unloaded object_permission cases.
     """
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
+    )
     from litellm.proxy._types import LiteLLM_ObjectPermissionTable
+    from litellm.types.mcp import MCPTransport
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
-    # Create mock object permission with servers and access groups
-    mock_object_permission = LiteLLM_ObjectPermissionTable(
-        object_permission_id="perm-789",
-        mcp_servers=["direct-server1", "direct-server2"],
-        mcp_access_groups=["dev-group"],
-        vector_stores=[],
-    )
+    # Register placeholder ids in the manager so expand_permission_list resolves them.
+    for sid in ("direct-server1", "direct-server2"):
+        global_mcp_server_manager.registry[sid] = MCPServer(
+            server_id=sid,
+            name=sid,
+            server_name=sid,
+            url=f"https://{sid}.example.com",
+            transport=MCPTransport.http,
+        )
+    try:
+        # Create mock object permission with servers and access groups
+        mock_object_permission = LiteLLM_ObjectPermissionTable(
+            object_permission_id="perm-789",
+            mcp_servers=["direct-server1", "direct-server2"],
+            mcp_access_groups=["dev-group"],
+            vector_stores=[],
+        )
 
-    # Create mock user auth
-    mock_user_auth = UserAPIKeyAuth(
-        api_key="test-key",
-        user_id="test-user",
-        team_id="team-789",
-    )
+        # Create mock user auth
+        mock_user_auth = UserAPIKeyAuth(
+            api_key="test-key",
+            user_id="test-user",
+            team_id="team-789",
+        )
 
-    # Mock the helper methods
-    with patch.object(
-        MCPRequestHandler, "_get_team_object_permission"
-    ) as mock_get_team_perm:
+        # Mock the helper methods
         with patch.object(
-            MCPRequestHandler, "_get_mcp_servers_from_access_groups"
-        ) as mock_get_access_group_servers:
-            # Configure mocks
-            mock_get_team_perm.return_value = mock_object_permission
-            mock_get_access_group_servers.return_value = [
-                "group-server1",
-                "group-server2",
-            ]
+            MCPRequestHandler, "_get_team_object_permission"
+        ) as mock_get_team_perm:
+            with patch.object(
+                MCPRequestHandler, "_get_mcp_servers_from_access_groups"
+            ) as mock_get_access_group_servers:
+                # Configure mocks
+                mock_get_team_perm.return_value = mock_object_permission
+                mock_get_access_group_servers.return_value = [
+                    "group-server1",
+                    "group-server2",
+                ]
 
-            # Call the method
-            result = await MCPRequestHandler._get_allowed_mcp_servers_for_team(
-                mock_user_auth
-            )
+                # Call the method
+                result = await MCPRequestHandler._get_allowed_mcp_servers_for_team(
+                    mock_user_auth
+                )
 
-            # Assert the result contains both direct and access group servers
-            assert set(result) == {
-                "direct-server1",
-                "direct-server2",
-                "group-server1",
-                "group-server2",
-            }
+                # Assert the result contains both direct and access group servers
+                assert set(result) == {
+                    "direct-server1",
+                    "direct-server2",
+                    "group-server1",
+                    "group-server2",
+                }
 
-            # Verify _get_team_object_permission was called (the helper we fixed)
-            mock_get_team_perm.assert_called_once_with(mock_user_auth)
+                # Verify _get_team_object_permission was called (the helper we fixed)
+                mock_get_team_perm.assert_called_once_with(mock_user_auth)
 
-            # Verify access groups were resolved
-            mock_get_access_group_servers.assert_called_once_with(["dev-group"])
+                # Verify access groups were resolved
+                mock_get_access_group_servers.assert_called_once_with(["dev-group"])
+    finally:
+        for sid in ("direct-server1", "direct-server2"):
+            global_mcp_server_manager.registry.pop(sid, None)
 
 
 @pytest.mark.asyncio
@@ -1569,35 +1587,53 @@ async def test_get_allowed_mcp_servers_for_key_returns_empty_when_db_returns_non
 async def test_get_allowed_mcp_servers_for_key_prefers_in_memory_permission():
     """Ensure in-memory object_permission is used without hitting the DB."""
 
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
+    )
     from litellm.proxy._types import LiteLLM_ObjectPermissionTable
+    from litellm.types.mcp import MCPTransport
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
-    perms = LiteLLM_ObjectPermissionTable(
-        object_permission_id="perm-in-memory",
-        mcp_servers=["direct-server"],
-        mcp_access_groups=["grp-alpha"],
+    # Register "direct-server" in the manager so permission expansion resolves it.
+    # Without this, expand_permission_list drops unknown ids as stale — which is
+    # the correct production behavior but unrelated to what this test asserts.
+    global_mcp_server_manager.registry["direct-server"] = MCPServer(
+        server_id="direct-server",
+        name="direct-server",
+        server_name="direct-server",
+        url="https://direct-server.example.com",
+        transport=MCPTransport.http,
     )
-    user_api_key_auth = UserAPIKeyAuth(
-        api_key="test-key",
-        user_id="test-user",
-        object_permission=perms,
-    )
+    try:
+        perms = LiteLLM_ObjectPermissionTable(
+            object_permission_id="perm-in-memory",
+            mcp_servers=["direct-server"],
+            mcp_access_groups=["grp-alpha"],
+        )
+        user_api_key_auth = UserAPIKeyAuth(
+            api_key="test-key",
+            user_id="test-user",
+            object_permission=perms,
+        )
 
-    with patch(
-        "litellm.proxy.auth.auth_checks.get_object_permission",
-        new_callable=AsyncMock,
-    ) as mock_get_perm:
-        with patch.object(
-            MCPRequestHandler, "_get_mcp_servers_from_access_groups"
-        ) as mock_access_groups:
-            mock_access_groups.return_value = ["group-server"]
+        with patch(
+            "litellm.proxy.auth.auth_checks.get_object_permission",
+            new_callable=AsyncMock,
+        ) as mock_get_perm:
+            with patch.object(
+                MCPRequestHandler, "_get_mcp_servers_from_access_groups"
+            ) as mock_access_groups:
+                mock_access_groups.return_value = ["group-server"]
 
-            result = await MCPRequestHandler._get_allowed_mcp_servers_for_key(
-                user_api_key_auth
-            )
+                result = await MCPRequestHandler._get_allowed_mcp_servers_for_key(
+                    user_api_key_auth
+                )
 
-    assert set(result) == {"direct-server", "group-server"}
-    mock_get_perm.assert_not_called()
-    mock_access_groups.assert_called_once_with(["grp-alpha"])
+        assert set(result) == {"direct-server", "group-server"}
+        mock_get_perm.assert_not_called()
+        mock_access_groups.assert_called_once_with(["grp-alpha"])
+    finally:
+        global_mcp_server_manager.registry.pop("direct-server", None)
 
 
 @pytest.mark.asyncio
@@ -1753,28 +1789,46 @@ async def test_tool_permission_servers_included_in_allowed_servers():
 
     Regression test for https://github.com/BerriAI/litellm/issues/21954
     """
-    perm = MagicMock()
-    perm.mcp_servers = []
-    perm.mcp_access_groups = []
-    perm.mcp_tool_permissions = {"server_id_123": ["tool_a", "tool_b"]}
-
-    user_api_key_auth = UserAPIKeyAuth(
-        api_key="test-key",
-        user_id="test-user",
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
     )
+    from litellm.types.mcp import MCPTransport
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
-    with (
-        patch.object(
-            MCPRequestHandler, "_get_key_object_permission", return_value=perm
-        ),
-        patch.object(
-            MCPRequestHandler,
-            "_get_mcp_servers_from_access_groups",
-            new_callable=AsyncMock,
-            return_value=[],
-        ),
-    ):
-        result = await MCPRequestHandler._get_allowed_mcp_servers_for_key(
-            user_api_key_auth=user_api_key_auth,
+    # Register the server id so expand_permission_list resolves it rather than
+    # dropping it as stale.
+    global_mcp_server_manager.registry["server_id_123"] = MCPServer(
+        server_id="server_id_123",
+        name="server_id_123",
+        server_name="server_id_123",
+        url="https://server-id-123.example.com",
+        transport=MCPTransport.http,
+    )
+    try:
+        perm = MagicMock()
+        perm.mcp_servers = []
+        perm.mcp_access_groups = []
+        perm.mcp_tool_permissions = {"server_id_123": ["tool_a", "tool_b"]}
+
+        user_api_key_auth = UserAPIKeyAuth(
+            api_key="test-key",
+            user_id="test-user",
         )
-        assert "server_id_123" in result
+
+        with (
+            patch.object(
+                MCPRequestHandler, "_get_key_object_permission", return_value=perm
+            ),
+            patch.object(
+                MCPRequestHandler,
+                "_get_mcp_servers_from_access_groups",
+                new_callable=AsyncMock,
+                return_value=[],
+            ),
+        ):
+            result = await MCPRequestHandler._get_allowed_mcp_servers_for_key(
+                user_api_key_auth=user_api_key_auth,
+            )
+            assert "server_id_123" in result
+    finally:
+        global_mcp_server_manager.registry.pop("server_id_123", None)

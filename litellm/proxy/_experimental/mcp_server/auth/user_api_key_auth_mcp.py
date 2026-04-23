@@ -643,8 +643,14 @@ class MCPRequestHandler:
             if key_object_permission is None:
                 return []
 
-            # Get direct MCP servers
-            direct_mcp_servers = key_object_permission.mcp_servers or []
+            # Permission entries may be server_ids OR names/aliases — expand to ids.
+            from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+                global_mcp_server_manager,
+            )
+
+            direct_mcp_servers = global_mcp_server_manager.expand_permission_list(
+                key_object_permission.mcp_servers or []
+            )
 
             # Get MCP servers from access groups
             access_group_servers = (
@@ -654,8 +660,8 @@ class MCPRequestHandler:
             )
 
             # servers referenced in tool permissions should also be accessible
-            tool_perm_servers = list(
-                (key_object_permission.mcp_tool_permissions or {}).keys()
+            tool_perm_servers = global_mcp_server_manager.expand_permission_list(
+                list((key_object_permission.mcp_tool_permissions or {}).keys())
             )
 
             # Combine all lists
@@ -685,8 +691,14 @@ class MCPRequestHandler:
             if object_permissions is None:
                 return []
 
-            # Get direct MCP servers
-            direct_mcp_servers = object_permissions.mcp_servers or []
+            # Permission entries may be server_ids OR names/aliases — expand to ids.
+            from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+                global_mcp_server_manager,
+            )
+
+            direct_mcp_servers = global_mcp_server_manager.expand_permission_list(
+                object_permissions.mcp_servers or []
+            )
 
             # Get MCP servers from access groups
             access_group_servers = (
@@ -696,8 +708,8 @@ class MCPRequestHandler:
             )
 
             # servers referenced in tool permissions should also be accessible
-            tool_perm_servers = list(
-                (object_permissions.mcp_tool_permissions or {}).keys()
+            tool_perm_servers = global_mcp_server_manager.expand_permission_list(
+                list((object_permissions.mcp_tool_permissions or {}).keys())
             )
 
             # Combine all lists
@@ -746,8 +758,14 @@ class MCPRequestHandler:
             if end_user_obj is None or end_user_obj.object_permission is None:
                 return []
 
-            # Get direct MCP servers
-            direct_mcp_servers = end_user_obj.object_permission.mcp_servers or []
+            # Permission entries may be server_ids OR names/aliases — expand to ids.
+            from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+                global_mcp_server_manager,
+            )
+
+            direct_mcp_servers = global_mcp_server_manager.expand_permission_list(
+                end_user_obj.object_permission.mcp_servers or []
+            )
 
             # Get MCP servers from access groups
             access_group_servers = (
@@ -757,8 +775,8 @@ class MCPRequestHandler:
             )
 
             # servers referenced in tool permissions should also be accessible
-            tool_perm_servers = list(
-                (end_user_obj.object_permission.mcp_tool_permissions or {}).keys()
+            tool_perm_servers = global_mcp_server_manager.expand_permission_list(
+                list((end_user_obj.object_permission.mcp_tool_permissions or {}).keys())
             )
 
             # Combine all lists
@@ -836,12 +854,21 @@ class MCPRequestHandler:
             if isinstance(mcp_access_groups, str):
                 mcp_access_groups = []
 
+            # Permission entries may be server_ids OR names/aliases — expand to ids.
+            from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+                global_mcp_server_manager,
+            )
+
+            expanded_direct_servers = global_mcp_server_manager.expand_permission_list(
+                list(direct_mcp_servers)
+            )
+
             access_group_servers = (
                 await MCPRequestHandler._get_mcp_servers_from_access_groups(
                     mcp_access_groups
                 )
             )
-            all_servers = list(direct_mcp_servers) + access_group_servers
+            all_servers = expanded_direct_servers + access_group_servers
             return list(set(all_servers))
         except Exception as e:
             verbose_logger.warning(
