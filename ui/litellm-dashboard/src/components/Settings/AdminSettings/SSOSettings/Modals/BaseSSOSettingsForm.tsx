@@ -1,12 +1,19 @@
 "use client";
 
-import { TextInput } from "@tremor/react";
-import { Checkbox, Form, Input, Select } from "antd";
+import {
+  Checkbox,
+  Form,
+  Input as AntInput,
+  Select,
+} from "antd";
+import { Input } from "@/components/ui/input";
 import React from "react";
 import { ssoProviderLogoMap, ssoProviderDisplayNames } from "../constants";
 
 export interface BaseSSOSettingsFormProps {
-  form: any; // Replace with proper Form type if available
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  form: any;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   onFormSubmit: (formValues: Record<string, any>) => Promise<void>;
 }
 
@@ -98,7 +105,11 @@ export const renderProviderFields = (provider: string) => {
       name={field.name}
       rules={[{ required: true, message: `Please enter the ${field.label.toLowerCase()}` }]}
     >
-      {field.name.includes("client") ? <Input.Password /> : <TextInput placeholder={field.placeholder} />}
+      {field.name.includes("client") ? (
+        <AntInput.Password />
+      ) : (
+        <Input placeholder={field.placeholder} />
+      )}
     </Form.Item>
   ));
 };
@@ -115,12 +126,13 @@ const BaseSSOSettingsForm: React.FC<BaseSSOSettingsFormProps> = ({ form, onFormS
           <Select>
             {Object.entries(ssoProviderLogoMap).map(([value, logo]) => (
               <Select.Option key={value} value={value}>
-                <div style={{ display: "flex", alignItems: "center", padding: "4px 0" }}>
+                <div className="flex items-center py-1">
                   {logo && (
+                    // eslint-disable-next-line @next/next/no-img-element
                     <img
                       src={logo}
                       alt={value}
-                      style={{ height: 24, width: 24, marginRight: 12, objectFit: "contain" }}
+                      className="h-6 w-6 mr-3 object-contain"
                     />
                   )}
                   <span>
@@ -147,7 +159,7 @@ const BaseSSOSettingsForm: React.FC<BaseSSOSettingsFormProps> = ({ form, onFormS
           name="user_email"
           rules={[{ required: true, message: "Please enter the email of the proxy admin" }]}
         >
-          <TextInput />
+          <Input />
         </Form.Item>
         <Form.Item
           label="Proxy Base URL"
@@ -170,7 +182,7 @@ const BaseSSOSettingsForm: React.FC<BaseSSOSettingsFormProps> = ({ form, onFormS
             },
           ]}
         >
-          <TextInput placeholder="https://example.com" />
+          <Input placeholder="https://example.com" />
         </Form.Item>
 
         <Form.Item
@@ -204,7 +216,7 @@ const BaseSSOSettingsForm: React.FC<BaseSSOSettingsFormProps> = ({ form, onFormS
                 name="group_claim"
                 rules={[{ required: true, message: "Please enter the group claim" }]}
               >
-                <TextInput />
+                <Input />
               </Form.Item>
             ) : null;
           }}
@@ -233,19 +245,19 @@ const BaseSSOSettingsForm: React.FC<BaseSSOSettingsFormProps> = ({ form, onFormS
                 </Form.Item>
 
                 <Form.Item label="Proxy Admin Teams" name="proxy_admin_teams">
-                  <TextInput />
+                  <Input />
                 </Form.Item>
 
                 <Form.Item label="Admin Viewer Teams" name="admin_viewer_teams">
-                  <TextInput />
+                  <Input />
                 </Form.Item>
 
                 <Form.Item label="Internal User Teams" name="internal_user_teams">
-                  <TextInput />
+                  <Input />
                 </Form.Item>
 
                 <Form.Item label="Internal Viewer Teams" name="internal_viewer_teams">
-                  <TextInput />
+                  <Input />
                 </Form.Item>
               </>
             ) : null;
@@ -283,7 +295,7 @@ const BaseSSOSettingsForm: React.FC<BaseSSOSettingsFormProps> = ({ form, onFormS
                 name="team_ids_jwt_field"
                 rules={[{ required: true, message: "Please enter the team IDs JWT field" }]}
               >
-                <TextInput />
+                <Input />
               </Form.Item>
             ) : null;
           }}
