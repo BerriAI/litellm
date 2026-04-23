@@ -1,4 +1,4 @@
-import { InfoCircleOutlined, UserAddOutlined } from "@ant-design/icons";
+import { Info as InfoCircleOutlined, UserPlus as UserAddOutlined } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 // eslint-disable-next-line litellm-ui/no-banned-ui-imports
 import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
