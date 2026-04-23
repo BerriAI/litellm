@@ -1,6 +1,6 @@
 "use client";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
-import { ChevronDownIcon, ChevronUpIcon, SwitchVerticalIcon } from "@heroicons/react/outline";
+import { ArrowUpDown, ChevronDown, ChevronUp } from "lucide-react";
 import {
   ColumnDef,
   flexRender,
@@ -9,6 +9,7 @@ import {
   SortingState,
   useReactTable,
 } from "@tanstack/react-table";
+// eslint-disable-next-line litellm-ui/no-banned-ui-imports
 import {
   Table,
   TableBody,
@@ -16,10 +17,15 @@ import {
   TableHead,
   TableHeaderCell,
   TableRow,
-  Badge,
-  Text,
 } from "@tremor/react";
-import { Tooltip } from "antd";
+import { Badge } from "@/components/ui/badge";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import { cn } from "@/lib/utils";
 import React, { useState } from "react";
 import { DeletedTeam } from "@/app/(dashboard)/hooks/teams/useTeams";
 import { getModelDisplayName } from "@/components/key_team_helpers/fetch_available_models_team_key";
@@ -52,11 +58,16 @@ export function DeletedTeamsTable({
       cell: (info) => {
         const value = info.getValue() as string;
         return (
-          <Tooltip title={value || undefined}>
-            <span className="truncate block max-w-[200px]">
-              {value || "-"}
-            </span>
-          </Tooltip>
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span className="truncate block max-w-[200px]">
+                  {value || "-"}
+                </span>
+              </TooltipTrigger>
+              {value && <TooltipContent>{value}</TooltipContent>}
+            </Tooltip>
+          </TooltipProvider>
         );
       },
     },
@@ -69,11 +80,16 @@ export function DeletedTeamsTable({
       cell: (info) => {
         const value = info.getValue() as string;
         return (
-          <Tooltip title={value}>
-            <span className="font-mono text-blue-500 text-xs truncate block max-w-[250px]">
-              {value || "-"}
-            </span>
-          </Tooltip>
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span className="font-mono text-blue-500 text-xs truncate block max-w-[250px]">
+                  {value || "-"}
+                </span>
+              </TooltipTrigger>
+              <TooltipContent>{value}</TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
         );
       },
     },
@@ -99,7 +115,7 @@ export function DeletedTeamsTable({
       size: 100,
       maxSize: 140,
       cell: (info) => {
-        const spend = (info.row.original as any).spend as number | undefined;
+        const spend = (info.row.original as { spend?: number }).spend;
         return (
           <span className="block max-w-[140px]">
             {spend !== undefined ? formatNumberWithCommas(spend, 4) : "-"}
@@ -130,35 +146,33 @@ export function DeletedTeamsTable({
       maxSize: 300,
       cell: (info) => {
         const models = info.getValue() as string[];
+        const redBadge =
+          "text-xs bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300";
+        const blueBadge =
+          "text-xs bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300";
+        const grayBadge = "text-xs bg-muted text-muted-foreground";
         if (!Array.isArray(models) || models.length === 0) {
-          return (
-            <Badge size={"xs"} color="red">
-              <Text>All Proxy Models</Text>
-            </Badge>
-          );
+          return <Badge className={redBadge}>All Proxy Models</Badge>;
         }
         return (
           <div className="flex flex-wrap gap-1 max-w-[300px]">
             {models.slice(0, 3).map((model: string, index: number) =>
               model === "all-proxy-models" ? (
-                <Badge key={index} size={"xs"} color="red">
-                  <Text>All Proxy Models</Text>
+                <Badge key={index} className={redBadge}>
+                  All Proxy Models
                 </Badge>
               ) : (
-                <Badge key={index} size={"xs"} color="blue">
-                  <Text>
-                    {model.length > 30
-                      ? `${getModelDisplayName(model).slice(0, 30)}...`
-                      : getModelDisplayName(model)}
-                  </Text>
+                <Badge key={index} className={blueBadge}>
+                  {model.length > 30
+                    ? `${getModelDisplayName(model).slice(0, 30)}...`
+                    : getModelDisplayName(model)}
                 </Badge>
               ),
             )}
             {models.length > 3 && (
-              <Badge size={"xs"} color="gray">
-                <Text>
-                  +{models.length - 3} {models.length - 3 === 1 ? "more model" : "more models"}
-                </Text>
+              <Badge className={grayBadge}>
+                +{models.length - 3}{" "}
+                {models.length - 3 === 1 ? "more model" : "more models"}
               </Badge>
             )}
           </div>
@@ -174,11 +188,16 @@ export function DeletedTeamsTable({
       cell: (info) => {
         const value = info.getValue() as string;
         return (
-          <Tooltip title={value || undefined}>
-            <span className="truncate block max-w-[200px]">
-              {value || "-"}
-            </span>
-          </Tooltip>
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span className="truncate block max-w-[200px]">
+                  {value || "-"}
+                </span>
+              </TooltipTrigger>
+              {value && <TooltipContent>{value}</TooltipContent>}
+            </Tooltip>
+          </TooltipProvider>
         );
       },
     },
@@ -189,7 +208,8 @@ export function DeletedTeamsTable({
       size: 120,
       maxSize: 140,
       cell: (info) => {
-        const value = (info.row.original as any).deleted_at as string | null | undefined;
+        const value = (info.row.original as { deleted_at?: string | null })
+          .deleted_at;
         return (
           <span className="block max-w-[140px]">
             {value ? new Date(value).toLocaleDateString() : "-"}
@@ -204,13 +224,19 @@ export function DeletedTeamsTable({
       size: 120,
       maxSize: 180,
       cell: (info) => {
-        const value = (info.row.original as any).deleted_by as string | null | undefined;
+        const value = (info.row.original as { deleted_by?: string | null })
+          .deleted_by;
         return (
-          <Tooltip title={value || undefined}>
-            <span className="truncate block max-w-[180px]">
-              {value || "-"}
-            </span>
-          </Tooltip>
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span className="truncate block max-w-[180px]">
+                  {value || "-"}
+                </span>
+              </TooltipTrigger>
+              {value && <TooltipContent>{value}</TooltipContent>}
+            </Tooltip>
+          </TooltipProvider>
         );
       },
     },
@@ -236,9 +262,11 @@ export function DeletedTeamsTable({
       <div className="border-b py-4 flex-1 overflow-hidden">
         <div className="flex items-center justify-between w-full mb-4">
           {isLoading || isFetching ? (
-            <span className="inline-flex text-sm text-gray-700">Loading...</span>
+            <span className="inline-flex text-sm text-foreground">
+              Loading...
+            </span>
           ) : (
-            <span className="inline-flex text-sm text-gray-700">
+            <span className="inline-flex text-sm text-foreground">
               Showing {teams.length} {teams.length === 1 ? "team" : "teams"}
             </span>
           )}
@@ -254,7 +282,7 @@ export function DeletedTeamsTable({
                         <TableHeaderCell
                           key={header.id}
                           data-header-id={header.id}
-                          className={`py-1 h-8 relative hover:bg-gray-50`}
+                          className={cn("py-1 h-8 relative hover:bg-muted")}
                           style={{
                             width: header.getSize(),
                             maxWidth: header.column.columnDef.maxSize,
@@ -283,11 +311,15 @@ export function DeletedTeamsTable({
                             <div className="w-4">
                               {header.column.getIsSorted() ? (
                                 {
-                                  asc: <ChevronUpIcon className="h-4 w-4 text-blue-500" />,
-                                  desc: <ChevronDownIcon className="h-4 w-4 text-blue-500" />,
+                                  asc: (
+                                    <ChevronUp className="h-4 w-4 text-primary" />
+                                  ),
+                                  desc: (
+                                    <ChevronDown className="h-4 w-4 text-primary" />
+                                  ),
                                 }[header.column.getIsSorted() as string]
                               ) : (
-                                <SwitchVerticalIcon className="h-4 w-4 text-gray-400" />
+                                <ArrowUpDown className="h-4 w-4 text-muted-foreground" />
                               )}
                             </div>
                             <div
@@ -317,8 +349,11 @@ export function DeletedTeamsTable({
                 <TableBody>
                   {isLoading || isFetching ? (
                     <TableRow>
-                      <TableCell colSpan={columns.length} className="h-8 text-center">
-                        <div className="text-center text-gray-500">
+                      <TableCell
+                        colSpan={columns.length}
+                        className="h-8 text-center"
+                      >
+                        <div className="text-center text-muted-foreground">
                           <p>🚅 Loading teams...</p>
                         </div>
                       </TableCell>
@@ -344,8 +379,11 @@ export function DeletedTeamsTable({
                     ))
                   ) : (
                     <TableRow>
-                      <TableCell colSpan={columns.length} className="h-8 text-center">
-                        <div className="text-center text-gray-500">
+                      <TableCell
+                        colSpan={columns.length}
+                        className="h-8 text-center"
+                      >
+                        <div className="text-center text-muted-foreground">
                           <p>No deleted teams found</p>
                         </div>
                       </TableCell>
