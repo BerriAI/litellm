@@ -165,11 +165,27 @@ class DashScopeImageGenerationConfig(BaseImageGenerationConfig):
         DashScope response: output.choices[0].message.content[0].image
         OpenAI response:    data[0].url
         """
+        if raw_response.status_code != 200:
+            raise self.get_error_class(
+                error_message=raw_response.text,
+                status_code=raw_response.status_code,
+                headers=raw_response.headers,
+            )
+
         try:
             response_data = raw_response.json()
         except Exception as e:
             raise self.get_error_class(
                 error_message=f"Failed to parse DashScope image generation response: {e}",
+                status_code=raw_response.status_code,
+                headers=raw_response.headers,
+            )
+
+        # DashScope can return API-level errors in a 200 response body.
+        # Example: {"code": "InvalidParameter", "message": "Size not supported"}
+        if "code" in response_data and "output" not in response_data:
+            raise self.get_error_class(
+                error_message=str(response_data.get("message", response_data)),
                 status_code=raw_response.status_code,
                 headers=raw_response.headers,
             )
