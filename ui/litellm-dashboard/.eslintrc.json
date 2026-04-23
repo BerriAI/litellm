@@ -49,7 +49,11 @@
         "src/components/common_components/DeleteResourceModal.tsx",
         "src/components/common_components/PremiumLoggingSettings.tsx",
         "src/components/common_components/AutoRotationView.tsx",
-        "src/components/agents/agent_card.tsx"
+        "src/components/agents/agent_card.tsx",
+        "src/components/permissions/VectorStorePermissions.tsx",
+        "src/components/permissions/AgentPermissions.tsx",
+        "src/components/DeletedKeysPage/DeletedKeysPage.tsx",
+        "src/components/DeletedTeamsPage/DeletedTeamsPage.tsx"
       ],
       "rules": {
         "litellm-ui/no-banned-ui-imports": "off",
