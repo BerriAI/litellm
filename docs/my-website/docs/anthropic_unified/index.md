@@ -506,12 +506,15 @@ Request body will be in the Anthropic messages API format. **litellm follows the
   A system prompt providing context or specific instructions to the model.
 - **temperature** (number):  
   Controls randomness in the model's responses. Valid range: `0 < temperature < 1`.
-- **thinking** (object):  
+- **thinking** (object):
   Configuration for enabling extended thinking. If enabled, it includes:
-  - **budget_tokens** (integer):  
+  - **budget_tokens** (integer):
     Minimum of 1024 tokens (and less than `max_tokens`).
-  - **type** (enum):  
+  - **type** (enum):
     E.g., `"enabled"`.
+  - **summary** (string, optional):
+    Enables the summary style for thinking blocks. Possible values: `"auto"`, `"concise"`, `"detailed"`, `"disabled"`.
+    When routing to non-Anthropic providers (e.g., `openai/gpt-5.1`), the `summary` value is preserved and forwarded to the downstream API.
 - **tool_choice** (object):  
   Instructs how the model should utilize any provided tools.
 - **tools** (array of objects):  

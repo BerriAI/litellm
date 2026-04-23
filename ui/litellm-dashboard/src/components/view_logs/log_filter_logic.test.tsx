@@ -11,7 +11,6 @@ vi.mock("../networking", () => ({
 }));
 
 vi.mock("@/components/key_team_helpers/filter_helpers", () => ({
-  fetchAllKeyAliases: vi.fn().mockResolvedValue([]),
   fetchAllTeams: vi.fn().mockResolvedValue([]),
 }));
 
@@ -82,7 +81,7 @@ describe("useLogFilterLogic", () => {
   const wrapper = ({ children }: { children: ReactNode }) =>
     React.createElement(QueryClientProvider, { client: queryClient }, children);
 
-  it("should return filters, filteredLogs, allKeyAliases, allTeams, handleFilterChange, and handleFilterReset", () => {
+  it("should return filters, filteredLogs, allTeams, handleFilterChange, and handleFilterReset", () => {
     const { result } = renderHook(
       () =>
         useLogFilterLogic({
@@ -94,7 +93,6 @@ describe("useLogFilterLogic", () => {
 
     expect(result.current.filters).toBeDefined();
     expect(result.current.filteredLogs).toBeDefined();
-    expect(result.current.allKeyAliases).toBeDefined();
     expect(result.current).toHaveProperty("allTeams");
     expect(result.current.handleFilterChange).toBeDefined();
     expect(result.current.handleFilterReset).toBeDefined();
@@ -453,7 +451,7 @@ describe("useLogFilterLogic", () => {
     );
   });
 
-  it("should fall back to logs when backend filters are active but API returns empty", async () => {
+  it("should return empty results when backend filters are active but API returns empty", async () => {
     vi.mocked(uiSpendLogsCall).mockResolvedValue({
       data: [],
       total: 0,
@@ -476,8 +474,7 @@ describe("useLogFilterLogic", () => {
       { timeout: 500 },
     );
 
-    expect(result.current.filteredLogs.data).toHaveLength(1);
-    expect(result.current.filteredLogs.data[0].request_id).toBe("client-req");
+    expect(result.current.filteredLogs.data).toHaveLength(0);
   });
 
   it("should refetch when sortBy changes and backend filters are active", async () => {

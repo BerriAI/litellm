@@ -47,7 +47,7 @@ def get_current_weather(location, unit="fahrenheit"):
     [
         "gpt-3.5-turbo-1106",
         "mistral/mistral-large-latest",
-        "claude-3-haiku-20240307",
+        "claude-haiku-4-5-20251001",
         "gemini/gemini-2.5-flash-lite",
         "anthropic.claude-3-sonnet-20240229-v1:0",
     ],
@@ -275,7 +275,7 @@ from litellm.types.utils import ChatCompletionMessageToolCall, Function, Message
             "anthropic.claude-3-sonnet-20240229-v1:0",
             "bedrock",
         ),
-        ("claude-3-haiku-20240307", "anthropic"),
+        ("claude-haiku-4-5-20251001", "anthropic"),
     ],
 )
 @pytest.mark.parametrize(
@@ -333,6 +333,10 @@ def test_parallel_function_call_anthropic_error_msg(
 
     Reference Issue: https://github.com/BerriAI/litellm/issues/5747, https://github.com/BerriAI/litellm/issues/5388
     """
+    # Ensure modify_params is False so UnsupportedParamsError is raised
+    # (other tests in this file set it to True and don't reset it)
+    original_modify_params = litellm.modify_params
+    litellm.modify_params = False
     try:
         litellm.set_verbose = True
 
@@ -363,6 +367,8 @@ def test_parallel_function_call_anthropic_error_msg(
         print(e)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
+    finally:
+        litellm.modify_params = original_modify_params
 
 
 def test_parallel_function_call_stream():
@@ -614,7 +620,7 @@ def test_passing_tool_result_as_list(model):
             ],
             "role": "tool",
             "tool_call_id": "toolu_01V1paXrun4CVetdAGiQaZG5",
-            "name": "execute_bash"
+            "name": "execute_bash",
         },
     ]
     tools = [
@@ -774,5 +780,3 @@ async def test_watsonx_tool_choice(sync_mode, monkeypatch):
                 pytest.skip("Skipping test due to timeout")
             else:
                 raise e
-
-

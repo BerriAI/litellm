@@ -4,6 +4,7 @@ from litellm.types.videos.main import VideoCreateOptionalRequestParams
 from litellm.types.router import GenericLiteLLMParams
 from litellm.llms.azure.common_utils import BaseAzureLLM
 from litellm.llms.openai.videos.transformation import OpenAIVideoConfig
+
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
 
@@ -64,16 +65,15 @@ class AzureVideoConfig(OpenAIVideoConfig):
         # If litellm_params is provided, use it; otherwise create a new one
         if litellm_params is None:
             litellm_params = GenericLiteLLMParams()
-        
+
         if api_key and not litellm_params.api_key:
             litellm_params.api_key = api_key
-        
+
         # Use the base Azure validation method which properly handles:
         # 1. Credentials from litellm_credential_name via litellm_params
         # 2. Sets the correct "api-key" header (not "Authorization: Bearer")
         return BaseAzureLLM._base_validate_azure_environment(
-            headers=headers, 
-            litellm_params=litellm_params
+            headers=headers, litellm_params=litellm_params
         )
 
     def get_complete_url(

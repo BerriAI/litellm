@@ -713,6 +713,34 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 
 [**See Code**](https://github.com/BerriAI/litellm/blob/c9e6b05cfb20dfb17272218e2555d6b496c47f6f/litellm/router.py#L2163)
 
+:::important
+**`enable_pre_call_checks` is required** for context-window enforcement. Without it, requests are sent to the provider regardless of input token count. Set `enable_pre_call_checks: true` in `router_settings` in your config.
+:::
+
+#### Custom max_input_tokens per deployment
+
+You can override the default context limit for a deployment by setting `max_input_tokens` in `model_info`. This is useful for testing, rate-limiting long prompts, or enforcing stricter limits than the provider's default.
+
+**Both** of the following are required:
+
+1. **`router_settings.enable_pre_call_checks: true`** — enables pre-call checks
+2. **`model_info.max_input_tokens`** on the deployment — overrides the limit for that model
+
+```yaml
+router_settings:
+  enable_pre_call_checks: true  # Required for enforcement
+
+model_list:
+  - model_name: gpt-4o
+    litellm_params:
+      model: openai/gpt-4o
+      api_key: os.environ/OPENAI_API_KEY
+    model_info:
+      max_input_tokens: 10  # Override: reject prompts > 10 tokens
+```
+
+If a request exceeds the limit, LiteLLM raises `ContextWindowExceededError` with details like `Model=gpt-4o, Max Input Tokens=10, Got=306`.
+
 **1. Setup config**
 
 For azure deployments, set the base model. Pick the base model from [this list](https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json), all the azure models start with azure/.

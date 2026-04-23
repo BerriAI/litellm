@@ -21,8 +21,7 @@ try:
         # contains a (known) object attribute
         object: Literal["chat.completion", "edit", "text_completion"]
 
-        def __getitem__(self, key: K) -> V:
-            ...  # noqa
+        def __getitem__(self, key: K) -> V: ...  # noqa
 
         def get(self, key: K, default: Optional[V] = None) -> Optional[V]:  # noqa
             ...  # pragma: no cover
@@ -44,7 +43,9 @@ try:
                         request, response, time_elapsed
                     )
                 else:
-                    logger.debug(f"Unknown OpenAI response object: {response['object']}")
+                    logger.debug(
+                        f"Unknown OpenAI response object: {response['object']}"
+                    )
             except Exception as e:
                 logger.warning(f"Failed to resolve request/response: {e}")
             return None

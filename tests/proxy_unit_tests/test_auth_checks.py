@@ -261,6 +261,132 @@ async def test_can_key_call_model_wildcard_access(key_models, model, expect_to_w
             print(e)
 
 
+@pytest.mark.parametrize(
+    "key_models, model, expect_to_work",
+    [
+        # After a cost-map reload, add_known_models() updates anthropic_models so
+        # the anthropic/* wildcard can match a newly-added Anthropic model.
+        (["anthropic/*"], "claude-brand-new-model-reload-test", True),
+        # Wrong provider wildcard must still be denied even after reload.
+        (["openai/*"], "claude-brand-new-model-reload-test", False),
+    ],
+)
+@pytest.mark.asyncio
+async def test_wildcard_access_after_cost_map_reload(key_models, model, expect_to_work):
+    """
+    Regression test: after a cost-map hot-reload, calling
+    add_known_models(model_cost_map=new_map) must update litellm.anthropic_models
+    so that the anthropic/* wildcard correctly grants (or denies) access to
+    newly-added models.
+
+    Root cause: both reload paths in proxy_server.py only updated
+    litellm.model_cost but never re-ran add_known_models(), so the provider sets
+    stayed stale and wildcard matching failed for new models.
+
+    Fix: each reload now calls litellm.add_known_models(model_cost_map=new_map)
+    with the fetched map passed explicitly to avoid any reference ambiguity.
+    """
+    from litellm.proxy.auth.auth_checks import can_key_call_model
+
+    # Build a new cost map that includes the brand-new model — exactly what
+    # proxy_server.py receives from get_model_cost_map() during a reload.
+    new_cost_map = dict(litellm.model_cost)
+    new_cost_map[model] = {
+        "litellm_provider": "anthropic",
+        "max_tokens": 8192,
+        "input_cost_per_token": 0.000003,
+        "output_cost_per_token": 0.000015,
+    }
+
+    original_model_cost = litellm.model_cost
+    litellm.model_cost = new_cost_map
+
+    # Confirm the model is NOT yet in the provider set before reload propagation.
+    assert model not in litellm.anthropic_models
+
+    # Simulate what proxy_server.py now does after every reload.
+    litellm.add_known_models(model_cost_map=new_cost_map)
+
+    # After add_known_models(), the model must be in the set.
+    assert model in litellm.anthropic_models
+
+    llm_model_list = [
+        {
+            "model_name": "anthropic/*",
+            "litellm_params": {"model": "anthropic/*", "api_key": "test-api-key"},
+            "model_info": {"id": "test-id-anthropic-wildcard", "db_model": False},
+        },
+        {
+            "model_name": "openai/*",
+            "litellm_params": {"model": "openai/*", "api_key": "test-api-key"},
+            "model_info": {"id": "test-id-openai-wildcard", "db_model": False},
+        },
+    ]
+    router = litellm.Router(model_list=llm_model_list)
+    user_api_key_object = UserAPIKeyAuth(models=key_models)
+
+    try:
+        if expect_to_work:
+            await can_key_call_model(
+                model=model,
+                llm_model_list=llm_model_list,
+                valid_token=user_api_key_object,
+                llm_router=router,
+            )
+        else:
+            with pytest.raises(Exception):
+                await can_key_call_model(
+                    model=model,
+                    llm_model_list=llm_model_list,
+                    valid_token=user_api_key_object,
+                    llm_router=router,
+                )
+    finally:
+        litellm.model_cost = original_model_cost
+        litellm.anthropic_models.discard(model)
+
+
+@pytest.mark.asyncio
+async def test_add_known_models_explicit_map_updates_provider_sets():
+    """
+    Regression test: after a cost-map hot-reload, calling
+    add_known_models(model_cost_map=new_map) with the new map passed explicitly
+    must add any new provider models to the correct provider sets so that
+    wildcard access checks (anthropic/*, openai/*, …) work immediately.
+
+    This covers the proxy_server.py fix where both reload paths now call
+    litellm.add_known_models(model_cost_map=new_model_cost_map) instead of
+    relying on the module-level model_cost being up to date.
+    """
+    fake_new_model = "claude-brand-new-explicit-map-test"
+
+    # Baseline: the model must not be in the sets before we do anything.
+    assert fake_new_model not in litellm.anthropic_models
+
+    new_cost_map = dict(litellm.model_cost)
+    new_cost_map[fake_new_model] = {
+        "litellm_provider": "anthropic",
+        "max_tokens": 8192,
+        "input_cost_per_token": 0.000003,
+        "output_cost_per_token": 0.000015,
+    }
+
+    # Simulate what proxy_server.py does on reload.
+    original_model_cost = litellm.model_cost
+    litellm.model_cost = new_cost_map
+    litellm.add_known_models(model_cost_map=new_cost_map)
+
+    try:
+        assert fake_new_model in litellm.anthropic_models, (
+            "add_known_models(model_cost_map=...) did not add the new model to "
+            "litellm.anthropic_models — wildcard access checks would fail."
+        )
+    finally:
+        # Clean up: restore original state.
+        litellm.model_cost = original_model_cost
+        litellm.anthropic_models.discard(fake_new_model)
+
+
 @pytest.mark.asyncio
 async def test_is_valid_fallback_model():
     from litellm.proxy.auth.auth_checks import is_valid_fallback_model
@@ -483,17 +609,56 @@ async def test_virtual_key_soft_budget_check(spend, soft_budget, expect_alert):
 @pytest.mark.parametrize(
     "spend, soft_budget, expect_alert, metadata, expected_alert_emails",
     [
-        (100, 50, False, None, None),  # Over soft budget, no metadata - no alert_emails configured, so no alert
-        (50, 50, False, None, None),  # At soft budget, no metadata - no alert_emails configured, so no alert
+        (
+            100,
+            50,
+            False,
+            None,
+            None,
+        ),  # Over soft budget, no metadata - no alert_emails configured, so no alert
+        (
+            50,
+            50,
+            False,
+            None,
+            None,
+        ),  # At soft budget, no metadata - no alert_emails configured, so no alert
         (25, 50, False, None, None),  # Under soft budget
         (100, None, False, None, None),  # No soft budget set
-        (100, 50, True, {"soft_budget_alerting_emails": ["team1@example.com", "team2@example.com"]}, ["team1@example.com", "team2@example.com"]),  # Over soft budget with list of emails
-        (100, 50, True, {"soft_budget_alerting_emails": "team1@example.com,team2@example.com"}, ["team1@example.com", "team2@example.com"]),  # Over soft budget with comma-separated emails
-        (100, 50, True, {"soft_budget_alerting_emails": ["team1@example.com", "", "  ", "team2@example.com"]}, ["team1@example.com", "team2@example.com"]),  # Over soft budget with empty strings filtered
+        (
+            100,
+            50,
+            True,
+            {"soft_budget_alerting_emails": ["team1@example.com", "team2@example.com"]},
+            ["team1@example.com", "team2@example.com"],
+        ),  # Over soft budget with list of emails
+        (
+            100,
+            50,
+            True,
+            {"soft_budget_alerting_emails": "team1@example.com,team2@example.com"},
+            ["team1@example.com", "team2@example.com"],
+        ),  # Over soft budget with comma-separated emails
+        (
+            100,
+            50,
+            True,
+            {
+                "soft_budget_alerting_emails": [
+                    "team1@example.com",
+                    "",
+                    "  ",
+                    "team2@example.com",
+                ]
+            },
+            ["team1@example.com", "team2@example.com"],
+        ),  # Over soft budget with empty strings filtered
     ],
 )
 @pytest.mark.asyncio
-async def test_team_soft_budget_check(spend, soft_budget, expect_alert, metadata, expected_alert_emails):
+async def test_team_soft_budget_check(
+    spend, soft_budget, expect_alert, metadata, expected_alert_emails
+):
     """
     Test cases for _team_soft_budget_check:
     1. Spend over soft budget, no alert_emails configured - should NOT trigger alert (alerts only sent when alert_emails configured)
@@ -555,7 +720,10 @@ async def test_team_soft_budget_check(spend, soft_budget, expect_alert, metadata
         if expected_alert_emails is not None:
             assert captured_call_info.alert_emails == expected_alert_emails
         else:
-            assert captured_call_info.alert_emails is None or captured_call_info.alert_emails == []
+            assert (
+                captured_call_info.alert_emails is None
+                or captured_call_info.alert_emails == []
+            )
 
 
 @pytest.mark.asyncio
@@ -833,7 +1001,9 @@ async def test_delete_cache_access_object():
     ],
 )
 @pytest.mark.asyncio
-async def test_get_resources_from_access_groups(resource_field, access_group_data, expected):
+async def test_get_resources_from_access_groups(
+    resource_field, access_group_data, expected
+):
     """Test _get_resources_from_access_groups returns correct resource list from access groups."""
     from unittest.mock import AsyncMock, MagicMock, patch
 

@@ -25,10 +25,12 @@ class AzureOpenAIFilesAPI(BaseAzureLLM):
         super().__init__()
 
     @staticmethod
-    def _prepare_create_file_data(create_file_data: CreateFileRequest) -> dict[str, Any]:
+    def _prepare_create_file_data(
+        create_file_data: CreateFileRequest,
+    ) -> dict[str, Any]:
         """
         Prepare create_file_data for OpenAI SDK.
-        
+
         Removes expires_after if None to match SDK's Omit pattern.
         SDK expects file_create_params.ExpiresAfter | Omit, but FileExpiresAfter works at runtime.
         """
@@ -56,7 +58,9 @@ class AzureOpenAIFilesAPI(BaseAzureLLM):
         api_version: Optional[str],
         timeout: Union[float, httpx.Timeout],
         max_retries: Optional[int],
-        client: Optional[Union[AzureOpenAI, AsyncAzureOpenAI, OpenAI, AsyncOpenAI]] = None,
+        client: Optional[
+            Union[AzureOpenAI, AsyncAzureOpenAI, OpenAI, AsyncOpenAI]
+        ] = None,
         litellm_params: Optional[dict] = None,
     ) -> Union[OpenAIFileObject, Coroutine[Any, Any, OpenAIFileObject]]:
         openai_client: Optional[
@@ -102,7 +106,9 @@ class AzureOpenAIFilesAPI(BaseAzureLLM):
         timeout: Union[float, httpx.Timeout],
         max_retries: Optional[int],
         api_version: Optional[str] = None,
-        client: Optional[Union[AzureOpenAI, AsyncAzureOpenAI, OpenAI, AsyncOpenAI]] = None,
+        client: Optional[
+            Union[AzureOpenAI, AsyncAzureOpenAI, OpenAI, AsyncOpenAI]
+        ] = None,
         litellm_params: Optional[dict] = None,
     ) -> Union[
         HttpxBinaryResponseContent, Coroutine[Any, Any, HttpxBinaryResponseContent]
@@ -154,7 +160,9 @@ class AzureOpenAIFilesAPI(BaseAzureLLM):
         timeout: Union[float, httpx.Timeout],
         max_retries: Optional[int],
         api_version: Optional[str] = None,
-        client: Optional[Union[AzureOpenAI, AsyncAzureOpenAI, OpenAI, AsyncOpenAI]] = None,
+        client: Optional[
+            Union[AzureOpenAI, AsyncAzureOpenAI, OpenAI, AsyncOpenAI]
+        ] = None,
         litellm_params: Optional[dict] = None,
     ):
         openai_client: Optional[
@@ -206,7 +214,9 @@ class AzureOpenAIFilesAPI(BaseAzureLLM):
         max_retries: Optional[int],
         organization: Optional[str] = None,
         api_version: Optional[str] = None,
-        client: Optional[Union[AzureOpenAI, AsyncAzureOpenAI, OpenAI, AsyncOpenAI]] = None,
+        client: Optional[
+            Union[AzureOpenAI, AsyncAzureOpenAI, OpenAI, AsyncOpenAI]
+        ] = None,
         litellm_params: Optional[dict] = None,
     ):
         openai_client: Optional[
@@ -260,7 +270,9 @@ class AzureOpenAIFilesAPI(BaseAzureLLM):
         max_retries: Optional[int],
         purpose: Optional[str] = None,
         api_version: Optional[str] = None,
-        client: Optional[Union[AzureOpenAI, AsyncAzureOpenAI, OpenAI, AsyncOpenAI]] = None,
+        client: Optional[
+            Union[AzureOpenAI, AsyncAzureOpenAI, OpenAI, AsyncOpenAI]
+        ] = None,
         litellm_params: Optional[dict] = None,
     ):
         openai_client: Optional[

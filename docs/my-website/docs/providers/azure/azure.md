@@ -1032,7 +1032,7 @@ print("list_batches_response=", list_batches_response)
 </TabItem>
 </Tabs>
 
-### [Health Check Azure Batch models](./proxy/health.md#batch-models-azure-only)
+### [Health Check Azure Batch models](../../proxy/health.md#batch-models-azure-only)
 
 
 ### [BETA] Loadbalance Multiple Azure Deployments 
@@ -1143,7 +1143,7 @@ In production, [Router connects to a Redis Cache](#redis-queue) to track usage a
 #### Quick Start
 
 ```python
-pip install litellm
+uv add litellm
 ```
 
 ```python

@@ -37,8 +37,16 @@ from litellm.llms.base_llm.image_generation.transformation import (
     BaseImageGenerationConfig,
 )
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.llms.openai import OpenAIImageGenerationOptionalParams, AllMessageValues
-from litellm.types.utils import ImageObject, ImageResponse, ImageUsage, ImageUsageInputTokensDetails
+from litellm.types.llms.openai import (
+    OpenAIImageGenerationOptionalParams,
+    AllMessageValues,
+)
+from litellm.types.utils import (
+    ImageObject,
+    ImageResponse,
+    ImageUsage,
+    ImageUsageInputTokensDetails,
+)
 from litellm.llms.openrouter.common_utils import OpenRouterException
 
 
@@ -51,7 +59,7 @@ else:
 class OpenRouterImageGenerationConfig(BaseImageGenerationConfig):
     """
     Configuration for OpenRouter image generation via chat completions.
-    
+
     OpenRouter uses chat completion endpoints for image generation,
     so we need to transform image generation requests to chat format
     and extract images from chat responses.
@@ -62,7 +70,7 @@ class OpenRouterImageGenerationConfig(BaseImageGenerationConfig):
     ) -> List[OpenAIImageGenerationOptionalParams]:
         """
         Get supported OpenAI parameters for OpenRouter image generation.
-        
+
         Since OpenRouter uses chat completions for image generation,
         we support standard image generation params.
         """
@@ -81,13 +89,13 @@ class OpenRouterImageGenerationConfig(BaseImageGenerationConfig):
     ) -> dict:
         """
         Map image generation params to OpenRouter chat completion format.
-        
+
         Maps OpenAI parameters to OpenRouter's image_config format:
         - size -> image_config.aspect_ratio
         - quality -> image_config.image_size
         """
         supported_params = self.get_supported_openai_params(model)
-        
+
         for key, value in non_default_params.items():
             if key in supported_params:
                 if key == "size":
@@ -109,13 +117,13 @@ class OpenRouterImageGenerationConfig(BaseImageGenerationConfig):
             elif not drop_params:
                 # If not supported and drop_params is False, pass through
                 optional_params[key] = value
-        
+
         return optional_params
-    
+
     def _map_size_to_aspect_ratio(self, size: str) -> str:
         """
         Map OpenAI size format to OpenRouter aspect_ratio format.
-        
+
         OpenAI sizes:
         - 1024x1024 (square)
         - 1536x1024 (landscape)
@@ -124,7 +132,7 @@ class OpenRouterImageGenerationConfig(BaseImageGenerationConfig):
         - 1024x1792 (tall portrait, dall-e-3)
         - 256x256, 512x512 (dall-e-2)
         - auto (default)
-        
+
         OpenRouter aspect_ratios:
         - 1:1 → 1024×1024 (default)
         - 2:3 → 832×1248
@@ -152,16 +160,16 @@ class OpenRouterImageGenerationConfig(BaseImageGenerationConfig):
             "auto": "1:1",
         }
         return size_to_aspect_ratio.get(size, "1:1")
-    
+
     def _map_quality_to_image_size(self, quality: str) -> Optional[str]:
         """
         Map OpenAI quality to OpenRouter image_size format.
-        
+
         OpenAI quality values:
         - auto (default) - automatically select best quality
         - high, medium, low - for GPT image models
         - hd, standard - for dall-e-3
-        
+
         OpenRouter image_size values (Gemini only):
         - 1K → Standard resolution (default)
         - 2K → Higher resolution
@@ -178,7 +186,7 @@ class OpenRouterImageGenerationConfig(BaseImageGenerationConfig):
             "auto": "1K",
         }
         return quality_to_image_size.get(quality)
-    
+
     def _set_usage_and_cost(
         self,
         model_response: ImageResponse,
@@ -187,7 +195,7 @@ class OpenRouterImageGenerationConfig(BaseImageGenerationConfig):
     ) -> None:
         """
         Extract and set usage and cost information from OpenRouter response.
-        
+
         Args:
             model_response: ImageResponse object to populate
             response_json: Parsed JSON response from OpenRouter
@@ -197,10 +205,10 @@ class OpenRouterImageGenerationConfig(BaseImageGenerationConfig):
         if usage_data:
             prompt_tokens = usage_data.get("prompt_tokens", 0)
             total_tokens = usage_data.get("total_tokens", 0)
-            
+
             completion_tokens_details = usage_data.get("completion_tokens_details", {})
             image_tokens = completion_tokens_details.get("image_tokens", 0)
-            
+
             model_response.usage = ImageUsage(
                 input_tokens=prompt_tokens,
                 input_tokens_details=ImageUsageInputTokensDetails(
@@ -210,7 +218,7 @@ class OpenRouterImageGenerationConfig(BaseImageGenerationConfig):
                 output_tokens=image_tokens,
                 total_tokens=total_tokens,
             )
-            
+
             cost = usage_data.get("cost")
             if cost is not None:
                 if not hasattr(model_response, "_hidden_params"):
@@ -220,13 +228,15 @@ class OpenRouterImageGenerationConfig(BaseImageGenerationConfig):
                 model_response._hidden_params["additional_headers"][
                     "llm_provider-x-litellm-response-cost"
                 ] = float(cost)
-            
+
             cost_details = usage_data.get("cost_details", {})
             if cost_details:
                 if "response_cost_details" not in model_response._hidden_params:
                     model_response._hidden_params["response_cost_details"] = {}
-                model_response._hidden_params["response_cost_details"].update(cost_details)
-        
+                model_response._hidden_params["response_cost_details"].update(
+                    cost_details
+                )
+
         model_response._hidden_params["model"] = response_json.get("model", model)
 
     def get_complete_url(
@@ -240,7 +250,7 @@ class OpenRouterImageGenerationConfig(BaseImageGenerationConfig):
     ) -> str:
         """
         Get the complete URL for OpenRouter image generation.
-        
+
         OpenRouter uses chat completions endpoint for image generation.
         Default: https://openrouter.ai/api/v1/chat/completions
         """
@@ -249,7 +259,7 @@ class OpenRouterImageGenerationConfig(BaseImageGenerationConfig):
                 api_base = api_base.rstrip("/")
                 return f"{api_base}/chat/completions"
             return api_base
-        
+
         return "https://openrouter.ai/api/v1/chat/completions"
 
     def validate_environment(
@@ -262,11 +272,7 @@ class OpenRouterImageGenerationConfig(BaseImageGenerationConfig):
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
     ) -> dict:
-        api_key = (
-            api_key
-            or litellm.api_key
-            or get_secret_str("OPENROUTER_API_KEY")
-        )
+        api_key = api_key or litellm.api_key or get_secret_str("OPENROUTER_API_KEY")
         headers.update(
             {
                 "Authorization": f"Bearer {api_key}",
@@ -284,32 +290,27 @@ class OpenRouterImageGenerationConfig(BaseImageGenerationConfig):
     ) -> dict:
         """
         Transform image generation request to OpenRouter chat completion format.
-        
+
         Args:
             model: The model name
             prompt: The image generation prompt
             optional_params: Optional parameters (including image_config)
             litellm_params: LiteLLM parameters
             headers: Request headers
-            
+
         Returns:
             dict: Request body in chat completion format with image_config
         """
         request_body = {
             "model": model,
-            "messages": [
-                {
-                    "role": "user",
-                    "content": prompt
-                }
-            ]
+            "messages": [{"role": "user", "content": prompt}],
         }
-        
+
         # These will be passed through to OpenRouter
         for key, value in optional_params.items():
             if key not in ["model", "messages", "modalities"]:
                 request_body[key] = value
-        
+
         return request_body
 
     def transform_image_generation_response(
@@ -327,9 +328,9 @@ class OpenRouterImageGenerationConfig(BaseImageGenerationConfig):
     ) -> ImageResponse:
         """
         Transform OpenRouter chat completion response to ImageResponse format.
-        
+
         Extracts images from the message content and maps usage/cost information.
-        
+
         Args:
             model: The model name
             raw_response: Raw HTTP response from OpenRouter
@@ -341,7 +342,7 @@ class OpenRouterImageGenerationConfig(BaseImageGenerationConfig):
             encoding: Encoding
             api_key: API key
             json_mode: JSON mode flag
-            
+
         Returns:
             ImageResponse: Populated image response
         """
@@ -353,28 +354,28 @@ class OpenRouterImageGenerationConfig(BaseImageGenerationConfig):
                 status_code=raw_response.status_code,
                 headers=raw_response.headers,
             )
-        
+
         if not model_response.data:
             model_response.data = []
-        
+
         try:
             choices = response_json.get("choices", [])
-            
+
             for choice in choices:
                 message = choice.get("message", {})
                 images = message.get("images", [])
-                
+
                 for image_data in images:
                     image_url_obj = image_data.get("image_url", {})
                     image_url = image_url_obj.get("url")
-                    
+
                     if image_url:
                         if image_url.startswith("data:"):
                             # Extract base64 data
                             # Format: data:image/png;base64,<base64_data>
                             parts = image_url.split(",", 1)
                             b64_data = parts[1] if len(parts) > 1 else None
-                            
+
                             model_response.data.append(
                                 ImageObject(
                                     b64_json=b64_data,
@@ -390,12 +391,12 @@ class OpenRouterImageGenerationConfig(BaseImageGenerationConfig):
                                     revised_prompt=None,
                                 )
                             )
-            
+
             # Extract and set usage and cost information
             self._set_usage_and_cost(model_response, response_json, model)
-            
+
             return model_response
-            
+
         except Exception as e:
             raise OpenRouterException(
                 message=f"Error transforming OpenRouter image generation response: {str(e)}",

@@ -1,6 +1,6 @@
 import os
 import sys
-from typing import List, Literal
+from typing import List, Literal, Optional
 
 from litellm.litellm_core_utils.env_utils import get_env_int
 
@@ -49,12 +49,18 @@ DEFAULT_REPLICATE_POLLING_DELAY_SECONDS = int(
 )
 DEFAULT_IMAGE_TOKEN_COUNT = int(os.getenv("DEFAULT_IMAGE_TOKEN_COUNT", 250))
 
+# Maximum wall-clock seconds a streaming response is allowed to run.
+# Streams exceeding this duration are terminated with a Timeout error.
+# None (default) = no limit.  Set env var to a number of seconds to enable globally.
+_max_stream_duration_env = os.getenv("LITELLM_MAX_STREAMING_DURATION_SECONDS", None)
+LITELLM_MAX_STREAMING_DURATION_SECONDS = (
+    float(_max_stream_duration_env) if _max_stream_duration_env is not None else None
+)
+
 # Maximum number of base64 characters to keep in logging payloads.
 # Data URIs exceeding this are replaced with a size placeholder.
 # Set to 0 to disable truncation.
-MAX_BASE64_LENGTH_FOR_LOGGING = int(
-    os.getenv("MAX_BASE64_LENGTH_FOR_LOGGING", 64)
-)
+MAX_BASE64_LENGTH_FOR_LOGGING = int(os.getenv("MAX_BASE64_LENGTH_FOR_LOGGING", 64))
 
 # When true, adds detailed per-phase timing breakdown headers to responses.
 # Headers: x-litellm-timing-{pre-processing,llm-api,post-processing,message-copy}-ms
@@ -129,9 +135,36 @@ MCP_OAUTH2_TOKEN_CACHE_DEFAULT_TTL = int(
 MCP_NPM_CACHE_DIR = os.getenv("MCP_NPM_CACHE_DIR", "/tmp/.npm_mcp_cache")
 MCP_OAUTH2_TOKEN_CACHE_MIN_TTL = int(os.getenv("MCP_OAUTH2_TOKEN_CACHE_MIN_TTL", "10"))
 
+# Per-user OAuth token Redis cache (for server-side token storage)
+MCP_PER_USER_TOKEN_REDIS_KEY_PREFIX = "mcp:per_user_token"
+MCP_PER_USER_TOKEN_DEFAULT_TTL = int(
+    os.getenv("MCP_PER_USER_TOKEN_DEFAULT_TTL", "43200")  # 12 hours
+)
+MCP_PER_USER_TOKEN_EXPIRY_BUFFER_SECONDS = int(
+    os.getenv("MCP_PER_USER_TOKEN_EXPIRY_BUFFER_SECONDS", "60")
+)
+
+# MCP timeout defaults (seconds). Override via env vars for slow/custom MCP servers.
+MCP_CLIENT_TIMEOUT = float(os.getenv("LITELLM_MCP_CLIENT_TIMEOUT", "60.0"))
+MCP_TOOL_LISTING_TIMEOUT = float(os.getenv("LITELLM_MCP_TOOL_LISTING_TIMEOUT", "30.0"))
+MCP_METADATA_TIMEOUT = float(os.getenv("LITELLM_MCP_METADATA_TIMEOUT", "10.0"))
+MCP_HEALTH_CHECK_TIMEOUT = float(os.getenv("LITELLM_MCP_HEALTH_CHECK_TIMEOUT", "10.0"))
+
+# Allowlist of commands permitted for MCP stdio transport.
+# Prevents arbitrary command execution via /mcp-rest/test/* endpoints or server creation.
+# Note: allowlisted runtimes can still execute code via args (e.g. python -c "...").
+# This is an accepted residual risk since these endpoints require PROXY_ADMIN.
+# Extend via LITELLM_MCP_STDIO_EXTRA_COMMANDS env var (comma-separated).
+_MCP_STDIO_EXTRA_COMMANDS = os.getenv("LITELLM_MCP_STDIO_EXTRA_COMMANDS", "")
+MCP_STDIO_ALLOWED_COMMANDS: frozenset = frozenset(
+    {"npx", "uvx", "python", "python3", "node", "docker", "deno"}
+    | (set(_MCP_STDIO_EXTRA_COMMANDS.split(",")) - {""})
+)
+
 LITELLM_UI_ALLOW_HEADERS = [
     "x-litellm-semantic-filter",
     "x-litellm-semantic-filter-tools",
+    "x-litellm-adaptive-router-model",
 ]
 
 # Gemini model-specific minimal thinking budget constants
@@ -185,9 +218,9 @@ _DEFAULT_TTL_FOR_HTTPX_CLIENTS = 3600  # 1 hour, re-use the same httpx client fo
 
 # Aiohttp connection pooling - prevents memory leaks from unbounded connection growth
 # Set to 0 for unlimited (not recommended for production)
-AIOHTTP_CONNECTOR_LIMIT = int(os.getenv("AIOHTTP_CONNECTOR_LIMIT", 300))
+AIOHTTP_CONNECTOR_LIMIT = int(os.getenv("AIOHTTP_CONNECTOR_LIMIT", 1000))
 AIOHTTP_CONNECTOR_LIMIT_PER_HOST = int(
-    os.getenv("AIOHTTP_CONNECTOR_LIMIT_PER_HOST", 50)
+    os.getenv("AIOHTTP_CONNECTOR_LIMIT_PER_HOST", 500)
 )
 AIOHTTP_KEEPALIVE_TIMEOUT = int(os.getenv("AIOHTTP_KEEPALIVE_TIMEOUT", 120))
 AIOHTTP_TTL_DNS_CACHE = int(os.getenv("AIOHTTP_TTL_DNS_CACHE", 300))
@@ -242,9 +275,14 @@ REDIS_DAILY_END_USER_SPEND_UPDATE_BUFFER_KEY = (
 REDIS_DAILY_AGENT_SPEND_UPDATE_BUFFER_KEY = "litellm_daily_agent_spend_update_buffer"
 REDIS_DAILY_TAG_SPEND_UPDATE_BUFFER_KEY = "litellm_daily_tag_spend_update_buffer"
 MAX_REDIS_BUFFER_DEQUEUE_COUNT = int(os.getenv("MAX_REDIS_BUFFER_DEQUEUE_COUNT", 100))
-MAX_SIZE_IN_MEMORY_QUEUE = int(os.getenv("MAX_SIZE_IN_MEMORY_QUEUE", 2000))
 # Bounds asyncio.Queue() instances (log queues, spend update queues, etc.) to prevent unbounded memory growth
 LITELLM_ASYNCIO_QUEUE_MAXSIZE = int(os.getenv("LITELLM_ASYNCIO_QUEUE_MAXSIZE", 1000))
+TOOL_POLICY_CACHE_TTL_SECONDS = int(os.getenv("TOOL_POLICY_CACHE_TTL_SECONDS", 60))
+# Aggregation threshold: default to 80% of the asyncio queue maxsize so the check can always trigger.
+# Must be < LITELLM_ASYNCIO_QUEUE_MAXSIZE; if set higher the aggregation logic will never fire.
+MAX_SIZE_IN_MEMORY_QUEUE = int(
+    os.getenv("MAX_SIZE_IN_MEMORY_QUEUE", int(LITELLM_ASYNCIO_QUEUE_MAXSIZE * 0.8))
+)
 MAX_IN_MEMORY_QUEUE_FLUSH_COUNT = int(
     os.getenv("MAX_IN_MEMORY_QUEUE_FLUSH_COUNT", 1000)
 )
@@ -333,6 +371,12 @@ AZURE_DOCUMENT_INTELLIGENCE_DEFAULT_DPI = int(
 )
 REDIS_SOCKET_TIMEOUT = float(os.getenv("REDIS_SOCKET_TIMEOUT", 0.1))
 REDIS_CONNECTION_POOL_TIMEOUT = int(os.getenv("REDIS_CONNECTION_POOL_TIMEOUT", 5))
+REDIS_CIRCUIT_BREAKER_FAILURE_THRESHOLD = int(
+    os.getenv("REDIS_CIRCUIT_BREAKER_FAILURE_THRESHOLD", 5)
+)
+REDIS_CIRCUIT_BREAKER_RECOVERY_TIMEOUT = int(
+    os.getenv("REDIS_CIRCUIT_BREAKER_RECOVERY_TIMEOUT", 60)
+)
 # Default Redis major version to assume when version cannot be determined
 # Using 7 as it's the modern version that supports LPOP with count parameter
 DEFAULT_REDIS_MAJOR_VERSION = int(os.getenv("DEFAULT_REDIS_MAJOR_VERSION", 7))
@@ -370,7 +414,20 @@ MAX_SIZE_PER_ITEM_IN_MEMORY_CACHE_IN_KB = int(
 )
 DEFAULT_MAX_TOKENS_FOR_TRITON = int(os.getenv("DEFAULT_MAX_TOKENS_FOR_TRITON", 2000))
 #### Networking settings ####
-request_timeout: float = float(os.getenv("REQUEST_TIMEOUT", 6000))  # time in seconds
+# Sentinel used when `REQUEST_TIMEOUT` is unset: `litellm.request_timeout` keeps this
+# value so longer-running surfaces (Router `timeout or litellm.request_timeout`,
+# speech/TTS, responses, vector stores, etc.) get a long HTTP deadline. Chat
+# `completion()` maps this sentinel down to 600s when the caller did not set a
+# per-request/model timeout—see ``CompletionTimeout.resolve`` in completion_timeout.py. MCP uses
+# dedicated timeouts (e.g. `MCP_CLIENT_TIMEOUT`), not `request_timeout`.
+DEFAULT_REQUEST_TIMEOUT_SECONDS: float = 6000.0
+# Pair used for default httpx clients when no custom timeout is passed: read/write
+# deadline and connect handshake (see ``http_handler`` cached handler paths).
+COMPLETION_HTTP_FALLBACK_SECONDS: float = 600.0
+HTTP_HANDLER_CONNECT_TIMEOUT_SECONDS: float = 5.0
+request_timeout: float = float(
+    os.getenv("REQUEST_TIMEOUT", str(int(DEFAULT_REQUEST_TIMEOUT_SECONDS)))
+)
 DEFAULT_A2A_AGENT_TIMEOUT: float = float(
     os.getenv("DEFAULT_A2A_AGENT_TIMEOUT", 6000)
 )  # 10 minutes
@@ -488,6 +545,7 @@ LITELLM_CHAT_PROVIDERS = [
     "azure_ai",
     "sagemaker",
     "sagemaker_chat",
+    "sagemaker_nova",
     "bedrock",
     "vllm",
     "nlp_cloud",
@@ -1016,6 +1074,9 @@ WANDB_MODELS: set = set(
         "Qwen/Qwen3-235B-A22B-Thinking-2507",
         # moonshotai
         "moonshotai/Kimi-K2-Instruct",
+        "moonshotai/Kimi-K2.5",
+        # MiniMaxAI
+        "MiniMaxAI/MiniMax-M2.5",
         # meta models
         "meta-llama/Llama-3.1-8B-Instruct",
         "meta-llama/Llama-3.3-70B-Instruct",
@@ -1066,6 +1127,7 @@ BEDROCK_CONVERSE_MODELS = [
     "openai.gpt-oss-120b-1:0",
     "anthropic.claude-haiku-4-5-20251001-v1:0",
     "anthropic.claude-sonnet-4-5-20250929-v1:0",
+    "anthropic.claude-opus-4-7",
     "anthropic.claude-opus-4-6-v1:0",
     "anthropic.claude-opus-4-6-v1",
     "anthropic.claude-sonnet-4-6",
@@ -1195,12 +1257,8 @@ OPENAI_FINISH_REASONS = [
     "stop",
     "length",
     "function_call",
+    "tool_calls",
     "content_filter",
-    "null",
-    "finish_reason_unspecified",
-    "malformed_function_call",
-    "guardrail_intervened",
-    "eos",
 ]
 HUMANLOOP_PROMPT_CACHE_TTL_SECONDS = int(
     os.getenv("HUMANLOOP_PROMPT_CACHE_TTL_SECONDS", 60)
@@ -1223,6 +1281,11 @@ X_LITELLM_DISABLE_CALLBACKS = "x-litellm-disable-callbacks"
 LITELLM_METADATA_FIELD = "litellm_metadata"
 OLD_LITELLM_METADATA_FIELD = "metadata"
 LITELLM_TRUNCATED_PAYLOAD_FIELD = "litellm_truncated"
+LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE = (
+    "Truncation is a DB storage safeguard. "
+    "Full, untruncated data is logged to logging callbacks (OTEL, Datadog, etc.). "
+    "To increase the truncation limit, set `MAX_STRING_LENGTH_PROMPT_IN_DB` in your env."
+)
 
 ########################### LiteLLM Proxy Specific Constants ###########################
 ########################################################################################
@@ -1282,6 +1345,41 @@ BATCH_STATUS_POLL_MAX_ATTEMPTS = int(
 HEALTH_CHECK_TIMEOUT_SECONDS = int(
     os.getenv("HEALTH_CHECK_TIMEOUT_SECONDS", 60)
 )  # 60 seconds
+_background_health_check_max_tokens_env = os.getenv(
+    "BACKGROUND_HEALTH_CHECK_MAX_TOKENS"
+)
+try:
+    _raw_background_health_check_max_tokens = (
+        _background_health_check_max_tokens_env.strip()
+        if _background_health_check_max_tokens_env is not None
+        else ""
+    )
+    BACKGROUND_HEALTH_CHECK_MAX_TOKENS: Optional[int] = (
+        int(_raw_background_health_check_max_tokens)
+        if _raw_background_health_check_max_tokens
+        else None
+    )
+except (ValueError, TypeError):
+    BACKGROUND_HEALTH_CHECK_MAX_TOKENS = None
+
+
+_background_health_check_max_tokens_reasoning_env = os.getenv(
+    "BACKGROUND_HEALTH_CHECK_MAX_TOKENS_REASONING"
+)
+try:
+    _raw_background_health_check_max_tokens_reasoning = (
+        _background_health_check_max_tokens_reasoning_env.strip()
+        if _background_health_check_max_tokens_reasoning_env is not None
+        else ""
+    )
+    BACKGROUND_HEALTH_CHECK_MAX_TOKENS_REASONING: Optional[int] = (
+        int(_raw_background_health_check_max_tokens_reasoning)
+        if _raw_background_health_check_max_tokens_reasoning
+        else None
+    )
+except (ValueError, TypeError):
+    BACKGROUND_HEALTH_CHECK_MAX_TOKENS_REASONING = None
+
 LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME = "litellm-internal-health-check"
 LITTELM_CLI_SERVICE_ACCOUNT_NAME = "litellm-cli"
 LITELLM_INTERNAL_JOBS_SERVICE_ACCOUNT_NAME = "litellm_internal_jobs"
@@ -1294,6 +1392,9 @@ LITELLM_KEY_ROTATION_CHECK_INTERVAL_SECONDS = int(
 LITELLM_KEY_ROTATION_GRACE_PERIOD: str = os.getenv(
     "LITELLM_KEY_ROTATION_GRACE_PERIOD", ""
 )  # Duration to keep old key valid after rotation (e.g. "24h", "2d"); empty = immediate revoke (default)
+LITELLM_KEY_ROTATION_LOCK_TTL_SECONDS = int(
+    os.getenv("LITELLM_KEY_ROTATION_LOCK_TTL_SECONDS", 600)
+)  # 10 minutes default — caps the deadlock window if a pod crashes mid-rotation
 UI_SESSION_TOKEN_TEAM_ID = "litellm-dashboard"
 LITELLM_PROXY_ADMIN_NAME = "default_user_id"
 
@@ -1309,14 +1410,21 @@ CLI_JWT_EXPIRATION_HOURS = int(
     or 24
 )
 
+########################### UI SESSION DURATION ###########################
+# Duration for UI login session (username/password, SSO, invitation links). Format: "30s", "30m", "24h", "7d"
+# Does NOT apply to EXPERIMENTAL_UI_LOGIN flow, which intentionally uses a fixed 10-minute expiry for security.
+LITELLM_UI_SESSION_DURATION = os.getenv("LITELLM_UI_SESSION_DURATION", "24h")
+
 ########################### DB CRON JOB NAMES ###########################
 DB_SPEND_UPDATE_JOB_NAME = "db_spend_update_job"
+DB_DAILY_TAG_SPEND_UPDATE_JOB_NAME = "db_daily_tag_spend_update_job"
 PROMETHEUS_EMIT_BUDGET_METRICS_JOB_NAME = "prometheus_emit_budget_metrics"
 CLOUDZERO_EXPORT_USAGE_DATA_JOB_NAME = "cloudzero_export_usage_data"
 CLOUDZERO_MAX_FETCHED_DATA_RECORDS = int(
     os.getenv("CLOUDZERO_MAX_FETCHED_DATA_RECORDS", 50000)
 )
 SPEND_LOG_CLEANUP_JOB_NAME = "spend_log_cleanup"
+KEY_ROTATION_JOB_NAME = "litellm_key_rotation_job"
 SPEND_LOG_RUN_LOOPS = int(os.getenv("SPEND_LOG_RUN_LOOPS", 500))
 SPEND_LOG_CLEANUP_BATCH_SIZE = int(os.getenv("SPEND_LOG_CLEANUP_BATCH_SIZE", 1000))
 SPEND_LOG_QUEUE_SIZE_THRESHOLD = int(os.getenv("SPEND_LOG_QUEUE_SIZE_THRESHOLD", 100))
@@ -1328,6 +1436,18 @@ PROXY_BUDGET_RESCHEDULER_MIN_TIME = int(
     os.getenv("PROXY_BUDGET_RESCHEDULER_MIN_TIME", 597)
 )
 PROXY_BATCH_POLLING_INTERVAL = int(os.getenv("PROXY_BATCH_POLLING_INTERVAL", 3600))
+MAX_OBJECTS_PER_POLL_CYCLE = max(1, int(os.getenv("MAX_OBJECTS_PER_POLL_CYCLE", 50)))
+MANAGED_OBJECT_STALENESS_CUTOFF_DAYS = max(
+    1, int(os.getenv("MANAGED_OBJECT_STALENESS_CUTOFF_DAYS", 7))
+)
+STALE_OBJECT_CLEANUP_BATCH_SIZE = max(
+    1, int(os.getenv("STALE_OBJECT_CLEANUP_BATCH_SIZE", 1000))
+)
+# Set PROXY_BATCH_POLLING_ENABLED=false to disable the CheckBatchCost and
+# CheckResponsesCost background polling jobs entirely (e.g. to avoid DB load on
+# installations with large numbers of stale managed objects).
+_batch_polling_env = os.getenv("PROXY_BATCH_POLLING_ENABLED", "true").lower()
+PROXY_BATCH_POLLING_ENABLED = _batch_polling_env == "true"
 PROXY_BUDGET_RESCHEDULER_MAX_TIME = int(
     os.getenv("PROXY_BUDGET_RESCHEDULER_MAX_TIME", 605)
 )
@@ -1354,6 +1474,10 @@ APSCHEDULER_REPLACE_EXISTING = os.getenv(
     "1",
 ]  # always replace existing jobs
 
+# The number of tag entries are higher than number of user, team entries. This leads to a higher QPS.
+# This will run tag spcific tasks at a later time to smooth QPS
+DAILY_TAG_SPEND_BATCH_MULTIPLIER = 2.3
+
 DEFAULT_HEALTH_CHECK_INTERVAL = int(
     os.getenv("DEFAULT_HEALTH_CHECK_INTERVAL", 300)
 )  # 5 minutes
@@ -1363,6 +1487,9 @@ DEFAULT_SHARED_HEALTH_CHECK_TTL = int(
 DEFAULT_SHARED_HEALTH_CHECK_LOCK_TTL = int(
     os.getenv("DEFAULT_SHARED_HEALTH_CHECK_LOCK_TTL", 60)
 )  # 1 minute - TTL for health check lock
+DEFAULT_HEALTH_CHECK_STALENESS_MULTIPLIER = (
+    2  # health state is stale after interval * this
+)
 PROMETHEUS_FALLBACK_STATS_SEND_TIME_HOURS = int(
     os.getenv("PROMETHEUS_FALLBACK_STATS_SEND_TIME_HOURS", 9)
 )
@@ -1385,6 +1512,7 @@ SECRET_MANAGER_REFRESH_INTERVAL = int(
 )
 LITELLM_SETTINGS_SAFE_DB_OVERRIDES = [
     "default_internal_user_params",
+    "default_team_params",
     "public_mcp_servers",
     "public_agent_groups",
     "public_model_groups",
@@ -1396,9 +1524,7 @@ SPECIAL_LITELLM_AUTH_TOKEN = ["ui-token"]
 DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL = int(
     os.getenv("DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL", 60)
 )
-DEFAULT_ACCESS_GROUP_CACHE_TTL = int(
-    os.getenv("DEFAULT_ACCESS_GROUP_CACHE_TTL", 600)
-)
+DEFAULT_ACCESS_GROUP_CACHE_TTL = int(os.getenv("DEFAULT_ACCESS_GROUP_CACHE_TTL", 600))
 
 # Sentry Scrubbing Configuration
 SENTRY_DENYLIST = [
@@ -1412,6 +1538,7 @@ SENTRY_DENYLIST = [
     "credential",
     "OPENAI_API_KEY",
     "ANTHROPIC_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
     "AZURE_API_KEY",
     "COHERE_API_KEY",
     "REPLICATE_API_KEY",
@@ -1507,3 +1634,16 @@ MAX_PAYLOAD_SIZE_FOR_DEBUG_LOG = int(
 MAX_COMPETITOR_NAMES = int(os.getenv("MAX_COMPETITOR_NAMES", 100))
 COMPETITOR_LLM_TEMPERATURE = float(os.getenv("COMPETITOR_LLM_TEMPERATURE", 0.3))
 DEFAULT_COMPETITOR_DISCOVERY_MODEL = "gpt-4o-mini"
+
+# Advisor tool orchestration
+# Providers that support advisor_20260301 natively (no LiteLLM orchestration needed).
+# Add vertex_ai here once verified.
+ADVISOR_NATIVE_PROVIDERS: frozenset = frozenset({"anthropic"})
+# Hard cap on advisor iterations per request to prevent runaway loops.
+ADVISOR_MAX_USES: int = 5
+# Description injected into the synthetic advisor tool definition sent to non-native providers.
+ADVISOR_TOOL_DESCRIPTION: str = (
+    "Consult a highly intelligent advisor model when you need expert guidance, "
+    "want to verify your reasoning, or face a complex decision. "
+    "Describe your question or challenge clearly in the 'question' field."
+)

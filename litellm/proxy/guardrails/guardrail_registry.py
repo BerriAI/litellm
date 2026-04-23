@@ -11,8 +11,12 @@ from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
-from litellm.proxy.utils import PrismaClient
+from litellm.proxy.guardrails.guardrail_hooks.grayswan import GraySwanGuardrail
+from litellm.proxy.guardrails.guardrail_hooks.grayswan import (
+    initialize_guardrail as initialize_grayswan,
+)
 from litellm.proxy.types_utils.utils import get_instance_fn
+from litellm.proxy.utils import PrismaClient
 from litellm.secret_managers.main import get_secret
 from litellm.types.guardrails import (
     Guardrail,
@@ -20,10 +24,6 @@ from litellm.types.guardrails import (
     LakeraCategoryThresholds,
     LitellmParams,
     SupportedGuardrailIntegrations,
-)
-from litellm.proxy.guardrails.guardrail_hooks.grayswan import (
-    GraySwanGuardrail,
-    initialize_guardrail as initialize_grayswan,
 )
 
 from .guardrail_initializers import (
@@ -327,11 +327,13 @@ class GuardrailRegistry:
         prisma_client: PrismaClient,
     ) -> List[Guardrail]:
         """
-        Get all guardrails from the database
+        Get all active guardrails from the database.
+        Only rows with status == "active" are returned (pending_review and rejected are excluded).
         """
         try:
             guardrails_from_db = (
                 await prisma_client.db.litellm_guardrailstable.find_many(
+                    where={"status": "active"},
                     order={"created_at": "desc"},
                 )
             )
@@ -470,6 +472,13 @@ class InMemoryGuardrailHandler:
         else:
             raise ValueError(f"Unsupported guardrail: {guardrail_type}")
 
+        if custom_guardrail_callback is not None:
+            setattr(
+                custom_guardrail_callback,
+                "skip_system_message_in_guardrail",
+                getattr(litellm_params, "skip_system_message_in_guardrail", None),
+            )
+
         parsed_guardrail = Guardrail(
             guardrail_id=guardrail.get("guardrail_id"),
             guardrail_name=guardrail["guardrail_name"],
@@ -504,7 +513,9 @@ class InMemoryGuardrailHandler:
             guardrail_type,
         )
 
-        _guardrail_class = get_instance_fn(guardrail_type, config_file_path=config_file_path)
+        _guardrail_class = get_instance_fn(
+            guardrail_type, config_file_path=config_file_path
+        )
 
         mode = litellm_params.mode
         if mode is None:

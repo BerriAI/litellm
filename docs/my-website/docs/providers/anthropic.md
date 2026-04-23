@@ -4,6 +4,8 @@ import TabItem from '@theme/TabItem';
 # Anthropic
 LiteLLM supports all anthropic models.
 
+- `claude-opus-4-6` (`claude-opus-4-6-20260205`)
+- `claude-sonnet-4-6`
 - `claude-sonnet-4-5-20250929`
 - `claude-opus-4-5-20251101`
 - `claude-opus-4-1-20250805`
@@ -50,7 +52,7 @@ Check this in code, [here](../completion/input.md#translated-openai-params)
 **Notes:**
 - Anthropic API fails requests when `max_tokens` are not passed. Due to this litellm passes `max_tokens=4096` when no `max_tokens` are passed.
 - `response_format` is fully supported for Claude Sonnet 4.5 and Opus 4.1 models (see [Structured Outputs](#structured-outputs) section)
-- `reasoning_effort` is automatically mapped to `output_config={"effort": ...}` for Claude Opus 4.5 models (see [Effort Parameter](./anthropic_effort.md))
+- `reasoning_effort` is automatically mapped to `output_config={"effort": ...}` for Claude 4.6 and Opus 4.5 models (see [Effort Parameter](./anthropic_effort.md))
 
 :::
 
@@ -415,7 +417,10 @@ print(response)
 
 | Model Name       | Function Call                              |
 |------------------|--------------------------------------------|
+| claude-opus-4-6  | `completion('claude-opus-4-6-20260205', messages)` | `os.environ['ANTHROPIC_API_KEY']`       |
 | claude-sonnet-4-5  | `completion('claude-sonnet-4-5-20250929', messages)` | `os.environ['ANTHROPIC_API_KEY']`       |
+| claude-opus-4-5  | `completion('claude-opus-4-5-20251101', messages)` | `os.environ['ANTHROPIC_API_KEY']`       |
+| claude-opus-4-1  | `completion('claude-opus-4-1-20250805', messages)` | `os.environ['ANTHROPIC_API_KEY']`       |
 | claude-opus-4  | `completion('claude-opus-4-20250514', messages)` | `os.environ['ANTHROPIC_API_KEY']`       |
 | claude-sonnet-4  | `completion('claude-sonnet-4-20250514', messages)` | `os.environ['ANTHROPIC_API_KEY']`       |
 | claude-3.7  | `completion('claude-3-7-sonnet-20250219', messages)` | `os.environ['ANTHROPIC_API_KEY']`       |
@@ -1959,6 +1964,98 @@ curl -L -X POST 'http://0.0.0.0:4000/v1/chat/completions' \
 
 </TabItem>
 </Tabs>
+
+## Files API
+
+Upload files once and reference them by `file_id` in multiple requests—no need to re-upload content each time.
+
+:::info
+The `file_id` obtained from Anthropic only works with Anthropic Claude models. You cannot use it with other providers (OpenAI, Bedrock, etc.).
+:::
+
+- **Max file size:** 500 MB | **Total storage:** 100 GB per org
+- **Pricing:** File API operations are free. File content used in Messages requests is priced as input tokens.
+
+**Supported models by file type:**
+- **Images:** All Claude 3+ models
+- **PDFs:** All Claude 3.5+ models
+- **Other file types** (for code execution): Claude 3.5 Haiku + all Claude 3.7+ models
+
+### Quick Start
+
+```python
+import litellm
+import os
+
+os.environ["ANTHROPIC_API_KEY"] = "sk-ant-..."
+
+# 1. Upload a file once
+file = litellm.create_file(
+    file=open("document.pdf", "rb"),
+    purpose="messages",
+    custom_llm_provider="anthropic",
+)
+
+# 2. Use file_id in messages (no re-upload needed)
+response = litellm.completion(
+    model="anthropic/claude-sonnet-4-5-20250929",
+    messages=[{
+        "role": "user",
+        "content": [
+            {"type": "text", "text": "Summarize this document"},
+            {"type": "file", "file": {"file_id": file.id, "format": "application/pdf"}}
+        ]
+    }]
+)
+```
+
+### File Operations
+
+| Operation | Function |
+|-----------|----------|
+| Upload | `litellm.create_file(file, purpose="messages", custom_llm_provider="anthropic")` |
+| List | `litellm.file_list(custom_llm_provider="anthropic")` |
+| Retrieve | `litellm.file_retrieve(file_id, custom_llm_provider="anthropic")` |
+| Delete | `litellm.file_delete(file_id, custom_llm_provider="anthropic")` |
+| Download | `litellm.file_content(file_id, custom_llm_provider="anthropic")` |
+
+:::note
+Download only works for files created by the [code execution tool](https://docs.anthropic.com/en/docs/agents-and-tools/tool-use/code-execution-tool), not uploaded files.
+:::
+
+### Supported Formats
+
+| File Type | Format Value |
+|-----------|-------------|
+| PDF | `application/pdf` |
+| Plain text | `text/plain` |
+| JPEG | `image/jpeg` |
+| PNG | `image/png` |
+| GIF | `image/gif` |
+| WebP | `image/webp` |
+
+### Using Images
+
+```python
+# Upload image
+image = litellm.create_file(
+    file=open("photo.jpg", "rb"),
+    purpose="messages",
+    custom_llm_provider="anthropic",
+)
+
+# Use in message
+response = litellm.completion(
+    model="anthropic/claude-sonnet-4-5-20250929",
+    messages=[{
+        "role": "user",
+        "content": [
+            {"type": "text", "text": "What's in this image?"},
+            {"type": "file", "file": {"file_id": image.id, "format": "image/jpeg"}}
+        ]
+    }]
+)
+```
 
 ## Usage - passing 'user_id' to Anthropic
 

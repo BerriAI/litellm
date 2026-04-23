@@ -1,15 +1,24 @@
 import React, { useState } from "react";
-import { Card, Text, Button, Grid, Tab, TabList, TabGroup, TabPanel, TabPanels, Title, Badge } from "@tremor/react";
-import { ArrowLeftIcon, TrashIcon, RefreshIcon } from "@heroicons/react/outline";
 import {
-  userInfoCall,
+  Card, Text, Button, Grid, Tab, TabList, TabGroup, TabPanel, TabPanels, Title,
+  Table, TableHead, TableBody, TableRow, TableHeaderCell, TableCell,
+} from "@tremor/react";
+import { ArrowLeftIcon, TrashIcon, RefreshIcon, PlusIcon } from "@heroicons/react/outline";
+import {
+  userGetInfoV2,
+  UserInfoV2Response,
   userDeleteCall,
   userUpdateUserCall,
   modelAvailableCall,
   invitationCreateCall,
   getProxyBaseUrl,
+  teamInfoCall,
+  teamListCall,
+  teamMemberAddCall,
+  teamMemberDeleteCall,
+  Member,
 } from "../networking";
-import { Button as AntdButton } from "antd";
+import { Button as AntdButton, Modal, Select as AntdSelect, Form, Tooltip } from "antd";
 import { rolesWithWriteAccess } from "../../utils/roles";
 import { UserEditView } from "../user_edit_view";
 import OnboardingModal, { InvitationLink } from "../onboarding_link";
@@ -30,23 +39,10 @@ interface UserInfoViewProps {
   startInEditMode?: boolean;
 }
 
-interface UserInfo {
-  user_id: string;
-  user_info: {
-    user_email: string | null;
-    user_alias: string | null;
-    user_role: string | null;
-    teams: any[] | null;
-    models: string[] | null;
-    max_budget: number | null;
-    budget_duration: string | null;
-    spend: number | null;
-    metadata: Record<string, any> | null;
-    created_at: string | null;
-    updated_at: string | null;
-  };
-  keys: any[] | null;
-  teams: any[] | null;
+/** Team info used for display in user detail view */
+interface TeamDisplayInfo {
+  team_id: string;
+  team_alias: string | null;
 }
 
 export default function UserInfoView({
@@ -59,7 +55,8 @@ export default function UserInfoView({
   initialTab = 0,
   startInEditMode = false,
 }: UserInfoViewProps) {
-  const [userData, setUserData] = useState<UserInfo | null>(null);
+  const [userData, setUserData] = useState<UserInfoV2Response | null>(null);
+  const [teamDetails, setTeamDetails] = useState<TeamDisplayInfo[]>([]);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [isDeletingUser, setIsDeletingUser] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
@@ -71,6 +68,15 @@ export default function UserInfoView({
   const [activeTab, setActiveTab] = useState(initialTab);
   const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({});
   const [isTeamsExpanded, setIsTeamsExpanded] = useState(false);
+  const [isAddTeamModalOpen, setIsAddTeamModalOpen] = useState(false);
+  const [isRemoveTeamModalOpen, setIsRemoveTeamModalOpen] = useState(false);
+  const [teamToRemove, setTeamToRemove] = useState<TeamDisplayInfo | null>(null);
+  const [isAddingTeam, setIsAddingTeam] = useState(false);
+  const [isRemovingTeam, setIsRemovingTeam] = useState(false);
+  const [allTeams, setAllTeams] = useState<Array<{ team_id: string; team_alias: string }>>([]);
+  const [selectedTeamId, setSelectedTeamId] = useState<string>("");
+  const [selectedRole, setSelectedRole] = useState<string>("user");
+  const [isLoadingTeams, setIsLoadingTeams] = useState(false);
 
   React.useEffect(() => {
     setBaseUrl(getProxyBaseUrl());
@@ -81,8 +87,30 @@ export default function UserInfoView({
     const fetchData = async () => {
       try {
         if (!accessToken) return;
-        const data = await userInfoCall(accessToken, userId, userRole || "", false, null, null, true);
+        const data = await userGetInfoV2(accessToken, userId);
         setUserData(data);
+
+        // Fetch team details for display (team aliases)
+        if (data.teams && data.teams.length > 0) {
+          try {
+            const teamPromises = data.teams.map(async (teamId: string) => {
+              try {
+                const teamData = await teamInfoCall(accessToken, teamId);
+                return {
+                  team_id: teamId,
+                  team_alias: teamData?.team_info?.team_alias || null,
+                };
+              } catch {
+                return { team_id: teamId, team_alias: null };
+              }
+            });
+            const teams = await Promise.all(teamPromises);
+            setTeamDetails(teams);
+          } catch {
+            // Fall back to just team IDs
+            setTeamDetails(data.teams.map((id: string) => ({ team_id: id, team_alias: null })));
+          }
+        }
 
         // Fetch available models
         const modelDataResponse = await modelAvailableCall(accessToken, userId, userRole || "");
@@ -98,6 +126,118 @@ export default function UserInfoView({
 
     fetchData();
   }, [accessToken, userId, userRole]);
+
+  const isProxyAdmin = userRole === "proxy_admin" || userRole === "Admin";
+
+  const fetchAllTeams = async () => {
+    if (!accessToken) return;
+    setIsLoadingTeams(true);
+    try {
+      const teams = await teamListCall(accessToken, null);
+      setAllTeams(
+        (teams || []).map((t: any) => ({
+          team_id: t.team_id,
+          team_alias: t.team_alias || t.team_id,
+        }))
+      );
+    } catch (error) {
+      console.error("Error fetching teams:", error);
+    } finally {
+      setIsLoadingTeams(false);
+    }
+  };
+
+  const handleOpenAddTeamModal = () => {
+    setSelectedTeamId("");
+    setSelectedRole("user");
+    setIsAddTeamModalOpen(true);
+    fetchAllTeams();
+  };
+
+  const handleAddTeamSubmit = async () => {
+    if (!accessToken || !selectedTeamId) return;
+    setIsAddingTeam(true);
+    try {
+      const member: Member = {
+        role: selectedRole,
+        user_id: userId,
+      };
+      await teamMemberAddCall(accessToken, selectedTeamId, member);
+      NotificationsManager.success("User added to team successfully");
+      setIsAddTeamModalOpen(false);
+      // Re-fetch user data to refresh teams
+      const data = await userGetInfoV2(accessToken, userId);
+      setUserData(data);
+      if (data.teams && data.teams.length > 0) {
+        const teamPromises = data.teams.map(async (teamId: string) => {
+          try {
+            const teamData = await teamInfoCall(accessToken, teamId);
+            return { team_id: teamId, team_alias: teamData?.team_info?.team_alias || null };
+          } catch {
+            return { team_id: teamId, team_alias: null };
+          }
+        });
+        setTeamDetails(await Promise.all(teamPromises));
+      } else {
+        setTeamDetails([]);
+      }
+    } catch (error: any) {
+      console.error("Error adding user to team:", error);
+      NotificationsManager.fromBackend(error?.message || "Failed to add user to team");
+    } finally {
+      setIsAddingTeam(false);
+    }
+  };
+
+  const handleOpenRemoveTeamModal = (team: TeamDisplayInfo) => {
+    setTeamToRemove(team);
+    setIsRemoveTeamModalOpen(true);
+  };
+
+  const handleRemoveTeamConfirm = async () => {
+    if (!accessToken || !teamToRemove) return;
+    setIsRemovingTeam(true);
+    try {
+      const member: Member = {
+        role: "user",
+        user_id: userId,
+      };
+      await teamMemberDeleteCall(accessToken, teamToRemove.team_id, member);
+      NotificationsManager.success("User removed from team successfully");
+      setIsRemoveTeamModalOpen(false);
+      setTeamToRemove(null);
+      // Re-fetch user data to refresh teams
+      const data = await userGetInfoV2(accessToken, userId);
+      setUserData(data);
+      if (data.teams && data.teams.length > 0) {
+        const teamPromises = data.teams.map(async (teamId: string) => {
+          try {
+            const teamData = await teamInfoCall(accessToken, teamId);
+            return { team_id: teamId, team_alias: teamData?.team_info?.team_alias || null };
+          } catch {
+            return { team_id: teamId, team_alias: null };
+          }
+        });
+        setTeamDetails(await Promise.all(teamPromises));
+      } else {
+        setTeamDetails([]);
+      }
+    } catch (error: any) {
+      console.error("Error removing user from team:", error);
+      NotificationsManager.fromBackend(error?.message || "Failed to remove user from team");
+    } finally {
+      setIsRemovingTeam(false);
+    }
+  };
+
+  const handleRemoveTeamCancel = () => {
+    setIsRemoveTeamModalOpen(false);
+    setTeamToRemove(null);
+  };
+
+  const availableTeamsForAdd = allTeams.filter(
+    (t) => !teamDetails.some((td) => td.team_id === t.team_id)
+  );
 
   const handleResetPassword = async () => {
     if (!accessToken) {
@@ -146,15 +286,12 @@ export default function UserInfoView({
       // Update local state with new values
       setUserData({
         ...userData,
-        user_info: {
-          ...userData.user_info,
-          user_email: formValues.user_email,
-          user_alias: formValues.user_alias,
-          models: formValues.models,
-          max_budget: formValues.max_budget,
-          budget_duration: formValues.budget_duration,
-          metadata: formValues.metadata,
-        },
+        user_email: formValues.user_email ?? userData.user_email,
+        user_alias: formValues.user_alias ?? userData.user_alias,
+        models: formValues.models ?? userData.models,
+        max_budget: formValues.max_budget ?? userData.max_budget,
+        budget_duration: formValues.budget_duration ?? userData.budget_duration,
+        metadata: formValues.metadata ?? userData.metadata,
       });
 
       NotificationsManager.success("User updated successfully");
@@ -197,6 +334,20 @@ export default function UserInfoView({
     }
   };
 
+  // Build a legacy-compatible shape for UserEditView
+  const userDataForEdit = {
+    user_id: userData.user_id,
+    user_info: {
+      user_email: userData.user_email,
+      user_alias: userData.user_alias,
+      user_role: userData.user_role,
+      models: userData.models,
+      max_budget: userData.max_budget,
+      budget_duration: userData.budget_duration,
+      metadata: userData.metadata,
+    },
+  };
+
   return (
     <div className="p-4">
       <div className="flex justify-between items-center mb-6">
@@ -204,7 +355,7 @@ export default function UserInfoView({
           <Button icon={ArrowLeftIcon} variant="light" onClick={onClose} className="mb-4">
             Back to Users
           </Button>
-          <Title>{userData.user_info?.user_email || "User"}</Title>
+          <Title>{userData.user_email || "User"}</Title>
           <div className="flex items-center cursor-pointer">
             <Text className="text-gray-500 font-mono">{userData.user_id}</Text>
             <AntdButton
@@ -243,20 +394,20 @@ export default function UserInfoView({
         message="Are you sure you want to delete this user? This action cannot be undone."
         resourceInformationTitle="User Information"
         resourceInformation={[
-          { label: "Email", value: userData.user_info?.user_email },
+          { label: "Email", value: userData.user_email },
           { label: "User ID", value: userData.user_id, code: true },
           {
             label: "Global Proxy Role",
             value:
-              (userData.user_info?.user_role && possibleUIRoles?.[userData.user_info.user_role]?.ui_label) ||
-              userData.user_info?.user_role ||
+              (userData.user_role && possibleUIRoles?.[userData.user_role]?.ui_label) ||
+              userData.user_role ||
               "-",
           },
           {
             label: "Total Spend (USD)",
             value:
-              userData.user_info?.spend !== null && userData.user_info?.spend !== undefined
-                ? userData.user_info.spend.toFixed(2)
+              userData.spend !== null && userData.spend !== undefined
+                ? userData.spend.toFixed(2)
                 : undefined,
           },
         ]}
@@ -278,65 +429,91 @@ export default function UserInfoView({
               <Card>
                 <Text>Spend</Text>
                 <div className="mt-2">
-                  <Title>${formatNumberWithCommas(userData.user_info?.spend || 0, 4)}</Title>
+                  <Title>${formatNumberWithCommas(userData.spend || 0, 4)}</Title>
                   <Text>
                     of{" "}
-                    {userData.user_info?.max_budget !== null
-                      ? `$${formatNumberWithCommas(userData.user_info.max_budget, 4)}`
+                    {userData.max_budget !== null
+                      ? `$${formatNumberWithCommas(userData.max_budget, 4)}`
                       : "Unlimited"}
                   </Text>
                 </div>
               </Card>
 
               <Card>
-                <Text>Teams</Text>
+                <div className="flex justify-between items-center mb-2">
+                  <Text>Teams</Text>
+                  {isProxyAdmin && (
+                    <Button
+                      icon={PlusIcon}
+                      variant="light"
+                      size="xs"
+                      onClick={handleOpenAddTeamModal}
+                    >
+                      Add Team
+                    </Button>
+                  )}
+                </div>
                 <div className="mt-2">
-                  {userData.teams?.length && userData.teams?.length > 0 ? (
-                    <div className="flex flex-wrap gap-2">
-                      {userData.teams?.slice(0, isTeamsExpanded ? userData.teams.length : 20).map((team, index) => (
-                        <Badge key={index} color="blue" title={team.team_alias}>
-                          {team.team_alias}
-                        </Badge>
-                      ))}
-                      {!isTeamsExpanded && userData.teams?.length > 20 && (
-                        <Badge
-                          color="gray"
-                          className="cursor-pointer hover:bg-gray-200 transition-colors"
-                          onClick={() => setIsTeamsExpanded(true)}
-                        >
-                          +{userData.teams.length - 20} more
-                        </Badge>
-                      )}
-                      {isTeamsExpanded && userData.teams?.length > 20 && (
-                        <Badge
-                          color="gray"
-                          className="cursor-pointer hover:bg-gray-200 transition-colors"
-                          onClick={() => setIsTeamsExpanded(false)}
-                        >
-                          Show Less
-                        </Badge>
-                      )}
+                  {teamDetails.length > 0 ? (
+                    <div className="max-h-60 overflow-y-auto">
+                    <Table>
+                      <TableHead>
+                        <TableRow>
+                          <TableHeaderCell>Team Name</TableHeaderCell>
+                          {isProxyAdmin && <TableHeaderCell className="text-right">Actions</TableHeaderCell>}
+                        </TableRow>
+                      </TableHead>
+                      <TableBody>
+                        {teamDetails.slice(0, isTeamsExpanded ? teamDetails.length : 20).map((team) => (
+                          <TableRow key={team.team_id}>
+                            <TableCell>{team.team_alias || team.team_id}</TableCell>
+                            {isProxyAdmin && (
+                              <TableCell className="text-right">
+                                <Button
+                                  icon={TrashIcon}
+                                  variant="light"
+                                  size="xs"
+                                  color="red"
+                                  onClick={() => handleOpenRemoveTeamModal(team)}
+                                />
+                              </TableCell>
+                            )}
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
                     </div>
                   ) : (
                     <Text>No teams</Text>
                   )}
-                </div>
-              </Card>
-
-              <Card>
-                <Text>Virtual Keys</Text>
-                <div className="mt-2">
-                  <Text>
-                    {userData.keys?.length || 0} {userData.keys?.length === 1 ? "Key" : "Keys"}
-                  </Text>
+                  {!isTeamsExpanded && teamDetails.length > 20 && (
+                    <Button
+                      variant="light"
+                      size="xs"
+                      className="mt-2"
+                      onClick={() => setIsTeamsExpanded(true)}
+                    >
+                      +{teamDetails.length - 20} more
+                    </Button>
+                  )}
+                  {isTeamsExpanded && teamDetails.length > 20 && (
+                    <Button
+                      variant="light"
+                      size="xs"
+                      className="mt-2"
+                      onClick={() => setIsTeamsExpanded(false)}
+                    >
+                      Show Less
+                    </Button>
+                  )}
                 </div>
               </Card>
 
               <Card>
                 <Text>Personal Models</Text>
                 <div className="mt-2">
-                  {userData.user_info?.models?.length && userData.user_info?.models?.length > 0 ? (
-                    userData.user_info?.models?.map((model, index) => <Text key={index}>{model}</Text>)
+                  {userData.models?.length && userData.models?.length > 0 ? (
+                    userData.models?.map((model, index) => <Text key={index}>{model}</Text>)
                   ) : (
                     <Text>All proxy models</Text>
                   )}
@@ -357,10 +534,10 @@ export default function UserInfoView({
 
               {isEditing && userData ? (
                 <UserEditView
-                  userData={userData}
+                  userData={userDataForEdit}
                   onCancel={() => setIsEditing(false)}
                   onSubmit={handleUserUpdate}
-                  teams={userData.teams}
+                  teams={teamDetails}
                   accessToken={accessToken}
                   userID={userId}
                   userRole={userRole}
@@ -389,24 +566,24 @@ export default function UserInfoView({
 
                   <div>
                     <Text className="font-medium">Email</Text>
-                    <Text>{userData.user_info?.user_email || "Not Set"}</Text>
+                    <Text>{userData.user_email || "Not Set"}</Text>
                   </div>
 
                   <div>
                     <Text className="font-medium">User Alias</Text>
-                    <Text>{userData.user_info?.user_alias || "Not Set"}</Text>
+                    <Text>{userData.user_alias || "Not Set"}</Text>
                   </div>
 
                   <div>
                     <Text className="font-medium">Global Proxy Role</Text>
-                    <Text>{userData.user_info?.user_role || "Not Set"}</Text>
+                    <Text>{userData.user_role || "Not Set"}</Text>
                   </div>
 
                   <div>
                     <Text className="font-medium">Created</Text>
                     <Text>
-                      {userData.user_info?.created_at
-                        ? new Date(userData.user_info.created_at).toLocaleString()
+                      {userData.created_at
+                        ? new Date(userData.created_at).toLocaleString()
                         : "Unknown"}
                     </Text>
                   </div>
@@ -414,54 +591,17 @@ export default function UserInfoView({
                   <div>
                     <Text className="font-medium">Last Updated</Text>
                     <Text>
-                      {userData.user_info?.updated_at
-                        ? new Date(userData.user_info.updated_at).toLocaleString()
+                      {userData.updated_at
+                        ? new Date(userData.updated_at).toLocaleString()
                         : "Unknown"}
                     </Text>
                   </div>
 
                   <div>
-                    <Text className="font-medium">Teams</Text>
-                    <div className="flex flex-wrap gap-2 mt-1">
-                      {userData.teams?.length && userData.teams?.length > 0 ? (
-                        <>
-                          {userData.teams?.slice(0, isTeamsExpanded ? userData.teams.length : 20).map((team, index) => (
-                            <span
-                              key={index}
-                              className="px-2 py-1 bg-blue-100 rounded text-xs"
-                              title={team.team_alias || team.team_id}
-                            >
-                              {team.team_alias || team.team_id}
-                            </span>
-                          ))}
-                          {!isTeamsExpanded && userData.teams?.length > 20 && (
-                            <span
-                              className="px-2 py-1 bg-gray-100 rounded text-xs cursor-pointer hover:bg-gray-200 transition-colors"
-                              onClick={() => setIsTeamsExpanded(true)}
-                            >
-                              +{userData.teams.length - 20} more
-                            </span>
-                          )}
-                          {isTeamsExpanded && userData.teams?.length > 20 && (
-                            <span
-                              className="px-2 py-1 bg-gray-100 rounded text-xs cursor-pointer hover:bg-gray-200 transition-colors"
-                              onClick={() => setIsTeamsExpanded(false)}
-                            >
-                              Show Less
-                            </span>
-                          )}
-                        </>
-                      ) : (
-                        <Text>No teams</Text>
-                      )}
-                    </div>
-                  </div>
-
-                  <div>
                     <Text className="font-medium">Personal Models</Text>
                     <div className="flex flex-wrap gap-2 mt-1">
-                      {userData.user_info?.models?.length && userData.user_info?.models?.length > 0 ? (
-                        userData.user_info?.models?.map((model, index) => (
+                      {userData.models?.length && userData.models?.length > 0 ? (
+                        userData.models?.map((model, index) => (
                           <span key={index} className="px-2 py-1 bg-blue-100 rounded text-xs">
                             {model}
                           </span>
@@ -473,38 +613,23 @@ export default function UserInfoView({
                   </div>
 
                   <div>
-                    <Text className="font-medium">Virtual Keys</Text>
-                    <div className="flex flex-wrap gap-2 mt-1">
-                      {userData.keys?.length && userData.keys?.length > 0 ? (
-                        userData.keys.map((key, index) => (
-                          <span key={index} className="px-2 py-1 bg-green-100 rounded text-xs">
-                            {key.key_alias || key.token}
-                          </span>
-                        ))
-                      ) : (
-                        <Text>No Virtual Keys</Text>
-                      )}
-                    </div>
-                  </div>
-
-                  <div>
                     <Text className="font-medium">Max Budget</Text>
                     <Text>
-                      {userData.user_info?.max_budget !== null && userData.user_info?.max_budget !== undefined
-                        ? `$${formatNumberWithCommas(userData.user_info.max_budget, 4)}`
+                      {userData.max_budget !== null && userData.max_budget !== undefined
+                        ? `$${formatNumberWithCommas(userData.max_budget, 4)}`
                         : "Unlimited"}
                     </Text>
                   </div>
 
                   <div>
                     <Text className="font-medium">Budget Reset</Text>
-                    <Text>{getBudgetDurationLabel(userData.user_info?.budget_duration ?? null)}</Text>
+                    <Text>{getBudgetDurationLabel(userData.budget_duration ?? null)}</Text>
                   </div>
 
                   <div>
                     <Text className="font-medium">Metadata</Text>
                     <pre className="bg-gray-100 p-2 rounded text-xs overflow-auto mt-1">
-                      {JSON.stringify(userData.user_info?.metadata || {}, null, 2)}
+                      {JSON.stringify(userData.metadata || {}, null, 2)}
                     </pre>
                   </div>
                 </div>
@@ -520,6 +645,87 @@ export default function UserInfoView({
         invitationLinkData={invitationLinkData}
         modalType="resetPassword"
       />
+
+      {/* Delete Team Member Modal */}
+      <DeleteResourceModal
+        isOpen={isRemoveTeamModalOpen}
+        title="Remove from Team"
+        alertMessage="Removing this user from the team will also delete any keys the user created for this team."
+        message="Are you sure you want to remove this user from the team? This action cannot be undone."
+        resourceInformationTitle="Team Membership"
+        resourceInformation={[
+          { label: "Team", value: teamToRemove?.team_alias || teamToRemove?.team_id },
+          { label: "User ID", value: userData?.user_id, code: true },
+          { label: "Email", value: userData?.user_email },
+        ]}
+        onCancel={handleRemoveTeamCancel}
+        onOk={handleRemoveTeamConfirm}
+        confirmLoading={isRemovingTeam}
+      />
+
+      {/* Add to Team Modal */}
+      <Modal
+        title="Add User to Team"
+        open={isAddTeamModalOpen}
+        onCancel={() => setIsAddTeamModalOpen(false)}
+        footer={null}
+        width={500}
+        maskClosable={!isAddingTeam}
+      >
+        <Form
+          layout="vertical"
+          onFinish={handleAddTeamSubmit}
+        >
+          <Form.Item label="Team" required>
+            <AntdSelect
+              showSearch
+              value={selectedTeamId || undefined}
+              onChange={setSelectedTeamId}
+              placeholder="Select a team"
+              filterOption={(input, option) => {
+                const team = availableTeamsForAdd.find((t) => t.team_id === option?.value);
+                if (!team) return false;
+                return team.team_alias.toLowerCase().includes(input.toLowerCase());
+              }}
+              loading={isLoadingTeams}
+            >
+              {availableTeamsForAdd.map((team) => (
+                <AntdSelect.Option key={team.team_id} value={team.team_id}>
+                  {team.team_alias}
+                </AntdSelect.Option>
+              ))}
+            </AntdSelect>
+          </Form.Item>
+
+          <Form.Item label="Member Role">
+            <AntdSelect value={selectedRole} onChange={setSelectedRole}>
+              <AntdSelect.Option value="user">
+                <Tooltip title="Can view team info, but not manage it">
+                  <span className="font-medium">user</span>
+                  <span className="ml-2 text-gray-500 text-sm">- Can view team info, but not manage it</span>
+                </Tooltip>
+              </AntdSelect.Option>
+              <AntdSelect.Option value="admin">
+                <Tooltip title="Can create team keys, add members, and manage settings">
+                  <span className="font-medium">admin</span>
+                  <span className="ml-2 text-gray-500 text-sm">- Can create team keys, add members, and manage settings</span>
+                </Tooltip>
+              </AntdSelect.Option>
+            </AntdSelect>
+          </Form.Item>
+
+          <div className="text-right mt-4">
+            <AntdButton
+              type="primary"
+              htmlType="submit"
+              loading={isAddingTeam}
+              disabled={!selectedTeamId}
+            >
+              {isAddingTeam ? "Adding..." : "Add to Team"}
+            </AntdButton>
+          </div>
+        </Form>
+      </Modal>
     </div>
   );
 }

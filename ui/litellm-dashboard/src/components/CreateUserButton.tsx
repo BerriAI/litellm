@@ -1,15 +1,9 @@
 import { InfoCircleOutlined, UserAddOutlined } from "@ant-design/icons";
 import { useQueryClient } from "@tanstack/react-query";
-import {
-  Accordion,
-  AccordionBody,
-  AccordionHeader,
-  Button as Button2,
-  SelectItem,
-  TextInput,
-} from "@tremor/react";
+import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
+import { Accordion, AccordionBody, AccordionHeader, SelectItem, TextInput } from "@tremor/react";
 import { Alert, Button, Form, Input, Modal, Select, Select as Select2, Space, Tooltip, Typography } from "antd";
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import BulkCreateUsers from "./bulk_create_users_button";
 import TeamDropdown from "./common_components/team_dropdown";
 import { getModelDisplayName } from "./key_team_helpers/fetch_available_models_team_key";
@@ -55,7 +49,13 @@ interface UISettings {
 }
 
 export const CreateUserButton: React.FC<CreateuserProps> = ({
-  userID, accessToken, teams, possibleUIRoles, onUserCreated, isEmbedded = false }) => {
+  userID,
+  accessToken,
+  teams,
+  possibleUIRoles,
+  onUserCreated,
+  isEmbedded = false,
+}) => {
   const queryClient = useQueryClient();
   const [uiSettings, setUISettings] = useState<UISettings | null>(null);
   const [form] = Form.useForm();
@@ -65,6 +65,15 @@ export const CreateUserButton: React.FC<CreateuserProps> = ({
   const [isInvitationLinkModalVisible, setIsInvitationLinkModalVisible] = useState(false);
   const [invitationLinkData, setInvitationLinkData] = useState<InvitationLink | null>(null);
   const [baseUrl, setBaseUrl] = useState<string | null>(null);
+  const { data: organizations = [] } = useOrganizations();
+
+  // Derive teams from the user's organizations, falling back to the teams prop
+  const availableTeams = useMemo(() => {
+    const orgTeams = organizations.flatMap((org) => org.teams || []);
+    if (orgTeams.length > 0) return orgTeams;
+    return teams || [];
+  }, [organizations, teams]);
+
   useEffect(() => {
     const fetchData = async () => {
       try {
@@ -98,7 +107,13 @@ export const CreateUserButton: React.FC<CreateuserProps> = ({
     form.resetFields();
   };
 
-  const handleCreate = async (formValues: { user_id: string; models?: string[]; user_role: string }) => {
+  const handleCreate = async (formValues: {
+    user_id: string;
+    models?: string[];
+    user_role: string;
+    organization_ids?: string[];
+    organizations?: string[];
+  }) => {
     try {
       NotificationsManager.info("Making API Call");
       if (!isEmbedded) {
@@ -106,6 +121,10 @@ export const CreateUserButton: React.FC<CreateuserProps> = ({
       }
       if ((!formValues.models || formValues.models.length === 0) && formValues.user_role !== "proxy_admin") {
         formValues.models = ["no-default-models"];
+      }
+      if (formValues.organization_ids) {
+        formValues.organizations = formValues.organization_ids;
+        delete formValues.organization_ids;
       }
       const response = await userCreateCall(accessToken, null, formValues);
       await queryClient.invalidateQueries({ queryKey: ["userList"] });
@@ -156,13 +175,20 @@ export const CreateUserButton: React.FC<CreateuserProps> = ({
   // Modify the return statement to handle embedded mode
   if (isEmbedded) {
     return (
-      <Form form={form} onFinish={handleCreate} labelCol={{ span: 8 }} wrapperCol={{ span: 16 }} labelAlign="left">
+      <Form
+        form={form}
+        onFinish={handleCreate}
+        labelCol={{ span: 8 }}
+        wrapperCol={{ span: 16 }}
+        labelAlign="left"
+        initialValues={{ user_role: "internal_user_viewer" }}
+      >
         <Alert
           message="Email invitations"
           description={
             <>
-              New users receive an email invite only when an email integration (SMTP, Resend, or SendGrid) is configured.
-              {" "}
+              New users receive an email invite only when an email integration (SMTP, Resend, or SendGrid) is
+              configured.{" "}
               <Link href="https://docs.litellm.ai/docs/proxy/email" target="_blank">
                 Learn how to set up email notifications
               </Link>
@@ -191,9 +217,7 @@ export const CreateUserButton: React.FC<CreateuserProps> = ({
           </Select2>
         </Form.Item>
         <Form.Item label="Team" name="team_id">
-          <Select placeholder="Select Team" style={{ width: "100%" }}>
-            <TeamDropdown teams={teams} />
-          </Select>
+          <TeamDropdown />
         </Form.Item>
 
         <Form.Item label="Metadata" name="metadata">
@@ -210,9 +234,9 @@ export const CreateUserButton: React.FC<CreateuserProps> = ({
   // Original return for standalone mode
   return (
     <div className="flex gap-2">
-      <Button2 className="mb-0" onClick={() => setIsModalVisible(true)}>
+      <Button type="primary" className="mb-0" onClick={() => setIsModalVisible(true)}>
         + Invite User
-      </Button2>
+      </Button>
       <BulkCreateUsers accessToken={accessToken} teams={teams} possibleUIRoles={possibleUIRoles} />
       <Modal
         title="Invite User"
@@ -228,8 +252,8 @@ export const CreateUserButton: React.FC<CreateuserProps> = ({
             message="Email invitations"
             description={
               <>
-                New users receive an email invite only when an email integration (SMTP, Resend, or SendGrid) is configured.
-                {" "}
+                New users receive an email invite only when an email integration (SMTP, Resend, or SendGrid) is
+                configured.{" "}
                 <Link href="https://docs.litellm.ai/docs/proxy/email" target="_blank">
                   Learn how to set up email notifications
                 </Link>
@@ -240,7 +264,14 @@ export const CreateUserButton: React.FC<CreateuserProps> = ({
             className="mb-4"
           />
         </Space>
-        <Form form={form} onFinish={handleCreate} labelCol={{ span: 8 }} wrapperCol={{ span: 16 }} labelAlign="left">
+        <Form
+          form={form}
+          onFinish={handleCreate}
+          labelCol={{ span: 8 }}
+          wrapperCol={{ span: 16 }}
+          labelAlign="left"
+          initialValues={{ user_role: "internal_user_viewer" }}
+        >
           <Form.Item label="User Email" name="user_email">
             <Input />
           </Form.Item>
@@ -259,11 +290,10 @@ export const CreateUserButton: React.FC<CreateuserProps> = ({
               {possibleUIRoles &&
                 Object.entries(possibleUIRoles).map(([role, { ui_label, description }]) => (
                   <SelectItem key={role} value={role} title={ui_label}>
-                    <Text>
-                      {ui_label}
-                    </Text>
+                    <Text>{ui_label}</Text>
                     <Text type="secondary">
-                      {" - "}{description}
+                      {" - "}
+                      {description}
                     </Text>
                   </SelectItem>
                 ))}
@@ -276,7 +306,21 @@ export const CreateUserButton: React.FC<CreateuserProps> = ({
             name="team_id"
             help="If selected, user will be added as a 'user' role to the team."
           >
-            <TeamDropdown teams={teams} />
+            <TeamDropdown />
+          </Form.Item>
+
+          <Form.Item
+            label="Organization"
+            name="organization_ids"
+            help="The user will be added to the selected organization(s)."
+          >
+            <Select mode="multiple" placeholder="Select Organization" style={{ width: "100%" }}>
+              {organizations.map((org) => (
+                <Option key={org.organization_id} value={org.organization_id}>
+                  {org.organization_alias} ({org.organization_id})
+                </Option>
+              ))}
+            </Select>
           </Form.Item>
 
           <Form.Item label="Metadata" name="metadata">
@@ -317,7 +361,9 @@ export const CreateUserButton: React.FC<CreateuserProps> = ({
             </AccordionBody>
           </Accordion>
           <div style={{ textAlign: "right", marginTop: "10px" }}>
-            <Button type="primary" icon={<UserAddOutlined />} htmlType="submit">Invite User</Button>
+            <Button type="primary" icon={<UserAddOutlined />} htmlType="submit">
+              Invite User
+            </Button>
           </div>
         </Form>
       </Modal>

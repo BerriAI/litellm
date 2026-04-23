@@ -11,16 +11,17 @@ import { Button, Tag, Tooltip } from "antd";
 import { internalUserRoles } from "../../utils/roles";
 import DeletedKeysPage from "../DeletedKeysPage/DeletedKeysPage";
 import DeletedTeamsPage from "../DeletedTeamsPage/DeletedTeamsPage";
-import { fetchAllKeyAliases } from "../key_team_helpers/filter_helpers";
-import { KeyResponse, Team } from "../key_team_helpers/key_list";
+import FilterTeamDropdown from "../common_components/FilterTeamDropdown";
+import { KeyResponse } from "../key_team_helpers/key_list";
+import { PaginatedKeyAliasSelect } from "../KeyAliasSelect/PaginatedKeyAliasSelect/PaginatedKeyAliasSelect";
 import { PaginatedModelSelect } from "../ModelSelect/PaginatedModelSelect/PaginatedModelSelect";
 import FilterComponent, { FilterOption } from "../molecules/filter";
-import { allEndUsersCall, keyInfoV1Call, keyListCall, uiSpendLogsCall } from "../networking";
+import { allEndUsersCall, keyInfoV1Call, uiSpendLogsCall } from "../networking";
 import KeyInfoView from "../templates/key_info_view";
 import AuditLogs from "./audit_logs";
 import { createColumns, LogEntry, type LogsSortField } from "./columns";
 import { ConfigInfoMessage } from "./ConfigInfoMessage";
-import { ERROR_CODE_OPTIONS, MCP_CALL_TYPES, QUICK_SELECT_OPTIONS } from "./constants";
+import { AGENT_CALL_TYPES, ERROR_CODE_OPTIONS, MCP_CALL_TYPES, QUICK_SELECT_OPTIONS } from "./constants";
 import { CostBreakdownViewer } from "./CostBreakdownViewer";
 import { ErrorViewer } from "./ErrorViewer";
 import { useLogFilterLogic } from "./log_filter_logic";
@@ -36,7 +37,6 @@ interface SpendLogsTableProps {
   token: string | null;
   userRole: string | null;
   userID: string | null;
-  allTeams: Team[];
   premiumUser: boolean;
 }
 
@@ -53,7 +53,6 @@ export default function SpendLogsTable({
   token,
   userRole,
   userID,
-  allTeams,
   premiumUser,
 }: SpendLogsTableProps) {
   const [searchTerm, setSearchTerm] = useState("");
@@ -241,8 +240,7 @@ export default function SpendLogsTable({
     filters,
     filteredLogs,
     hasBackendFilters,
-    allTeams: hookAllTeams,
-    allKeyAliases,
+    allTeams,
     handleFilterChange,
     handleFilterReset: handleFilterResetFromHook,
   } = useLogFilterLogic({
@@ -310,13 +308,15 @@ export default function SpendLogsTable({
     return matchesSearch;
   });
 
-  const sessionCompositionById = searchedLogs.reduce<Record<string, { llm: number; mcp: number }>>((acc, log) => {
+  const sessionCompositionById = searchedLogs.reduce<Record<string, { llm: number; agent: number; mcp: number }>>((acc, log) => {
     if (!log.session_id) return acc;
     if (!acc[log.session_id]) {
-      acc[log.session_id] = { llm: 0, mcp: 0 };
+      acc[log.session_id] = { llm: 0, agent: 0, mcp: 0 };
     }
     if (MCP_CALL_TYPES.includes(log.call_type)) {
       acc[log.session_id].mcp += 1;
+    } else if (AGENT_CALL_TYPES.includes(log.call_type)) {
+      acc[log.session_id].agent += 1;
     } else {
       acc[log.session_id].llm += 1;
     }
@@ -341,9 +341,10 @@ export default function SpendLogsTable({
         const sessionComposition = log.session_id ? sessionCompositionById[log.session_id] : undefined;
         return {
           ...log,
-          duration: (Date.parse(log.endTime) - Date.parse(log.startTime)) / 1000,
+          request_duration_ms: log.request_duration_ms,
           session_llm_count: sessionComposition?.llm ?? undefined,
           session_mcp_count: sessionComposition?.mcp ?? undefined,
+          session_agent_count: sessionComposition?.agent ?? undefined,
           onKeyHashClick: (keyHash: string) => setSelectedKeyIdInfoView(keyHash),
           onSessionClick: (sessionId: string) => {
             if (sessionId) {
@@ -392,20 +393,7 @@ export default function SpendLogsTable({
     {
       name: "Team ID",
       label: "Team ID",
-      isSearchable: true,
-      searchFn: async (searchText: string) => {
-        if (!allTeams || allTeams.length === 0) return [];
-        const filtered = allTeams.filter((team: Team) => {
-          return (
-            team.team_id.toLowerCase().includes(searchText.toLowerCase()) ||
-            (team.team_alias && team.team_alias.toLowerCase().includes(searchText.toLowerCase()))
-          );
-        });
-        return filtered.map((team: Team) => ({
-          label: `${team.team_alias || team.team_id} (${team.team_id})`,
-          value: team.team_id,
-        }));
-      },
+      customComponent: FilterTeamDropdown,
     },
     {
       name: "Status",
@@ -424,16 +412,7 @@ export default function SpendLogsTable({
     {
       name: "Key Alias",
       label: "Key Alias",
-      isSearchable: true,
-      searchFn: async (searchText: string) => {
-        if (!accessToken) return [];
-        const keyAliases = await fetchAllKeyAliases(accessToken);
-        const filtered = keyAliases.filter((alias) => alias.toLowerCase().includes(searchText.toLowerCase()));
-        return filtered.map((alias) => ({
-          label: alias,
-          value: alias,
-        }));
-      },
+      customComponent: PaginatedKeyAliasSelect,
     },
     {
       name: "End User",
@@ -513,7 +492,7 @@ export default function SpendLogsTable({
               <KeyInfoView
                 keyId={selectedKeyIdInfoView}
                 keyData={selectedKeyInfo}
-                teams={allTeams}
+                teams={allTeams ?? []}
                 onClose={() => setSelectedKeyIdInfoView(null)}
                 backButtonText="Back to Logs"
               />
@@ -724,7 +703,6 @@ export default function SpendLogsTable({
               accessToken={accessToken}
               isActive={activeTab === "audit logs"}
               premiumUser={premiumUser}
-              allTeams={allTeams}
             />
           </TabPanel>
           <TabPanel><DeletedKeysPage /></TabPanel>
@@ -943,7 +921,7 @@ export function RequestViewer({ row, onOpenSettings }: { row: Row<LogEntry>; onO
             </div>
             <div className="flex">
               <span className="font-medium w-1/3">Duration:</span>
-              <span>{row.original.duration} s.</span>
+              <span>{row.original.request_duration_ms != null ? (row.original.request_duration_ms / 1000).toFixed(3) : "-"} s.</span>
             </div>
             {row.original.metadata?.litellm_overhead_time_ms !== undefined && (
               <div className="flex">

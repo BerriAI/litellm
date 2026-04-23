@@ -3,4 +3,3 @@
 from .transformation import BaseSkillsAPIConfig
 
 __all__ = ["BaseSkillsAPIConfig"]
-

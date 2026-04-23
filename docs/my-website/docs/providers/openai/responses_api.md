@@ -693,6 +693,236 @@ print(final_response.output)
 
 Set `parallel_tool_calls=False` to ensure zero or one tool is called per turn. [More details](https://platform.openai.com/docs/guides/function-calling#parallel-function-calling).
 
+## Tool Search & Namespaces
+
+Tool search lets models dynamically load tools at runtime instead of sending every tool definition in the prompt. Group functions into **namespaces** and mark them with `defer_loading: true` — the model only loads the schemas it actually needs, saving tokens.
+
+Requires `gpt-5.4` or later. See [OpenAI Tool Search docs](https://developers.openai.com/api/docs/guides/tools-tool-search) for full details.
+
+<Tabs>
+<TabItem value="sdk" label="LiteLLM Python SDK">
+
+```python showLineNumbers title="Tool Search with Namespaces"
+import litellm
+
+# Define namespaces with deferred tools
+tools = [
+    {"type": "tool_search"},  # Enable tool search
+    {
+        "type": "namespace",
+        "name": "crm",
+        "description": "CRM tools for customer management",
+        "tools": [
+            {
+                "type": "function",
+                "name": "get_customer",
+                "description": "Get customer details by ID",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "customer_id": {"type": "string"}
+                    },
+                    "required": ["customer_id"],
+                },
+                "defer_loading": True,
+            },
+            {
+                "type": "function",
+                "name": "list_customers",
+                "description": "List customers with optional filters",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "status": {"type": "string", "enum": ["active", "inactive"]},
+                    },
+                },
+                "defer_loading": True,
+            },
+        ],
+    },
+    {
+        "type": "namespace",
+        "name": "billing",
+        "description": "Billing and invoicing tools",
+        "tools": [
+            {
+                "type": "function",
+                "name": "get_invoice",
+                "description": "Get an invoice by ID",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "invoice_id": {"type": "string"}
+                    },
+                    "required": ["invoice_id"],
+                },
+                "defer_loading": True,
+            },
+        ],
+    },
+]
+
+response = litellm.responses(
+    model="openai/gpt-5.4",
+    input="Look up invoice INV-2024-001 from the billing system",
+    tools=tools,
+)
+
+# The response contains tool_search_call, tool_search_output, and function_call items
+for item in response.output:
+    if isinstance(item, dict):
+        if item["type"] == "tool_search_call":
+            print(f"Searched namespaces: {item['arguments']['paths']}")
+        elif item["type"] == "tool_search_output":
+            print(f"Loaded {len(item['tools'])} tool(s)")
+        elif item["type"] == "function_call":
+            print(f"Called: {item.get('namespace', '')}.{item['name']}({item['arguments']})")
+    else:
+        if item.type == "function_call":
+            print(f"Called: {item.namespace}.{item.name}({item.arguments})")
+```
+
+</TabItem>
+<TabItem value="proxy" label="LiteLLM Proxy">
+
+1. Set up config.yaml
+
+```yaml showLineNumbers title="OpenAI Proxy Configuration"
+model_list:
+  - model_name: openai/gpt-5.4
+    litellm_params:
+      model: openai/gpt-5.4
+      api_key: os.environ/OPENAI_API_KEY
+```
+
+2. Start LiteLLM Proxy Server
+
+```bash title="Start LiteLLM Proxy Server"
+litellm --config /path/to/config.yaml
+
+# RUNNING on http://0.0.0.0:4000
+```
+
+3. Test it!
+
+```python showLineNumbers title="Tool Search via OpenAI SDK with LiteLLM Proxy"
+from openai import OpenAI
+
+client = OpenAI(
+    base_url="http://localhost:4000",
+    api_key="your-api-key"
+)
+
+response = client.responses.create(
+    model="openai/gpt-5.4",
+    input="Look up invoice INV-2024-001 from the billing system",
+    tools=[
+        {"type": "tool_search"},
+        {
+            "type": "namespace",
+            "name": "billing",
+            "description": "Billing and invoicing tools",
+            "tools": [
+                {
+                    "type": "function",
+                    "name": "get_invoice",
+                    "description": "Get an invoice by ID",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"invoice_id": {"type": "string"}},
+                        "required": ["invoice_id"],
+                    },
+                    "defer_loading": True,
+                },
+            ],
+        },
+    ],
+)
+
+print(response.output)
+```
+
+</TabItem>
+</Tabs>
+
+### Tool Search via Chat Completions Bridge
+
+You can also use tool search through the `/v1/chat/completions` endpoint by prefixing the model with `openai/responses/`. The request is routed through the Responses API but returns a standard chat completions response.
+
+<Tabs>
+<TabItem value="sdk" label="LiteLLM Python SDK">
+
+```python showLineNumbers title="Tool Search via Chat Completions Bridge"
+import litellm
+
+response = litellm.completion(
+    model="openai/responses/gpt-5.4",
+    messages=[{"role": "user", "content": "Look up invoice INV-2024-001"}],
+    tools=[
+        {"type": "tool_search"},
+        {
+            "type": "namespace",
+            "name": "billing",
+            "description": "Billing and invoicing tools",
+            "tools": [
+                {
+                    "type": "function",
+                    "name": "get_invoice",
+                    "description": "Get an invoice by ID",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"invoice_id": {"type": "string"}},
+                        "required": ["invoice_id"],
+                    },
+                    "defer_loading": True,
+                },
+            ],
+        },
+    ],
+)
+
+# Standard chat completions response
+for tool_call in response.choices[0].message.tool_calls:
+    print(f"Called: {tool_call.function.name}({tool_call.function.arguments})")
+```
+
+</TabItem>
+<TabItem value="proxy" label="LiteLLM Proxy">
+
+```bash showLineNumbers title="Tool Search via /v1/chat/completions"
+curl http://localhost:4000/v1/chat/completions \
+  -H "Authorization: Bearer $LITELLM_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "openai/responses/gpt-5.4",
+    "messages": [{"role": "user", "content": "Look up invoice INV-2024-001"}],
+    "tools": [
+      {"type": "tool_search"},
+      {
+        "type": "namespace",
+        "name": "billing",
+        "description": "Billing and invoicing tools",
+        "tools": [
+          {
+            "type": "function",
+            "name": "get_invoice",
+            "description": "Get an invoice by ID",
+            "parameters": {
+              "type": "object",
+              "properties": {"invoice_id": {"type": "string"}},
+              "required": ["invoice_id"]
+            },
+            "defer_loading": true
+          }
+        ]
+      }
+    ]
+  }'
+```
+
+</TabItem>
+</Tabs>
+
 ## Free-form Function Calling
 
 <Tabs>

@@ -20,8 +20,8 @@ class AzureAIRerankConfig(CohereRerankConfig):
     """
 
     def get_complete_url(
-        self, 
-        api_base: Optional[str], 
+        self,
+        api_base: Optional[str],
         model: str,
         optional_params: Optional[dict] = None,
     ) -> str:
@@ -41,7 +41,9 @@ class AzureAIRerankConfig(CohereRerankConfig):
         # Allow callers to pass either full v1/v2 rerank endpoints:
         # - https://<resource>.services.ai.azure.com/v1/rerank
         # - https://<resource>.services.ai.azure.com/providers/cohere/v2/rerank
-        if normalized_path.endswith("/v1/rerank") or normalized_path.endswith("/v2/rerank"):
+        if normalized_path.endswith("/v1/rerank") or normalized_path.endswith(
+            "/v2/rerank"
+        ):
             return str(original_url.copy_with(path=normalized_path or "/"))
 
         # If callers pass just the version path (e.g. ".../v2" or ".../providers/cohere/v2"), append "/rerank"

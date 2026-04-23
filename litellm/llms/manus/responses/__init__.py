@@ -1,2 +1,1 @@
 # Manus Responses API implementation
-

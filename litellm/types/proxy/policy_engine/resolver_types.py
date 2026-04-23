@@ -207,7 +207,8 @@ class PolicyDBResponse(BaseModel):
         default=None, description="Policy ID this version was cloned from."
     )
     is_latest: bool = Field(
-        default=True, description="True if this is the latest version by version_number."
+        default=True,
+        description="True if this is the latest version by version_number.",
     )
     published_at: Optional[datetime] = Field(
         default=None, description="When this version was published."
@@ -235,7 +236,9 @@ class PolicyDBResponse(BaseModel):
     updated_at: Optional[datetime] = Field(
         default=None, description="When the policy was last updated."
     )
-    created_by: Optional[str] = Field(default=None, description="Who created the policy.")
+    created_by: Optional[str] = Field(
+        default=None, description="Who created the policy."
+    )
     updated_by: Optional[str] = Field(
         default=None, description="Who last updated the policy."
     )
@@ -382,12 +385,8 @@ class PolicyResolveRequest(BaseModel):
     key_alias: Optional[str] = Field(
         default=None, description="Key alias to resolve for."
     )
-    model: Optional[str] = Field(
-        default=None, description="Model name to resolve for."
-    )
-    tags: Optional[List[str]] = Field(
-        default=None, description="Tags to resolve for."
-    )
+    model: Optional[str] = Field(default=None, description="Model name to resolve for.")
+    tags: Optional[List[str]] = Field(default=None, description="Tags to resolve for.")
 
 
 class PolicyMatchDetail(BaseModel):
@@ -425,10 +424,12 @@ class AttachmentImpactResponse(BaseModel):
     """Response for estimating the impact of a policy attachment."""
 
     affected_keys_count: int = Field(
-        default=0, description="Number of keys that would be affected (named + unnamed)."
+        default=0,
+        description="Number of keys that would be affected (named + unnamed).",
     )
     affected_teams_count: int = Field(
-        default=0, description="Number of teams that would be affected (named + unnamed)."
+        default=0,
+        description="Number of teams that would be affected (named + unnamed).",
     )
     unnamed_keys_count: int = Field(
         default=0, description="Number of affected keys without an alias."

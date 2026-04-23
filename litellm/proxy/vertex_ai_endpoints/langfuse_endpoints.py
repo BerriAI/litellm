@@ -19,6 +19,7 @@ from fastapi import APIRouter, Request, Response
 import litellm
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.http_parsing_utils import _safe_get_request_headers
 from litellm.proxy.litellm_pre_call_utils import _get_dynamic_logging_metadata
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     create_pass_through_route,
@@ -32,7 +33,7 @@ def create_request_copy(request: Request):
     return {
         "method": request.method,
         "url": str(request.url),
-        "headers": dict(request.headers),
+        "headers": _safe_get_request_headers(request).copy(),
         "cookies": request.cookies,
         "query_params": dict(request.query_params),
     }
@@ -69,10 +70,10 @@ async def langfuse_proxy_route(
         request=request, api_key="Bearer {}".format(api_key)
     )
 
-    callback_settings_obj: Optional[
-        TeamCallbackMetadata
-    ] = _get_dynamic_logging_metadata(
-        user_api_key_dict=user_api_key_dict, proxy_config=proxy_config
+    callback_settings_obj: Optional[TeamCallbackMetadata] = (
+        _get_dynamic_logging_metadata(
+            user_api_key_dict=user_api_key_dict, proxy_config=proxy_config
+        )
     )
 
     dynamic_langfuse_public_key: Optional[str] = None

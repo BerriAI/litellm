@@ -213,6 +213,24 @@ export const LITELLM_CONTENT_FILTER_CARDS: GuardrailCardInfo[] = [
     logo: `${ASSET_PREFIX}litellm_logo.jpg`,
     tags: ["Keywords", "Blocklist"],
   },
+  {
+    id: "block_code_execution",
+    name: "Block Code Execution",
+    description: "Detects markdown fenced code blocks in requests and responses. Block or mask executable code (e.g. Python, JavaScript, Bash) by language with configurable confidence.",
+    category: "litellm",
+    subcategory: "Code Safety",
+    logo: `${ASSET_PREFIX}litellm_logo.jpg`,
+    tags: ["Code", "Safety", "Prompt Injection"],
+  },
+  {
+    id: "cf_competitor_intent",
+    name: "Competitor Name Blocking",
+    description: "Block or reframe competitor comparison and ranking intent. Detect when users ask to compare or recommend competitors (airline or generic competitor lists).",
+    category: "litellm",
+    subcategory: "Content Category",
+    logo: `${ASSET_PREFIX}litellm_logo.jpg`,
+    tags: ["Content Category", "Competitor", "Topic Blocker"],
+  },
 ];
 
 export const PARTNER_GUARDRAIL_CARDS: GuardrailCardInfo[] = [
@@ -354,6 +372,31 @@ export const PARTNER_GUARDRAIL_CARDS: GuardrailCardInfo[] = [
     category: "partner",
     logo: `${ASSET_PREFIX}pillar.jpeg`,
     tags: ["Monitoring", "Safety"],
+  },
+  {
+    id: "akto",
+    name: "Akto Guardrail",
+    description: "AI security platform from Akto.io with automatic monitoring and guardrails for AI/ML applications.",
+    category: "partner",
+    logo: `${ASSET_PREFIX}akto.svg`,
+    tags: ["Security", "Safety", "Monitoring"],
+  },
+  {
+    id: "promptguard",
+    name: "PromptGuard",
+    description:
+      "AI security gateway with prompt injection detection, PII redaction, topic filtering, entity blocklists, and hallucination detection. Self-hostable with drop-in proxy integration.",
+    category: "partner",
+    logo: `${ASSET_PREFIX}promptguard.svg`,
+    tags: ["Security", "Prompt Injection", "PII"],
+    providerKey: "Promptguard",
+    eval: {
+      f1: 94.9,
+      precision: 100.0,
+      recall: 90.4,
+      testCases: 5384,
+      latency: "~150ms",
+    },
   },
 ];
 

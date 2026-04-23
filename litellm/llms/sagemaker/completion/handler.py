@@ -583,35 +583,17 @@ class SagemakerLLM(BaseAWSLLM):
         ### BOTO3 INIT
         import boto3
 
-        # pop aws_secret_access_key, aws_access_key_id, aws_region_name from kwargs, since completion calls fail with them
-        aws_secret_access_key = optional_params.pop("aws_secret_access_key", None)
-        aws_access_key_id = optional_params.pop("aws_access_key_id", None)
-        aws_region_name = optional_params.pop("aws_region_name", None)
+        # Use _load_credentials to support role assumption (aws_role_name, aws_session_name)
+        credentials, aws_region_name = self._load_credentials(optional_params)
 
-        if aws_access_key_id is not None:
-            # uses auth params passed to completion
-            # aws_access_key_id is not None, assume user is trying to auth using litellm.completion
-            client = boto3.client(
-                service_name="sagemaker-runtime",
-                aws_access_key_id=aws_access_key_id,
-                aws_secret_access_key=aws_secret_access_key,
-                region_name=aws_region_name,
-            )
-        else:
-            # aws_access_key_id is None, assume user is trying to auth using env variables
-            # boto3 automaticaly reads env variables
-
-            # we need to read region name from env
-            # I assume majority of users use .env for auth
-            region_name = (
-                get_secret("AWS_REGION_NAME")
-                or aws_region_name  # get region from config file if specified
-                or "us-west-2"  # default to us-west-2 if region not specified
-            )
-            client = boto3.client(
-                service_name="sagemaker-runtime",
-                region_name=region_name,
-            )
+        # Create boto3 session with the loaded credentials
+        session = boto3.Session(
+            aws_access_key_id=credentials.access_key,
+            aws_secret_access_key=credentials.secret_key,
+            aws_session_token=credentials.token,
+            region_name=aws_region_name,
+        )
+        client = session.client(service_name="sagemaker-runtime")
 
         # pop streaming if it's in the optional params as 'stream' raises an error with sagemaker
         inference_params = deepcopy(optional_params)
@@ -628,7 +610,9 @@ class SagemakerLLM(BaseAWSLLM):
         #### EMBEDDING LOGIC
         # Transform request based on model type
         provider_config = SagemakerEmbeddingConfig.get_model_config(model)
-        request_data = provider_config.transform_embedding_request(model, input, optional_params, {})
+        request_data = provider_config.transform_embedding_request(
+            model, input, optional_params, {}
+        )
         data = json.dumps(request_data).encode("utf-8")
 
         ## LOGGING
@@ -673,19 +657,19 @@ class SagemakerLLM(BaseAWSLLM):
         )
 
         print_verbose(f"raw model_response: {response}")
-        
+
         # Transform response based on model type
         from httpx import Response as HttpxResponse
-        
+
         # Create a mock httpx Response object for the transformation
         mock_response = HttpxResponse(
             status_code=200,
-            content=json.dumps(response).encode('utf-8'),
-            headers={"content-type": "application/json"}
+            content=json.dumps(response).encode("utf-8"),
+            headers={"content-type": "application/json"},
         )
-        
+
         model_response = EmbeddingResponse()
-        
+
         # Use the request_data that was already transformed above
         return provider_config.transform_embedding_response(
             model=model,
@@ -695,5 +679,5 @@ class SagemakerLLM(BaseAWSLLM):
             api_key=None,
             request_data=request_data,
             optional_params=optional_params,
-            litellm_params=litellm_params or {}
+            litellm_params=litellm_params or {},
         )

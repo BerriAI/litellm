@@ -4,6 +4,8 @@ import TabItem from '@theme/TabItem';
 
 # Lakera AI
 
+**Supported endpoints:** The Lakera v2 integration only supports the **chat completions** endpoint (`/v1/chat/completions`). It is not supported for the Responses API, `/v1/messages`, MCP, A2A, or other proxy endpoints.
+
 ## Quick Start
 ### 1. Define Guardrails on your LiteLLM config.yaml 
 

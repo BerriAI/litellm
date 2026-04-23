@@ -4,7 +4,6 @@ import moment from "moment";
 import { LogEntry } from "../columns";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import GuardrailViewer from "../GuardrailViewer/GuardrailViewer";
-import CompliancePanel from "../GuardrailViewer/CompliancePanel";
 import { CostBreakdownViewer } from "../CostBreakdownViewer";
 import { ConfigInfoMessage } from "../ConfigInfoMessage";
 import { VectorStoreViewer } from "../VectorStoreViewer";
@@ -143,6 +142,9 @@ export function LogDetailContent({ logEntry, onOpenSettings, isLoadingDetails = 
         promptTokens={logEntry.prompt_tokens}
         completionTokens={logEntry.completion_tokens}
         cacheHit={logEntry.cache_hit}
+        rawInputTokens={metadata?.additional_usage_values?.prompt_tokens_details?.text_tokens}
+        cacheReadTokens={metadata?.additional_usage_values?.cache_read_input_tokens}
+        cacheCreationTokens={metadata?.additional_usage_values?.cache_creation_input_tokens}
       />
 
       {/* Tools */}
@@ -258,7 +260,26 @@ function GuardrailLabel({ label, maskedCount }: { label: string; maskedCount: nu
   );
 }
 
+/**
+ * Uncached input token count (billable non-cache prompt text), aligned with Cost Breakdown "Input".
+ * Same sources as CostBreakdownViewer rawInputTokens.
+ */
+function getUncachedInputTextTokens(metadata: Record<string, any>): number | undefined {
+  const raw =
+    metadata?.additional_usage_values?.prompt_tokens_details?.text_tokens ??
+    metadata?.usage_object?.prompt_tokens_details?.text_tokens;
+  if (raw === undefined || raw === null) return undefined;
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : undefined;
+}
+
 function MetricsSection({ logEntry, metadata }: { logEntry: LogEntry; metadata: Record<string, any> }) {
+  const completionStartTime = logEntry.completionStartTime;
+  const ttftMs =
+    completionStartTime && completionStartTime !== logEntry.endTime
+      ? new Date(completionStartTime).getTime() - new Date(logEntry.startTime).getTime()
+      : null;
+
   const hasCacheActivity =
     logEntry.cache_hit ||
     (metadata?.additional_usage_values?.cache_read_input_tokens &&
@@ -272,19 +293,37 @@ function MetricsSection({ logEntry, metadata }: { logEntry: LogEntry; metadata: 
         ? "red"
         : "default";
 
+  const uncachedInputTokens = getUncachedInputTextTokens(metadata);
+  const showAnthropicMessagesInputOutput =
+    logEntry.call_type === "anthropic_messages" && uncachedInputTokens !== undefined;
+
   return (
     <div className="bg-white rounded-lg shadow w-full max-w-full overflow-hidden mb-6">
       <Card title="Metrics" size="small" style={{ marginBottom: 0 }}>
         <Descriptions column={2} size="small">
-          <Descriptions.Item label="Tokens">
-            <TokenFlow
-              prompt={logEntry.prompt_tokens}
-              completion={logEntry.completion_tokens}
-              total={logEntry.total_tokens}
-            />
-          </Descriptions.Item>
+          {showAnthropicMessagesInputOutput ? (
+            <>
+              <Descriptions.Item label="Input Tokens">
+                {formatNumberWithCommas(uncachedInputTokens)}
+              </Descriptions.Item>
+              <Descriptions.Item label="Output Tokens">
+                {formatNumberWithCommas(logEntry.completion_tokens)}
+              </Descriptions.Item>
+            </>
+          ) : (
+            <Descriptions.Item label="Tokens">
+              <TokenFlow
+                prompt={logEntry.prompt_tokens}
+                completion={logEntry.completion_tokens}
+                total={logEntry.total_tokens}
+              />
+            </Descriptions.Item>
+          )}
           <Descriptions.Item label="Cost">${formatNumberWithCommas(logEntry.spend || 0, 8)}</Descriptions.Item>
-          <Descriptions.Item label="Duration">{logEntry.duration?.toFixed(3)} s</Descriptions.Item>
+          <Descriptions.Item label="Duration">{logEntry.request_duration_ms != null ? (logEntry.request_duration_ms / 1000).toFixed(3) : "-"} s</Descriptions.Item>
+          {ttftMs != null && ttftMs > 0 && (
+            <Descriptions.Item label="Time to First Token">{(ttftMs / 1000).toFixed(3)} s</Descriptions.Item>
+          )}
 
           {hasCacheActivity && (
             <>

@@ -5,6 +5,7 @@ import pytest
 from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.experimental_pass_through.transformation import (
     VertexAIPartnerModelsAnthropicMessagesConfig,
 )
+from litellm.types.router import GenericLiteLLMParams
 
 
 def test_validate_environment_uses_vertex_ai_location():
@@ -17,11 +18,14 @@ def test_validate_environment_uses_vertex_ai_location():
     }
     optional_params = {}
 
-    with patch.object(
-        config, "_ensure_access_token", return_value=("token", "test-project")
-    ), patch.object(
-        config, "get_complete_vertex_url", return_value="https://mock-url"
-    ) as mock_get_url:
+    with (
+        patch.object(
+            config, "_ensure_access_token", return_value=("token", "test-project")
+        ),
+        patch.object(
+            config, "get_complete_vertex_url", return_value="https://mock-url"
+        ) as mock_get_url,
+    ):
         config.validate_anthropic_messages_environment(
             headers=headers,
             model="claude-3-sonnet",
@@ -44,15 +48,16 @@ def test_web_search_header_added_for_messages_endpoint():
     }
     # Include web search tool in optional_params
     optional_params = {
-        "tools": [
-            {"type": "web_search_20250305", "name": "web_search", "max_uses": 5}
-        ]
+        "tools": [{"type": "web_search_20250305", "name": "web_search", "max_uses": 5}]
     }
 
-    with patch.object(
-        config, "_ensure_access_token", return_value=("token", "test-project")
-    ), patch.object(
-        config, "get_complete_vertex_url", return_value="https://mock-url"
+    with (
+        patch.object(
+            config, "_ensure_access_token", return_value=("token", "test-project")
+        ),
+        patch.object(
+            config, "get_complete_vertex_url", return_value="https://mock-url"
+        ),
     ):
         updated_headers, api_base = config.validate_anthropic_messages_environment(
             headers=headers,
@@ -62,11 +67,14 @@ def test_web_search_header_added_for_messages_endpoint():
             litellm_params=litellm_params,
             api_base=None,
         )
-        
+
         # Assert that the anthropic-beta header with web-search is present
-        assert "anthropic-beta" in updated_headers, "anthropic-beta header should be present"
-        assert updated_headers["anthropic-beta"] == "web-search-2025-03-05", \
-            f"anthropic-beta should be 'web-search-2025-03-05', got: {updated_headers['anthropic-beta']}"
+        assert (
+            "anthropic-beta" in updated_headers
+        ), "anthropic-beta header should be present"
+        assert (
+            updated_headers["anthropic-beta"] == "web-search-2025-03-05"
+        ), f"anthropic-beta should be 'web-search-2025-03-05', got: {updated_headers['anthropic-beta']}"
 
 
 def test_web_search_header_not_added_without_tool():
@@ -81,10 +89,13 @@ def test_web_search_header_not_added_without_tool():
     # No web search tool
     optional_params = {}
 
-    with patch.object(
-        config, "_ensure_access_token", return_value=("token", "test-project")
-    ), patch.object(
-        config, "get_complete_vertex_url", return_value="https://mock-url"
+    with (
+        patch.object(
+            config, "_ensure_access_token", return_value=("token", "test-project")
+        ),
+        patch.object(
+            config, "get_complete_vertex_url", return_value="https://mock-url"
+        ),
     ):
         updated_headers, api_base = config.validate_anthropic_messages_environment(
             headers=headers,
@@ -94,10 +105,11 @@ def test_web_search_header_not_added_without_tool():
             litellm_params=litellm_params,
             api_base=None,
         )
-        
+
         # Assert that the anthropic-beta header is NOT present when no web search tool
-        assert "anthropic-beta" not in updated_headers, \
-            "anthropic-beta header should not be present without web search tool"
+        assert (
+            "anthropic-beta" not in updated_headers
+        ), "anthropic-beta header should not be present without web search tool"
 
 
 def test_compact_context_management_header_added():
@@ -110,18 +122,15 @@ def test_compact_context_management_header_added():
         "vertex_credentials": "{}",
     }
     # Include context_management with compact_20260112
-    optional_params = {
-        "context_management": {
-            "edits": [
-                {"type": "compact_20260112"}
-            ]
-        }
-    }
+    optional_params = {"context_management": {"edits": [{"type": "compact_20260112"}]}}
 
-    with patch.object(
-        config, "_ensure_access_token", return_value=("token", "test-project")
-    ), patch.object(
-        config, "get_complete_vertex_url", return_value="https://mock-url"
+    with (
+        patch.object(
+            config, "_ensure_access_token", return_value=("token", "test-project")
+        ),
+        patch.object(
+            config, "get_complete_vertex_url", return_value="https://mock-url"
+        ),
     ):
         updated_headers, api_base = config.validate_anthropic_messages_environment(
             headers=headers,
@@ -131,11 +140,14 @@ def test_compact_context_management_header_added():
             litellm_params=litellm_params,
             api_base=None,
         )
-        
+
         # Assert that the anthropic-beta header with compact-2026-01-12 is present
-        assert "anthropic-beta" in updated_headers, "anthropic-beta header should be present"
-        assert "compact-2026-01-12" in updated_headers["anthropic-beta"], \
-            f"anthropic-beta should contain 'compact-2026-01-12', got: {updated_headers['anthropic-beta']}"
+        assert (
+            "anthropic-beta" in updated_headers
+        ), "anthropic-beta header should be present"
+        assert (
+            "compact-2026-01-12" in updated_headers["anthropic-beta"]
+        ), f"anthropic-beta should contain 'compact-2026-01-12', got: {updated_headers['anthropic-beta']}"
 
 
 def test_context_management_header_added_for_other_edits():
@@ -148,18 +160,15 @@ def test_context_management_header_added_for_other_edits():
         "vertex_credentials": "{}",
     }
     # Include context_management with other edit types
-    optional_params = {
-        "context_management": {
-            "edits": [
-                {"type": "some_other_type"}
-            ]
-        }
-    }
+    optional_params = {"context_management": {"edits": [{"type": "some_other_type"}]}}
 
-    with patch.object(
-        config, "_ensure_access_token", return_value=("token", "test-project")
-    ), patch.object(
-        config, "get_complete_vertex_url", return_value="https://mock-url"
+    with (
+        patch.object(
+            config, "_ensure_access_token", return_value=("token", "test-project")
+        ),
+        patch.object(
+            config, "get_complete_vertex_url", return_value="https://mock-url"
+        ),
     ):
         updated_headers, api_base = config.validate_anthropic_messages_environment(
             headers=headers,
@@ -169,11 +178,14 @@ def test_context_management_header_added_for_other_edits():
             litellm_params=litellm_params,
             api_base=None,
         )
-        
+
         # Assert that the anthropic-beta header with context-management-2025-06-27 is present
-        assert "anthropic-beta" in updated_headers, "anthropic-beta header should be present"
-        assert "context-management-2025-06-27" in updated_headers["anthropic-beta"], \
-            f"anthropic-beta should contain 'context-management-2025-06-27', got: {updated_headers['anthropic-beta']}"
+        assert (
+            "anthropic-beta" in updated_headers
+        ), "anthropic-beta header should be present"
+        assert (
+            "context-management-2025-06-27" in updated_headers["anthropic-beta"]
+        ), f"anthropic-beta should contain 'context-management-2025-06-27', got: {updated_headers['anthropic-beta']}"
 
 
 def test_both_compact_and_context_management_headers_added():
@@ -188,17 +200,17 @@ def test_both_compact_and_context_management_headers_added():
     # Include context_management with both compact and other edit types
     optional_params = {
         "context_management": {
-            "edits": [
-                {"type": "compact_20260112"},
-                {"type": "some_other_type"}
-            ]
+            "edits": [{"type": "compact_20260112"}, {"type": "some_other_type"}]
         }
     }
 
-    with patch.object(
-        config, "_ensure_access_token", return_value=("token", "test-project")
-    ), patch.object(
-        config, "get_complete_vertex_url", return_value="https://mock-url"
+    with (
+        patch.object(
+            config, "_ensure_access_token", return_value=("token", "test-project")
+        ),
+        patch.object(
+            config, "get_complete_vertex_url", return_value="https://mock-url"
+        ),
     ):
         updated_headers, api_base = config.validate_anthropic_messages_environment(
             headers=headers,
@@ -208,13 +220,18 @@ def test_both_compact_and_context_management_headers_added():
             litellm_params=litellm_params,
             api_base=None,
         )
-        
+
         # Assert that both beta headers are present
-        assert "anthropic-beta" in updated_headers, "anthropic-beta header should be present"
-        assert "compact-2026-01-12" in updated_headers["anthropic-beta"], \
-            f"anthropic-beta should contain 'compact-2026-01-12', got: {updated_headers['anthropic-beta']}"
-        assert "context-management-2025-06-27" in updated_headers["anthropic-beta"], \
-            f"anthropic-beta should contain 'context-management-2025-06-27', got: {updated_headers['anthropic-beta']}"
+        assert (
+            "anthropic-beta" in updated_headers
+        ), "anthropic-beta header should be present"
+        assert (
+            "compact-2026-01-12" in updated_headers["anthropic-beta"]
+        ), f"anthropic-beta should contain 'compact-2026-01-12', got: {updated_headers['anthropic-beta']}"
+        assert (
+            "context-management-2025-06-27" in updated_headers["anthropic-beta"]
+        ), f"anthropic-beta should contain 'context-management-2025-06-27', got: {updated_headers['anthropic-beta']}"
+
 
 def test_validate_environment_with_authorization_header_calculates_api_base():
     """Test that api_base is calculated even when Authorization header is already present"""
@@ -239,12 +256,58 @@ def test_validate_environment_with_authorization_header_calculates_api_base():
             litellm_params=litellm_params,
             api_base=None,
         )
-        
+
         # Verify that api_base was calculated even though Authorization was already present
-        assert api_base == "https://mock-vertex-url", \
-            f"api_base should be calculated even with Authorization header. Got: {api_base}"
+        assert (
+            api_base == "https://mock-vertex-url"
+        ), f"api_base should be calculated even with Authorization header. Got: {api_base}"
         assert mock_get_url.called, "get_complete_vertex_url should be called"
-        
+
         # Verify Authorization header is still present
-        assert "Authorization" in updated_headers, \
-            "Authorization header should be preserved"
+        assert (
+            "Authorization" in updated_headers
+        ), "Authorization header should be preserved"
+
+
+def test_transform_anthropic_messages_request_removes_scope_from_cache_control():
+    """Ensure scope field is removed from cache_control for Vertex AI (not supported)."""
+    config = VertexAIPartnerModelsAnthropicMessagesConfig()
+
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "Hello",
+                    "cache_control": {"type": "ephemeral", "scope": "global"},
+                }
+            ],
+        }
+    ]
+    anthropic_messages_optional_request_params = {
+        "max_tokens": 1024,
+        "system": [
+            {
+                "type": "text",
+                "text": "You are an AI assistant.",
+                "cache_control": {"type": "ephemeral", "scope": "global"},
+            }
+        ],
+    }
+
+    result = config.transform_anthropic_messages_request(
+        model="claude-sonnet-4-6",
+        messages=messages,
+        anthropic_messages_optional_request_params=anthropic_messages_optional_request_params,
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    # scope removed from system
+    assert "scope" not in result["system"][0]["cache_control"]
+    assert result["system"][0]["cache_control"]["type"] == "ephemeral"
+
+    # scope removed from message content
+    assert "scope" not in result["messages"][0]["content"][0]["cache_control"]
+    assert result["messages"][0]["content"][0]["cache_control"]["type"] == "ephemeral"

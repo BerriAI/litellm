@@ -48,7 +48,9 @@ def _is_user_agent_tag(tag: Optional[str]) -> bool:
     if not tag:
         return False
     normalized_tag = tag.strip().lower()
-    return normalized_tag.startswith("user-agent:") or normalized_tag.startswith("user agent:")
+    return normalized_tag.startswith("user-agent:") or normalized_tag.startswith(
+        "user agent:"
+    )
 
 
 def compute_tag_metadata_totals(records: List[Any]) -> SpendMetrics:
@@ -264,13 +266,13 @@ def update_breakdown_metrics(
                     ),
                 )
             )
-        breakdown.endpoints[record.endpoint].api_key_breakdown[record.api_key].metrics = (
-            update_metrics(
-                breakdown.endpoints[record.endpoint]
-                .api_key_breakdown[record.api_key]
-                .metrics,
-                record,
-            )
+        breakdown.endpoints[record.endpoint].api_key_breakdown[
+            record.api_key
+        ].metrics = update_metrics(
+            breakdown.endpoints[record.endpoint]
+            .api_key_breakdown[record.api_key]
+            .metrics,
+            record,
         )
 
     # Update api key breakdown
@@ -347,8 +349,7 @@ async def get_api_key_metadata(
         where={"token": {"in": list(api_keys)}}
     )
     result = {
-        k.token: {"key_alias": k.key_alias, "team_id": k.team_id}
-        for k in key_records
+        k.token: {"key_alias": k.key_alias, "team_id": k.team_id} for k in key_records
     }
 
     # For any keys not found in the active table, check the deleted keys table
@@ -523,9 +524,7 @@ def _build_aggregated_sql_query(
 
     # Exclude specific entities
     if exclude_entity_ids:
-        placeholders = ", ".join(
-            f"${p + i}" for i in range(len(exclude_entity_ids))
-        )
+        placeholders = ", ".join(f"${p + i}" for i in range(len(exclude_entity_ids)))
         sql_conditions.append(f'"{entity_id_field}" NOT IN ({placeholders})')
         sql_params.extend(exclude_entity_ids)
         p += len(exclude_entity_ids)
@@ -799,8 +798,12 @@ async def get_daily_activity_aggregated(
                 total_api_requests=aggregated["totals"].api_requests,
                 total_successful_requests=aggregated["totals"].successful_requests,
                 total_failed_requests=aggregated["totals"].failed_requests,
-                total_cache_read_input_tokens=aggregated["totals"].cache_read_input_tokens,
-                total_cache_creation_input_tokens=aggregated["totals"].cache_creation_input_tokens,
+                total_cache_read_input_tokens=aggregated[
+                    "totals"
+                ].cache_read_input_tokens,
+                total_cache_creation_input_tokens=aggregated[
+                    "totals"
+                ].cache_creation_input_tokens,
                 page=1,
                 total_pages=1,
                 has_more=False,

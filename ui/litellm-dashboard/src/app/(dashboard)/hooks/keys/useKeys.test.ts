@@ -50,6 +50,7 @@ const mockKeys: KeyResponse[] = [
     config: {},
     user_id: "user-1",
     team_id: null,
+    project_id: null,
     max_parallel_requests: 10,
     metadata: {},
     tpm_limit: 1000,
@@ -105,6 +106,7 @@ const mockKeys: KeyResponse[] = [
     config: {},
     user_id: "user-2",
     team_id: "team-1",
+    project_id: "project-1",
     max_parallel_requests: 5,
     metadata: {},
     tpm_limit: 500,
@@ -395,6 +397,76 @@ describe("useKeys", () => {
         },
       },
     );
+  });
+
+  it("should pass projectID filter to the API", async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        keys: [mockKeys[1]],
+        total_count: 1,
+        current_page: 1,
+        total_pages: 1,
+      }),
+    });
+
+    const { result } = renderHook(
+      () => useKeys(1, 10, { projectID: "project-1" }),
+      { wrapper },
+    );
+
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+    });
+
+    const callUrl = mockFetch.mock.calls[0][0];
+    expect(callUrl).toContain("project_id=project-1");
+    expect(result.current.data?.keys).toHaveLength(1);
+    expect(result.current.data?.keys[0].project_id).toBe("project-1");
+  });
+
+  it("should pass both projectID and teamID filters to the API", async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        keys: [mockKeys[1]],
+        total_count: 1,
+        current_page: 1,
+        total_pages: 1,
+      }),
+    });
+
+    const { result } = renderHook(
+      () => useKeys(1, 10, { projectID: "project-1", teamID: "team-1" }),
+      { wrapper },
+    );
+
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+    });
+
+    const callUrl = mockFetch.mock.calls[0][0];
+    expect(callUrl).toContain("project_id=project-1");
+    expect(callUrl).toContain("team_id=team-1");
+  });
+
+  it("should not include project_id param when projectID is null", async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => mockKeysResponse,
+    });
+
+    const { result } = renderHook(
+      () => useKeys(1, 10, { projectID: null }),
+      { wrapper },
+    );
+
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+    });
+
+    const callUrl = mockFetch.mock.calls[0][0];
+    expect(callUrl).not.toContain("project_id");
   });
 });
 

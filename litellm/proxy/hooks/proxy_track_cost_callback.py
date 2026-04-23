@@ -12,13 +12,15 @@ from litellm.litellm_core_utils.core_helpers import (
 )
 from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.auth.auth_checks import log_db_metrics
-from litellm.proxy.auth.route_checks import RouteChecks
-from litellm.proxy.utils import ProxyUpdateSpend
-from litellm.types.utils import (
-    StandardLoggingPayload,
-    StandardLoggingUserAPIKeyMetadata,
+from litellm.proxy.auth.auth_checks import (
+    get_key_object,
+    get_team_object,
+    log_db_metrics,
 )
+from litellm.proxy.auth.route_checks import RouteChecks
+from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+from litellm.proxy.utils import ProxyUpdateSpend
+from litellm.types.utils import StandardLoggingPayload
 from litellm.utils import get_end_user_id_for_cost_tracking
 
 
@@ -38,42 +40,30 @@ class _ProxyDBLogger(CustomLogger):
         request_route = user_api_key_dict.request_route
         if _ProxyDBLogger._should_track_errors_in_db() is False:
             return
-        elif request_route is not None and not RouteChecks.is_llm_api_route(
-            route=request_route
+        elif request_route is not None and not (
+            RouteChecks.is_llm_api_route(route=request_route)
+            or RouteChecks.is_info_route(route=request_route)
         ):
             return
 
         from litellm.proxy.proxy_server import proxy_logging_obj
 
         _metadata = dict(
-            StandardLoggingUserAPIKeyMetadata(
-                user_api_key_hash=user_api_key_dict.api_key,
-                user_api_key_alias=user_api_key_dict.key_alias,
-                user_api_key_spend=user_api_key_dict.spend,
-                user_api_key_max_budget=user_api_key_dict.max_budget,
-                user_api_key_budget_reset_at=(
-                    user_api_key_dict.budget_reset_at.isoformat()
-                    if user_api_key_dict.budget_reset_at
-                    else None
-                ),
-                user_api_key_user_email=user_api_key_dict.user_email,
-                user_api_key_user_id=user_api_key_dict.user_id,
-                user_api_key_team_id=user_api_key_dict.team_id,
-                user_api_key_org_id=user_api_key_dict.org_id,
-                user_api_key_project_id=user_api_key_dict.project_id,
-                user_api_key_team_alias=user_api_key_dict.team_alias,
-                user_api_key_end_user_id=user_api_key_dict.end_user_id,
-                user_api_key_request_route=user_api_key_dict.request_route,
-                user_api_key_auth_metadata=user_api_key_dict.metadata,
+            LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(
+                user_api_key_dict=user_api_key_dict
             )
         )
         _metadata["user_api_key"] = user_api_key_dict.api_key
         _metadata["status"] = "failure"
-        _metadata[
-            "error_information"
-        ] = StandardLoggingPayloadSetup.get_error_information(
-            original_exception=original_exception,
-            traceback_str=traceback_str,
+        _metadata["error_information"] = (
+            StandardLoggingPayloadSetup.get_error_information(
+                original_exception=original_exception,
+                traceback_str=traceback_str,
+            )
+        )
+
+        _metadata = await _ProxyDBLogger._enrich_failure_metadata_with_key_info(
+            metadata=_metadata,
         )
 
         existing_metadata: dict = request_data.get("metadata", None) or {}
@@ -106,6 +96,30 @@ class _ProxyDBLogger(CustomLogger):
                 "custom_llm_provider"
             ) or request_data.get("custom_llm_provider", "")
 
+        # Propagate standard_logging_object and litellm_trace_id from the
+        # Logging instance so that _get_session_id_for_spend_log uses the same
+        # trace_id that Langfuse received (via async_failure_handler).
+        # Without this, the DB session_id would be a random UUID that doesn't
+        # match the Langfuse trace_id, making failed requests unsearchable.
+        _litellm_logging_obj = request_data.get("litellm_logging_obj")
+        if _litellm_logging_obj is not None:
+            if not request_data.get("standard_logging_object"):
+                request_data["standard_logging_object"] = getattr(
+                    _litellm_logging_obj, "model_call_details", {}
+                ).get("standard_logging_object")
+            if request_data.get("litellm_trace_id") is None:
+                request_data["litellm_trace_id"] = getattr(
+                    _litellm_logging_obj, "litellm_trace_id", None
+                )
+
+        # Use the actual request start time from the logging object so that
+        # failed requests record the real duration instead of 0.
+        actual_start_time = datetime.now()
+        if _litellm_logging_obj is not None:
+            obj_start = getattr(_litellm_logging_obj, "start_time", None)
+            if obj_start is not None:
+                actual_start_time = obj_start
+
         await proxy_logging_obj.db_spend_update_writer.update_database(
             token=user_api_key_dict.api_key,
             response_cost=0.0,
@@ -114,7 +128,7 @@ class _ProxyDBLogger(CustomLogger):
             team_id=user_api_key_dict.team_id,
             kwargs=request_data,
             completion_response=original_exception,
-            start_time=datetime.now(),
+            start_time=actual_start_time,
             end_time=datetime.now(),
             org_id=user_api_key_dict.org_id,
         )
@@ -129,7 +143,11 @@ class _ProxyDBLogger(CustomLogger):
         start_time=None,
         end_time=None,  # start/end time for completion
     ):
-        from litellm.proxy.proxy_server import proxy_logging_obj, update_cache
+        from litellm.proxy.proxy_server import (
+            increment_spend_counters,
+            proxy_logging_obj,
+            update_cache,
+        )
 
         verbose_proxy_logger.debug("INSIDE _PROXY_track_cost_callback")
         try:
@@ -188,7 +206,18 @@ class _ProxyDBLogger(CustomLogger):
                         org_id=org_id,
                     )
 
-                    # update cache
+                    # Atomically update spend counters (in-memory + Redis)
+                    # for cross-pod budget enforcement.
+                    await increment_spend_counters(
+                        token=user_api_key,
+                        team_id=team_id,
+                        user_id=user_id,
+                        response_cost=response_cost,
+                        org_id=org_id,
+                    )
+
+                    # update cache (fire-and-forget for backward compat:
+                    # cached object fields, soft budget alerts, etc.)
                     asyncio.create_task(
                         update_cache(
                             token=user_api_key,
@@ -254,6 +283,72 @@ class _ProxyDBLogger(CustomLogger):
             verbose_proxy_logger.exception(
                 "Error in tracking cost callback - %s", str(e)
             )
+
+    @staticmethod
+    async def _enrich_failure_metadata_with_key_info(metadata: dict) -> dict:
+        """
+        Enriches failure spend log metadata by looking up the key object (and team object)
+        from cache/DB when key fields are missing.
+
+        This handles two scenarios:
+        1. Auth errors (401): UserAPIKeyAuth is created with only api_key set, all other
+           fields are null. We look up the full key object to fill in alias, user_id,
+           team_id, etc.
+        2. Post-auth failures (provider errors, rate limits): key fields are populated
+           but team_alias is missing because LiteLLM_VerificationTokenView SQL view
+           doesn't include it. We look up the team object to fill in team_alias.
+        """
+        api_key_hash = metadata.get("user_api_key")
+        if not api_key_hash:
+            return metadata
+
+        from litellm.proxy.proxy_server import (
+            prisma_client,
+            proxy_logging_obj,
+            user_api_key_cache,
+        )
+
+        # Step 1: If key fields are missing, look up the full key object
+        if metadata.get("user_api_key_alias") is None:
+            try:
+                key_obj = await get_key_object(
+                    hashed_token=api_key_hash,
+                    prisma_client=prisma_client,
+                    user_api_key_cache=user_api_key_cache,
+                    proxy_logging_obj=proxy_logging_obj,
+                )
+                if metadata.get("user_api_key_alias") is None:
+                    metadata["user_api_key_alias"] = key_obj.key_alias
+                if metadata.get("user_api_key_user_id") is None:
+                    metadata["user_api_key_user_id"] = key_obj.user_id
+                if metadata.get("user_api_key_team_id") is None:
+                    metadata["user_api_key_team_id"] = key_obj.team_id
+                if metadata.get("user_api_key_org_id") is None:
+                    metadata["user_api_key_org_id"] = key_obj.org_id
+            except Exception:
+                verbose_proxy_logger.debug(
+                    "Failed to enrich failure metadata with key info for api_key=%s",
+                    api_key_hash,
+                )
+
+        # Step 2: If team_id is known but team_alias is missing, look up the team object
+        team_id = metadata.get("user_api_key_team_id")
+        if team_id and metadata.get("user_api_key_team_alias") is None:
+            try:
+                team_obj = await get_team_object(
+                    team_id=team_id,
+                    prisma_client=prisma_client,
+                    user_api_key_cache=user_api_key_cache,
+                    proxy_logging_obj=proxy_logging_obj,
+                )
+                if team_obj.team_alias is not None:
+                    metadata["user_api_key_team_alias"] = team_obj.team_alias
+            except Exception:
+                verbose_proxy_logger.debug(
+                    "Failed to enrich failure metadata with team_alias for team_id=%s",
+                    team_id,
+                )
+        return metadata
 
     @staticmethod
     def _should_track_errors_in_db():

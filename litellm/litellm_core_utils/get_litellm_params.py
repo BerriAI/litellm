@@ -1,38 +1,39 @@
 from typing import Optional
 
-
 # Pre-define optional kwargs keys as frozenset for O(1) lookups
 # These are extracted from kwargs only if present, avoiding unnecessary .get() calls
-_OPTIONAL_KWARGS_KEYS = frozenset({
-    "azure_ad_token",
-    "tenant_id",
-    "client_id",
-    "client_secret",
-    "azure_username",
-    "azure_password",
-    "azure_scope",
-    "timeout",
-    "bucket_name",
-    "vertex_credentials",
-    "vertex_project",
-    "vertex_location",
-    "vertex_ai_project",
-    "vertex_ai_location",
-    "vertex_ai_credentials",
-    "aws_region_name",
-    "aws_access_key_id",
-    "aws_secret_access_key",
-    "aws_session_token",
-    "aws_session_name",
-    "aws_profile_name",
-    "aws_role_name",
-    "aws_web_identity_token",
-    "aws_sts_endpoint",
-    "aws_external_id",
-    "aws_bedrock_runtime_endpoint",
-    "tpm",
-    "rpm",
-})
+_OPTIONAL_KWARGS_KEYS = frozenset(
+    {
+        "azure_ad_token",
+        "tenant_id",
+        "client_id",
+        "client_secret",
+        "azure_username",
+        "azure_password",
+        "azure_scope",
+        "timeout",
+        "bucket_name",
+        "vertex_credentials",
+        "vertex_project",
+        "vertex_location",
+        "vertex_ai_project",
+        "vertex_ai_location",
+        "vertex_ai_credentials",
+        "aws_region_name",
+        "aws_access_key_id",
+        "aws_secret_access_key",
+        "aws_session_token",
+        "aws_session_name",
+        "aws_profile_name",
+        "aws_role_name",
+        "aws_web_identity_token",
+        "aws_sts_endpoint",
+        "aws_external_id",
+        "aws_bedrock_runtime_endpoint",
+        "tpm",
+        "rpm",
+    }
+)
 
 
 def _get_base_model_from_litellm_call_metadata(
@@ -95,6 +96,13 @@ def get_litellm_params(
     litellm_request_debug: Optional[bool] = None,
     **kwargs,
 ) -> dict:
+    # Derive litellm_session_id / litellm_trace_id from metadata when not provided (call chaining)
+    _meta = metadata or {}
+    if litellm_session_id is None:
+        litellm_session_id = _meta.get("session_id") or _meta.get("trace_id")
+    if litellm_trace_id is None:
+        litellm_trace_id = _meta.get("trace_id") or _meta.get("session_id")
+
     # Build base dict with explicit parameters (always included)
     litellm_params = {
         "acompletion": acompletion,

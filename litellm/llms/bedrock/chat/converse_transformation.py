@@ -51,6 +51,7 @@ from litellm.types.llms.openai import (
 )
 from litellm.types.utils import (
     ChatCompletionMessageToolCall,
+    CompletionTokensDetailsWrapper,
     Function,
     Message,
     ModelResponse,
@@ -63,6 +64,7 @@ from litellm.utils import (
     has_tool_call_blocks,
     last_assistant_with_tool_calls_has_no_thinking_blocks,
     supports_reasoning,
+    token_counter,
 )
 
 from ..common_utils import (
@@ -88,34 +90,6 @@ UNSUPPORTED_BEDROCK_CONVERSE_BETA_PATTERNS = [
     "prompt-caching",  # Prompt caching not supported in Converse API
     "compact-2026-01-12",  # The compact beta feature is not currently supported on the Converse and ConverseStream APIs
 ]
-
-# Models that support Bedrock's native structured outputs API (outputConfig.textFormat)
-# Uses substring matching against the Bedrock model ID
-# Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/structured-output.html
-BEDROCK_NATIVE_STRUCTURED_OUTPUT_MODELS = {
-    # Anthropic Claude 4.5+
-    "claude-haiku-4-5",
-    "claude-sonnet-4-5",
-    "claude-opus-4-5",
-    "claude-opus-4-6",
-    # Qwen3
-    "qwen3",
-    # DeepSeek
-    "deepseek-v3.1",
-    # Gemma 3
-    "gemma-3",
-    # MiniMax
-    "minimax-m2",
-    # Mistral (magistral-small excluded: broken constrained decoding on Bedrock)
-    "ministral",
-    "mistral-large-3",
-    "voxtral",
-    # Moonshot
-    "kimi-k2",
-    # NVIDIA
-    "nemotron-nano",
-    # OpenAI (gpt-oss excluded: broken constrained decoding, works via tool-call fallback)
-}
 
 
 class AmazonConverseConfig(BaseConfig):
@@ -348,7 +322,9 @@ class AmazonConverseConfig(BaseConfig):
 
         # Check if the model is a Nova 2 model (matches nova-2-lite, nova-2-pro, etc.)
         # Also check for nova-2/ spec prefix for imported models
-        return model_without_region.startswith("amazon.nova-2-") or model_without_region.startswith("nova-2/")
+        return model_without_region.startswith(
+            "amazon.nova-2-"
+        ) or model_without_region.startswith("nova-2/")
 
     def _map_web_search_options(
         self, web_search_options: dict, model: str
@@ -489,8 +465,7 @@ class AmazonConverseConfig(BaseConfig):
             budget = thinking.get("budget_tokens")
             if isinstance(budget, int) and budget < BEDROCK_MIN_THINKING_BUDGET_TOKENS:
                 verbose_logger.debug(
-                    "Bedrock requires thinking.budget_tokens >= %d, got %d. "
-                    "Clamping to minimum.",
+                    "Bedrock requires thinking.budget_tokens >= %d, got %d. Clamping to minimum.",
                     BEDROCK_MIN_THINKING_BUDGET_TOKENS,
                     budget,
                 )
@@ -759,11 +734,20 @@ class AmazonConverseConfig(BaseConfig):
         return _tool
 
     @staticmethod
-    def _supports_native_structured_outputs(model: str) -> bool:
-        """Check if the Bedrock model supports native structured outputs (outputConfig.textFormat)."""
-        return any(
-            substring in model
-            for substring in BEDROCK_NATIVE_STRUCTURED_OUTPUT_MODELS
+    def _supports_native_structured_outputs(
+        model: str, custom_llm_provider: Optional[str] = None
+    ) -> bool:
+        """Check if the Bedrock model supports native structured outputs (outputConfig.textFormat).
+
+        Delegates to the standard ``supports_native_structured_output`` utility
+        which looks up the flag in ``litellm.model_cost`` via
+        ``_get_model_info_helper``.
+        Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/structured-output.html
+        """
+        from litellm.utils import supports_native_structured_output
+
+        return supports_native_structured_output(
+            model=model, custom_llm_provider=custom_llm_provider
         )
 
     @staticmethod
@@ -910,16 +894,16 @@ class AmazonConverseConfig(BaseConfig):
                 )
             if param == "tool_choice":
                 _tool_choice_value = self.map_tool_choice_values(
-                    model=model, tool_choice=value, drop_params=drop_params  # type: ignore
+                    model=model,
+                    tool_choice=value,
+                    drop_params=drop_params,  # type: ignore
                 )
                 if _tool_choice_value is not None:
                     optional_params["tool_choice"] = _tool_choice_value
             if param == "parallel_tool_calls":
                 disable_parallel = not value
                 optional_params["_parallel_tool_use_config"] = {
-                    "tool_choice": {
-                        "disable_parallel_tool_use": disable_parallel
-                    }
+                    "tool_choice": {"disable_parallel_tool_use": disable_parallel}
                 }
             if param == "thinking":
                 optional_params["thinking"] = value
@@ -1005,7 +989,10 @@ class AmazonConverseConfig(BaseConfig):
         if "type" in value and value["type"] == "text":
             return optional_params
 
-        if self._supports_native_structured_outputs(model) and json_schema is not None:
+        if (
+            self._supports_native_structured_outputs(model, self.custom_llm_provider)
+            and json_schema is not None
+        ):
             # Use Bedrock's native structured outputs API (outputConfig.textFormat)
             # No synthetic tool injection, no fake_stream needed.
             # Requires an explicit schema — json_object with no schema falls through
@@ -1016,7 +1003,7 @@ class AmazonConverseConfig(BaseConfig):
                 description=description,
             )
             optional_params["outputConfig"] = output_config
-        else:
+        elif json_schema is not None:
             # Fallback: translate to a synthetic tool call
             # https://docs.anthropic.com/en/docs/build-with-claude/tool-use#json-mode
             _tool = self._create_json_tool_call_for_response_format(
@@ -1038,6 +1025,12 @@ class AmazonConverseConfig(BaseConfig):
                 )
             if non_default_params.get("stream", False) is True:
                 optional_params["fake_stream"] = True
+        # else: response_format=json_object with no schema.
+        # Don't inject the synthetic json_tool_call tool here. When no
+        # schema is given, _create_json_tool_call_for_response_format
+        # produces an empty schema (properties: {}), and the model
+        # returns {} instead of the requested JSON. The model already
+        # returns JSON when the prompt asks for it.
 
         optional_params["json_mode"] = True
         return optional_params
@@ -1199,13 +1192,21 @@ class AmazonConverseConfig(BaseConfig):
             + supported_config_params
         )
         inference_params.pop("json_mode", None)  # used for handling json_schema
+        # Anthropic-only key. Bedrock expects `outputConfig` (camelCase) and
+        # will reject `output_config` if it leaks through pass-through routes.
+        inference_params.pop("output_config", None)
 
         # Extract requestMetadata before processing other parameters
         request_metadata = inference_params.pop("requestMetadata", None)
         if request_metadata is not None:
             self._validate_request_metadata(request_metadata)
 
-        output_config: Optional[OutputConfigBlock] = inference_params.pop("outputConfig", None)
+        output_config: Optional[OutputConfigBlock] = inference_params.pop(
+            "outputConfig", None
+        )
+        inference_params.pop(
+            "output_config", None
+        )  # Bedrock Converse doesn't support it
 
         # keep supported params in 'inference_params', and set all model-specific params in 'additional_request_params'
         additional_request_params = {
@@ -1216,15 +1217,21 @@ class AmazonConverseConfig(BaseConfig):
         }
 
         # Handle parallel_tool_calls configuration
-        parallel_tool_use_config = additional_request_params.pop("_parallel_tool_use_config", None)
-        if parallel_tool_use_config is not None:
-            # Merge the tool_choice config from parallel_tool_calls into additional_request_params
+        parallel_tool_use_config = additional_request_params.pop(
+            "_parallel_tool_use_config", None
+        )
+        if parallel_tool_use_config is not None and is_claude_4_5_on_bedrock(model):
             for key, value in parallel_tool_use_config.items():
-                if key in additional_request_params and isinstance(additional_request_params[key], dict) and isinstance(value, dict):
-                    # Merge dictionaries
+                if (
+                    key in additional_request_params
+                    and isinstance(additional_request_params[key], dict)
+                    and isinstance(value, dict)
+                ):
                     additional_request_params[key].update(value)
                 else:
                     additional_request_params[key] = value
+
+        additional_request_params.pop("parallel_tool_calls", None)
 
         # Only set the topK value in for models that support it
         additional_request_params.update(
@@ -1297,11 +1304,24 @@ class AmazonConverseConfig(BaseConfig):
             # Add computer use tools and anthropic_beta if needed (only when computer use tools are present)
             if computer_use_tools:
                 # Determine the correct computer-use beta header based on model
-                # "computer-use-2025-11-24" for Claude Opus 4.6, Claude Opus 4.5
+                # "computer-use-2025-11-24" for Claude Opus 4.7, Opus 4.6, and Opus 4.5
                 # "computer-use-2025-01-24" for Claude Sonnet 4.5, Haiku 4.5, Opus 4.1, Sonnet 4, Opus 4, and Sonnet 3.7
                 # "computer-use-2024-10-22" for older models
                 model_lower = model.lower()
-                if "opus-4.6" in model_lower or "opus_4.6" in model_lower or "opus-4-6" in model_lower or "opus_4_6" in model_lower or "sonnet-4.6" in model_lower or "sonnet_4.6" in model_lower or "sonnet-4-6" in model_lower or "sonnet_4_6" in model_lower:
+                if (
+                    "opus-4.7" in model_lower
+                    or "opus_4.7" in model_lower
+                    or "opus-4-7" in model_lower
+                    or "opus_4_7" in model_lower
+                    or "opus-4.6" in model_lower
+                    or "opus_4.6" in model_lower
+                    or "opus-4-6" in model_lower
+                    or "opus_4_6" in model_lower
+                    or "sonnet-4.6" in model_lower
+                    or "sonnet_4.6" in model_lower
+                    or "sonnet-4-6" in model_lower
+                    or "sonnet_4_6" in model_lower
+                ):
                     computer_use_header = "computer-use-2025-11-24"
                 elif (
                     "opus-4.5" in model_lower
@@ -1421,6 +1441,16 @@ class AmazonConverseConfig(BaseConfig):
         bedrock_tools, anthropic_beta_list = self._process_tools_and_beta(
             original_tools, model, headers, additional_request_params
         )
+
+        # Append cachePoint to tools if cache_control_injection_points has tool_config
+        cache_injection_points = additional_request_params.pop(
+            "cache_control_injection_points", None
+        )
+        if cache_injection_points and len(bedrock_tools) > 0:
+            for point in cache_injection_points:
+                if point.get("location") == "tool_config":
+                    bedrock_tools.append({"cachePoint": {"type": "default"}})
+                    break
 
         bedrock_tool_config: Optional[ToolConfigBlock] = None
         if len(bedrock_tools) > 0:
@@ -1620,13 +1650,18 @@ class AmazonConverseConfig(BaseConfig):
                 thinking_blocks_list.append(_redacted_block)
         return thinking_blocks_list
 
-    def _transform_usage(self, usage: ConverseTokenUsageBlock) -> Usage:
+    def _transform_usage(
+        self,
+        usage: ConverseTokenUsageBlock,
+        reasoning_content: Optional[str] = None,
+    ) -> Usage:
         input_tokens = usage["inputTokens"]
         output_tokens = usage["outputTokens"]
         total_tokens = usage["totalTokens"]
         cache_creation_input_tokens: int = 0
         cache_read_input_tokens: int = 0
 
+        raw_input_tokens = input_tokens  # capture before inflation
         if "cacheReadInputTokens" in usage:
             cache_read_input_tokens = usage["cacheReadInputTokens"]
             input_tokens += cache_read_input_tokens
@@ -1635,7 +1670,22 @@ class AmazonConverseConfig(BaseConfig):
             input_tokens += cache_creation_input_tokens
 
         prompt_tokens_details = PromptTokensDetailsWrapper(
-            cached_tokens=cache_read_input_tokens
+            cached_tokens=cache_read_input_tokens,
+            cache_creation_tokens=cache_creation_input_tokens,
+            text_tokens=raw_input_tokens,
+        )
+        reasoning_tokens = (
+            token_counter(text=reasoning_content, count_response_tokens=True)
+            if reasoning_content
+            else 0
+        )
+        completion_tokens_details = CompletionTokensDetailsWrapper(
+            reasoning_tokens=reasoning_tokens,
+            text_tokens=(
+                output_tokens - reasoning_tokens
+                if reasoning_tokens > 0
+                else output_tokens
+            ),
         )
         openai_usage = Usage(
             prompt_tokens=input_tokens,
@@ -1644,6 +1694,7 @@ class AmazonConverseConfig(BaseConfig):
             prompt_tokens_details=prompt_tokens_details,
             cache_creation_input_tokens=cache_creation_input_tokens,
             cache_read_input_tokens=cache_read_input_tokens,
+            completion_tokens_details=completion_tokens_details,
         )
         return openai_usage
 
@@ -1779,6 +1830,90 @@ class AmazonConverseConfig(BaseConfig):
 
         return content_str, tools, reasoningContentBlocks, citationsContentBlocks
 
+    @staticmethod
+    def _unwrap_bedrock_properties(json_str: str) -> str:
+        """
+        Unwrap Bedrock's response_format JSON structure.
+
+        If the JSON has a single "properties" key, extract its value.
+        Otherwise, return the original string.
+
+        Args:
+            json_str: JSON string to unwrap
+
+        Returns:
+            Unwrapped JSON string or original if unwrapping not needed
+        """
+        try:
+            response_data = json.loads(json_str)
+            if (
+                isinstance(response_data, dict)
+                and "properties" in response_data
+                and len(response_data) == 1
+            ):
+                response_data = response_data["properties"]
+                return json.dumps(response_data)
+        except json.JSONDecodeError:
+            pass
+        return json_str
+
+    @staticmethod
+    def _filter_json_mode_tools(
+        json_mode: Optional[bool],
+        tools: List[ChatCompletionToolCallChunk],
+        chat_completion_message: ChatCompletionResponseMessage,
+    ) -> Optional[List[ChatCompletionToolCallChunk]]:
+        """
+        When json_mode is True, Bedrock may return the internal `json_tool_call`
+        tool alongside real user-defined tools. This method handles 3 scenarios:
+
+        1. Only json_tool_call present  -> convert to text content, return None
+        2. Mixed json_tool_call + real  -> filter out json_tool_call, return real tools
+        3. No json_tool_call / no json_mode -> return tools as-is
+        """
+        if not json_mode or not tools:
+            return tools if tools else None
+
+        json_tool_indices = [
+            i
+            for i, t in enumerate(tools)
+            if t["function"].get("name") == RESPONSE_FORMAT_TOOL_NAME
+        ]
+
+        if not json_tool_indices:
+            # No json_tool_call found, return tools unchanged
+            return tools
+
+        if len(json_tool_indices) == len(tools):
+            # All tools are json_tool_call — convert first one to content
+            verbose_logger.debug(
+                "Processing JSON tool call response for response_format"
+            )
+            json_mode_content_str: Optional[str] = tools[0]["function"].get("arguments")
+            if json_mode_content_str is not None:
+                json_mode_content_str = AmazonConverseConfig._unwrap_bedrock_properties(
+                    json_mode_content_str
+                )
+                chat_completion_message["content"] = json_mode_content_str
+            return None
+
+        # Mixed: filter out json_tool_call, keep real tools.
+        # Preserve the json_tool_call content as message text so the structured
+        # output from response_format is not silently lost.
+        first_idx = json_tool_indices[0]
+        json_mode_args = tools[first_idx]["function"].get("arguments")
+        if json_mode_args is not None:
+            json_mode_args = AmazonConverseConfig._unwrap_bedrock_properties(
+                json_mode_args
+            )
+            existing = chat_completion_message.get("content") or ""
+            chat_completion_message["content"] = (
+                existing + json_mode_args if existing else json_mode_args
+            )
+
+        real_tools = [t for i, t in enumerate(tools) if i not in json_tool_indices]
+        return real_tools if real_tools else None
+
     def _transform_response(  # noqa: PLR0915
         self,
         model: str,
@@ -1801,7 +1936,7 @@ class AmazonConverseConfig(BaseConfig):
                 additional_args={"complete_input_dict": data},
             )
 
-        json_mode: Optional[bool] = optional_params.pop("json_mode", None)
+        json_mode: Optional[bool] = optional_params.get("json_mode", None)
         ## RESPONSE OBJECT
         try:
             completion_response = ConverseResponseBlock(**response.json())  # type: ignore
@@ -1885,44 +2020,29 @@ class AmazonConverseConfig(BaseConfig):
                 self._transform_thinking_blocks(reasoningContentBlocks)
             )
         chat_completion_message["content"] = content_str
-        if (
-            json_mode is True
-            and tools is not None
-            and len(tools) == 1
-            and tools[0]["function"].get("name") == RESPONSE_FORMAT_TOOL_NAME
-        ):
-            verbose_logger.debug(
-                "Processing JSON tool call response for response_format"
-            )
-            json_mode_content_str: Optional[str] = tools[0]["function"].get("arguments")
-            if json_mode_content_str is not None:
-                # Bedrock returns the response wrapped in a "properties" object
-                # We need to extract the actual content from this wrapper
-                try:
-                    response_data = json.loads(json_mode_content_str)
-
-                    # If Bedrock wrapped the response in "properties", extract the content
-                    if (
-                        isinstance(response_data, dict)
-                        and "properties" in response_data
-                        and len(response_data) == 1
-                    ):
-                        response_data = response_data["properties"]
-                        json_mode_content_str = json.dumps(response_data)
-                except json.JSONDecodeError:
-                    # If parsing fails, use the original response
-                    pass
-
-                chat_completion_message["content"] = json_mode_content_str
-        elif tools:
-            chat_completion_message["tool_calls"] = tools
+        filtered_tools = self._filter_json_mode_tools(
+            json_mode=json_mode,
+            tools=tools,
+            chat_completion_message=chat_completion_message,
+        )
+        if filtered_tools:
+            chat_completion_message["tool_calls"] = filtered_tools
 
         ## CALCULATING USAGE - bedrock returns usage in the headers
-        usage = self._transform_usage(completion_response["usage"])
+        usage = self._transform_usage(
+            completion_response["usage"],
+            reasoning_content=chat_completion_message.get("reasoning_content"),
+        )
 
         ## HANDLE TOOL CALLS
         _message = Message(**chat_completion_message)
         initial_finish_reason = map_finish_reason(completion_response["stopReason"])
+
+        # When json_mode filtered out all synthetic tool calls the response
+        # is plain content, not a pending tool invocation. Fix finish_reason
+        # so callers (e.g. OpenAI SDK) don't misinterpret it.
+        if json_mode and not filtered_tools and tools:
+            initial_finish_reason = "stop"
 
         (
             returned_message,

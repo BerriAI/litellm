@@ -334,7 +334,10 @@ def _normalize_teams(teams, team_details):
     """
     if isinstance(team_details, list) and team_details:
         return [
-            {"team_id": i.get("team_id") or i.get("id"), "team_alias": i.get("team_alias")}
+            {
+                "team_id": i.get("team_id") or i.get("id"),
+                "team_alias": i.get("team_alias"),
+            }
             for i in team_details
             if isinstance(i, dict) and (i.get("team_id") or i.get("id"))
         ]
@@ -608,7 +611,9 @@ def whoami():
     click.echo(f"Token age: {age_hours:.1f} hours")
 
     if age_hours > CLI_JWT_EXPIRATION_HOURS:
-        click.echo(f"⚠️ Warning: Token is more than {CLI_JWT_EXPIRATION_HOURS} hours old and may have expired.")
+        click.echo(
+            f"⚠️ Warning: Token is more than {CLI_JWT_EXPIRATION_HOURS} hours old and may have expired."
+        )
 
 
 # Export functions for use by other CLI commands

@@ -18,6 +18,8 @@ mcp_servers:
     command: python3
     args:
       - tests/mcp_tests/mcp_server.py
+    allow_all_keys: true  # Needed for master_key auth when DB/object_permission not used
   math_streamable_http:
     transport: http
     url: http://127.0.0.1:0/mcp
+    allow_all_keys: true

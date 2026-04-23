@@ -20,6 +20,7 @@ Add A2A Agents on LiteLLM AI Gateway, Invoke agents in A2A Protocol, track reque
 | Logging | ✅ |
 | Load Balancing | ✅ |
 | Streaming | ✅ |
+| [Iteration Budgets](a2a_iteration_budgets) | ✅ |
 
 
 :::tip

@@ -7,6 +7,7 @@ This test validates:
 3. Unknown headers (not in config) are filtered out
 4. For Bedrock providers, beta headers appear in the request body (not just HTTP headers)
 """
+
 import json
 import os
 from typing import Dict, List
@@ -17,6 +18,7 @@ import pytest
 import litellm
 from litellm.anthropic_beta_headers_manager import (
     filter_and_transform_beta_headers,
+    update_request_with_filtered_beta,
 )
 
 
@@ -28,11 +30,12 @@ class TestAnthropicBetaHeadersFiltering:
         """Load the beta headers config for testing."""
         # Force use of local config file for tests
         monkeypatch.setenv("LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS", "True")
-        
+
         # Clear the cached config to ensure fresh load with local config
         from litellm import anthropic_beta_headers_manager
+
         anthropic_beta_headers_manager._BETA_HEADERS_CONFIG = None
-        
+
         config_path = os.path.join(
             os.path.dirname(litellm.__file__),
             "anthropic_beta_headers_config.json",
@@ -115,6 +118,30 @@ class TestAnthropicBetaHeadersFiltering:
             assert (
                 unknown not in filtered
             ), f"Unknown header '{unknown}' should be filtered out for {provider}"
+
+    def test_update_request_with_filtered_beta_vertex_ai(self):
+        """Test combined filtering for both HTTP headers and request body betas."""
+        headers = {
+            "anthropic-beta": "files-api-2025-04-14,context-management-2025-06-27,code-execution-2025-05-22"
+        }
+        request_data = {
+            "anthropic_beta": [
+                "files-api-2025-04-14",
+                "context-management-2025-06-27",
+                "code-execution-2025-05-22",
+            ]
+        }
+
+        filtered_headers, filtered_request_data = update_request_with_filtered_beta(
+            headers=headers,
+            request_data=request_data,
+            provider="vertex_ai",
+        )
+
+        assert filtered_headers.get("anthropic-beta") == "context-management-2025-06-27"
+        assert filtered_request_data.get("anthropic_beta") == [
+            "context-management-2025-06-27"
+        ]
 
     @pytest.mark.asyncio
     async def test_anthropic_messages_http_headers_filtering(self):
@@ -225,7 +252,9 @@ class TestAnthropicBetaHeadersFiltering:
             mock_response = MagicMock()
             mock_response.status_code = 200
             mock_response.json.return_value = {
-                "output": {"message": {"role": "assistant", "content": [{"text": "Hello"}]}},
+                "output": {
+                    "message": {"role": "assistant", "content": [{"text": "Hello"}]}
+                },
                 "stopReason": "end_turn",
                 "usage": {"inputTokens": 10, "outputTokens": 20},
             }
@@ -238,7 +267,7 @@ class TestAnthropicBetaHeadersFiltering:
 
             try:
                 await litellm.acompletion(
-                    model="bedrock/converse/us.anthropic.claude-3-5-sonnet-20241022-v2:0",
+                    model="bedrock/converse/us.anthropic.claude-haiku-4-5-20251001-v1:0",
                     messages=[{"role": "user", "content": "Hi"}],
                     aws_access_key_id="test",
                     aws_secret_access_key="test",
@@ -375,7 +404,13 @@ class TestAnthropicBetaHeadersFiltering:
 
     def test_null_value_headers_filtered(self):
         """Test that headers with null values are always filtered out."""
-        for provider in ["anthropic", "azure_ai", "bedrock_converse", "bedrock", "vertex_ai"]:
+        for provider in [
+            "anthropic",
+            "azure_ai",
+            "bedrock_converse",
+            "bedrock",
+            "vertex_ai",
+        ]:
             unsupported = self.get_unsupported_headers(provider)
 
             if unsupported:
@@ -389,7 +424,13 @@ class TestAnthropicBetaHeadersFiltering:
 
     def test_empty_headers_list(self):
         """Test that empty headers list returns empty result."""
-        for provider in ["anthropic", "azure_ai", "bedrock_converse", "bedrock", "vertex_ai"]:
+        for provider in [
+            "anthropic",
+            "azure_ai",
+            "bedrock_converse",
+            "bedrock",
+            "vertex_ai",
+        ]:
             filtered = filter_and_transform_beta_headers(
                 beta_headers=[], provider=provider
             )
@@ -400,7 +441,13 @@ class TestAnthropicBetaHeadersFiltering:
 
     def test_mixed_supported_and_unsupported_headers(self):
         """Test filtering with a mix of supported, unsupported, and unknown headers."""
-        for provider in ["anthropic", "azure_ai", "bedrock_converse", "bedrock", "vertex_ai"]:
+        for provider in [
+            "anthropic",
+            "azure_ai",
+            "bedrock_converse",
+            "bedrock",
+            "vertex_ai",
+        ]:
             supported = self.get_supported_headers(provider)
             unsupported = self.get_unsupported_headers(provider)
             mapped_headers = self.get_mapped_headers(provider)
@@ -408,11 +455,7 @@ class TestAnthropicBetaHeadersFiltering:
             if not supported or not unsupported:
                 continue
 
-            test_headers = (
-                [supported[0]]
-                + [unsupported[0]]
-                + ["unknown-header-123"]
-            )
+            test_headers = [supported[0]] + [unsupported[0]] + ["unknown-header-123"]
 
             filtered = filter_and_transform_beta_headers(
                 beta_headers=test_headers, provider=provider

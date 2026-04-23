@@ -124,6 +124,34 @@ def test_virtual_key_mcp_routes_allows_v1_mcp_server():
     assert result is True
 
 
+@pytest.mark.parametrize(
+    "route",
+    [
+        "/v1/mcp/server/register",
+        "/v1/mcp/server/health",
+        "/v1/mcp/server/submissions",
+        "/v1/mcp/server/abc123",
+        "/v1/mcp/server/abc123/approve",
+        "/v1/mcp/server/oauth/session",
+        "/v1/mcp/server/oauth/abc123/authorize",
+    ],
+)
+def test_virtual_key_mcp_routes_allows_v1_mcp_server_subpaths(route):
+    """Regression test: mcp_routes must allow /v1/mcp/server sub-paths (register, health, oauth, etc.)."""
+
+    valid_token = UserAPIKeyAuth(
+        user_id="test_user",
+        allowed_routes=["mcp_routes"],
+    )
+
+    result = RouteChecks.is_virtual_key_allowed_to_call_route(
+        route=route,
+        valid_token=valid_token,
+    )
+
+    assert result is True
+
+
 def test_virtual_key_allowed_routes_with_litellm_routes_member_name_denied():
     """Test that virtual key is denied when route is not in the allowed LiteLLMRoutes group"""
 
@@ -976,6 +1004,43 @@ def test_proxy_admin_viewer_can_access_global_spend_tags():
         )
 
 
+@pytest.mark.parametrize("route", ["/audit", "/audit/some-log-id"])
+def test_proxy_admin_viewer_can_access_audit_logs(route):
+    """
+    Test that proxy_admin_viewer can access /audit endpoints.
+
+    Admin viewers should be able to view audit logs since these are read-only.
+    """
+
+    user_obj = LiteLLM_UserTable(
+        user_id="viewer_user",
+        user_email="viewer@example.com",
+        user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
+    )
+
+    valid_token = UserAPIKeyAuth(
+        user_id="viewer_user",
+        user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
+    )
+
+    request = MagicMock(spec=Request)
+    request.query_params = {}
+
+    try:
+        RouteChecks.non_proxy_admin_allowed_routes_check(
+            user_obj=user_obj,
+            _user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
+            route=route,
+            request=request,
+            valid_token=valid_token,
+            request_data={},
+        )
+    except Exception as e:
+        pytest.fail(
+            f"proxy_admin_viewer should be able to access {route} route. Got error: {str(e)}"
+        )
+
+
 class TestModelsRouteExemptFromDisableLLMEndpoints:
     """
     Test that /models and /v1/models are exempt from DISABLE_LLM_API_ENDPOINTS.
@@ -993,8 +1058,15 @@ class TestModelsRouteExemptFromDisableLLMEndpoints:
 
         local_file = os.path.join(
             os.path.dirname(__file__),
-            "..", "..", "..", "..", "enterprise",
-            "litellm_enterprise", "proxy", "auth", "route_checks.py",
+            "..",
+            "..",
+            "..",
+            "..",
+            "enterprise",
+            "litellm_enterprise",
+            "proxy",
+            "auth",
+            "route_checks.py",
         )
         local_file = os.path.abspath(local_file)
 
@@ -1010,10 +1082,15 @@ class TestModelsRouteExemptFromDisableLLMEndpoints:
         """Test that /models is allowed even when LLM API routes are disabled"""
         EnterpriseRouteChecks = self._get_enterprise_route_checks()
 
-        with patch.object(
-            EnterpriseRouteChecks, "is_llm_api_route_disabled", return_value=True
-        ), patch.object(
-            EnterpriseRouteChecks, "is_management_routes_disabled", return_value=False
+        with (
+            patch.object(
+                EnterpriseRouteChecks, "is_llm_api_route_disabled", return_value=True
+            ),
+            patch.object(
+                EnterpriseRouteChecks,
+                "is_management_routes_disabled",
+                return_value=False,
+            ),
         ):
             # /models should NOT raise - it's exempt
             EnterpriseRouteChecks.should_call_route("/models")
@@ -1023,10 +1100,15 @@ class TestModelsRouteExemptFromDisableLLMEndpoints:
         """Test that /v1/models is allowed even when LLM API routes are disabled"""
         EnterpriseRouteChecks = self._get_enterprise_route_checks()
 
-        with patch.object(
-            EnterpriseRouteChecks, "is_llm_api_route_disabled", return_value=True
-        ), patch.object(
-            EnterpriseRouteChecks, "is_management_routes_disabled", return_value=False
+        with (
+            patch.object(
+                EnterpriseRouteChecks, "is_llm_api_route_disabled", return_value=True
+            ),
+            patch.object(
+                EnterpriseRouteChecks,
+                "is_management_routes_disabled",
+                return_value=False,
+            ),
         ):
             # /v1/models should NOT raise - it's exempt
             EnterpriseRouteChecks.should_call_route("/v1/models")
@@ -1036,10 +1118,15 @@ class TestModelsRouteExemptFromDisableLLMEndpoints:
         """Test that non-exempt LLM routes like /v1/chat/completions are still blocked"""
         EnterpriseRouteChecks = self._get_enterprise_route_checks()
 
-        with patch.object(
-            EnterpriseRouteChecks, "is_llm_api_route_disabled", return_value=True
-        ), patch.object(
-            EnterpriseRouteChecks, "is_management_routes_disabled", return_value=False
+        with (
+            patch.object(
+                EnterpriseRouteChecks, "is_llm_api_route_disabled", return_value=True
+            ),
+            patch.object(
+                EnterpriseRouteChecks,
+                "is_management_routes_disabled",
+                return_value=False,
+            ),
         ):
             with pytest.raises(HTTPException) as exc_info:
                 EnterpriseRouteChecks.should_call_route("/v1/chat/completions")
@@ -1054,10 +1141,15 @@ class TestModelsRouteExemptFromDisableLLMEndpoints:
         """Test that /v1/embeddings is still blocked when LLM API routes are disabled"""
         EnterpriseRouteChecks = self._get_enterprise_route_checks()
 
-        with patch.object(
-            EnterpriseRouteChecks, "is_llm_api_route_disabled", return_value=True
-        ), patch.object(
-            EnterpriseRouteChecks, "is_management_routes_disabled", return_value=False
+        with (
+            patch.object(
+                EnterpriseRouteChecks, "is_llm_api_route_disabled", return_value=True
+            ),
+            patch.object(
+                EnterpriseRouteChecks,
+                "is_management_routes_disabled",
+                return_value=False,
+            ),
         ):
             with pytest.raises(HTTPException) as exc_info:
                 EnterpriseRouteChecks.should_call_route("/v1/embeddings")
@@ -1069,10 +1161,15 @@ class TestModelsRouteExemptFromDisableLLMEndpoints:
         """Test that /models works normally when LLM API routes are not disabled"""
         EnterpriseRouteChecks = self._get_enterprise_route_checks()
 
-        with patch.object(
-            EnterpriseRouteChecks, "is_llm_api_route_disabled", return_value=False
-        ), patch.object(
-            EnterpriseRouteChecks, "is_management_routes_disabled", return_value=False
+        with (
+            patch.object(
+                EnterpriseRouteChecks, "is_llm_api_route_disabled", return_value=False
+            ),
+            patch.object(
+                EnterpriseRouteChecks,
+                "is_management_routes_disabled",
+                return_value=False,
+            ),
         ):
             # Should not raise
             EnterpriseRouteChecks.should_call_route("/models")
@@ -1116,3 +1213,292 @@ def test_route_in_additional_public_routes_exact_match():
         assert route_in_additonal_public_routes("/status") is True
         # Non-matching routes should fail
         assert route_in_additonal_public_routes("/other") is False
+
+
+def test_internal_user_can_access_key_reset_spend_route():
+    """
+    Regression test: team admins (role=internal_user) should pass the route-level
+    check for /key/{hash}/reset_spend. The endpoint itself enforces team admin status.
+    """
+    user_obj = LiteLLM_UserTable(
+        user_id="team-admin-user",
+        user_email="teamadmin@example.com",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+    )
+    valid_token = UserAPIKeyAuth(
+        user_id="team-admin-user",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+    )
+    request = MagicMock(spec=Request)
+    request.query_params = {}
+
+    key_hash = "baec26d2901589fe9fec76610e6e2be4895cdd8e19b3ada9a4fa2eb85e1901ae"
+    route = f"/key/{key_hash}/reset_spend"
+
+    # Should not raise — the route-level check must pass for team admins
+    RouteChecks.non_proxy_admin_allowed_routes_check(
+        user_obj=user_obj,
+        _user_role=LitellmUserRoles.INTERNAL_USER.value,
+        route=route,
+        request=request,
+        valid_token=valid_token,
+        request_data={},
+    )
+
+
+def test_non_admin_non_team_admin_cannot_access_config_update_but_can_attempt_reset_spend():
+    """
+    An internal_user passes the route check for /key/{hash}/reset_spend
+    (authorization is deferred to the endpoint), but is still blocked from
+    admin-only routes like /config/update.
+    """
+    user_obj = LiteLLM_UserTable(
+        user_id="regular-user",
+        user_email="user@example.com",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+    )
+    valid_token = UserAPIKeyAuth(
+        user_id="regular-user",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+    )
+    request = MagicMock(spec=Request)
+    request.query_params = {}
+
+    key_hash = "baec26d2901589fe9fec76610e6e2be4895cdd8e19b3ada9a4fa2eb85e1901ae"
+
+    # /key/{hash}/reset_spend passes the route check for internal_user
+    RouteChecks.non_proxy_admin_allowed_routes_check(
+        user_obj=user_obj,
+        _user_role=LitellmUserRoles.INTERNAL_USER.value,
+        route=f"/key/{key_hash}/reset_spend",
+        request=request,
+        valid_token=valid_token,
+        request_data={},
+    )
+
+    # /config/update is still blocked
+    with pytest.raises(Exception) as exc_info:
+        RouteChecks.non_proxy_admin_allowed_routes_check(
+            user_obj=user_obj,
+            _user_role=LitellmUserRoles.INTERNAL_USER.value,
+            route="/config/update",
+            request=request,
+            valid_token=valid_token,
+            request_data={},
+        )
+    assert "Only proxy admin can be used to generate" in str(exc_info.value)
+
+
+@pytest.mark.parametrize(
+    "user_role",
+    [
+        LitellmUserRoles.INTERNAL_USER.value,
+        LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value,
+        LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
+    ],
+)
+def test_available_roles_accessible_to_non_admin_users(user_role):
+    """
+    /user/available_roles is read-only role metadata that any authenticated user
+    (including org admins and team admins) needs when inviting users. It should
+    pass the route check for all non-proxy-admin roles without requiring an
+    organization_id in the request body.
+    """
+    user_obj = LiteLLM_UserTable(
+        user_id="test_user",
+        user_email="test@example.com",
+        user_role=user_role,
+    )
+    valid_token = UserAPIKeyAuth(
+        user_id="test_user",
+        user_role=user_role,
+    )
+    request = MagicMock(spec=Request)
+    request.query_params = {}
+
+    # Should not raise — /user/available_roles is in self_managed_routes
+    RouteChecks.non_proxy_admin_allowed_routes_check(
+        user_obj=user_obj,
+        _user_role=user_role,
+        route="/user/available_roles",
+        request=request,
+        valid_token=valid_token,
+        request_data={},
+    )
+
+
+# ── _user_is_org_admin tests ──────────────────────────────────────────────────
+
+from datetime import datetime
+
+from litellm.proxy._types import LiteLLM_OrganizationMembershipTable
+from litellm.proxy.auth.auth_checks_organization import _user_is_org_admin
+
+
+def _make_org_admin_user(org_id: str) -> LiteLLM_UserTable:
+    membership = LiteLLM_OrganizationMembershipTable(
+        user_id="org-admin-user",
+        organization_id=org_id,
+        user_role=LitellmUserRoles.ORG_ADMIN.value,
+        created_at=datetime(2024, 1, 1),
+        updated_at=datetime(2024, 1, 1),
+    )
+    return LiteLLM_UserTable(
+        user_id="org-admin-user",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+        organization_memberships=[membership],
+    )
+
+
+def test_user_is_org_admin_with_organizations_list():
+    """Org admin can be identified via the `organizations` list field (used by /user/new)."""
+    user_obj = _make_org_admin_user("org-1")
+    assert _user_is_org_admin({"organizations": ["org-1"]}, user_obj) is True
+
+
+def test_user_is_org_admin_with_singular_organization_id():
+    """Backward-compat: org admin can still be identified via singular `organization_id`."""
+    user_obj = _make_org_admin_user("org-1")
+    assert _user_is_org_admin({"organization_id": "org-1"}, user_obj) is True
+
+
+def test_user_is_org_admin_organizations_list_wrong_org():
+    """Non-member of the requested org is not considered an org admin for it."""
+    user_obj = _make_org_admin_user("org-2")
+    assert _user_is_org_admin({"organizations": ["org-1"]}, user_obj) is False
+
+
+def test_user_is_org_admin_no_org_fields():
+    """Returns False when neither `organization_id` nor `organizations` is in the request."""
+    user_obj = _make_org_admin_user("org-1")
+    assert _user_is_org_admin({}, user_obj) is False
+
+
+def test_non_org_admin_with_organizations_list():
+    """A regular internal user is not an org admin even if they are a member of the org."""
+    membership = LiteLLM_OrganizationMembershipTable(
+        user_id="regular-user",
+        organization_id="org-1",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+        created_at=datetime(2024, 1, 1),
+        updated_at=datetime(2024, 1, 1),
+    )
+    user_obj = LiteLLM_UserTable(
+        user_id="regular-user",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+        organization_memberships=[membership],
+    )
+    assert _user_is_org_admin({"organizations": ["org-1"]}, user_obj) is False
+
+
+def test_org_admin_cannot_escalate_to_other_org():
+    """Regression: admin of org-A requesting [org-A, org-B] must be rejected."""
+    user_obj = _make_org_admin_user("org-A")
+    assert _user_is_org_admin({"organizations": ["org-A", "org-B"]}, user_obj) is False
+
+
+def test_org_admin_of_multiple_orgs_can_operate_on_both():
+    """Admin of both org-A and org-B can operate on both."""
+    memberships = [
+        LiteLLM_OrganizationMembershipTable(
+            user_id="multi-admin",
+            organization_id="org-A",
+            user_role=LitellmUserRoles.ORG_ADMIN.value,
+            created_at=datetime(2024, 1, 1),
+            updated_at=datetime(2024, 1, 1),
+        ),
+        LiteLLM_OrganizationMembershipTable(
+            user_id="multi-admin",
+            organization_id="org-B",
+            user_role=LitellmUserRoles.ORG_ADMIN.value,
+            created_at=datetime(2024, 1, 1),
+            updated_at=datetime(2024, 1, 1),
+        ),
+    ]
+    user_obj = LiteLLM_UserTable(
+        user_id="multi-admin",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+        organization_memberships=memberships,
+    )
+    assert _user_is_org_admin({"organizations": ["org-A", "org-B"]}, user_obj) is True
+
+
+@pytest.mark.asyncio
+async def test_initialize_pass_through_registers_wildcard_for_auth_subpath():
+    """
+    Test that initialize_pass_through_endpoints registers both base path and
+    wildcard path in openai_routes when auth=true and include_subpath=true,
+    and that subpath requests pass is_llm_api_route.
+
+    Also verifies:
+    - Dedup: calling init twice does not duplicate entries
+    - Cleanup: removing the endpoint cleans up openai_routes
+    """
+    from litellm.proxy._types import LiteLLMRoutes
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+        InitPassThroughEndpointHelpers,
+        initialize_pass_through_endpoints,
+    )
+
+    base_path = "/v1/ocr/nvidia/community/nemoretriever-ocr-v1"
+    wildcard_path = base_path + "/*"
+
+    endpoint_config = {
+        "path": base_path,
+        "target": "https://httpbin.org/post",
+        "include_subpath": True,
+        "auth": True,
+        "headers": {"content-type": "application/json"},
+    }
+
+    original_routes = LiteLLMRoutes.openai_routes.value[:]
+    try:
+        with (
+            patch(
+                "litellm.proxy.proxy_server.app",
+                MagicMock(),
+            ),
+            patch(
+                "litellm.proxy.proxy_server.premium_user",
+                True,
+            ),
+            patch(
+                "litellm.proxy.proxy_server.config_passthrough_endpoints",
+                None,
+            ),
+        ):
+            await initialize_pass_through_endpoints([endpoint_config])
+
+            # Both base and wildcard paths should be registered
+            assert base_path in LiteLLMRoutes.openai_routes.value
+            assert wildcard_path in LiteLLMRoutes.openai_routes.value
+
+            # Subpath requests should pass the auth route check
+            assert RouteChecks.is_llm_api_route(base_path) is True
+            assert RouteChecks.is_llm_api_route(base_path + "/v1/infer") is True
+
+            # Calling init again should not duplicate entries
+            await initialize_pass_through_endpoints([endpoint_config])
+            assert LiteLLMRoutes.openai_routes.value.count(base_path) == 1
+            assert LiteLLMRoutes.openai_routes.value.count(wildcard_path) == 1
+
+            # Removing the endpoint should clean up openai_routes
+            # remove_endpoint_routes takes endpoint_id (UUID portion of
+            # the route key "{id}:exact:{path}:{methods}")
+            registered = (
+                InitPassThroughEndpointHelpers.get_all_registered_pass_through_routes()
+            )
+            endpoint_ids = {k.split(":")[0] for k in registered}
+            for eid in endpoint_ids:
+                InitPassThroughEndpointHelpers.remove_endpoint_routes(eid)
+            assert base_path not in LiteLLMRoutes.openai_routes.value
+            assert wildcard_path not in LiteLLMRoutes.openai_routes.value
+    finally:
+        LiteLLMRoutes.openai_routes.value[:] = original_routes
+        # Clean up any routes registered during this test to avoid
+        # polluting the module-level _registered_pass_through_routes
+        registered = (
+            InitPassThroughEndpointHelpers.get_all_registered_pass_through_routes()
+        )
+        for k in registered:
+            InitPassThroughEndpointHelpers.remove_endpoint_routes(k.split(":")[0])

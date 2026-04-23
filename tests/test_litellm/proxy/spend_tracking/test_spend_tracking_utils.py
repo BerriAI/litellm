@@ -16,13 +16,20 @@ sys.path.insert(
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import litellm
-from litellm.constants import LITELLM_TRUNCATED_PAYLOAD_FIELD, REDACTED_BY_LITELM_STRING
+from litellm.constants import (
+    LITELLM_TRUNCATED_PAYLOAD_FIELD,
+    LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE,
+    REDACTED_BY_LITELM_STRING,
+)
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy.spend_tracking.spend_tracking_utils import (
+    _get_messages_for_spend_logs_payload,
     _get_proxy_server_request_for_spend_logs_payload,
+    _get_request_duration_ms,
     _get_response_for_spend_logs_payload,
     _get_spend_logs_metadata,
     _get_vector_store_request_for_spend_logs_payload,
+    _is_master_key,
     _sanitize_request_body_for_spend_logs_payload,
     _should_store_prompts_and_responses_in_spend_logs,
     get_logging_payload,
@@ -46,21 +53,23 @@ def test_sanitize_request_body_for_spend_logs_payload_long_string():
     from litellm.constants import MAX_STRING_LENGTH_PROMPT_IN_DB
 
     # Create a string longer than MAX_STRING_LENGTH_PROMPT_IN_DB (2048)
-    long_string = "a" * 3000  # Create a string longer than MAX_STRING_LENGTH_PROMPT_IN_DB
+    long_string = (
+        "a" * 3000
+    )  # Create a string longer than MAX_STRING_LENGTH_PROMPT_IN_DB
     request_body = {"text": long_string, "normal_text": "short text"}
     sanitized = _sanitize_request_body_for_spend_logs_payload(request_body)
-    
+
     # Calculate expected lengths: 35% start + 65% end + truncation message
     start_chars = int(MAX_STRING_LENGTH_PROMPT_IN_DB * 0.35)
     end_chars = int(MAX_STRING_LENGTH_PROMPT_IN_DB * 0.65)
     total_keep = start_chars + end_chars
     if total_keep > MAX_STRING_LENGTH_PROMPT_IN_DB:
         end_chars = MAX_STRING_LENGTH_PROMPT_IN_DB - start_chars
-    
+
     skipped_chars = len(long_string) - (start_chars + end_chars)
-    expected_truncation_message = f"... ({LITELLM_TRUNCATED_PAYLOAD_FIELD} skipped {skipped_chars} chars) ..."
+    expected_truncation_message = f"... ({LITELLM_TRUNCATED_PAYLOAD_FIELD} skipped {skipped_chars} chars. {LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE}) ..."
     expected_length = start_chars + len(expected_truncation_message) + end_chars
-    
+
     assert len(sanitized["text"]) == expected_length
     assert sanitized["text"].startswith("a" * start_chars)
     assert sanitized["text"].endswith("a" * end_chars)
@@ -75,18 +84,18 @@ def test_sanitize_request_body_for_spend_logs_payload_nested_dict():
     long_string = "a" * (MAX_STRING_LENGTH_PROMPT_IN_DB + 500)
     request_body = {"outer": {"inner": {"text": long_string, "normal": "short"}}}
     sanitized = _sanitize_request_body_for_spend_logs_payload(request_body)
-    
+
     # Calculate expected lengths based on actual MAX_STRING_LENGTH_PROMPT_IN_DB
     start_chars = int(MAX_STRING_LENGTH_PROMPT_IN_DB * 0.35)
     end_chars = int(MAX_STRING_LENGTH_PROMPT_IN_DB * 0.65)
     total_keep = start_chars + end_chars
     if total_keep > MAX_STRING_LENGTH_PROMPT_IN_DB:
         end_chars = MAX_STRING_LENGTH_PROMPT_IN_DB - start_chars
-    
+
     skipped_chars = len(long_string) - total_keep
-    expected_truncation_message = f"... ({LITELLM_TRUNCATED_PAYLOAD_FIELD} skipped {skipped_chars} chars) ..."
+    expected_truncation_message = f"... ({LITELLM_TRUNCATED_PAYLOAD_FIELD} skipped {skipped_chars} chars. {LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE}) ..."
     expected_length = start_chars + len(expected_truncation_message) + end_chars
-    
+
     assert len(sanitized["outer"]["inner"]["text"]) == expected_length
     assert sanitized["outer"]["inner"]["normal"] == "short"
 
@@ -100,18 +109,18 @@ def test_sanitize_request_body_for_spend_logs_payload_nested_list():
         "items": [{"text": long_string}, {"text": "short"}, [{"text": long_string}]]
     }
     sanitized = _sanitize_request_body_for_spend_logs_payload(request_body)
-    
+
     # Calculate expected lengths based on actual MAX_STRING_LENGTH_PROMPT_IN_DB
     start_chars = int(MAX_STRING_LENGTH_PROMPT_IN_DB * 0.35)
     end_chars = int(MAX_STRING_LENGTH_PROMPT_IN_DB * 0.65)
     total_keep = start_chars + end_chars
     if total_keep > MAX_STRING_LENGTH_PROMPT_IN_DB:
         end_chars = MAX_STRING_LENGTH_PROMPT_IN_DB - start_chars
-    
+
     skipped_chars = len(long_string) - total_keep
-    expected_truncation_message = f"... ({LITELLM_TRUNCATED_PAYLOAD_FIELD} skipped {skipped_chars} chars) ..."
+    expected_truncation_message = f"... ({LITELLM_TRUNCATED_PAYLOAD_FIELD} skipped {skipped_chars} chars. {LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE}) ..."
     expected_length = start_chars + len(expected_truncation_message) + end_chars
-    
+
     assert len(sanitized["items"][0]["text"]) == expected_length
     assert sanitized["items"][1]["text"] == "short"
     assert len(sanitized["items"][2][0]["text"]) == expected_length
@@ -140,23 +149,38 @@ def test_sanitize_request_body_for_spend_logs_payload_mixed_types():
         "nested": {"list": ["short", long_string], "dict": {"key": long_string}},
     }
     sanitized = _sanitize_request_body_for_spend_logs_payload(request_body)
-    
+
     # Calculate expected lengths based on actual MAX_STRING_LENGTH_PROMPT_IN_DB
     start_chars = int(MAX_STRING_LENGTH_PROMPT_IN_DB * 0.35)
     end_chars = int(MAX_STRING_LENGTH_PROMPT_IN_DB * 0.65)
     total_keep = start_chars + end_chars
     if total_keep > MAX_STRING_LENGTH_PROMPT_IN_DB:
         end_chars = MAX_STRING_LENGTH_PROMPT_IN_DB - start_chars
-    
+
     skipped_chars = len(long_string) - total_keep
-    expected_truncation_message = f"... ({LITELLM_TRUNCATED_PAYLOAD_FIELD} skipped {skipped_chars} chars) ..."
+    expected_truncation_message = f"... ({LITELLM_TRUNCATED_PAYLOAD_FIELD} skipped {skipped_chars} chars. {LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE}) ..."
     expected_length = start_chars + len(expected_truncation_message) + end_chars
-    
+
     assert len(sanitized["text"]) == expected_length
     assert sanitized["number"] == 42
     assert sanitized["nested"]["list"][0] == "short"
     assert len(sanitized["nested"]["list"][1]) == expected_length
     assert len(sanitized["nested"]["dict"]["key"]) == expected_length
+
+
+def test_sanitize_request_body_for_spend_logs_payload_uses_runtime_env_override(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from litellm.constants import MAX_STRING_LENGTH_PROMPT_IN_DB
+
+    override_max = max(MAX_STRING_LENGTH_PROMPT_IN_DB + 1000, 6000)
+    test_string = "a" * (MAX_STRING_LENGTH_PROMPT_IN_DB + 500)
+
+    # Simulate config-loaded env var being set after module import.
+    monkeypatch.setenv("MAX_STRING_LENGTH_PROMPT_IN_DB", str(override_max))
+
+    sanitized = _sanitize_request_body_for_spend_logs_payload({"text": test_string})
+    assert sanitized["text"] == test_string
 
 
 def test_sanitize_request_body_for_spend_logs_payload_circular_reference():
@@ -248,6 +272,75 @@ def test_get_vector_store_request_for_spend_logs_payload_null_input(mock_should_
 @patch(
     "litellm.proxy.spend_tracking.spend_tracking_utils._should_store_prompts_and_responses_in_spend_logs"
 )
+def test_get_messages_for_spend_logs_realtime_returns_messages(mock_should_store):
+    """
+    Test that _get_messages_for_spend_logs_payload returns messages
+    for realtime calls when store_prompts_in_spend_logs is True.
+    """
+    mock_should_store.return_value = True
+    realtime_messages = [
+        {"role": "system", "content": "You are a helpful assistant."},
+        {"role": "user", "content": "What is the weather today?"},
+    ]
+    payload = cast(
+        StandardLoggingPayload,
+        {
+            "call_type": "_arealtime",
+            "messages": realtime_messages,
+        },
+    )
+    result = _get_messages_for_spend_logs_payload(payload)
+    parsed = json.loads(result)
+    assert len(parsed) == 2
+    assert parsed[0]["role"] == "system"
+    assert parsed[0]["content"] == "You are a helpful assistant."
+    assert parsed[1]["role"] == "user"
+    assert parsed[1]["content"] == "What is the weather today?"
+
+
+@patch(
+    "litellm.proxy.spend_tracking.spend_tracking_utils._should_store_prompts_and_responses_in_spend_logs"
+)
+def test_get_messages_for_spend_logs_realtime_empty_when_disabled(mock_should_store):
+    """
+    Test that _get_messages_for_spend_logs_payload returns '{}' for realtime calls
+    when store_prompts_in_spend_logs is False.
+    """
+    mock_should_store.return_value = False
+    payload = cast(
+        StandardLoggingPayload,
+        {
+            "call_type": "_arealtime",
+            "messages": [{"role": "user", "content": "Hello"}],
+        },
+    )
+    result = _get_messages_for_spend_logs_payload(payload)
+    assert result == "{}"
+
+
+@patch(
+    "litellm.proxy.spend_tracking.spend_tracking_utils._should_store_prompts_and_responses_in_spend_logs"
+)
+def test_get_messages_for_spend_logs_non_realtime_returns_empty(mock_should_store):
+    """
+    Test that _get_messages_for_spend_logs_payload returns '{}' for non-realtime
+    calls even when store_prompts_in_spend_logs is True.
+    """
+    mock_should_store.return_value = True
+    payload = cast(
+        StandardLoggingPayload,
+        {
+            "call_type": "acompletion",
+            "messages": [{"role": "user", "content": "Hello"}],
+        },
+    )
+    result = _get_messages_for_spend_logs_payload(payload)
+    assert result == "{}"
+
+
+@patch(
+    "litellm.proxy.spend_tracking.spend_tracking_utils._should_store_prompts_and_responses_in_spend_logs"
+)
 def test_get_response_for_spend_logs_payload_truncates_large_base64(mock_should_store):
     from litellm.constants import MAX_STRING_LENGTH_PROMPT_IN_DB
 
@@ -256,14 +349,14 @@ def test_get_response_for_spend_logs_payload_truncates_large_base64(mock_should_
     payload = cast(
         StandardLoggingPayload,
         {
-        "response": {
-            "data": [
-                {
-                    "b64_json": large_text,
-                    "other_field": "value",
-                }
-            ]
-        }
+            "response": {
+                "data": [
+                    {
+                        "b64_json": large_text,
+                        "other_field": "value",
+                    }
+                ]
+            }
         },
     )
 
@@ -278,7 +371,9 @@ def test_get_response_for_spend_logs_payload_truncates_large_base64(mock_should_
 @patch(
     "litellm.proxy.spend_tracking.spend_tracking_utils._should_store_prompts_and_responses_in_spend_logs"
 )
-def test_get_response_for_spend_logs_payload_truncates_large_embedding(mock_should_store):
+def test_get_response_for_spend_logs_payload_truncates_large_embedding(
+    mock_should_store,
+):
     from litellm.constants import MAX_STRING_LENGTH_PROMPT_IN_DB
 
     mock_should_store.return_value = True
@@ -303,30 +398,106 @@ def test_get_response_for_spend_logs_payload_truncates_large_embedding(mock_shou
     response_json = _get_response_for_spend_logs_payload(payload)
     parsed = json.loads(response_json)
     truncated_value = parsed["data"][0]["embedding"]
-    
+
     assert isinstance(truncated_value, str)
     assert len(truncated_value) < len(large_embedding)
     assert LITELLM_TRUNCATED_PAYLOAD_FIELD in truncated_value
     assert parsed["data"][0]["other_field"] == "value"
 
 
+def test_truncation_includes_db_safeguard_note():
+    """
+    Test that truncated content includes the DB safeguard note explaining
+    that full data is available in OTEL/other logging integrations.
+    """
+    from litellm.constants import MAX_STRING_LENGTH_PROMPT_IN_DB
+
+    large_error = "Error: " + "x" * (MAX_STRING_LENGTH_PROMPT_IN_DB + 1000)
+    request_body = {"error_trace": large_error}
+    sanitized = _sanitize_request_body_for_spend_logs_payload(request_body)
+
+    truncated = sanitized["error_trace"]
+    assert LITELLM_TRUNCATED_PAYLOAD_FIELD in truncated
+    assert LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE in truncated
+    assert "DB storage safeguard" in truncated
+    assert (
+        "logging callbacks" in truncated.lower()
+        or "logging integrations" in truncated.lower()
+        or "logging callbacks" in truncated
+    )
+
+
+@patch(
+    "litellm.proxy.spend_tracking.spend_tracking_utils._should_store_prompts_and_responses_in_spend_logs"
+)
+def test_response_truncation_logs_info_message(mock_should_store):
+    """
+    Test that when response is truncated before DB storage, an info log is emitted
+    noting that full data is available in OTEL/other integrations.
+    """
+    from litellm.constants import MAX_STRING_LENGTH_PROMPT_IN_DB
+
+    mock_should_store.return_value = True
+    large_text = "B" * (MAX_STRING_LENGTH_PROMPT_IN_DB + 500)
+    payload = cast(
+        StandardLoggingPayload,
+        {"response": {"data": [{"content": large_text}]}},
+    )
+
+    with patch(
+        "litellm.proxy.spend_tracking.spend_tracking_utils.verbose_proxy_logger"
+    ) as mock_logger:
+        _get_response_for_spend_logs_payload(payload)
+        mock_logger.info.assert_called_once()
+        log_msg = mock_logger.info.call_args[0][0]
+        assert "response was truncated" in log_msg
+
+
+@patch(
+    "litellm.proxy.spend_tracking.spend_tracking_utils._should_store_prompts_and_responses_in_spend_logs"
+)
+def test_request_body_truncation_logs_info_message(mock_should_store):
+    """
+    Test that when request body is truncated before DB storage, an info log is emitted.
+    """
+    from litellm.constants import MAX_STRING_LENGTH_PROMPT_IN_DB
+
+    mock_should_store.return_value = True
+    large_prompt = "C" * (MAX_STRING_LENGTH_PROMPT_IN_DB + 500)
+    litellm_params = {
+        "proxy_server_request": {
+            "body": {"messages": [{"role": "user", "content": large_prompt}]}
+        }
+    }
+
+    with patch(
+        "litellm.proxy.spend_tracking.spend_tracking_utils.verbose_proxy_logger"
+    ) as mock_logger:
+        _get_proxy_server_request_for_spend_logs_payload(
+            metadata={}, litellm_params=litellm_params, kwargs={}
+        )
+        mock_logger.info.assert_called_once()
+        log_msg = mock_logger.info.call_args[0][0]
+        assert "request body was truncated" in log_msg
+
+
 def test_safe_dumps_handles_circular_references():
     """Test that safe_dumps can handle circular references without raising exceptions"""
-    
+
     # Create a circular reference
     obj1 = {"name": "obj1"}
     obj2 = {"name": "obj2", "ref": obj1}
     obj1["ref"] = obj2  # This creates a circular reference
-    
+
     # This should not raise an exception
     result = safe_dumps(obj1)
-    
+
     # Should be a valid JSON string
     assert isinstance(result, str)
-    
+
     # Should contain placeholder for circular reference
     assert "CircularReference Detected" in result
-    
+
     # Should be parseable as JSON
     parsed = json.loads(result)
     assert parsed["name"] == "obj1"
@@ -335,18 +506,18 @@ def test_safe_dumps_handles_circular_references():
 
 def test_safe_dumps_normal_objects():
     """Test that safe_dumps works correctly with normal objects"""
-    
+
     normal_obj = {
         "string": "test",
         "number": 42,
         "boolean": True,
         "null": None,
         "list": [1, 2, 3],
-        "nested": {"key": "value"}
+        "nested": {"key": "value"},
     }
-    
+
     result = safe_dumps(normal_obj)
-    
+
     # Should be a valid JSON string that can be parsed
     assert isinstance(result, str)
     parsed = json.loads(result)
@@ -355,28 +526,28 @@ def test_safe_dumps_normal_objects():
 
 def test_safe_dumps_complex_metadata_like_object():
     """Test with a complex metadata-like object similar to what caused the issue"""
-    
+
     # Simulate a complex metadata object
     metadata = {
         "user_api_key": "test-key",
         "model": "gpt-4",
         "usage": {"total_tokens": 100},
         "mcp_tool_call_metadata": {
-            "name": "test_tool", 
-            "arguments": {"param": "value"}
-        }
+            "name": "test_tool",
+            "arguments": {"param": "value"},
+        },
     }
-    
+
     # Add a potential circular reference
     usage_detail = {"parent_metadata": metadata}
     metadata["usage"]["detail"] = usage_detail
-    
+
     # This should not raise an exception
     result = safe_dumps(metadata)
-    
+
     # Should be a valid JSON string
     assert isinstance(result, str)
-    
+
     # Should be parseable as JSON
     parsed = json.loads(result)
     assert parsed["user_api_key"] == "test-key"
@@ -388,14 +559,14 @@ def test_safe_dumps_complex_metadata_like_object():
 def test_get_logging_payload_api_key_preserved_when_standard_logging_payload_is_none():
     """
     Critical - Product incident was caused by this bug.
-    
+
     Test that api_key is NOT set to empty string when standard_logging_payload is None.
-    
+
     This is a regression test for a bug where:
     - On failed requests (bad request errors), standard_logging_payload is None
     - The else block was incorrectly setting api_key = ""
     - This caused empty api_key in DailyUserSpend table despite SpendLogs having the correct key
-    
+
     Expected behavior:
     - api_key from metadata should be extracted and hashed
     - Even when standard_logging_payload is None, the api_key should be preserved
@@ -403,7 +574,7 @@ def test_get_logging_payload_api_key_preserved_when_standard_logging_payload_is_
     """
     # Setup: Simulate a failed request scenario
     test_api_key = "sk-WLi4iRn4JmbVlTaYw12IOA"
-    
+
     # Create kwargs similar to what's passed during a bad request error
     kwargs = {
         "model": "openai/gpt-4.1",
@@ -418,39 +589,42 @@ def test_get_logging_payload_api_key_preserved_when_standard_logging_payload_is_
         },
         # Note: No 'standard_logging_object' in kwargs - simulating failure case
     }
-    
+
     # Create a mock error response (bad request)
     response_obj = Exception("BadRequestError: Invalid parameter 'usersss'")
-    
+
     # Create timestamps
     start_time = datetime.datetime.now(timezone.utc)
     end_time = datetime.datetime.now(timezone.utc)
-    
+
     # Call get_logging_payload
     payload = get_logging_payload(
         kwargs=kwargs,
         response_obj=response_obj,
         start_time=start_time,
-        end_time=end_time
+        end_time=end_time,
     )
-    
+
     # CRITICAL ASSERTION: api_key should NOT be empty string
-    assert payload["api_key"] != "", \
-        "BUG: api_key is empty! When standard_logging_payload is None, " \
+    assert payload["api_key"] != "", (
+        "BUG: api_key is empty! When standard_logging_payload is None, "
         "the api_key from metadata should be preserved and hashed."
-    
+    )
+
     # The api_key should be hashed (not the raw key)
-    assert payload["api_key"] != test_api_key, \
-        "api_key should be hashed, not the raw key"
-    
+    assert (
+        payload["api_key"] != test_api_key
+    ), "api_key should be hashed, not the raw key"
+
     # The api_key should be a valid hash (64 character hex string for SHA256)
-    assert len(payload["api_key"]) == 64, \
-        f"Expected 64 character hash, got {len(payload['api_key'])} characters"
-    
+    assert (
+        len(payload["api_key"]) == 64
+    ), f"Expected 64 character hash, got {len(payload['api_key'])} characters"
+
     # Verify other fields are set correctly
     assert payload["model"] == "openai/gpt-4.1"
     assert payload["user"] == "test_user"
-    
+
     print(f"✅ Test passed! api_key preserved: {payload['api_key']}")
 
 
@@ -460,16 +634,16 @@ def test_get_logging_payload_api_key_preserved_when_standard_logging_payload_is_
 async def test_api_key_preserved_through_failure_hook_to_database():
     """
     CRITICAL E2E TEST: Validates the COMPLETE code path from failure hook to database.
-    
+
     This is THE comprehensive test that protects against the production incident.
     It tests the EXACT flow that caused the bug:
-    
+
     1. async_post_call_failure_hook is called with api_key in UserAPIKeyAuth
     2. Failure hook calls update_database with the token parameter
     3. update_database calls get_logging_payload to create payload
     4. BUG WAS HERE: get_logging_payload set api_key = "" when standard_logging_payload was None
     5. Empty api_key was written to DailyUserSpend table
-    
+
     This test validates the ENTIRE flow to ensure the bug cannot regress.
     If this test fails in CI/CD, the build MUST fail.
     """
@@ -480,13 +654,21 @@ async def test_api_key_preserved_through_failure_hook_to_database():
     # Setup
     test_api_key = "sk-test-critical-e2e-key"
     hashed_key = hash_token(test_api_key)
-    
+
     # Track what payload gets created
     captured_payloads = []
-    
+
     async def mock_update_database(
-        token, response_cost, user_id, end_user_id, team_id,
-        kwargs, completion_response, start_time, end_time, org_id
+        token,
+        response_cost,
+        user_id,
+        end_user_id,
+        team_id,
+        kwargs,
+        completion_response,
+        start_time,
+        end_time,
+        org_id,
     ):
         """Mock update_database and capture the payload it creates"""
         from litellm.proxy.spend_tracking.spend_tracking_utils import (
@@ -498,21 +680,23 @@ async def test_api_key_preserved_through_failure_hook_to_database():
             kwargs=kwargs,
             response_obj=completion_response,
             start_time=start_time,
-            end_time=end_time
+            end_time=end_time,
         )
-        
-        captured_payloads.append({
-            "token": token,
-            "payload": payload,
-        })
-    
+
+        captured_payloads.append(
+            {
+                "token": token,
+                "payload": payload,
+            }
+        )
+
     # Mock dependencies
     mock_db_writer = MagicMock()
     mock_db_writer.update_database = AsyncMock(side_effect=mock_update_database)
-    
+
     mock_proxy_logging_obj = MagicMock()
     mock_proxy_logging_obj.db_spend_update_writer = mock_db_writer
-    
+
     # Create UserAPIKeyAuth (what the failure hook receives)
     user_api_key_dict = UserAPIKeyAuth(
         api_key=hashed_key,
@@ -527,9 +711,9 @@ async def test_api_key_preserved_through_failure_hook_to_database():
         team_alias=None,
         end_user_id=None,
         request_route="/chat/completions",
-        metadata={}
+        metadata={},
     )
-    
+
     # Request data with bad parameter (triggers failure)
     request_data = {
         "model": "gpt-3.5-turbo",
@@ -541,66 +725,66 @@ async def test_api_key_preserved_through_failure_hook_to_database():
                 "user_api_key_user_id": "test_user",
                 "user_api_key_team_id": "test_team",
             }
-        }
+        },
     }
-    
+
     exception = Exception("BadRequestError: Invalid parameter 'invalid_param'")
-    
+
     # Execute the ACTUAL failure hook code path
     logger = _ProxyDBLogger()
-    
+
     with patch("litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging_obj):
         await logger.async_post_call_failure_hook(
             request_data=request_data,
             original_exception=exception,
             user_api_key_dict=user_api_key_dict,
-            traceback_str=None
+            traceback_str=None,
         )
-        
+
         await asyncio.sleep(0.1)  # Wait for async operations
-    
+
     # =========================================================================
     # CRITICAL ASSERTIONS - If ANY fail, the production bug has regressed!
     # =========================================================================
-    
+
     assert len(captured_payloads) == 1, "update_database should be called once"
-    
+
     data = captured_payloads[0]
     payload = data["payload"]
     payload_api_key = payload.get("api_key")
-    
+
     # THE CRITICAL ASSERTION - This would fail with the original bug!
-    assert payload_api_key != "", \
-        "🚨 CRITICAL BUG: payload['api_key'] is empty! " \
-        "This is the EXACT production incident bug. " \
-        "get_logging_payload() is setting api_key = '' when " \
+    assert payload_api_key != "", (
+        "🚨 CRITICAL BUG: payload['api_key'] is empty! "
+        "This is the EXACT production incident bug. "
+        "get_logging_payload() is setting api_key = '' when "
         "standard_logging_payload is None (failure case)."
-    
-    assert payload_api_key is not None, \
-        "🚨 CRITICAL: payload['api_key'] is None!"
-    
-    assert payload_api_key == hashed_key, \
-        f"🚨 CRITICAL: Expected api_key={hashed_key}, got {payload_api_key}"
-    
+    )
+
+    assert payload_api_key is not None, "🚨 CRITICAL: payload['api_key'] is None!"
+
+    assert (
+        payload_api_key == hashed_key
+    ), f"🚨 CRITICAL: Expected api_key={hashed_key}, got {payload_api_key}"
+
     # Verify token parameter matches
-    assert data["token"] == hashed_key, \
-        f"Token parameter should be {hashed_key}"
-    
+    assert data["token"] == hashed_key, f"Token parameter should be {hashed_key}"
+
     # Verify other fields
     assert payload.get("model") == "gpt-3.5-turbo"
     assert payload.get("user") == "test_user"
-    
-    print("\n" + "="*80)
+
+    print("\n" + "=" * 80)
     print("✅ CRITICAL E2E TEST PASSED")
-    print("="*80)
+    print("=" * 80)
     print(f"Token: {data['token']}")
     print(f"Payload api_key: {payload_api_key}")
     print(f"Match: {data['token'] == payload_api_key}")
-    print("="*80)
+    print("=" * 80)
     print("Production incident bug is FIXED and protected:")
     print("- Failed requests preserve api_key through entire flow")
     print("- Both SpendLogs AND DailyUserSpend will have correct api_key")
-    print("="*80 + "\n")
+    print("=" * 80 + "\n")
 
 
 @patch("litellm.proxy.proxy_server.master_key", None)
@@ -638,7 +822,9 @@ def test_get_logging_payload_includes_agent_id_from_kwargs():
         end_time=end_time,
     )
 
-    assert payload["agent_id"] == test_agent_id, f"Expected agent_id '{test_agent_id}', got '{payload.get('agent_id')}'"
+    assert (
+        payload["agent_id"] == test_agent_id
+    ), f"Expected agent_id '{test_agent_id}', got '{payload.get('agent_id')}'"
 
 
 @patch("litellm.proxy.proxy_server.master_key", None)
@@ -739,9 +925,9 @@ def test_get_logging_payload_includes_overhead_in_spend_logs_metadata():
     # Parse the metadata JSON string
     metadata_json = payload.get("metadata")
     assert metadata_json is not None, "metadata should not be None"
-    
+
     metadata = json.loads(metadata_json)
-    
+
     # Verify overhead is stored directly in metadata
     assert (
         metadata.get("litellm_overhead_time_ms") == test_overhead_ms
@@ -845,9 +1031,9 @@ def test_get_logging_payload_handles_missing_overhead_gracefully():
     # Parse the metadata JSON string
     metadata_json = payload.get("metadata")
     assert metadata_json is not None, "metadata should not be None"
-    
+
     metadata = json.loads(metadata_json)
-    
+
     # When overhead is None, litellm_overhead_time_ms should be None or not present
     assert (
         metadata.get("litellm_overhead_time_ms") is None
@@ -887,7 +1073,9 @@ def test_spend_logs_redacts_request_and_response_when_turn_off_message_logging_e
     )
 
     parsed_request = json.loads(request_result)
-    assert parsed_request["messages"] == [{"role": "user", "content": "redacted-by-litellm"}]
+    assert parsed_request["messages"] == [
+        {"role": "user", "content": "redacted-by-litellm"}
+    ]
     assert parsed_request["model"] == "gpt-4"
 
     # Test response redaction - use dict response to verify redaction
@@ -906,12 +1094,15 @@ def test_spend_logs_redacts_request_and_response_when_turn_off_message_logging_e
         {"response": response_dict},
     )
 
-    response_result = _get_response_for_spend_logs_payload(payload=payload, kwargs=kwargs)
+    response_result = _get_response_for_spend_logs_payload(
+        payload=payload, kwargs=kwargs
+    )
 
     # When redaction is enabled and response is a dict (not ModelResponse),
-    # perform_redaction returns {"text": "redacted-by-litellm"}
+    # perform_redaction redacts content in-place within the choices structure
     parsed_response = json.loads(response_result)
-    assert parsed_response == {"text": "redacted-by-litellm"}
+    assert parsed_response["choices"][0]["message"]["content"] == "redacted-by-litellm"
+    assert parsed_response["choices"][0]["message"]["role"] == "assistant"
 
 
 @patch("litellm.secret_managers.main.get_secret_bool")
@@ -924,39 +1115,56 @@ def test_should_store_prompts_and_responses_in_spend_logs_case_insensitive_strin
     """
     # Test case-insensitive string "true" variations
     for true_value in ["true", "TRUE", "True", "TrUe"]:
-        with patch("litellm.proxy.proxy_server.general_settings", {"store_prompts_in_spend_logs": true_value}):
+        with patch(
+            "litellm.proxy.proxy_server.general_settings",
+            {"store_prompts_in_spend_logs": true_value},
+        ):
             mock_get_secret_bool.return_value = False  # Ensure env var is False
             result = _should_store_prompts_and_responses_in_spend_logs()
             assert result is True, f"Expected True for '{true_value}', got {result}"
-    
+
     # Test boolean True
-    with patch("litellm.proxy.proxy_server.general_settings", {"store_prompts_in_spend_logs": True}):
+    with patch(
+        "litellm.proxy.proxy_server.general_settings",
+        {"store_prompts_in_spend_logs": True},
+    ):
         mock_get_secret_bool.return_value = False
         result = _should_store_prompts_and_responses_in_spend_logs()
         assert result is True, f"Expected True for boolean True, got {result}"
-    
+
     # Test that non-true values fall back to environment variable
     for false_value in [False, None, "false", "FALSE", "False", "anything"]:
-        with patch("litellm.proxy.proxy_server.general_settings", {"store_prompts_in_spend_logs": false_value}):
+        with patch(
+            "litellm.proxy.proxy_server.general_settings",
+            {"store_prompts_in_spend_logs": false_value},
+        ):
             # When env var is True, should return True
             mock_get_secret_bool.return_value = True
             result = _should_store_prompts_and_responses_in_spend_logs()
-            assert result is True, f"Expected True (from env var) for '{false_value}', got {result}"
-            
+            assert (
+                result is True
+            ), f"Expected True (from env var) for '{false_value}', got {result}"
+
             # When env var is False, should return False
             mock_get_secret_bool.return_value = False
             result = _should_store_prompts_and_responses_in_spend_logs()
-            assert result is False, f"Expected False (from env var) for '{false_value}', got {result}"
-    
+            assert (
+                result is False
+            ), f"Expected False (from env var) for '{false_value}', got {result}"
+
     # Test when general_settings doesn't have the key at all
     with patch("litellm.proxy.proxy_server.general_settings", {}):
         mock_get_secret_bool.return_value = True
         result = _should_store_prompts_and_responses_in_spend_logs()
-        assert result is True, "Expected True (from env var) when key missing, got False"
-        
+        assert (
+            result is True
+        ), "Expected True (from env var) when key missing, got False"
+
         mock_get_secret_bool.return_value = False
         result = _should_store_prompts_and_responses_in_spend_logs()
-        assert result is False, "Expected False (from env var) when key missing, got True"
+        assert (
+            result is False
+        ), "Expected False (from env var) when key missing, got True"
 
 
 def test_get_spend_logs_metadata_guardrail_info_fallback_from_metadata():
@@ -1232,3 +1440,82 @@ def test_get_logging_payload_handles_missing_retry_info_gracefully():
         metadata.get("max_retries") is None
     ), "max_retries should be None when not provided"
 
+
+def test_get_request_duration_ms_normal():
+    """Test that request duration is correctly computed in milliseconds."""
+    start = datetime.datetime(2025, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
+    end = datetime.datetime(
+        2025, 1, 1, 0, 0, 2, 500000, tzinfo=timezone.utc
+    )  # 2.5s later
+    result = _get_request_duration_ms(start, end)
+    assert result == 2500
+
+
+def test_get_request_duration_ms_sub_millisecond():
+    """Test that sub-millisecond durations are truncated to int."""
+    start = datetime.datetime(2025, 1, 1, 0, 0, 0, 0, tzinfo=timezone.utc)
+    end = datetime.datetime(2025, 1, 1, 0, 0, 0, 500, tzinfo=timezone.utc)  # 0.5ms
+    result = _get_request_duration_ms(start, end)
+    assert result == 0
+
+
+def test_get_request_duration_ms_zero():
+    """Test that identical start and end times produce 0."""
+    t = datetime.datetime(2025, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
+    result = _get_request_duration_ms(t, t)
+    assert result == 0
+
+
+def test_get_logging_payload_includes_request_duration_ms():
+    """Test that get_logging_payload populates request_duration_ms."""
+    start_time = datetime.datetime(2025, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
+    end_time = datetime.datetime(2025, 1, 1, 0, 0, 3, tzinfo=timezone.utc)  # 3s later
+
+    kwargs = {
+        "model": "gpt-4",
+        "litellm_params": {"api_base": "https://api.openai.com"},
+        "standard_logging_object": None,
+    }
+    response_obj = {
+        "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}
+    }
+
+    with (
+        patch("litellm.proxy.proxy_server.master_key", None),
+        patch("litellm.proxy.proxy_server.general_settings", {}),
+    ):
+        payload = get_logging_payload(
+            kwargs=kwargs,
+            response_obj=response_obj,
+            start_time=start_time,
+            end_time=end_time,
+        )
+
+    assert payload["request_duration_ms"] == 3000
+
+
+class TestIsMasterKey:
+    """Tests for _is_master_key handling None inputs without raising TypeError."""
+
+    def test_none_api_key_returns_false(self):
+        """Regression: _is_master_key(None, 'sk-master') should return False, not raise TypeError."""
+        assert _is_master_key(api_key=None, _master_key="sk-master-key") is False
+
+    def test_none_master_key_returns_false(self):
+        assert _is_master_key(api_key="sk-some-key", _master_key=None) is False
+
+    def test_both_none_returns_false(self):
+        assert _is_master_key(api_key=None, _master_key=None) is False
+
+    def test_matching_key_returns_true(self):
+        assert _is_master_key(api_key="sk-master", _master_key="sk-master") is True
+
+    def test_non_matching_key_returns_false(self):
+        assert _is_master_key(api_key="sk-other", _master_key="sk-master") is False
+
+    def test_hashed_key_returns_true(self):
+        from litellm.proxy.utils import hash_token
+
+        master = "sk-master-key-123"
+        hashed = hash_token(master)
+        assert _is_master_key(api_key=hashed, _master_key=master) is True

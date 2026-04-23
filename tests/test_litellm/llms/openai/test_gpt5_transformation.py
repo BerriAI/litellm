@@ -1,8 +1,10 @@
 import pytest
 
 import litellm
-from litellm.llms.openai.openai import OpenAIConfig
+from litellm.litellm_core_utils.get_model_cost_map import get_model_cost_map
 from litellm.llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config
+from litellm.llms.openai.openai import OpenAIConfig
+from litellm.utils import _is_explicitly_disabled_factory
 
 
 @pytest.fixture()
@@ -15,15 +17,23 @@ def gpt5_config() -> OpenAIGPT5Config:
     return OpenAIGPT5Config()
 
 
+@pytest.fixture(autouse=True)
+def use_local_model_cost_map(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(
+        litellm, "model_cost", get_model_cost_map(url=litellm.model_cost_map_url)
+    )
+    litellm.add_known_models(model_cost_map=litellm.model_cost)
+
+
 def test_gpt5_supports_reasoning_effort(config: OpenAIConfig):
     assert "reasoning_effort" in config.get_supported_openai_params(model="gpt-5")
     assert "reasoning_effort" in config.get_supported_openai_params(model="gpt-5-mini")
 
 
 def test_gpt5_chat_does_not_support_reasoning_effort(config: OpenAIConfig):
-    assert (
-        "reasoning_effort"
-        not in config.get_supported_openai_params(model="gpt-5-chat-latest")
+    assert "reasoning_effort" not in config.get_supported_openai_params(
+        model="gpt-5-chat-latest"
     )
 
 
@@ -132,7 +142,6 @@ def test_gpt5_codex_temperature_error(config: OpenAIConfig):
         )
 
 
-
 def test_gpt5_codex_temperature_one_allowed(config: OpenAIConfig):
     """Test that GPT-5-Codex allows temperature=1."""
     params = config.map_openai_params(
@@ -198,6 +207,8 @@ def test_gpt5_verbosity_parameter(config: OpenAIConfig):
             drop_params=False,
         )
         assert params["verbosity"] == "low"
+
+
 def test_gpt5_1_reasoning_effort_none(config: OpenAIConfig):
     """Test that GPT-5.1 supports reasoning_effort='none' parameter.
 
@@ -260,18 +271,23 @@ def test_gpt5_drops_reasoning_effort_xhigh_when_requested(config: OpenAIConfig):
 
 # GPT-5.1 temperature handling tests
 def test_gpt5_1_model_detection(gpt5_config: OpenAIGPT5Config):
-    """Test that GPT-5.1 models are correctly detected."""
-    assert gpt5_config.is_model_gpt_5_1_model("gpt-5.1")
-    assert gpt5_config.is_model_gpt_5_1_model("gpt-5.1-codex")
-    assert gpt5_config.is_model_gpt_5_1_model("gpt-5.1-codex-max")
-    assert gpt5_config.is_model_gpt_5_1_model("gpt-5.1-chat")
-    assert gpt5_config.is_model_gpt_5_1_model("gpt-5.2")
-    assert gpt5_config.is_model_gpt_5_1_model("gpt-5.2-2025-12-11")
-    assert gpt5_config.is_model_gpt_5_1_model("gpt-5.2-chat-latest")
-    assert not gpt5_config.is_model_gpt_5_1_model("gpt-5.2-pro")
-    assert not gpt5_config.is_model_gpt_5_1_model("gpt-5")
-    assert not gpt5_config.is_model_gpt_5_1_model("gpt-5-mini")
-    assert not gpt5_config.is_model_gpt_5_1_model("gpt-5-codex")
+    """Test that models supporting reasoning_effort='none' are correctly detected via model map."""
+    # gpt-5.1 and gpt-5.2 chat variants support none
+    assert gpt5_config._supports_reasoning_effort_level("gpt-5.1", "none")
+    assert gpt5_config._supports_reasoning_effort_level("gpt-5.1-2025-11-13", "none")
+    assert gpt5_config._supports_reasoning_effort_level("gpt-5.1-chat-latest", "none")
+    assert gpt5_config._supports_reasoning_effort_level("gpt-5.2", "none")
+    assert gpt5_config._supports_reasoning_effort_level("gpt-5.2-2025-12-11", "none")
+    # codex/pro/chat variants do not support none
+    assert not gpt5_config._supports_reasoning_effort_level("gpt-5.1-codex", "none")
+    assert not gpt5_config._supports_reasoning_effort_level("gpt-5.1-codex-max", "none")
+    assert not gpt5_config._supports_reasoning_effort_level(
+        "gpt-5.2-chat-latest", "none"
+    )
+    assert not gpt5_config._supports_reasoning_effort_level("gpt-5.2-pro", "none")
+    assert not gpt5_config._supports_reasoning_effort_level("gpt-5", "none")
+    assert not gpt5_config._supports_reasoning_effort_level("gpt-5-mini", "none")
+    assert not gpt5_config._supports_reasoning_effort_level("gpt-5-codex", "none")
 
 
 def test_gpt5_1_temperature_with_reasoning_effort_none(config: OpenAIConfig):
@@ -301,9 +317,391 @@ def test_gpt5_2_temperature_with_reasoning_effort_none(config: OpenAIConfig):
         assert params["reasoning_effort"] == "none"
 
 
+def test_gpt5_4_allows_reasoning_effort_xhigh(config: OpenAIConfig):
+    params = config.map_openai_params(
+        non_default_params={"reasoning_effort": "xhigh"},
+        optional_params={},
+        model="gpt-5.4",
+        drop_params=False,
+    )
+    assert params["reasoning_effort"] == "xhigh"
+
+
+def test_gpt5_4_pro_allows_reasoning_effort_xhigh(config: OpenAIConfig):
+    params = config.map_openai_params(
+        non_default_params={"reasoning_effort": "xhigh"},
+        optional_params={},
+        model="gpt-5.4-pro",
+        drop_params=False,
+    )
+    assert params["reasoning_effort"] == "xhigh"
+
+
+def test_gpt5_4_mini_allows_reasoning_effort_xhigh(config: OpenAIConfig):
+    """gpt-5.4-mini supports reasoning_effort='xhigh'."""
+    params = config.map_openai_params(
+        non_default_params={"reasoning_effort": "xhigh"},
+        optional_params={},
+        model="gpt-5.4-mini",
+        drop_params=False,
+    )
+    assert params["reasoning_effort"] == "xhigh"
+
+
+def test_gpt5_4_nano_allows_reasoning_effort_xhigh(config: OpenAIConfig):
+    """gpt-5.4-nano supports reasoning_effort='xhigh'."""
+    params = config.map_openai_params(
+        non_default_params={"reasoning_effort": "xhigh"},
+        optional_params={},
+        model="gpt-5.4-nano",
+        drop_params=False,
+    )
+    assert params["reasoning_effort"] == "xhigh"
+
+
+def test_gpt5_4_nano_allows_reasoning_effort_none(config: OpenAIConfig):
+    """gpt-5.4-nano supports reasoning_effort='none'."""
+    params = config.map_openai_params(
+        non_default_params={"reasoning_effort": "none"},
+        optional_params={},
+        model="gpt-5.4-nano",
+        drop_params=False,
+    )
+    assert params["reasoning_effort"] == "none"
+
+
+def test_gpt5_4_mini_allows_reasoning_effort_none(config: OpenAIConfig):
+    """gpt-5.4-mini supports reasoning_effort='none'."""
+    params = config.map_openai_params(
+        non_default_params={"reasoning_effort": "none"},
+        optional_params={},
+        model="gpt-5.4-mini",
+        drop_params=False,
+    )
+    assert params["reasoning_effort"] == "none"
+
+
+def test_gpt5_4_allows_reasoning_effort_minimal(config: OpenAIConfig):
+    """gpt-5.4 supports reasoning_effort='minimal'."""
+    params = config.map_openai_params(
+        non_default_params={"reasoning_effort": "minimal"},
+        optional_params={},
+        model="gpt-5.4",
+        drop_params=False,
+    )
+    assert params["reasoning_effort"] == "minimal"
+
+
+def test_gpt5_4_pro_allows_reasoning_effort_minimal(config: OpenAIConfig):
+    """gpt-5.4-pro supports reasoning_effort='minimal'."""
+    params = config.map_openai_params(
+        non_default_params={"reasoning_effort": "minimal"},
+        optional_params={},
+        model="gpt-5.4-pro",
+        drop_params=False,
+    )
+    assert params["reasoning_effort"] == "minimal"
+
+
+def test_gpt5_4_mini_rejects_reasoning_effort_minimal(config: OpenAIConfig):
+    """gpt-5.4-mini does not support reasoning_effort='minimal'."""
+    with pytest.raises(litellm.utils.UnsupportedParamsError):
+        config.map_openai_params(
+            non_default_params={"reasoning_effort": "minimal"},
+            optional_params={},
+            model="gpt-5.4-mini",
+            drop_params=False,
+        )
+
+
+def test_gpt5_4_nano_rejects_reasoning_effort_minimal(config: OpenAIConfig):
+    """gpt-5.4-nano does not support reasoning_effort='minimal'."""
+    with pytest.raises(litellm.utils.UnsupportedParamsError):
+        config.map_openai_params(
+            non_default_params={"reasoning_effort": "minimal"},
+            optional_params={},
+            model="gpt-5.4-nano",
+            drop_params=False,
+        )
+
+
+def test_gpt5_4_mini_provider_prefixed_rejects_minimal(config: OpenAIConfig):
+    """openai/gpt-5.4-mini correctly rejects minimal (model lookup normalizes prefix)."""
+    with pytest.raises(litellm.utils.UnsupportedParamsError):
+        config.map_openai_params(
+            non_default_params={"reasoning_effort": "minimal"},
+            optional_params={},
+            model="openai/gpt-5.4-mini",
+            drop_params=False,
+        )
+
+
+def test_gpt5_drops_reasoning_effort_minimal_when_requested(config: OpenAIConfig):
+    """reasoning_effort='minimal' is dropped for unsupported models when drop_params=True."""
+    params = config.map_openai_params(
+        non_default_params={"reasoning_effort": "minimal"},
+        optional_params={},
+        model="gpt-5.4-mini",
+        drop_params=True,
+    )
+    assert "reasoning_effort" not in params
+
+
+def test_gpt5_minimal_dict_triggers_validation(config: OpenAIConfig):
+    """Dict with effort='minimal' triggers minimal model-support validation."""
+    with pytest.raises(litellm.utils.UnsupportedParamsError):
+        config.map_openai_params(
+            non_default_params={
+                "reasoning_effort": {"effort": "minimal", "summary": "detailed"}
+            },
+            optional_params={},
+            model="gpt-5.4-mini",
+            drop_params=False,
+        )
+
+
+def test_gpt5_minimal_dict_accepted_for_supported_model(config: OpenAIConfig):
+    """Dict with effort='minimal' passes through for gpt-5.4+."""
+    params = config.map_openai_params(
+        non_default_params={
+            "reasoning_effort": {"effort": "minimal", "summary": "detailed"}
+        },
+        optional_params={},
+        model="gpt-5.4",
+        drop_params=False,
+    )
+    assert params["reasoning_effort"] == "minimal"
+
+
+def test_gpt5_supports_reasoning_effort_level_minimal(gpt5_config: OpenAIGPT5Config):
+    """Test that _supports_reasoning_effort_level correctly identifies minimal support."""
+    assert gpt5_config._supports_reasoning_effort_level("gpt-5.4", "minimal")
+    assert gpt5_config._supports_reasoning_effort_level("gpt-5.4-pro", "minimal")
+    assert not gpt5_config._supports_reasoning_effort_level("gpt-5.4-mini", "minimal")
+    assert not gpt5_config._supports_reasoning_effort_level("gpt-5.4-nano", "minimal")
+
+
+def test_gpt5_minimal_explicitly_disabled_check(gpt5_config: OpenAIGPT5Config):
+    """_is_reasoning_effort_level_explicitly_disabled returns True only for explicit False entries.
+
+    Models with supports_minimal_reasoning_effort=false → disabled.
+    Models with supports_minimal_reasoning_effort=true (or missing) → not disabled.
+    Provider-prefixed models (openai/gpt-5.4-mini) are normalized before lookup.
+    """
+    assert gpt5_config._is_reasoning_effort_level_explicitly_disabled(
+        "gpt-5.4-mini", "minimal"
+    )
+    assert gpt5_config._is_reasoning_effort_level_explicitly_disabled(
+        "gpt-5.4-nano", "minimal"
+    )
+    assert gpt5_config._is_reasoning_effort_level_explicitly_disabled(
+        "openai/gpt-5.4-mini", "minimal"
+    )
+    assert not gpt5_config._is_reasoning_effort_level_explicitly_disabled(
+        "gpt-5.4", "minimal"
+    )
+    assert not gpt5_config._is_reasoning_effort_level_explicitly_disabled(
+        "gpt-5.4-pro", "minimal"
+    )
+
+
+def test_is_explicitly_disabled_factory_minimal():
+    """_is_explicitly_disabled_factory returns True only for explicit False entries.
+
+    Verifies the shared helper used by _is_reasoning_effort_level_explicitly_disabled
+    directly — so future changes to the helper are caught without going through the
+    method wrapper.
+    """
+    key = "supports_minimal_reasoning_effort"
+    assert _is_explicitly_disabled_factory("gpt-5.4-mini", None, key)
+    assert _is_explicitly_disabled_factory("gpt-5.4-nano", None, key)
+    assert _is_explicitly_disabled_factory("openai/gpt-5.4-mini", None, key)
+    assert not _is_explicitly_disabled_factory("gpt-5.4", None, key)
+    assert not _is_explicitly_disabled_factory("gpt-5.4-pro", None, key)
+    assert not _is_explicitly_disabled_factory("gpt-5.4-turbo-preview", None, key)
+
+
+def test_gpt5_unknown_model_passes_through_minimal(config: OpenAIConfig):
+    """Unknown/unlisted gpt-5 models should pass reasoning_effort='minimal' through.
+
+    Missing supports_minimal_reasoning_effort key is treated as supported,
+    not as unsupported, to avoid breaking custom or newly-announced models.
+    """
+    params = config.map_openai_params(
+        non_default_params={"reasoning_effort": "minimal"},
+        optional_params={},
+        model="gpt-5.4-turbo-preview",
+        drop_params=False,
+    )
+    assert params["reasoning_effort"] == "minimal"
+
+
+def test_gpt5_normalizes_reasoning_effort_dict_with_summary(config: OpenAIConfig):
+    """Dict with summary/generate_summary is normalized for chat completions."""
+    params = config.map_openai_params(
+        non_default_params={
+            "reasoning_effort": {"effort": "high", "summary": "detailed"}
+        },
+        optional_params={},
+        model="gpt-5.4",
+        drop_params=False,
+    )
+    assert params["reasoning_effort"] == "high"
+
+
+def test_gpt5_xhigh_dict_triggers_validation(config: OpenAIConfig):
+    """Dict with effort='xhigh' triggers xhigh model-support validation.
+
+    Regression: when reasoning_effort is a dict, effective_effort must be used for
+    the xhigh guard so validation is not silently skipped.
+    """
+    with pytest.raises(litellm.utils.UnsupportedParamsError):
+        config.map_openai_params(
+            non_default_params={
+                "reasoning_effort": {"effort": "xhigh", "summary": "detailed"}
+            },
+            optional_params={},
+            model="gpt-5.1",
+            drop_params=False,
+        )
+
+
+def test_gpt5_xhigh_dict_accepted_for_supported_model(config: OpenAIConfig):
+    """Dict with effort='xhigh' passes through for gpt-5.4+."""
+    params = config.map_openai_params(
+        non_default_params={
+            "reasoning_effort": {"effort": "xhigh", "summary": "detailed"}
+        },
+        optional_params={},
+        model="gpt-5.4",
+        drop_params=False,
+    )
+    assert params["reasoning_effort"] == "xhigh"
+
+
+def test_gpt5_none_dict_with_tools_no_tool_drop(config: OpenAIConfig):
+    """Dict with effort='none' and tools: no tool-drop, reasoning_effort preserved.
+
+    Regression: effective_effort='none' must be used for tool-drop guard so
+    {"effort": "none", "summary": "detailed"} is not incorrectly treated as non-none.
+    """
+    tools = [{"type": "function", "function": {"name": "test", "description": "test"}}]
+    params = config.map_openai_params(
+        non_default_params={
+            "reasoning_effort": {"effort": "none", "summary": "detailed"},
+            "tools": tools,
+        },
+        optional_params={},
+        model="gpt-5.4",
+        drop_params=False,
+    )
+    assert params["reasoning_effort"] == "none"
+    assert params["tools"] == tools
+
+
+def test_gpt5_none_dict_with_sampling_params_allowed(config: OpenAIConfig):
+    """Dict with effort='none' allows logprobs/top_p/top_logprobs.
+
+    Regression: effective_effort='none' must be used for sampling guard so
+    {"effort": "none", "summary": "detailed"} does not incorrectly trigger sampling errors.
+    """
+    params = config.map_openai_params(
+        non_default_params={
+            "reasoning_effort": {"effort": "none", "summary": "detailed"},
+            "logprobs": True,
+            "top_p": 0.9,
+        },
+        optional_params={},
+        model="gpt-5.1",
+        drop_params=False,
+    )
+    assert params["reasoning_effort"] == "none"
+    assert params["logprobs"] is True
+    assert params["top_p"] == 0.9
+
+
+def test_gpt5_normalizes_reasoning_effort_dict_with_summary_from_optional_params(
+    config: OpenAIConfig,
+):
+    """reasoning_effort dict with summary in optional_params is normalized."""
+    params = config.map_openai_params(
+        non_default_params={},
+        optional_params={
+            "reasoning_effort": {"effort": "medium", "summary": "detailed"}
+        },
+        model="gpt-5.4",
+        drop_params=False,
+    )
+    assert params["reasoning_effort"] == "medium"
+
+
+def test_gpt5_4_passes_through_reasoning_effort_with_tools(config: OpenAIConfig):
+    """gpt-5.4 with tools + reasoning_effort: map_openai_params passes through both.
+
+    Routing to Responses API (which supports tools + reasoning) happens at completion()
+    level (responses_api_bridge_check). See test_responses_api_bridge_check_gpt_5_4_tools_plus_reasoning_routes_to_responses.
+    """
+    tools = [{"type": "function", "function": {"name": "test", "description": "test"}}]
+    params = config.map_openai_params(
+        non_default_params={"reasoning_effort": "high", "tools": tools},
+        optional_params={},
+        model="gpt-5.4",
+        drop_params=False,
+    )
+    assert params["reasoning_effort"] == "high"
+    assert params["tools"] == tools
+
+
+def test_gpt5_4_keeps_reasoning_effort_when_no_tools(config: OpenAIConfig):
+    """reasoning_effort is kept when tools are not present."""
+    params = config.map_openai_params(
+        non_default_params={"reasoning_effort": "high"},
+        optional_params={},
+        model="gpt-5.4",
+        drop_params=False,
+    )
+    assert params["reasoning_effort"] == "high"
+
+
+def test_gpt5_4_keeps_reasoning_effort_none_with_tools(config: OpenAIConfig):
+    """reasoning_effort='none' is kept when tools are present."""
+    tools = [{"type": "function", "function": {"name": "test", "description": "test"}}]
+    params = config.map_openai_params(
+        non_default_params={"reasoning_effort": "none", "tools": tools},
+        optional_params={},
+        model="gpt-5.4",
+        drop_params=False,
+    )
+    assert params["reasoning_effort"] == "none"
+    assert params["tools"] == tools
+
+
+def test_gpt5_2_keeps_reasoning_effort_with_tools(config: OpenAIConfig):
+    """gpt-5.2: reasoning_effort drop only applies to gpt-5.4, not gpt-5.2."""
+    tools = [{"type": "function", "function": {"name": "test", "description": "test"}}]
+    params = config.map_openai_params(
+        non_default_params={"reasoning_effort": "high", "tools": tools},
+        optional_params={},
+        model="gpt-5.2",
+        drop_params=False,
+    )
+    assert params["reasoning_effort"] == "high"
+    assert params["tools"] == tools
+
+
+def test_gpt5_4_pro_rejects_non_default_temperature(config: OpenAIConfig):
+    with pytest.raises(litellm.utils.UnsupportedParamsError):
+        config.map_openai_params(
+            non_default_params={"temperature": 0.5},
+            optional_params={},
+            model="gpt-5.4-pro",
+            drop_params=False,
+        )
+
+
 def test_gpt5_1_temperature_without_reasoning_effort(config: OpenAIConfig):
     """Test that GPT-5.1 supports any temperature when reasoning_effort is not specified.
-    
+
     When reasoning_effort is not provided, it defaults to "none" for gpt-5.1,
     so temperature should be allowed.
     """
@@ -329,7 +727,7 @@ def test_gpt5_1_temperature_with_reasoning_effort_other_values(config: OpenAICon
                 model="gpt-5.1",
                 drop_params=False,
             )
-    
+
     # Test that temperature=1 is allowed with other reasoning_effort values
     for effort in ["low", "medium", "high"]:
         params = config.map_openai_params(
@@ -342,7 +740,9 @@ def test_gpt5_1_temperature_with_reasoning_effort_other_values(config: OpenAICon
         assert params["reasoning_effort"] == effort
 
 
-def test_gpt5_1_temperature_with_reasoning_effort_in_optional_params(config: OpenAIConfig):
+def test_gpt5_1_temperature_with_reasoning_effort_in_optional_params(
+    config: OpenAIConfig,
+):
     """Test that reasoning_effort can be in optional_params and still work correctly."""
     # Test with reasoning_effort="none" in optional_params
     params = config.map_openai_params(
@@ -352,7 +752,7 @@ def test_gpt5_1_temperature_with_reasoning_effort_in_optional_params(config: Ope
         drop_params=False,
     )
     assert params["temperature"] == 0.5
-    
+
     # Test with reasoning_effort="low" in optional_params (should only allow temp=1)
     with pytest.raises(litellm.utils.UnsupportedParamsError):
         config.map_openai_params(
@@ -361,6 +761,7 @@ def test_gpt5_1_temperature_with_reasoning_effort_in_optional_params(config: Ope
             model="gpt-5.1",
             drop_params=False,
         )
+
 
 def test_gpt5_1_temperature_drop_when_not_none(config: OpenAIConfig):
     """Test that GPT-5.1 drops temperature when reasoning_effort != 'none' and drop_params=True."""
@@ -384,7 +785,7 @@ def test_gpt5_temperature_still_restricted(config: OpenAIConfig):
             model="gpt-5",
             drop_params=False,
         )
-    
+
     # temperature=1 should still work for gpt-5
     params = config.map_openai_params(
         non_default_params={"temperature": 1.0},
@@ -395,7 +796,38 @@ def test_gpt5_temperature_still_restricted(config: OpenAIConfig):
     assert params["temperature"] == 1.0
 
 
-def test_gpt5_2_pro_allows_reasoning_effort_xhigh(config: OpenAIConfig):
+def test_gpt5_2_chat_temperature_restricted(config: OpenAIConfig):
+    """Test that gpt-5.2-chat only supports temperature=1, like base gpt-5.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/21911
+    """
+    # gpt-5.2-chat should reject non-1 temperature when drop_params=False
+    for model in ["gpt-5.2-chat", "gpt-5.2-chat-latest"]:
+        with pytest.raises(litellm.utils.UnsupportedParamsError):
+            config.map_openai_params(
+                non_default_params={"temperature": 0.7},
+                optional_params={},
+                model=model,
+                drop_params=False,
+            )
+
+        # temperature=1 should still work
+        params = config.map_openai_params(
+            non_default_params={"temperature": 1.0},
+            optional_params={},
+            model=model,
+            drop_params=False,
+        )
+        assert params["temperature"] == 1.0
+
+        # drop_params=True should silently drop non-1 temperature
+        params = config.map_openai_params(
+            non_default_params={"temperature": 0.5},
+            optional_params={},
+            model=model,
+            drop_params=True,
+        )
+        assert "temperature" not in params
     params = config.map_openai_params(
         non_default_params={"reasoning_effort": "xhigh"},
         optional_params={},
@@ -414,3 +846,188 @@ def test_gpt5_2_allows_reasoning_effort_xhigh(config: OpenAIConfig):
         drop_params=False,
     )
     assert params["reasoning_effort"] == "xhigh"
+
+
+# GPT-5-Search specific tests
+def test_gpt5_search_model_detection(gpt5_config: OpenAIGPT5Config):
+    """Test that GPT-5 search models are correctly detected."""
+    assert gpt5_config.is_model_gpt_5_search_model("gpt-5-search-api")
+    assert gpt5_config.is_model_gpt_5_search_model("gpt-5-search-mini-api")
+
+    assert not gpt5_config.is_model_gpt_5_search_model("gpt-5")
+    assert not gpt5_config.is_model_gpt_5_search_model("gpt-5-codex")
+    assert not gpt5_config.is_model_gpt_5_search_model("gpt-5-mini")
+
+
+def test_gpt5_search_supported_params(gpt5_config: OpenAIGPT5Config):
+    """Test that search models do NOT list reasoning/tool params as supported."""
+    supported = gpt5_config.get_supported_openai_params(model="gpt-5-search-api")
+    rejected = [
+        "logit_bias",
+        "modalities",
+        "prediction",
+        "n",
+        "seed",
+        "temperature",
+        "tools",
+        "tool_choice",
+        "function_call",
+        "functions",
+        "parallel_tool_calls",
+        "audio",
+        "reasoning_effort",
+    ]
+    for param in rejected:
+        assert (
+            param not in supported
+        ), f"{param} should not be supported for search models"
+
+
+def test_gpt5_search_has_expected_params(gpt5_config: OpenAIGPT5Config):
+    """Test that search models DO list the correct supported params."""
+    supported = gpt5_config.get_supported_openai_params(model="gpt-5-search-api")
+    expected = [
+        "max_tokens",
+        "max_completion_tokens",
+        "stream",
+        "stream_options",
+        "web_search_options",
+        "service_tier",
+        "response_format",
+        "user",
+        "store",
+        "verbosity",
+        "extra_headers",
+    ]
+    for param in expected:
+        assert param in supported, f"{param} should be supported for search models"
+
+
+def test_gpt5_search_maps_max_tokens(config: OpenAIConfig):
+    """Test that search models map max_tokens -> max_completion_tokens."""
+    params = config.map_openai_params(
+        non_default_params={"max_tokens": 200},
+        optional_params={},
+        model="gpt-5-search-api",
+        drop_params=False,
+    )
+    assert params["max_completion_tokens"] == 200
+    assert "max_tokens" not in params
+
+
+def test_gpt5_search_drops_unsupported_params(config: OpenAIConfig):
+    """Test that search models drop unsupported params via map_openai_params."""
+    params = config.map_openai_params(
+        non_default_params={
+            "n": 2,
+            "temperature": 0.7,
+            "tools": [{"type": "function"}],
+        },
+        optional_params={},
+        model="gpt-5-search-api",
+        drop_params=True,
+    )
+    assert "n" not in params
+    assert "temperature" not in params
+    assert "tools" not in params
+
+
+# GPT-5 unsupported params audit (validated via direct API calls)
+def test_gpt5_rejects_params_unsupported_by_openai(config: OpenAIConfig):
+    """Params that OpenAI rejects for all GPT-5 reasoning models."""
+    rejected_params = [
+        "logit_bias",
+        "modalities",
+        "prediction",
+        "audio",
+        "web_search_options",
+    ]
+    for model in ["gpt-5", "gpt-5-mini", "gpt-5-codex", "gpt-5.1", "gpt-5.2"]:
+        supported = config.get_supported_openai_params(model=model)
+        for param in rejected_params:
+            assert (
+                param not in supported
+            ), f"{param} should not be supported for {model}"
+
+
+def test_gpt5_1_supports_logprobs_top_p(config: OpenAIConfig):
+    """gpt-5.1/5.2 support logprobs, top_p, top_logprobs when reasoning_effort='none'."""
+    for model in ["gpt-5.1", "gpt-5.2"]:
+        supported = config.get_supported_openai_params(model=model)
+        assert "logprobs" in supported, f"logprobs should be supported for {model}"
+        assert "top_p" in supported, f"top_p should be supported for {model}"
+        assert (
+            "top_logprobs" in supported
+        ), f"top_logprobs should be supported for {model}"
+
+
+def test_gpt5_base_does_not_support_logprobs_top_p(config: OpenAIConfig):
+    """Base gpt-5/gpt-5-mini do NOT support logprobs, top_p, top_logprobs."""
+    for model in ["gpt-5", "gpt-5-mini", "gpt-5-codex"]:
+        supported = config.get_supported_openai_params(model=model)
+        assert (
+            "logprobs" not in supported
+        ), f"logprobs should not be supported for {model}"
+        assert "top_p" not in supported, f"top_p should not be supported for {model}"
+        assert (
+            "top_logprobs" not in supported
+        ), f"top_logprobs should not be supported for {model}"
+
+
+def test_gpt5_1_logprobs_passthrough(config: OpenAIConfig):
+    """Test that logprobs passes through for gpt-5.1."""
+    params = config.map_openai_params(
+        non_default_params={"logprobs": True, "top_logprobs": 3},
+        optional_params={},
+        model="gpt-5.1",
+        drop_params=False,
+    )
+    assert params["logprobs"] is True
+    assert params["top_logprobs"] == 3
+
+
+def test_gpt5_1_top_p_passthrough(config: OpenAIConfig):
+    """Test that top_p passes through for gpt-5.1."""
+    params = config.map_openai_params(
+        non_default_params={"top_p": 0.9},
+        optional_params={},
+        model="gpt-5.1",
+        drop_params=False,
+    )
+    assert params["top_p"] == 0.9
+
+
+def test_gpt5_1_logprobs_rejected_with_reasoning_effort(config: OpenAIConfig):
+    """logprobs/top_p/top_logprobs are rejected when reasoning_effort != 'none'."""
+    for effort in ["low", "medium", "high"]:
+        with pytest.raises(litellm.utils.UnsupportedParamsError):
+            config.map_openai_params(
+                non_default_params={"logprobs": True, "reasoning_effort": effort},
+                optional_params={},
+                model="gpt-5.1",
+                drop_params=False,
+            )
+
+
+def test_gpt5_1_top_p_rejected_with_reasoning_effort(config: OpenAIConfig):
+    """top_p is rejected when reasoning_effort != 'none'."""
+    with pytest.raises(litellm.utils.UnsupportedParamsError):
+        config.map_openai_params(
+            non_default_params={"top_p": 0.9, "reasoning_effort": "high"},
+            optional_params={},
+            model="gpt-5.1",
+            drop_params=False,
+        )
+
+
+def test_gpt5_1_logprobs_dropped_with_reasoning_effort(config: OpenAIConfig):
+    """logprobs/top_p are dropped when reasoning_effort != 'none' and drop_params=True."""
+    params = config.map_openai_params(
+        non_default_params={"logprobs": True, "top_p": 0.9, "reasoning_effort": "high"},
+        optional_params={},
+        model="gpt-5.1",
+        drop_params=True,
+    )
+    assert "logprobs" not in params
+    assert "top_p" not in params
+    assert params["reasoning_effort"] == "high"

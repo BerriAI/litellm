@@ -38,31 +38,10 @@ describe("useMCPServerHealth", () => {
     vi.clearAllMocks();
   });
 
-  it("should fetch health status for given server IDs", async () => {
+  it("should fetch health status for all servers", async () => {
     const mockHealthStatuses = [
       { server_id: "server-1", status: "healthy" },
       { server_id: "server-2", status: "unhealthy" },
-    ];
-
-    vi.mocked(networking.fetchMCPServerHealth).mockResolvedValue(mockHealthStatuses);
-
-    const { result } = renderHook(() => useMCPServerHealth(["server-1", "server-2"]), {
-      wrapper,
-    });
-
-    await waitFor(() => {
-      expect(result.current.isSuccess).toBe(true);
-    });
-
-    expect(networking.fetchMCPServerHealth).toHaveBeenCalledWith("test-token-123", ["server-1", "server-2"]);
-    expect(result.current.data).toEqual(mockHealthStatuses);
-  });
-
-  it("should fetch health status for all servers when no server IDs provided", async () => {
-    const mockHealthStatuses = [
-      { server_id: "server-1", status: "healthy" },
-      { server_id: "server-2", status: "healthy" },
-      { server_id: "server-3", status: "unhealthy" },
     ];
 
     vi.mocked(networking.fetchMCPServerHealth).mockResolvedValue(mockHealthStatuses);
@@ -75,30 +54,15 @@ describe("useMCPServerHealth", () => {
       expect(result.current.isSuccess).toBe(true);
     });
 
-    expect(networking.fetchMCPServerHealth).toHaveBeenCalledWith("test-token-123", undefined);
+    expect(networking.fetchMCPServerHealth).toHaveBeenCalledWith("test-token-123");
     expect(result.current.data).toEqual(mockHealthStatuses);
-  });
-
-  it("should handle empty server list", async () => {
-    vi.mocked(networking.fetchMCPServerHealth).mockResolvedValue([]);
-
-    const { result } = renderHook(() => useMCPServerHealth([]), {
-      wrapper,
-    });
-
-    await waitFor(() => {
-      expect(result.current.isSuccess).toBe(true);
-    });
-
-    expect(networking.fetchMCPServerHealth).toHaveBeenCalledWith("test-token-123", []);
-    expect(result.current.data).toEqual([]);
   });
 
   it("should handle errors when fetching health status", async () => {
     const mockError = new Error("Failed to fetch health status");
     vi.mocked(networking.fetchMCPServerHealth).mockRejectedValue(mockError);
 
-    const { result } = renderHook(() => useMCPServerHealth(["server-1"]), {
+    const { result } = renderHook(() => useMCPServerHealth(), {
       wrapper,
     });
 
@@ -116,12 +80,26 @@ describe("useMCPServerHealth", () => {
       accessToken: null,
     } as any);
 
-    const { result } = renderHook(() => useMCPServerHealth(["server-1"]), {
+    const { result } = renderHook(() => useMCPServerHealth(), {
       wrapper,
     });
 
     // Should remain in idle state since query is not enabled
     expect(result.current.status).toBe("pending");
     expect(networking.fetchMCPServerHealth).not.toHaveBeenCalled();
+  });
+
+  it("should use a stable query key that does not include server IDs", () => {
+    // Regression test: deleting a server used to pass a changing serverIds array into the
+    // hook, which was embedded in the query key. React Query would see a new key and fire
+    // a health check for every remaining server.
+    //
+    // The fix: the hook takes no serverIds parameter and uses a constant query key, so
+    // deleting (or adding) a server never causes an extra health check request.
+    //
+    // We verify the contract here by confirming the hook accepts no arguments.
+    // The stable-key behaviour is further exercised by mcp_servers.test.tsx.
+    const hookLength = useMCPServerHealth.length;
+    expect(hookLength).toBe(0);
   });
 });

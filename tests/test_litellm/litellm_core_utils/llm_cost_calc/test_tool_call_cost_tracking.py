@@ -121,17 +121,20 @@ def test_get_cost_for_built_in_tools_file_search():
 
 def test_get_cost_for_anthropic_web_search():
     """
-    Test that the cost for a web search is 0.00 when no response object is provided
+    Test that Anthropic web search cost is tracked when usage.server_tool_use.web_search_requests
+    is set. Use claude-3-7-sonnet-20250219 (has search_context_cost_per_query) and
+    custom_llm_provider=anthropic so get_cost_for_anthropic_web_search is invoked.
     """
     from litellm.types.utils import ServerToolUse, Usage
 
-    model = "claude-3-7-sonnet-latest"
+    model = "claude-3-7-sonnet-20250219"
     usage = Usage(server_tool_use=ServerToolUse(web_search_requests=1))
     cost = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
         model=model,
         usage=usage,
         response_object=None,
         standard_built_in_tools_params=None,
+        custom_llm_provider="anthropic",
     )
     assert cost > 0.0
 
@@ -185,9 +188,8 @@ def test_get_cost_for_vertex_ai_gemini_web_search(model, custom_llm_provider):
                 finish_reason="stop",
                 index=0,
                 message=Message(
-                    content="Test response with grounding",
-                    role="assistant"
-                )
+                    content="Test response with grounding", role="assistant"
+                ),
             )
         ],
         created=1234567890,
@@ -202,9 +204,8 @@ def test_get_cost_for_vertex_ai_gemini_web_search(model, custom_llm_provider):
         completion_tokens=100,
         total_tokens=111,
         prompt_tokens_details=PromptTokensDetailsWrapper(
-            text_tokens=11,
-            web_search_requests=1  # This should trigger grounding cost
-        )
+            text_tokens=11, web_search_requests=1  # This should trigger grounding cost
+        ),
     )
     response.usage = usage
 
@@ -228,9 +229,9 @@ def test_azure_assistant_features_integrated_cost_tracking():
     # Force use of local model cost map for CI/CD consistency
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
-    
+
     model = "azure/gpt-4o"
-    
+
     # Test with multiple Azure assistant features
     standard_built_in_tools_params = StandardBuiltInToolsParams(
         vector_store_usage={"storage_gb": 1.0, "days": 10},
@@ -245,10 +246,10 @@ def test_azure_assistant_features_integrated_cost_tracking():
         custom_llm_provider="azure",
         standard_built_in_tools_params=standard_built_in_tools_params,
     )
-    
+
     # Should calculate costs for:
     # - Vector store: 1.0 * 10 * 0.1 = $1.00
-    # - Computer use: (1000/1000 * 3.0) + (500/1000 * 12.0) = $9.00  
+    # - Computer use: (1000/1000 * 3.0) + (500/1000 * 12.0) = $9.00
     # - Code interpreter: 2 * 0.03 = $0.06
     # Total: $10.06
     expected_cost = 1.0 + 9.0 + 0.06
@@ -303,9 +304,9 @@ def test_completion_cost_includes_web_search_without_standard_built_in_tools_par
     )
 
     assert web_search_cost > 0, "Web search cost should be non-zero"
-    assert cost >= web_search_cost, (
-        f"completion_cost ({cost}) should include web search cost ({web_search_cost})"
-    )
+    assert (
+        cost >= web_search_cost
+    ), f"completion_cost ({cost}) should include web search cost ({web_search_cost})"
 
 
 # Note: File search integration test removed due to complex annotation detection logic

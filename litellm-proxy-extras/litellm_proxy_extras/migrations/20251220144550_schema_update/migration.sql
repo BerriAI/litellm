@@ -1,5 +1,5 @@
 -- CreateTable
-CREATE TABLE "LiteLLM_SkillsTable" (
+CREATE TABLE IF NOT EXISTS "LiteLLM_SkillsTable" (
     "skill_id" TEXT NOT NULL,
     "display_title" TEXT,
     "description" TEXT,

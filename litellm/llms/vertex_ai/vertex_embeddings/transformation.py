@@ -107,6 +107,7 @@ class VertexAITextEmbeddingConfig(BaseModel):
         """
         # Import here to avoid circular import issues with litellm.__init__
         from litellm.llms.vertex_ai.vertex_embeddings.bge import VertexBGEConfig
+
         if model.isdigit():
             return self._transform_openai_request_to_fine_tuned_embedding_request(
                 input, optional_params, model
@@ -174,7 +175,10 @@ class VertexAITextEmbeddingConfig(BaseModel):
             **optional_params
         )
         # Remove 'shared_session' from parameters if present
-        if vertex_request["parameters"] is not None and "shared_session" in vertex_request["parameters"]:
+        if (
+            vertex_request["parameters"] is not None
+            and "shared_session" in vertex_request["parameters"]
+        ):
             del vertex_request["parameters"]["shared_session"]  # type: ignore[typeddict-item]
 
         return vertex_request
@@ -215,10 +219,10 @@ class VertexAITextEmbeddingConfig(BaseModel):
             return self._transform_vertex_response_to_openai_for_fine_tuned_models(
                 response, model, model_response
             )
-        
+
         # Import here to avoid circular import issues with litellm.__init__
         from litellm.llms.vertex_ai.vertex_embeddings.bge import VertexBGEConfig
-        
+
         if VertexBGEConfig.is_bge_model(model):
             return VertexBGEConfig.transform_response(
                 response=response, model=model, model_response=model_response

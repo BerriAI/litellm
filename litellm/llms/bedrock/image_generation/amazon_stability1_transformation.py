@@ -115,7 +115,7 @@ class AmazonStabilityConfig:
 
         return {
             "text_prompts": [{"text": prompt, "weight": 1}],
-             **inference_params,
+            **inference_params,
         }
 
     @classmethod

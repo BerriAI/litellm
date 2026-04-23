@@ -4,6 +4,7 @@ import NotificationsManager from "../molecules/notifications_manager";
 import { createGuardrailCall, getGuardrailProviderSpecificParams, getGuardrailUISettings } from "../networking";
 import ContentFilterConfiguration from "./content_filter/ContentFilterConfiguration";
 import {
+  choiceToSkipSystemForCreate,
   getGuardrailProviders,
   guardrail_provider_map,
   guardrailLogoMap,
@@ -118,6 +119,14 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
   const [pendingCategorySelection, setPendingCategorySelection] = useState<string>("");
   const [competitorIntentEnabled, setCompetitorIntentEnabled] = useState(false);
   const [competitorIntentConfig, setCompetitorIntentConfig] = useState<any>(null);
+
+  // Endpoint Settings state (step 5)
+  const [selectedEndpointType, setSelectedEndpointType] = useState<string>("");
+  const [endSessionAfterNFails, setEndSessionAfterNFails] = useState<number | undefined>(undefined);
+  const [onViolation, setOnViolation] = useState<"warn" | "end_session">("warn");
+  const [realtimeViolationMessage, setRealtimeViolationMessage] = useState<string>("");
+  const [endpointSettingsOpen, setEndpointSettingsOpen] = useState<boolean>(false);
+
   const [toolPermissionConfig, setToolPermissionConfig] = useState<ToolPermissionConfig>({
     rules: [],
     default_action: "deny",
@@ -166,12 +175,17 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
 
     // Set provider
     setSelectedProvider(preset.provider);
-    form.setFieldsValue({
+    const baseValues: Record<string, any> = {
       provider: preset.provider,
       guardrail_name: preset.guardrailNameSuggestion,
       mode: preset.mode,
       default_on: preset.defaultOn,
-    });
+      skip_system_message_choice: "inherit",
+    };
+    if (preset.provider === "BlockCodeExecution") {
+      baseValues.confidence_threshold = 0.5;
+    }
+    form.setFieldsValue(baseValues);
 
     // Pre-select content category if specified
     if (preset.categoryName && guardrailSettings.content_filter_settings?.content_categories) {
@@ -195,11 +209,15 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
   const handleProviderChange = (value: string) => {
     setSelectedProvider(value);
     // Reset form fields that are provider-specific
-    form.setFieldsValue({
+    const resetValues: Record<string, any> = {
       config: undefined,
       presidio_analyzer_api_base: undefined,
       presidio_anonymizer_api_base: undefined,
-    });
+    };
+    if (value === "BlockCodeExecution") {
+      resetValues.confidence_threshold = 0.5;
+    }
+    form.setFieldsValue(resetValues);
 
     // Reset PII selections when changing provider
     setSelectedEntities([]);
@@ -353,6 +371,11 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
       on_disallowed_action: "block",
       violation_message_template: "",
     });
+    setSelectedEndpointType("");
+    setEndSessionAfterNFails(undefined);
+    setOnViolation("warn");
+    setRealtimeViolationMessage("");
+    setEndpointSettingsOpen(false);
     setCurrentStep(0);
   };
 
@@ -392,6 +415,11 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
         },
         guardrail_info: {},
       };
+
+      const skipForCreate = choiceToSkipSystemForCreate(values.skip_system_message_choice);
+      if (skipForCreate !== undefined) {
+        guardrailData.litellm_params.skip_system_message_in_guardrail = skipForCreate;
+      }
 
       // For Presidio PII, add the entity and action configurations
       if (values.provider === "PresidioPII" && selectedEntities.length > 0) {
@@ -493,6 +521,19 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
         guardrailData.litellm_params.on_disallowed_action = toolPermissionConfig.on_disallowed_action;
         if (toolPermissionConfig.violation_message_template) {
           guardrailData.litellm_params.violation_message_template = toolPermissionConfig.violation_message_template;
+        }
+      }
+
+      // Endpoint Settings (realtime) — content filter only
+      if (shouldRenderContentFilterConfigSettings(values.provider)) {
+        if (endSessionAfterNFails !== undefined && endSessionAfterNFails > 0) {
+          guardrailData.litellm_params.end_session_after_n_fails = endSessionAfterNFails;
+        }
+        if (onViolation && selectedEndpointType === "realtime") {
+          guardrailData.litellm_params.on_violation = onViolation;
+        }
+        if (realtimeViolationMessage.trim()) {
+          guardrailData.litellm_params.realtime_violation_message = realtimeViolationMessage.trim();
         }
       }
 
@@ -715,6 +756,18 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
           </Select>
         </Form.Item>
 
+        <Form.Item
+          name="skip_system_message_choice"
+          label="Skip system messages in guardrail"
+          tooltip="Unified guardrails only: omit role: system from guardrail evaluation input (OpenAI chat + Anthropic messages). The model still receives full messages. Use global default follows litellm_settings.skip_system_message_in_guardrail."
+        >
+          <Select>
+            <Select.Option value="inherit">Use global default</Select.Option>
+            <Select.Option value="yes">Yes — exclude from guardrail scan</Select.Option>
+            <Select.Option value="no">No — always include in scan</Select.Option>
+          </Select>
+        </Form.Item>
+
         {/* Use the GuardrailProviderFields component to render provider-specific fields */}
         {!isToolPermissionProvider && !shouldRenderContentFilterConfigSettings(selectedProvider) && (
           <GuardrailProviderFields
@@ -833,13 +886,15 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
           return renderContentFilterConfiguration("keywords");
         }
         return null;
+      case 4:
+        return renderEndpointSettings();
       default:
         return null;
     }
   };
 
   const renderStepButtons = () => {
-    const totalSteps = shouldRenderContentFilterConfigSettings(selectedProvider) ? 4 : 2;
+    const totalSteps = shouldRenderContentFilterConfigSettings(selectedProvider) ? 5 : 2;
     const isLastStep = currentStep === totalSteps - 1;
     const isCategoriesStep = shouldRenderContentFilterConfigSettings(selectedProvider) && currentStep === 1;
     const hasPendingCategory = pendingCategorySelection !== "";
@@ -880,13 +935,137 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
     );
   };
 
+  const renderEndpointSettings = () => {
+    return (
+      <div className="space-y-6">
+        <div>
+          <p className="text-sm text-gray-500">
+            Configure settings for a specific call type. Most guardrails don't need this — skip it
+            unless you're using a specific endpoint like <code>/v1/realtime</code>.
+          </p>
+        </div>
+
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-1">Call type</label>
+          <Select
+            placeholder="Select a call type"
+            value={selectedEndpointType || undefined}
+            onChange={(v) => {
+              setSelectedEndpointType(v);
+              setEndpointSettingsOpen(false);
+            }}
+            style={{ width: 260 }}
+            allowClear
+            options={[{ value: "realtime", label: "/v1/realtime" }]}
+          />
+          <p className="text-xs text-gray-400 mt-1">More call types coming soon.</p>
+        </div>
+
+        {selectedEndpointType === "realtime" && (
+          <div className="border border-gray-200 rounded-lg overflow-hidden">
+            <button
+              type="button"
+              onClick={() => setEndpointSettingsOpen((o) => !o)}
+              className="w-full flex items-center justify-between px-4 py-3 bg-gray-50 hover:bg-gray-100 text-sm font-medium text-gray-700"
+            >
+              <span>/v1/realtime settings</span>
+              <svg
+                className={`w-4 h-4 text-gray-500 transition-transform ${endpointSettingsOpen ? "rotate-180" : ""}`}
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+                strokeWidth={2}
+              >
+                <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+              </svg>
+            </button>
+
+            {endpointSettingsOpen && (
+              <div className="space-y-5 px-4 py-4 border-t border-gray-200">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    End session after X violations
+                  </label>
+                  <p className="text-xs text-gray-400 mb-2">
+                    Automatically close the session after this many guardrail violations. Leave
+                    empty to never auto-close.
+                  </p>
+                  <input
+                    type="number"
+                    min={1}
+                    placeholder="e.g. 3"
+                    value={endSessionAfterNFails ?? ""}
+                    onChange={(e) =>
+                      setEndSessionAfterNFails(
+                        e.target.value ? parseInt(e.target.value, 10) : undefined
+                      )
+                    }
+                    className="border border-gray-300 rounded px-3 py-1.5 text-sm w-32"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    On violation
+                  </label>
+                  <div className="space-y-2">
+                    {(["warn", "end_session"] as const).map((opt) => (
+                      <label key={opt} className="flex items-start gap-2 cursor-pointer">
+                        <input
+                          type="radio"
+                          name="on_violation"
+                          value={opt}
+                          checked={onViolation === opt}
+                          onChange={() => setOnViolation(opt)}
+                          className="mt-0.5"
+                        />
+                        <div>
+                          <span className="text-sm font-medium text-gray-800">
+                            {opt === "warn" ? "Warn" : "End session"}
+                          </span>
+                          <p className="text-xs text-gray-400 m-0">
+                            {opt === "warn"
+                              ? "Bot speaks the message, session continues"
+                              : "Bot speaks the message, connection closes immediately"}
+                          </p>
+                        </div>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Message the user hears
+                  </label>
+                  <p className="text-xs text-gray-400 mb-2">
+                    What the bot says aloud when this guardrail fires. Falls back to the default
+                    violation message if empty.
+                  </p>
+                  <textarea
+                    rows={3}
+                    placeholder="e.g. I'm not able to continue this conversation. Please contact us at 1-800-774-2678."
+                    value={realtimeViolationMessage}
+                    onChange={(e) => setRealtimeViolationMessage(e.target.value)}
+                    className="border border-gray-300 rounded px-3 py-2 text-sm w-full resize-none"
+                  />
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    );
+  };
+
   const getStepConfigs = () => {
     if (shouldRenderContentFilterConfigSettings(selectedProvider)) {
       return [
         { title: "Basic Info", optional: false },
-        { title: "Default Categories", optional: false },
+        { title: "Topics", optional: false },
         { title: "Patterns", optional: false },
         { title: "Keywords", optional: false },
+        { title: "Endpoint Settings (Optional)", optional: true },
       ];
     }
     if (shouldRenderPIIConfigSettings(selectedProvider)) {
@@ -936,6 +1115,7 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
             initialValues={{
               mode: "pre_call",
               default_on: false,
+              skip_system_message_choice: "inherit",
             }}
           >
             {stepConfigs.map((step, index) => {

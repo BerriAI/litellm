@@ -11,6 +11,7 @@ This endpoint supports various guardrail types including:
 - **Presidio** - PII detection and masking
 - **Bedrock** - AWS Bedrock guardrails for content moderation
 - **Lakera** - AI safety guardrails
+- **PANW Prisma AIRS** - Threat detection, DLP, and policy enforcement
 - **Custom guardrails** - User-defined guardrails
 
 ## Configuration

@@ -56,9 +56,9 @@ class AzureAIAgentsConfig(BaseConfig):
 
     Azure AI Agent Service is a fully managed service for building AI agents
     that can understand natural language and perform tasks.
-    
+
     Model format: azure_ai/agents/<agent_id>
-    
+
     The flow is:
     1. Create a thread
     2. Add user messages to the thread
@@ -70,7 +70,7 @@ class AzureAIAgentsConfig(BaseConfig):
     # GA version: 2025-05-01, Preview: 2025-05-15-preview
     # See: https://learn.microsoft.com/en-us/azure/ai-foundry/agents/quickstart
     DEFAULT_API_VERSION = "2025-05-01"
-    
+
     # Polling configuration
     MAX_POLL_ATTEMPTS = 60
     POLL_INTERVAL_SECONDS = 1.0
@@ -82,7 +82,7 @@ class AzureAIAgentsConfig(BaseConfig):
     def is_azure_ai_agents_route(model: str) -> bool:
         """
         Check if the model is an Azure AI Agents route.
-        
+
         Model format: azure_ai/agents/<agent_id>
         """
         return "agents/" in model
@@ -91,7 +91,7 @@ class AzureAIAgentsConfig(BaseConfig):
     def get_agent_id_from_model(model: str) -> str:
         """
         Extract agent ID from the model string.
-        
+
         Model format: azure_ai/agents/<agent_id> -> <agent_id>
         or: agents/<agent_id> -> <agent_id>
         """
@@ -153,12 +153,12 @@ class AzureAIAgentsConfig(BaseConfig):
     ) -> str:
         """
         Get the base URL for Azure AI Agent Service.
-        
+
         The actual endpoint will vary based on the operation:
         - /openai/threads for creating threads
         - /openai/threads/{thread_id}/messages for adding messages
         - /openai/threads/{thread_id}/runs for creating runs
-        
+
         This returns the base URL that will be modified for each operation.
         """
         if api_base is None:
@@ -178,7 +178,9 @@ class AzureAIAgentsConfig(BaseConfig):
 
         model format: "azure_ai/agents/<agent_id>" or "agents/<agent_id>" or just "<agent_id>"
         """
-        agent_id = optional_params.get("agent_id") or optional_params.get("assistant_id")
+        agent_id = optional_params.get("agent_id") or optional_params.get(
+            "assistant_id"
+        )
         if agent_id:
             return agent_id
 
@@ -195,7 +197,7 @@ class AzureAIAgentsConfig(BaseConfig):
     ) -> dict:
         """
         Transform the request for Azure Agents.
-        
+
         This stores the necessary data for the multi-step agent flow.
         The actual API calls happen in the custom handler.
         """
@@ -246,10 +248,10 @@ class AzureAIAgentsConfig(BaseConfig):
     ) -> dict:
         """
         Validate and set up environment for Azure Foundry Agents requests.
-        
+
         Azure Foundry Agents uses Bearer token authentication with Azure AD tokens.
         Get token via: az account get-access-token --resource 'https://ai.azure.com'
-        
+
         See: https://learn.microsoft.com/en-us/azure/ai-foundry/agents/quickstart
         """
         headers["Content-Type"] = "application/json"
@@ -326,15 +328,15 @@ class AzureAIAgentsConfig(BaseConfig):
     ) -> Any:
         """
         Dispatch method for Azure Foundry Agents completion.
-        
+
         Routes to sync or async completion based on acompletion flag.
         Supports native streaming via SSE when stream=True and acompletion=True.
-        
+
         Authentication: Uses Azure AD Bearer tokens.
         - Pass api_key directly as an Azure AD token
         - Or set up Azure AD credentials via environment variables for automatic token retrieval:
           - AZURE_TENANT_ID, AZURE_CLIENT_ID, AZURE_CLIENT_SECRET (Service Principal)
-        
+
         See: https://learn.microsoft.com/en-us/azure/ai-foundry/agents/quickstart
         """
         from litellm.llms.azure.common_utils import get_azure_ad_token
@@ -349,7 +351,7 @@ class AzureAIAgentsConfig(BaseConfig):
             azure_auth_params = dict(litellm_params) if litellm_params else {}
             azure_auth_params["azure_scope"] = "https://ai.azure.com/.default"
             api_key = get_azure_ad_token(GenericLiteLLMParams(**azure_auth_params))
-            
+
         if api_key is None:
             raise ValueError(
                 "api_key (Azure AD token) is required for Azure Foundry Agents. "

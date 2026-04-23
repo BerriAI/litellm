@@ -223,6 +223,8 @@ def test_increment_token_metrics(prometheus_logger):
         api_key_alias="test_alias",
         team="test_team",
         team_alias="test_team_alias",
+        org_id=None,
+        org_alias=None,
         requested_model=None,
         model="gpt-3.5-turbo",
         model_id="model-123",
@@ -237,6 +239,8 @@ def test_increment_token_metrics(prometheus_logger):
         api_key_alias="test_alias",
         team="test_team",
         team_alias="test_team_alias",
+        org_id=None,
+        org_alias=None,
         requested_model=None,
         model="gpt-3.5-turbo",
         model_id="model-123",
@@ -253,6 +257,8 @@ def test_increment_token_metrics(prometheus_logger):
         api_key_alias="test_alias",
         team="test_team",
         team_alias="test_team_alias",
+        org_id=None,
+        org_alias=None,
         requested_model=None,
         model="gpt-3.5-turbo",
         model_id="model-123",
@@ -414,6 +420,8 @@ def test_set_latency_metrics(prometheus_logger):
         api_key_alias="test_alias",
         team="test_team",
         team_alias="test_team_alias",
+        org_id=None,
+        org_alias=None,
         requested_model="openai-gpt",
         model="gpt-3.5-turbo",
         model_id="model-123",
@@ -430,6 +438,8 @@ def test_set_latency_metrics(prometheus_logger):
         api_key_alias="test_alias",
         team="test_team",
         team_alias="test_team_alias",
+        org_id=None,
+        org_alias=None,
         requested_model="openai-gpt",
         model="gpt-3.5-turbo",
         model_id="model-123",
@@ -446,6 +456,8 @@ def test_set_latency_metrics(prometheus_logger):
         api_key_alias="test_alias",
         team="test_team",
         team_alias="test_team_alias",
+        org_id=None,
+        org_alias=None,
         requested_model="openai-gpt",
         model="gpt-3.5-turbo",
         model_id="model-123",
@@ -589,8 +601,11 @@ def test_increment_top_level_request_and_spend_metrics(prometheus_logger):
         api_key_alias="test_alias",
         team="test_team",
         team_alias="test_team_alias",
+        org_id=None,
+        org_alias=None,
         model="gpt-3.5-turbo",
         model_id="model-123",
+        api_provider="openai",
         client_ip=None,
         user_agent=None,
     )
@@ -605,8 +620,11 @@ def test_increment_top_level_request_and_spend_metrics(prometheus_logger):
         api_key_alias="test_alias",
         team="test_team",
         team_alias="test_team_alias",
+        org_id=None,
+        org_alias=None,
         model="gpt-3.5-turbo",
         model_id="model-123",
+        api_provider="openai",
         client_ip=None,
         user_agent=None,
     )
@@ -642,7 +660,7 @@ async def test_async_log_failure_event(prometheus_logger):
     )
 
     # litellm_llm_api_failed_requests_metric incremented
-    # Labels: end_user, api_key_hash, api_key_alias, model, team, team_alias, user, model_id
+    # Labels: end_user, hashed_api_key, api_key_alias, model, team, team_alias, user, model_id
     prometheus_logger.litellm_llm_api_failed_requests_metric.labels.assert_called_once_with(
         None,  # end_user_id
         "test_hash",
@@ -758,6 +776,8 @@ async def test_async_post_call_failure_hook(prometheus_logger):
         api_key_alias="test_alias",
         team="test_team",
         team_alias="test_team_alias",
+        org_id=None,
+        org_alias=None,
         requested_model="gpt-3.5-turbo",
         exception_status="429",
         exception_class="Openai.RateLimitError",
@@ -776,6 +796,8 @@ async def test_async_post_call_failure_hook(prometheus_logger):
         requested_model="gpt-3.5-turbo",
         team="test_team",
         team_alias="test_team_alias",
+        org_id=None,
+        org_alias=None,
         user="test_user",
         status_code="429",
         user_email=None,
@@ -955,6 +977,8 @@ def test_set_llm_deployment_success_metrics(prometheus_logger):
         api_key_alias=standard_logging_payload["metadata"]["user_api_key_alias"],
         team=standard_logging_payload["metadata"]["user_api_key_team_id"],
         team_alias=standard_logging_payload["metadata"]["user_api_key_team_alias"],
+        org_id=None,
+        org_alias=None,
     )
     prometheus_logger.litellm_overhead_latency_metric.labels.assert_called_once_with(
         api_base="https://api.openai.com",
@@ -1126,10 +1150,10 @@ def test_prometheus_factory(monkeypatch, enable_end_user_cost_tracking_prometheu
 
     enum_values = UserAPIKeyLabelValues(
         end_user="test_end_user",
-        api_key_hash="test_hash",
+        hashed_api_key="test_hash",
         api_key_alias="test_alias",
     )
-    supported_labels = ["end_user", "api_key_hash", "api_key_alias"]
+    supported_labels = ["end_user", "hashed_api_key", "api_key_alias"]
     returned_dict = prometheus_label_factory(
         supported_enum_labels=supported_labels, enum_values=enum_values
     )
@@ -1138,6 +1162,8 @@ def test_prometheus_factory(monkeypatch, enable_end_user_cost_tracking_prometheu
         assert returned_dict["end_user"] == "test_end_user"
     else:
         assert returned_dict["end_user"] == None
+    assert returned_dict["hashed_api_key"] == "test_hash"
+    assert returned_dict["api_key_alias"] == "test_alias"
 
 
 def test_get_custom_labels_from_metadata(monkeypatch):
@@ -1608,15 +1634,24 @@ async def test_initialize_remaining_budget_metrics_exception_handling(
         mock_teamtable = MagicMock()
         mock_teamtable.count = MagicMock(side_effect=Exception("Team count error"))
 
+        # Mock litellm_organizationtable to raise an exception for org budget metrics
+        mock_orgtable = MagicMock()
+        mock_orgtable.find_many = MagicMock(
+            side_effect=Exception("Org database error")
+        )
+        mock_orgtable.count = MagicMock(side_effect=Exception("Org count error"))
+
         mock_db = MagicMock()
         mock_db.litellm_usertable = mock_usertable
         mock_db.litellm_teamtable = mock_teamtable
+        mock_db.litellm_organizationtable = mock_orgtable
         mock_prisma.db = mock_db
 
         # Mock the Prometheus metrics
         prometheus_logger.litellm_remaining_team_budget_metric = MagicMock()
         prometheus_logger.litellm_remaining_api_key_budget_metric = MagicMock()
         prometheus_logger.litellm_remaining_user_budget_metric = MagicMock()
+        prometheus_logger.litellm_remaining_org_budget_metric = MagicMock()
         prometheus_logger.litellm_total_users_metric = MagicMock()
         prometheus_logger.litellm_teams_count_metric = MagicMock()
 
@@ -1625,8 +1660,8 @@ async def test_initialize_remaining_budget_metrics_exception_handling(
             # Call the function
             await prometheus_logger._initialize_remaining_budget_metrics()
 
-            # Verify all four errors were logged (teams, keys, users, and user/team count)
-            assert mock_logger.call_count == 4
+            # Verify all five errors were logged (teams, keys, users, orgs, and user/team count)
+            assert mock_logger.call_count == 5
             assert (
                 "Error initializing teams budget metrics"
                 in mock_logger.call_args_list[0][0][0]
@@ -1640,14 +1675,19 @@ async def test_initialize_remaining_budget_metrics_exception_handling(
                 in mock_logger.call_args_list[2][0][0]
             )
             assert (
-                "Error initializing user/team count metrics"
+                "Error initializing orgs budget metrics"
                 in mock_logger.call_args_list[3][0][0]
+            )
+            assert (
+                "Error initializing user/team count metrics"
+                in mock_logger.call_args_list[4][0][0]
             )
 
         # Verify the metrics were never called
         prometheus_logger.litellm_remaining_team_budget_metric.assert_not_called()
         prometheus_logger.litellm_remaining_api_key_budget_metric.assert_not_called()
         prometheus_logger.litellm_remaining_user_budget_metric.assert_not_called()
+        prometheus_logger.litellm_remaining_org_budget_metric.assert_not_called()
         prometheus_logger.litellm_total_users_metric.assert_not_called()
         prometheus_logger.litellm_teams_count_metric.assert_not_called()
 
@@ -2316,5 +2356,3 @@ async def test_prometheus_token_metrics_with_prometheus_config():
                 raise AssertionError(f"Metric {metric_name} not found in registry")
 
         print("✓ All token metrics validated successfully!")
-
-        # check final value of metrics in registry

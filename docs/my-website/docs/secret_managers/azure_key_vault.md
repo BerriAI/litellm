@@ -6,7 +6,7 @@
 
 [Enterprise Pricing](https://www.litellm.ai/#pricing)
 
-[Contact us here to get a free trial](https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat)
+[Contact us here to get a free trial](https://enterprise.litellm.ai/demo)
 
 :::
 
@@ -14,7 +14,7 @@
 
 1. Install Proxy dependencies 
 ```bash
-pip install 'litellm[proxy]' 'litellm[extra_proxy]'
+uv tool install 'litellm[proxy]' 'litellm[extra_proxy]'
 ```
 
 2. Save Azure details in your environment

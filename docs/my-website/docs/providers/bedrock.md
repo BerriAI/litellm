@@ -16,7 +16,7 @@ ALL Bedrock models (Anthropic, Meta, Deepseek, Mistral, Amazon, etc.) are Suppor
 
 LiteLLM requires `boto3` to be installed on your system for Bedrock requests
 ```shell
-pip install boto3>=1.28.57
+uv add boto3>=1.28.57
 ```
 
 :::info
@@ -95,7 +95,7 @@ Here's how to call Bedrock with the LiteLLM Proxy Server
 model_list:
   - model_name: bedrock-claude-3-5-sonnet
     litellm_params:
-      model: bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0
+      model: bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0
       aws_access_key_id: os.environ/AWS_ACCESS_KEY_ID
       aws_secret_access_key: os.environ/AWS_SECRET_ACCESS_KEY
       aws_region_name: os.environ/AWS_REGION_NAME
@@ -337,7 +337,7 @@ os.environ["AWS_SECRET_ACCESS_KEY"] = ""
 os.environ["AWS_REGION_NAME"] = ""
 
 response = completion(
-    model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+    model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
     messages=[{"role": "user", "content": "Hello, how are you?"}],
     requestMetadata={
         "cost_center": "engineering",
@@ -354,7 +354,7 @@ response = completion(
 model_list:
   - model_name: bedrock-claude-v1
     litellm_params:
-      model: bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0
+      model: bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0
       requestMetadata:
         cost_center: "engineering"
 ```
@@ -660,7 +660,7 @@ Same as [Anthropic API response](../providers/anthropic#usage---thinking--reason
 
 LiteLLM supports Anthropic's beta features on AWS Bedrock through the `anthropic-beta` header. This enables access to experimental features like:
 
-- **1M Context Window** - Up to 1 million tokens of context (Claude Sonnet 4)
+- **1M Context Window** - Up to 1 million tokens of context (Claude Opus 4.6, Sonnet 4.5, Sonnet 4)
 - **Computer Use Tools** - AI that can interact with computer interfaces
 - **Token-Efficient Tools** - More efficient tool usage patterns  
 - **Extended Output** - Up to 128K output tokens
@@ -670,7 +670,7 @@ LiteLLM supports Anthropic's beta features on AWS Bedrock through the `anthropic
 
 | Beta Feature | Header Value | Compatible Models | Description |
 |--------------|-------------|------------------|-------------|
-| 1M Context Window | `context-1m-2025-08-07` | Claude Sonnet 4 | Enable 1 million token context window |
+| 1M Context Window | `context-1m-2025-08-07` | Claude Opus 4.6, Sonnet 4.5, Sonnet 4 | Enable 1 million token context window |
 | Computer Use (Latest) | `computer-use-2025-01-24` | Claude 3.7 Sonnet | Latest computer use tools |
 | Computer Use (Legacy) | `computer-use-2024-10-22` | Claude 3.5 Sonnet v2 | Computer use tools for Claude 3.5 |
 | Token-Efficient Tools | `token-efficient-tools-2025-02-19` | Claude 3.7 Sonnet | More efficient tool usage |
@@ -1543,7 +1543,7 @@ file_data = response.content
 encoded_file = base64.b64encode(file_data).decode("utf-8")
 
 # model
-model = "bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0"
+model = "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0"
 
 image_content = [
     {"type": "text", "text": "What's this file about?"},
@@ -1574,7 +1574,7 @@ assert response is not None
 model_list:
   - model_name: bedrock-model
     litellm_params:
-      model: bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0
+      model: bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0
       aws_access_key_id: os.environ/AWS_ACCESS_KEY_ID
       aws_secret_access_key: os.environ/AWS_SECRET_ACCESS_KEY
       aws_region_name: os.environ/AWS_REGION_NAME
@@ -1631,7 +1631,7 @@ encoded_file = base64.b64encode(file_data).decode("utf-8")
 base64_url = f"data:application/pdf;base64,{encoded_file}"
 
 # model
-model = "bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0"
+model = "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0"
 
 image_content = [
     {"type": "text", "text": "What's this file about?"},
@@ -1660,7 +1660,7 @@ assert response is not None
 model_list:
   - model_name: bedrock-model
     litellm_params:
-      model: bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0
+      model: bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0
       aws_access_key_id: os.environ/AWS_ACCESS_KEY_ID
       aws_secret_access_key: os.environ/AWS_SECRET_ACCESS_KEY
       aws_region_name: os.environ/AWS_REGION_NAME
@@ -1941,7 +1941,7 @@ Here's an example of using a bedrock model with LiteLLM. For a complete list, re
 | GPT-OSS 120B | `completion(model='bedrock/converse/openai.gpt-oss-120b-1:0', messages=messages)` | `os.environ['AWS_ACCESS_KEY_ID']`, `os.environ['AWS_SECRET_ACCESS_KEY']`, `os.environ['AWS_REGION_NAME']` |
 | Deepseek R1    | `completion(model='bedrock/us.deepseek.r1-v1:0', messages=messages)`   | `os.environ['AWS_ACCESS_KEY_ID']`, `os.environ['AWS_SECRET_ACCESS_KEY']`           |
 | Anthropic Claude Sonnet 4.5    | `completion(model='bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0', messages=messages)`   | `os.environ['AWS_ACCESS_KEY_ID']`, `os.environ['AWS_SECRET_ACCESS_KEY']`           |
-| Anthropic Claude-V3.5 Sonnet    | `completion(model='bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0', messages=messages)`   | `os.environ['AWS_ACCESS_KEY_ID']`, `os.environ['AWS_SECRET_ACCESS_KEY']`           |
+| Anthropic Claude-V3.5 Sonnet    | `completion(model='bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0', messages=messages)`   | `os.environ['AWS_ACCESS_KEY_ID']`, `os.environ['AWS_SECRET_ACCESS_KEY']`           |
 | Anthropic Claude-V3  sonnet    | `completion(model='bedrock/anthropic.claude-3-sonnet-20240229-v1:0', messages=messages)`   | `os.environ['AWS_ACCESS_KEY_ID']`, `os.environ['AWS_SECRET_ACCESS_KEY']`           |
 | Anthropic Claude-V3 Haiku     | `completion(model='bedrock/anthropic.claude-3-haiku-20240307-v1:0', messages=messages)`   | `os.environ['AWS_ACCESS_KEY_ID']`, `os.environ['AWS_SECRET_ACCESS_KEY']`           |
 | Anthropic Claude-V3 Opus     | `completion(model='bedrock/anthropic.claude-3-opus-20240229-v1:0', messages=messages)`   | `os.environ['AWS_ACCESS_KEY_ID']`, `os.environ['AWS_SECRET_ACCESS_KEY']`           |
@@ -2051,7 +2051,7 @@ os.environ["AWS_SECRET_ACCESS_KEY"] = ""
 os.environ["AWS_REGION_NAME"] = ""
 
 response = completion(
-    model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+    model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
     messages=[{"role": "user", "content": "Hello, how are you?"}],
     model_id="arn:aws:bedrock:eu-central-1:000000000000:application-inference-profile/a0a0a0a0a0a0",
 )
@@ -2068,7 +2068,7 @@ print(response)
 model_list:
   - model_name: anthropic-claude-3-5-sonnet
     litellm_params:
-      model: bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0
+      model: bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0
       # You have to set the ARN application inference profile in the model_id parameter
       model_id: arn:aws:bedrock:eu-central-1:000000000000:application-inference-profile/a0a0a0a0a0a0
 ```

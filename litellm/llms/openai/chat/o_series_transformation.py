@@ -131,15 +131,17 @@ class OpenAIOSeriesConfig(OpenAIGPTConfig):
 
     def is_model_o_series_model(self, model: str) -> bool:
         model = model.split("/")[-1]  # could be "openai/o3" or "o3"
-        return model in litellm.open_ai_chat_completion_models and any(
-            model.startswith(pfx) for pfx in ("o1", "o3", "o4")
+        return (
+            len(model) > 1
+            and model[0] == "o"
+            and model[1].isdigit()
+            and model in litellm.open_ai_chat_completion_models
         )
 
     @overload
     def _transform_messages(
         self, messages: List[AllMessageValues], model: str, is_async: Literal[True]
-    ) -> Coroutine[Any, Any, List[AllMessageValues]]:
-        ...
+    ) -> Coroutine[Any, Any, List[AllMessageValues]]: ...
 
     @overload
     def _transform_messages(
@@ -147,8 +149,7 @@ class OpenAIOSeriesConfig(OpenAIGPTConfig):
         messages: List[AllMessageValues],
         model: str,
         is_async: Literal[False] = False,
-    ) -> List[AllMessageValues]:
-        ...
+    ) -> List[AllMessageValues]: ...
 
     def _transform_messages(
         self, messages: List[AllMessageValues], model: str, is_async: bool = False

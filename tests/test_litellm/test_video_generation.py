@@ -1,4 +1,5 @@
 import asyncio
+import io
 import json
 import os
 import sys
@@ -14,6 +15,7 @@ import litellm
 from litellm.cost_calculator import default_video_cost_calculator
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.llms.gemini.videos.transformation import GeminiVideoConfig
 from litellm.llms.openai.videos.transformation import OpenAIVideoConfig
@@ -45,10 +47,10 @@ class TestVideoGeneration:
                 "created_at": 1712697600,
                 "model": "sora-2",
                 "size": "720x1280",
-                "seconds": "8"
-            }
+                "seconds": "8",
+            },
         )
-        
+
         assert isinstance(response, VideoObject)
         assert response.id == "video_123"
         assert response.status == "queued"
@@ -66,17 +68,17 @@ class TestVideoGeneration:
             "completed_at": 1712697660,
             "model": "sora-2",
             "size": "1280x720",
-            "seconds": "10"
+            "seconds": "10",
         }
-        
+
         response = video_generation(
             prompt="A beautiful sunset over the ocean",
             model="sora-2",
             seconds="10",
             size="1280x720",
-            mock_response=mock_data
+            mock_response=mock_data,
         )
-        
+
         assert isinstance(response, VideoObject)
         assert response.id == "video_456"
         assert response.status == "completed"
@@ -92,26 +94,34 @@ class TestVideoGeneration:
             status="processing",
             created_at=1712697600,
             model="sora-2",
-            progress=50
+            progress=50,
         )
-        
+
         # Mock the async_video_generation_handler to return the mock_response
         async_mock = AsyncMock(return_value=mock_response)
-        with patch.object(videos_main.base_llm_http_handler, 'async_video_generation_handler', async_mock):
-            with patch.object(videos_main.base_llm_http_handler, 'video_generation_handler', side_effect=lambda **kwargs: async_mock(**kwargs)):
+        with patch.object(
+            videos_main.base_llm_http_handler,
+            "async_video_generation_handler",
+            async_mock,
+        ):
+            with patch.object(
+                videos_main.base_llm_http_handler,
+                "video_generation_handler",
+                side_effect=lambda **kwargs: async_mock(**kwargs),
+            ):
                 import asyncio
-                
+
                 async def test_async():
                     response = await avideo_generation(
                         prompt="A cat playing with a ball",
                         model="sora-2",
                         seconds="5",
-                        size="720x1280"
+                        size="720x1280",
                     )
                     return response
-                
+
                 response = asyncio.run(test_async())
-                
+
                 assert isinstance(response, VideoObject)
                 assert response.id == "video_async_123"
                 assert response.status == "processing"
@@ -123,25 +133,31 @@ class TestVideoGeneration:
         response = video_generation(
             prompt="Test video",
             model="sora-2",
-            mock_response={"id": "test", "object": "video", "status": "queued", "created_at": 1712697600}
+            mock_response={
+                "id": "test",
+                "object": "video",
+                "status": "queued",
+                "created_at": 1712697600,
+            },
         )
-        
+
         assert isinstance(response, VideoObject)
         assert response.id == "test"
 
     def test_video_generation_error_handling(self):
         """Test video generation error handling."""
-        with patch.object(videos_main.base_llm_http_handler, 'video_generation_handler', side_effect=Exception("API Error")):
+        with patch.object(
+            videos_main.base_llm_http_handler,
+            "video_generation_handler",
+            side_effect=Exception("API Error"),
+        ):
             with pytest.raises(Exception):
-                video_generation(
-                    prompt="Test video",
-                    model="sora-2"
-                )
+                video_generation(prompt="Test video", model="sora-2")
 
     def test_video_generation_provider_config(self):
         """Test video generation provider configuration."""
         config = OpenAIVideoConfig()
-        
+
         # Test supported parameters
         supported_params = config.get_supported_openai_params("sora-2")
         assert "prompt" in supported_params
@@ -152,20 +168,17 @@ class TestVideoGeneration:
     def test_video_generation_request_transformation(self):
         """Test video generation request transformation."""
         config = OpenAIVideoConfig()
-        
+
         # Test request transformation
         data, files, returned_api_base = config.transform_video_create_request(
             model="sora-2",
             prompt="Test video prompt",
             api_base="https://api.openai.com/v1/videos",
-            video_create_optional_request_params={
-                "seconds": "8",
-                "size": "720x1280"
-            },
+            video_create_optional_request_params={"seconds": "8", "size": "720x1280"},
             litellm_params=MagicMock(),
-            headers={}
+            headers={},
         )
-        
+
         assert data["model"] == "sora-2"
         assert data["prompt"] == "Test video prompt"
         assert data["seconds"] == "8"
@@ -173,10 +186,38 @@ class TestVideoGeneration:
         assert files == []
         assert returned_api_base == "https://api.openai.com/v1/videos"
 
+    def test_video_generation_request_decodes_encoded_character_ids(self):
+        """Encoded character IDs should be decoded before upstream create-video call."""
+        from litellm.types.videos.utils import encode_character_id_with_provider
+
+        config = OpenAIVideoConfig()
+        encoded_character_id = encode_character_id_with_provider(
+            character_id="char_123",
+            provider="openai",
+            model_id="sora-2",
+        )
+
+        data, files, returned_api_base = config.transform_video_create_request(
+            model="sora-2",
+            prompt="Test video prompt",
+            api_base="https://api.openai.com/v1/videos",
+            video_create_optional_request_params={
+                "seconds": "8",
+                "size": "720x1280",
+                "characters": [{"id": encoded_character_id}],
+            },
+            litellm_params=MagicMock(),
+            headers={},
+        )
+
+        assert data["characters"] == [{"id": "char_123"}]
+        assert files == []
+        assert returned_api_base == "https://api.openai.com/v1/videos"
+
     def test_video_generation_response_transformation(self):
         """Test video generation response transformation."""
         config = OpenAIVideoConfig()
-        
+
         # Mock HTTP response
         mock_http_response = MagicMock()
         mock_http_response.json.return_value = {
@@ -186,15 +227,13 @@ class TestVideoGeneration:
             "created_at": 1712697600,
             "model": "sora-2",
             "size": "1280x720",
-            "seconds": "12"
+            "seconds": "12",
         }
-        
+
         response = config.transform_video_create_response(
-            model="sora-2",
-            raw_response=mock_http_response,
-            logging_obj=MagicMock()
+            model="sora-2", raw_response=mock_http_response, logging_obj=MagicMock()
         )
-        
+
         assert isinstance(response, VideoObject)
         assert response.id == "video_789"
         assert response.status == "completed"
@@ -211,7 +250,9 @@ class TestVideoGeneration:
             # Try alternative paths
             alt_paths = [
                 os.path.join(os.path.dirname(__file__), "..", "..", cost_map_path),
-                os.path.join(os.path.dirname(__file__), "..", "..", "..", cost_map_path),
+                os.path.join(
+                    os.path.dirname(__file__), "..", "..", "..", cost_map_path
+                ),
             ]
             for path in alt_paths:
                 if os.path.exists(path):
@@ -219,17 +260,15 @@ class TestVideoGeneration:
                     break
             else:
                 pytest.skip("model_prices_and_context_window.json not found")
-        
+
         with open(cost_map_path, "r") as f:
             litellm.model_cost = json.load(f)
-        
+
         # Test with sora-2 model
         cost = default_video_cost_calculator(
-            model="openai/sora-2",
-            duration_seconds=10.0,
-            custom_llm_provider="openai"
+            model="openai/sora-2", duration_seconds=10.0, custom_llm_provider="openai"
         )
-        
+
         # Should calculate cost based on duration (10 seconds * $0.10 per second = $1.00)
         assert cost == 1.0
 
@@ -239,17 +278,134 @@ class TestVideoGeneration:
             default_video_cost_calculator(
                 model="unknown-model",
                 duration_seconds=5.0,
-                custom_llm_provider="openai"
+                custom_llm_provider="openai",
             )
+
+    def test_video_generation_cost_with_custom_model_info(self):
+        """Test that custom model_info pricing is applied for video generation.
+
+        When a deployment has custom pricing via model_info, it should be used
+        instead of looking up the global litellm.model_cost map.
+
+        Related: https://github.com/BerriAI/litellm/issues/21907
+        """
+        model_info = {
+            "output_cost_per_video_per_second": 0.05,
+        }
+        cost = default_video_cost_calculator(
+            model="my-custom-video-model",
+            duration_seconds=10.0,
+            model_info=model_info,
+        )
+        assert cost == 0.5
+
+    def test_video_generation_cost_custom_model_info_fallback_to_per_second(self):
+        """Test that output_cost_per_second is used as fallback when
+        output_cost_per_video_per_second is not set in custom model_info.
+
+        Related: https://github.com/BerriAI/litellm/issues/21907
+        """
+        model_info = {
+            "output_cost_per_second": 0.10,
+        }
+        cost = default_video_cost_calculator(
+            model="my-custom-video-model",
+            duration_seconds=5.0,
+            model_info=model_info,
+        )
+        assert cost == 0.5
+
+    def test_video_generation_cost_1080p_tier_via_default_calculator(self):
+        """default_video_cost_calculator uses output_cost_per_second_1080p when requested."""
+        from litellm.cost_calculator import default_video_cost_calculator
+
+        model_info = {
+            "output_cost_per_second": 0.05,
+            "output_cost_per_second_1080p": 0.08,
+        }
+        cost = default_video_cost_calculator(
+            model="my-custom-video-model",
+            duration_seconds=10.0,
+            model_info=model_info,
+            video_resolution="1080p",
+        )
+        assert cost == 0.8
+
+    def test_video_generation_cost_custom_pricing_through_completion_cost(self):
+        """Test that custom video pricing flows through completion_cost via litellm_logging_obj.
+
+        This tests the full cost calculation path: completion_cost extracts model_info
+        from litellm_logging_obj.litellm_params.metadata.model_info and passes it to
+        the video cost calculator.
+
+        Related: https://github.com/BerriAI/litellm/issues/21907
+        """
+        from litellm.cost_calculator import completion_cost
+
+        # Create mock response with usage containing duration_seconds
+        mock_response = MagicMock()
+        mock_response.usage = MagicMock()
+        mock_response.usage.duration_seconds = 10.0
+        type(mock_response)._hidden_params = {}
+
+        # Create mock litellm_logging_obj with custom pricing
+        mock_logging_obj = MagicMock()
+        mock_logging_obj.litellm_params = {
+            "metadata": {
+                "model_info": {
+                    "output_cost_per_video_per_second": 0.05,
+                }
+            }
+        }
+
+        cost = completion_cost(
+            completion_response=mock_response,
+            model="openai/hunyuanvideo",
+            call_type="create_video",
+            custom_llm_provider="openai",
+            custom_pricing=True,
+            litellm_logging_obj=mock_logging_obj,
+        )
+        assert cost == 0.5
+
+    def test_completion_cost_video_generation_1080p_tier(self):
+        """create_video cost uses output_cost_per_second_1080p when usage.video_resolution is 1080p."""
+        from litellm.cost_calculator import completion_cost
+
+        mock_response = MagicMock()
+        mock_response.usage = MagicMock()
+        mock_response.usage.duration_seconds = 10.0
+        mock_response.usage.video_resolution = "1080p"
+        type(mock_response)._hidden_params = {}
+
+        mock_logging_obj = MagicMock()
+        mock_logging_obj.litellm_params = {
+            "metadata": {
+                "model_info": {
+                    "output_cost_per_second": 0.05,
+                    "output_cost_per_second_1080p": 0.08,
+                }
+            }
+        }
+
+        cost = completion_cost(
+            completion_response=mock_response,
+            model="gemini/veo-3.1-lite-generate-preview",
+            call_type="create_video",
+            custom_llm_provider="gemini",
+            custom_pricing=True,
+            litellm_logging_obj=mock_logging_obj,
+        )
+        assert abs(cost - 0.8) < 0.001
 
     def test_video_generation_with_files(self):
         """Test video generation with file uploads."""
         config = OpenAIVideoConfig()
-        
+
         # Mock file data
         mock_file = MagicMock()
         mock_file.read.return_value = b"fake_image_data"
-        
+
         data, files, returned_api_base = config.transform_video_create_request(
             model="sora-2",
             prompt="Test video with image",
@@ -257,12 +413,12 @@ class TestVideoGeneration:
             video_create_optional_request_params={
                 "input_reference": mock_file,
                 "seconds": "8",
-                "size": "720x1280"
+                "size": "720x1280",
             },
             litellm_params=MagicMock(),
-            headers={}
+            headers={},
         )
-        
+
         assert data["model"] == "sora-2"
         assert data["prompt"] == "Test video with image"
         assert len(files) > 0  # Should have files when input_reference is provided
@@ -270,14 +426,12 @@ class TestVideoGeneration:
     def test_video_generation_environment_validation(self):
         """Test video generation environment validation."""
         config = OpenAIVideoConfig()
-        
+
         # Test environment validation
         headers = config.validate_environment(
-            headers={},
-            model="sora-2",
-            api_key="test-api-key"
+            headers={}, model="sora-2", api_key="test-api-key"
         )
-        
+
         assert "Authorization" in headers
         assert headers["Authorization"] == "Bearer test-api-key"
 
@@ -285,36 +439,44 @@ class TestVideoGeneration:
         """Test that video generation handler uses api_key from litellm_params when function parameter is None."""
         handler = BaseLLMHTTPHandler()
         config = OpenAIVideoConfig()
-        
+
         # Mock the validate_environment method to capture the api_key passed to it
-        with patch.object(config, 'validate_environment') as mock_validate:
+        with patch.object(config, "validate_environment") as mock_validate:
             mock_validate.return_value = {"Authorization": "Bearer deployment-api-key"}
-            
+
             # Mock the transform and HTTP client
-            with patch.object(config, 'transform_video_create_request') as mock_transform:
-                mock_transform.return_value = ({"model": "sora-2", "prompt": "test"}, [], "https://api.openai.com/v1/videos")
-                
+            with patch.object(
+                config, "transform_video_create_request"
+            ) as mock_transform:
+                mock_transform.return_value = (
+                    {"model": "sora-2", "prompt": "test"},
+                    [],
+                    "https://api.openai.com/v1/videos",
+                )
+
                 # Mock the transform_video_create_response to avoid needing a real response
-                with patch.object(config, 'transform_video_create_response') as mock_transform_response:
+                with patch.object(
+                    config, "transform_video_create_response"
+                ) as mock_transform_response:
                     mock_video_object = MagicMock()
                     mock_video_object.id = "video_123"
                     mock_video_object.object = "video"
                     mock_video_object.status = "queued"
                     mock_transform_response.return_value = mock_video_object
-                    
+
                     mock_response = MagicMock()
                     mock_response.json.return_value = {
                         "id": "video_123",
                         "object": "video",
                         "status": "queued",
                         "created_at": 1712697600,
-                        "model": "sora-2"
+                        "model": "sora-2",
                     }
                     mock_response.status_code = 200
-                    
+
                     mock_client = MagicMock()
                     mock_client.post.return_value = mock_response
-                    
+
                     with patch(
                         "litellm.llms.custom_httpx.llm_http_handler._get_httpx_client",
                         return_value=mock_client,
@@ -325,13 +487,16 @@ class TestVideoGeneration:
                             video_generation_provider_config=config,
                             video_generation_optional_request_params={},
                             custom_llm_provider="openai",
-                            litellm_params={"api_key": "deployment-api-key", "api_base": "https://api.openai.com/v1"},
+                            litellm_params={
+                                "api_key": "deployment-api-key",
+                                "api_base": "https://api.openai.com/v1",
+                            },
                             logging_obj=MagicMock(),
                             timeout=5.0,
                             api_key=None,  # Function parameter is None
                             _is_async=False,
                         )
-                    
+
                     # Verify validate_environment was called with api_key from litellm_params
                     mock_validate.assert_called_once()
                     call_args = mock_validate.call_args
@@ -340,31 +505,29 @@ class TestVideoGeneration:
     def test_video_generation_url_generation(self):
         """Test video generation URL generation."""
         config = OpenAIVideoConfig()
-        
+
         # Test URL generation
         url = config.get_complete_url(
-            model="sora-2",
-            api_base="https://api.openai.com/v1",
-            litellm_params={}
+            model="sora-2", api_base="https://api.openai.com/v1", litellm_params={}
         )
-        
+
         assert url == "https://api.openai.com/v1/videos"
 
     def test_video_generation_parameter_mapping(self):
         """Test video generation parameter mapping."""
         config = OpenAIVideoConfig()
-        
+
         # Test parameter mapping
         mapped_params = config.map_openai_params(
             video_create_optional_params={
                 "seconds": "8",
                 "size": "720x1280",
-                "user": "test-user"
+                "user": "test-user",
             },
             model="sora-2",
-            drop_params=False
+            drop_params=False,
         )
-        
+
         assert mapped_params["seconds"] == "8"
         assert mapped_params["size"] == "720x1280"
         assert mapped_params["user"] == "test-user"
@@ -380,13 +543,10 @@ class TestVideoGeneration:
             video_generation_provider_config=OpenAIVideoConfig(),
             video_generation_optional_params={
                 "seconds": "8",
-                "extra_body": {
-                    "vertex_ai_param": "value",
-                    "gemini_param": "value2"
-                }
-            }
+                "extra_body": {"vertex_ai_param": "value", "gemini_param": "value2"},
+            },
         )
-        
+
         # extra_body params should be merged into the result
         assert result["seconds"] == "8"
         assert result["vertex_ai_param"] == "value"
@@ -402,20 +562,20 @@ class TestVideoGeneration:
             object="video",
             status="completed",
             created_at=1712697600,
-            model="sora-2"
+            model="sora-2",
         )
-        
+
         assert video_obj.id == "test_id"
         assert video_obj.object == "video"
         assert video_obj.status == "completed"
-        
+
         # Test dictionary-like access
         assert video_obj["id"] == "test_id"
         assert video_obj["status"] == "completed"
         assert "id" in video_obj
         assert video_obj.get("id") == "test_id"
         assert video_obj.get("nonexistent", "default") == "default"
-        
+
         # Test JSON serialization
         json_data = video_obj.json()
         assert json_data["id"] == "test_id"
@@ -425,22 +585,19 @@ class TestVideoGeneration:
         """Test video generation response types."""
         # Test VideoResponse
         video_obj = VideoObject(
-            id="test_id",
-            object="video",
-            status="completed",
-            created_at=1712697600
+            id="test_id", object="video", status="completed", created_at=1712697600
         )
-        
+
         response = VideoResponse(data=[video_obj])
-        
+
         assert len(response.data) == 1
         assert response.data[0].id == "test_id"
-        
+
         # Test dictionary-like access
         assert response["data"][0]["id"] == "test_id"
         assert "data" in response
         assert response.get("data")[0]["id"] == "test_id"
-        
+
         # Test JSON serialization
         json_data = response.json()
         assert len(json_data["data"]) == 1
@@ -461,10 +618,10 @@ class TestVideoGeneration:
                 "model": "sora-2",
                 "progress": 100,
                 "size": "720x1280",
-                "seconds": "8"
-            }
+                "seconds": "8",
+            },
         )
-        
+
         assert isinstance(response, VideoObject)
         assert response.id == "video_123"
         assert response.status == "completed"
@@ -481,15 +638,13 @@ class TestVideoGeneration:
             "model": "sora-2",
             "progress": 75,
             "size": "1280x720",
-            "seconds": "10"
+            "seconds": "10",
         }
-        
+
         response = video_status(
-            video_id="video_456",
-            model="sora-2",
-            mock_response=mock_data
+            video_id="video_456", model="sora-2", mock_response=mock_data
         )
-        
+
         assert isinstance(response, VideoObject)
         assert response.id == "video_456"
         assert response.status == "processing"
@@ -504,24 +659,29 @@ class TestVideoGeneration:
             status="queued",
             created_at=1712697600,
             model="sora-2",
-            progress=0
+            progress=0,
         )
-        
+
         # Mock the async_video_status_handler to return the mock_response
         async_mock = AsyncMock(return_value=mock_response)
-        with patch.object(videos_main.base_llm_http_handler, 'async_video_status_handler', async_mock):
-            with patch.object(videos_main.base_llm_http_handler, 'video_status_handler', side_effect=lambda **kwargs: async_mock(**kwargs)):
+        with patch.object(
+            videos_main.base_llm_http_handler, "async_video_status_handler", async_mock
+        ):
+            with patch.object(
+                videos_main.base_llm_http_handler,
+                "video_status_handler",
+                side_effect=lambda **kwargs: async_mock(**kwargs),
+            ):
                 import asyncio
-                
+
                 async def test_async():
                     response = await avideo_status(
-                        video_id="video_async_123",
-                        model="sora-2"
+                        video_id="video_async_123", model="sora-2"
                     )
                     return response
-                
+
                 response = asyncio.run(test_async())
-                
+
                 assert isinstance(response, VideoObject)
                 assert response.id == "video_async_123"
                 assert response.status == "queued"
@@ -533,40 +693,46 @@ class TestVideoGeneration:
         response = video_status(
             video_id="test_video_id",
             model="sora-2",
-            mock_response={"id": "test", "object": "video", "status": "completed", "created_at": 1712697600}
+            mock_response={
+                "id": "test",
+                "object": "video",
+                "status": "completed",
+                "created_at": 1712697600,
+            },
         )
-        
+
         assert isinstance(response, VideoObject)
         assert response.id == "test"
 
     def test_video_status_error_handling(self):
         """Test video status error handling."""
-        with patch.object(videos_main.base_llm_http_handler, 'video_status_handler', side_effect=Exception("API Error")):
+        with patch.object(
+            videos_main.base_llm_http_handler,
+            "video_status_handler",
+            side_effect=Exception("API Error"),
+        ):
             with pytest.raises(Exception):
-                video_status(
-                    video_id="test_video_id",
-                    model="sora-2"
-                )
+                video_status(video_id="test_video_id", model="sora-2")
 
     def test_video_status_request_transformation(self):
         """Test video status request transformation."""
         config = OpenAIVideoConfig()
-        
+
         # Test request transformation
         url, data = config.transform_video_status_retrieve_request(
             video_id="video_123",
             api_base="https://api.openai.com/v1/videos",
             litellm_params=MagicMock(),
-            headers={}
+            headers={},
         )
-        
+
         assert url == "https://api.openai.com/v1/videos/video_123"
         assert data == {}
 
     def test_video_status_response_transformation(self):
         """Test video status response transformation."""
         config = OpenAIVideoConfig()
-        
+
         # Mock HTTP response
         mock_http_response = MagicMock()
         mock_http_response.json.return_value = {
@@ -578,14 +744,13 @@ class TestVideoGeneration:
             "model": "sora-2",
             "progress": 100,
             "size": "1280x720",
-            "seconds": "12"
+            "seconds": "12",
         }
-        
+
         response = config.transform_video_status_retrieve_response(
-            raw_response=mock_http_response,
-            logging_obj=MagicMock()
+            raw_response=mock_http_response, logging_obj=MagicMock()
         )
-        
+
         assert isinstance(response, VideoObject)
         assert response.id == "video_789"
         assert response.status == "completed"
@@ -604,12 +769,12 @@ class TestVideoGeneration:
                 "status": "queued",
                 "created_at": 1712697600,
                 "model": "sora-2",
-                "progress": 0
-            }
+                "progress": 0,
+            },
         )
         assert queued_response.status == "queued"
         assert queued_response.progress == 0
-        
+
         # Test processing state
         processing_response = video_status(
             video_id="video_processing",
@@ -620,12 +785,12 @@ class TestVideoGeneration:
                 "status": "processing",
                 "created_at": 1712697600,
                 "model": "sora-2",
-                "progress": 50
-            }
+                "progress": 50,
+            },
         )
         assert processing_response.status == "processing"
         assert processing_response.progress == 50
-        
+
         # Test completed state
         completed_response = video_status(
             video_id="video_completed",
@@ -637,8 +802,8 @@ class TestVideoGeneration:
                 "created_at": 1712697600,
                 "completed_at": 1712697660,
                 "model": "sora-2",
-                "progress": 100
-            }
+                "progress": 100,
+            },
         )
         assert completed_response.status == "completed"
         assert completed_response.progress == 100
@@ -655,25 +820,23 @@ class TestVideoGeneration:
             "progress": 100,
             "remixed_from_video_id": "video_original_123",
             "size": "720x1280",
-            "seconds": "8"
+            "seconds": "8",
         }
-        
+
         response = video_status(
-            video_id="video_remix_123",
-            model="sora-2",
-            mock_response=mock_data
+            video_id="video_remix_123", model="sora-2", mock_response=mock_data
         )
-        
+
         assert isinstance(response, VideoObject)
         assert response.id == "video_remix_123"
         assert response.status == "completed"
-        assert hasattr(response, 'remixed_from_video_id')
+        assert hasattr(response, "remixed_from_video_id")
         assert response.remixed_from_video_id == "video_original_123"
 
     def test_video_status_async_inside_async_function(self):
         """Test that sync video_status works inside async functions (no asyncio.run issues)."""
         import asyncio
-        
+
         async def test_sync_in_async():
             # This should work without asyncio.run() issues
             # Use mock_response parameter for reliable testing
@@ -686,13 +849,13 @@ class TestVideoGeneration:
                     "status": "completed",
                     "created_at": 1712697600,
                     "model": "sora-2",
-                    "progress": 100
-                }
+                    "progress": 100,
+                },
             )
             return response
-        
+
         response = asyncio.run(test_sync_in_async())
-        
+
         assert isinstance(response, VideoObject)
         assert response.id == "video_sync_in_async"
         assert response.status == "completed"
@@ -700,20 +863,32 @@ class TestVideoGeneration:
     def test_video_status_url_construction(self):
         """Test video status URL construction."""
         config = OpenAIVideoConfig()
-        
+
         # Test with different API bases
         test_cases = [
-            ("https://api.openai.com/v1/videos", "video_123", "https://api.openai.com/v1/videos/video_123"),
-            ("https://api.openai.com/v1/videos/", "video_123", "https://api.openai.com/v1/videos/video_123"),
-            ("https://custom-api.com/v1/videos", "video_456", "https://custom-api.com/v1/videos/video_456"),
+            (
+                "https://api.openai.com/v1/videos",
+                "video_123",
+                "https://api.openai.com/v1/videos/video_123",
+            ),
+            (
+                "https://api.openai.com/v1/videos/",
+                "video_123",
+                "https://api.openai.com/v1/videos/video_123",
+            ),
+            (
+                "https://custom-api.com/v1/videos",
+                "video_456",
+                "https://custom-api.com/v1/videos/video_456",
+            ),
         ]
-        
+
         for api_base, video_id, expected_url in test_cases:
             url, data = config.transform_video_status_retrieve_request(
                 video_id=video_id,
                 api_base=api_base,
                 litellm_params=MagicMock(),
-                headers={}
+                headers={},
             )
             assert url == expected_url
             assert data == {}
@@ -721,14 +896,16 @@ class TestVideoGeneration:
 
 class TestVideoLogging:
     """Test video generation logging functionality."""
-    
+
     class TestVideoLogger(CustomLogger):
         def __init__(self):
             self.standard_logging_payload = None
-            
-        async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+
+        async def async_log_success_event(
+            self, kwargs, response_obj, start_time, end_time
+        ):
             self.standard_logging_payload = kwargs.get("standard_logging_object")
-    
+
     @pytest.mark.asyncio
     async def test_video_generation_logging(self):
         """Test that video generation creates proper logging payload with cost tracking.
@@ -747,7 +924,7 @@ class TestVideoLogging:
             created_at=1712697600,
             model="sora-2",
             size="720x1280",
-            seconds="8"
+            seconds="8",
         )
 
         # Create async mock function to return the mock_response
@@ -755,12 +932,16 @@ class TestVideoLogging:
             return mock_response
 
         # Patch the async_video_generation_handler method on base_llm_http_handler
-        with patch.object(videos_main.base_llm_http_handler, 'async_video_generation_handler', side_effect=mock_async_handler):
+        with patch.object(
+            videos_main.base_llm_http_handler,
+            "async_video_generation_handler",
+            side_effect=mock_async_handler,
+        ):
             response = await litellm.avideo_generation(
                 prompt="A cat running in a garden",
                 model="sora-2",
                 seconds="8",
-                size="720x1280"
+                size="720x1280",
             )
 
             await asyncio.sleep(1)  # Allow logging to complete
@@ -801,6 +982,84 @@ def test_openai_transform_video_content_request_empty_params():
     assert params == {}
 
 
+@pytest.mark.parametrize(
+    "variant,expected_suffix",
+    [
+        ("thumbnail", "?variant=thumbnail"),
+        ("spritesheet", "?variant=spritesheet"),
+    ],
+)
+def test_openai_transform_video_content_request_with_variant(variant, expected_suffix):
+    """OpenAI content transform should append ?variant= when variant is provided."""
+    config = OpenAIVideoConfig()
+    url, params = config.transform_video_content_request(
+        video_id="video_123",
+        api_base="https://api.openai.com/v1/videos",
+        litellm_params={},
+        headers={},
+        variant=variant,
+    )
+
+    assert url == f"https://api.openai.com/v1/videos/video_123/content{expected_suffix}"
+    assert params == {}
+
+
+def test_openai_transform_video_content_request_variant_none_no_query_param():
+    """OpenAI content transform should NOT append ?variant= when variant is None."""
+    config = OpenAIVideoConfig()
+    url, params = config.transform_video_content_request(
+        video_id="video_123",
+        api_base="https://api.openai.com/v1/videos",
+        litellm_params={},
+        headers={},
+        variant=None,
+    )
+
+    assert "variant" not in url
+    assert url == "https://api.openai.com/v1/videos/video_123/content"
+
+
+def test_video_content_handler_passes_variant_to_url():
+    """HTTP handler should pass variant through to the final URL."""
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+    from litellm.types.router import GenericLiteLLMParams
+
+    if hasattr(litellm, "in_memory_llm_clients_cache"):
+        litellm.in_memory_llm_clients_cache.flush_cache()
+
+    handler = BaseLLMHTTPHandler()
+    config = OpenAIVideoConfig()
+
+    mock_client = MagicMock(spec=HTTPHandler)
+    mock_response = MagicMock()
+    mock_response.content = b"thumbnail-bytes"
+    mock_client.get.return_value = mock_response
+
+    with patch(
+        "litellm.llms.custom_httpx.llm_http_handler._get_httpx_client",
+        return_value=mock_client,
+    ):
+        result = handler.video_content_handler(
+            video_id="video_abc",
+            video_content_provider_config=config,
+            custom_llm_provider="openai",
+            litellm_params=GenericLiteLLMParams(api_base="https://api.openai.com/v1"),
+            logging_obj=MagicMock(),
+            timeout=5.0,
+            api_key="sk-test",
+            client=mock_client,
+            _is_async=False,
+            variant="thumbnail",
+        )
+
+    assert result == b"thumbnail-bytes"
+    called_url = mock_client.get.call_args.kwargs["url"]
+    assert (
+        called_url
+        == "https://api.openai.com/v1/videos/video_abc/content?variant=thumbnail"
+    )
+
+
 def test_video_content_handler_uses_get_for_openai():
     """HTTP handler must use GET (not POST) for OpenAI content download."""
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
@@ -808,7 +1067,7 @@ def test_video_content_handler_uses_get_for_openai():
 
     # Clear the HTTP client cache to prevent test isolation issues
     # In CI, a cached real HTTPHandler from a previous test might bypass the mock
-    if hasattr(litellm, 'in_memory_llm_clients_cache'):
+    if hasattr(litellm, "in_memory_llm_clients_cache"):
         litellm.in_memory_llm_clients_cache.flush_cache()
 
     handler = BaseLLMHTTPHandler()
@@ -823,7 +1082,9 @@ def test_video_content_handler_uses_get_for_openai():
 
     # Patch _get_httpx_client to ensure no real HTTP client is created
     # This prevents test isolation issues where isinstance check might fail
-    with patch('litellm.llms.custom_httpx.llm_http_handler._get_httpx_client') as mock_get_client:
+    with patch(
+        "litellm.llms.custom_httpx.llm_http_handler._get_httpx_client"
+    ) as mock_get_client:
         mock_get_client.return_value = mock_client
 
         result = handler.video_content_handler(
@@ -851,15 +1112,15 @@ def test_video_content_respects_api_base_and_api_key_from_kwargs():
 
     # Mock the handler to capture litellm_params
     captured_litellm_params = None
-    
+
     def capture_litellm_params(*args, **kwargs):
         nonlocal captured_litellm_params
         captured_litellm_params = kwargs.get("litellm_params")
         return b"mp4-bytes"
-    
-    with patch('litellm.videos.main.base_llm_http_handler') as mock_handler:
+
+    with patch("litellm.videos.main.base_llm_http_handler") as mock_handler:
         mock_handler.video_content_handler = capture_litellm_params
-        
+
         # Call video_content with api_base and api_key in kwargs (simulating database entry)
         # This simulates how the router passes model config from database via **kwargs
         result = video_content(
@@ -868,10 +1129,13 @@ def test_video_content_respects_api_base_and_api_key_from_kwargs():
             api_base="https://test-resource.openai.azure.com/",  # Passed via kwargs by router
             api_key="test-api-key-from-db",  # Passed via kwargs by router
         )
-    
+
     # Verify that api_base and api_key from kwargs were included in litellm_params
     assert captured_litellm_params is not None
-    assert captured_litellm_params.get("api_base") == "https://test-resource.openai.azure.com/"
+    assert (
+        captured_litellm_params.get("api_base")
+        == "https://test-resource.openai.azure.com/"
+    )
     assert captured_litellm_params.get("api_key") == "test-api-key-from-db"
     assert result == b"mp4-bytes"
 
@@ -892,7 +1156,7 @@ def test_encode_video_id_with_provider_handles_azure_video_prefix():
     """
     Test that encode_video_id_with_provider correctly encodes Azure/OpenAI video IDs
     that start with 'video_' prefix.
-    
+
     This test verifies the fix for the issue where Azure returns video IDs like
     'video_69323201cf6081909263f751f89991e6', which were previously skipped
     from encoding, causing video status retrieval to default to 'openai' provider.
@@ -906,32 +1170,29 @@ def test_encode_video_id_with_provider_handles_azure_video_prefix():
     raw_azure_video_id = "video_69323201cf6081909263f751f89991e6"
     provider = "azure"
     model_id = "azure/sora-2"
-    
+
     # Encode the video ID with provider information
     encoded_id = encode_video_id_with_provider(
-        video_id=raw_azure_video_id,
-        provider=provider,
-        model_id=model_id
+        video_id=raw_azure_video_id, provider=provider, model_id=model_id
     )
-    
+
     # Verify the ID was encoded (should be different from the original)
     assert encoded_id != raw_azure_video_id
     assert encoded_id.startswith("video_")
-    
+
     # Decode the encoded ID to verify provider information is preserved
     decoded = decode_video_id_with_provider(encoded_id)
     assert decoded.get("custom_llm_provider") == provider
     assert decoded.get("model_id") == model_id
     assert decoded.get("video_id") == raw_azure_video_id
-    
+
     # Verify that encoding an already-encoded ID doesn't double-encode it
     encoded_twice = encode_video_id_with_provider(
-        video_id=encoded_id,
-        provider=provider,
-        model_id=model_id
+        video_id=encoded_id, provider=provider, model_id=model_id
     )
     assert encoded_twice == encoded_id  # Should return the same encoded ID
-    
+
+
 class TestVideoListTransformation:
     """Tests for video list request/response transformation with provider ID encoding."""
 
@@ -993,7 +1254,12 @@ class TestVideoListTransformation:
         mock_http_response.json.return_value = {
             "object": "list",
             "data": [
-                {"id": "video_aaa", "object": "video", "model": "sora-2", "status": "completed"},
+                {
+                    "id": "video_aaa",
+                    "object": "video",
+                    "model": "sora-2",
+                    "status": "completed",
+                },
             ],
             "first_id": "video_aaa",
             "last_id": "video_aaa",
@@ -1018,7 +1284,12 @@ class TestVideoListTransformation:
         mock_http_response.json.return_value = {
             "object": "list",
             "data": [
-                {"id": "video_aaa", "object": "video", "model": "sora-2", "status": "completed"},
+                {
+                    "id": "video_aaa",
+                    "object": "video",
+                    "model": "sora-2",
+                    "status": "completed",
+                },
             ],
             "has_more": False,
         }
@@ -1081,8 +1352,18 @@ class TestVideoListTransformation:
         mock_http_response.json.return_value = {
             "object": "list",
             "data": [
-                {"id": "video_aaa", "object": "video", "model": "sora-2", "status": "completed"},
-                {"id": "video_bbb", "object": "video", "model": "sora-2", "status": "completed"},
+                {
+                    "id": "video_aaa",
+                    "object": "video",
+                    "model": "sora-2",
+                    "status": "completed",
+                },
+                {
+                    "id": "video_bbb",
+                    "object": "video",
+                    "model": "sora-2",
+                    "status": "completed",
+                },
             ],
             "first_id": "video_aaa",
             "last_id": "video_bbb",
@@ -1140,16 +1421,16 @@ class TestVideoEndpointsProxyLitellmParams:
                         "vertex_project": "test-project-123",
                         "vertex_location": "global",
                         "vertex_credentials": "/path/to/test-credentials.json",
-                    }
+                    },
                 }
             ]
         }
-        
+
         # Write config to temporary file
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
             yaml.dump(config, f)
             config_fp = f.name
-        
+
         try:
             # Initialize the proxy with the test config
             app = FastAPI()
@@ -1161,6 +1442,7 @@ class TestVideoEndpointsProxyLitellmParams:
         finally:
             # Clean up temporary file
             import os
+
             if os.path.exists(config_fp):
                 os.unlink(config_fp)
 
@@ -1205,7 +1487,10 @@ class TestVideoEndpointsProxyLitellmParams:
 
     @pytest.mark.asyncio
     async def test_video_status_respects_litellm_params(
-        self, client_with_vertex_config, mock_video_generation_response, mock_video_status_response
+        self,
+        client_with_vertex_config,
+        mock_video_generation_response,
+        mock_video_status_response,
     ):
         """Test that video_status endpoint uses litellm_params from proxy config."""
         from unittest.mock import AsyncMock, MagicMock, patch
@@ -1215,7 +1500,9 @@ class TestVideoEndpointsProxyLitellmParams:
 
         # Mock the router instance
         mock_router_instance = MagicMock()
-        mock_router_instance.resolve_model_name_from_model_id.return_value = "vertex-ai-sora-2"
+        mock_router_instance.resolve_model_name_from_model_id.return_value = (
+            "vertex-ai-sora-2"
+        )
         mock_router_instance.model_names = {"vertex-ai-sora-2"}
         mock_router_instance.has_model_id.return_value = False
 
@@ -1223,13 +1510,16 @@ class TestVideoEndpointsProxyLitellmParams:
         # route_request should return a coroutine (not await it), so we return a coroutine
         async def mock_route_request_func(*args, **kwargs):
             return mock_video_status_response
-        
+
         # Create a coroutine that will be added to tasks
         def create_mock_coroutine(*args, **kwargs):
             return mock_route_request_func(*args, **kwargs)
 
         with patch("litellm.proxy.proxy_server.llm_router", mock_router_instance):
-            with patch("litellm.proxy.common_request_processing.route_request", side_effect=create_mock_coroutine) as mock_route_request:
+            with patch(
+                "litellm.proxy.common_request_processing.route_request",
+                side_effect=create_mock_coroutine,
+            ) as mock_route_request:
                 # Make request to video_status endpoint
                 response = client_with_vertex_config.get(
                     f"/v1/videos/{encoded_video_id}",
@@ -1243,7 +1533,15 @@ class TestVideoEndpointsProxyLitellmParams:
                 assert mock_route_request.called
                 call_args = mock_route_request.call_args
                 # route_request is called with data as a keyword argument
-                data_passed = call_args.kwargs.get("data", {}) if call_args.kwargs else (call_args.args[0] if call_args.args and len(call_args.args) > 0 else {})
+                data_passed = (
+                    call_args.kwargs.get("data", {})
+                    if call_args.kwargs
+                    else (
+                        call_args.args[0]
+                        if call_args.args and len(call_args.args) > 0
+                        else {}
+                    )
+                )
 
                 # Verify that model was resolved and added to data
                 assert data_passed.get("model") == "vertex-ai-sora-2", (
@@ -1258,7 +1556,10 @@ class TestVideoEndpointsProxyLitellmParams:
 
     @pytest.mark.asyncio
     async def test_video_content_respects_litellm_params(
-        self, client_with_vertex_config, mock_video_generation_response, mock_video_content_response
+        self,
+        client_with_vertex_config,
+        mock_video_generation_response,
+        mock_video_content_response,
     ):
         """Test that video_content endpoint uses litellm_params from proxy config."""
         from unittest.mock import AsyncMock, MagicMock, patch
@@ -1268,7 +1569,9 @@ class TestVideoEndpointsProxyLitellmParams:
 
         # Mock the router instance
         mock_router_instance = MagicMock()
-        mock_router_instance.resolve_model_name_from_model_id.return_value = "vertex-ai-sora-2"
+        mock_router_instance.resolve_model_name_from_model_id.return_value = (
+            "vertex-ai-sora-2"
+        )
         mock_router_instance.model_names = {"vertex-ai-sora-2"}
         mock_router_instance.has_model_id.return_value = False
 
@@ -1276,13 +1579,16 @@ class TestVideoEndpointsProxyLitellmParams:
         # route_request should return a coroutine (not await it), so we return a coroutine
         async def mock_route_request_func(*args, **kwargs):
             return mock_video_content_response
-        
+
         # Create a coroutine that will be added to tasks
         def create_mock_coroutine(*args, **kwargs):
             return mock_route_request_func(*args, **kwargs)
 
         with patch("litellm.proxy.proxy_server.llm_router", mock_router_instance):
-            with patch("litellm.proxy.common_request_processing.route_request", side_effect=create_mock_coroutine) as mock_route_request:
+            with patch(
+                "litellm.proxy.common_request_processing.route_request",
+                side_effect=create_mock_coroutine,
+            ) as mock_route_request:
                 # Make request to video_content endpoint
                 response = client_with_vertex_config.get(
                     f"/v1/videos/{encoded_video_id}/content",
@@ -1296,7 +1602,15 @@ class TestVideoEndpointsProxyLitellmParams:
                 assert mock_route_request.called
                 call_args = mock_route_request.call_args
                 # route_request is called with data as a keyword argument
-                data_passed = call_args.kwargs.get("data", {}) if call_args.kwargs else (call_args.args[0] if call_args.args and len(call_args.args) > 0 else {})
+                data_passed = (
+                    call_args.kwargs.get("data", {})
+                    if call_args.kwargs
+                    else (
+                        call_args.args[0]
+                        if call_args.args and len(call_args.args) > 0
+                        else {}
+                    )
+                )
 
                 # Verify that model was resolved and added to data
                 assert data_passed.get("model") == "vertex-ai-sora-2", (
@@ -1311,7 +1625,10 @@ class TestVideoEndpointsProxyLitellmParams:
 
     @pytest.mark.asyncio
     async def test_video_content_preserves_custom_llm_provider_from_decoded_id(
-        self, client_with_vertex_config, mock_video_generation_response, mock_video_content_response
+        self,
+        client_with_vertex_config,
+        mock_video_generation_response,
+        mock_video_content_response,
     ):
         """Test that video_content preserves custom_llm_provider from decoded video_id."""
         from unittest.mock import AsyncMock, MagicMock, patch
@@ -1321,7 +1638,9 @@ class TestVideoEndpointsProxyLitellmParams:
 
         # Mock the router instance
         mock_router_instance = MagicMock()
-        mock_router_instance.resolve_model_name_from_model_id.return_value = "vertex-ai-sora-2"
+        mock_router_instance.resolve_model_name_from_model_id.return_value = (
+            "vertex-ai-sora-2"
+        )
         mock_router_instance.model_names = {"vertex-ai-sora-2"}
         mock_router_instance.has_model_id.return_value = False
 
@@ -1329,13 +1648,16 @@ class TestVideoEndpointsProxyLitellmParams:
         # route_request should return a coroutine (not await it), so we return a coroutine
         async def mock_route_request_func(*args, **kwargs):
             return mock_video_content_response
-        
+
         # Create a coroutine that will be added to tasks
         def create_mock_coroutine(*args, **kwargs):
             return mock_route_request_func(*args, **kwargs)
 
         with patch("litellm.proxy.proxy_server.llm_router", mock_router_instance):
-            with patch("litellm.proxy.common_request_processing.route_request", side_effect=create_mock_coroutine) as mock_route_request:
+            with patch(
+                "litellm.proxy.common_request_processing.route_request",
+                side_effect=create_mock_coroutine,
+            ) as mock_route_request:
                 # Make request to video_content endpoint
                 response = client_with_vertex_config.get(
                     f"/v1/videos/{encoded_video_id}/content",
@@ -1349,7 +1671,15 @@ class TestVideoEndpointsProxyLitellmParams:
                 assert mock_route_request.called
                 call_args = mock_route_request.call_args
                 # route_request is called with data as a keyword argument
-                data_passed = call_args.kwargs.get("data", {}) if call_args.kwargs else (call_args.args[0] if call_args.args and len(call_args.args) > 0 else {})
+                data_passed = (
+                    call_args.kwargs.get("data", {})
+                    if call_args.kwargs
+                    else (
+                        call_args.args[0]
+                        if call_args.args and len(call_args.args) > 0
+                        else {}
+                    )
+                )
 
                 # Most importantly: verify that custom_llm_provider is "vertex_ai" not "openai"
                 # This was the bug we fixed - it was defaulting to "openai" before
@@ -1360,5 +1690,652 @@ class TestVideoEndpointsProxyLitellmParams:
                 )
 
 
+def test_video_remix_handler_uses_api_key_from_litellm_params():
+    """Sync remix handler should fall back to litellm_params api_key when api_key param is None."""
+    handler = BaseLLMHTTPHandler()
+    config = OpenAIVideoConfig()
+
+    with patch.object(config, "validate_environment") as mock_validate:
+        mock_validate.return_value = {"Authorization": "Bearer deployment-key"}
+
+        with patch.object(config, "transform_video_remix_request") as mock_transform:
+            mock_transform.return_value = (
+                "https://api.openai.com/v1/videos/video_123/remix",
+                {"prompt": "remix it"},
+            )
+
+            with patch.object(config, "transform_video_remix_response") as mock_resp:
+                mock_resp.return_value = MagicMock()
+
+                mock_client = MagicMock()
+                mock_client.post.return_value = MagicMock(status_code=200)
+
+                with patch(
+                    "litellm.llms.custom_httpx.llm_http_handler._get_httpx_client",
+                    return_value=mock_client,
+                ):
+                    handler.video_remix_handler(
+                        video_id="video_123",
+                        prompt="remix it",
+                        video_remix_provider_config=config,
+                        custom_llm_provider="openai",
+                        litellm_params={
+                            "api_key": "deployment-key",
+                            "api_base": "https://api.openai.com/v1",
+                        },
+                        logging_obj=MagicMock(),
+                        timeout=5.0,
+                        api_key=None,
+                        _is_async=False,
+                    )
+
+        mock_validate.assert_called_once()
+        assert mock_validate.call_args.kwargs["api_key"] == "deployment-key"
+
+
+@pytest.mark.asyncio
+async def test_async_video_remix_handler_uses_api_key_from_litellm_params():
+    """Async remix handler should fall back to litellm_params api_key when api_key param is None."""
+    handler = BaseLLMHTTPHandler()
+    config = OpenAIVideoConfig()
+
+    with patch.object(config, "validate_environment") as mock_validate:
+        mock_validate.return_value = {"Authorization": "Bearer deployment-key"}
+
+        with patch.object(config, "transform_video_remix_request") as mock_transform:
+            mock_transform.return_value = (
+                "https://api.openai.com/v1/videos/video_123/remix",
+                {"prompt": "remix it"},
+            )
+
+            with patch.object(config, "transform_video_remix_response") as mock_resp:
+                mock_resp.return_value = MagicMock()
+
+                mock_client = MagicMock(spec=AsyncHTTPHandler)
+                mock_response = MagicMock(status_code=200)
+                mock_client.post = AsyncMock(return_value=mock_response)
+
+                with patch(
+                    "litellm.llms.custom_httpx.llm_http_handler.get_async_httpx_client",
+                    return_value=mock_client,
+                ):
+                    await handler.async_video_remix_handler(
+                        video_id="video_123",
+                        prompt="remix it",
+                        video_remix_provider_config=config,
+                        custom_llm_provider="openai",
+                        litellm_params={
+                            "api_key": "deployment-key",
+                            "api_base": "https://api.openai.com/v1",
+                        },
+                        logging_obj=MagicMock(),
+                        timeout=5.0,
+                        api_key=None,
+                    )
+
+        mock_validate.assert_called_once()
+        assert mock_validate.call_args.kwargs["api_key"] == "deployment-key"
+
+
+def test_video_remix_handler_prefers_explicit_api_key():
+    """Sync remix handler should prefer explicit api_key over litellm_params."""
+    handler = BaseLLMHTTPHandler()
+    config = OpenAIVideoConfig()
+
+    with patch.object(config, "validate_environment") as mock_validate:
+        mock_validate.return_value = {"Authorization": "Bearer explicit-key"}
+
+        with patch.object(config, "transform_video_remix_request") as mock_transform:
+            mock_transform.return_value = (
+                "https://api.openai.com/v1/videos/video_123/remix",
+                {"prompt": "remix it"},
+            )
+
+            with patch.object(config, "transform_video_remix_response") as mock_resp:
+                mock_resp.return_value = MagicMock()
+
+                mock_client = MagicMock()
+                mock_client.post.return_value = MagicMock(status_code=200)
+
+                with patch(
+                    "litellm.llms.custom_httpx.llm_http_handler._get_httpx_client",
+                    return_value=mock_client,
+                ):
+                    handler.video_remix_handler(
+                        video_id="video_123",
+                        prompt="remix it",
+                        video_remix_provider_config=config,
+                        custom_llm_provider="openai",
+                        litellm_params={
+                            "api_key": "deployment-key",
+                            "api_base": "https://api.openai.com/v1",
+                        },
+                        logging_obj=MagicMock(),
+                        timeout=5.0,
+                        api_key="explicit-key",
+                        _is_async=False,
+                    )
+
+        mock_validate.assert_called_once()
+        assert mock_validate.call_args.kwargs["api_key"] == "explicit-key"
+
+
 if __name__ == "__main__":
     pytest.main([__file__])
+
+
+# ===== Tests for new video endpoints (characters, edits, extensions) =====
+
+
+class TestVideoCreateCharacter:
+    """Tests for video_create_character / avideo_create_character."""
+
+    def test_video_create_character_transform_request(self):
+        """Verify multipart form construction for POST /videos/characters."""
+        config = OpenAIVideoConfig()
+        fake_video = b"fake_video_bytes"
+
+        url, files_list = config.transform_video_create_character_request(
+            name="hero",
+            video=fake_video,
+            api_base="https://api.openai.com/v1/videos",
+            litellm_params=MagicMock(),
+            headers={},
+        )
+
+        assert url == "https://api.openai.com/v1/videos/characters"
+        # Should have (name field) + (video file field) = 2 entries
+        assert len(files_list) == 2
+        field_names = [f[0] for f in files_list]
+        assert "name" in field_names
+        assert "video" in field_names
+
+    def test_video_create_character_sets_video_mimetype(self):
+        """Ensure character video upload is sent as video/mp4."""
+        config = OpenAIVideoConfig()
+        fake_video = io.BytesIO(b"....ftyp....video-bytes")
+        fake_video.name = "character.mp4"
+
+        _, files_list = config.transform_video_create_character_request(
+            name="hero",
+            video=fake_video,
+            api_base="https://api.openai.com/v1/videos",
+            litellm_params=MagicMock(),
+            headers={},
+        )
+
+        video_parts = [f for f in files_list if f[0] == "video"]
+        assert len(video_parts) == 1
+        video_tuple = video_parts[0][1]
+        assert video_tuple[0] == "character.mp4"
+        assert video_tuple[2] == "video/mp4"
+
+    def test_video_create_character_transform_response(self):
+        """Verify CharacterObject is returned from response."""
+        from litellm.types.videos.main import CharacterObject
+
+        config = OpenAIVideoConfig()
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "id": "char_abc123",
+            "object": "character",
+            "created_at": 1712697600,
+            "name": "hero",
+        }
+
+        result = config.transform_video_create_character_response(
+            raw_response=mock_response,
+            logging_obj=MagicMock(),
+        )
+
+        assert isinstance(result, CharacterObject)
+        assert result.id == "char_abc123"
+        assert result.name == "hero"
+
+    def test_video_create_character_mock_response(self):
+        """video_create_character returns CharacterObject on mock_response."""
+        from litellm.types.videos.main import CharacterObject
+        from litellm.videos.main import video_create_character
+
+        response = video_create_character(
+            name="hero",
+            video=b"fake",
+            mock_response={
+                "id": "char_abc",
+                "object": "character",
+                "created_at": 1712697600,
+                "name": "hero",
+            },
+        )
+        assert isinstance(response, CharacterObject)
+        assert response.id == "char_abc"
+
+
+class TestVideoGetCharacter:
+    """Tests for video_get_character / avideo_get_character."""
+
+    def test_video_get_character_transform_request(self):
+        """Verify URL construction for GET /videos/characters/{character_id}."""
+        config = OpenAIVideoConfig()
+
+        url, params = config.transform_video_get_character_request(
+            character_id="char_xyz",
+            api_base="https://api.openai.com/v1/videos",
+            litellm_params=MagicMock(),
+            headers={},
+        )
+
+        assert url == "https://api.openai.com/v1/videos/characters/char_xyz"
+        assert params == {}
+
+    def test_video_get_character_transform_response(self):
+        """Verify CharacterObject is returned from GET response."""
+        from litellm.types.videos.main import CharacterObject
+
+        config = OpenAIVideoConfig()
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "id": "char_xyz",
+            "object": "character",
+            "created_at": 1712697600,
+            "name": "villain",
+        }
+
+        result = config.transform_video_get_character_response(
+            raw_response=mock_response,
+            logging_obj=MagicMock(),
+        )
+
+        assert isinstance(result, CharacterObject)
+        assert result.id == "char_xyz"
+        assert result.name == "villain"
+
+    def test_video_get_character_mock_response(self):
+        """video_get_character returns CharacterObject on mock_response."""
+        from litellm.types.videos.main import CharacterObject
+        from litellm.videos.main import video_get_character
+
+        response = video_get_character(
+            character_id="char_xyz",
+            mock_response={
+                "id": "char_xyz",
+                "object": "character",
+                "created_at": 1712697600,
+                "name": "villain",
+            },
+        )
+        assert isinstance(response, CharacterObject)
+        assert response.id == "char_xyz"
+
+
+class TestVideoEdit:
+    """Tests for video_edit / avideo_edit."""
+
+    def test_video_edit_transform_request(self):
+        """Verify JSON body with video.id for POST /videos/edits."""
+        config = OpenAIVideoConfig()
+
+        url, data = config.transform_video_edit_request(
+            prompt="make it brighter",
+            video_id="video_abc123",
+            api_base="https://api.openai.com/v1/videos",
+            litellm_params=MagicMock(),
+            headers={},
+        )
+
+        assert url == "https://api.openai.com/v1/videos/edits"
+        assert data["prompt"] == "make it brighter"
+        assert data["video"]["id"] == "video_abc123"
+
+    def test_video_edit_transform_request_with_extra_body(self):
+        """Extra body params are merged into request data."""
+        config = OpenAIVideoConfig()
+
+        url, data = config.transform_video_edit_request(
+            prompt="darken it",
+            video_id="video_abc123",
+            api_base="https://api.openai.com/v1/videos",
+            litellm_params=MagicMock(),
+            headers={},
+            extra_body={"resolution": "1080p"},
+        )
+
+        assert data["resolution"] == "1080p"
+
+    def test_video_edit_mock_response(self):
+        """video_edit returns VideoObject on mock_response."""
+        from litellm.videos.main import video_edit
+
+        response = video_edit(
+            video_id="video_abc123",
+            prompt="make it brighter",
+            mock_response={
+                "id": "video_edit_001",
+                "object": "video",
+                "status": "queued",
+                "created_at": 1712697600,
+            },
+        )
+        assert isinstance(response, VideoObject)
+        assert response.id == "video_edit_001"
+
+    def test_video_edit_strips_encoded_provider_from_video_id(self):
+        """Provider-encoded video IDs are decoded before sending to API."""
+        from litellm.types.videos.utils import encode_video_id_with_provider
+
+        config = OpenAIVideoConfig()
+
+        encoded_id = encode_video_id_with_provider("raw_video_id", "openai", None)
+        url, data = config.transform_video_edit_request(
+            prompt="test",
+            video_id=encoded_id,
+            api_base="https://api.openai.com/v1/videos",
+            litellm_params=MagicMock(),
+            headers={},
+        )
+
+        # The video.id in the request body should be the raw ID, not the encoded one
+        assert data["video"]["id"] == "raw_video_id"
+
+
+class TestVideoExtension:
+    """Tests for video_extension / avideo_extension."""
+
+    def test_video_extension_transform_request(self):
+        """Verify JSON body with video.id + seconds for POST /videos/extensions."""
+        config = OpenAIVideoConfig()
+
+        url, data = config.transform_video_extension_request(
+            prompt="continue the scene",
+            video_id="video_abc123",
+            seconds="5",
+            api_base="https://api.openai.com/v1/videos",
+            litellm_params=MagicMock(),
+            headers={},
+        )
+
+        assert url == "https://api.openai.com/v1/videos/extensions"
+        assert data["prompt"] == "continue the scene"
+        assert data["seconds"] == "5"
+        assert data["video"]["id"] == "video_abc123"
+
+    def test_video_extension_transform_request_with_extra_body(self):
+        """Extra body params are merged into request data."""
+        config = OpenAIVideoConfig()
+
+        url, data = config.transform_video_extension_request(
+            prompt="extend",
+            video_id="video_abc123",
+            seconds="10",
+            api_base="https://api.openai.com/v1/videos",
+            litellm_params=MagicMock(),
+            headers={},
+            extra_body={"model": "sora-2"},
+        )
+
+        assert data["model"] == "sora-2"
+
+    def test_video_extension_mock_response(self):
+        """video_extension returns VideoObject on mock_response."""
+        from litellm.videos.main import video_extension
+
+        response = video_extension(
+            video_id="video_abc123",
+            prompt="continue the scene",
+            seconds="5",
+            mock_response={
+                "id": "video_ext_001",
+                "object": "video",
+                "status": "queued",
+                "created_at": 1712697600,
+            },
+        )
+        assert isinstance(response, VideoObject)
+        assert response.id == "video_ext_001"
+
+    def test_video_extension_strips_encoded_provider_from_video_id(self):
+        """Provider-encoded video IDs are decoded before sending to API."""
+        from litellm.types.videos.utils import encode_video_id_with_provider
+
+        config = OpenAIVideoConfig()
+
+        encoded_id = encode_video_id_with_provider("raw_video_id", "openai", None)
+        url, data = config.transform_video_extension_request(
+            prompt="extend",
+            video_id=encoded_id,
+            seconds="5",
+            api_base="https://api.openai.com/v1/videos",
+            litellm_params=MagicMock(),
+            headers={},
+        )
+
+        assert data["video"]["id"] == "raw_video_id"
+
+
+@pytest.fixture
+def video_proxy_test_client():
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+    from litellm.proxy.video_endpoints.endpoints import router as video_router
+
+    app = FastAPI()
+    app.include_router(video_router)
+    app.dependency_overrides[user_api_key_auth] = lambda: MagicMock()
+    return TestClient(app)
+
+
+def test_character_id_encode_decode_roundtrip():
+    from litellm.types.videos.utils import (
+        decode_character_id_with_provider,
+        encode_character_id_with_provider,
+    )
+
+    encoded = encode_character_id_with_provider(
+        character_id="char_raw_123",
+        provider="vertex_ai",
+        model_id="veo-2.0-generate-001",
+    )
+    decoded = decode_character_id_with_provider(encoded)
+
+    assert decoded["character_id"] == "char_raw_123"
+    assert decoded["custom_llm_provider"] == "vertex_ai"
+    assert decoded["model_id"] == "veo-2.0-generate-001"
+
+
+def test_character_id_decode_handles_missing_base64_padding():
+    from litellm.types.videos.utils import (
+        decode_character_id_with_provider,
+        encode_character_id_with_provider,
+    )
+
+    encoded = encode_character_id_with_provider(
+        character_id="id",
+        provider="openai",
+        model_id="gpt-4o",
+    )
+    encoded_without_padding = encoded.rstrip("=")
+    decoded = decode_character_id_with_provider(encoded_without_padding)
+
+    assert decoded["character_id"] == "id"
+    assert decoded["custom_llm_provider"] == "openai"
+    assert decoded["model_id"] == "gpt-4o"
+
+
+def test_video_create_character_target_model_names_returns_encoded_id(
+    video_proxy_test_client,
+):
+    from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+    from litellm.types.videos.utils import decode_character_id_with_provider
+
+    captured_data = {}
+
+    async def _mock_base_process(self, **kwargs):
+        captured_data.update(self.data)
+        return {
+            "id": "char_upstream_123",
+            "object": "character",
+            "created_at": 1712697600,
+            "name": "hero",
+        }
+
+    with patch.object(
+        ProxyBaseLLMRequestProcessing,
+        "base_process_llm_request",
+        new=_mock_base_process,
+    ):
+        response = video_proxy_test_client.post(
+            "/v1/videos/characters",
+            headers={"Authorization": "Bearer sk-1234"},
+            files={"video": ("character.mp4", b"fake-video", "video/mp4")},
+            data={
+                "name": "hero",
+                "target_model_names": "vertex-ai-sora-2",
+                "extra_body": json.dumps({"custom_llm_provider": "vertex_ai"}),
+            },
+        )
+
+    assert response.status_code == 200, response.text
+    response_json = response.json()
+    decoded = decode_character_id_with_provider(response_json["id"])
+    assert decoded["character_id"] == "char_upstream_123"
+    assert decoded["custom_llm_provider"] == "vertex_ai"
+    assert decoded["model_id"] == "vertex-ai-sora-2"
+    assert captured_data["model"] == "vertex-ai-sora-2"
+    assert captured_data["custom_llm_provider"] == "vertex_ai"
+
+
+def test_video_get_character_accepts_encoded_character_id(video_proxy_test_client):
+    from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+    from litellm.types.videos.utils import (
+        decode_character_id_with_provider,
+        encode_character_id_with_provider,
+    )
+
+    captured_data = {}
+
+    async def _mock_base_process(self, **kwargs):
+        captured_data.update(self.data)
+        return {
+            "id": "char_upstream_123",
+            "object": "character",
+            "created_at": 1712697600,
+            "name": "hero",
+        }
+
+    encoded_character_id = encode_character_id_with_provider(
+        character_id="char_upstream_123",
+        provider="vertex_ai",
+        model_id="veo-2.0-generate-001",
+    )
+    mock_router = MagicMock()
+    mock_router.resolve_model_name_from_model_id.return_value = "vertex-ai-sora-2"
+
+    with patch("litellm.proxy.proxy_server.llm_router", mock_router):
+        with patch.object(
+            ProxyBaseLLMRequestProcessing,
+            "base_process_llm_request",
+            new=_mock_base_process,
+        ):
+            response = video_proxy_test_client.get(
+                f"/v1/videos/characters/{encoded_character_id}",
+                headers={"Authorization": "Bearer sk-1234"},
+            )
+
+    assert response.status_code == 200, response.text
+    assert captured_data["character_id"] == "char_upstream_123"
+    assert captured_data["custom_llm_provider"] == "vertex_ai"
+    assert captured_data["model"] == "vertex-ai-sora-2"
+    response_decoded = decode_character_id_with_provider(response.json()["id"])
+    assert response_decoded["character_id"] == "char_upstream_123"
+    assert response_decoded["custom_llm_provider"] == "vertex_ai"
+    assert response_decoded["model_id"] == "veo-2.0-generate-001"
+
+
+@pytest.mark.parametrize("endpoint", ["/v1/videos/edits", "/v1/videos/extensions"])
+def test_edit_and_extension_support_custom_provider_from_extra_body(
+    video_proxy_test_client, endpoint
+):
+    from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+
+    captured_data = {}
+
+    async def _mock_base_process(self, **kwargs):
+        captured_data.update(self.data)
+        return {
+            "id": "video_resp_123",
+            "object": "video",
+            "status": "queued",
+            "created_at": 1712697600,
+        }
+
+    payload = {
+        "prompt": "test",
+        "video": {"id": "video_raw_123"},
+        "extra_body": {"custom_llm_provider": "vertex_ai"},
+    }
+    if endpoint.endswith("extensions"):
+        payload["seconds"] = "4"
+
+    with patch.object(
+        ProxyBaseLLMRequestProcessing,
+        "base_process_llm_request",
+        new=_mock_base_process,
+    ):
+        response = video_proxy_test_client.post(
+            endpoint,
+            headers={"Authorization": "Bearer sk-1234"},
+            json=payload,
+        )
+
+    assert response.status_code == 200, response.text
+    assert captured_data["custom_llm_provider"] == "vertex_ai"
+
+
+@pytest.mark.parametrize("endpoint", ["/v1/videos/edits", "/v1/videos/extensions"])
+def test_edit_and_extension_route_with_encoded_video_ids(
+    video_proxy_test_client, endpoint
+):
+    from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+    from litellm.types.videos.utils import encode_video_id_with_provider
+
+    captured_data = {}
+
+    async def _mock_base_process(self, **kwargs):
+        captured_data.update(self.data)
+        return {
+            "id": "video_resp_123",
+            "object": "video",
+            "status": "queued",
+            "created_at": 1712697600,
+        }
+
+    encoded_video_id = encode_video_id_with_provider(
+        video_id="video_raw_123",
+        provider="vertex_ai",
+        model_id="veo-2.0-generate-001",
+    )
+    payload = {"prompt": "test", "video": {"id": encoded_video_id}}
+    if endpoint.endswith("extensions"):
+        payload["seconds"] = "4"
+
+    mock_router = MagicMock()
+    mock_router.resolve_model_name_from_model_id.return_value = "vertex-ai-sora-2"
+
+    with patch("litellm.proxy.proxy_server.llm_router", mock_router):
+        with patch.object(
+            ProxyBaseLLMRequestProcessing,
+            "base_process_llm_request",
+            new=_mock_base_process,
+        ):
+            response = video_proxy_test_client.post(
+                endpoint,
+                headers={"Authorization": "Bearer sk-1234"},
+                json=payload,
+            )
+
+    assert response.status_code == 200, response.text
+    assert captured_data["video_id"] == encoded_video_id
+    assert captured_data["custom_llm_provider"] == "vertex_ai"
+    assert captured_data["model"] == "vertex-ai-sora-2"

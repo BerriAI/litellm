@@ -159,7 +159,7 @@ class LLMCachingHandler:
             #########################################################
             parent_otel_span = _get_parent_otel_span_from_kwargs(kwargs)
             kwargs["parent_otel_span"] = parent_otel_span
-            
+
             if litellm.cache is not None and self._is_call_type_supported_by_cache(
                 original_function=original_function
             ):
@@ -181,7 +181,9 @@ class LLMCachingHandler:
                         api_base=kwargs.get("api_base", None),
                         api_key=kwargs.get("api_key", None),
                     )
-                    cache_duration_ms = (cache_check_end_time - cache_check_start_time) * 1000
+                    cache_duration_ms = (
+                        cache_check_end_time - cache_check_start_time
+                    ) * 1000
                     self._update_litellm_logging_obj_environment(
                         logging_obj=logging_obj,
                         model=model,
@@ -194,7 +196,6 @@ class LLMCachingHandler:
 
                     call_type = original_function.__name__
 
-      
                     cached_result = self._convert_cached_result_to_model_response(
                         cached_result=cached_result,
                         call_type=call_type,
@@ -244,7 +245,7 @@ class LLMCachingHandler:
                         final_embedding_cached_response=final_embedding_cached_response,
                         embedding_all_elements_cache_hit=embedding_all_elements_cache_hit,
                     )
-        
+
             verbose_logger.debug(f"CACHE RESULT: {cached_result}")
             return CachingHandlerResponse(
                 cached_result=cached_result,
@@ -265,9 +266,8 @@ class LLMCachingHandler:
     ) -> CachingHandlerResponse:
         from litellm.utils import CustomStreamWrapper
 
-
         cached_result: Optional[Any] = None
-        
+
         # Check if caching should be performed BEFORE doing expensive kwargs copy
         if litellm.cache is not None and self._is_call_type_supported_by_cache(
             original_function=original_function
@@ -325,7 +325,7 @@ class LLMCachingHandler:
                         result=cached_result,
                         start_time=start_time,
                         end_time=end_time,
-                        cache_hit=cache_hit
+                        cache_hit=cache_hit,
                     )
                     cache_key = litellm.cache.get_cache_key(**kwargs)
                     if (
@@ -554,12 +554,18 @@ class LLMCachingHandler:
 
         GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
             async_coroutine=logging_obj.async_success_handler(
-                result=cached_result, start_time=start_time, end_time=end_time, cache_hit=cache_hit
+                result=cached_result,
+                start_time=start_time,
+                end_time=end_time,
+                cache_hit=cache_hit,
             )
         )
 
         logging_obj.handle_sync_success_callbacks_for_async_calls(
-            result=cached_result, start_time=start_time, end_time=end_time, cache_hit=cache_hit
+            result=cached_result,
+            start_time=start_time,
+            end_time=end_time,
+            cache_hit=cache_hit,
         )
 
     async def _retrieve_from_cache(
@@ -728,10 +734,9 @@ class LLMCachingHandler:
                 response_type="audio_transcription",
                 hidden_params=hidden_params,
             )
-        elif (
-            call_type == "aresponses"
-            or call_type == "responses"
-        ) and isinstance(cached_result, dict):
+        elif (call_type == "aresponses" or call_type == "responses") and isinstance(
+            cached_result, dict
+        ):
             # Convert cached dict back to ResponsesAPIResponse object
             cached_result = ResponsesAPIResponse(**cached_result)
 
@@ -741,7 +746,7 @@ class LLMCachingHandler:
             and isinstance(cached_result._hidden_params, dict)
         ):
             cached_result._hidden_params["cache_hit"] = True
-        
+
         #########################################################
         # Add final timing metrics to the cached result
         #########################################################
