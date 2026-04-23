@@ -804,11 +804,6 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
           </Select>
         </Form.Item>
 
-        {/* LLM-as-a-Judge: dedicated criteria builder */}
-        {shouldRenderLLMJudgeFields(selectedProvider) && (
-          <LLMJudgeFields availableModels={availableModels} form={form} />
-        )}
-
         {/* Use the GuardrailProviderFields component to render provider-specific fields */}
         {!isToolPermissionProvider && !shouldRenderContentFilterConfigSettings(selectedProvider) && !shouldRenderLLMJudgeFields(selectedProvider) && (
           <GuardrailProviderFields
@@ -915,6 +910,9 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
         }
         if (shouldRenderContentFilterConfigSettings(selectedProvider)) {
           return renderContentFilterConfiguration("categories");
+        }
+        if (shouldRenderLLMJudgeFields(selectedProvider)) {
+          return <LLMJudgeFields availableModels={availableModels} form={form} />;
         }
         return renderOptionalParams();
       case 2:

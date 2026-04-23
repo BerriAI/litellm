@@ -16,7 +16,7 @@ export const populateGuardrailProviders = (providerParamsResponse: Record<string
   providers.PresidioPII = "Presidio PII";
   providers.Bedrock = "Bedrock Guardrail";
   providers.Lakera = "Lakera";
-  providers.LlmAsAJudge = "LLM as a Judge";
+  providers.LlmAsAJudge = "LiteLLM LLM as a Judge";
 
   // Add dynamic providers from API response
   Object.entries(providerParamsResponse).forEach(([key, value]) => {
@@ -134,6 +134,7 @@ export const guardrailLogoMap: Record<string, string> = {
   "Prompt Security": `${asset_logos_folder}prompt_security.png`,
   PromptGuard: `${asset_logos_folder}promptguard.svg`,
   "LiteLLM Content Filter": `${asset_logos_folder}litellm_logo.jpg`,
+  "LiteLLM LLM as a Judge": `${asset_logos_folder}litellm_logo.jpg`,
   "Akto": `${asset_logos_folder}akto.svg`,
 };
 
