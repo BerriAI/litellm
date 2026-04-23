@@ -1,5 +1,6 @@
 import React, { useCallback, useState, useRef } from "react";
-import { DateRangePicker, DateRangePickerValue, Text } from "@tremor/react";
+// eslint-disable-next-line litellm-ui/no-banned-ui-imports
+import { DateRangePicker, DateRangePickerValue } from "@tremor/react";
 
 interface UsageDatePickerProps {
   value: DateRangePickerValue;
@@ -110,7 +111,7 @@ const UsageDatePicker: React.FC<UsageDatePickerProps> = ({
 
   return (
     <div className={className}>
-      {label && <Text className="mb-2">{label}</Text>}
+      {label && <p className="mb-2 text-sm">{label}</p>}
 
       {/* Container with relative positioning for absolute placement */}
       <div className="relative w-fit">
@@ -147,7 +148,9 @@ const UsageDatePicker: React.FC<UsageDatePickerProps> = ({
 
       {/* Time range display */}
       {showTimeRange && value.from && value.to && (
-        <Text className="mt-2 text-xs text-gray-500">{formatTimeRange(value.from, value.to)}</Text>
+        <p className="mt-2 text-xs text-muted-foreground">
+          {formatTimeRange(value.from, value.to)}
+        </p>
       )}
     </div>
   );

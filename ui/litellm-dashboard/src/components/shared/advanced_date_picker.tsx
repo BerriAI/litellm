@@ -1,5 +1,6 @@
-import { CalendarOutlined, ClockCircleOutlined } from "@ant-design/icons";
-import { Button, DateRangePickerValue, Text } from "@tremor/react";
+import { Calendar as CalendarIcon, Clock } from "lucide-react";
+// eslint-disable-next-line litellm-ui/no-banned-ui-imports
+import { Button, DateRangePickerValue } from "@tremor/react";
 import moment from "moment";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 
@@ -274,7 +275,7 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
 
   return (
     <div className="flex items-center gap-3">
-      {label && <Text className="text-sm font-medium text-gray-700 whitespace-nowrap">{label}</Text>}
+      {label && <span className="text-sm font-medium text-foreground whitespace-nowrap">{label}</span>}
       <div className="relative" ref={dropdownRef}>
         {/* Main input display */}
         <div
@@ -283,7 +284,7 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
         >
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
-              <ClockCircleOutlined className="text-gray-600" />
+              <Clock className="h-4 w-4 text-muted-foreground" />
               <span className="text-gray-900">{formatDisplayRange(value.from, value.to)}</span>
             </div>
             <svg
@@ -337,7 +338,7 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
               <div className="w-1/2 relative">
                 <div className="p-3.5 border-b border-gray-200">
                   <div className="flex items-center gap-2">
-                    <CalendarOutlined className="text-gray-600" />
+                    <CalendarIcon className="h-4 w-4 text-muted-foreground" />
                     <span className="text-sm font-semibold text-gray-900">Start and end dates</span>
                   </div>
                 </div>
