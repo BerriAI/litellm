@@ -76,9 +76,13 @@ class TestOCIEmbeddingConfig:
         assert "embedText" in url
 
     def test_get_complete_url_custom_api_base(self):
-        """test_get_complete_url returns api_base as-is when provided."""
+        """Custom api_base still gets /<api-version>/actions/embedText appended.
+        The OCI signature covers the path, so a bare base URL would cause a
+        401 when the signed path doesn't match the actual request."""
+        from litellm.llms.oci.common_utils import OCI_API_VERSION
+
         config = OCIEmbeddingConfig()
-        custom_base = "https://custom.oci.example.com/embed"
+        custom_base = "https://custom.oci.example.com"
         url = config.get_complete_url(
             api_base=custom_base,
             api_key=None,
@@ -86,7 +90,21 @@ class TestOCIEmbeddingConfig:
             optional_params={},
             litellm_params={},
         )
-        assert url == custom_base
+        assert url == f"{custom_base}/{OCI_API_VERSION}/actions/embedText"
+
+    def test_get_complete_url_custom_api_base_strips_trailing_slash(self):
+        """Trailing slash on api_base must not produce a double slash."""
+        from litellm.llms.oci.common_utils import OCI_API_VERSION
+
+        config = OCIEmbeddingConfig()
+        url = config.get_complete_url(
+            api_base="https://custom.oci.example.com/",
+            api_key=None,
+            model=TEST_MODEL_NAME,
+            optional_params={},
+            litellm_params={},
+        )
+        assert url == f"https://custom.oci.example.com/{OCI_API_VERSION}/actions/embedText"
 
     def test_get_supported_openai_params(self):
         """test_get_supported_openai_params returns expected params list."""

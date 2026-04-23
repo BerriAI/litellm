@@ -123,12 +123,15 @@ class OCIEmbedConfig(BaseEmbeddingConfig):
         litellm_params: dict,
         stream: Optional[bool] = None,
     ) -> str:
-        # If the caller provides an explicit api_base, use it as-is.
-        # Do NOT fall back to litellm.api_base — it may belong to another provider
-        # and would produce a bare URL without the /actions/embedText path.
+        # The /actions/embedText path is always appended. The OCI signature
+        # covers the request path, so a bare base URL (no path) produces a
+        # signed path that doesn't match the actual request → 401.
+        # Do NOT fall back to litellm.api_base — it may belong to another
+        # provider.
         if api_base:
-            return api_base.rstrip("/")
-        base = get_oci_base_url(optional_params, None)
+            base = api_base.rstrip("/")
+        else:
+            base = get_oci_base_url(optional_params, None)
         return f"{base}/{OCI_API_VERSION}/actions/embedText"
 
     def sign_request(

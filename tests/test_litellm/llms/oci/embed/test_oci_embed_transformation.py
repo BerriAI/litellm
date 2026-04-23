@@ -73,7 +73,11 @@ class TestOCIEmbedConfig:
         )
 
     def test_get_complete_url_respects_api_base(self):
-        """api_base is returned as-is (caller supplies complete URL for dedicated/custom endpoints)."""
+        """Custom api_base still gets /<api-version>/actions/embedText appended.
+        The OCI signature covers the request path — returning the bare base
+        URL would produce a signed-path mismatch and a 401 from OCI."""
+        from litellm.llms.oci.common_utils import OCI_API_VERSION
+
         cfg = self._config()
         url = cfg.get_complete_url(
             api_base="https://custom.endpoint.example.com",
@@ -82,10 +86,15 @@ class TestOCIEmbedConfig:
             optional_params={},
             litellm_params={},
         )
-        assert url == "https://custom.endpoint.example.com"
+        assert (
+            url
+            == f"https://custom.endpoint.example.com/{OCI_API_VERSION}/actions/embedText"
+        )
 
     def test_get_complete_url_strips_trailing_slash(self):
-        """Trailing slash is stripped from api_base."""
+        """Trailing slash is stripped from api_base before appending the path."""
+        from litellm.llms.oci.common_utils import OCI_API_VERSION
+
         cfg = self._config()
         url = cfg.get_complete_url(
             api_base="https://custom.endpoint.example.com/",
@@ -94,7 +103,10 @@ class TestOCIEmbedConfig:
             optional_params={},
             litellm_params={},
         )
-        assert url == "https://custom.endpoint.example.com"
+        assert (
+            url
+            == f"https://custom.endpoint.example.com/{OCI_API_VERSION}/actions/embedText"
+        )
 
     # ------------------------------------------------------------------
     # transform_embedding_request
