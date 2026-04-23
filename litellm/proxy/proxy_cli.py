@@ -578,6 +578,16 @@ class ProxyInitializationHelpers:
     envvar="ENFORCE_PRISMA_MIGRATION_CHECK",
 )
 @click.option(
+    "--use_v2_migration_resolver",
+    is_flag=True,
+    default=False,
+    help=(
+        "Opt into the v2 migration resolver. Avoids the diff-and-force recovery "
+        "path that can cause schema thrashing during rolling deploys where two "
+        "LiteLLM versions contend for the same DB. Default is the v1 resolver."
+    ),
+)
+@click.option(
     "--reload",
     is_flag=True,
     default=False,
@@ -624,6 +634,7 @@ def run_server(  # noqa: PLR0915
     keepalive_timeout,
     max_requests_before_restart,
     enforce_prisma_migration_check: bool,
+    use_v2_migration_resolver: bool,
     reload: bool,
 ):
     if setup:
@@ -893,9 +904,31 @@ def run_server(  # noqa: PLR0915
                 ):
                     check_prisma_schema_diff(db_url=None)
                 else:
-                    if not PrismaManager.setup_database(
-                        use_migrate=not use_prisma_db_push
-                    ):
+                    if not use_v2_migration_resolver:
+                        print(  # noqa
+                            "\033[1;33mLiteLLM Proxy: Using default (v1) migration resolver. "
+                            "If your deployment has seen schema thrashing during rolling "
+                            "deploys, try --use_v2_migration_resolver (safer: avoids the "
+                            "diff-and-force recovery that caused the thrash).\033[0m"
+                        )
+                    try:
+                        setup_ok = PrismaManager.setup_database(
+                            use_migrate=not use_prisma_db_push,
+                            use_v2_resolver=use_v2_migration_resolver,
+                        )
+                    except RuntimeError as e:
+                        # v2 resolver raises on unrecoverable migration errors
+                        # (e.g. non-idempotent failures, permission issues).
+                        # v1 never raises here, so this only fires when the
+                        # operator opted into v2.
+                        print(  # noqa
+                            "\033[1;31mLiteLLM Proxy: Database migration cannot proceed. "
+                            f"{e}\033[0m",
+                            file=sys.stderr,
+                            flush=True,
+                        )
+                        sys.exit(2)
+                    if not setup_ok:
                         if enforce_prisma_migration_check:
                             print(  # noqa
                                 "\033[1;31mLiteLLM Proxy: Database setup failed after multiple retries. "

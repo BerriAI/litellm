@@ -696,6 +696,7 @@ class BedrockModelInfo(BaseLLMModelInfo):
         "agentcore",
         "async_invoke",
         "openai",
+        "mantle",
     ]:
         """
         Get the bedrock route for the given model.
@@ -710,6 +711,7 @@ class BedrockModelInfo(BaseLLMModelInfo):
                 "agentcore",
                 "async_invoke",
                 "openai",
+                "mantle",
             ],
         ] = {
             "invoke/": "invoke",
@@ -719,6 +721,7 @@ class BedrockModelInfo(BaseLLMModelInfo):
             "agentcore/": "agentcore",
             "async_invoke/": "async_invoke",
             "openai/": "openai",
+            "mantle/": "mantle",
         }
 
         # Check explicit routes first
@@ -771,6 +774,13 @@ class BedrockModelInfo(BaseLLMModelInfo):
         return "agentcore/" in model
 
     @staticmethod
+    def _explicit_mantle_route(model: str) -> bool:
+        """
+        Check if the model is an explicit mantle route (bedrock-mantle endpoint).
+        """
+        return "mantle/" in model
+
+    @staticmethod
     def _explicit_converse_like_route(model: str) -> bool:
         """
         Check if the model is an explicit converse like route.
@@ -808,6 +818,16 @@ class BedrockModelInfo(BaseLLMModelInfo):
         # Converse routes should go through litellm.completion()
         if BedrockModelInfo._explicit_converse_route(model):
             return None
+
+        #########################################################
+        # Mantle route uses the bedrock-mantle endpoint (not bedrock-runtime)
+        #########################################################
+        if BedrockModelInfo._explicit_mantle_route(model):
+            from litellm.llms.bedrock.messages.mantle_transformation import (
+                AmazonMantleMessagesConfig,
+            )
+
+            return AmazonMantleMessagesConfig()
 
         #########################################################
         # This goes through litellm.AmazonAnthropicClaude3MessagesConfig()
@@ -855,6 +875,12 @@ def get_bedrock_chat_config(model: str):
         )
 
         return AmazonAgentCoreConfig()
+    elif bedrock_route == "mantle":
+        from litellm.llms.bedrock.chat.mantle.transformation import (
+            AmazonMantleConfig,
+        )
+
+        return AmazonMantleConfig()
 
     # Handle provider-specific configs
     if bedrock_invoke_provider == "amazon":
