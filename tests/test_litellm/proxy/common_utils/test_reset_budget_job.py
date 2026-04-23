@@ -824,7 +824,7 @@ def test_reset_budget_for_team_members_preserves_total_spend():
 
 
 @pytest.mark.asyncio
-async def test_reset_budget_windows_uses_plain_find_many_and_resets_key_and_team(
+async def test_reset_budget_windows_uses_query_raw_and_resets_key_and_team(
     monkeypatch,
 ):
     class _InMemoryCache:
@@ -847,29 +847,30 @@ async def test_reset_budget_windows_uses_plain_find_many_and_resets_key_and_team
     expired_at = (datetime.utcnow() - timedelta(minutes=5)).isoformat()
     future_at = (datetime.utcnow() + timedelta(minutes=5)).isoformat()
 
-    key_row = SimpleNamespace(
-        token="key-1",
-        budget_limits=[
+    key_row = {
+        "token": "key-1",
+        "budget_limits": [
             {"budget_duration": "1d", "reset_at": expired_at},
             {"budget_duration": "7d", "reset_at": future_at},
         ],
-    )
-    key_without_limits = SimpleNamespace(token="key-2", budget_limits=None)
+    }
+    team_row = {
+        "team_id": "team-1",
+        "budget_limits": json.dumps(
+            [{"budget_duration": "1d", "reset_at": expired_at}]
+        ),
+    }
 
-    team_row = SimpleNamespace(
-        team_id="team-1",
-        budget_limits=json.dumps([{"budget_duration": "1d", "reset_at": expired_at}]),
-    )
-    team_without_limits = SimpleNamespace(team_id="team-2", budget_limits=None)
+    async def fake_query_raw(sql: str, *args):
+        if "LiteLLM_VerificationToken" in sql:
+            return [key_row]
+        if "LiteLLM_TeamTable" in sql:
+            return [team_row]
+        raise AssertionError(f"unexpected query_raw call: {sql!r}")
 
     mock_prisma_client = MagicMock()
-    mock_prisma_client.db.litellm_verificationtoken.find_many = AsyncMock(
-        return_value=[key_row, key_without_limits]
-    )
+    mock_prisma_client.db.query_raw = AsyncMock(side_effect=fake_query_raw)
     mock_prisma_client.db.litellm_verificationtoken.update = AsyncMock()
-    mock_prisma_client.db.litellm_teamtable.find_many = AsyncMock(
-        return_value=[team_row, team_without_limits]
-    )
     mock_prisma_client.db.litellm_teamtable.update = AsyncMock()
 
     job = ResetBudgetJob(
@@ -878,11 +879,15 @@ async def test_reset_budget_windows_uses_plain_find_many_and_resets_key_and_team
 
     await job.reset_budget_windows()
 
-    mock_prisma_client.db.litellm_verificationtoken.find_many.assert_called_once_with(
-        where={"budget_limits": {"not": None}}
+    assert mock_prisma_client.db.query_raw.call_count == 2
+    queries = [call.args[0] for call in mock_prisma_client.db.query_raw.call_args_list]
+    assert any(
+        'FROM "LiteLLM_VerificationToken"' in q and "budget_limits IS NOT NULL" in q
+        for q in queries
     )
-    mock_prisma_client.db.litellm_teamtable.find_many.assert_called_once_with(
-        where={"budget_limits": {"not": None}}
+    assert any(
+        'FROM "LiteLLM_TeamTable"' in q and "budget_limits IS NOT NULL" in q
+        for q in queries
     )
 
     mock_prisma_client.db.litellm_verificationtoken.update.assert_called_once()
