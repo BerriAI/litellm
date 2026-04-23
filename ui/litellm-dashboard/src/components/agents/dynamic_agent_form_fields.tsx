@@ -1,10 +1,16 @@
 import React from "react";
-import { Form, Input, Select, Collapse } from "antd";
+import { Form, Input as AntInput, Select } from "antd";
+import {
+  Accordion,
+  AccordionContent,
+  AccordionItem,
+  AccordionTrigger,
+} from "@/components/ui/accordion";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { AgentCreateInfo, AgentCredentialFieldMetadata } from "../networking";
 import { AGENT_FORM_CONFIG } from "./agent_config";
 import CostConfigFields from "./cost_config_fields";
-
-const { Panel } = Collapse;
 
 interface DynamicAgentFormFieldsProps {
   agentTypeInfo: AgentCreateInfo;
@@ -23,7 +29,9 @@ const DynamicAgentFormFields: React.FC<DynamicAgentFormFieldsProps> = ({
       <Form.Item
         label="Agent Name"
         name="agent_name"
-        rules={[{ required: true, message: "Please enter a unique agent name" }]}
+        rules={[
+          { required: true, message: "Please enter a unique agent name" },
+        ]}
         tooltip="Unique identifier for the agent"
       >
         <Input placeholder="e.g., my-langgraph-agent" />
@@ -34,41 +42,63 @@ const DynamicAgentFormFields: React.FC<DynamicAgentFormFieldsProps> = ({
         name="description"
         tooltip="Brief description of what this agent does"
       >
-        <Input.TextArea rows={2} placeholder="Describe what this agent does..." />
+        <Textarea
+          rows={2}
+          placeholder="Describe what this agent does..."
+        />
       </Form.Item>
 
-      {agentTypeInfo.credential_fields.map((field: AgentCredentialFieldMetadata) => (
-        <Form.Item
-          key={field.key}
-          label={field.label}
-          name={field.key}
-          rules={field.required ? [{ required: true, message: `Please enter ${field.label}` }] : undefined}
-          tooltip={field.tooltip}
-          initialValue={field.default_value}
-        >
-          {field.field_type === "password" ? (
-            <Input.Password placeholder={field.placeholder || ""} />
-          ) : field.field_type === "textarea" ? (
-            <Input.TextArea rows={3} placeholder={field.placeholder || ""} />
-          ) : field.field_type === "select" && field.options ? (
-            <Select placeholder={field.placeholder || ""}>
-              {field.options.map((opt) => (
-                <Select.Option key={opt} value={opt}>
-                  {opt}
-                </Select.Option>
-              ))}
-            </Select>
-          ) : (
-            <Input placeholder={field.placeholder || ""} />
-          )}
-        </Form.Item>
-      ))}
+      {agentTypeInfo.credential_fields.map(
+        (field: AgentCredentialFieldMetadata) => (
+          <Form.Item
+            key={field.key}
+            label={field.label}
+            name={field.key}
+            rules={
+              field.required
+                ? [
+                    {
+                      required: true,
+                      message: `Please enter ${field.label}`,
+                    },
+                  ]
+                : undefined
+            }
+            tooltip={field.tooltip}
+            initialValue={field.default_value}
+          >
+            {field.field_type === "password" ? (
+              <AntInput.Password placeholder={field.placeholder || ""} />
+            ) : field.field_type === "textarea" ? (
+              <Textarea rows={3} placeholder={field.placeholder || ""} />
+            ) : field.field_type === "select" && field.options ? (
+              <Select placeholder={field.placeholder || ""}>
+                {field.options.map((opt) => (
+                  <Select.Option key={opt} value={opt}>
+                    {opt}
+                  </Select.Option>
+                ))}
+              </Select>
+            ) : (
+              <Input placeholder={field.placeholder || ""} />
+            )}
+          </Form.Item>
+        ),
+      )}
 
-      <Collapse style={{ marginBottom: 16 }}>
-        <Panel header={AGENT_FORM_CONFIG.cost.title} key={AGENT_FORM_CONFIG.cost.key}>
-          <CostConfigFields />
-        </Panel>
-      </Collapse>
+      <Accordion type="single" collapsible className="mb-4">
+        <AccordionItem
+          value={AGENT_FORM_CONFIG.cost.key}
+          className="border border-border rounded-md px-3"
+        >
+          <AccordionTrigger className="py-2 hover:no-underline">
+            {AGENT_FORM_CONFIG.cost.title}
+          </AccordionTrigger>
+          <AccordionContent>
+            <CostConfigFields />
+          </AccordionContent>
+        </AccordionItem>
+      </Accordion>
     </>
   );
 };
@@ -78,10 +108,11 @@ const DynamicAgentFormFields: React.FC<DynamicAgentFormFieldsProps> = ({
  * Uses configuration from agentTypeInfo to determine which fields to include.
  */
 export const buildDynamicAgentData = (
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   values: any,
-  agentTypeInfo: AgentCreateInfo
+  agentTypeInfo: AgentCreateInfo,
 ) => {
-  // Build litellm_params from template
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const litellmParams: Record<string, any> = {
     ...(agentTypeInfo.litellm_params_template || {}),
   };
@@ -118,6 +149,7 @@ export const buildDynamicAgentData = (
     litellmParams.model = model;
   }
 
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const agentData: Record<string, any> = {
     agent_name: values.agent_name,
     agent_card_params: {
