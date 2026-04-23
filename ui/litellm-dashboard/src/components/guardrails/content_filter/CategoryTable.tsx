@@ -1,9 +1,23 @@
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import { cn } from "@/lib/utils";
+import { Trash2 } from "lucide-react";
 import React from "react";
-import { Typography, Select, Table, Tag, Button } from "antd";
-import { DeleteOutlined } from "@ant-design/icons";
-
-const { Text } = Typography;
-const { Option } = Select;
 
 interface ContentCategory {
   id: string;
@@ -21,6 +35,17 @@ interface CategoryTableProps {
   readOnly?: boolean;
 }
 
+const severityBadgeClass: Record<string, string> = {
+  high: "bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300",
+  medium: "bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300",
+  low: "bg-yellow-100 text-yellow-700 dark:bg-yellow-950 dark:text-yellow-300",
+};
+
+const actionBadgeClass: Record<string, string> = {
+  BLOCK: "bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300",
+  MASK: "bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300",
+};
+
 const CategoryTable: React.FC<CategoryTableProps> = ({
   categories,
   onActionChange,
@@ -28,119 +53,110 @@ const CategoryTable: React.FC<CategoryTableProps> = ({
   onRemove,
   readOnly = false,
 }) => {
-  const columns = [
-    {
-      title: "Category",
-      dataIndex: "display_name",
-      key: "display_name",
-      render: (displayName: string, record: ContentCategory) => (
-        <div>
-          <Text strong>{displayName}</Text>
-          {displayName !== record.category && (
-            <div>
-              <Text type="secondary" style={{ fontSize: 12 }}>
-                {record.category}
-              </Text>
-            </div>
-          )}
-        </div>
-      ),
-    },
-    {
-      title: "Severity Threshold",
-      dataIndex: "severity_threshold",
-      key: "severity_threshold",
-      width: 180,
-      render: (severity: string, record: ContentCategory) => {
-        if (readOnly) {
-          const colorMap = {
-            high: "red",
-            medium: "orange",
-            low: "yellow",
-          } as const;
-          return (
-            <Tag color={colorMap[severity as keyof typeof colorMap]}>
-              {severity.toUpperCase()}
-            </Tag>
-          );
-        }
-        return (
-          <Select
-            value={severity}
-            onChange={(value) => onSeverityChange?.(record.id, value as "high" | "medium" | "low")}
-            style={{ width: 150 }}
-            size="small"
-          >
-            <Option value="high">High</Option>
-            <Option value="medium">Medium</Option>
-            <Option value="low">Low</Option>
-          </Select>
-        );
-      },
-    },
-    {
-      title: "Action",
-      dataIndex: "action",
-      key: "action",
-      width: 150,
-      render: (action: string, record: ContentCategory) => {
-        if (readOnly) {
-          return (
-            <Tag color={action === "BLOCK" ? "red" : "blue"}>
-              {action}
-            </Tag>
-          );
-        }
-        return (
-          <Select
-            value={action}
-            onChange={(value) => onActionChange?.(record.id, value as "BLOCK" | "MASK")}
-            style={{ width: 120 }}
-            size="small"
-          >
-            <Option value="BLOCK">Block</Option>
-            <Option value="MASK">Mask</Option>
-          </Select>
-        );
-      },
-    },
-  ];
-
-  if (!readOnly) {
-    columns.push({
-      title: "",
-      key: "actions",
-      width: 100,
-      render: (_: any, record: ContentCategory) => (
-        <Button
-          type="text"
-          danger
-          size="small"
-          icon={<DeleteOutlined />}
-          onClick={() => onRemove?.(record.id)}
-        >
-          Delete
-        </Button>
-      ),
-    } as any);
-  }
-
   if (categories.length === 0) {
     return (
-      <div style={{ textAlign: "center", padding: "40px 0", color: "#999" }}>
+      <div className="text-center py-10 text-muted-foreground">
         No categories configured.
       </div>
     );
   }
 
   return (
-    <Table
-      dataSource={categories}
-      columns={columns}
-      rowKey="id"
-      pagination={false}
-      size="small"
-    />
+    <div className="border border-border rounded-md overflow-hidden">
+      <Table>
+        <TableHeader>
+          <TableRow>
+            <TableHead>Category</TableHead>
+            <TableHead className="w-[180px]">Severity Threshold</TableHead>
+            <TableHead className="w-[150px]">Action</TableHead>
+            {!readOnly && <TableHead className="w-[100px]" />}
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {categories.map((record) => (
+            <TableRow key={record.id}>
+              <TableCell>
+                <div>
+                  <span className="font-bold">{record.display_name}</span>
+                  {record.display_name !== record.category && (
+                    <div>
+                      <span className="text-xs text-muted-foreground">
+                        {record.category}
+                      </span>
+                    </div>
+                  )}
+                </div>
+              </TableCell>
+              <TableCell>
+                {readOnly ? (
+                  <Badge
+                    className={cn(
+                      severityBadgeClass[record.severity_threshold],
+                    )}
+                  >
+                    {record.severity_threshold.toUpperCase()}
+                  </Badge>
+                ) : (
+                  <Select
+                    value={record.severity_threshold}
+                    onValueChange={(v) =>
+                      onSeverityChange?.(
+                        record.id,
+                        v as "high" | "medium" | "low",
+                      )
+                    }
+                  >
+                    <SelectTrigger className="w-[150px] h-8">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="high">High</SelectItem>
+                      <SelectItem value="medium">Medium</SelectItem>
+                      <SelectItem value="low">Low</SelectItem>
+                    </SelectContent>
+                  </Select>
+                )}
+              </TableCell>
+              <TableCell>
+                {readOnly ? (
+                  <Badge className={cn(actionBadgeClass[record.action])}>
+                    {record.action}
+                  </Badge>
+                ) : (
+                  <Select
+                    value={record.action}
+                    onValueChange={(v) =>
+                      onActionChange?.(record.id, v as "BLOCK" | "MASK")
+                    }
+                  >
+                    <SelectTrigger className="w-[120px] h-8">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="BLOCK">Block</SelectItem>
+                      <SelectItem value="MASK">Mask</SelectItem>
+                    </SelectContent>
+                  </Select>
+                )}
+              </TableCell>
+              {!readOnly && (
+                <TableCell>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="text-destructive hover:text-destructive hover:bg-destructive/10"
+                    onClick={() => onRemove?.(record.id)}
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                    Delete
+                  </Button>
+                </TableCell>
+              )}
+            </TableRow>
+          ))}
+        </TableBody>
+      </Table>
+    </div>
   );
 };
 
