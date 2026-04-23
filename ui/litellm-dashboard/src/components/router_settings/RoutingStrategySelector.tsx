@@ -1,10 +1,17 @@
 import React from "react";
-import { Select } from "antd";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 
 interface RoutingStrategySelectorProps {
   selectedStrategy: string | null;
   availableStrategies: string[];
   routingStrategyDescriptions: { [key: string]: string };
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   routerFieldsMetadata: { [key: string]: any };
   onStrategyChange: (strategy: string) => void;
 }
@@ -19,32 +26,38 @@ const RoutingStrategySelector: React.FC<RoutingStrategySelectorProps> = ({
   return (
     <div className="space-y-2 max-w-3xl">
       <div>
-        <label className="text-xs font-medium text-gray-700 uppercase tracking-wide">
-          {routerFieldsMetadata["routing_strategy"]?.ui_field_name || "Routing Strategy"}
+        <label className="text-xs font-medium text-foreground uppercase tracking-wide">
+          {routerFieldsMetadata["routing_strategy"]?.ui_field_name ||
+            "Routing Strategy"}
         </label>
-        <p className="text-xs text-gray-500 mt-0.5 mb-2">
+        <p className="text-xs text-muted-foreground mt-0.5 mb-2">
           {routerFieldsMetadata["routing_strategy"]?.field_description || ""}
         </p>
       </div>
       <div className="routing-strategy-select max-w-3xl">
         <Select
-          value={selectedStrategy}
-          onChange={onStrategyChange}
-          style={{ width: "100%" }}
-          size="large"
+          value={selectedStrategy ?? undefined}
+          onValueChange={onStrategyChange}
         >
-          {availableStrategies.map((strategy) => (
-            <Select.Option key={strategy} value={strategy} label={strategy}>
-              <div className="flex flex-col gap-0.5 py-1">
-                <span className="font-mono text-sm font-medium">{strategy}</span>
-                {routingStrategyDescriptions[strategy] && (
-                  <span className="text-xs text-gray-500 font-normal">
-                    {routingStrategyDescriptions[strategy]}
+          <SelectTrigger className="w-full h-10">
+            <SelectValue placeholder="Select strategy" />
+          </SelectTrigger>
+          <SelectContent>
+            {availableStrategies.map((strategy) => (
+              <SelectItem key={strategy} value={strategy}>
+                <div className="flex flex-col gap-0.5 py-1">
+                  <span className="font-mono text-sm font-medium">
+                    {strategy}
                   </span>
-                )}
-              </div>
-            </Select.Option>
-          ))}
+                  {routingStrategyDescriptions[strategy] && (
+                    <span className="text-xs text-muted-foreground font-normal">
+                      {routingStrategyDescriptions[strategy]}
+                    </span>
+                  )}
+                </div>
+              </SelectItem>
+            ))}
+          </SelectContent>
         </Select>
       </div>
     </div>
@@ -52,4 +65,3 @@ const RoutingStrategySelector: React.FC<RoutingStrategySelectorProps> = ({
 };
 
 export default RoutingStrategySelector;
-

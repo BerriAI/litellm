@@ -1,8 +1,9 @@
 import React from "react";
-import { Switch } from "antd";
+import { Switch } from "@/components/ui/switch";
 
 interface TagFilteringToggleProps {
   enabled: boolean;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   routerFieldsMetadata: { [key: string]: any };
   onToggle: (enabled: boolean) => void;
 }
@@ -16,11 +17,13 @@ const TagFilteringToggle: React.FC<TagFilteringToggleProps> = ({
     <div className="space-y-3 max-w-3xl">
       <div className="flex items-start justify-between">
         <div className="flex-1">
-          <label className="text-xs font-medium text-gray-700 uppercase tracking-wide">
-            {routerFieldsMetadata["enable_tag_filtering"]?.ui_field_name || "Enable Tag Filtering"}
+          <label className="text-xs font-medium text-foreground uppercase tracking-wide">
+            {routerFieldsMetadata["enable_tag_filtering"]?.ui_field_name ||
+              "Enable Tag Filtering"}
           </label>
-          <p className="text-xs text-gray-500 mt-0.5">
-            {routerFieldsMetadata["enable_tag_filtering"]?.field_description || ""}
+          <p className="text-xs text-muted-foreground mt-0.5">
+            {routerFieldsMetadata["enable_tag_filtering"]?.field_description ||
+              ""}
             {routerFieldsMetadata["enable_tag_filtering"]?.link && (
               <>
                 {" "}
@@ -28,7 +31,7 @@ const TagFilteringToggle: React.FC<TagFilteringToggleProps> = ({
                   href={routerFieldsMetadata["enable_tag_filtering"].link}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="text-blue-600 hover:text-blue-800 underline"
+                  className="text-primary hover:underline"
                 >
                   Learn more
                 </a>
@@ -38,7 +41,7 @@ const TagFilteringToggle: React.FC<TagFilteringToggleProps> = ({
         </div>
         <Switch
           checked={enabled}
-          onChange={onToggle}
+          onCheckedChange={onToggle}
           className="ml-4"
         />
       </div>
@@ -47,4 +50,3 @@ const TagFilteringToggle: React.FC<TagFilteringToggleProps> = ({
 };
 
 export default TagFilteringToggle;
-
