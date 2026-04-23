@@ -2,7 +2,11 @@ name: LiteLLM MCP Tests (folder - tests/mcp_tests)
 
 on:
   pull_request:
-    branches: [main]
+    branches:
+      - main
+      - litellm_internal_staging
+      - litellm_oss_branch
+      - "litellm_**"
 
 permissions:
   contents: read
@@ -27,26 +31,16 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install Poetry
-        run: pip install 'poetry==2.3.2'
+      - name: Set up uv
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
+        with:
+          version: "0.10.9"
 
       - name: Install dependencies
         run: |
-          poetry lock
-          poetry install --with dev,proxy-dev --extras "proxy semantic-router"
-          poetry run pip install "pytest==7.3.1"
-          poetry run pip install "pytest-retry==1.6.3"
-          poetry run pip install "pytest-cov==5.0.0"
-          poetry run pip install "pytest-asyncio==0.21.1"
-          poetry run pip install "respx==0.22.0"
-          poetry run pip install "pydantic==2.11.0"
-          poetry run pip install "mcp==1.25.0"
-          poetry run pip install 'pytest-xdist==3.8.0'
-
-      - name: Setup litellm-enterprise as local package
-        run: |
-          poetry run pip install --force-reinstall --no-deps -e enterprise/
+          uv lock --check
+          uv sync --frozen --group proxy-dev --extra proxy --extra semantic-router
 
       - name: Run MCP tests
         run: |
-          poetry run pytest tests/mcp_tests -x -vv -n 4 --cov=litellm --cov-report=xml --durations=5
+          uv run --no-sync pytest tests/mcp_tests -x -vv -n 4 --cov=litellm --cov-report=xml --durations=5

@@ -620,7 +620,7 @@ def test_passing_tool_result_as_list(model):
             ],
             "role": "tool",
             "tool_call_id": "toolu_01V1paXrun4CVetdAGiQaZG5",
-            "name": "execute_bash"
+            "name": "execute_bash",
         },
     ]
     tools = [
@@ -780,5 +780,3 @@ async def test_watsonx_tool_choice(sync_mode, monkeypatch):
                 pytest.skip("Skipping test due to timeout")
             else:
                 raise e
-
-

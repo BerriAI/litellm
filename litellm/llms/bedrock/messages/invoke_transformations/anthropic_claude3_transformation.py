@@ -13,6 +13,8 @@ from typing import (
 import httpx
 
 from litellm.anthropic_beta_headers_manager import filter_and_transform_beta_headers
+from litellm.constants import BEDROCK_MIN_THINKING_BUDGET_TOKENS
+from litellm.litellm_core_utils.litellm_logging import verbose_logger
 from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
     AnthropicMessagesConfig,
@@ -25,8 +27,10 @@ from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation
     AmazonInvokeConfig,
 )
 from litellm.llms.bedrock.common_utils import (
+    ensure_bedrock_anthropic_messages_tool_names,
     get_anthropic_beta_from_headers,
     is_claude_4_5_on_bedrock,
+    normalize_tool_input_schema_types_for_bedrock_invoke,
     remove_custom_field_from_tools,
 )
 from litellm.types.llms.anthropic import ANTHROPIC_TOOL_SEARCH_BETA_HEADER
@@ -209,9 +213,77 @@ class AmazonAnthropicClaudeMessagesConfig(
             "opus_4.6",
             "opus-4-6",
             "opus_4_6",
+            "opus-4.7",
+            "opus_4.7",
+            "opus-4-7",
+            "opus_4_7",
         ]
 
         return any(pattern in model_lower for pattern in supported_patterns)
+
+    def _ensure_thinking_for_clear_thinking_context_management(
+        self,
+        anthropic_messages_request: Dict,
+        model: str,
+    ) -> bool:
+        """
+        Bedrock rejects ``clear_thinking_20251015`` context-management edits unless
+        extended thinking is ``enabled`` or ``adaptive``. Claude Code often sends
+        context management without a top-level ``thinking`` field.
+
+        When we detect that edit type on a model that supports extended thinking on
+        Bedrock, inject a minimal ``thinking`` config so the request succeeds.
+
+        Returns:
+            True if ``thinking`` was added or upgraded for this fix (caller may
+            need to add the interleaved-thinking beta header).
+        """
+        cm = anthropic_messages_request.get("context_management")
+        if not isinstance(cm, dict):
+            return False
+        edits = cm.get("edits")
+        if not isinstance(edits, list):
+            return False
+        needs_thinking = any(
+            isinstance(e, dict) and e.get("type") == "clear_thinking_20251015"
+            for e in edits
+        )
+        if not needs_thinking:
+            return False
+        if not self._supports_extended_thinking_on_bedrock(model):
+            return False
+
+        thinking = anthropic_messages_request.get("thinking")
+        if isinstance(thinking, dict):
+            t = thinking.get("type")
+            if t in ("enabled", "adaptive"):
+                return False
+            # ``disabled`` or unknown — replace with enabled so clear_thinking is valid
+            verbose_logger.debug(
+                "Bedrock clear_thinking_20251015: replacing thinking=%s with minimal enabled thinking",
+                thinking,
+            )
+
+        max_tokens = anthropic_messages_request.get("max_tokens")
+        budget = BEDROCK_MIN_THINKING_BUDGET_TOKENS
+        if isinstance(max_tokens, int) and max_tokens <= budget:
+            verbose_logger.warning(
+                "Bedrock clear_thinking_20251015: max_tokens=%s is not greater than "
+                "minimum thinking budget (%s); cannot inject thinking safely",
+                max_tokens,
+                budget,
+            )
+            return False
+
+        anthropic_messages_request["thinking"] = {
+            "type": "enabled",
+            "budget_tokens": budget,
+        }
+        verbose_logger.debug(
+            "Bedrock clear_thinking_20251015: injected thinking with budget_tokens=%s",
+            budget,
+        )
+        return True
 
     def _is_claude_opus_4_5(self, model: str) -> bool:
         """
@@ -285,6 +357,10 @@ class AmazonAnthropicClaudeMessagesConfig(
             "sonnet_4.6",
             "sonnet-4-6",
             "sonnet_4_6",
+            # NOTE: Opus 4.7 on Bedrock does not support server-side tool search
+            # as of launch (2026-04-16). Bedrock rejects the tool type with:
+            # "tool type 'tool_search_tool_..._20251119' is not supported for this model".
+            # Re-add the opus-4.7 patterns here once AWS announces support.
         ]
 
         return any(pattern in model_lower for pattern in supported_patterns)
@@ -398,9 +474,9 @@ class AmazonAnthropicClaudeMessagesConfig(
 
         # 1. anthropic_version is required for all claude models
         if "anthropic_version" not in anthropic_messages_request:
-            anthropic_messages_request[
-                "anthropic_version"
-            ] = self.DEFAULT_BEDROCK_ANTHROPIC_API_VERSION
+            anthropic_messages_request["anthropic_version"] = (
+                self.DEFAULT_BEDROCK_ANTHROPIC_API_VERSION
+            )
 
         # 2. `stream` is not allowed in request body for bedrock invoke
         if "stream" in anthropic_messages_request:
@@ -409,6 +485,13 @@ class AmazonAnthropicClaudeMessagesConfig(
         # 3. `model` is not allowed in request body for bedrock invoke
         if "model" in anthropic_messages_request:
             anthropic_messages_request.pop("model", None)
+
+        injected_thinking_for_clear_thinking = (
+            self._ensure_thinking_for_clear_thinking_context_management(
+                anthropic_messages_request=anthropic_messages_request,
+                model=model,
+            )
+        )
 
         # 4. Remove `ttl` field from cache_control in messages (Bedrock doesn't support it for older models)
         self._remove_ttl_from_cache_control(
@@ -434,6 +517,8 @@ class AmazonAnthropicClaudeMessagesConfig(
         # which causes Bedrock to reject the request with "Extra inputs are not permitted"
         # Ref: https://github.com/BerriAI/litellm/issues/22847
         remove_custom_field_from_tools(anthropic_messages_request)
+        normalize_tool_input_schema_types_for_bedrock_invoke(anthropic_messages_request)
+        ensure_bedrock_anthropic_messages_tool_names(anthropic_messages_request)
 
         # 6. AUTO-INJECT beta headers based on features used
         anthropic_model_info = AnthropicModelInfo()
@@ -458,6 +543,9 @@ class AmazonAnthropicClaudeMessagesConfig(
             ),
         )
         beta_set.update(auto_betas)
+
+        if injected_thinking_for_clear_thinking:
+            beta_set.add("interleaved-thinking-2025-05-14")
 
         self._get_tool_search_beta_header_for_bedrock(
             model=model,
@@ -540,11 +628,14 @@ class AmazonAnthropicClaudeMessagesConfig(
         """
         Bedrock invoke does not return SSE formatted data. This function is a wrapper to ensure litellm chunks are SSE formatted.
 
-        Bedrock's Anthropic-compatible streaming puts cache usage fields
-        (cache_creation_input_tokens, cache_read_input_tokens) only on
-        message_stop, not on message_start or message_delta. Claude Code's
-        SDK only merges usage from message_delta, so we promote those fields
-        from message_stop onto message_delta before yielding.
+        Bedrock's Anthropic-compatible streaming usually puts cache usage fields
+        (cache_creation_input_tokens, cache_read_input_tokens) on message_stop.
+        Some deployments (including GovCloud) emit the cache breakdown only on
+        ``message_start.message.usage``; ``message_delta`` / ``message_stop`` then
+        repeat uncached ``input_tokens`` only. We promote cache fields from
+        ``message_stop`` onto ``message_delta``, and when those are absent we
+        merge them from ``message_start`` so logging/cost sees a consistent usage
+        object (fixes negative input costs: LIT-2411).
         """
         from litellm.llms.anthropic.experimental_pass_through.messages.streaming_iterator import (
             BaseAnthropicMessagesStreamingIterator,
@@ -561,26 +652,40 @@ class AmazonAnthropicClaudeMessagesConfig(
             yield chunk
 
     @staticmethod
+    def _merge_message_start_cache_into_delta_usage(
+        delta_usage: Dict[str, Any],
+        start_usage: Optional[Dict[str, Any]],
+    ) -> None:
+        """
+        Copy cache breakdown from message_start onto message_delta usage when
+        those keys are missing on the delta (GovCloud / some Bedrock streams).
+        """
+        if not start_usage:
+            return
+        for field in ("cache_creation_input_tokens", "cache_read_input_tokens"):
+            if field not in delta_usage:
+                val = start_usage.get(field)
+                if val is not None:
+                    delta_usage[field] = val
+        if "cache_creation" not in delta_usage:
+            cc = start_usage.get("cache_creation")
+            if cc is not None:
+                delta_usage["cache_creation"] = cc
+
+    @staticmethod
     async def _promote_message_stop_usage(
         completion_stream: AsyncIterator[
             Union[bytes, GenericStreamingChunk, ModelResponseStream, dict]
         ],
     ) -> AsyncIterator[Union[bytes, GenericStreamingChunk, ModelResponseStream, dict]]:
         """
-        Promote cache usage fields from message_stop onto message_delta.
-
-        Bedrock reports input_tokens (uncached only) on message_start, and
-        the full breakdown (input_tokens, cache_creation_input_tokens,
-        cache_read_input_tokens) only on message_stop. Claude Code's SDK
-        merges usage from message_start and message_delta but ignores
-        message_stop. This method buffers message_delta and, when
-        message_stop arrives with cache usage, merges those fields into the
-        message_delta usage and also updates the input_tokens on
-        message_delta to include the full count (uncached + cache_creation +
-        cache_read).
+        Promote cache usage fields onto message_delta from message_stop (and,
+        when stop lacks them, from message_start).  Ensures the final usage
+        chunk that logging/cost sees is always self-consistent.
         """
         _CACHE_FIELDS = ("cache_creation_input_tokens", "cache_read_input_tokens")
-        pending_delta = None
+        pending_delta: Optional[Dict[str, Any]] = None
+        start_usage_snapshot: Optional[Dict[str, Any]] = None
 
         async for chunk in completion_stream:
             if not isinstance(chunk, dict):
@@ -592,8 +697,19 @@ class AmazonAnthropicClaudeMessagesConfig(
 
             chunk_type = chunk.get("type")
 
+            if chunk_type == "message_start":
+                msg: Dict[str, Any] = cast(Dict[str, Any], chunk.get("message") or {})
+                u = msg.get("usage")
+                if isinstance(u, dict):
+                    start_usage_snapshot = dict(u)
+                if pending_delta is not None:
+                    yield pending_delta
+                    pending_delta = None
+                yield chunk
+                continue
+
             if chunk_type == "message_delta":
-                pending_delta = chunk
+                pending_delta = cast(Dict[str, Any], chunk)
                 continue
 
             if chunk_type == "message_stop" and pending_delta is not None:
@@ -606,12 +722,13 @@ class AmazonAnthropicClaudeMessagesConfig(
 
                 raw_input = stop_usage.get("input_tokens")
                 if raw_input is not None:
-                    uncached = raw_input if isinstance(raw_input, int) else 0
-                    raw_cc = delta_usage.get("cache_creation_input_tokens", 0)
-                    cache_creation = raw_cc if isinstance(raw_cc, int) else 0
-                    raw_cr = delta_usage.get("cache_read_input_tokens", 0)
-                    cache_read = raw_cr if isinstance(raw_cr, int) else 0
-                    delta_usage["input_tokens"] = uncached + cache_creation + cache_read
+                    delta_usage["input_tokens"] = (
+                        raw_input if isinstance(raw_input, int) else 0
+                    )
+
+                AmazonAnthropicClaudeMessagesConfig._merge_message_start_cache_into_delta_usage(
+                    delta_usage, start_usage_snapshot
+                )
 
                 if delta_usage:
                     pending_delta["usage"] = delta_usage  # type: ignore[arg-type]
@@ -628,6 +745,12 @@ class AmazonAnthropicClaudeMessagesConfig(
             yield chunk
 
         if pending_delta is not None:
+            delta_usage = dict(pending_delta.get("usage") or {})
+            AmazonAnthropicClaudeMessagesConfig._merge_message_start_cache_into_delta_usage(
+                delta_usage, start_usage_snapshot
+            )
+            if delta_usage:
+                pending_delta["usage"] = delta_usage  # type: ignore[arg-type]
             yield pending_delta
 
 

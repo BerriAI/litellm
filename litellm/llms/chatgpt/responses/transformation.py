@@ -1,5 +1,5 @@
 import json
-from typing import Any, Optional
+from typing import Any, Dict, Optional
 
 from litellm.constants import STREAM_SSE_DONE_STRING
 from litellm.exceptions import AuthenticationError
@@ -77,9 +77,9 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
         existing_instructions = request.get("instructions")
         if existing_instructions:
             if base_instructions not in existing_instructions:
-                request[
-                    "instructions"
-                ] = f"{base_instructions}\n\n{existing_instructions}"
+                request["instructions"] = (
+                    f"{base_instructions}\n\n{existing_instructions}"
+                )
         else:
             request["instructions"] = base_instructions
         request["store"] = False
@@ -134,6 +134,7 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
 
         completed_response = None
         error_message = None
+        streamed_output_items: Dict[int, dict] = {}
         for chunk in body_text.splitlines():
             stripped_chunk = CustomStreamWrapper._strip_sse_data_from_chunk(chunk)
             if not stripped_chunk:
@@ -150,10 +151,24 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
             if not isinstance(parsed_chunk, dict):
                 continue
             event_type = parsed_chunk.get("type")
+            if event_type == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE:
+                item = parsed_chunk.get("item")
+                output_index = parsed_chunk.get("output_index")
+                if isinstance(item, dict):
+                    try:
+                        index = int(output_index)
+                    except (TypeError, ValueError):
+                        index = len(streamed_output_items)
+                    streamed_output_items[index] = item
+                continue
             if event_type == ResponsesAPIStreamEvents.RESPONSE_COMPLETED:
                 response_payload = parsed_chunk.get("response")
                 if isinstance(response_payload, dict):
                     response_payload = dict(response_payload)
+                    if not response_payload.get("output") and streamed_output_items:
+                        response_payload["output"] = [
+                            item for _, item in sorted(streamed_output_items.items())
+                        ]
                     if "created_at" in response_payload:
                         response_payload["created_at"] = _safe_convert_created_field(
                             response_payload["created_at"]

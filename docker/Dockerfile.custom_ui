@@ -71,8 +71,16 @@ WORKDIR /app
 RUN sed -i 's/\r$//' docker/entrypoint.sh && chmod +x docker/entrypoint.sh
 RUN sed -i 's/\r$//' docker/prod_entrypoint.sh && chmod +x docker/prod_entrypoint.sh
 
+# Run as non-root user
+RUN groupadd --gid 1000 appuser && useradd --uid 1000 --gid 1000 --no-create-home appuser \
+    && chown -R appuser:appuser /app
+USER appuser
+
 # Expose the necessary port
 EXPOSE 4000/tcp
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:4000/health')"]
 
 # Override the CMD instruction with your desired command and arguments
 CMD ["--port", "4000", "--config", "config.yaml", "--detailed_debug"]

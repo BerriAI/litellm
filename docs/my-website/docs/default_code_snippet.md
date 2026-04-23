@@ -16,7 +16,7 @@ If you want to use the non-hosted version, [go here](https://docs.litellm.ai/doc
 
 
 ```
-pip install litellm
+uv add litellm
 ```
 
 <QueryParamReader/>

@@ -551,9 +551,9 @@ class LiteLLMAnthropicMessagesAdapter:
 
             ## ASSISTANT MESSAGE ##
             assistant_message_str: Optional[str] = None
-            assistant_content_list: List[
-                Dict[str, Any]
-            ] = []  # For content blocks with cache_control
+            assistant_content_list: List[Dict[str, Any]] = (
+                []
+            )  # For content blocks with cache_control
             has_cache_control_in_text = False
             tool_calls: List[ChatCompletionAssistantToolCall] = []
             thinking_blocks: List[
@@ -596,12 +596,12 @@ class LiteLLMAnthropicMessagesAdapter:
                                         function_chunk.get("provider_specific_fields")
                                         or {}
                                     )
-                                    provider_specific_fields[
-                                        "thought_signature"
-                                    ] = signature
-                                    function_chunk[
-                                        "provider_specific_fields"
-                                    ] = provider_specific_fields
+                                    provider_specific_fields["thought_signature"] = (
+                                        signature
+                                    )
+                                    function_chunk["provider_specific_fields"] = (
+                                        provider_specific_fields
+                                    )
 
                                 tool_call = ChatCompletionAssistantToolCall(
                                     id=content.get("id", ""),
@@ -804,7 +804,7 @@ class LiteLLMAnthropicMessagesAdapter:
         tool_name_mapping: Dict[str, str] = {}
         mapped_tool_params = ["name", "input_schema", "description", "cache_control"]
 
-        for tool in tools:
+        for idx, tool in enumerate(tools):
             # Check if this is an Anthropic-native tool that should be kept as-is
             tool_type = tool.get("type", "")
             if any(tool_type.startswith(t.value) for t in ANTHROPIC_HOSTED_TOOLS):
@@ -812,7 +812,13 @@ class LiteLLMAnthropicMessagesAdapter:
                 new_tools.append(tool)  # type: ignore[arg-type]
                 continue
 
-            original_name = tool["name"]
+            raw_name = tool.get("name")
+            if raw_name is None or (
+                isinstance(raw_name, str) and not str(raw_name).strip()
+            ):
+                original_name = f"litellm_unnamed_tool_{idx}"
+            else:
+                original_name = str(raw_name)
             truncated_name = truncate_tool_name(original_name)
 
             # Store mapping if name was truncated
@@ -1348,9 +1354,9 @@ class LiteLLMAnthropicMessagesAdapter:
             hasattr(usage, "_cache_creation_input_tokens")
             and usage._cache_creation_input_tokens > 0
         ):
-            anthropic_usage[
-                "cache_creation_input_tokens"
-            ] = usage._cache_creation_input_tokens
+            anthropic_usage["cache_creation_input_tokens"] = (
+                usage._cache_creation_input_tokens
+            )
         if cached_tokens > 0:
             anthropic_usage["cache_read_input_tokens"] = cached_tokens
 
@@ -1527,9 +1533,9 @@ class LiteLLMAnthropicMessagesAdapter:
                     hasattr(litellm_usage_chunk, "_cache_creation_input_tokens")
                     and litellm_usage_chunk._cache_creation_input_tokens > 0
                 ):
-                    usage_delta[
-                        "cache_creation_input_tokens"
-                    ] = litellm_usage_chunk._cache_creation_input_tokens
+                    usage_delta["cache_creation_input_tokens"] = (
+                        litellm_usage_chunk._cache_creation_input_tokens
+                    )
                 if cached_tokens > 0:
                     usage_delta["cache_read_input_tokens"] = cached_tokens
             else:

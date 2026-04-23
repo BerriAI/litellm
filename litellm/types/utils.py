@@ -235,6 +235,9 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     output_cost_per_video_per_second: Optional[float]  # only for vertex ai models
     output_cost_per_audio_per_second: Optional[float]  # only for vertex ai models
     output_cost_per_second: Optional[float]  # for OpenAI Speech models
+    output_cost_per_second_1080p: Optional[
+        float
+    ]  # video_generation tier: key output_cost_per_second_<resolution> (e.g. 1080p, 720p)
     ocr_cost_per_page: Optional[float]  # for OCR models
     annotation_cost_per_page: Optional[float]  # for OCR models
     search_context_cost_per_query: Optional[
@@ -2510,6 +2513,7 @@ class StandardLoggingUserAPIKeyMetadata(TypedDict):
     user_api_key_max_budget: Optional[float]
     user_api_key_budget_reset_at: Optional[str]
     user_api_key_org_id: Optional[str]
+    user_api_key_org_alias: Optional[str]
     user_api_key_team_id: Optional[str]
     user_api_key_project_id: Optional[str]
     user_api_key_project_alias: Optional[str]
@@ -2646,6 +2650,8 @@ class StandardLoggingAdditionalHeaders(TypedDict, total=False):
     x_ratelimit_limit_tokens: int
     x_ratelimit_remaining_requests: int
     x_ratelimit_remaining_tokens: int
+    x_ratelimit_reset_requests: str
+    x_ratelimit_reset_tokens: str
 
 
 class StandardLoggingHiddenParams(TypedDict):
@@ -2797,7 +2803,9 @@ class CostBreakdown(TypedDict, total=False):
     Detailed cost breakdown for a request
     """
 
-    input_cost: float  # Cost of input/prompt tokens
+    input_cost: float  # Cost of raw (non-cached) input tokens only
+    cache_read_cost: float  # Cost of cache-read tokens (discounted rate)
+    cache_creation_cost: float  # Cost of cache-write tokens (premium rate)
     output_cost: (
         float  # Cost of output/completion tokens (includes reasoning if applicable)
     )
@@ -2966,6 +2974,7 @@ class CustomPricingLiteLLMParams(BaseModel):
     output_cost_per_token: Optional[float] = None
     input_cost_per_second: Optional[float] = None
     output_cost_per_second: Optional[float] = None
+    output_cost_per_second_1080p: Optional[float] = None
     input_cost_per_pixel: Optional[float] = None
     output_cost_per_pixel: Optional[float] = None
 

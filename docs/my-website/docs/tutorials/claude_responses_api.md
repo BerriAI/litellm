@@ -28,7 +28,7 @@ This tutorial is based on [Anthropic's official LiteLLM configuration documentat
 First, install LiteLLM with proxy support:
 
 ```bash
-pip install 'litellm[proxy]'
+uv tool install 'litellm[proxy]'
 ```
 
 ### 1. Setup config.yaml
