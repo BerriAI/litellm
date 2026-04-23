@@ -3165,6 +3165,7 @@ proxy-runtime = [
     { name = "langfuse" },
     { name = "llm-sandbox" },
     { name = "mangum" },
+    { name = "newrelic" },
     { name = "opentelemetry-api" },
     { name = "opentelemetry-exporter-otlp" },
     { name = "opentelemetry-sdk" },
@@ -3298,8 +3299,9 @@ requires-dist = [
     { name = "litellm-proxy-extras", marker = "extra == 'proxy'", editable = "litellm-proxy-extras" },
     { name = "llm-sandbox", marker = "extra == 'proxy-runtime'", specifier = "==0.3.31" },
     { name = "mangum", marker = "extra == 'proxy-runtime'", specifier = "==0.17.0" },
-    { name = "mcp", marker = "extra == 'proxy'", specifier = "==1.26.0" },
-    { name = "mlflow", marker = "extra == 'mlflow'", specifier = "==3.9.0" },
+    { name = "mcp", marker = "python_full_version >= '3.10' and extra == 'proxy'", specifier = "==1.26.0" },
+    { name = "mlflow", marker = "python_full_version >= '3.10' and extra == 'mlflow'", specifier = "==3.9.0" },
+    { name = "newrelic", marker = "extra == 'proxy-runtime'", specifier = "==12.1.0" },
     { name = "numpydoc", marker = "extra == 'utils'", specifier = "==1.8.0" },
     { name = "openai", specifier = "==2.24.0" },
     { name = "opentelemetry-api", marker = "extra == 'proxy-runtime'", specifier = "==1.28.0" },
@@ -4028,6 +4030,42 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/a2/6e/371856a3fb9d31ca8dac321cda606860fa4548858c0cc45d9d1d4ca2628b/mypy_extensions-1.1.0.tar.gz", hash = "sha256:52e68efc3284861e772bbcd66823fde5ae21fd2fdb51c62a211403730b916558", size = 6343, upload-time = "2025-04-22T14:54:24.164Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/79/7b/2c79738432f5c924bef5071f933bcc9efd0473bac3b4aa584a6f7c1c8df8/mypy_extensions-1.1.0-py3-none-any.whl", hash = "sha256:1be4cccdb0f2482337c4743e60421de3a356cd97508abadd57d47403e94f5505", size = 4963, upload-time = "2025-04-22T14:54:22.983Z" },
+]
+
+[[package]]
+name = "newrelic"
+version = "12.1.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/56/16/4dd1efc8443e50ddb7f3b83ea35a45b08ded6e9bd4694e73720d90df9b8b/newrelic-12.1.0.tar.gz", hash = "sha256:309e515ae3cb7981919dd2eaf9d2c0510e46e3e3a60b915e5c79b8257ececa82", size = 1379969, upload-time = "2026-03-26T21:50:12.721Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/31/6a/4cde031ed6e21fcec1a9e3ba294487225aa553ed46d3fc268f0ce82530c8/newrelic-12.1.0-cp310-cp310-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl", hash = "sha256:ec2dda00fbd1bf6d6b499bb49ed7698b54d893f375e77f0a43bf4fc6e7eceb95", size = 912980, upload-time = "2026-03-26T21:49:08.678Z" },
+    { url = "https://files.pythonhosted.org/packages/79/94/065d6f5deee4a778505fe79d8667847eb436591201aac46b664d52594fab/newrelic-12.1.0-cp310-cp310-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:36e99ee022661f0b83d33d10efde7538cfe9c75e104ae2260edb3831887e35f3", size = 916232, upload-time = "2026-03-26T21:49:10.384Z" },
+    { url = "https://files.pythonhosted.org/packages/79/a7/0f06e8589c9cc1c3ab2da7ec4c7d9f670f09df05450cd09515d3a4c9f25d/newrelic-12.1.0-cp310-cp310-musllinux_1_2_aarch64.whl", hash = "sha256:ff29d0d32f52638b63fae969d4d8fdd574277f6b97411cbfaaae6c95f538dcab", size = 914863, upload-time = "2026-03-26T21:49:11.732Z" },
+    { url = "https://files.pythonhosted.org/packages/5b/5b/33dc281831673605c993d5d9e90b5e2c58ed6777ad54a54ae44345bc1136/newrelic-12.1.0-cp310-cp310-musllinux_1_2_x86_64.whl", hash = "sha256:26a3b2b45b28f2cec8ff220930a2d8edef96b3f70be95be1fdb3e1089adb3a40", size = 912617, upload-time = "2026-03-26T21:49:13.293Z" },
+    { url = "https://files.pythonhosted.org/packages/13/ed/42511d2044eeabfe42e4f7f53b2f6454e351e9cebbc24ce5f96a1621ca8a/newrelic-12.1.0-cp311-cp311-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl", hash = "sha256:d45a99ea8499d9a922ce61dba490c50ed603b5d19f66e7927c8f7bc8543abb21", size = 913421, upload-time = "2026-03-26T21:49:15.003Z" },
+    { url = "https://files.pythonhosted.org/packages/43/ef/51a02c8ef47d1544f886948d85a3531b289bc8fa8cd118644401760b51d3/newrelic-12.1.0-cp311-cp311-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:977865ee5f9852963463d9eb4d5efc6c1147d1d0469b9d081604335de1b345fa", size = 916691, upload-time = "2026-03-26T21:49:16.319Z" },
+    { url = "https://files.pythonhosted.org/packages/7e/8a/9746bff80776710d03af4d0811ebfad907375b901b86b705c1d0d0061684/newrelic-12.1.0-cp311-cp311-musllinux_1_2_aarch64.whl", hash = "sha256:d3da859a78a8a4033ecab5d65c861fc45d13bd641edcabe3cc69d2894c9a1f8c", size = 915442, upload-time = "2026-03-26T21:49:17.668Z" },
+    { url = "https://files.pythonhosted.org/packages/d1/4d/decefdf71004637470b01ff4df3f3fefdbf99a87ec5d20e8bbc160a7fd1e/newrelic-12.1.0-cp311-cp311-musllinux_1_2_x86_64.whl", hash = "sha256:ef292df6ee99202bd49b9757546ed7f76e413c10a0a6d4d608d07833d6cdf375", size = 913152, upload-time = "2026-03-26T21:49:18.957Z" },
+    { url = "https://files.pythonhosted.org/packages/29/f2/379a75db8f974b941019effc6756539f4fb816e6dc0fb816c4b7ba70ddea/newrelic-12.1.0-cp312-cp312-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl", hash = "sha256:38121407bf50c2acfd25a3d4fc2f09d81a43adb23b746b8671dfd1be785946cf", size = 921495, upload-time = "2026-03-26T21:49:20.309Z" },
+    { url = "https://files.pythonhosted.org/packages/9f/bb/00784e122376da6482733ff9404c051bb382e20da4c477263b1f291f25b3/newrelic-12.1.0-cp312-cp312-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:1b926f57e8845a0a29524e9c3ca3bb14bbfc90caac7ea481f0fe9f94fadb3998", size = 924190, upload-time = "2026-03-26T21:49:21.951Z" },
+    { url = "https://files.pythonhosted.org/packages/d0/77/eda9e5864b2ef6f1ce39ae51c2762b6cdc9125ff2fb74804973f913aa155/newrelic-12.1.0-cp312-cp312-musllinux_1_2_aarch64.whl", hash = "sha256:e9c561c3d80c6193683b354c424228fb9904b82efe408ded56b2093f39458ba2", size = 922079, upload-time = "2026-03-26T21:49:23.556Z" },
+    { url = "https://files.pythonhosted.org/packages/09/a9/2e7a7dbcb807e7d0ac4ae926ec4b47e2818c01721f681d1ecaf8c4672adf/newrelic-12.1.0-cp312-cp312-musllinux_1_2_x86_64.whl", hash = "sha256:4441a44afdc399b72db338a17c1d7aa5a111047c011a8883a318fafe858fcb23", size = 920637, upload-time = "2026-03-26T21:49:24.895Z" },
+    { url = "https://files.pythonhosted.org/packages/f2/64/1b675cf46b18f99f940a374056654bfd7cf622fc26f087f06ac4e55ea78d/newrelic-12.1.0-cp313-cp313-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl", hash = "sha256:9295aed7fb26304cd6efc5d7d56ce6426251349f18889d2e0ef265583b65aa62", size = 921556, upload-time = "2026-03-26T21:49:26.357Z" },
+    { url = "https://files.pythonhosted.org/packages/fc/03/1cfa7279245f815bf0bcb168e7592bb7e1821153ebc3af3ff2d7c79fbd2a/newrelic-12.1.0-cp313-cp313-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:2fdef1de8c7c505bc7a8fb3e7ce443b3faa93bf95b3a66179cce52de558c28aa", size = 924298, upload-time = "2026-03-26T21:49:27.997Z" },
+    { url = "https://files.pythonhosted.org/packages/68/f8/6463c67f16c661cb02ab7797d0f8fc70d3842213aede2c7342ed5311eb07/newrelic-12.1.0-cp313-cp313-musllinux_1_2_aarch64.whl", hash = "sha256:ee10572d76136d3f2975bb02870a133ed1ddf203ff210a96de3081c620eddad3", size = 922161, upload-time = "2026-03-26T21:49:29.336Z" },
+    { url = "https://files.pythonhosted.org/packages/51/e3/33e6f03ac5d105616dfdc7140d4d191a9c7957ee8f7c7d4e521c5cff4fd6/newrelic-12.1.0-cp313-cp313-musllinux_1_2_x86_64.whl", hash = "sha256:42620fffffade5852cd48ea52aaf594b3da280341f16bd2573b1664643bf30c5", size = 920696, upload-time = "2026-03-26T21:49:30.736Z" },
+    { url = "https://files.pythonhosted.org/packages/e3/e7/d4e5fa2a8b8c66732bd8bbe02f74c1ea565128a3a60413701baca0d19083/newrelic-12.1.0-cp313-cp313-win_amd64.whl", hash = "sha256:f21308e5cc63359e646c3322f2272f66b125e5c2e537ae3aad8f266e762ee2f7", size = 854286, upload-time = "2026-03-26T21:49:31.999Z" },
+    { url = "https://files.pythonhosted.org/packages/39/a0/10a3861a27597430ecb9df0cd4d28dbc5f03075d7854d7fc39105d20e8ee/newrelic-12.1.0-cp313-cp313-win_arm64.whl", hash = "sha256:bdef608293bd28ca658baa5c775cb26695bdcbbd226ed16771aed6f1a4e71e7a", size = 851665, upload-time = "2026-03-26T21:49:33.826Z" },
+    { url = "https://files.pythonhosted.org/packages/d4/04/86025e13562e45234dfb7ba4a5115e4b7ddf56b6154ce079ed89bd419b6e/newrelic-12.1.0-cp313-cp313t-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl", hash = "sha256:820de18c42571949c0f3f9a4601a36cde1915fc8f1debea6f57ce405c3ae423f", size = 955006, upload-time = "2026-03-26T21:49:35.557Z" },
+    { url = "https://files.pythonhosted.org/packages/07/f0/aca49eddfd6ce128ee9de84eaefc6e3efd23cc1935316f261a3dd5da3bba/newrelic-12.1.0-cp313-cp313t-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:44b44b792ea5bd90fbc54e6b2a87fbba0c26d2a1b1d219a44ee1154e86aa4f75", size = 962899, upload-time = "2026-03-26T21:49:36.93Z" },
+    { url = "https://files.pythonhosted.org/packages/68/c8/c5cee15cbee6ff7da6de61f0b3c593f0b8115e5e0e09a5a652a4fb81a2f0/newrelic-12.1.0-cp313-cp313t-musllinux_1_2_aarch64.whl", hash = "sha256:4dafb7806c67b39e32559ab4845a0fc91a8f5fa137c6e7df9b8951b8478e75ac", size = 958837, upload-time = "2026-03-26T21:49:38.771Z" },
+    { url = "https://files.pythonhosted.org/packages/50/31/0486249881c921ad9e854fea1f0ccc58ce476a6f9f695c92b4fdaabcd86e/newrelic-12.1.0-cp313-cp313t-musllinux_1_2_x86_64.whl", hash = "sha256:03f1a9709a807365bfb1d3fb9ced04c9e4fe052f0214010d7f40c6cb31c033b2", size = 952457, upload-time = "2026-03-26T21:49:40.459Z" },
+    { url = "https://files.pythonhosted.org/packages/31/73/a46c488c06f383b842dc9a6622f827d8cd29a1ad64b4cb984191a788ad39/newrelic-12.1.0-cp313-cp313t-win_amd64.whl", hash = "sha256:0f08278968698ab03983959b09fa4ad71e85d3c110c550a9162644fc499c4167", size = 857330, upload-time = "2026-03-26T21:49:41.885Z" },
+    { url = "https://files.pythonhosted.org/packages/59/37/58ae0d6fd2e3469493e709354ef457eef855a858612546eb6b98589e5c54/newrelic-12.1.0-cp313-cp313t-win_arm64.whl", hash = "sha256:7764cab572224217931a7bd473c39038d316781ba0693c7adfb50a1da04b78fe", size = 853401, upload-time = "2026-03-26T21:49:43.25Z" },
+    { url = "https://files.pythonhosted.org/packages/86/43/abcc6930d0893473beb8a0e0a0006e70a1c19afc5986f297563c7612cc47/newrelic-12.1.0-cp39-cp39-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl", hash = "sha256:b1655c4012f616b512fb014549458b091f3ca5665f71fc42c6bf46de5fa3ae5b", size = 912506, upload-time = "2026-03-26T21:50:05.665Z" },
+    { url = "https://files.pythonhosted.org/packages/b8/01/1e54fc4397b5537974d6a24e87c9546d4967d08776b5d4f021e25cc5975f/newrelic-12.1.0-cp39-cp39-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:5a8a83ae8e1ca6e3cd5b24602c0e539d73ec01fca7de621d3a7b486d21df82d5", size = 915721, upload-time = "2026-03-26T21:50:07.978Z" },
+    { url = "https://files.pythonhosted.org/packages/10/05/587fe5236958f79f58b46de95d43a1670c0035a7615e4be277e28a260ff8/newrelic-12.1.0-cp39-cp39-musllinux_1_2_aarch64.whl", hash = "sha256:f7da837f5ca33158e79b5993f7d9e4691f44fcbdecbf418583293e67265bb0e2", size = 914361, upload-time = "2026-03-26T21:50:09.827Z" },
+    { url = "https://files.pythonhosted.org/packages/fe/68/ed99d4bd5b84af7d81adcc8e9eec1e63888c8f4deaa41765f8325bbb5d91/newrelic-12.1.0-cp39-cp39-musllinux_1_2_x86_64.whl", hash = "sha256:443b6526ec00af730d68a199fa756b09063c81295a0cfbc658e4a5e02c64dd56", size = 912231, upload-time = "2026-03-26T21:50:11.232Z" },
 ]
 
 [[package]]
