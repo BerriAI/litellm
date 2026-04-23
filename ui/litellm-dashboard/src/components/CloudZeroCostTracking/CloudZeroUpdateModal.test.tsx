@@ -56,7 +56,9 @@ describe("CloudZeroUpdateModal", () => {
 
     expect(screen.getByText("Edit CloudZero Integration")).toBeInTheDocument();
     expect(screen.getByLabelText("CloudZero API Key")).toBeInTheDocument();
-    expect(screen.getByLabelText("Connection ID")).toBeInTheDocument();
+    // Connection ID label includes a required indicator post phase-1; match
+    // by partial text.
+    expect(screen.getByLabelText(/Connection ID/)).toBeInTheDocument();
     expect(screen.getByLabelText("Timezone")).toBeInTheDocument();
   });
 });

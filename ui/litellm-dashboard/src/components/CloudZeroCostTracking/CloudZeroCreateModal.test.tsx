@@ -48,8 +48,9 @@ describe("CloudZeroCreateModal", () => {
     );
 
     expect(screen.getByText("Create CloudZero Integration")).toBeInTheDocument();
-    expect(screen.getByLabelText("CloudZero API Key")).toBeInTheDocument();
-    expect(screen.getByLabelText("Connection ID")).toBeInTheDocument();
+    // Required-field labels include a required indicator post phase-1.
+    expect(screen.getByLabelText(/CloudZero API Key/)).toBeInTheDocument();
+    expect(screen.getByLabelText(/Connection ID/)).toBeInTheDocument();
     expect(screen.getByLabelText("Timezone")).toBeInTheDocument();
   });
 });

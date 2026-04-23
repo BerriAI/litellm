@@ -1,6 +1,6 @@
 import { useCloudZeroSettings } from "@/app/(dashboard)/hooks/cloudzero/useCloudZeroSettings";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
-import { Card, Typography } from "antd";
+import { Card } from "@/components/ui/card";
 import CloudZeroEmptyPlaceholder from "./CloudZeroEmptyPlaceholder";
 import { useState } from "react";
 import CloudZeroCreationModal from "./CloudZeroCreateModal";
@@ -10,7 +10,11 @@ import { CloudZeroIntegrationSettings } from "./CloudZeroIntegrationSettings";
 
 export default function CloudZeroCostTracking() {
   const { accessToken } = useAuthorized();
-  const { data: settings, isLoading, error } = useCloudZeroSettings(accessToken);
+  const {
+    data: settings,
+    isLoading,
+    error,
+  } = useCloudZeroSettings(accessToken);
   const queryClient = useQueryClient();
   const cloudZeroSettingsKeys = createQueryKeys("cloudZeroSettings");
 
@@ -18,27 +22,28 @@ export default function CloudZeroCostTracking() {
 
   const handleCreateModalOk = async () => {
     setIsCreateModalOpen(false);
-    await queryClient.invalidateQueries({ queryKey: cloudZeroSettingsKeys.list({}) });
+    await queryClient.invalidateQueries({
+      queryKey: cloudZeroSettingsKeys.list({}),
+    });
   };
 
-  const handleCreateModalCancel = () => {
-    setIsCreateModalOpen(false);
-  };
+  const handleCreateModalCancel = () => setIsCreateModalOpen(false);
 
   if (isLoading) {
     return (
-      <Card>
-        <Typography.Text>Loading CloudZero settings...</Typography.Text>
+      <Card className="p-6">
+        <span className="text-sm">Loading CloudZero settings...</span>
       </Card>
     );
   }
 
   if (error) {
     return (
-      <Card>
-        <Typography.Text className="text-red-600">
-          Error loading CloudZero settings: {error instanceof Error ? error.message : String(error)}
-        </Typography.Text>
+      <Card className="p-6">
+        <span className="text-sm text-destructive">
+          Error loading CloudZero settings:{" "}
+          {error instanceof Error ? error.message : String(error)}
+        </span>
       </Card>
     );
   }
@@ -46,7 +51,9 @@ export default function CloudZeroCostTracking() {
   if (!settings) {
     return (
       <>
-        <CloudZeroEmptyPlaceholder startCreation={() => setIsCreateModalOpen(true)} />
+        <CloudZeroEmptyPlaceholder
+          startCreation={() => setIsCreateModalOpen(true)}
+        />
         <CloudZeroCreationModal
           open={isCreateModalOpen}
           onOk={handleCreateModalOk}
@@ -57,8 +64,9 @@ export default function CloudZeroCostTracking() {
   }
 
   return (
-    <>
-      <CloudZeroIntegrationSettings settings={settings} onSettingsUpdated={handleCreateModalOk} />
-    </>
+    <CloudZeroIntegrationSettings
+      settings={settings}
+      onSettingsUpdated={handleCreateModalOk}
+    />
   );
 }

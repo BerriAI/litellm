@@ -3,7 +3,22 @@ import { useCloudZeroExport } from "@/app/(dashboard)/hooks/cloudzero/useCloudZe
 import { useCloudZeroDeleteSettings } from "@/app/(dashboard)/hooks/cloudzero/useCloudZeroSettings";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import DeleteResourceModal from "@/components/common_components/DeleteResourceModal";
-import { Alert, Button, Card, Descriptions, Divider, Popconfirm, Tag } from "antd";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { Separator } from "@/components/ui/separator";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
 import MessageManager from "@/components/molecules/message_manager";
 import { CheckCircle, Edit, Play, Trash2, Upload } from "lucide-react";
 import { useState } from "react";
@@ -15,7 +30,10 @@ interface CloudZeroIntegrationSettingsProps {
   onSettingsUpdated: () => void;
 }
 
-export function CloudZeroIntegrationSettings({ settings, onSettingsUpdated }: CloudZeroIntegrationSettingsProps) {
+export function CloudZeroIntegrationSettings({
+  settings,
+  onSettingsUpdated,
+}: CloudZeroIntegrationSettingsProps) {
   const { accessToken } = useAuthorized();
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
@@ -26,11 +44,10 @@ export function CloudZeroIntegrationSettings({ settings, onSettingsUpdated }: Cl
 
   const handleDryRun = () => {
     if (!accessToken) return;
-
     dryRunMutation.mutate(
       { limit: 10 },
       {
-        onSuccess: (data) => {
+        onSuccess: () => {
           MessageManager.success("Dry run completed successfully");
         },
         onError: (error) => {
@@ -40,11 +57,12 @@ export function CloudZeroIntegrationSettings({ settings, onSettingsUpdated }: Cl
     );
   };
 
-  const dryRunResult = dryRunMutation.data ? JSON.stringify(dryRunMutation.data, null, 2) : null;
+  const dryRunResult = dryRunMutation.data
+    ? JSON.stringify(dryRunMutation.data, null, 2)
+    : null;
 
   const handleExport = () => {
     if (!accessToken) return;
-
     exportMutation.mutate(
       { operation: "replace_hourly" },
       {
@@ -58,26 +76,13 @@ export function CloudZeroIntegrationSettings({ settings, onSettingsUpdated }: Cl
     );
   };
 
-  const handleEdit = () => {
-    setIsEditModalOpen(true);
-  };
-
   const handleEditModalOk = async () => {
     setIsEditModalOpen(false);
     onSettingsUpdated();
   };
 
-  const handleEditModalCancel = () => {
-    setIsEditModalOpen(false);
-  };
-
-  const handleDeleteClick = () => {
-    setIsDeleteModalOpen(true);
-  };
-
   const handleDeleteConfirm = () => {
     if (!accessToken) return;
-
     deleteMutation.mutate(undefined, {
       onSuccess: () => {
         MessageManager.success("CloudZero integration deleted successfully");
@@ -85,118 +90,143 @@ export function CloudZeroIntegrationSettings({ settings, onSettingsUpdated }: Cl
         onSettingsUpdated();
       },
       onError: (error) => {
-        MessageManager.error(error?.message || "Failed to delete CloudZero integration");
+        MessageManager.error(
+          error?.message || "Failed to delete CloudZero integration",
+        );
       },
     });
-  };
-
-  const handleDeleteCancel = () => {
-    setIsDeleteModalOpen(false);
   };
 
   return (
     <>
       <div className="space-y-6 w-full max-w-4xl mx-auto">
-        <Card
-          title={
+        <Card className="shadow-sm p-6">
+          <div className="flex items-center justify-between mb-4">
             <div className="flex items-center gap-2">
-              <span className="text-lg font-semibold">CloudZero Configuration</span>
-              <Tag color="success" className="ml-2 capitalize">
+              <span className="text-lg font-semibold">
+                CloudZero Configuration
+              </span>
+              <Badge variant="default" className="capitalize">
                 {settings.status || "Active"}
-              </Tag>
+              </Badge>
             </div>
-          }
-          extra={
             <div className="flex gap-2">
-              <Button icon={<Edit size={16} />} onClick={handleEdit} className="flex items-center gap-2">
+              <Button
+                variant="outline"
+                onClick={() => setIsEditModalOpen(true)}
+              >
+                <Edit size={16} />
                 Edit
               </Button>
               <Button
-                danger
-                icon={<Trash2 size={16} />}
-                onClick={handleDeleteClick}
-                className="flex items-center gap-2"
+                variant="destructive"
+                onClick={() => setIsDeleteModalOpen(true)}
               >
+                <Trash2 size={16} />
                 Delete
               </Button>
             </div>
-          }
-          className="shadow-sm"
-        >
-          <Descriptions
-            bordered
-            column={{
-              xxl: 1,
-              xl: 1,
-              lg: 1,
-              md: 1,
-              sm: 1,
-              xs: 1,
-            }}
-          >
-            <Descriptions.Item label="API Key (Redacted)">
-              <span className="font-mono text-gray-600">
-                {settings.api_key_masked || <span className="text-gray-400 italic">Not configured</span>}
-              </span>
-            </Descriptions.Item>
-            <Descriptions.Item label="Connection ID">
-              <span className="font-mono text-gray-600">
-                {settings.connection_id || <span className="text-gray-400 italic">Not configured</span>}
-              </span>
-            </Descriptions.Item>
-            <Descriptions.Item label="Timezone">
-              {settings.timezone || <span className="text-gray-400 italic">Default (UTC)</span>}
-            </Descriptions.Item>
-          </Descriptions>
+          </div>
 
-          <Divider orientation="left" className="text-gray-500">
+          <dl className="border border-border rounded-md overflow-hidden text-sm">
+            <div className="grid grid-cols-[200px_1fr] border-b border-border">
+              <dt className="bg-muted px-4 py-3 font-medium">
+                API Key (Redacted)
+              </dt>
+              <dd className="px-4 py-3">
+                <span className="font-mono text-muted-foreground">
+                  {settings.api_key_masked || (
+                    <span className="text-muted-foreground italic">
+                      Not configured
+                    </span>
+                  )}
+                </span>
+              </dd>
+            </div>
+            <div className="grid grid-cols-[200px_1fr] border-b border-border">
+              <dt className="bg-muted px-4 py-3 font-medium">Connection ID</dt>
+              <dd className="px-4 py-3">
+                <span className="font-mono text-muted-foreground">
+                  {settings.connection_id || (
+                    <span className="text-muted-foreground italic">
+                      Not configured
+                    </span>
+                  )}
+                </span>
+              </dd>
+            </div>
+            <div className="grid grid-cols-[200px_1fr]">
+              <dt className="bg-muted px-4 py-3 font-medium">Timezone</dt>
+              <dd className="px-4 py-3">
+                {settings.timezone || (
+                  <span className="text-muted-foreground italic">
+                    Default (UTC)
+                  </span>
+                )}
+              </dd>
+            </div>
+          </dl>
+
+          <Separator className="my-6" />
+          <h4 className="text-sm font-medium text-muted-foreground mb-3">
             Actions
-          </Divider>
+          </h4>
 
           <div className="flex flex-wrap gap-4 mb-6">
             <Button
+              variant="outline"
               onClick={handleDryRun}
-              loading={dryRunMutation.isPending}
-              icon={<Play size={16} />}
-              className="flex items-center gap-2"
+              disabled={dryRunMutation.isPending}
             >
-              Run Dry Run Simulation
+              <Play size={16} />
+              {dryRunMutation.isPending
+                ? "Running…"
+                : "Run Dry Run Simulation"}
             </Button>
 
-            <Popconfirm
-              title="Export Data to CloudZero"
-              description="This will push the current accumulated cost data to CloudZero. Continue?"
-              onConfirm={handleExport}
-              okText="Export"
-              cancelText="Cancel"
-            >
-              <Button
-                type="primary"
-                loading={exportMutation.isPending}
-                icon={<Upload size={16} />}
-                className="flex items-center gap-2"
-              >
-                Export Data Now
-              </Button>
-            </Popconfirm>
+            <AlertDialog>
+              <AlertDialogTrigger asChild>
+                <Button disabled={exportMutation.isPending}>
+                  <Upload size={16} />
+                  {exportMutation.isPending
+                    ? "Exporting…"
+                    : "Export Data Now"}
+                </Button>
+              </AlertDialogTrigger>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>
+                    Export Data to CloudZero
+                  </AlertDialogTitle>
+                  <AlertDialogDescription>
+                    This will push the current accumulated cost data to
+                    CloudZero. Continue?
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel>Cancel</AlertDialogCancel>
+                  <AlertDialogAction onClick={handleExport}>
+                    Export
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
           </div>
 
           {dryRunResult && (
-            <div className="mt-6 animate-in fade-in slide-in-from-top-4 duration-300">
-              <Alert
-                message="Dry Run Results"
-                description={
-                  <div className="mt-2">
-                    <p className="mb-2 text-gray-600">Simulation output for connection: {settings.connection_id}</p>
-                    <pre className="bg-gray-50 p-4 rounded-md border border-gray-200 overflow-x-auto text-xs font-mono text-gray-800">
-                      {dryRunResult}
-                    </pre>
-                  </div>
-                }
-                type="info"
-                showIcon
-                icon={<CheckCircle className="text-blue-500" />}
-              />
+            <div className="mt-6">
+              <Alert>
+                <CheckCircle className="h-4 w-4" />
+                <AlertTitle>Dry Run Results</AlertTitle>
+                <AlertDescription>
+                  <p className="mb-2 text-muted-foreground">
+                    Simulation output for connection: {settings.connection_id}
+                  </p>
+                  <pre className="bg-muted p-4 rounded-md border border-border overflow-x-auto text-xs font-mono text-foreground">
+                    {dryRunResult}
+                  </pre>
+                </AlertDescription>
+              </Alert>
             </div>
           )}
         </Card>
@@ -205,7 +235,7 @@ export function CloudZeroIntegrationSettings({ settings, onSettingsUpdated }: Cl
       <CloudZeroUpdateModal
         open={isEditModalOpen}
         onOk={handleEditModalOk}
-        onCancel={handleEditModalCancel}
+        onCancel={() => setIsEditModalOpen(false)}
         settings={settings}
       />
 
@@ -225,7 +255,7 @@ export function CloudZeroIntegrationSettings({ settings, onSettingsUpdated }: Cl
             value: settings.timezone || "Default (UTC)",
           },
         ]}
-        onCancel={handleDeleteCancel}
+        onCancel={() => setIsDeleteModalOpen(false)}
         onOk={handleDeleteConfirm}
         confirmLoading={deleteMutation.isPending}
       />

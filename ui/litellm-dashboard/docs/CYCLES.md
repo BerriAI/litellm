@@ -89,6 +89,17 @@ Layer abbreviations: **TS** (tsc --noEmit), **Lint** (eslint), **Vitest**
   Tests updated to use semantic queries (button disabled state) and to match
   the rhf submit shape (object containing tag_name).
 
+## 19. Cost Tracking — CloudZero (cost-tracking, cloudzero subset)
+
+- Cycles used: 1 / 7
+- Layer outcomes per cycle:
+  - cycle 1: TS ✓ | Lint ✓ | Vitest ✓ (6/6) | Build ✓ | Parity ⏭ | Snap ⏭
+- Final status: **done (cloudzero subset)**
+- Scope: CloudZeroCostTracking, CloudZeroCreateModal, CloudZeroEmptyPlaceholder,
+  CloudZeroIntegrationSettings, CloudZeroUpdateModal. The broader cost-tracking
+  section (CostTrackingSettings/*) is pending in a follow-up commit.
+- Tests updated for required-field label regex matching.
+
 ## 24. Guardrails Monitor (guardrails-monitor)
 
 - Cycles used: 1 / 7
