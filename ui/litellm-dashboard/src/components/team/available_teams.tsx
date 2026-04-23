@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from "react";
+// eslint-disable-next-line litellm-ui/no-banned-ui-imports
 import {
   Table,
   TableBody,
@@ -6,11 +7,10 @@ import {
   TableHead,
   TableHeaderCell,
   TableRow,
-  Card,
-  Button,
-  Text,
-  Badge,
 } from "@tremor/react";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
 import { availableTeamListCall, teamMemberAddCall } from "../networking";
 import NotificationsManager from "../molecules/notifications_manager";
 
@@ -19,7 +19,11 @@ interface AvailableTeam {
   team_alias: string;
   description?: string;
   models: string[];
-  members_with_roles: { user_id?: string; user_email?: string; role: string }[];
+  members_with_roles: {
+    user_id?: string;
+    user_email?: string;
+    role: string;
+  }[];
 }
 
 interface AvailableTeamsProps {
@@ -27,7 +31,10 @@ interface AvailableTeamsProps {
   userID: string | null;
 }
 
-const AvailableTeamsPanel: React.FC<AvailableTeamsProps> = ({ accessToken, userID }) => {
+const AvailableTeamsPanel: React.FC<AvailableTeamsProps> = ({
+  accessToken,
+  userID,
+}) => {
   const [availableTeams, setAvailableTeams] = useState<AvailableTeam[]>([]);
 
   useEffect(() => {
@@ -50,14 +57,15 @@ const AvailableTeamsPanel: React.FC<AvailableTeamsProps> = ({ accessToken, userI
     if (!accessToken || !userID) return;
 
     try {
-      const response = await teamMemberAddCall(accessToken, teamId, {
+      await teamMemberAddCall(accessToken, teamId, {
         user_id: userID,
         role: "user",
       });
 
       NotificationsManager.success("Successfully joined team");
-      // Update available teams list
-      setAvailableTeams((teams) => teams.filter((team) => team.team_id !== teamId));
+      setAvailableTeams((teams) =>
+        teams.filter((team) => team.team_id !== teamId),
+      );
     } catch (error) {
       console.error("Error joining team:", error);
       NotificationsManager.fromBackend("Failed to join team");
@@ -80,31 +88,38 @@ const AvailableTeamsPanel: React.FC<AvailableTeamsProps> = ({ accessToken, userI
           {availableTeams.map((team) => (
             <TableRow key={team.team_id}>
               <TableCell>
-                <Text>{team.team_alias}</Text>
+                <span>{team.team_alias}</span>
               </TableCell>
               <TableCell>
-                <Text>{team.description || "No description available"}</Text>
+                <span>{team.description || "No description available"}</span>
               </TableCell>
               <TableCell>
-                <Text>{team.members_with_roles.length} members</Text>
+                <span>{team.members_with_roles.length} members</span>
               </TableCell>
               <TableCell>
                 <div className="flex flex-col">
                   {!team.models || team.models.length === 0 ? (
-                    <Badge size="xs" color="red">
-                      <Text>All Proxy Models</Text>
+                    <Badge className="text-xs bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300">
+                      All Proxy Models
                     </Badge>
                   ) : (
                     team.models.map((model, index) => (
-                      <Badge key={index} size="xs" className="mb-1" color="blue">
-                        <Text>{model.length > 30 ? `${model.slice(0, 30)}...` : model}</Text>
+                      <Badge
+                        key={index}
+                        className="text-xs mb-1 bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300"
+                      >
+                        {model.length > 30 ? `${model.slice(0, 30)}...` : model}
                       </Badge>
                     ))
                   )}
                 </div>
               </TableCell>
               <TableCell>
-                <Button size="xs" variant="secondary" onClick={() => handleJoinTeam(team.team_id)}>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => handleJoinTeam(team.team_id)}
+                >
                   Join Team
                 </Button>
               </TableCell>
@@ -113,16 +128,18 @@ const AvailableTeamsPanel: React.FC<AvailableTeamsProps> = ({ accessToken, userI
           {availableTeams.length === 0 && (
             <TableRow>
               <TableCell colSpan={5} className="text-center">
-                <Text>No available teams to join. See how to set available teams{" "}
+                <span>
+                  No available teams to join. See how to set available teams{" "}
                   <a
                     href="https://docs.litellm.ai/docs/proxy/self_serve#all-settings-for-self-serve--sso-flow"
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="text-blue-500 hover:text-blue-700 underline"
+                    className="text-primary hover:text-primary/80 underline"
                   >
                     here
-                  </a>.
-                </Text>
+                  </a>
+                  .
+                </span>
               </TableCell>
             </TableRow>
           )}
