@@ -891,6 +891,61 @@ class TestOpenAIChatCompletionsHandlerStreamingOutput:
         assert result == responses_so_far
 
 
+class TestGetStructuredMessages:
+    """Test the get_structured_messages method."""
+
+    def test_should_return_messages_from_chat_completions_request(self):
+        """Test that messages are returned from a chat completions request."""
+        handler = OpenAIChatCompletionsHandler()
+        data = {
+            "messages": [
+                {"role": "system", "content": "You are helpful."},
+                {"role": "user", "content": "Hello"},
+            ]
+        }
+        result = handler.get_structured_messages(data)
+        assert result is not None
+        assert len(result) == 2
+        assert result[0]["role"] == "system"
+        assert result[1]["role"] == "user"
+
+    def test_should_return_none_when_no_messages(self):
+        """Test that None is returned when no messages key exists."""
+        handler = OpenAIChatCompletionsHandler()
+        data = {"model": "gpt-4"}
+        result = handler.get_structured_messages(data)
+        assert result is None
+
+    def test_should_return_none_for_none_messages(self):
+        """Test that None is returned when messages is explicitly None."""
+        handler = OpenAIChatCompletionsHandler()
+        data = {"messages": None}
+        result = handler.get_structured_messages(data)
+        assert result is None
+
+    def test_should_handle_multimodal_content(self):
+        """Test that messages with multimodal content are returned."""
+        handler = OpenAIChatCompletionsHandler()
+        data = {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "What's in this image?"},
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": "https://example.com/image.png"},
+                        },
+                    ],
+                }
+            ]
+        }
+        result = handler.get_structured_messages(data)
+        assert result is not None
+        assert len(result) == 1
+        assert isinstance(result[0]["content"], list)
+
+
 if __name__ == "__main__":
     # Run the tests
     pytest.main([__file__, "-v"])
