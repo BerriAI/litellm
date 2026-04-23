@@ -1,17 +1,17 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 
-// Use vi.hoisted so the mock object is available when vi.mock is hoisted
-const mockStaticMessage = vi.hoisted(() => ({
+// Sonner is a module-level singleton; mock it before importing the manager.
+const mockToast = vi.hoisted(() => ({
   success: vi.fn(),
   error: vi.fn(),
   warning: vi.fn(),
   info: vi.fn(),
   loading: vi.fn(),
-  destroy: vi.fn(),
+  dismiss: vi.fn(),
 }));
 
-vi.mock("antd", () => ({
-  message: mockStaticMessage,
+vi.mock("sonner", () => ({
+  toast: mockToast,
 }));
 
 import MessageManager, { setMessageInstance } from "./message_manager";
@@ -21,87 +21,43 @@ describe("MessageManager", () => {
     vi.clearAllMocks();
   });
 
-  describe("when no instance is set (falls back to static message)", () => {
-    it("delegates success to static message", () => {
+  describe("delegates to sonner", () => {
+    it("delegates success", () => {
       MessageManager.success("done!");
-      expect(mockStaticMessage.success).toHaveBeenCalledWith("done!", undefined);
+      expect(mockToast.success).toHaveBeenCalledWith("done!", { duration: undefined });
     });
 
-    it("delegates error to static message", () => {
+    it("delegates error with duration (converts seconds → ms)", () => {
       MessageManager.error("failed!", 5);
-      expect(mockStaticMessage.error).toHaveBeenCalledWith("failed!", 5);
+      expect(mockToast.error).toHaveBeenCalledWith("failed!", { duration: 5000 });
     });
 
-    it("delegates warning to static message", () => {
+    it("delegates warning", () => {
       MessageManager.warning("watch out");
-      expect(mockStaticMessage.warning).toHaveBeenCalledWith("watch out", undefined);
+      expect(mockToast.warning).toHaveBeenCalledWith("watch out", { duration: undefined });
     });
 
-    it("delegates info to static message", () => {
-      MessageManager.info("fyi");
-      expect(mockStaticMessage.info).toHaveBeenCalledWith("fyi", undefined);
+    it("delegates info with duration", () => {
+      MessageManager.info("fyi", 2);
+      expect(mockToast.info).toHaveBeenCalledWith("fyi", { duration: 2000 });
     });
 
-    it("delegates loading to static message", () => {
-      MessageManager.loading("loading...", 3);
-      expect(mockStaticMessage.loading).toHaveBeenCalledWith("loading...", 3);
+    it("delegates loading and returns the toast id", () => {
+      mockToast.loading.mockReturnValue("toast-id-42");
+      const result = MessageManager.loading("loading...", 3);
+      expect(mockToast.loading).toHaveBeenCalledWith("loading...", { duration: 3000 });
+      expect(result).toBe("toast-id-42");
     });
 
-    it("delegates destroy to static message", () => {
+    it("delegates destroy to toast.dismiss()", () => {
       MessageManager.destroy();
-      expect(mockStaticMessage.destroy).toHaveBeenCalled();
+      expect(mockToast.dismiss).toHaveBeenCalled();
     });
   });
 
-  describe("when a custom instance is set", () => {
-    const mockInstance = {
-      success: vi.fn(),
-      error: vi.fn(),
-      warning: vi.fn(),
-      info: vi.fn(),
-      loading: vi.fn(),
-      destroy: vi.fn(),
-      open: vi.fn(),
-    };
-
-    beforeEach(() => {
-      vi.clearAllMocks();
-      setMessageInstance(mockInstance as any);
-    });
-
-    it("delegates success to custom instance", () => {
-      MessageManager.success("done!");
-      expect(mockInstance.success).toHaveBeenCalledWith("done!", undefined);
-      expect(mockStaticMessage.success).not.toHaveBeenCalled();
-    });
-
-    it("delegates error with duration to custom instance", () => {
-      MessageManager.error("failed!", 5);
-      expect(mockInstance.error).toHaveBeenCalledWith("failed!", 5);
-      expect(mockStaticMessage.error).not.toHaveBeenCalled();
-    });
-
-    it("delegates warning to custom instance", () => {
-      MessageManager.warning("watch out");
-      expect(mockInstance.warning).toHaveBeenCalledWith("watch out", undefined);
-    });
-
-    it("delegates info to custom instance", () => {
-      MessageManager.info("fyi", 2);
-      expect(mockInstance.info).toHaveBeenCalledWith("fyi", 2);
-    });
-
-    it("delegates loading to custom instance and returns result", () => {
-      const mockReturn = { then: vi.fn() };
-      mockInstance.loading.mockReturnValue(mockReturn);
-      const result = MessageManager.loading("loading...", 3);
-      expect(mockInstance.loading).toHaveBeenCalledWith("loading...", 3);
-      expect(result).toBe(mockReturn);
-    });
-
-    it("delegates destroy to custom instance", () => {
-      MessageManager.destroy();
-      expect(mockInstance.destroy).toHaveBeenCalled();
+  describe("setMessageInstance is a no-op (back-compat shim)", () => {
+    it("does not throw when called", () => {
+      expect(() => setMessageInstance({} as unknown)).not.toThrow();
     });
   });
 });

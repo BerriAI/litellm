@@ -1,28 +1,17 @@
 "use client";
 
-import React, { useEffect, useRef } from "react";
-import { notification, message } from "antd";
-import { setNotificationInstance } from "@/components/molecules/notifications_manager";
-import { setMessageInstance } from "@/components/molecules/message_manager";
+import React from "react";
 
+/**
+ * Legacy wrapper kept for backwards-compatibility during the phase-1
+ * shadcn migration. Previously registered antd notification/message
+ * instances with the global managers. The managers now delegate to
+ * sonner (rendered globally via `<Toaster />` in the root layout), so
+ * this component is a passthrough.
+ *
+ * Will be deleted entirely in the "drop AntdGlobalProvider" cleanup
+ * task after antd has been uninstalled.
+ */
 export default function AntdGlobalProvider({ children }: { children: React.ReactNode }) {
-  const [notificationApi, notificationContextHolder] = notification.useNotification();
-  const [messageApi, messageContextHolder] = message.useMessage();
-  const initialized = useRef(false);
-
-  useEffect(() => {
-    if (!initialized.current) {
-      setNotificationInstance(notificationApi);
-      setMessageInstance(messageApi);
-      initialized.current = true;
-    }
-  }, [notificationApi, messageApi]);
-
-  return (
-    <>
-      {notificationContextHolder}
-      {messageContextHolder}
-      {children}
-    </>
-  );
+  return <>{children}</>;
 }

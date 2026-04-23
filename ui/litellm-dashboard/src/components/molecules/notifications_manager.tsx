@@ -1,17 +1,32 @@
 import React from "react";
-import { notification as staticNotification } from "antd";
-import type { NotificationInstance } from "antd/es/notification/interface";
+import { toast } from "sonner";
 import { parseErrorMessage } from "../shared/errorUtils";
-import { ArgsProps } from "antd/es/notification";
 
-let notificationInstance: NotificationInstance | null = null;
+/**
+ * Global notification manager — thin wrapper around sonner's `toast.*` API.
+ *
+ * Phase-1 shadcn migration: this file previously delegated to antd's
+ * `notification.*` API. It now delegates to sonner. The public shape of
+ * the module is preserved (same functions + `setNotificationInstance`)
+ * so existing call sites don't need to change; `setNotificationInstance`
+ * is now a no-op kept for backwards-compatibility.
+ */
 
-export const setNotificationInstance = (instance: NotificationInstance) => {
-  notificationInstance = instance;
+/**
+ * No-op retained for API compatibility with call sites that import
+ * `setNotificationInstance` from this module. Sonner is rendered globally via
+ * `<Toaster />` in the root layout; no per-tree registration is required.
+ */
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+export const setNotificationInstance = (_instance: unknown) => {
+  // no-op — sonner is singleton
 };
 
-// Helper to get the best available notification instance
-const getNotification = () => notificationInstance || staticNotification;
+/** Kept public for callers that used to spread it into an antd notification config. */
+export const COMMON_NOTIFICATION_PROPS = {
+  // sonner's equivalent toggles are `richColors` (global on <Toaster>) and
+  // `closeButton`; individual toasts don't need these fields.
+};
 
 type Placement = "top" | "topLeft" | "topRight" | "bottom" | "bottomLeft" | "bottomRight";
 
@@ -25,16 +40,12 @@ type NotificationConfig = {
 
 type NotificationConfigResolved = Omit<NotificationConfig, "message"> & { message: string | React.ReactNode };
 
-function defaultPlacement(): Placement {
-  return "topRight";
-}
-
 function normalize(input: string | NotificationConfig, fallbackTitle: string): NotificationConfigResolved {
   if (typeof input === "string") return { message: fallbackTitle, description: input };
   return { message: input.message ?? fallbackTitle, ...input };
 }
 
-function toIntMaybe(val: any): number | undefined {
+function toIntMaybe(val: unknown): number | undefined {
   if (typeof val === "number") return val;
   if (typeof val === "string" && /^\d+$/.test(val)) return parseInt(val, 10);
   return undefined;
@@ -114,7 +125,7 @@ const NOT_FOUND_MATCH = [
   "team not found",
   "organization not found",
   "mcp server with id",
-  "tool '", // will combine with “not found” in message
+  "tool '",
 ];
 
 const EXISTS_MATCH = ["already exists", "team member is already in team", "user already exists"];
@@ -151,10 +162,10 @@ function titleFor(status?: number, desc?: string): string {
 
   if (AUTH_MATCH.some((s) => d.includes(s))) return "Authentication Error";
   if (FORBIDDEN_MATCH.some((s) => d.includes(s))) return "Access Denied";
-  if (DB_MATCH?.some?.((s: string) => d.includes(s)) || status === 503) return "Service Unavailable";
-  if (BUDGET_MATCH?.some?.((s: string) => d.includes(s))) return "Budget Exceeded";
-  if (ENTERPRISE_MATCH?.some?.((s: string) => d.includes(s))) return "Feature Unavailable";
-  if (ROUTER_MATCH?.some?.((s: string) => d.includes(s))) return "Routing Error";
+  if (DB_MATCH.some((s) => d.includes(s)) || status === 503) return "Service Unavailable";
+  if (BUDGET_MATCH.some((s) => d.includes(s))) return "Budget Exceeded";
+  if (ENTERPRISE_MATCH.some((s) => d.includes(s))) return "Feature Unavailable";
+  if (ROUTER_MATCH.some((s) => d.includes(s))) return "Routing Error";
 
   if (EXISTS_MATCH.some((s) => d.includes(s))) return "Already Exists";
   if (GUARDRAIL_MATCH.some((s) => d.includes(s))) return "Content Blocked";
@@ -169,7 +180,7 @@ function titleFor(status?: number, desc?: string): string {
     d.includes("rate limit") ||
     d.includes("tpm") ||
     d.includes("rpm") ||
-    RATE_LIMIT_EXTRA?.some?.((s: string) => d.includes(s))
+    RATE_LIMIT_EXTRA.some((s) => d.includes(s))
   )
     return "Rate Limit Exceeded";
   if (status && status >= 500) return "Server Error";
@@ -224,99 +235,115 @@ function classifyGeneralMessage(desc?: string): { kind: "success" | "info" | "wa
   if (SUCCESS_MATCH.some((s) => d.includes(s))) return { kind: "success", title: "Success" };
   if (DEPRECATION_FEATURE_WARN_MATCH.some((s) => d.includes(s))) return { kind: "warning", title: "Feature Notice" };
   if (CONFIG_WARN_MATCH.some((s) => d.includes(s))) return { kind: "warning", title: "Configuration Warning" };
-  if (INFO_MATCH.some((s) => d.includes(s))) return { kind: "warning", title: "Rate Limit" }; // show as warning for visibility
+  if (INFO_MATCH.some((s) => d.includes(s))) return { kind: "warning", title: "Rate Limit" };
 
   return null;
 }
 
-function extractStatus(input: any): number | undefined {
-  return toIntMaybe(input?.response?.status) ?? toIntMaybe(input?.status_code) ?? toIntMaybe(input?.code);
+function extractStatus(input: unknown): number | undefined {
+  const obj = (input ?? {}) as Record<string, unknown>;
+  const response = obj?.response as Record<string, unknown> | undefined;
+  return toIntMaybe(response?.status) ?? toIntMaybe(obj?.status_code) ?? toIntMaybe(obj?.code);
 }
 
-function extractDescription(input: any): string {
-  if (typeof input === "string") return input; // raw error string
+function extractDescription(input: unknown): string {
+  if (typeof input === "string") return input;
+  const obj = (input ?? {}) as Record<string, unknown>;
+  const response = obj?.response as Record<string, unknown> | undefined;
+  const data = response?.data as Record<string, unknown> | undefined;
+  const dataError = data?.error as Record<string, unknown> | string | undefined;
   const backendMsg =
-    input?.response?.data?.error?.message ??
-    input?.response?.data?.message ??
-    input?.response?.data?.error ??
-    input?.detail ??
-    input?.message ??
+    (typeof dataError === "object" ? dataError?.message : dataError) ??
+    data?.message ??
+    obj?.detail ??
+    obj?.message ??
     input;
   return parseErrorMessage(backendMsg);
 }
 
-export const COMMON_NOTIFICATION_PROPS: Partial<ArgsProps> = {
-  showProgress: true,
-  pauseOnHover: true,
-};
-
-function looksErrorPayload(input: any, status?: number): boolean {
+function looksErrorPayload(input: unknown, status?: number): boolean {
   if (status !== undefined) return true;
   if (input instanceof Error) return true;
-  if (typeof input === "string") return true; // treat raw strings passed to fromBackend as errors
+  if (typeof input === "string") return true;
   if (input && typeof input === "object" && ("error" in input || "detail" in input)) return true;
   return false;
+}
+
+/** antd durations are seconds; sonner durations are milliseconds. */
+function toMs(d?: number): number | undefined {
+  if (d == null) return undefined;
+  return d * 1000;
+}
+
+/**
+ * Sonner accepts a `description` field on every level, so we bundle
+ * the (message, description) pair by using message as the main text and
+ * description as the subtitle — same visual shape as the old antd stack.
+ */
+function callToast(
+  level: "error" | "warning" | "info" | "success",
+  cfg: NotificationConfigResolved,
+  defaultDurationSec: number,
+) {
+  const title =
+    typeof cfg.message === "string" ? cfg.message : String(cfg.message ?? "");
+  const description =
+    typeof cfg.description === "string" || typeof cfg.description === "number"
+      ? String(cfg.description)
+      : cfg.description
+      ? (cfg.description as React.ReactNode)
+      : undefined;
+  const duration = toMs(cfg.duration ?? defaultDurationSec);
+  const opts: Parameters<typeof toast>[1] = { description, duration };
+  switch (level) {
+    case "error":
+      return toast.error(title, opts);
+    case "warning":
+      return toast.warning(title, opts);
+    case "info":
+      return toast.info(title, opts);
+    case "success":
+      return toast.success(title, opts);
+  }
 }
 
 const NotificationManager = {
   error(input: string | NotificationConfig) {
     const cfg = normalize(input, "Error");
-    getNotification().error({
-      ...COMMON_NOTIFICATION_PROPS,
-      ...cfg,
-      placement: cfg.placement ?? defaultPlacement(),
-      duration: cfg.duration ?? 6,
-    });
+    callToast("error", cfg, 6);
   },
 
   warning(input: string | NotificationConfig) {
     const cfg = normalize(input, "Warning");
-    getNotification().warning({
-      ...COMMON_NOTIFICATION_PROPS,
-      ...cfg,
-      placement: cfg.placement ?? defaultPlacement(),
-      duration: cfg.duration ?? 5,
-    });
+    callToast("warning", cfg, 5);
   },
 
   info(input: string | NotificationConfig) {
     const cfg = normalize(input, "Info");
-    getNotification().info({
-      ...COMMON_NOTIFICATION_PROPS,
-      ...cfg,
-      placement: cfg.placement ?? defaultPlacement(),
-      duration: cfg.duration ?? 4,
-    });
+    callToast("info", cfg, 4);
   },
 
   success(input: string | React.ReactNode | NotificationConfig) {
     if (React.isValidElement(input)) {
-      getNotification().success({
-        ...COMMON_NOTIFICATION_PROPS,
-        message: "Success",
-        description: input,
-        placement: defaultPlacement(),
-        duration: 3.5,
-      });
+      toast.success("Success", { description: input, duration: toMs(3.5) });
       return;
     }
     const cfg = normalize(input as string | NotificationConfig, "Success");
-    getNotification().success({
-      ...COMMON_NOTIFICATION_PROPS,
-      ...cfg,
-      placement: cfg.placement ?? defaultPlacement(),
-      duration: cfg.duration ?? 3.5,
-    });
+    callToast("success", cfg, 3.5);
   },
 
-  fromBackend(input: any, extra?: Omit<NotificationConfig, "message" | "description">) {
+  fromBackend(input: unknown, extra?: Omit<NotificationConfig, "message" | "description">) {
     const status = extractStatus(input);
     const description = extractDescription(input);
-    const base = { ...(extra ?? {}), description, placement: extra?.placement ?? defaultPlacement() };
+    const base: NotificationConfigResolved = {
+      ...(extra ?? {}),
+      message: "Info",
+      description,
+    };
 
     if (looksErrorPayload(input, status)) {
       const title = titleFor(status, description);
-      const payload = { ...base, message: title };
+      const payload: NotificationConfigResolved = { ...base, message: title };
 
       if (
         title === "Rate Limit Exceeded" ||
@@ -326,11 +353,11 @@ const NotificationManager = {
         title === "Content Blocked" ||
         title === "Integration Error"
       ) {
-        getNotification().warning({ ...COMMON_NOTIFICATION_PROPS, ...payload, duration: extra?.duration ?? 7 });
+        callToast("warning", payload, extra?.duration ?? 7);
         return;
       }
       if (title === "Server Error") {
-        getNotification().error({ ...COMMON_NOTIFICATION_PROPS, ...payload, duration: extra?.duration ?? 8 });
+        callToast("error", payload, extra?.duration ?? 8);
         return;
       }
       if (
@@ -341,30 +368,29 @@ const NotificationManager = {
         title === "Error" ||
         title === "Already Exists"
       ) {
-        getNotification().error({ ...COMMON_NOTIFICATION_PROPS, ...payload, duration: extra?.duration ?? 6 });
+        callToast("error", payload, extra?.duration ?? 6);
         return;
       }
-      getNotification().info({ ...COMMON_NOTIFICATION_PROPS, ...payload, duration: extra?.duration ?? 4 });
+      callToast("info", payload, extra?.duration ?? 4);
       return;
     }
 
-    // Non-error: success/info/warning classifier
     const cls = classifyGeneralMessage(description);
-    const payload = { ...base, message: cls?.title ?? "Info" };
+    const payload: NotificationConfigResolved = { ...base, message: cls?.title ?? "Info" };
 
     if (cls?.kind === "success") {
-      getNotification().success({ ...COMMON_NOTIFICATION_PROPS, ...payload, duration: extra?.duration ?? 3.5 });
+      callToast("success", payload, extra?.duration ?? 3.5);
       return;
     }
     if (cls?.kind === "warning") {
-      getNotification().warning({ ...COMMON_NOTIFICATION_PROPS, ...payload, duration: extra?.duration ?? 6 });
+      callToast("warning", payload, extra?.duration ?? 6);
       return;
     }
-    getNotification().info({ ...COMMON_NOTIFICATION_PROPS, ...payload, duration: extra?.duration ?? 4 });
+    callToast("info", payload, extra?.duration ?? 4);
   },
 
   clear() {
-    getNotification().destroy();
+    toast.dismiss();
   },
 };
 

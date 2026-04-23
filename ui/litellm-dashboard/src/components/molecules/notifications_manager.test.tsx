@@ -1,33 +1,35 @@
-import { notification } from "antd";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import NotificationManager, { COMMON_NOTIFICATION_PROPS } from "./notifications_manager";
 
-vi.mock("@/components/molecules/notifications_manager", async () => {
-  const actual = await vi.importActual<typeof import("@/components/molecules/notifications_manager")>(
-    "@/components/molecules/notifications_manager",
-  );
+// The global `setupTests.ts` mocks `@/components/molecules/notifications_manager`
+// as a safety rail for component tests. Unmock it here so we can exercise the
+// real manager against sonner.
+vi.unmock("@/components/molecules/notifications_manager");
+vi.unmock("./notifications_manager");
 
-  return actual;
-});
-
-// Mock the antd notification module
-vi.mock("antd", () => ({
-  notification: {
-    error: vi.fn(),
-    warning: vi.fn(),
-    info: vi.fn(),
-    success: vi.fn(),
-    destroy: vi.fn(),
-  },
+// Sonner is a module-level singleton; mock it before importing the manager.
+const mockToast = vi.hoisted(() => ({
+  success: vi.fn(),
+  error: vi.fn(),
+  warning: vi.fn(),
+  info: vi.fn(),
+  loading: vi.fn(),
+  dismiss: vi.fn(),
 }));
 
-describe("NotificationManager", () => {
+vi.mock("sonner", () => ({
+  toast: mockToast,
+}));
+
+// Dynamic import AFTER vi.unmock so the global mock doesn't take effect.
+const { default: NotificationManager } = await import("./notifications_manager");
+
+describe("NotificationManager (sonner-backed)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
   describe("Already Exists case", () => {
-    it("should show error notification for 'already exists' message", () => {
+    it("should show error toast for 'already exists' backend message", () => {
       const error = {
         message: "Key with alias 'test10' already exists.",
         type: "bad_request_error",
@@ -36,35 +38,36 @@ describe("NotificationManager", () => {
 
       NotificationManager.fromBackend(error);
 
-      expect(notification.error).toHaveBeenCalledWith(
+      expect(mockToast.error).toHaveBeenCalledWith(
+        "Already Exists",
         expect.objectContaining({
-          message: "Already Exists",
           description: "Key with alias 'test10' already exists.",
-          duration: 6,
-          placement: "topRight",
+          duration: 6000,
         }),
       );
     });
   });
 
-  describe("COMMON_NOTIFICATION_PROPS", () => {
-    const notificationTypes = [
-      { type: "error", method: NotificationManager.error, mockFn: notification.error },
-      { type: "warning", method: NotificationManager.warning, mockFn: notification.warning },
-      { type: "info", method: NotificationManager.info, mockFn: notification.info },
-      { type: "success", method: NotificationManager.success, mockFn: notification.success },
+  describe("direct call routing", () => {
+    const cases = [
+      { label: "error", call: () => NotificationManager.error("Test error"), mockFn: mockToast.error },
+      { label: "warning", call: () => NotificationManager.warning("Test warning"), mockFn: mockToast.warning },
+      { label: "info", call: () => NotificationManager.info("Test info"), mockFn: mockToast.info },
+      { label: "success", call: () => NotificationManager.success("Test success"), mockFn: mockToast.success },
     ];
 
-    notificationTypes.forEach(({ type, method, mockFn }) => {
-      it(`should pass COMMON_NOTIFICATION_PROPS to ${type} notifications`, () => {
-        method(`Test ${type}`);
-
-        expect(mockFn).toHaveBeenCalledWith(
-          expect.objectContaining({
-            ...COMMON_NOTIFICATION_PROPS,
-          }),
-        );
+    cases.forEach(({ label, call, mockFn }) => {
+      it(`should route ${label} to toast.${label}`, () => {
+        call();
+        expect(mockFn).toHaveBeenCalled();
       });
+    });
+  });
+
+  describe("clear()", () => {
+    it("dismisses all toasts", () => {
+      NotificationManager.clear();
+      expect(mockToast.dismiss).toHaveBeenCalled();
     });
   });
 });

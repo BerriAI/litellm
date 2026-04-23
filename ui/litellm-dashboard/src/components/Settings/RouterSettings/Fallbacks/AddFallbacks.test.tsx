@@ -8,15 +8,22 @@ vi.mock("../../../playground/llm_calls/fetch_models", () => ({
   fetchAvailableModels: vi.fn(),
 }));
 
-vi.mock("antd", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("antd")>();
-  return {
-    ...actual,
-    message: {
-      error: vi.fn(),
-    },
-  };
-});
+// MessageManager is the project's global message wrapper (delegates to sonner
+// post phase-1 migration). Mock it as a first-class object so assertions don't
+// care which underlying toast library is in use.
+const mockMessageManager = vi.hoisted(() => ({
+  success: vi.fn(),
+  error: vi.fn(),
+  warning: vi.fn(),
+  info: vi.fn(),
+  loading: vi.fn(),
+  destroy: vi.fn(),
+}));
+
+vi.mock("@/components/molecules/message_manager", () => ({
+  default: mockMessageManager,
+  setMessageInstance: vi.fn(),
+}));
 
 vi.mock("./FallbackSelectionForm", () => ({
   FallbackSelectionForm: ({ groups, onGroupsChange }: any) => {
@@ -122,7 +129,6 @@ describe("AddFallbacks", () => {
 
   it("should show error when saving incomplete groups", async () => {
     const user = userEvent.setup();
-    const antd = await import("antd");
     render(<AddFallbacks {...defaultProps} />);
 
     const addButton = screen.getByRole("button", { name: /add fallbacks/i });
@@ -141,13 +147,12 @@ describe("AddFallbacks", () => {
     await user.click(saveButton);
 
     await waitFor(() => {
-      expect(antd.message.error).toHaveBeenCalled();
+      expect(mockMessageManager.error).toHaveBeenCalled();
     });
   });
 
   it("should show error message when saving incomplete groups", async () => {
     const user = userEvent.setup();
-    const antd = await import("antd");
     render(<AddFallbacks {...defaultProps} />);
 
     const addButton = screen.getByRole("button", { name: /add fallbacks/i });
@@ -161,7 +166,7 @@ describe("AddFallbacks", () => {
     await user.click(saveButton);
 
     await waitFor(() => {
-      expect(antd.message.error).toHaveBeenCalled();
+      expect(mockMessageManager.error).toHaveBeenCalled();
     });
   });
 

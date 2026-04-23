@@ -4,6 +4,7 @@ import "./globals.css";
 
 import AntdGlobalProvider from "@/contexts/AntdGlobalProvider";
 import ReactQueryProvider from "@/contexts/ReactQueryProvider";
+import { Toaster } from "@/components/ui/sonner";
 
 const inter = Inter({ subsets: ["latin"] });
 
@@ -24,6 +25,7 @@ export default function RootLayout({
         <ReactQueryProvider>
           <AntdGlobalProvider>{children}</AntdGlobalProvider>
         </ReactQueryProvider>
+        <Toaster richColors position="top-right" />
       </body>
     </html>
   );
