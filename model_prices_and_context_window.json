@@ -1145,6 +1145,7 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_xhigh_reasoning_effort": true,
+        "supports_max_reasoning_effort": true,
         "tool_use_system_prompt_tokens": 346,
         "supports_native_structured_output": true
     },
@@ -1187,6 +1188,7 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_xhigh_reasoning_effort": true,
+        "supports_max_reasoning_effort": true,
         "tool_use_system_prompt_tokens": 346,
         "supports_native_structured_output": true
     },
@@ -1215,6 +1217,7 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_xhigh_reasoning_effort": true,
+        "supports_max_reasoning_effort": true,
         "tool_use_system_prompt_tokens": 346,
         "supports_native_structured_output": true
     },
@@ -1243,6 +1246,7 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_xhigh_reasoning_effort": true,
+        "supports_max_reasoning_effort": true,
         "tool_use_system_prompt_tokens": 346,
         "supports_native_structured_output": true
     },
@@ -1271,6 +1275,7 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_xhigh_reasoning_effort": true,
+        "supports_max_reasoning_effort": true,
         "tool_use_system_prompt_tokens": 346,
         "supports_native_structured_output": true
     },
@@ -1299,7 +1304,8 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "tool_use_system_prompt_tokens": 346,
-        "supports_native_structured_output": true
+        "supports_native_structured_output": true,
+        "supports_max_reasoning_effort": true
     },
     "global.anthropic.claude-sonnet-4-6": {
         "cache_creation_input_token_cost": 3.75e-06,
@@ -1326,7 +1332,8 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "tool_use_system_prompt_tokens": 346,
-        "supports_native_structured_output": true
+        "supports_native_structured_output": true,
+        "supports_max_reasoning_effort": true
     },
     "us.anthropic.claude-sonnet-4-6": {
         "cache_creation_input_token_cost": 4.125e-06,
@@ -1353,7 +1360,8 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "tool_use_system_prompt_tokens": 346,
-        "supports_native_structured_output": true
+        "supports_native_structured_output": true,
+        "supports_max_reasoning_effort": true
     },
     "eu.anthropic.claude-sonnet-4-6": {
         "cache_creation_input_token_cost": 4.125e-06,
@@ -1380,7 +1388,8 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "tool_use_system_prompt_tokens": 346,
-        "supports_native_structured_output": true
+        "supports_native_structured_output": true,
+        "supports_max_reasoning_effort": true
     },
     "au.anthropic.claude-sonnet-4-6": {
         "cache_creation_input_token_cost": 4.125e-06,
@@ -1407,7 +1416,8 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "tool_use_system_prompt_tokens": 346,
-        "supports_native_structured_output": true
+        "supports_native_structured_output": true,
+        "supports_max_reasoning_effort": true
     },
     "anthropic.claude-sonnet-4-20250514-v1:0": {
         "cache_creation_input_token_cost": 3.75e-06,
@@ -1953,6 +1963,7 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_xhigh_reasoning_effort": true,
+        "supports_max_reasoning_effort": true,
         "tool_use_system_prompt_tokens": 159
     },
     "azure_ai/claude-opus-4-1": {
@@ -2017,7 +2028,8 @@
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true,
-        "tool_use_system_prompt_tokens": 346
+        "tool_use_system_prompt_tokens": 346,
+        "supports_max_reasoning_effort": true
     },
     "azure/computer-use-preview": {
         "input_cost_per_token": 3e-06,
@@ -8923,7 +8935,8 @@
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true,
-        "tool_use_system_prompt_tokens": 346
+        "tool_use_system_prompt_tokens": 346,
+        "supports_max_reasoning_effort": true
     },
     "claude-sonnet-4-5-20250929-v1:0": {
         "cache_creation_input_token_cost": 3.75e-06,
@@ -9177,6 +9190,7 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_xhigh_reasoning_effort": true,
+        "supports_max_reasoning_effort": true,
         "tool_use_system_prompt_tokens": 346,
         "provider_specific_entry": {
             "us": 1.1,
@@ -9209,6 +9223,7 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_xhigh_reasoning_effort": true,
+        "supports_max_reasoning_effort": true,
         "tool_use_system_prompt_tokens": 346,
         "provider_specific_entry": {
             "us": 1.1,
@@ -31451,6 +31466,7 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_xhigh_reasoning_effort": true,
+        "supports_max_reasoning_effort": true,
         "tool_use_system_prompt_tokens": 346
     },
     "vertex_ai/claude-opus-4-7@default": {
@@ -31478,6 +31494,7 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_xhigh_reasoning_effort": true,
+        "supports_max_reasoning_effort": true,
         "tool_use_system_prompt_tokens": 346
     },
     "vertex_ai/claude-sonnet-4-5": {
@@ -31530,7 +31547,8 @@
             "search_context_size_high": 0.01,
             "search_context_size_low": 0.01,
             "search_context_size_medium": 0.01
-        }
+        },
+            "supports_max_reasoning_effort": true
     },
     "vertex_ai/claude-sonnet-4-5@20250929": {
         "cache_creation_input_token_cost": 3.75e-06,
@@ -38424,7 +38442,8 @@
             "search_context_size_high": 0.01,
             "search_context_size_low": 0.01,
             "search_context_size_medium": 0.01
-        }
+        },
+            "supports_max_reasoning_effort": true
     },
     "duckduckgo/search": {
         "litellm_provider": "duckduckgo",

@@ -1653,9 +1653,7 @@ def test_max_effort_rejected_for_opus_45():
 
     messages = [{"role": "user", "content": "Test"}]
 
-    with pytest.raises(
-        ValueError, match="effort='max' is only supported by Claude Opus 4.6"
-    ):
+    with pytest.raises(ValueError, match="effort='max' is not supported by this model"):
         optional_params = {"output_config": {"effort": "max"}}
         config.transform_request(
             model="claude-opus-4-5-20251101",
@@ -2212,30 +2210,70 @@ def test_reasoning_effort_does_not_set_output_config_for_older_models():
         ), f"output_config should not be set for {model}"
 
 
-def test_max_effort_rejected_for_sonnet_46():
-    """Test that effort='max' is rejected for Sonnet 4.6 (only Opus 4.6 supports max)."""
-    config = AnthropicConfig()
-    messages = [{"role": "user", "content": "Test"}]
+def test_max_effort_accepted_for_sonnet_46():
+    """Per Anthropic's effort docs, ``max`` is supported by Sonnet 4.6.
 
-    with pytest.raises(
-        ValueError, match="effort='max' is only supported by Claude Opus 4.6"
-    ):
-        config.transform_request(
-            model="claude-sonnet-4-6-20260219",
-            messages=messages,
-            optional_params={"output_config": {"effort": "max"}},
-            litellm_params={},
-            headers={},
-        )
+    Source: https://platform.claude.com/docs/en/build-with-claude/effort
+        > The ``max`` effort level is available on Claude Mythos Preview,
+        > Claude Opus 4.7, Claude Opus 4.6, and Claude Sonnet 4.6.
+    """
+    import litellm
 
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
 
-def test_max_effort_accepted_for_opus_46():
-    """Test that effort='max' works for Opus 4.6."""
     config = AnthropicConfig()
     messages = [{"role": "user", "content": "Test"}]
 
     result = config.transform_request(
-        model="claude-opus-4-6-20250514",
+        model="claude-sonnet-4-6",
+        messages=messages,
+        optional_params={"output_config": {"effort": "max"}},
+        litellm_params={},
+        headers={},
+    )
+
+    assert result["output_config"]["effort"] == "max"
+
+
+def test_max_effort_accepted_for_opus_46():
+    """Test that effort='max' works for Opus 4.6."""
+    import litellm
+
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    config = AnthropicConfig()
+    messages = [{"role": "user", "content": "Test"}]
+
+    result = config.transform_request(
+        model="claude-opus-4-6-20260205",
+        messages=messages,
+        optional_params={"output_config": {"effort": "max"}},
+        litellm_params={},
+        headers={},
+    )
+
+    assert result["output_config"]["effort"] == "max"
+
+
+def test_max_effort_accepted_for_opus_47():
+    """Regression for #25957 - effort='max' must work for Opus 4.7.
+
+    Anthropic's Messages API accepts ``output_config.effort='max'`` on
+    ``claude-opus-4-7-*`` models. The previous hardcoded ``_is_opus_4_6_model``
+    guard rejected the request before it ever reached Anthropic.
+    """
+    import litellm
+
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    config = AnthropicConfig()
+    messages = [{"role": "user", "content": "Test"}]
+
+    result = config.transform_request(
+        model="claude-opus-4-7-20260416",
         messages=messages,
         optional_params={"output_config": {"effort": "max"}},
         litellm_params={},
