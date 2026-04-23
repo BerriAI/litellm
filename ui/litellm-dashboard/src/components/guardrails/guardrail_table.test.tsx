@@ -47,10 +47,7 @@ describe("GuardrailTable", () => {
 
     const deleteGuardrailButton = getByTestId("config-delete-icon");
     expect(deleteGuardrailButton).toBeInTheDocument();
-    expect(deleteGuardrailButton).toHaveClass("cursor-not-allowed text-gray-400");
-    expect(deleteGuardrailButton).toHaveAttribute(
-      "title",
-      "Config guardrail cannot be deleted on the dashboard. Please delete it from the config file.",
-    );
+    expect(deleteGuardrailButton).toHaveClass("cursor-not-allowed");
+    expect(deleteGuardrailButton).toBeDisabled();
   });
 });

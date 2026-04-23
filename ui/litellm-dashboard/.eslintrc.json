@@ -58,6 +58,7 @@
         "src/components/policies/attachment_table.tsx",
         "src/components/claude_code_plugins/plugin_table.tsx",
         "src/components/policies/policy_table.tsx",
+        "src/components/guardrails/guardrail_table.tsx",
         "src/components/permissions/VectorStorePermissions.tsx",
         "src/components/permissions/AgentPermissions.tsx",
         "src/components/permissions/MCPServerPermissions.tsx",
