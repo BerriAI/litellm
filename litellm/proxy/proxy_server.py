@@ -2009,9 +2009,7 @@ async def _init_and_increment_spend_counter(
                 key=counter_key, value=base_spend
             )
 
-    await spend_counter_cache.async_increment_cache(
-        key=counter_key, value=increment
-    )
+    await spend_counter_cache.async_increment_cache(key=counter_key, value=increment)
 
 
 async def update_cache(  # noqa: PLR0915
