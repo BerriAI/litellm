@@ -1,8 +1,22 @@
 import React from "react";
-import { Typography, Select, Modal, Space, Button } from "antd";
-
-const { Text } = Typography;
-const { Option } = Select;
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Button } from "@/components/ui/button";
+import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectLabel,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 
 interface PrebuiltPattern {
   name: string;
@@ -35,77 +49,75 @@ const PatternModal: React.FC<PatternModalProps> = ({
   onCancel,
 }) => {
   return (
-    <Modal
-      title="Add prebuilt pattern"
+    <Dialog
       open={visible}
-      onCancel={onCancel}
-      footer={null}
-      width={800}
+      onOpenChange={(o) => (!o ? onCancel() : undefined)}
     >
-      <Space direction="vertical" style={{ width: "100%" }} size="large">
-        <div>
-          <Text strong>Pattern type</Text>
-          <Select
-            placeholder="Choose pattern type"
-            value={selectedPatternName}
-            onChange={onPatternNameChange}
-            style={{ width: "100%", marginTop: 8 }}
-            showSearch
-            filterOption={(input, option) => {
-              const pattern = prebuiltPatterns.find((p) => p.name === option?.value);
-              if (pattern) {
-                return (
-                  pattern.display_name.toLowerCase().includes(input.toLowerCase()) ||
-                  pattern.name.toLowerCase().includes(input.toLowerCase())
-                );
-              }
-              return false;
-            }}
-          >
-            {categories.map((category) => {
-              const categoryPatterns = prebuiltPatterns.filter((p) => p.category === category);
-              if (categoryPatterns.length === 0) return null;
-              
-              return (
-                <Select.OptGroup key={category} label={category}>
-                  {categoryPatterns.map((pattern) => (
-                    <Option key={pattern.name} value={pattern.name}>
-                      {pattern.display_name}
-                    </Option>
-                  ))}
-                </Select.OptGroup>
-              );
-            })}
-          </Select>
-        </div>
+      <DialogContent className="max-w-[800px]">
+        <DialogHeader>
+          <DialogTitle>Add prebuilt pattern</DialogTitle>
+        </DialogHeader>
+        <div className="flex flex-col gap-6">
+          <div>
+            <Label className="font-bold">Pattern type</Label>
+            <Select
+              value={selectedPatternName}
+              onValueChange={onPatternNameChange}
+            >
+              <SelectTrigger className="w-full mt-2">
+                <SelectValue placeholder="Choose pattern type" />
+              </SelectTrigger>
+              <SelectContent>
+                {categories.map((category) => {
+                  const categoryPatterns = prebuiltPatterns.filter(
+                    (p) => p.category === category,
+                  );
+                  if (categoryPatterns.length === 0) return null;
 
-        <div>
-          <Text strong>Action</Text>
-          <Text type="secondary" style={{ display: "block", marginTop: 4, marginBottom: 8 }}>
-            Choose what action the guardrail should take when this pattern is detected
-          </Text>
-          <Select
-            value={patternAction}
-            onChange={onActionChange}
-            style={{ width: "100%" }}
-          >
-            <Option value="BLOCK">Block</Option>
-            <Option value="MASK">Mask</Option>
-          </Select>
-        </div>
-      </Space>
+                  return (
+                    <SelectGroup key={category}>
+                      <SelectLabel>{category}</SelectLabel>
+                      {categoryPatterns.map((pattern) => (
+                        <SelectItem key={pattern.name} value={pattern.name}>
+                          {pattern.display_name}
+                        </SelectItem>
+                      ))}
+                    </SelectGroup>
+                  );
+                })}
+              </SelectContent>
+            </Select>
+          </div>
 
-      <div style={{ display: "flex", justifyContent: "flex-end", gap: "8px", marginTop: "24px" }}>
-        <Button onClick={onCancel}>
-          Cancel
-        </Button>
-        <Button type="primary" onClick={onAdd}>
-          Add
-        </Button>
-      </div>
-    </Modal>
+          <div>
+            <Label className="font-bold">Action</Label>
+            <p className="text-sm text-muted-foreground mt-1 mb-2">
+              Choose what action the guardrail should take when this pattern is
+              detected
+            </p>
+            <Select
+              value={patternAction}
+              onValueChange={(v) => onActionChange(v as "BLOCK" | "MASK")}
+            >
+              <SelectTrigger className="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="BLOCK">Block</SelectItem>
+                <SelectItem value="MASK">Mask</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onCancel}>
+            Cancel
+          </Button>
+          <Button onClick={onAdd}>Add</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 };
 
 export default PatternModal;
-

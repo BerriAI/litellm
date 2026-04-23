@@ -1,5 +1,6 @@
 import React from "react";
-import { Card, Text, Badge } from "@tremor/react";
+import { Badge } from "@/components/ui/badge";
+import { Card } from "@/components/ui/card";
 import PatternTable from "./PatternTable";
 import KeywordTable from "./KeywordTable";
 import CategoryTable from "./CategoryTable";
@@ -35,10 +36,14 @@ interface ContentFilterDisplayProps {
   readOnly?: boolean;
   onPatternActionChange?: (id: string, action: "BLOCK" | "MASK") => void;
   onPatternRemove?: (id: string) => void;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   onBlockedWordUpdate?: (id: string, field: string, value: any) => void;
   onBlockedWordRemove?: (id: string) => void;
   onCategoryActionChange?: (id: string, action: "BLOCK" | "MASK") => void;
-  onCategorySeverityChange?: (id: string, severity: "high" | "medium" | "low") => void;
+  onCategorySeverityChange?: (
+    id: string,
+    severity: "high" | "medium" | "low",
+  ) => void;
   onCategoryRemove?: (id: string) => void;
 }
 
@@ -55,20 +60,25 @@ const ContentFilterDisplay: React.FC<ContentFilterDisplayProps> = ({
   onCategorySeverityChange,
   onCategoryRemove,
 }) => {
-  if (patterns.length === 0 && blockedWords.length === 0 && categories.length === 0) {
+  if (
+    patterns.length === 0 &&
+    blockedWords.length === 0 &&
+    categories.length === 0
+  ) {
     return null;
   }
 
-  // No-op handlers for read-only mode
   const noOp = () => {};
 
   return (
     <>
       {categories.length > 0 && (
-        <Card className="mt-6">
+        <Card className="mt-6 p-6">
           <div className="flex justify-between items-center mb-4">
-            <Text className="text-lg font-semibold">Content Categories</Text>
-            <Badge color="blue">{categories.length} categories configured</Badge>
+            <span className="text-lg font-semibold">Content Categories</span>
+            <Badge className="bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300">
+              {categories.length} categories configured
+            </Badge>
           </div>
           <CategoryTable
             categories={categories}
@@ -81,29 +91,33 @@ const ContentFilterDisplay: React.FC<ContentFilterDisplayProps> = ({
       )}
 
       {patterns.length > 0 && (
-        <Card className="mt-6">
+        <Card className="mt-6 p-6">
           <div className="flex justify-between items-center mb-4">
-            <Text className="text-lg font-semibold">Pattern Detection</Text>
-            <Badge color="blue">{patterns.length} patterns configured</Badge>
+            <span className="text-lg font-semibold">Pattern Detection</span>
+            <Badge className="bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300">
+              {patterns.length} patterns configured
+            </Badge>
           </div>
           <PatternTable
             patterns={patterns}
-            onActionChange={readOnly ? noOp : (onPatternActionChange || noOp)}
-            onRemove={readOnly ? noOp : (onPatternRemove || noOp)}
+            onActionChange={readOnly ? noOp : onPatternActionChange || noOp}
+            onRemove={readOnly ? noOp : onPatternRemove || noOp}
           />
         </Card>
       )}
 
       {blockedWords.length > 0 && (
-        <Card className="mt-6">
+        <Card className="mt-6 p-6">
           <div className="flex justify-between items-center mb-4">
-            <Text className="text-lg font-semibold">Blocked Keywords</Text>
-            <Badge color="blue">{blockedWords.length} keywords configured</Badge>
+            <span className="text-lg font-semibold">Blocked Keywords</span>
+            <Badge className="bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300">
+              {blockedWords.length} keywords configured
+            </Badge>
           </div>
           <KeywordTable
             keywords={blockedWords}
-            onActionChange={readOnly ? noOp : (onBlockedWordUpdate || noOp)}
-            onRemove={readOnly ? noOp : (onBlockedWordRemove || noOp)}
+            onActionChange={readOnly ? noOp : onBlockedWordUpdate || noOp}
+            onRemove={readOnly ? noOp : onBlockedWordRemove || noOp}
           />
         </Card>
       )}
@@ -112,4 +126,3 @@ const ContentFilterDisplay: React.FC<ContentFilterDisplayProps> = ({
 };
 
 export default ContentFilterDisplay;
-

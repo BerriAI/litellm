@@ -56,6 +56,8 @@
         "src/components/permissions/MCPServerPermissions.tsx",
         "src/components/survey/ClaudeCodeModal.tsx",
         "src/components/view_logs/ToolsSection/ToolItem.tsx",
+        "src/components/guardrails/content_filter/PatternTable.tsx",
+        "src/components/guardrails/content_filter/ContentFilterDisplay.tsx",
         "src/components/policies/impact_preview_alert.tsx",
         "src/components/policies/impact_popover.tsx",
         "src/components/DeletedKeysPage/DeletedKeysPage.tsx",

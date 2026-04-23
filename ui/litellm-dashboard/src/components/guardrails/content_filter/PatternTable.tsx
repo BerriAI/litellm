@@ -1,9 +1,22 @@
+import { Trash2 } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import React from "react";
-import { Typography, Select, Table, Tag, Button } from "antd";
-import { DeleteOutlined } from "@ant-design/icons";
-
-const { Text } = Typography;
-const { Option } = Select;
 
 interface Pattern {
   id: string;
@@ -25,83 +38,83 @@ const PatternTable: React.FC<PatternTableProps> = ({
   onActionChange,
   onRemove,
 }) => {
-  const columns = [
-    {
-      title: "Type",
-      dataIndex: "type",
-      key: "type",
-      width: 100,
-      render: (type: string) => (
-        <Tag color={type === "prebuilt" ? "blue" : "green"}>
-          {type === "prebuilt" ? "Prebuilt" : "Custom"}
-        </Tag>
-      ),
-    },
-    {
-      title: "Pattern name",
-      dataIndex: "name",
-      key: "name",
-      render: (_: string, record: Pattern) => record.display_name || record.name,
-    },
-    {
-      title: "Regex pattern",
-      dataIndex: "pattern",
-      key: "pattern",
-      render: (pattern: string) => (pattern ? <Text code style={{ fontSize: 12 }}>{pattern.substring(0, 40)}...</Text> : "-"),
-    },
-    {
-      title: "Action",
-      dataIndex: "action",
-      key: "action",
-      width: 150,
-      render: (action: string, record: Pattern) => (
-        <Select
-          value={action}
-          onChange={(value) => onActionChange(record.id, value as "BLOCK" | "MASK")}
-          style={{ width: 120 }}
-          size="small"
-        >
-          <Option value="BLOCK">Block</Option>
-          <Option value="MASK">Mask</Option>
-        </Select>
-      ),
-    },
-    {
-      title: "",
-      key: "actions",
-      width: 100,
-      render: (_: any, record: Pattern) => (
-        <Button
-          type="text"
-          danger
-          size="small"
-          icon={<DeleteOutlined />}
-          onClick={() => onRemove(record.id)}
-        >
-          Delete
-        </Button>
-      ),
-    },
-  ];
-
   if (patterns.length === 0) {
     return (
-      <div style={{ textAlign: "center", padding: "40px 0", color: "#999" }}>
+      <div className="text-center py-10 text-muted-foreground">
         No patterns added.
       </div>
     );
   }
 
   return (
-    <Table
-      dataSource={patterns}
-      columns={columns}
-      rowKey="id"
-      pagination={false}
-      size="small"
-    />
+    <div className="border border-border rounded-md overflow-hidden">
+      <Table>
+        <TableHeader>
+          <TableRow>
+            <TableHead className="w-[100px]">Type</TableHead>
+            <TableHead>Pattern name</TableHead>
+            <TableHead>Regex pattern</TableHead>
+            <TableHead className="w-[150px]">Action</TableHead>
+            <TableHead className="w-[100px]" />
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {patterns.map((record) => (
+            <TableRow key={record.id}>
+              <TableCell>
+                <Badge
+                  className={
+                    record.type === "prebuilt"
+                      ? "bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300"
+                      : "bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300"
+                  }
+                >
+                  {record.type === "prebuilt" ? "Prebuilt" : "Custom"}
+                </Badge>
+              </TableCell>
+              <TableCell>{record.display_name || record.name}</TableCell>
+              <TableCell>
+                {record.pattern ? (
+                  <code className="text-xs bg-muted px-1 py-0.5 rounded">
+                    {record.pattern.substring(0, 40)}...
+                  </code>
+                ) : (
+                  "-"
+                )}
+              </TableCell>
+              <TableCell>
+                <Select
+                  value={record.action}
+                  onValueChange={(v) =>
+                    onActionChange(record.id, v as "BLOCK" | "MASK")
+                  }
+                >
+                  <SelectTrigger className="w-[120px] h-8">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="BLOCK">Block</SelectItem>
+                    <SelectItem value="MASK">Mask</SelectItem>
+                  </SelectContent>
+                </Select>
+              </TableCell>
+              <TableCell>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="text-destructive hover:text-destructive hover:bg-destructive/10"
+                  onClick={() => onRemove(record.id)}
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                  Delete
+                </Button>
+              </TableCell>
+            </TableRow>
+          ))}
+        </TableBody>
+      </Table>
+    </div>
   );
 };
 
 export default PatternTable;
-
