@@ -180,6 +180,7 @@ async def persist_credential_to_db(item: CredentialItem) -> None:
     # would bind the stale None reference rather than the live client.
     from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
     from litellm.proxy.proxy_server import prisma_client
+    from litellm.proxy.utils import jsonify_object
 
     if prisma_client is None:
         verbose_logger.debug(
@@ -195,19 +196,24 @@ async def persist_credential_to_db(item: CredentialItem) -> None:
         "type": CREDENTIAL_TYPE,
         "custom_llm_provider": "github_copilot",
     }
+    # Prisma's Json columns want JSON-serialized strings, not raw dicts.
+    jsonified = jsonify_object(
+        {
+            "credential_values": encrypted_values,
+            "credential_info": credential_info,
+        }
+    )
     await prisma_client.db.litellm_credentialstable.upsert(
         where={"credential_name": item.credential_name},
         data={
             "create": {
                 "credential_name": item.credential_name,
-                "credential_values": encrypted_values,
-                "credential_info": credential_info,
+                **jsonified,
                 "created_by": "copilot_oauth_flow",
                 "updated_by": "copilot_oauth_flow",
             },
             "update": {
-                "credential_values": encrypted_values,
-                "credential_info": credential_info,
+                **jsonified,
                 "updated_by": "copilot_oauth_flow",
             },
         },

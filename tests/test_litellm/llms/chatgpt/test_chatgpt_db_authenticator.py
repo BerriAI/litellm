@@ -1,3 +1,4 @@
+import json
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -178,11 +179,12 @@ class TestPersistCredentialToDb:
         assert kwargs["where"] == {"credential_name": "test"}
         create = kwargs["data"]["create"]
         assert create["credential_name"] == "test"
-        assert create["credential_values"] == {
+        # Prisma Json columns receive pre-serialized JSON strings.
+        assert json.loads(create["credential_values"]) == {
             "access_token": "enc(a)",
             "refresh_token": "enc(r)",
         }
-        assert create["credential_info"] == {"type": CREDENTIAL_TYPE}
+        assert json.loads(create["credential_info"]) == {"type": CREDENTIAL_TYPE}
         update = kwargs["data"]["update"]
         assert update["credential_values"] == create["credential_values"]
 

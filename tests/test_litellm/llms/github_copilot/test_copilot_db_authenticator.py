@@ -1,3 +1,4 @@
+import json
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -225,10 +226,14 @@ class TestPersistCredentialToDb:
         fake_prisma.db.litellm_credentialstable.upsert.assert_called_once()
         kwargs = fake_prisma.db.litellm_credentialstable.upsert.call_args.kwargs
         assert kwargs["where"] == {"credential_name": "c"}
-        assert kwargs["data"]["create"]["credential_values"] == {
+        # Prisma Json columns receive pre-serialized JSON strings.
+        assert json.loads(kwargs["data"]["create"]["credential_values"]) == {
             "access_token": "enc(gho_abc)"
         }
-        assert kwargs["data"]["create"]["credential_info"]["type"] == CREDENTIAL_TYPE
+        assert (
+            json.loads(kwargs["data"]["create"]["credential_info"])["type"]
+            == CREDENTIAL_TYPE
+        )
 
 
 class _Awaitable:
