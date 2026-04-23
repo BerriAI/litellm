@@ -48,6 +48,22 @@ POLL_TIMEOUT_SECONDS = 60
 TOLERANCE = 1e-10
 
 
+def _make_test_session() -> aiohttp.ClientSession:
+    """
+    Session tuned for CI reliability:
+    - force_close: avoid aiohttp reusing a TCP connection that the proxy/kernel
+      silently closed during the long idle window between setup POSTs and the
+      later poll loop (observed failure mode: ConnectionTimeoutError on the
+      first /key/info call after 20 chat completions).
+    - explicit connect timeout: surface a blocked proxy event loop quickly
+      instead of hanging on aiohttp's 5-minute default total timeout.
+    """
+    return aiohttp.ClientSession(
+        connector=aiohttp.TCPConnector(force_close=True),
+        timeout=aiohttp.ClientTimeout(total=30, connect=10),
+    )
+
+
 async def create_organization(session, organization_alias: str):
     """Helper function to create a new organization"""
     url = "http://0.0.0.0:4000/organization/new"
@@ -156,7 +172,16 @@ async def poll_key_spend_until(session, key: str, expected: float) -> float:
     start = time.time()
     last_spend = 0.0
     while time.time() - start < POLL_TIMEOUT_SECONDS:
-        key_info = await get_spend_info(session, "key", key)
+        try:
+            key_info = await get_spend_info(session, "key", key)
+        except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
+            print(
+                f"Transient transport error during spend poll: "
+                f"{type(exc).__name__}: {exc}. Retrying... "
+                f"({time.time() - start:.1f}s elapsed)"
+            )
+            await asyncio.sleep(POLL_INTERVAL_SECONDS)
+            continue
         last_spend = key_info["info"]["spend"]
         if abs(last_spend - expected) < TOLERANCE:
             print(
@@ -193,7 +218,7 @@ async def test_basic_spend_accuracy():
     """
     NUM_LLM_REQUESTS = 20
 
-    async with aiohttp.ClientSession() as session:
+    async with _make_test_session() as session:
         await assert_proxy_healthy(session)
 
         org_response = await create_organization(
@@ -278,7 +303,7 @@ async def test_long_term_spend_accuracy_with_bursts():
     BURST_1_REQUESTS = 22
     BURST_2_REQUESTS = 12
 
-    async with aiohttp.ClientSession() as session:
+    async with _make_test_session() as session:
         await assert_proxy_healthy(session)
 
         org_response = await create_organization(
