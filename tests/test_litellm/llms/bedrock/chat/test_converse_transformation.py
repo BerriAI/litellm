@@ -3286,7 +3286,8 @@ def test_transform_request_with_output_config():
 
 def test_transform_request_strips_anthropic_output_config():
     """
-    output_config is Anthropic-specific and must never be forwarded to Bedrock.
+    output_config is Anthropic-specific and must be stripped for models that
+    don't declare supports_output_config (e.g. Nova).
     """
     config = AmazonConverseConfig()
     messages = [{"role": "user", "content": "hello"}]
@@ -3305,6 +3306,76 @@ def test_transform_request_strips_anthropic_output_config():
     assert "outputConfig" not in result
     additional_fields = result.get("additionalModelRequestFields", {})
     assert "output_config" not in additional_fields
+
+
+def test_transform_request_forwards_output_config_for_claude_4_6():
+    """
+    For Bedrock Converse models that declare supports_output_config=true
+    (Claude 4.6+), the Anthropic-style `output_config` must flow through
+    `additionalModelRequestFields` so Bedrock forwards the `effort` setting
+    to the Anthropic backend.
+    """
+    from unittest.mock import patch
+
+    config = AmazonConverseConfig()
+    messages = [{"role": "user", "content": "hello"}]
+
+    with patch(
+        "litellm.llms.bedrock.chat.converse_transformation._supports_factory",
+        return_value=True,
+    ):
+        result = config._transform_request(
+            model="us.anthropic.claude-opus-4-6-v1",
+            messages=messages,
+            optional_params={
+                "maxTokens": 64,
+                "output_config": {"effort": "high"},
+            },
+            litellm_params={},
+            headers={},
+        )
+
+    additional_fields = result.get("additionalModelRequestFields", {})
+    assert additional_fields.get("output_config") == {"effort": "high"}
+    # Native Bedrock `outputConfig` (structured outputs) should not be set.
+    assert "outputConfig" not in result
+
+
+def test_transform_request_forwards_output_config_for_claude_4_7():
+    """
+    Claude Opus 4.7 on Bedrock Converse must preserve output_config via
+    additionalModelRequestFields. Reads the real flag from the bundled cost
+    JSON so a regression in model_prices_and_context_window.json would trip
+    this test.
+    """
+    old_env = os.environ.get("LITELLM_LOCAL_MODEL_COST_MAP")
+    old_cost = litellm.model_cost
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    try:
+        config = AmazonConverseConfig()
+        messages = [{"role": "user", "content": "hello"}]
+
+        result = config._transform_request(
+            model="us.anthropic.claude-opus-4-7",
+            messages=messages,
+            optional_params={
+                "maxTokens": 64,
+                "output_config": {"effort": "max"},
+            },
+            litellm_params={},
+            headers={},
+        )
+
+        additional_fields = result.get("additionalModelRequestFields", {})
+        assert additional_fields.get("output_config") == {"effort": "max"}
+        assert "outputConfig" not in result
+    finally:
+        litellm.model_cost = old_cost
+        if old_env is None:
+            os.environ.pop("LITELLM_LOCAL_MODEL_COST_MAP", None)
+        else:
+            os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = old_env
 
 
 def test_transform_response_native_structured_output():

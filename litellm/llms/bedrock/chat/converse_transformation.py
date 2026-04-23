@@ -59,6 +59,7 @@ from litellm.types.utils import (
     Usage,
 )
 from litellm.utils import (
+    _supports_factory,
     add_dummy_tool,
     any_assistant_message_has_thinking_blocks,
     has_tool_call_blocks,
@@ -1192,9 +1193,6 @@ class AmazonConverseConfig(BaseConfig):
             + supported_config_params
         )
         inference_params.pop("json_mode", None)  # used for handling json_schema
-        # Anthropic-only key. Bedrock expects `outputConfig` (camelCase) and
-        # will reject `output_config` if it leaks through pass-through routes.
-        inference_params.pop("output_config", None)
 
         # Extract requestMetadata before processing other parameters
         request_metadata = inference_params.pop("requestMetadata", None)
@@ -1204,9 +1202,10 @@ class AmazonConverseConfig(BaseConfig):
         output_config: Optional[OutputConfigBlock] = inference_params.pop(
             "outputConfig", None
         )
-        inference_params.pop(
-            "output_config", None
-        )  # Bedrock Converse doesn't support it
+        if not _supports_factory(
+            model=model, custom_llm_provider=None, key="supports_output_config"
+        ):
+            inference_params.pop("output_config", None)
 
         # keep supported params in 'inference_params', and set all model-specific params in 'additional_request_params'
         additional_request_params = {
