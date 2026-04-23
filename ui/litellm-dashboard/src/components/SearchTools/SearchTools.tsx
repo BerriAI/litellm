@@ -1,8 +1,20 @@
 import { isAdminRole } from "@/utils/roles";
-import { LoadingOutlined } from "@ant-design/icons";
 import { useQuery } from "@tanstack/react-query";
-import { Button, Text, Title } from "@tremor/react";
-import { Form, Input, Modal, Select, Spin, Table } from "antd";
+import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Loader2 } from "lucide-react";
+import {
+  Form,
+  Input as AntInput,
+  Select,
+  Table,
+} from "antd";
 import React, { useState } from "react";
 import DeleteResourceModal from "../common_components/DeleteResourceModal";
 import NotificationsManager from "../molecules/notifications_manager";
@@ -168,7 +180,7 @@ const SearchTools: React.FC<SearchToolsProps> = ({ accessToken, userRole, userID
         label="Search Tool Name"
         rules={[{ required: true, message: "Please enter a search tool name" }]}
       >
-        <Input placeholder="e.g., my-perplexity-search" />
+        <AntInput placeholder="e.g., my-perplexity-search" />
       </Form.Item>
 
       <Form.Item
@@ -185,19 +197,29 @@ const SearchTools: React.FC<SearchToolsProps> = ({ accessToken, userRole, userID
         </Select>
       </Form.Item>
 
-      <Form.Item name="api_key" label="API Key" extra="API key for the search provider">
-        <Input.Password placeholder="Enter API key" />
+      <Form.Item
+        name="api_key"
+        label="API Key"
+        extra="API key for the search provider"
+      >
+        <AntInput.Password placeholder="Enter API key" />
       </Form.Item>
 
       <Form.Item name="description" label="Description">
-        <Input.TextArea rows={3} placeholder="Description of this search tool" />
+        <AntInput.TextArea
+          rows={3}
+          placeholder="Description of this search tool"
+        />
       </Form.Item>
     </Form>
   );
 
   if (!accessToken || !userRole || !userID) {
-    console.log("Missing required authentication parameters", { accessToken, userRole, userID });
-    return <div className="p-6 text-center text-gray-500">Missing required authentication parameters.</div>;
+    return (
+      <div className="p-6 text-center text-muted-foreground">
+        Missing required authentication parameters.
+      </div>
+    );
   }
 
   const ToolsTab = () =>
@@ -222,21 +244,25 @@ const SearchTools: React.FC<SearchToolsProps> = ({ accessToken, userRole, userID
         availableProviders={availableProviders}
       />
     ) : (
-      <div className="w-full h-full">
-        <Spin spinning={isLoadingTools} indicator={<LoadingOutlined spin />} size="large">
-          <Table
-            bordered
-            dataSource={searchTools || []}
-            columns={columns}
-            rowKey={(record) => record.search_tool_id || record.search_tool_name}
-            pagination={false}
-            locale={{
-              emptyText: "No search tools configured",
-            }}
-            size="small"
-          />
-        </Spin>
-
+      <div className="w-full h-full relative">
+        {isLoadingTools && (
+          <div className="absolute inset-0 flex items-center justify-center bg-background/50 z-10">
+            <Loader2 className="h-8 w-8 animate-spin text-primary" />
+          </div>
+        )}
+        <Table
+          bordered
+          dataSource={searchTools || []}
+          columns={columns}
+          rowKey={(record) =>
+            record.search_tool_id || record.search_tool_name
+          }
+          pagination={false}
+          locale={{
+            emptyText: "No search tools configured",
+          }}
+          size="small"
+        />
       </div>
     );
 
@@ -274,24 +300,46 @@ const SearchTools: React.FC<SearchToolsProps> = ({ accessToken, userRole, userID
       />
 
       {/* Edit Modal */}
-      <Modal
-        title="Edit Search Tool"
+      <Dialog
         open={isEditModalVisible}
-        onOk={handleEditSubmit}
-        onCancel={() => {
-          setEditModalVisible(false);
-          form.resetFields();
-          setSelectedToolId(null);
+        onOpenChange={(o) => {
+          if (!o) {
+            setEditModalVisible(false);
+            form.resetFields();
+            setSelectedToolId(null);
+          }
         }}
-        width={600}
       >
-        {renderEditForm()}
-      </Modal>
+        <DialogContent className="max-w-[600px]">
+          <DialogHeader>
+            <DialogTitle>Edit Search Tool</DialogTitle>
+          </DialogHeader>
+          {renderEditForm()}
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setEditModalVisible(false);
+                form.resetFields();
+                setSelectedToolId(null);
+              }}
+            >
+              Cancel
+            </Button>
+            <Button onClick={handleEditSubmit}>OK</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
-      <Title>Search Tools</Title>
-      <Text className="text-tremor-content mt-2">Configure and manage your search providers</Text>
+      <h1 className="text-2xl font-semibold">Search Tools</h1>
+      <p className="text-muted-foreground mt-2">
+        Configure and manage your search providers
+      </p>
       {isAdminRole(userRole) && (
-        <Button className="mt-4 mb-4" onClick={() => setCreateModalVisible(true)}>
+        <Button
+          className="mt-4 mb-4"
+          onClick={() => setCreateModalVisible(true)}
+        >
           + Add New Search Tool
         </Button>
       )}
