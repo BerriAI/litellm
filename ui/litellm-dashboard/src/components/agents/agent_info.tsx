@@ -1,8 +1,11 @@
-import React, { useState, useEffect } from "react";
-import { Card, Title, Text, Button as TremorButton, Tab, TabGroup, TabList, TabPanel, TabPanels} from "@tremor/react";
-import { Form, Input, InputNumber, Button as AntButton, Spin, Descriptions, Divider } from "antd";
+import React, { useState, useEffect, useCallback } from "react";
+// eslint-disable-next-line litellm-ui/no-banned-ui-imports
+import { Tab, TabGroup, TabList, TabPanel, TabPanels } from "@tremor/react";
+import { Form, Input, InputNumber, Descriptions } from "antd";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { ArrowLeft, Loader2 } from "lucide-react";
 import MessageManager from "@/components/molecules/message_manager";
-import { ArrowLeftIcon } from "@heroicons/react/outline";
 import { getAgentInfo, patchAgentCall, getAgentCreateMetadata, AgentCreateInfo } from "../networking";
 import { Agent } from "./types";
 import AgentFormFields from "./agent_form_fields";
@@ -44,31 +47,27 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({
     fetchMetadata();
   }, []);
 
-  useEffect(() => {
-    fetchAgentInfo();
-  }, [agentId, accessToken]);
-
-  const fetchAgentInfo = async () => {
+  const fetchAgentInfo = useCallback(async () => {
     if (!accessToken) return;
 
     setIsLoading(true);
     try {
       const data = await getAgentInfo(accessToken, agentId);
       setAgent(data);
-      
-      // Detect agent type
+
       const agentType = detectAgentType(data);
       setDetectedAgentType(agentType);
-      
-      // Parse form values based on agent type
+
       if (agentType === "a2a") {
         form.setFieldsValue(parseAgentForForm(data));
       } else {
-        const typeInfo = agentTypeMetadata.find(t => t.agent_type === agentType);
+        const typeInfo = agentTypeMetadata.find(
+          (t) => t.agent_type === agentType,
+        );
         if (typeInfo) {
           form.setFieldsValue(parseDynamicAgentForForm(data, typeInfo));
         } else {
-      form.setFieldsValue(parseAgentForForm(data));
+          form.setFieldsValue(parseAgentForForm(data));
         }
       }
     } catch (error) {
@@ -77,30 +76,41 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [accessToken, agentId, agentTypeMetadata, form]);
+
+  useEffect(() => {
+    fetchAgentInfo();
+  }, [fetchAgentInfo]);
 
   // Re-parse form when metadata is loaded
   useEffect(() => {
     if (agent && agentTypeMetadata.length > 0) {
       const agentType = detectAgentType(agent);
       if (agentType !== "a2a") {
-        const typeInfo = agentTypeMetadata.find(t => t.agent_type === agentType);
+        const typeInfo = agentTypeMetadata.find(
+          (t) => t.agent_type === agentType,
+        );
         if (typeInfo) {
           form.setFieldsValue(parseDynamicAgentForForm(agent, typeInfo));
         }
       }
     }
-  }, [agentTypeMetadata, agent]);
+  }, [agentTypeMetadata, agent, form]);
 
-  const selectedAgentTypeInfo = agentTypeMetadata.find(t => t.agent_type === detectedAgentType);
+  const selectedAgentTypeInfo = agentTypeMetadata.find(
+    (t) => t.agent_type === detectedAgentType,
+  );
 
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const handleUpdate = async (values: any) => {
     if (!accessToken || !agent) return;
 
     setIsSaving(true);
     try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       let updateData: any;
-      
+
+
       if (detectedAgentType === "a2a") {
         updateData = buildAgentDataFromForm(values, agent);
       } else if (selectedAgentTypeInfo) {
@@ -127,7 +137,7 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({
     return (
       <div className="p-4">
         <div className="flex justify-center items-center h-64">
-          <Spin size="large" />
+          <Loader2 className="h-6 w-6 animate-spin text-primary" />
         </div>
       </div>
     );
@@ -137,9 +147,9 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({
     return (
       <div className="p-4">
         <div className="text-center">Agent not found</div>
-        <TremorButton onClick={onClose} className="mt-4">
+        <Button onClick={onClose} className="mt-4">
           Back to Agents List
-        </TremorButton>
+        </Button>
       </div>
     );
   }
@@ -154,11 +164,14 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({
   return (
     <div className="p-4">
       <div>
-        <TremorButton icon={ArrowLeftIcon} variant="light" onClick={onClose} className="mb-4">
+        <Button variant="ghost" onClick={onClose} className="mb-4">
+          <ArrowLeft className="h-4 w-4" />
           Back to Agents
-        </TremorButton>
-        <Title>{agent.agent_name || "Unnamed Agent"}</Title>
-        <Text className="text-gray-500 font-mono">{agent.agent_id}</Text>
+        </Button>
+        <h1 className="text-2xl font-semibold">
+          {agent.agent_name || "Unnamed Agent"}
+        </h1>
+        <span className="text-muted-foreground font-mono">{agent.agent_id}</span>
       </div>
 
       <TabGroup>
@@ -215,9 +228,9 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({
                 agent.object_permission.mcp_access_groups?.length ||
                 (agent.object_permission.mcp_tool_permissions &&
                   Object.keys(agent.object_permission.mcp_tool_permissions).length > 0)) && (
-              <div style={{ marginTop: 24 }}>
-                <Title>MCP Tool Permissions</Title>
-                <Descriptions bordered column={1} style={{ marginTop: 16 }}>
+              <div className="mt-6">
+                <h2 className="text-lg font-semibold">MCP Tool Permissions</h2>
+                <Descriptions bordered column={1} className="mt-4">
                   {agent.object_permission.mcp_servers && agent.object_permission.mcp_servers.length > 0 && (
                     <Descriptions.Item label="MCP Servers">
                       {agent.object_permission.mcp_servers.join(", ")}
@@ -250,35 +263,58 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({
 
             <AgentCostView agent={agent} />
 
-            {agent.agent_card_params?.skills && agent.agent_card_params.skills.length > 0 && (
-              <div style={{ marginTop: 24 }}>
-                <Title>Skills</Title>
-                <Descriptions bordered column={1} style={{ marginTop: 16 }}>
-                  {agent.agent_card_params.skills.map((skill: any, index: number) => (
-                    <Descriptions.Item label={skill.name || `Skill ${index + 1}`} key={index}>
-                      <div>
-                        <div><strong>ID:</strong> {skill.id}</div>
-                        <div><strong>Description:</strong> {skill.description}</div>
-                        <div><strong>Tags:</strong> {Array.isArray(skill.tags) ? skill.tags.join(", ") : skill.tags}</div>
-                        {skill.examples && skill.examples.length > 0 && (
-                          <div><strong>Examples:</strong> {Array.isArray(skill.examples) ? skill.examples.join(", ") : skill.examples}</div>
-                        )}
-                      </div>
-                    </Descriptions.Item>
-                  ))}
-                </Descriptions>
-              </div>
-            )}
+            {agent.agent_card_params?.skills &&
+              agent.agent_card_params.skills.length > 0 && (
+                <div className="mt-6">
+                  <h2 className="text-lg font-semibold">Skills</h2>
+                  <Descriptions bordered column={1} className="mt-4">
+                    {agent.agent_card_params.skills.map(
+                      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                      (skill: any, index: number) => (
+                        <Descriptions.Item
+                          label={skill.name || `Skill ${index + 1}`}
+                          key={index}
+                        >
+                          <div>
+                            <div>
+                              <strong>ID:</strong> {skill.id}
+                            </div>
+                            <div>
+                              <strong>Description:</strong> {skill.description}
+                            </div>
+                            <div>
+                              <strong>Tags:</strong>{" "}
+                              {Array.isArray(skill.tags)
+                                ? skill.tags.join(", ")
+                                : skill.tags}
+                            </div>
+                            {skill.examples && skill.examples.length > 0 && (
+                              <div>
+                                <strong>Examples:</strong>{" "}
+                                {Array.isArray(skill.examples)
+                                  ? skill.examples.join(", ")
+                                  : skill.examples}
+                              </div>
+                            )}
+                          </div>
+                        </Descriptions.Item>
+                      ),
+                    )}
+                  </Descriptions>
+                </div>
+              )}
           </TabPanel>
 
           {/* Settings Panel (only for admins) */}
           {isAdmin && (
             <TabPanel>
-              <Card>
+              <Card className="p-4">
                 <div className="flex justify-between items-center mb-4">
-                  <Title>Agent Settings</Title>
+                  <h2 className="text-lg font-semibold">Agent Settings</h2>
                   {!isEditing && (
-                    <TremorButton onClick={() => setIsEditing(true)}>Edit Settings</TremorButton>
+                    <Button onClick={() => setIsEditing(true)}>
+                      Edit Settings
+                    </Button>
                   )}
                 </div>
 
@@ -300,8 +336,8 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({
                     <AgentFormFields showAgentName={true} />
                     )}
 
-                    <Divider />
-                    <Title className="mb-4">Rate Limits</Title>
+                    <hr className="my-4 border-border" />
+                    <h3 className="text-lg font-semibold mb-4">Rate Limits</h3>
                     <div className="grid grid-cols-2 gap-4">
                       <Form.Item label="TPM Limit" name="tpm_limit">
                         <InputNumber className="w-full" min={0} placeholder="Unlimited" />
@@ -320,19 +356,26 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({
                     </div>
 
                     <div className="flex justify-end gap-2 mt-6">
-                      <AntButton onClick={() => {
-                        setIsEditing(false);
-                        fetchAgentInfo();
-                      }}>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={() => {
+                          setIsEditing(false);
+                          fetchAgentInfo();
+                        }}
+                      >
                         Cancel
-                      </AntButton>
-                      <TremorButton loading={isSaving}>
-                        Save Changes
-                      </TremorButton>
+                      </Button>
+                      <Button type="submit" disabled={isSaving}>
+                        {isSaving ? "Saving..." : "Save Changes"}
+                      </Button>
                     </div>
                   </Form>
                 ) : (
-                  <Text>Click &quot;Edit Settings&quot; to modify agent configuration.</Text>
+                  <p className="text-muted-foreground">
+                    Click &quot;Edit Settings&quot; to modify agent
+                    configuration.
+                  </p>
                 )}
               </Card>
             </TabPanel>
