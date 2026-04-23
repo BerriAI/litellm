@@ -17,10 +17,10 @@ const CodeBlock = ({ code, language }: CodeBlockProps) => {
   };
 
   return (
-    <div className="relative rounded-lg border border-gray-200 overflow-hidden">
+    <div className="relative rounded-lg border border-border overflow-hidden">
       <button
         onClick={copyToClipboard}
-        className="absolute top-3 right-3 p-2 rounded-md bg-gray-100 hover:bg-gray-200 text-gray-600 z-10"
+        className="absolute top-3 right-3 p-2 rounded-md bg-muted hover:bg-muted/80 text-muted-foreground z-10"
         aria-label="Copy code"
       >
         {copied ? <CheckIcon size={16} /> : <ClipboardIcon size={16} />}

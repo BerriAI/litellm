@@ -1,9 +1,6 @@
 import React from "react";
 import { ExternalLink } from "lucide-react";
-
-function cn(...parts: Array<string | undefined>) {
-  return parts.filter(Boolean).join(" ");
-}
+import { cn } from "@/lib/utils";
 
 export type DocLinkProps = {
   href?: string;
@@ -18,8 +15,8 @@ const DocLink = ({ href, className }: DocLinkProps) => {
       rel="noopener noreferrer"
       title="Open documentation in a new tab"
       className={cn(
-        "inline-flex items-center gap-2 rounded-xl border border-zinc-200 bg-white/80 px-3.5 py-2 text-sm font-medium text-zinc-700 shadow-sm",
-        "hover:bg-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 active:translate-y-[0.5px]",
+        "inline-flex items-center gap-2 rounded-xl border border-border bg-background/80 px-3.5 py-2 text-sm font-medium text-foreground shadow-sm",
+        "hover:bg-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring active:translate-y-[0.5px]",
         className,
       )}
     >
