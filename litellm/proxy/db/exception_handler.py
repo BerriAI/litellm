@@ -31,12 +31,35 @@ class PrismaDBExceptionHandler:
 
     @staticmethod
     def is_database_connection_error(e: Exception) -> bool:
-        """Connectivity failures + the ``no_db_connection`` marker only.
-        Data-layer errors (``UniqueViolationError``, etc.) must NOT match
-        — matching them would route non-outage exceptions into the HA
-        fallback and the authentication bypass it grants.
+        """True iff the exception is (or could be) a DB-connectivity
+        failure, i.e. something that justifies the
+        ``allow_requests_on_db_unavailable`` HA fallback.
+
+        Known data-layer PrismaError subclasses (``UniqueViolationError``,
+        ``RecordNotFoundError``, etc.) are explicitly excluded — the DB IS
+        reachable, so a fallback that grants an anonymous token would be
+        an auth bypass. Unknown / bare ``PrismaError`` instances default
+        to True so genuine outages that don't match a specific subclass
+        still trigger the fallback.
         """
-        if PrismaDBExceptionHandler.is_database_transport_error(e):
+        import prisma
+
+        # Explicit data-layer exclusion: DB IS reachable, fallback must
+        # NOT fire.
+        data_layer_errors = (
+            prisma.errors.DataError,
+            prisma.errors.UniqueViolationError,
+            prisma.errors.ForeignKeyViolationError,
+            prisma.errors.MissingRequiredValueError,
+            prisma.errors.RawQueryError,
+            prisma.errors.TableNotFoundError,
+            prisma.errors.RecordNotFoundError,
+        )
+        if isinstance(e, data_layer_errors):
+            return False
+        if isinstance(e, DB_CONNECTION_ERROR_TYPES):
+            return True
+        if isinstance(e, prisma.errors.PrismaError):
             return True
         if isinstance(e, ProxyException) and e.type == ProxyErrorTypes.no_db_connection:
             return True

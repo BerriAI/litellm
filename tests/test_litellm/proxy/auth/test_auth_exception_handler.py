@@ -33,12 +33,17 @@ from litellm.proxy.auth.auth_exception_handler import UserAPIKeyAuthExceptionHan
 @pytest.mark.parametrize(
     "prisma_error",
     [
+        # Specific connectivity subclasses.
         HTTPClientClosedError(),
         ClientNotConnectedError(),
+        # Bare / generic PrismaError defaults to connectivity — we can't
+        # tell what it is, so err on the safe side for genuine outages.
+        PrismaError(),
     ],
 )
 async def test_handle_authentication_error_db_unavailable_connectivity(prisma_error):
-    """Transport-level / connectivity failures trigger the HA fallback."""
+    """Transport-level / connectivity failures (and generic PrismaError)
+    trigger the HA fallback."""
     handler = UserAPIKeyAuthExceptionHandler()
 
     mock_request = MagicMock()
@@ -62,7 +67,6 @@ async def test_handle_authentication_error_db_unavailable_connectivity(prisma_er
 @pytest.mark.parametrize(
     "prisma_error",
     [
-        PrismaError(),
         DataError(data={"user_facing_error": {"meta": {"table": "test_table"}}}),
         UniqueViolationError(
             data={"user_facing_error": {"meta": {"table": "test_table"}}}
@@ -85,10 +89,11 @@ async def test_handle_authentication_error_db_unavailable_connectivity(prisma_er
 async def test_handle_authentication_error_data_layer_errors_do_not_fall_back(
     prisma_error,
 ):
-    """Data-layer PrismaError subclasses (UniqueViolation, RecordNotFound,
-    etc.) mean the DB IS reachable — they must propagate instead of
-    triggering the HA fallback, which would grant the restricted
-    INTERNAL_USER token to a request that should have returned 401."""
+    """Known data-layer PrismaError subclasses (UniqueViolation,
+    RecordNotFound, etc.) mean the DB IS reachable — they must propagate
+    instead of triggering the HA fallback, which would grant the
+    restricted INTERNAL_USER token to a request that should have
+    returned 401."""
     handler = UserAPIKeyAuthExceptionHandler()
 
     mock_request = MagicMock()
