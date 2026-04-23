@@ -46,6 +46,12 @@ export default function TeamMemberTab({
     return "0";
   };
 
+  const getUserCurrentCycleSpend = (userId: string | null): number => {
+    if (!userId) return 0;
+    const membership = teamData.team_memberships.find((tm) => tm.user_id === userId);
+    return membership?.spend ?? 0;
+  };
+
   const getUserTotalSpend = (userId: string | null): number => {
     if (!userId) return 0;
     const membership = teamData.team_memberships.find((tm) => tm.user_id === userId);
@@ -130,8 +136,22 @@ export default function TeamMemberTab({
     {
       title: (
         <Space direction="horizontal">
+          Current Cycle Spend (USD)
+          <Tooltip title="Spend for the current budget cycle. Resets to $0 when the member's budget window rolls over. This is the value checked against the member's budget.">
+            <InfoCircleOutlined />
+          </Tooltip>
+        </Space>
+      ),
+      key: "spend",
+      render: (_: unknown, record: Member) => (
+        <Typography.Text>${formatNumberWithCommas(getUserCurrentCycleSpend(record.user_id), 4)}</Typography.Text>
+      ),
+    },
+    {
+      title: (
+        <Space direction="horizontal">
           Total Spend (USD)
-          <Tooltip title="Total spend by this member within this team. Tracking began 2026-04-21; spend from before that date is not included.">
+          <Tooltip title="Cumulative spend by this member within this team, across all budget cycles. Tracking began 2026-04-21; spend from before that date is not included.">
             <InfoCircleOutlined />
           </Tooltip>
         </Space>
