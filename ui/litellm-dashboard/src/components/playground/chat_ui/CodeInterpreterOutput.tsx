@@ -1,15 +1,23 @@
 import React, { useState, useEffect } from "react";
-import { Collapse, Spin } from "antd";
 import {
-  CodeOutlined,
-  DownloadOutlined,
-  FileImageOutlined,
-  FileTextOutlined,
-  LoadingOutlined,
-} from "@ant-design/icons";
+  Accordion,
+  AccordionContent,
+  AccordionItem,
+  AccordionTrigger,
+} from "@/components/ui/accordion";
+import {
+  Code,
+  Download,
+  FileImage,
+  FileText,
+  Loader2,
+} from "lucide-react";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { coy } from "react-syntax-highlighter/dist/esm/styles/prism";
-import { getProxyBaseUrl, getGlobalLitellmHeaderName } from "@/components/networking";
+import {
+  getProxyBaseUrl,
+  getGlobalLitellmHeaderName,
+} from "@/components/networking";
 
 interface ContainerFileCitation {
   type: "container_file_citation";
@@ -29,46 +37,49 @@ interface CodeInterpreterOutputProps {
 
 const CodeInterpreterOutput: React.FC<CodeInterpreterOutputProps> = ({
   code,
-  containerId,
   annotations = [],
   accessToken,
 }) => {
   const [imageUrls, setImageUrls] = useState<Record<string, string>>({});
-  const [loadingImages, setLoadingImages] = useState<Record<string, boolean>>({});
+  const [loadingImages, setLoadingImages] = useState<Record<string, boolean>>(
+    {},
+  );
   const proxyBaseUrl = getProxyBaseUrl();
 
-  // Fetch images from container files API
   useEffect(() => {
     const fetchImages = async () => {
       for (const annotation of annotations) {
-        const isImage = annotation.filename?.toLowerCase().endsWith(".png") ||
-                       annotation.filename?.toLowerCase().endsWith(".jpg") ||
-                       annotation.filename?.toLowerCase().endsWith(".jpeg") ||
-                       annotation.filename?.toLowerCase().endsWith(".gif");
-        
+        const isImage =
+          annotation.filename?.toLowerCase().endsWith(".png") ||
+          annotation.filename?.toLowerCase().endsWith(".jpg") ||
+          annotation.filename?.toLowerCase().endsWith(".jpeg") ||
+          annotation.filename?.toLowerCase().endsWith(".gif");
+
         if (isImage && annotation.container_id && annotation.file_id) {
-          setLoadingImages(prev => ({ ...prev, [annotation.file_id]: true }));
-          
+          setLoadingImages((prev) => ({ ...prev, [annotation.file_id]: true }));
+
           try {
-            // Fetch image content from container files API
             const response = await fetch(
               `${proxyBaseUrl}/v1/containers/${annotation.container_id}/files/${annotation.file_id}/content`,
               {
                 headers: {
                   [getGlobalLitellmHeaderName()]: `Bearer ${accessToken}`,
                 },
-              }
+              },
             );
-            
+
             if (response.ok) {
               const blob = await response.blob();
               const url = URL.createObjectURL(blob);
-              setImageUrls(prev => ({ ...prev, [annotation.file_id]: url }));
+              setImageUrls((prev) => ({ ...prev, [annotation.file_id]: url }));
             }
           } catch (error) {
             console.error("Error fetching image:", error);
           } finally {
-            setLoadingImages(prev => ({ ...prev, [annotation.file_id]: false }));
+            setLoadingImages((prev) => ({
+              ...prev,
+              [annotation.file_id]: false,
+            }));
           }
         }
       }
@@ -78,10 +89,10 @@ const CodeInterpreterOutput: React.FC<CodeInterpreterOutputProps> = ({
       fetchImages();
     }
 
-    // Cleanup URLs on unmount
     return () => {
-      Object.values(imageUrls).forEach(url => URL.revokeObjectURL(url));
+      Object.values(imageUrls).forEach((url) => URL.revokeObjectURL(url));
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [annotations, accessToken, proxyBaseUrl]);
 
   const handleDownload = async (annotation: ContainerFileCitation) => {
@@ -92,9 +103,9 @@ const CodeInterpreterOutput: React.FC<CodeInterpreterOutputProps> = ({
           headers: {
             [getGlobalLitellmHeaderName()]: `Bearer ${accessToken}`,
           },
-        }
+        },
       );
-      
+
       if (response.ok) {
         const blob = await response.blob();
         const url = URL.createObjectURL(blob);
@@ -111,19 +122,20 @@ const CodeInterpreterOutput: React.FC<CodeInterpreterOutputProps> = ({
     }
   };
 
-  // Separate images and other files
-  const imageAnnotations = annotations.filter(a => 
-    a.filename?.toLowerCase().endsWith(".png") ||
-    a.filename?.toLowerCase().endsWith(".jpg") ||
-    a.filename?.toLowerCase().endsWith(".jpeg") ||
-    a.filename?.toLowerCase().endsWith(".gif")
+  const imageAnnotations = annotations.filter(
+    (a) =>
+      a.filename?.toLowerCase().endsWith(".png") ||
+      a.filename?.toLowerCase().endsWith(".jpg") ||
+      a.filename?.toLowerCase().endsWith(".jpeg") ||
+      a.filename?.toLowerCase().endsWith(".gif"),
   );
-  
-  const fileAnnotations = annotations.filter(a => 
-    !a.filename?.toLowerCase().endsWith(".png") &&
-    !a.filename?.toLowerCase().endsWith(".jpg") &&
-    !a.filename?.toLowerCase().endsWith(".jpeg") &&
-    !a.filename?.toLowerCase().endsWith(".gif")
+
+  const fileAnnotations = annotations.filter(
+    (a) =>
+      !a.filename?.toLowerCase().endsWith(".png") &&
+      !a.filename?.toLowerCase().endsWith(".jpg") &&
+      !a.filename?.toLowerCase().endsWith(".jpeg") &&
+      !a.filename?.toLowerCase().endsWith(".gif"),
   );
 
   if (!code && annotations.length === 0) {
@@ -134,67 +146,71 @@ const CodeInterpreterOutput: React.FC<CodeInterpreterOutputProps> = ({
     <div className="mt-3 space-y-3">
       {/* Executed Code - Collapsible */}
       {code && (
-        <Collapse
-          size="small"
-          items={[
-            {
-              key: "code",
-              label: (
-                <span className="flex items-center gap-2 text-sm text-gray-600">
-                  <CodeOutlined /> Python Code Executed
-                </span>
-              ),
-              children: (
-                <SyntaxHighlighter
-                  language="python"
-                  style={coy}
-                  customStyle={{
-                    margin: 0,
-                    borderRadius: "6px",
-                    fontSize: "12px",
-                    maxHeight: "300px",
-                    overflow: "auto",
-                  }}
-                >
-                  {code}
-                </SyntaxHighlighter>
-              ),
-            },
-          ]}
-        />
+        <Accordion type="single" collapsible className="w-full">
+          <AccordionItem value="code" className="border border-border rounded-md px-3">
+            <AccordionTrigger className="py-2 hover:no-underline">
+              <span className="flex items-center gap-2 text-sm text-muted-foreground">
+                <Code className="h-4 w-4" /> Python Code Executed
+              </span>
+            </AccordionTrigger>
+            <AccordionContent>
+              <SyntaxHighlighter
+                language="python"
+                style={coy}
+                customStyle={{
+                  margin: 0,
+                  borderRadius: "6px",
+                  fontSize: "12px",
+                  maxHeight: "300px",
+                  overflow: "auto",
+                }}
+              >
+                {code}
+              </SyntaxHighlighter>
+            </AccordionContent>
+          </AccordionItem>
+        </Accordion>
       )}
 
       {/* Generated Images */}
       {imageAnnotations.map((annotation) => (
-        <div key={annotation.file_id} className="rounded-lg border border-gray-200 overflow-hidden">
+        <div
+          key={annotation.file_id}
+          className="rounded-lg border border-border overflow-hidden"
+        >
           {loadingImages[annotation.file_id] ? (
-            <div className="flex items-center justify-center p-8 bg-gray-50">
-              <Spin indicator={<LoadingOutlined spin />} />
-              <span className="ml-2 text-sm text-gray-500">Loading image...</span>
+            <div className="flex items-center justify-center p-8 bg-muted">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              <span className="ml-2 text-sm text-muted-foreground">
+                Loading image...
+              </span>
             </div>
           ) : imageUrls[annotation.file_id] ? (
             <div>
+              {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
                 src={imageUrls[annotation.file_id]}
                 alt={annotation.filename || "Generated chart"}
                 className="max-w-full"
                 style={{ maxHeight: "400px" }}
               />
-              <div className="flex items-center justify-between px-3 py-2 bg-gray-50 border-t border-gray-200">
-                <span className="text-xs text-gray-500 flex items-center gap-1">
-                  <FileImageOutlined /> {annotation.filename}
+              <div className="flex items-center justify-between px-3 py-2 bg-muted border-t border-border">
+                <span className="text-xs text-muted-foreground flex items-center gap-1">
+                  <FileImage className="h-3.5 w-3.5" /> {annotation.filename}
                 </span>
                 <button
                   onClick={() => handleDownload(annotation)}
-                  className="text-xs text-blue-500 hover:text-blue-700 flex items-center gap-1"
+                  className="text-xs text-primary hover:text-primary/80 flex items-center gap-1"
                 >
-                  <DownloadOutlined /> Download
+                  <Download className="h-3.5 w-3.5" /> Download
                 </button>
               </div>
             </div>
           ) : (
-            <div className="flex items-center justify-center p-4 bg-gray-50">
-              <span className="text-sm text-gray-400">Image not available</span>
+            <div className="flex items-center justify-center p-4 bg-muted">
+              <span className="text-sm text-muted-foreground">
+                Image not available
+              </span>
             </div>
           )}
         </div>
@@ -207,11 +223,11 @@ const CodeInterpreterOutput: React.FC<CodeInterpreterOutputProps> = ({
             <button
               key={annotation.file_id}
               onClick={() => handleDownload(annotation)}
-              className="flex items-center gap-2 px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg hover:bg-gray-100 transition-colors"
+              className="flex items-center gap-2 px-3 py-2 bg-muted border border-border rounded-lg hover:bg-muted/70 transition-colors"
             >
-              <FileTextOutlined className="text-blue-500" />
+              <FileText className="h-4 w-4 text-primary" />
               <span className="text-sm">{annotation.filename}</span>
-              <DownloadOutlined className="text-gray-400" />
+              <Download className="h-4 w-4 text-muted-foreground" />
             </button>
           ))}
         </div>
@@ -221,4 +237,3 @@ const CodeInterpreterOutput: React.FC<CodeInterpreterOutputProps> = ({
 };
 
 export default CodeInterpreterOutput;
-
