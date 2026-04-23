@@ -6,6 +6,10 @@ from urllib.parse import urlparse
 
 from fastapi import HTTPException
 
+# RFC 6749 §5.1 / OAuth 2.1 draft-15 §4.1.3: token-endpoint responses
+# must not be cached — both success and error bodies may reveal secrets.
+TOKEN_NO_CACHE_HEADERS = {"Cache-Control": "no-store", "Pragma": "no-cache"}
+
 
 def validate_loopback_redirect_uri(redirect_uri: str) -> None:
     """Require a loopback ``redirect_uri`` (OAuth 2.1 §4.1.2.1 + RFC 8252

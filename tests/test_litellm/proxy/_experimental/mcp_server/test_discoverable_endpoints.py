@@ -1920,3 +1920,88 @@ async def test_authorize_endpoint_accepts_ipv4_loopback_range_and_ipv6_full_form
                 state="s",
             )
         assert response.status_code == 307, f"{uri} should be accepted"
+
+
+@pytest.mark.asyncio
+async def test_callback_revalidates_loopback_on_decoded_base_url():
+    """VERIA-57 root cause B defense-in-depth: an encrypted state minted
+    before the /authorize validation was added has no expiry and stays
+    valid. /callback must re-validate the decoded base_url so those
+    stale states can't be used as an open-redirect + code-theft
+    primitive."""
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        callback,
+    )
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.discoverable_endpoints.decode_state_hash"
+    ) as mock_decode:
+        mock_decode.return_value = {
+            "base_url": "https://attacker.example.com/cb",
+            "original_state": "s",
+            "code_challenge": None,
+            "code_challenge_method": None,
+            "client_redirect_uri": "https://attacker.example.com/cb",
+        }
+        with pytest.raises(HTTPException) as exc_info:
+            await callback(code="stolen_code", state="encrypted_stale_state")
+        assert exc_info.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_token_endpoint_sets_no_store_cache_control():
+    """RFC 6749 §5.1 / OAuth 2.1 draft-15 §4.1.3: the token response
+    contains an access token (and possibly a refresh token) — it MUST
+    NOT be cached by intermediaries or the client."""
+    from fastapi import Request
+
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        exchange_token_with_server,
+    )
+    from litellm.proxy._types import MCPTransport
+    from litellm.types.mcp import MCPAuth
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    server = MCPServer(
+        server_id="t",
+        name="t",
+        server_name="t",
+        alias="t",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        client_id="cid",
+        client_secret="cs",
+        authorization_url="https://provider.com/oauth/authorize",
+        token_url="https://provider.com/oauth/token",
+    )
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "https://litellm.example.com/"
+    mock_request.headers = {}
+
+    fake_http_response = MagicMock()
+    fake_http_response.json.return_value = {
+        "access_token": "tok",
+        "token_type": "Bearer",
+        "expires_in": 3600,
+    }
+    fake_http_response.raise_for_status = MagicMock()
+    fake_http_client = MagicMock()
+    fake_http_client.post = AsyncMock(return_value=fake_http_response)
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.discoverable_endpoints.get_async_httpx_client",
+        return_value=fake_http_client,
+    ):
+        response = await exchange_token_with_server(
+            request=mock_request,
+            mcp_server=server,
+            grant_type="authorization_code",
+            code="c",
+            redirect_uri="http://127.0.0.1:3000/cb",
+            client_id="cid",
+            client_secret=None,
+            code_verifier=None,
+        )
+
+    assert response.headers["cache-control"] == "no-store"
+    assert response.headers["pragma"] == "no-cache"

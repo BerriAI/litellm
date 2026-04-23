@@ -11,6 +11,7 @@ from litellm.llms.custom_httpx.http_handler import (
     httpxSpecialProvider,
 )
 from litellm.proxy._experimental.mcp_server.oauth_utils import (
+    TOKEN_NO_CACHE_HEADERS,
     validate_loopback_redirect_uri,
 )
 from litellm.proxy.auth.ip_address_utils import IPAddressUtils
@@ -481,7 +482,8 @@ async def exchange_token_with_server(
     if "scope" in token_response and token_response["scope"]:
         result["scope"] = token_response["scope"]
 
-    return JSONResponse(result)
+    # RFC 6749 §5.1: token responses must not be cached.
+    return JSONResponse(result, headers=TOKEN_NO_CACHE_HEADERS)
 
 
 async def register_client_with_server(
@@ -648,20 +650,26 @@ async def token_endpoint(
 @router.get("/callback")
 async def callback(code: str, state: str):
     try:
-        # Decode the state hash to get base_url, original state, and PKCE params
         state_data = decode_state_hash(state)
         base_url = state_data["base_url"]
         original_state = state_data["original_state"]
 
-        # Forward code and original state back to client
-        params = {"code": code, "state": original_state}
+        # Re-validate loopback at the sink. /authorize rejects non-loopback
+        # redirect_uri before encoding into state, but encrypted states
+        # minted before that check was added have no expiry and remain
+        # valid indefinitely. Validating here blocks the open-redirect +
+        # code-theft primitive even for pre-fix states.
+        validate_loopback_redirect_uri(base_url)
 
-        # Forward to client's callback endpoint
+        params = {"code": code, "state": original_state}
         complete_returned_url = f"{base_url}?{urlencode(params)}"
         return RedirectResponse(url=complete_returned_url, status_code=302)
 
+    except HTTPException:
+        # Re-raise so a non-loopback base_url surfaces as 400 instead of
+        # a generic "authentication incomplete" redirect.
+        raise
     except Exception:
-        # fallback if state hash not found
         return HTMLResponse(
             "<html><body>Authentication incomplete. You can close this window.</body></html>"
         )
