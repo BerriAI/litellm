@@ -65,6 +65,7 @@
         "src/components/playground/chat_ui/SessionManagement.tsx",
         "src/components/playground/chat_ui/SearchResultsDisplay.tsx",
         "src/components/team/member_permissions.tsx",
+        "src/components/agent_management/AgentSelector.tsx",
         "src/components/UsagePage/components/EntityUsage/SpendByProvider.tsx",
         "src/components/view_logs/ToolsSection/FormattedToolView.tsx",
         "src/components/Settings/LoggingAndAlerts/LoggingCallbacks/LoggingCallbacksTable.tsx",
