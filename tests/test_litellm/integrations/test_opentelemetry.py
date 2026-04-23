@@ -421,11 +421,12 @@ class TestOpenTelemetry(unittest.TestCase):
         otel.tracer = MagicMock()
 
         # Mock the dynamic header extraction and tracer creation
-        with patch.object(
-            otel, "_get_dynamic_otel_headers_from_kwargs"
-        ) as mock_get_headers, patch.object(
-            otel, "_get_tracer_with_dynamic_headers"
-        ) as mock_get_tracer:
+        with (
+            patch.object(
+                otel, "_get_dynamic_otel_headers_from_kwargs"
+            ) as mock_get_headers,
+            patch.object(otel, "_get_tracer_with_dynamic_headers") as mock_get_tracer,
+        ):
 
             # Test case 1: With dynamic headers
             mock_get_headers.return_value = {
@@ -1046,6 +1047,36 @@ class TestOpenTelemetryEndpointNormalization(unittest.TestCase):
         result = otel._normalize_otel_endpoint("http://collector:4318/", "traces")
         self.assertEqual(result, "http://collector:4318/v1/traces")
 
+    @parameterized.expand(
+        [
+            (
+                "https://ingest.eu1.observability.splunkcloud.com/v2/trace/otlp",
+                "https://ingest.eu1.observability.splunkcloud.com/v2/trace/otlp",
+            ),
+            (
+                "https://ingest.us0.observability.splunkcloud.com/v2/trace/otlp/",
+                "https://ingest.us0.observability.splunkcloud.com/v2/trace/otlp",
+            ),
+            (
+                "https://ingest.eu0.signalfx.com/v2/trace/otlp",
+                "https://ingest.eu0.signalfx.com/v2/trace/otlp",
+            ),
+            (
+                "https://example.com/prefix/v2/trace/otlp",
+                "https://example.com/prefix/v2/trace/otlp",
+            ),
+        ]
+    )
+    def test_normalize_traces_nonstandard_otlp_ingest_urls_unchanged(
+        self, input_url: str, expected: str
+    ) -> None:
+        """Splunk-style /v2/trace/otlp endpoints must not get /v1/traces appended."""
+        otel = OpenTelemetry()
+        self.assertEqual(
+            otel._normalize_otel_endpoint(input_url, "traces"),
+            expected,
+        )
+
     def test_normalize_endpoint_none(self):
         """Test that None endpoint returns None"""
         otel = OpenTelemetry()
@@ -1314,7 +1345,7 @@ class TestOpenTelemetryProtocolSelection(unittest.TestCase):
     @patch.dict(
         os.environ,
         {
-            "OTEL_EXPORTER": "otlp_http",
+            "OTEL_EXPORTER_OTLP_PROTOCOL": "http/protobuf",
             "OTEL_EXPORTER_OTLP_ENDPOINT": "http://collector:4318",
         },
         clear=False,
@@ -1338,7 +1369,7 @@ class TestOpenTelemetryProtocolSelection(unittest.TestCase):
     @patch.dict(
         os.environ,
         {
-            "OTEL_EXPORTER": "otlp_grpc",
+            "OTEL_EXPORTER_OTLP_PROTOCOL": "grpc",
             "OTEL_EXPORTER_OTLP_ENDPOINT": "http://collector:4317",
         },
         clear=False,
@@ -1358,6 +1389,60 @@ class TestOpenTelemetryProtocolSelection(unittest.TestCase):
         # Verify the gRPC exporter is used
         self.assertIsInstance(processor, BatchSpanProcessor)
         self.assertIsInstance(processor.span_exporter, OTLPSpanExporterGRPC)
+
+    @patch.dict(
+        os.environ,
+        {
+            "OTEL_EXPORTER": "otlp_http",
+            "OTEL_EXPORTER_OTLP_ENDPOINT": "http://collector:4318",
+        },
+        clear=False,
+    )
+    def test_protocol_selection_from_otel_exporter_fallback_http(self):
+        """OTEL_EXPORTER drives protocol when OTEL_EXPORTER_OTLP_PROTOCOL is unset."""
+        from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
+            OTLPSpanExporter as OTLPSpanExporterHTTP,
+        )
+        from opentelemetry.sdk.trace.export import BatchSpanProcessor
+
+        popped_protocol = os.environ.pop("OTEL_EXPORTER_OTLP_PROTOCOL", None)
+        try:
+            config = OpenTelemetryConfig.from_env()
+            self.assertEqual(config.exporter, "otlp_http")
+            otel = OpenTelemetry(config=config)
+            processor = otel._get_span_processor()
+            self.assertIsInstance(processor, BatchSpanProcessor)
+            self.assertIsInstance(processor.span_exporter, OTLPSpanExporterHTTP)
+        finally:
+            if popped_protocol is not None:
+                os.environ["OTEL_EXPORTER_OTLP_PROTOCOL"] = popped_protocol
+
+    @patch.dict(
+        os.environ,
+        {
+            "OTEL_EXPORTER": "otlp_grpc",
+            "OTEL_EXPORTER_OTLP_ENDPOINT": "http://collector:4317",
+        },
+        clear=False,
+    )
+    def test_protocol_selection_from_otel_exporter_fallback_grpc(self):
+        """OTEL_EXPORTER drives protocol when OTEL_EXPORTER_OTLP_PROTOCOL is unset."""
+        from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import (
+            OTLPSpanExporter as OTLPSpanExporterGRPC,
+        )
+        from opentelemetry.sdk.trace.export import BatchSpanProcessor
+
+        popped_protocol = os.environ.pop("OTEL_EXPORTER_OTLP_PROTOCOL", None)
+        try:
+            config = OpenTelemetryConfig.from_env()
+            self.assertEqual(config.exporter, "otlp_grpc")
+            otel = OpenTelemetry(config=config)
+            processor = otel._get_span_processor()
+            self.assertIsInstance(processor, BatchSpanProcessor)
+            self.assertIsInstance(processor.span_exporter, OTLPSpanExporterGRPC)
+        finally:
+            if popped_protocol is not None:
+                os.environ["OTEL_EXPORTER_OTLP_PROTOCOL"] = popped_protocol
 
     def test_http_exporter_endpoint_normalization_for_traces(self):
         """Test that HTTP trace exporter gets properly normalized endpoint"""
@@ -2751,3 +2836,26 @@ class TestResponseIdFallback(unittest.TestCase):
         mock_span.set_attribute.assert_any_call(
             "gen_ai.response.id", "litellm-img-call-101"
         )
+
+    def test_litellm_call_id_emitted_as_span_attribute(self):
+        """litellm.call_id must be set on the span from standard_logging_payload."""
+        otel = OpenTelemetry()
+        mock_span = MagicMock()
+
+        call_id = "my-litellm-call-uuid-456"
+        kwargs = {
+            "model": "gpt-4o",
+            "optional_params": {},
+            "litellm_params": {"custom_llm_provider": "openai"},
+            "standard_logging_object": {
+                "id": "chatcmpl-provider-id",
+                "litellm_call_id": call_id,
+                "call_type": "completion",
+                "metadata": {},
+            },
+        }
+        response_obj = {"id": "chatcmpl-provider-id", "model": "gpt-4o"}
+
+        otel.set_attributes(mock_span, kwargs, response_obj)
+
+        mock_span.set_attribute.assert_any_call("litellm.call_id", call_id)

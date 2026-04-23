@@ -65,9 +65,7 @@ def _make_prisma(
     prisma.db.litellm_tooltable.find_many = AsyncMock(
         return_value=find_many_rows if find_many_rows is not None else []
     )
-    prisma.db.litellm_tooltable.find_unique = AsyncMock(
-        return_value=find_unique_row
-    )
+    prisma.db.litellm_tooltable.find_unique = AsyncMock(return_value=find_unique_row)
     return prisma
 
 
@@ -202,8 +200,12 @@ async def test_update_tool_policy_calls_upsert_then_get_tool():
 @pytest.mark.asyncio
 async def test_get_tools_by_names_returns_policy_map():
     rows = [
-        _mock_row(tool_name="tool_a", input_policy="trusted", output_policy="untrusted"),
-        _mock_row(tool_name="tool_b", input_policy="blocked", output_policy="untrusted"),
+        _mock_row(
+            tool_name="tool_a", input_policy="trusted", output_policy="untrusted"
+        ),
+        _mock_row(
+            tool_name="tool_b", input_policy="blocked", output_policy="untrusted"
+        ),
     ]
     prisma = _make_prisma(find_many_rows=rows)
     result = await get_tools_by_names(prisma, ["tool_a", "tool_b"])
