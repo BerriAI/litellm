@@ -1,8 +1,29 @@
 import React, { useState, useEffect } from "react";
 
-import { Button } from "@tremor/react";
-import { Modal, Select } from "antd";
-import { getPromptsList, PromptSpec, ListPromptsResponse, deletePromptCall } from "./networking";
+import { Button } from "@/components/ui/button";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
+  getPromptsList,
+  PromptSpec,
+  ListPromptsResponse,
+  deletePromptCall,
+} from "./networking";
 import PromptTable from "./prompts/prompt_table";
 import PromptInfoView from "./prompts/prompt_info";
 import AddPromptForm from "./prompts/add_prompt_form";
@@ -15,27 +36,36 @@ interface PromptsProps {
   userRole?: string;
 }
 
+const ALL_ENVIRONMENTS = "__all__";
+
 const PromptsPanel: React.FC<PromptsProps> = ({ accessToken, userRole }) => {
   const [promptsList, setPromptsList] = useState<PromptSpec[]>([]);
   const [isLoading, setIsLoading] = useState(false);
-  const [selectedEnvironment, setSelectedEnvironment] = useState<string | undefined>(undefined);
+  const [selectedEnvironment, setSelectedEnvironment] = useState<
+    string | undefined
+  >(undefined);
   const [selectedPromptId, setSelectedPromptId] = useState<string | null>(null);
   const [isAddModalVisible, setIsAddModalVisible] = useState(false);
   const [showEditorView, setShowEditorView] = useState(false);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const [editPromptData, setEditPromptData] = useState<any>(null);
   const [isDeleting, setIsDeleting] = useState(false);
-  const [promptToDelete, setPromptToDelete] = useState<{ id: string; name: string } | null>(null);
+  const [promptToDelete, setPromptToDelete] = useState<{
+    id: string;
+    name: string;
+  } | null>(null);
 
   const isAdmin = userRole ? isAdminRole(userRole) : false;
 
   const fetchPrompts = async () => {
-    if (!accessToken) {
-      return;
-    }
+    if (!accessToken) return;
 
     setIsLoading(true);
     try {
-      const response: ListPromptsResponse = await getPromptsList(accessToken, selectedEnvironment);
+      const response: ListPromptsResponse = await getPromptsList(
+        accessToken,
+        selectedEnvironment,
+      );
       console.log(`prompts: ${JSON.stringify(response)}`);
       setPromptsList(response.prompts);
     } catch (error) {
@@ -47,6 +77,7 @@ const PromptsPanel: React.FC<PromptsProps> = ({ accessToken, userRole }) => {
 
   useEffect(() => {
     fetchPrompts();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [accessToken, selectedEnvironment]);
 
   const handlePromptClick = (promptId: string) => {
@@ -54,34 +85,27 @@ const PromptsPanel: React.FC<PromptsProps> = ({ accessToken, userRole }) => {
   };
 
   const handleAddPrompt = () => {
-    if (selectedPromptId) {
-      setSelectedPromptId(null);
-    }
+    if (selectedPromptId) setSelectedPromptId(null);
     setEditPromptData(null);
     setShowEditorView(true);
   };
 
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const handleEditPrompt = (promptData: any) => {
     setEditPromptData(promptData);
     setShowEditorView(true);
   };
 
   const handleAddPromptFromFile = () => {
-    if (selectedPromptId) {
-      setSelectedPromptId(null);
-    }
+    if (selectedPromptId) setSelectedPromptId(null);
     setIsAddModalVisible(true);
   };
 
-  const handleCloseModal = () => {
-    setIsAddModalVisible(false);
-  };
-
+  const handleCloseModal = () => setIsAddModalVisible(false);
   const handleCloseEditor = () => {
     setShowEditorView(false);
     setEditPromptData(null);
   };
-
   const handleSuccess = () => {
     fetchPrompts();
     setShowEditorView(false);
@@ -99,8 +123,10 @@ const PromptsPanel: React.FC<PromptsProps> = ({ accessToken, userRole }) => {
     setIsDeleting(true);
     try {
       await deletePromptCall(accessToken, promptToDelete.id);
-      NotificationsManager.success(`Prompt "${promptToDelete.name}" deleted successfully`);
-      fetchPrompts(); // Refresh the list
+      NotificationsManager.success(
+        `Prompt "${promptToDelete.name}" deleted successfully`,
+      );
+      fetchPrompts();
     } catch (error) {
       console.error("Error deleting prompt:", error);
       NotificationsManager.fromBackend("Failed to delete prompt");
@@ -108,10 +134,6 @@ const PromptsPanel: React.FC<PromptsProps> = ({ accessToken, userRole }) => {
       setIsDeleting(false);
       setPromptToDelete(null);
     }
-  };
-
-  const handleDeleteCancel = () => {
-    setPromptToDelete(null);
   };
 
   return (
@@ -139,22 +161,32 @@ const PromptsPanel: React.FC<PromptsProps> = ({ accessToken, userRole }) => {
               <Button onClick={handleAddPrompt} disabled={!accessToken}>
                 + Add New Prompt
               </Button>
-              <Button onClick={handleAddPromptFromFile} disabled={!accessToken} variant="secondary">
+              <Button
+                variant="secondary"
+                onClick={handleAddPromptFromFile}
+                disabled={!accessToken}
+              >
                 Upload .prompt File
               </Button>
             </div>
             <Select
-              placeholder="All Environments"
-              allowClear
-              value={selectedEnvironment}
-              onChange={(value) => setSelectedEnvironment(value)}
-              style={{ width: 180 }}
-              options={[
-                { label: "Development", value: "development" },
-                { label: "Staging", value: "staging" },
-                { label: "Production", value: "production" },
-              ]}
-            />
+              value={selectedEnvironment ?? ALL_ENVIRONMENTS}
+              onValueChange={(v) =>
+                setSelectedEnvironment(v === ALL_ENVIRONMENTS ? undefined : v)
+              }
+            >
+              <SelectTrigger className="w-44">
+                <SelectValue placeholder="All Environments" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={ALL_ENVIRONMENTS}>
+                  All Environments
+                </SelectItem>
+                <SelectItem value="development">Development</SelectItem>
+                <SelectItem value="staging">Staging</SelectItem>
+                <SelectItem value="production">Production</SelectItem>
+              </SelectContent>
+            </Select>
           </div>
 
           <PromptTable
@@ -175,20 +207,33 @@ const PromptsPanel: React.FC<PromptsProps> = ({ accessToken, userRole }) => {
         onSuccess={handleSuccess}
       />
 
-      {promptToDelete && (
-        <Modal
-          title="Delete Prompt"
-          open={promptToDelete !== null}
-          onOk={handleDeleteConfirm}
-          onCancel={handleDeleteCancel}
-          confirmLoading={isDeleting}
-          okText="Delete"
-          okButtonProps={{ danger: true }}
-        >
-          <p>Are you sure you want to delete prompt: {promptToDelete.name} ?</p>
-          <p>This action cannot be undone.</p>
-        </Modal>
-      )}
+      <AlertDialog
+        open={promptToDelete !== null}
+        onOpenChange={(o) => (!o ? setPromptToDelete(null) : undefined)}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete Prompt</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to delete prompt: {promptToDelete?.name} ?
+              This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={isDeleting}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={isDeleting}
+              onClick={(e) => {
+                e.preventDefault();
+                handleDeleteConfirm();
+              }}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              {isDeleting ? "Deleting…" : "Delete"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 };
