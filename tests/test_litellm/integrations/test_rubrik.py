@@ -58,9 +58,7 @@ class TestInitialization:
 
     def test_init_with_constructor_params(self):
         with patch("asyncio.create_task", Mock()):
-            handler = RubrikLogger(
-                api_key="ctor-key", api_base="http://ctor-host:9090"
-            )
+            handler = RubrikLogger(api_key="ctor-key", api_base="http://ctor-host:9090")
             assert handler.key == "ctor-key"
             assert (
                 handler.tool_blocking_endpoint
@@ -152,9 +150,7 @@ class TestInitialization:
         assert handler._headers["Content-Type"] == "application/json"
 
     def test_headers_without_api_key(self):
-        with patch.dict(
-            os.environ, {"RUBRIK_WEBHOOK_URL": "http://host"}, clear=True
-        ):
+        with patch.dict(os.environ, {"RUBRIK_WEBHOOK_URL": "http://host"}, clear=True):
             with patch("asyncio.create_task", Mock()):
                 h = RubrikLogger()
                 assert "Authorization" not in h._headers
@@ -351,9 +347,7 @@ def _echo_service():
 @pytest.mark.asyncio
 class TestApplyGuardrail:
     async def test_skips_requests(self, handler):
-        inputs = make_inputs_with_tools(
-            [make_tool_call_dict("call_1", "test_tool")]
-        )
+        inputs = make_inputs_with_tools([make_tool_call_dict("call_1", "test_tool")])
         result = await handler.apply_guardrail(
             inputs=inputs, request_data={}, input_type="request"
         )
@@ -464,9 +458,7 @@ class TestApplyGuardrail:
 
     async def test_blocking_service_payload_format(self, handler):
         tc1 = make_tool_call_dict("call_1", "get_weather", '{"location": "SF"}')
-        tc2 = make_tool_call_dict(
-            "call_2", "send_email", '{"to": "user@example.com"}'
-        )
+        tc2 = make_tool_call_dict("call_2", "send_email", '{"to": "user@example.com"}')
         inputs = make_inputs_with_tools([tc1, tc2])
 
         captured_payload: Dict[str, Any] = {}
@@ -605,9 +597,7 @@ class TestApplyGuardrailAnthropicFormat:
         inputs = make_inputs_with_tools([tc])
 
         mock_client = AsyncMock()
-        mock_client.post = AsyncMock(
-            side_effect=httpx.TimeoutException("Timeout")
-        )
+        mock_client.post = AsyncMock(side_effect=httpx.TimeoutException("Timeout"))
         handler.tool_blocking_client = mock_client
 
         result = await handler.apply_guardrail(
@@ -728,5 +718,7 @@ class TestResolveModel:
 
         response = Mock()
         response.model = ""
-        result = RubrikLogger._resolve_model({"response": response}, {"model": "fallback"})
+        result = RubrikLogger._resolve_model(
+            {"response": response}, {"model": "fallback"}
+        )
         assert result == "unknown"

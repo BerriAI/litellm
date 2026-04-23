@@ -702,7 +702,10 @@ async def test_promote_message_start_cache_when_message_stop_omits_cache_fields(
             "delta": {"stop_reason": "end_turn", "stop_sequence": None},
             "usage": {"input_tokens": 10, "output_tokens": 181},
         }
-        yield {"type": "message_stop", "usage": {"input_tokens": 10, "output_tokens": 181}}
+        yield {
+            "type": "message_stop",
+            "usage": {"input_tokens": 10, "output_tokens": 181},
+        }
 
     merged: list[dict] = []
     async for chunk in cfg._promote_message_stop_usage(_stream()):
@@ -756,7 +759,11 @@ async def test_unified_bedrock_messages_cache_on_start_only_never_negative_cost(
                 },
             },
         }
-        yield {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}}
+        yield {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {"type": "text", "text": ""},
+        }
         yield {
             "type": "content_block_delta",
             "index": 0,
@@ -768,7 +775,10 @@ async def test_unified_bedrock_messages_cache_on_start_only_never_negative_cost(
             "delta": {"stop_reason": "end_turn", "stop_sequence": None},
             "usage": {"output_tokens": 181, "input_tokens": 10},
         }
-        yield {"type": "message_stop", "usage": {"input_tokens": 10, "output_tokens": 181}}
+        yield {
+            "type": "message_stop",
+            "usage": {"input_tokens": 10, "output_tokens": 181},
+        }
 
     logging_obj = LiteLLMLoggingObj(
         model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
