@@ -1,13 +1,30 @@
+import React from "react";
 import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { Member } from "@/components/networking";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { isProxyAdminRole, isUserTeamAdminForSingleTeam } from "@/utils/roles";
-import { InfoCircleOutlined } from "@ant-design/icons";
-import { Space, Tooltip, Typography } from "antd";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import { Info } from "lucide-react";
 import type { ColumnsType } from "antd/es/table";
 import MemberTable from "@/components/common_components/MemberTable";
 import { TeamData } from "./TeamInfo";
+
+const InfoTip: React.FC<{ children: React.ReactNode }> = ({ children }) => (
+  <TooltipProvider>
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Info className="h-3 w-3 text-muted-foreground" />
+      </TooltipTrigger>
+      <TooltipContent className="max-w-xs">{children}</TooltipContent>
+    </Tooltip>
+  </TooltipProvider>
+);
 
 interface TeamMemberTabProps {
   teamData: TeamData;
@@ -92,47 +109,57 @@ export default function TeamMemberTab({
   const extraColumns: ColumnsType<Member> = [
     {
       title: (
-        <Space direction="horizontal">
+        <span className="inline-flex items-center gap-2">
           Model Scope
-          <Tooltip title="Models this member can access. Empty means they inherit all team models.">
-            <InfoCircleOutlined />
-          </Tooltip>
-        </Space>
+          <InfoTip>
+            Models this member can access. Empty means they inherit all team
+            models.
+          </InfoTip>
+        </span>
       ),
       key: "model_scope",
       render: (_: unknown, record: Member) => {
         const models = getUserAllowedModels(record.user_id);
         if (!models) {
-          return <Typography.Text type="secondary">(all team models)</Typography.Text>;
+          return (
+            <span className="text-muted-foreground">(all team models)</span>
+          );
         }
         const displayed = models.slice(0, 2);
         const remaining = models.length - displayed.length;
         return (
-          <Space wrap>
+          <div className="flex flex-wrap gap-2 items-center">
             {displayed.map((m) => (
-              <Typography.Text key={m} code style={{ fontSize: "12px" }}>{m}</Typography.Text>
+              <code key={m} className="text-xs">
+                {m}
+              </code>
             ))}
             {remaining > 0 && (
-              <Tooltip title={models.slice(2).join(", ")}>
-                <Typography.Text type="secondary">+{remaining} more</Typography.Text>
-              </Tooltip>
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <span className="text-muted-foreground">
+                      +{remaining} more
+                    </span>
+                  </TooltipTrigger>
+                  <TooltipContent>{models.slice(2).join(", ")}</TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
             )}
-          </Space>
+          </div>
         );
       },
     },
     {
       title: (
-        <Space direction="horizontal">
+        <span className="inline-flex items-center gap-2">
           Team Member Spend (USD)
-          <Tooltip title="This is the amount spent by a user in the team.">
-            <InfoCircleOutlined />
-          </Tooltip>
-        </Space>
+          <InfoTip>This is the amount spent by a user in the team.</InfoTip>
+        </span>
       ),
       key: "spend",
       render: (_: unknown, record: Member) => (
-        <Typography.Text>${formatNumberWithCommas(getUserSpend(record.user_id), 4)}</Typography.Text>
+        <span>${formatNumberWithCommas(getUserSpend(record.user_id), 4)}</span>
       ),
     },
     {
@@ -141,24 +168,22 @@ export default function TeamMemberTab({
       render: (_: unknown, record: Member) => {
         const budget = getUserBudget(record.user_id);
         return (
-          <Typography.Text>
+          <span>
             {budget ? `$${formatNumberWithCommas(Number(budget), 4)}` : "No Limit"}
-          </Typography.Text>
+          </span>
         );
       },
     },
     {
       title: (
-        <Space direction="horizontal">
+        <span className="inline-flex items-center gap-2">
           Team Member Rate Limits
-          <Tooltip title="Rate limits for this member's usage within this team.">
-            <InfoCircleOutlined />
-          </Tooltip>
-        </Space>
+          <InfoTip>Rate limits for this member&apos;s usage within this team.</InfoTip>
+        </span>
       ),
       key: "rate_limits",
       render: (_: unknown, record: Member) => (
-        <Typography.Text>{getUserRateLimits(record.user_id)}</Typography.Text>
+        <span>{getUserRateLimits(record.user_id)}</span>
       ),
     },
   ];
