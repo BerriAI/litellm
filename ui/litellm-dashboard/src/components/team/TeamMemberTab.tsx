@@ -1,6 +1,7 @@
 import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { Member } from "@/components/networking";
+import { formatBudgetReset } from "@/utils/budgetUtils";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { isProxyAdminRole, isUserTeamAdminForSingleTeam } from "@/utils/roles";
 import { InfoCircleOutlined } from "@ant-design/icons";
@@ -88,6 +89,12 @@ export default function TeamMemberTab({
     return models && models.length > 0 ? models : null;
   };
 
+  const getUserBudgetReset = (userId: string | null): string | null => {
+    if (!userId) return null;
+    const membership = teamData.team_memberships.find((tm) => tm.user_id === userId);
+    return formatBudgetReset(membership?.litellm_budget_table?.budget_reset_at);
+  };
+
   const extraColumns: ColumnsType<Member> = [
     {
       title: (
@@ -143,6 +150,18 @@ export default function TeamMemberTab({
           <Typography.Text>
             {budget ? `$${formatNumberWithCommas(Number(budget), 4)}` : "No Limit"}
           </Typography.Text>
+        );
+      },
+    },
+    {
+      title: "Budget Reset",
+      key: "budget_reset",
+      render: (_: unknown, record: Member) => {
+        const reset = getUserBudgetReset(record.user_id);
+        return reset ? (
+          <Typography.Text>{reset}</Typography.Text>
+        ) : (
+          <Typography.Text type="secondary">—</Typography.Text>
         );
       },
     },
