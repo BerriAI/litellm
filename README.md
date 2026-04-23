@@ -407,15 +407,14 @@ Support for more providers. Missing a provider or LLM Platform, raise a [feature
 ### Run in Developer Mode
 #### Services
 1. Setup .env file in root
-2. Run dependant services `docker-compose up db prometheus`
+2. Run dependent services `docker-compose up db prometheus`
 
 #### Backend
 1. (In root) create virtual environment `python -m venv .venv`
 2. Activate virtual environment `source .venv/bin/activate`
 3. Install dependencies `uv sync --all-extras --group proxy-dev`
-4. `uv run prisma generate`
-5. `prisma generate`
-6. Start proxy backend `python litellm/proxy/proxy_cli.py`
+4. `uv run prisma generate --schema litellm/proxy/schema.prisma`
+5. Start proxy backend `python litellm/proxy/proxy_cli.py`
 
 #### Frontend
 1. Navigate to `ui/litellm-dashboard`
