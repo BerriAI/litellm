@@ -126,7 +126,7 @@ print(result)
     - Tool calls parsing on streaming - [PR](https://github.com/BerriAI/litellm/pull/11171)
 - **[Cohere](../../docs/providers/cohere)**
     - Swapped Cohere and Cohere Chat provider positioning - [PR](https://github.com/BerriAI/litellm/pull/11173)
-- **[Nebius AI Studio](../../docs/providers/nebius)**
+- **[Nebius Token Factory](../../docs/providers/nebius)**
     - New provider integration - [PR](https://github.com/BerriAI/litellm/pull/11143)
 
 ## LLM API Endpoints
