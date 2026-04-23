@@ -74,6 +74,86 @@ def test_translate_streaming_openai_chunk_to_anthropic_content_block():
     }
 
 
+def test_iter_streaming_tool_calls_multiple_tool_calls():
+    choices = [
+        StreamingChoices(
+            finish_reason=None,
+            index=0,
+            delta=Delta(
+                provider_specific_fields=None,
+                content=None,
+                role="assistant",
+                function_call=None,
+                tool_calls=[
+                    ChatCompletionDeltaToolCall(
+                        id="call_weather",
+                        function=Function(
+                            arguments='{"location": "Boston"}', name="get_weather"
+                        ),
+                        type="function",
+                        index=0,
+                    ),
+                    ChatCompletionDeltaToolCall(
+                        id="call_time",
+                        function=Function(
+                            arguments='{"timezone": "UTC"}', name="get_time"
+                        ),
+                        type="function",
+                        index=1,
+                    ),
+                ],
+                audio=None,
+            ),
+            logprobs=None,
+        )
+    ]
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    tool_calls = adapter.iter_streaming_tool_calls(choices=choices)
+
+    assert [tool_call.id for tool_call in tool_calls] == ["call_weather", "call_time"]
+    assert [tool_call.index for tool_call in tool_calls] == [0, 1]
+
+
+def test_translate_streaming_tool_call_helpers():
+    tool_call = ChatCompletionDeltaToolCall(
+        id="call_time",
+        function=Function(arguments='{"timezone":"UTC"}', name="get_time"),
+        type="function",
+        index=1,
+    )
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    content_block = adapter.translate_streaming_tool_call_to_anthropic_content_block(
+        tool_call
+    )
+    content_delta = adapter.translate_streaming_tool_call_to_anthropic_delta(tool_call)
+
+    assert content_block == {
+        "type": "tool_use",
+        "id": "call_time",
+        "name": "get_time",
+        "input": {},
+    }
+    assert content_delta == {
+        "type": "input_json_delta",
+        "partial_json": '{"timezone":"UTC"}',
+    }
+
+
+def test_translate_streaming_tool_call_to_anthropic_delta_empty_arguments():
+    tool_call = ChatCompletionDeltaToolCall(
+        id="call_weather",
+        function=Function(arguments="", name="get_weather"),
+        type="function",
+        index=0,
+    )
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+
+    assert adapter.translate_streaming_tool_call_to_anthropic_delta(tool_call) is None
+
+
 def test_translate_streaming_openai_chunk_to_anthropic_thinking_content_block():
     choices = [
         StreamingChoices(
@@ -493,7 +573,7 @@ def test_translate_openai_content_to_anthropic_thinking_and_redacted_thinking():
     assert result[1]["data"] == "REDACTED"
 
 
-def test_translate_streaming_openai_chunk_to_anthropic_with_thinking():
+def test_translate_streaming_openai_chunk_to_anthropic_with_signature():
     choices = [
         StreamingChoices(
             finish_reason=None,
