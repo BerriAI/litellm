@@ -3937,8 +3937,13 @@ def test_vertex_ai_gemini_audio_ogg():
     client = HTTPHandler()
     httpx_mock = MagicMock(return_value=mock_response)
 
-    with patch.object(client, "post", new=httpx_mock), patch.object(
-        VertexBase, "_ensure_access_token", return_value=("fake-token", "fake-project")
+    with (
+        patch.object(client, "post", new=httpx_mock),
+        patch.object(
+            VertexBase,
+            "_ensure_access_token",
+            return_value=("fake-token", "fake-project"),
+        ),
     ):
         response = completion(
             model="vertex_ai/gemini-2.0-flash",

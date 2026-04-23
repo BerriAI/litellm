@@ -96,4 +96,3 @@ class TestPydanticAITransformation:
         assert "message" in result["result"]
         assert result["result"]["message"]["role"] == "agent"
         assert result["result"]["message"]["parts"][0]["text"] == "The answer is 4."
-

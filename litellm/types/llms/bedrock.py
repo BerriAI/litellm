@@ -203,7 +203,9 @@ class ConverseResponseBlock(TypedDict, total=False):
         str
     ]  # end_turn | tool_use | max_tokens | stop_sequence | content_filtered
     usage: Required[ConverseTokenUsageBlock]
-    serviceTier: ServiceTierBlock  # Optional - only present when serviceTier was sent in request
+    serviceTier: (
+        ServiceTierBlock  # Optional - only present when serviceTier was sent in request
+    )
 
 
 class ToolJsonSchemaBlock(TypedDict, total=False):
@@ -995,3 +997,47 @@ class BedrockToolBlock(TypedDict, total=False):
     toolSpec: Optional[ToolSpecBlock]
     systemTool: Optional[SystemToolBlock]  # For Nova grounding
     cachePoint: Optional[CachePointBlock]
+
+
+class BedrockInvokeAnthropicMessagesRequest(TypedDict, total=False):
+    """
+    Top-level request body accepted by AWS Bedrock `InvokeModel` /
+    `InvokeModelWithResponseStream` when calling an Anthropic Claude model with
+    the Messages API format. The LiteLLM /v1/messages → Bedrock Invoke
+    transformation filters outgoing requests to the keys of this TypedDict; any
+    other field (Anthropic-only extension, internal metadata, future addition)
+    is dropped before signing so Bedrock doesn't 400 with
+    "Extra inputs are not permitted".
+
+    Reference:
+        https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-anthropic-claude-messages.html
+        https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-anthropic-claude-messages-request-response.html
+
+    Editing this type is the single source of truth — the runtime allowlist in
+    `AmazonAnthropicClaudeMessagesConfig.BEDROCK_INVOKE_ALLOWED_TOP_LEVEL_FIELDS`
+    is derived from `__annotations__`, and a test asserts the resolved set
+    exactly, so any edit forces a conscious review.
+
+    Value types are intentionally loose (`list`, `dict`) — this type exists to
+    pin the allowed field names, not to validate nested structure.
+    """
+
+    # Required by Bedrock
+    anthropic_version: str
+    max_tokens: int
+    messages: list
+
+    # Documented optional fields
+    anthropic_beta: List[str]
+    system: object  # str or list[TextBlock]
+    stop_sequences: List[str]
+    temperature: float
+    top_p: float
+    top_k: int
+    tools: list
+    tool_choice: dict
+
+    # `thinking` is required for Opus 4.5 / Sonnet 4 extended thinking,
+    # `metadata` is part of the common Anthropic Messages API shape.
+    thinking: dict
+    metadata: dict
