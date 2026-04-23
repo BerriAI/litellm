@@ -1,5 +1,12 @@
-import { Text, TextInput } from "@tremor/react";
-import { Button as AntButton, Form, Modal, Select } from "antd";
+import { Form, Select } from "antd";
+import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
 import React, { useEffect, useState } from "react";
 import NumericalInput from "../shared/numerical_input";
 
@@ -23,6 +30,7 @@ interface ModalConfig {
     label: string | React.ReactNode;
     type: "input" | "select" | "numerical" | "multi-select";
     options?: Array<{ label: string; value: string }>;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     rules?: any[];
     step?: number;
     min?: number;
@@ -50,25 +58,20 @@ const MemberModal = <T extends BaseMember>({
   const [form] = Form.useForm();
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  console.log("Initial Data:", initialData);
-
   // Reset form and set initial values when modal becomes visible or initialData changes
   useEffect(() => {
     if (visible) {
       if (mode === "edit" && initialData) {
-        // For edit mode, use the initialData values
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const d = initialData as any;
         const formValues = {
           ...initialData,
-          // Ensure role is set correctly for editing
           role: initialData.role || config.defaultRole,
-          // Keep numeric values as numbers for NumericalInput components
-          max_budget_in_team: (initialData as any).max_budget_in_team || null,
-          tpm_limit: (initialData as any).tpm_limit || null,
-          rpm_limit: (initialData as any).rpm_limit || null,
-          // Keep array values for multi-select fields
-          allowed_models: (initialData as any).allowed_models || [],
+          max_budget_in_team: d.max_budget_in_team || null,
+          tpm_limit: d.tpm_limit || null,
+          rpm_limit: d.rpm_limit || null,
+          allowed_models: d.allowed_models || [],
         };
-        console.log("Setting form values:", formValues);
         form.setFieldsValue(formValues);
       } else {
         // For add mode, reset to defaults
@@ -80,29 +83,29 @@ const MemberModal = <T extends BaseMember>({
     }
   }, [visible, initialData, mode, form, config.defaultRole, config.roleOptions]);
 
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const handleSubmit = async (values: any) => {
     try {
       setIsSubmitting(true);
-      // Trim string values and clean up form data
       const formData = Object.entries(values).reduce((acc, [key, value]) => {
         if (typeof value === "string") {
           const trimmedValue = value.trim();
-          // For empty strings on optional numeric fields, set to null
-          if (trimmedValue === "" && (key === "max_budget_in_team" || key === "tpm_limit" || key === "rpm_limit")) {
+          if (
+            trimmedValue === "" &&
+            (key === "max_budget_in_team" ||
+              key === "tpm_limit" ||
+              key === "rpm_limit")
+          ) {
             return { ...acc, [key]: null };
           }
           return { ...acc, [key]: trimmedValue };
         }
-        // For numeric values from NumericalInput, use as-is (already numbers)
         return { ...acc, [key]: value };
       }, {}) as T;
 
-      console.log("Submitting form data:", formData);
       await Promise.resolve(onSubmit(formData));
       form.resetFields();
-      // NotificationsManager.success(`Successfully ${mode === 'add' ? 'added' : 'updated'} member`);
     } catch (error) {
-      // NotificationManager.fromBackend('Failed to submit form');
       console.error("Form submission error:", error);
     } finally {
       setIsSubmitting(false);
@@ -119,6 +122,7 @@ const MemberModal = <T extends BaseMember>({
     label: string | React.ReactNode;
     type: "input" | "select" | "numerical" | "multi-select";
     options?: Array<{ label: string; value: string }>;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     rules?: any[];
     step?: number;
     min?: number;
@@ -126,7 +130,7 @@ const MemberModal = <T extends BaseMember>({
   }) => {
     switch (field.type) {
       case "input":
-        return <TextInput placeholder={field.placeholder} />;
+        return <Input placeholder={field.placeholder} />;
       case "numerical":
         return (
           <NumericalInput
@@ -161,92 +165,117 @@ const MemberModal = <T extends BaseMember>({
   };
 
   return (
-    <Modal
-      title={config.title || (mode === "add" ? "Add Member" : "Edit Member")}
-      open={visible}
-      width={1000}
-      footer={null}
-      onCancel={onCancel}
-    >
-      <Form form={form} onFinish={handleSubmit} labelCol={{ span: 8 }} wrapperCol={{ span: 16 }} labelAlign="left">
-        {config.showEmail && (
-          <Form.Item
-            label="Email"
-            name="user_email"
-            className="mb-4"
-            rules={[{ type: "email", message: "Please enter a valid email!" }]}
-          >
-            <TextInput placeholder="user@example.com" />
-          </Form.Item>
-        )}
-
-        {config.showEmail && config.showUserId && (
-          <div className="text-center mb-4">
-            <Text>OR</Text>
-          </div>
-        )}
-
-        {config.showUserId && (
-          <Form.Item label="User ID" name="user_id" className="mb-4">
-            <TextInput placeholder="user_123" />
-          </Form.Item>
-        )}
-
-        <Form.Item
-          label={
-            <div className="flex items-center gap-2">
-              <span>Role</span>
-              {mode === "edit" && initialData && (
-                <span className="text-gray-500 text-sm">(Current: {getRoleLabel(initialData.role)})</span>
-              )}
-            </div>
-          }
-          name="role"
-          className="mb-4"
-          rules={[{ required: true, message: "Please select a role!" }]}
+    <Dialog open={visible} onOpenChange={(o) => (!o ? onCancel() : undefined)}>
+      <DialogContent className="max-w-[1000px]">
+        <DialogHeader>
+          <DialogTitle>
+            {config.title || (mode === "add" ? "Add Member" : "Edit Member")}
+          </DialogTitle>
+        </DialogHeader>
+        <Form
+          form={form}
+          onFinish={handleSubmit}
+          labelCol={{ span: 8 }}
+          wrapperCol={{ span: 16 }}
+          labelAlign="left"
         >
-          <Select>
-            {mode === "edit" && initialData
-              ? [
-                  // Current role first
-                  ...config.roleOptions.filter((option) => option.value === initialData.role),
-                  // Then all other roles
-                  ...config.roleOptions.filter((option) => option.value !== initialData.role),
-                ].map((option) => (
-                  <Select.Option key={option.value} value={option.value}>
-                    {option.label}
-                  </Select.Option>
-                ))
-              : config.roleOptions.map((option) => (
-                  <Select.Option key={option.value} value={option.value}>
-                    {option.label}
-                  </Select.Option>
-                ))}
-          </Select>
-        </Form.Item>
+          {config.showEmail && (
+            <Form.Item
+              label="Email"
+              name="user_email"
+              className="mb-4"
+              rules={[
+                { type: "email", message: "Please enter a valid email!" },
+              ]}
+            >
+              <Input placeholder="user@example.com" />
+            </Form.Item>
+          )}
 
-        {config.additionalFields?.map((field) => (
-          <Form.Item key={field.name} label={field.label} name={field.name} className="mb-4" rules={field.rules}>
-            {renderField(field)}
+          {config.showEmail && config.showUserId && (
+            <div className="text-center mb-4">
+              <span>OR</span>
+            </div>
+          )}
+
+          {config.showUserId && (
+            <Form.Item label="User ID" name="user_id" className="mb-4">
+              <Input placeholder="user_123" />
+            </Form.Item>
+          )}
+
+          <Form.Item
+            label={
+              <div className="flex items-center gap-2">
+                <span>Role</span>
+                {mode === "edit" && initialData && (
+                  <span className="text-muted-foreground text-sm">
+                    (Current: {getRoleLabel(initialData.role)})
+                  </span>
+                )}
+              </div>
+            }
+            name="role"
+            className="mb-4"
+            rules={[{ required: true, message: "Please select a role!" }]}
+          >
+            <Select>
+              {mode === "edit" && initialData
+                ? [
+                    ...config.roleOptions.filter(
+                      (option) => option.value === initialData.role,
+                    ),
+                    ...config.roleOptions.filter(
+                      (option) => option.value !== initialData.role,
+                    ),
+                  ].map((option) => (
+                    <Select.Option key={option.value} value={option.value}>
+                      {option.label}
+                    </Select.Option>
+                  ))
+                : config.roleOptions.map((option) => (
+                    <Select.Option key={option.value} value={option.value}>
+                      {option.label}
+                    </Select.Option>
+                  ))}
+            </Select>
           </Form.Item>
-        ))}
 
-        <div className="text-right mt-6">
-          <AntButton onClick={onCancel} className="mr-2" disabled={isSubmitting}>
-            Cancel
-          </AntButton>
-          <AntButton type="default" htmlType="submit" loading={isSubmitting}>
-            {mode === "add"
-              ? isSubmitting
-                ? "Adding..."
-                : "Add Member"
-              : isSubmitting
-                ? "Saving..."
-                : "Save Changes"}
-          </AntButton>
-        </div>
-      </Form>
-    </Modal>
+          {config.additionalFields?.map((field) => (
+            <Form.Item
+              key={field.name}
+              label={field.label}
+              name={field.name}
+              className="mb-4"
+              rules={field.rules}
+            >
+              {renderField(field)}
+            </Form.Item>
+          ))}
+
+          <div className="text-right mt-6">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={onCancel}
+              className="mr-2"
+              disabled={isSubmitting}
+            >
+              Cancel
+            </Button>
+            <Button type="submit" disabled={isSubmitting}>
+              {mode === "add"
+                ? isSubmitting
+                  ? "Adding..."
+                  : "Add Member"
+                : isSubmitting
+                  ? "Saving..."
+                  : "Save Changes"}
+            </Button>
+          </div>
+        </Form>
+      </DialogContent>
+    </Dialog>
   );
 };
 
