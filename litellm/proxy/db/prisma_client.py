@@ -59,11 +59,12 @@ class PrismaWrapper:
 
     @staticmethod
     async def _kill_engine_process(pid: int) -> None:
-        """Force-kill an orphaned engine subprocess to prevent DB connection pool leaks.
+        """Force-kill the query-engine subprocess during a Prisma client reconnect.
 
-        Called when disconnect() fails and the old engine process may still be
-        holding open connections. Sends SIGTERM for graceful shutdown, waits
-        briefly, then SIGKILL as a backstop.
+        Used by the reconnect paths in place of `disconnect()`, whose
+        synchronous `process.wait()` blocks the asyncio event loop for
+        30-120s on DB outages (#26191). Sends SIGTERM for graceful shutdown,
+        waits briefly, then SIGKILL as a backstop.
         """
         if pid <= 0:
             return
@@ -72,7 +73,7 @@ class PrismaWrapper:
         except (ProcessLookupError, PermissionError, OSError):
             return  # Already dead or inaccessible
         verbose_proxy_logger.warning(
-            "Sent SIGTERM to orphaned prisma-query-engine PID %s after failed disconnect.",
+            "Sent SIGTERM to prisma-query-engine PID %s during client reconnect.",
             pid,
         )
         # Brief wait for graceful shutdown, then force-kill
