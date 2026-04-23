@@ -1,8 +1,28 @@
 import React, { useState, useEffect } from "react";
-import { Table, TableBody, TableCell, TableHead, TableHeaderCell, TableRow, Button } from "@tremor/react";
-import { SwitchVerticalIcon, ChevronUpIcon, ChevronDownIcon, TrashIcon } from "@heroicons/react/outline";
-import { Tooltip } from "antd";
-import { CopyOutlined } from "@ant-design/icons";
+// eslint-disable-next-line litellm-ui/no-banned-ui-imports
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeaderCell,
+  TableRow,
+} from "@tremor/react";
+import { Button } from "@/components/ui/button";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import { cn } from "@/lib/utils";
+import {
+  ArrowUpDown,
+  ChevronDown,
+  ChevronUp,
+  Copy,
+  Trash2,
+} from "lucide-react";
 import { PromptSpec, modelHubCall } from "@/components/networking";
 import {
   ColumnDef,
@@ -27,6 +47,7 @@ interface PromptTableProps {
 interface ModelGroupInfo {
   model_group: string;
   providers: string[];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   [key: string]: any;
 }
 
@@ -38,13 +59,17 @@ const PromptTable: React.FC<PromptTableProps> = ({
   accessToken,
   isAdmin,
 }) => {
-  const [sorting, setSorting] = useState<SortingState>([{ id: "created_at", desc: true }]);
-  const [modelHubData, setModelHubData] = useState<Map<string, ModelGroupInfo>>(new Map());
+  const [sorting, setSorting] = useState<SortingState>([
+    { id: "created_at", desc: true },
+  ]);
+  const [modelHubData, setModelHubData] = useState<Map<string, ModelGroupInfo>>(
+    new Map(),
+  );
 
   useEffect(() => {
     const fetchModelHubData = async () => {
       if (!accessToken) return;
-      
+
       try {
         const response = await modelHubCall(accessToken);
         if (response?.data) {
@@ -62,7 +87,6 @@ const PromptTable: React.FC<PromptTableProps> = ({
     fetchModelHubData();
   }, [accessToken]);
 
-  // Format date helper function
   const formatDate = (dateString?: string) => {
     if (!dateString) return "-";
     const date = new Date(dateString);
@@ -77,30 +101,44 @@ const PromptTable: React.FC<PromptTableProps> = ({
     {
       header: "Prompt ID",
       accessorKey: "prompt_id",
-      cell: (info: any) => {
+      cell: (info) => {
         const fullId = String(info.getValue() || "");
-        const displayId = fullId.length > 25 ? `${fullId.slice(0, 25)}...` : fullId;
+        const displayId =
+          fullId.length > 25 ? `${fullId.slice(0, 25)}...` : fullId;
         return (
           <div className="flex items-center gap-2">
-            <Tooltip title={fullId}>
-              <Button
-                size="xs"
-                variant="light"
-                className="font-mono text-blue-500 bg-blue-50 hover:bg-blue-100 text-xs font-normal px-2 py-0.5 text-left overflow-hidden truncate min-w-[220px] justify-start"
-                onClick={() => info.getValue() && onPromptClick?.(info.getValue())}
-              >
-                {displayId}
-              </Button>
-            </Tooltip>
-            <Tooltip title="Copy prompt ID">
-              <CopyOutlined
-                onClick={(e) => {
-                  e.stopPropagation();
-                  copyToClipboard(fullId);
-                }}
-                className="cursor-pointer text-gray-500 hover:text-blue-500 text-xs"
-              />
-            </Tooltip>
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    className="font-mono text-blue-500 bg-blue-50 hover:bg-blue-100 dark:bg-blue-950/30 dark:hover:bg-blue-950/60 text-xs font-normal px-2 py-0.5 text-left overflow-hidden truncate min-w-[220px] rounded"
+                    onClick={() => fullId && onPromptClick?.(fullId)}
+                  >
+                    {displayId}
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent>{fullId}</TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      copyToClipboard(fullId);
+                    }}
+                    className="cursor-pointer text-muted-foreground hover:text-primary"
+                    aria-label="Copy prompt ID"
+                  >
+                    <Copy className="h-3 w-3" />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent>Copy prompt ID</TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
           </div>
         );
       },
@@ -111,52 +149,61 @@ const PromptTable: React.FC<PromptTableProps> = ({
       cell: ({ row }) => {
         const prompt = row.original;
         const model = extractModel(prompt);
-        
+
         if (!model) {
-          return <span className="text-xs text-gray-400">-</span>;
+          return <span className="text-xs text-muted-foreground">-</span>;
         }
-        
+
         const provider = getProviderFromModelHub(model, modelHubData);
         const { logo } = getProviderLogoAndName(provider || "");
-        
-        return (
-          <Tooltip title={model}>
-            <div className="flex items-center space-x-2">
-              {/* Provider Icon */}
-              <div className="flex-shrink-0">
-                {provider && logo ? (
-                  <img 
-                    src={logo} 
-                    alt={`${provider} logo`}
-                    className="w-4 h-4"
-                    onError={(e) => {
-                      const target = e.currentTarget as HTMLImageElement;
-                      const parent = target.parentElement;
-                      if (!parent || !parent.contains(target)) {
-                        return;
-                      }
 
-                      try {
-                        const fallbackDiv = document.createElement('div');
-                        fallbackDiv.className = 'w-4 h-4 rounded-full bg-gray-200 flex items-center justify-center text-xs';
-                        fallbackDiv.textContent = provider?.charAt(0) || '-';
-                        parent.replaceChild(fallbackDiv, target);
-                      } catch (error) {
-                        console.error('Failed to replace provider logo fallback:', error);
-                      }
-                    }}
-                  />
-                ) : (
-                  <div className="w-4 h-4 rounded-full bg-gray-200 flex items-center justify-center text-xs">
-                    -
+        return (
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <div className="flex items-center space-x-2">
+                  <div className="flex-shrink-0">
+                    {provider && logo ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        src={logo}
+                        alt={`${provider} logo`}
+                        className="w-4 h-4"
+                        onError={(e) => {
+                          const target = e.currentTarget as HTMLImageElement;
+                          const parent = target.parentElement;
+                          if (!parent || !parent.contains(target)) {
+                            return;
+                          }
+
+                          try {
+                            const fallbackDiv = document.createElement("div");
+                            fallbackDiv.className =
+                              "w-4 h-4 rounded-full bg-muted flex items-center justify-center text-xs";
+                            fallbackDiv.textContent =
+                              provider?.charAt(0) || "-";
+                            parent.replaceChild(fallbackDiv, target);
+                          } catch (error) {
+                            console.error(
+                              "Failed to replace provider logo fallback:",
+                              error,
+                            );
+                          }
+                        }}
+                      />
+                    ) : (
+                      <div className="w-4 h-4 rounded-full bg-muted flex items-center justify-center text-xs">
+                        -
+                      </div>
+                    )}
                   </div>
-                )}
-              </div>
-              
-              {/* Model Name */}
-              <span className="max-w-[15ch] truncate block">{model}</span>
-            </div>
-          </Tooltip>
+
+                  <span className="max-w-[15ch] truncate block">{model}</span>
+                </div>
+              </TooltipTrigger>
+              <TooltipContent>{model}</TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
         );
       },
     },
@@ -166,9 +213,14 @@ const PromptTable: React.FC<PromptTableProps> = ({
       cell: ({ row }) => {
         const prompt = row.original;
         return (
-          <Tooltip title={prompt.created_at}>
-            <span className="text-xs">{formatDate(prompt.created_at)}</span>
-          </Tooltip>
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span className="text-xs">{formatDate(prompt.created_at)}</span>
+              </TooltipTrigger>
+              <TooltipContent>{prompt.created_at}</TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
         );
       },
     },
@@ -178,9 +230,14 @@ const PromptTable: React.FC<PromptTableProps> = ({
       cell: ({ row }) => {
         const prompt = row.original;
         return (
-          <Tooltip title={prompt.updated_at}>
-            <span className="text-xs">{formatDate(prompt.updated_at)}</span>
-          </Tooltip>
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span className="text-xs">{formatDate(prompt.updated_at)}</span>
+              </TooltipTrigger>
+              <TooltipContent>{prompt.updated_at}</TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
         );
       },
     },
@@ -191,12 +248,20 @@ const PromptTable: React.FC<PromptTableProps> = ({
         const prompt = row.original;
         const env = prompt.environment || "development";
         const colorMap: Record<string, string> = {
-          production: "text-red-600 bg-red-50",
-          staging: "text-yellow-600 bg-yellow-50",
-          development: "text-green-600 bg-green-50",
+          production:
+            "text-red-600 bg-red-50 dark:text-red-300 dark:bg-red-950/30",
+          staging:
+            "text-amber-600 bg-amber-50 dark:text-amber-300 dark:bg-amber-950/30",
+          development:
+            "text-emerald-600 bg-emerald-50 dark:text-emerald-300 dark:bg-emerald-950/30",
         };
         return (
-          <span className={`text-xs px-2 py-0.5 rounded ${colorMap[env] || "text-gray-600 bg-gray-50"}`}>
+          <span
+            className={cn(
+              "text-xs px-2 py-0.5 rounded",
+              colorMap[env] || "text-muted-foreground bg-muted",
+            )}
+          >
             {env}
           </span>
         );
@@ -208,7 +273,7 @@ const PromptTable: React.FC<PromptTableProps> = ({
       cell: ({ row }) => {
         const prompt = row.original;
         return (
-          <span className="text-xs text-gray-600">
+          <span className="text-xs text-muted-foreground">
             {prompt.created_by || "-"}
           </span>
         );
@@ -220,9 +285,16 @@ const PromptTable: React.FC<PromptTableProps> = ({
       cell: ({ row }) => {
         const prompt = row.original;
         return (
-          <Tooltip title={prompt.prompt_info.prompt_type}>
-            <span className="text-xs">{prompt.prompt_info.prompt_type}</span>
-          </Tooltip>
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span className="text-xs">
+                  {prompt.prompt_info.prompt_type}
+                </span>
+              </TooltipTrigger>
+              <TooltipContent>{prompt.prompt_info.prompt_type}</TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
         );
       },
     },
@@ -232,25 +304,31 @@ const PromptTable: React.FC<PromptTableProps> = ({
             header: "Actions",
             id: "actions",
             enableSorting: false,
-            cell: ({ row }: any) => {
+            cell: ({ row }: { row: { original: PromptSpec } }) => {
               const prompt = row.original;
               const promptName = prompt.prompt_id || "Unknown Prompt";
 
               return (
                 <div className="flex items-center gap-1">
-                  <Tooltip title="Delete prompt">
-                    <Button
-                      size="xs"
-                      variant="light"
-                      color="red"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onDeleteClick?.(prompt.prompt_id, promptName);
-                      }}
-                      icon={TrashIcon}
-                      className="text-red-500 hover:text-red-700 hover:bg-red-50"
-                    />
-                  </Tooltip>
+                  <TooltipProvider>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-7 w-7 text-destructive hover:text-destructive hover:bg-destructive/10"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onDeleteClick?.(prompt.prompt_id, promptName);
+                          }}
+                          aria-label="Delete prompt"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent>Delete prompt</TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
                 </div>
               );
             },
@@ -262,9 +340,7 @@ const PromptTable: React.FC<PromptTableProps> = ({
   const table = useReactTable({
     data: promptsList,
     columns,
-    state: {
-      sorting,
-    },
+    state: { sorting },
     onSortingChange: setSorting,
     getCoreRowModel: getCoreRowModel(),
     getSortedRowModel: getSortedRowModel(),
@@ -286,16 +362,25 @@ const PromptTable: React.FC<PromptTableProps> = ({
                   >
                     <div className="flex items-center justify-between gap-2">
                       <div className="flex items-center">
-                        {header.isPlaceholder ? null : flexRender(header.column.columnDef.header, header.getContext())}
+                        {header.isPlaceholder
+                          ? null
+                          : flexRender(
+                              header.column.columnDef.header,
+                              header.getContext(),
+                            )}
                       </div>
                       <div className="w-4">
                         {header.column.getIsSorted() ? (
                           {
-                            asc: <ChevronUpIcon className="h-4 w-4 text-blue-500" />,
-                            desc: <ChevronDownIcon className="h-4 w-4 text-blue-500" />,
+                            asc: (
+                              <ChevronUp className="h-4 w-4 text-primary" />
+                            ),
+                            desc: (
+                              <ChevronDown className="h-4 w-4 text-primary" />
+                            ),
                           }[header.column.getIsSorted() as string]
                         ) : (
-                          <SwitchVerticalIcon className="h-4 w-4 text-gray-400" />
+                          <ArrowUpDown className="h-4 w-4 text-muted-foreground" />
                         )}
                       </div>
                     </div>
@@ -307,8 +392,11 @@ const PromptTable: React.FC<PromptTableProps> = ({
           <TableBody>
             {isLoading ? (
               <TableRow>
-                <TableCell colSpan={columns.length} className="h-8 text-center">
-                  <div className="text-center text-gray-500">
+                <TableCell
+                  colSpan={columns.length}
+                  className="h-8 text-center"
+                >
+                  <div className="text-center text-muted-foreground">
                     <p>Loading...</p>
                   </div>
                 </TableCell>
@@ -317,16 +405,25 @@ const PromptTable: React.FC<PromptTableProps> = ({
               table.getRowModel().rows.map((row) => (
                 <TableRow key={row.id} className="h-8">
                   {row.getVisibleCells().map((cell) => (
-                    <TableCell key={cell.id} className="py-0.5 max-h-8 overflow-hidden text-ellipsis whitespace-nowrap">
-                      {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                    <TableCell
+                      key={cell.id}
+                      className="py-0.5 max-h-8 overflow-hidden text-ellipsis whitespace-nowrap"
+                    >
+                      {flexRender(
+                        cell.column.columnDef.cell,
+                        cell.getContext(),
+                      )}
                     </TableCell>
                   ))}
                 </TableRow>
               ))
             ) : (
               <TableRow>
-                <TableCell colSpan={columns.length} className="h-8 text-center">
-                  <div className="text-center text-gray-500">
+                <TableCell
+                  colSpan={columns.length}
+                  className="h-8 text-center"
+                >
+                  <div className="text-center text-muted-foreground">
                     <p>No prompts found</p>
                   </div>
                 </TableCell>
