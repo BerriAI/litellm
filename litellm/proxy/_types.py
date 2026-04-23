@@ -427,7 +427,8 @@ class LiteLLMRoutes(enum.Enum):
         "/v1/skills/{skill_id}",
     ]
 
-    mcp_routes = [
+    # MCP tool-call / passthrough routes — data-plane. Gated by DISABLE_LLM_API_ENDPOINTS.
+    mcp_inference_routes = [
         "/mcp",
         "/mcp/",
         "/mcp/{subpath}",
@@ -436,9 +437,17 @@ class LiteLLMRoutes(enum.Enum):
         "/mcp/tools/call",
         "/mcp-rest/tools/list",
         "/mcp-rest/tools/call",
+    ]
+
+    # MCP server CRUD routes — control-plane. Gated by DISABLE_ADMIN_ENDPOINTS.
+    mcp_management_routes = [
         "/v1/mcp/server",
         "/v1/mcp/server/{path:path}",
     ]
+
+    # Backwards-compat union — virtual keys may be configured with
+    # allowed_routes=["mcp_routes"], which should cover both halves.
+    mcp_routes = mcp_inference_routes + mcp_management_routes
 
     agent_routes = [
         "/v1/agents",
@@ -477,7 +486,7 @@ class LiteLLMRoutes(enum.Enum):
         + mapped_pass_through_routes
         + passthrough_routes_wildcard
         + apply_guardrail_routes
-        + mcp_routes
+        + mcp_inference_routes
         + litellm_native_routes
         + agent_routes
     )
@@ -563,7 +572,7 @@ class LiteLLMRoutes(enum.Enum):
         "/jwt/key/mapping/delete",
         "/jwt/key/mapping/list",
         "/jwt/key/mapping/info",
-    ] + key_management_routes
+    ] + key_management_routes + mcp_management_routes
 
     spend_tracking_routes = [
         # spend
