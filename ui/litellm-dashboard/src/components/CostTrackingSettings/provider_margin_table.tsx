@@ -1,13 +1,19 @@
 import React, { useState } from "react";
-import { TextInput, Icon, Text } from "@tremor/react";
-import { TrashIcon, PencilAltIcon, CheckIcon, XIcon } from "@heroicons/react/outline";
+import { Input } from "@/components/ui/input";
+import { Check, Pencil, Trash2, X } from "lucide-react";
 import { SimpleTable } from "../common_components/simple_table";
 import { MarginConfig } from "./types";
-import { getProviderDisplayInfo, handleImageError } from "./provider_display_helpers";
+import {
+  getProviderDisplayInfo,
+  handleImageError,
+} from "./provider_display_helpers";
 
 interface ProviderMarginTableProps {
   marginConfig: MarginConfig;
-  onMarginChange: (provider: string, value: number | { percentage?: number; fixed_amount?: number }) => void;
+  onMarginChange: (
+    provider: string,
+    value: number | { percentage?: number; fixed_amount?: number },
+  ) => void;
   onRemoveProvider: (provider: string, providerDisplayName: string) => void;
 }
 
@@ -25,16 +31,23 @@ const ProviderMarginTable: React.FC<ProviderMarginTableProps> = ({
   const [editPercentage, setEditPercentage] = useState<string>("");
   const [editFixedAmount, setEditFixedAmount] = useState<string>("");
 
-  const handleStartEdit = (provider: string, currentMargin: number | { percentage?: number; fixed_amount?: number }) => {
+  const handleStartEdit = (
+    provider: string,
+    currentMargin: number | { percentage?: number; fixed_amount?: number },
+  ) => {
     setEditingProvider(provider);
     if (typeof currentMargin === "number") {
-      // Simple percentage format
       setEditPercentage((currentMargin * 100).toString());
       setEditFixedAmount("");
     } else {
-      // Complex format with percentage and/or fixed_amount
-      setEditPercentage(currentMargin.percentage ? (currentMargin.percentage * 100).toString() : "");
-      setEditFixedAmount(currentMargin.fixed_amount ? currentMargin.fixed_amount.toString() : "");
+      setEditPercentage(
+        currentMargin.percentage
+          ? (currentMargin.percentage * 100).toString()
+          : "",
+      );
+      setEditFixedAmount(
+        currentMargin.fixed_amount ? currentMargin.fixed_amount.toString() : "",
+      );
     }
   };
 
@@ -42,16 +55,29 @@ const ProviderMarginTable: React.FC<ProviderMarginTableProps> = ({
     const percentValue = editPercentage ? parseFloat(editPercentage) : undefined;
     const fixedValue = editFixedAmount ? parseFloat(editFixedAmount) : undefined;
 
-    if (percentValue !== undefined && !isNaN(percentValue) && percentValue >= 0 && percentValue <= 1000) {
-      if (fixedValue !== undefined && !isNaN(fixedValue) && fixedValue >= 0) {
-        // Both percentage and fixed amount
-        onMarginChange(provider, { percentage: percentValue / 100, fixed_amount: fixedValue });
+    if (
+      percentValue !== undefined &&
+      !isNaN(percentValue) &&
+      percentValue >= 0 &&
+      percentValue <= 1000
+    ) {
+      if (
+        fixedValue !== undefined &&
+        !isNaN(fixedValue) &&
+        fixedValue >= 0
+      ) {
+        onMarginChange(provider, {
+          percentage: percentValue / 100,
+          fixed_amount: fixedValue,
+        });
       } else {
-        // Only percentage
         onMarginChange(provider, percentValue / 100);
       }
-    } else if (fixedValue !== undefined && !isNaN(fixedValue) && fixedValue >= 0) {
-      // Only fixed amount
+    } else if (
+      fixedValue !== undefined &&
+      !isNaN(fixedValue) &&
+      fixedValue >= 0
+    ) {
       onMarginChange(provider, { fixed_amount: fixedValue });
     }
     setEditingProvider(null);
@@ -65,15 +91,9 @@ const ProviderMarginTable: React.FC<ProviderMarginTableProps> = ({
     setEditFixedAmount("");
   };
 
-  const handleKeyDown = (e: React.KeyboardEvent, provider: string) => {
-    if (e.key === 'Enter') {
-      handleSaveEdit(provider);
-    } else if (e.key === 'Escape') {
-      handleCancelEdit();
-    }
-  };
-
-  const formatMargin = (margin: number | { percentage?: number; fixed_amount?: number }): string => {
+  const formatMargin = (
+    margin: number | { percentage?: number; fixed_amount?: number },
+  ): string => {
     if (typeof margin === "number") {
       return `${(margin * 100).toFixed(1)}%`;
     }
@@ -87,7 +107,6 @@ const ProviderMarginTable: React.FC<ProviderMarginTableProps> = ({
     return parts.join(" + ") || "0%";
   };
 
-  // Convert margin config to array and sort (global first, then alphabetically)
   const data: ProviderMarginRow[] = Object.entries(marginConfig)
     .map(([provider, margin]) => ({ provider, margin }))
     .sort((a, b) => {
@@ -116,6 +135,7 @@ const ProviderMarginTable: React.FC<ProviderMarginTableProps> = ({
             return (
               <div className="flex items-center space-x-2">
                 {logo && (
+                  // eslint-disable-next-line @next/next/no-img-element
                   <img
                     src={logo}
                     alt={`${displayName} logo`}
@@ -135,45 +155,53 @@ const ProviderMarginTable: React.FC<ProviderMarginTableProps> = ({
               {editingProvider === row.provider ? (
                 <>
                   <div className="flex items-center gap-2">
-                    <TextInput
+                    <Input
                       value={editPercentage}
-                      onValueChange={setEditPercentage}
+                      onChange={(e) => setEditPercentage(e.target.value)}
                       placeholder="10"
-                      className="w-20"
+                      className="w-20 h-8"
                       autoFocus
                     />
-                    <span className="text-gray-600">%</span>
-                    <span className="text-gray-400">+</span>
-                    <span className="text-gray-600">$</span>
-                    <TextInput
+                    <span className="text-muted-foreground">%</span>
+                    <span className="text-muted-foreground">+</span>
+                    <span className="text-muted-foreground">$</span>
+                    <Input
                       value={editFixedAmount}
-                      onValueChange={setEditFixedAmount}
+                      onChange={(e) => setEditFixedAmount(e.target.value)}
                       placeholder="0.001"
-                      className="w-24"
+                      className="w-24 h-8"
                     />
                   </div>
-                  <Icon
-                    icon={CheckIcon}
-                    size="sm"
+                  <button
+                    type="button"
                     onClick={() => handleSaveEdit(row.provider)}
-                    className="cursor-pointer text-green-600 hover:text-green-700"
-                  />
-                  <Icon
-                    icon={XIcon}
-                    size="sm"
+                    className="cursor-pointer text-emerald-600 hover:text-emerald-700 dark:text-emerald-400"
+                    aria-label="Save"
+                  >
+                    <Check className="h-4 w-4" />
+                  </button>
+                  <button
+                    type="button"
                     onClick={handleCancelEdit}
-                    className="cursor-pointer text-gray-600 hover:text-gray-700"
-                  />
+                    className="cursor-pointer text-muted-foreground hover:text-foreground"
+                    aria-label="Cancel"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
                 </>
               ) : (
                 <>
-                  <Text className="font-medium">{formatMargin(row.margin)}</Text>
-                  <Icon
-                    icon={PencilAltIcon}
-                    size="sm"
+                  <span className="font-medium">
+                    {formatMargin(row.margin)}
+                  </span>
+                  <button
+                    type="button"
                     onClick={() => handleStartEdit(row.provider, row.margin)}
-                    className="cursor-pointer text-blue-600 hover:text-blue-700"
-                  />
+                    className="cursor-pointer text-primary hover:text-primary/80"
+                    aria-label="Edit"
+                  >
+                    <Pencil className="h-4 w-4" />
+                  </button>
                 </>
               )}
             </div>
@@ -183,14 +211,19 @@ const ProviderMarginTable: React.FC<ProviderMarginTableProps> = ({
         {
           header: "Actions",
           cell: (row) => {
-            const displayName = row.provider === "global" ? "Global" : getProviderDisplayInfo(row.provider).displayName;
+            const displayName =
+              row.provider === "global"
+                ? "Global"
+                : getProviderDisplayInfo(row.provider).displayName;
             return (
-              <Icon
-                icon={TrashIcon}
-                size="sm"
+              <button
+                type="button"
                 onClick={() => onRemoveProvider(row.provider, displayName)}
-                className="cursor-pointer hover:text-red-600"
-              />
+                className="cursor-pointer hover:text-destructive"
+                aria-label="Remove"
+              >
+                <Trash2 className="h-4 w-4" />
+              </button>
             );
           },
           width: "80px",
@@ -203,4 +236,3 @@ const ProviderMarginTable: React.FC<ProviderMarginTableProps> = ({
 };
 
 export default ProviderMarginTable;
-
