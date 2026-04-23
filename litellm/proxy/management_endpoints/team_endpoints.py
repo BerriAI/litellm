@@ -1275,6 +1275,7 @@ async def fetch_and_validate_organization(
     existing_team_row: Any,
     llm_router: Optional[Router],
     prisma_client: Any,
+    user_api_key_dict: Optional[UserAPIKeyAuth] = None,
 ) -> Any:
     """
     Fetch and validate an organization for team update operations.
@@ -1284,6 +1285,8 @@ async def fetch_and_validate_organization(
         existing_team_row: The existing team row being updated
         llm_router: The LLM router instance
         prisma_client: The Prisma database client
+        user_api_key_dict: The caller's auth context. Proxy admins get the SSO
+            auto-add path; all other callers get the original membership check.
 
     Returns:
         The organization row from the database
@@ -1309,18 +1312,24 @@ async def fetch_and_validate_organization(
             },
         )
 
+    is_proxy_admin = (
+        user_api_key_dict is not None
+        and user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
+    )
     organization = LiteLLM_OrganizationTableWithMembers(**organization_row.model_dump())
     validate_team_org_change(
         team=LiteLLM_TeamTable(**existing_team_row.model_dump()),
         organization=organization,
         llm_router=llm_router,
+        is_proxy_admin=is_proxy_admin,
     )
 
-    await _auto_add_team_members_to_organization(
-        team=LiteLLM_TeamTable(**existing_team_row.model_dump()),
-        organization=organization,
-        prisma_client=prisma_client,
-    )
+    if is_proxy_admin:
+        await _auto_add_team_members_to_organization(
+            team=LiteLLM_TeamTable(**existing_team_row.model_dump()),
+            organization=organization,
+            prisma_client=prisma_client,
+        )
 
     return organization_row
 
@@ -1329,20 +1338,48 @@ def validate_team_org_change(
     team: LiteLLM_TeamTable,
     organization: LiteLLM_OrganizationTableWithMembers,
     llm_router: Router,
+    is_proxy_admin: bool = False,
 ) -> bool:
     """
     Validate that a team can be moved to an organization.
 
     - The org must have access to the team's models
     - The team budget cannot be greater than the org max_budget
-    - The team's user_id must be a member of the org
+    - For non-proxy-admins: all team members must already be org members
     - The team's tpm/rpm limit must be less than the org's tpm/rpm limit
+
+    Proxy admins bypass the membership check and instead trigger auto-add of
+    missing members (handled by the caller). This supports SSO/Entra setups
+    where org membership tables are empty but proxy admins still need to group
+    teams under orgs for budget/model governance.
     """
 
     # If the team's organization is the same as the new organization, return True
     # Since no changes are being made
     if team.organization_id == organization.organization_id:
         return True
+
+    # For non-proxy-admins, require all team members to already be org members.
+    # This prevents a team admin from moving their team into an arbitrary org and
+    # thereby injecting members into that org without org admin approval.
+    if not is_proxy_admin:
+        team_members = [m.user_id for m in team.members_with_roles]
+        org_members = (
+            [m.user_id for m in organization.members] if organization.members else []
+        )
+        not_in_org = [
+            m
+            for m in team_members
+            if m not in org_members
+            and m != SpecialProxyStrings.default_user_id.value
+        ]
+        if len(not_in_org) > 0:
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "error": f"Cannot move team to organization. Team has user_id {not_in_org} that is not a member of the organization."
+                },
+            )
 
     # Check if the org has access to the team's models
     if len(organization.models) > 0:
@@ -1582,6 +1619,7 @@ async def update_team(  # noqa: PLR0915
                 existing_team_row=existing_team_row,
                 llm_router=llm_router,
                 prisma_client=prisma_client,
+                user_api_key_dict=user_api_key_dict,
             )
         elif data.organization_id is not None and len(data.organization_id) == 0:
             # unsetting the organization_id
