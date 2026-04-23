@@ -31,6 +31,7 @@ from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
     get_request_base_url,
 )
 from litellm.proxy._experimental.mcp_server.oauth_utils import (
+    TOKEN_NO_CACHE_HEADERS,
     validate_loopback_redirect_uri,
 )
 from litellm.proxy._types import UserAPIKeyAuth
@@ -73,18 +74,13 @@ def _purge_expired_codes() -> None:
         del _byok_auth_codes[k]
 
 
-# RFC 6749 §5.1 / OAuth 2.1 draft-15 §4.1.3: token-endpoint responses must
-# not be cached (both success and error bodies may reveal secrets).
-_TOKEN_NO_CACHE_HEADERS = {"Cache-Control": "no-store", "Pragma": "no-cache"}
-
-
 def _oauth_token_error(code: str, status: int = 400) -> JSONResponse:
     """RFC 6749 §5.2 token-endpoint error body: ``{"error": "<code>"}``.
     FastAPI's default ``HTTPException`` renders ``{"detail": ...}`` which
     spec-compliant OAuth clients parsing the ``error`` field won't recognize.
     """
     return JSONResponse(
-        status_code=status, content={"error": code}, headers=_TOKEN_NO_CACHE_HEADERS
+        status_code=status, content={"error": code}, headers=TOKEN_NO_CACHE_HEADERS
     )
 
 
@@ -876,5 +872,5 @@ async def byok_token(
             "token_type": "bearer",
             "expires_in": 3600,
         },
-        headers=_TOKEN_NO_CACHE_HEADERS,
+        headers=TOKEN_NO_CACHE_HEADERS,
     )
