@@ -9,19 +9,31 @@ import {
   removeLocalStorageItem,
   setLocalStorageItem,
 } from "@/utils/localStorageUtils";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import {
-  CrownOutlined,
-  DownOutlined,
-  LogoutOutlined,
-  MailOutlined,
-  SafetyOutlined,
-  UserOutlined,
-} from "@ant-design/icons";
-import type { MenuProps } from "antd";
-import { Button, Divider, Dropdown, Space, Switch, Tag, Tooltip, Typography } from "antd";
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { Switch } from "@/components/ui/switch";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import {
+  ChevronDown,
+  Crown,
+  LogOut,
+  Mail,
+  Shield,
+  User,
+} from "lucide-react";
 import React, { useEffect, useState } from "react";
-
-const { Text } = Typography;
 
 interface UserDropdownProps {
   onLogout: () => void;
@@ -40,178 +52,132 @@ const UserDropdown: React.FC<UserDropdownProps> = ({ onLogout }) => {
     setDisableShowNewBadge(storedValue === "true");
   }, []);
 
-  const userItems: MenuProps["items"] = [
-    {
-      key: "logout",
-      label: (
-        <Space>
-          <LogoutOutlined />
-          Logout
-        </Space>
-      ),
-      onClick: onLogout,
-    },
-  ];
+  const toggleLocalStorage = (key: string, checked: boolean) => {
+    if (checked) {
+      setLocalStorageItem(key, "true");
+    } else {
+      removeLocalStorageItem(key);
+    }
+    emitLocalStorageChange(key);
+  };
 
-  const renderUserInfoSection = () => (
-    <Space direction="vertical" size="small" style={{ width: "100%", padding: "12px" }}>
-      <Space style={{ width: "100%", justifyContent: "space-between" }}>
-        <Space>
-          <MailOutlined />
-          <Text type="secondary">{userEmail || "-"}</Text>
-        </Space>
-        {premiumUser ? (
-          <Tag
-            icon={<CrownOutlined />}
-            color="gold"
-          >
-            Premium
-          </Tag>
-        ) : (
-          <Tooltip title="Upgrade to Premium for advanced features" placement="left">
-            <Tag
-              icon={<CrownOutlined />}
-            >
-              Standard
-            </Tag>
-          </Tooltip>
-        )}
-      </Space>
-      <Divider style={{ margin: "8px 0" }} />
-      <Space style={{ width: "100%", justifyContent: "space-between" }}>
-        <Space>
-          <UserOutlined />
-          <Text type="secondary">User ID</Text>
-        </Space>
-        <Text
-          copyable
-          ellipsis
-          style={{ maxWidth: "150px" }}
-          title={userId || "-"}
-        >
-          {userId || "-"}
-        </Text>
-      </Space>
-      <Space style={{ width: "100%", justifyContent: "space-between" }}>
-        <Space>
-          <SafetyOutlined />
-          <Text type="secondary">Role</Text>
-        </Space>
-        <Text>{userRole}</Text>
-      </Space>
-      <Divider style={{ margin: "8px 0" }} />
-      <Space style={{ width: "100%", justifyContent: "space-between" }}>
-        <Text type="secondary">Hide New Feature Indicators</Text>
-        <Switch
-          size="small"
-          checked={disableShowNewBadge}
-          onChange={(checked) => {
-            setDisableShowNewBadge(checked);
-            if (checked) {
-              setLocalStorageItem("disableShowNewBadge", "true");
-              emitLocalStorageChange("disableShowNewBadge");
-            } else {
-              removeLocalStorageItem("disableShowNewBadge");
-              emitLocalStorageChange("disableShowNewBadge");
-            }
-          }}
-          aria-label="Toggle hide new feature indicators"
-        />
-      </Space>
-      <Space style={{ width: "100%", justifyContent: "space-between" }}>
-        <Text type="secondary">Hide All Prompts</Text>
-        <Switch
-          size="small"
-          checked={disableShowPrompts}
-          onChange={(checked) => {
-            if (checked) {
-              setLocalStorageItem("disableShowPrompts", "true");
-              emitLocalStorageChange("disableShowPrompts");
-            } else {
-              removeLocalStorageItem("disableShowPrompts");
-              emitLocalStorageChange("disableShowPrompts");
-            }
-          }}
-          aria-label="Toggle hide all prompts"
-        />
-      </Space>
-      <Space style={{ width: "100%", justifyContent: "space-between" }}>
-        <Text type="secondary">Hide Usage Indicator</Text>
-        <Switch
-          size="small"
-          checked={disableUsageIndicator}
-          onChange={(checked) => {
-            if (checked) {
-              setLocalStorageItem("disableUsageIndicator", "true");
-              emitLocalStorageChange("disableUsageIndicator");
-            } else {
-              removeLocalStorageItem("disableUsageIndicator");
-              emitLocalStorageChange("disableUsageIndicator");
-            }
-          }}
-          aria-label="Toggle hide usage indicator"
-        />
-      </Space>
-      <Space style={{ width: "100%", justifyContent: "space-between" }}>
-        <Text type="secondary">Hide Blog Posts</Text>
-        <Switch
-          size="small"
-          checked={disableBlogPosts}
-          onChange={(checked) => {
-            if (checked) {
-              setLocalStorageItem("disableBlogPosts", "true");
-              emitLocalStorageChange("disableBlogPosts");
-            } else {
-              removeLocalStorageItem("disableBlogPosts");
-              emitLocalStorageChange("disableBlogPosts");
-            }
-          }}
-          aria-label="Toggle hide blog posts"
-        />
-      </Space>
-      <Space style={{ width: "100%", justifyContent: "space-between" }}>
-        <Text type="secondary">Hide Bouncing Icon</Text>
-        <Switch
-          size="small"
-          checked={disableBouncingIcon}
-          onChange={(checked) => {
-            if (checked) {
-              setLocalStorageItem("disableBouncingIcon", "true");
-              emitLocalStorageChange("disableBouncingIcon");
-            } else {
-              removeLocalStorageItem("disableBouncingIcon");
-              emitLocalStorageChange("disableBouncingIcon");
-            }
-          }}
-          aria-label="Toggle hide bouncing icon"
-        />
-      </Space>
-    </Space>
+  const ToggleRow: React.FC<{
+    label: string;
+    checked: boolean;
+    onChange: (checked: boolean) => void;
+    ariaLabel?: string;
+  }> = ({ label, checked, onChange, ariaLabel }) => (
+    <div className="flex items-center justify-between w-full">
+      <span className="text-muted-foreground text-sm">{label}</span>
+      <Switch
+        checked={checked}
+        onCheckedChange={onChange}
+        aria-label={ariaLabel ?? label}
+      />
+    </div>
   );
 
   return (
-    <Dropdown
-      menu={{ items: userItems }}
-      popupRender={(menu) => (
-        <div
-          className="bg-white rounded-lg shadow-lg"
-        >
-          {renderUserInfoSection()}
-          <Divider style={{ margin: 0 }} />
-          {React.cloneElement(menu as React.ReactElement, {
-            style: { boxShadow: "none" },
-          })}
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button variant="ghost" className="gap-2">
+          <User className="h-4 w-4" />
+          <span className="text-sm">User</span>
+          <ChevronDown className="h-3 w-3" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-72 p-3">
+        <div className="flex flex-col gap-2">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2 text-sm">
+              <Mail className="h-4 w-4 text-muted-foreground" />
+              <span className="text-muted-foreground truncate max-w-[160px]">
+                {userEmail || "-"}
+              </span>
+            </div>
+            {premiumUser ? (
+              <Badge className="bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300 gap-1">
+                <Crown className="h-3 w-3" />
+                Premium
+              </Badge>
+            ) : (
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Badge variant="secondary" className="gap-1">
+                      <Crown className="h-3 w-3" />
+                      Standard
+                    </Badge>
+                  </TooltipTrigger>
+                  <TooltipContent side="left">
+                    Upgrade to Premium for advanced features
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+            )}
+          </div>
+          <DropdownMenuSeparator />
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2 text-sm">
+              <User className="h-4 w-4 text-muted-foreground" />
+              <span className="text-muted-foreground">User ID</span>
+            </div>
+            <span
+              className="text-sm truncate max-w-[150px]"
+              title={userId || "-"}
+            >
+              {userId || "-"}
+            </span>
+          </div>
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2 text-sm">
+              <Shield className="h-4 w-4 text-muted-foreground" />
+              <span className="text-muted-foreground">Role</span>
+            </div>
+            <span className="text-sm">{userRole}</span>
+          </div>
+          <DropdownMenuSeparator />
+          <ToggleRow
+            label="Hide New Feature Indicators"
+            checked={disableShowNewBadge}
+            onChange={(c) => {
+              setDisableShowNewBadge(c);
+              toggleLocalStorage("disableShowNewBadge", c);
+            }}
+            ariaLabel="Toggle hide new feature indicators"
+          />
+          <ToggleRow
+            label="Hide All Prompts"
+            checked={disableShowPrompts}
+            onChange={(c) => toggleLocalStorage("disableShowPrompts", c)}
+            ariaLabel="Toggle hide all prompts"
+          />
+          <ToggleRow
+            label="Hide Usage Indicator"
+            checked={disableUsageIndicator}
+            onChange={(c) => toggleLocalStorage("disableUsageIndicator", c)}
+            ariaLabel="Toggle hide usage indicator"
+          />
+          <ToggleRow
+            label="Hide Blog Posts"
+            checked={disableBlogPosts}
+            onChange={(c) => toggleLocalStorage("disableBlogPosts", c)}
+            ariaLabel="Toggle hide blog posts"
+          />
+          <ToggleRow
+            label="Hide Bouncing Icon"
+            checked={disableBouncingIcon}
+            onChange={(c) => toggleLocalStorage("disableBouncingIcon", c)}
+            ariaLabel="Toggle hide bouncing icon"
+          />
         </div>
-      )}
-    >
-      <Button type="text" >
-        <Space>
-          <UserOutlined />
-          <Text>User</Text>
-          <DownOutlined />
-        </Space>
-      </Button>
-    </Dropdown>
+        <DropdownMenuSeparator />
+        <DropdownMenuItem onClick={onLogout}>
+          <LogOut className="h-4 w-4" />
+          Logout
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 };
 
