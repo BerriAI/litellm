@@ -1,13 +1,20 @@
-import { Button } from "antd";
+import { Button } from "@/components/ui/button";
 import React, { useEffect, useState } from "react";
 import NotificationsManager from "../molecules/notifications_manager";
-import { getCallbacksCall, getRouterSettingsCall, setCallbacksCall } from "../networking";
-import RouterSettingsForm, { RouterSettingsFormValue } from "./RouterSettingsForm";
+import {
+  getCallbacksCall,
+  getRouterSettingsCall,
+  setCallbacksCall,
+} from "../networking";
+import RouterSettingsForm, {
+  RouterSettingsFormValue,
+} from "./RouterSettingsForm";
 
 interface RouterSettingsProps {
   accessToken: string | null;
   userRole: string | null;
   userID: string | null;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   modelData: any;
 }
 
@@ -16,14 +23,23 @@ interface routingStrategyArgs {
   lowest_latency_buffer?: number;
 }
 
-const RouterSettings: React.FC<RouterSettingsProps> = ({ accessToken, userRole, userID, modelData }) => {
+const RouterSettings: React.FC<RouterSettingsProps> = ({
+  accessToken,
+  userRole,
+  userID,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  modelData,
+}) => {
   const [formValue, setFormValue] = useState<RouterSettingsFormValue>({
     routerSettings: {},
     selectedStrategy: null,
     enableTagFiltering: false,
   });
   const [availableRoutingStrategies, setAvailableRoutingStrategies] = useState<string[]>([]);
-  const [routerFieldsMetadata, setRouterFieldsMetadata] = useState<{ [key: string]: any }>({});
+  const [routerFieldsMetadata, setRouterFieldsMetadata] = useState<{
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    [key: string]: any;
+  }>({});
   const [routingStrategyDescriptions, setRoutingStrategyDescriptions] = useState<{ [key: string]: string }>({});
 
   useEffect(() => {
@@ -48,7 +64,9 @@ const RouterSettings: React.FC<RouterSettingsProps> = ({ accessToken, userRole, 
       console.log("router settings from API", data);
       if (data.fields) {
         // Build metadata map for easy lookup
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const fieldsMap: { [key: string]: any } = {};
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         data.fields.forEach((field: any) => {
           fieldsMap[field.field_name] = {
             ui_field_name: field.ui_field_name,
@@ -60,7 +78,10 @@ const RouterSettings: React.FC<RouterSettingsProps> = ({ accessToken, userRole, 
         setRouterFieldsMetadata(fieldsMap);
 
         // Extract routing strategies from the routing_strategy field's options
-        const routingStrategyField = data.fields.find((field: any) => field.field_name === "routing_strategy");
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const routingStrategyField = data.fields.find(
+          (field: any) => field.field_name === "routing_strategy",
+        );
         if (routingStrategyField?.options) {
           setAvailableRoutingStrategies(routingStrategyField.options);
         }
@@ -71,7 +92,10 @@ const RouterSettings: React.FC<RouterSettingsProps> = ({ accessToken, userRole, 
         }
 
         // Set enable_tag_filtering value
-        const tagFilteringField = data.fields.find((field: any) => field.field_name === "enable_tag_filtering");
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const tagFilteringField = data.fields.find(
+          (field: any) => field.field_name === "enable_tag_filtering",
+        );
         if (tagFilteringField?.field_value !== null && tagFilteringField?.field_value !== undefined) {
           setFormValue((prev) => ({
             ...prev,
@@ -190,13 +214,11 @@ const RouterSettings: React.FC<RouterSettingsProps> = ({ accessToken, userRole, 
       />
 
       {/* Actions - Sticky at bottom */}
-      <div className="border-t border-gray-200 pt-6 flex justify-end gap-3">
-        <Button onClick={() => window.location.reload()}>
+      <div className="border-t border-border pt-6 flex justify-end gap-3">
+        <Button variant="outline" onClick={() => window.location.reload()}>
           Reset
         </Button>
-        <Button type="primary" onClick={handleSaveChanges}>
-          Save Changes
-        </Button>
+        <Button onClick={handleSaveChanges}>Save Changes</Button>
       </div>
     </div>
   );
