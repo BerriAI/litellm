@@ -63,6 +63,8 @@
         "src/components/prompts/prompt_editor_view/conversation_panel/MessageBubble.tsx",
         "src/components/playground/chat_ui/SessionManagement.tsx",
         "src/components/playground/chat_ui/SearchResultsDisplay.tsx",
+        "src/components/UsagePage/components/EntityUsage/SpendByProvider.tsx",
+        "src/components/view_logs/ToolsSection/FormattedToolView.tsx",
         "src/components/Settings/LoggingAndAlerts/LoggingCallbacks/LoggingCallbacksTable.tsx",
         "src/components/policies/impact_preview_alert.tsx",
         "src/components/policies/impact_popover.tsx",

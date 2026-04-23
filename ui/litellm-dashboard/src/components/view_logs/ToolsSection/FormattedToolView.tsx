@@ -1,20 +1,21 @@
-/**
- * Formatted view of tool definition with parameters table and call data
- */
-
-import { Typography, Table } from "antd";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import { ParsedTool, ParameterRow } from "./types";
-
-const { Text } = Typography;
 
 interface FormattedToolViewProps {
   tool: ParsedTool;
 }
 
 export function FormattedToolView({ tool }: FormattedToolViewProps) {
-  // Parse parameters for table display
   const parameterRows: ParameterRow[] = Object.entries(
-    tool.parameters?.properties || {}
+    tool.parameters?.properties || {},
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
   ).map(([name, schema]: [string, any]) => ({
     key: name,
     name: name,
@@ -23,104 +24,64 @@ export function FormattedToolView({ tool }: FormattedToolViewProps) {
     required: tool.parameters?.required?.includes(name) || false,
   }));
 
-  const columns = [
-    {
-      title: "Parameter",
-      dataIndex: "name",
-      key: "name",
-      render: (name: string, record: ParameterRow) => (
-        <Text code>
-          {name}
-          {record.required && <Text type="danger">*</Text>}
-        </Text>
-      ),
-    },
-    {
-      title: "Type",
-      dataIndex: "type",
-      key: "type",
-      render: (type: string) => (
-        <Text code style={{ color: "#1890ff" }}>
-          {type}
-        </Text>
-      ),
-    },
-    {
-      title: "Description",
-      dataIndex: "description",
-      key: "description",
-      render: (desc: string) => <Text type="secondary">{desc}</Text>,
-    },
-  ];
-
   return (
     <div>
-      {/* Description */}
       {tool.description && (
-        <div style={{ marginBottom: 16 }}>
-          <Text
-            style={{
-              lineHeight: 1.6,
-              whiteSpace: 'pre-wrap',
-            }}
-          >
+        <div className="mb-4">
+          <span className="leading-relaxed whitespace-pre-wrap">
             {tool.description}
-          </Text>
+          </span>
         </div>
       )}
 
-      {/* Parameters Table */}
       {parameterRows.length > 0 && (
         <div>
-          <Text
-            type="secondary"
-            style={{
-              fontSize: 12,
-              display: "block",
-              marginBottom: 8,
-            }}
-          >
+          <span className="text-xs text-muted-foreground block mb-2">
             Parameters
-          </Text>
-          <Table
-            dataSource={parameterRows}
-            columns={columns}
-            pagination={false}
-            size="small"
-            bordered
-          />
+          </span>
+          <div className="border border-border rounded-md overflow-hidden">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Parameter</TableHead>
+                  <TableHead>Type</TableHead>
+                  <TableHead>Description</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {parameterRows.map((row) => (
+                  <TableRow key={row.key}>
+                    <TableCell>
+                      <code className="text-xs bg-muted px-1 py-0.5 rounded">
+                        {row.name}
+                        {row.required && (
+                          <span className="text-destructive">*</span>
+                        )}
+                      </code>
+                    </TableCell>
+                    <TableCell>
+                      <code className="text-xs bg-muted px-1 py-0.5 rounded text-blue-600 dark:text-blue-400">
+                        {row.type}
+                      </code>
+                    </TableCell>
+                    <TableCell className="text-muted-foreground">
+                      {row.description}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
         </div>
       )}
 
-      {/* If tool was called, show the arguments used */}
       {tool.called && tool.callData && (
-        <div style={{ marginTop: 16 }}>
-          <Text
-            type="secondary"
-            style={{
-              fontSize: 12,
-              display: "block",
-              marginBottom: 8,
-            }}
-          >
+        <div className="mt-4">
+          <span className="text-xs text-muted-foreground block mb-2">
             Called With
-          </Text>
-          <div
-            style={{
-              background: "#f6ffed",
-              border: "1px solid #b7eb8f",
-              borderRadius: 4,
-              padding: 12,
-            }}
-          >
-            <pre
-              style={{
-                margin: 0,
-                fontSize: 12,
-                whiteSpace: "pre-wrap",
-                wordBreak: "break-word",
-              }}
-            >
+          </span>
+          <div className="bg-emerald-50 border border-emerald-200 dark:bg-emerald-950/30 dark:border-emerald-900 rounded p-3">
+            <pre className="m-0 text-xs whitespace-pre-wrap break-words">
               {JSON.stringify(tool.callData.arguments, null, 2)}
             </pre>
           </div>

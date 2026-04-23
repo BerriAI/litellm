@@ -1,20 +1,23 @@
 import { formatNumberWithCommas } from "@/utils/dataUtils";
-import { InfoCircleOutlined } from "@ant-design/icons";
+import { Card } from "@/components/ui/card";
+import { Switch } from "@/components/ui/switch";
 import {
-  Card,
-  Col,
-  DonutChart,
-  Grid,
-  Switch,
   Table,
   TableBody,
   TableCell,
   TableHead,
-  TableHeaderCell,
+  TableHeader,
   TableRow,
-  Title,
-} from "@tremor/react";
-import { Tooltip } from "antd";
+} from "@/components/ui/table";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+// eslint-disable-next-line litellm-ui/no-banned-ui-imports
+import { DonutChart } from "@tremor/react";
+import { Info } from "lucide-react";
 import React, { useState } from "react";
 import { ProviderLogo } from "../../../molecules/models/ProviderLogo";
 import { ChartLoader } from "../../../shared/chart_loader";
@@ -34,20 +37,21 @@ interface SpendByProviderProps {
   providerSpend: ProviderSpendData[];
 }
 
-const SpendByProvider: React.FC<SpendByProviderProps> = ({ loading, isDateChanging, providerSpend }) => {
+const SpendByProvider: React.FC<SpendByProviderProps> = ({
+  loading,
+  isDateChanging,
+  providerSpend,
+}) => {
   const [includeZeroSpend, setIncludeZeroSpend] = useState(false);
   const [includeUnknown, setIncludeUnknown] = useState(false);
 
   const filteredProviderSpend = providerSpend.filter((provider) => {
     const isUnknown = provider.provider?.toLowerCase() === "unknown";
 
-    // If includeUnknown is true, always include unknown provider
     if (isUnknown) {
       return includeUnknown;
     }
 
-    // If includeZeroSpend is true, include all providers (including those with 0 spend)
-    // Otherwise, only include providers with spend > 0
     if (includeZeroSpend) {
       return true;
     }
@@ -56,73 +60,101 @@ const SpendByProvider: React.FC<SpendByProviderProps> = ({ loading, isDateChangi
   });
 
   return (
-    <Card className="h-full">
+    <Card className="h-full p-4">
       <div className="flex justify-between items-center mb-4">
-        <Title>Spend by Provider</Title>
+        <h3 className="text-lg font-semibold">Spend by Provider</h3>
         <div className="flex items-center gap-4">
           <div className="flex items-center gap-2">
-            <label className="text-sm text-gray-700">Show Zero Spend</label>
-            <Switch checked={includeZeroSpend} onChange={setIncludeZeroSpend} />
+            <label className="text-sm text-foreground">Show Zero Spend</label>
+            <Switch
+              checked={includeZeroSpend}
+              onCheckedChange={setIncludeZeroSpend}
+            />
           </div>
           <div className="flex items-center gap-2">
             <div className="flex items-center gap-1">
-              <label className="text-sm text-gray-700">Show Unknown</label>
-              <Tooltip title="Requests that failed to route to a provider">
-                <InfoCircleOutlined className="text-gray-400 hover:text-gray-600" />
-              </Tooltip>
+              <label className="text-sm text-foreground">Show Unknown</label>
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Info className="h-3 w-3 text-muted-foreground" />
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    Requests that failed to route to a provider
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
             </div>
-            <Switch checked={includeUnknown} onChange={setIncludeUnknown} />
+            <Switch
+              checked={includeUnknown}
+              onCheckedChange={setIncludeUnknown}
+            />
           </div>
         </div>
       </div>
       {loading ? (
         <ChartLoader isDateChanging={isDateChanging} />
       ) : (
-        <Grid numItems={2}>
-          <Col numColSpan={1}>
+        <div className="grid grid-cols-2 gap-4">
+          <div>
             <DonutChart
               className="mt-4 h-40"
               data={filteredProviderSpend}
               index="provider"
               category="spend"
-              valueFormatter={(value) => `$${formatNumberWithCommas(value, 2)}`}
+              valueFormatter={(value) =>
+                `$${formatNumberWithCommas(value, 2)}`
+              }
               colors={["cyan"]}
             />
-          </Col>
-          <Col numColSpan={1}>
-            <Table>
-              <TableHead>
-                <TableRow>
-                  <TableHeaderCell>Provider</TableHeaderCell>
-                  <TableHeaderCell>Spend</TableHeaderCell>
-                  <TableHeaderCell className="text-green-600">Successful</TableHeaderCell>
-                  <TableHeaderCell className="text-red-600">Failed</TableHeaderCell>
-                  <TableHeaderCell>Tokens</TableHeaderCell>
-                </TableRow>
-              </TableHead>
-              <TableBody>
-                {filteredProviderSpend.map((provider) => (
-                  <TableRow key={provider.provider}>
-                    <TableCell>
-                      <div className="flex items-center space-x-2">
-                        {provider.provider && <ProviderLogo provider={provider.provider} className="w-4 h-4" />}
-                        <span>{provider.provider}</span>
-                      </div>
-                    </TableCell>
-                    <TableCell>${formatNumberWithCommas(provider.spend, 2)}</TableCell>
-                    <TableCell className="text-green-600">
-                      {provider.successful_requests.toLocaleString()}
-                    </TableCell>
-                    <TableCell className="text-red-600">
-                      {provider.failed_requests.toLocaleString()}
-                    </TableCell>
-                    <TableCell>{provider.tokens.toLocaleString()}</TableCell>
+          </div>
+          <div>
+            <div className="border border-border rounded-md overflow-hidden">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Provider</TableHead>
+                    <TableHead>Spend</TableHead>
+                    <TableHead className="text-emerald-600 dark:text-emerald-400">
+                      Successful
+                    </TableHead>
+                    <TableHead className="text-destructive">Failed</TableHead>
+                    <TableHead>Tokens</TableHead>
                   </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </Col>
-        </Grid>
+                </TableHeader>
+                <TableBody>
+                  {filteredProviderSpend.map((provider) => (
+                    <TableRow key={provider.provider}>
+                      <TableCell>
+                        <div className="flex items-center space-x-2">
+                          {provider.provider && (
+                            <ProviderLogo
+                              provider={provider.provider}
+                              className="w-4 h-4"
+                            />
+                          )}
+                          <span>{provider.provider}</span>
+                        </div>
+                      </TableCell>
+                      <TableCell>
+                        ${formatNumberWithCommas(provider.spend, 2)}
+                      </TableCell>
+                      <TableCell className="text-emerald-600 dark:text-emerald-400">
+                        {provider.successful_requests.toLocaleString()}
+                      </TableCell>
+                      <TableCell className="text-destructive">
+                        {provider.failed_requests.toLocaleString()}
+                      </TableCell>
+                      <TableCell>
+                        {provider.tokens.toLocaleString()}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          </div>
+        </div>
       )}
     </Card>
   );

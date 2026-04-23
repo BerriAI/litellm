@@ -1,6 +1,14 @@
 import { useEffect } from "react";
-import { Modal, Form, Button, Typography } from "antd";
-import { SaveOutlined } from "@ant-design/icons";
+import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Form } from "antd";
+import { Save } from "lucide-react";
 import MessageManager from "@/components/molecules/message_manager";
 import { ProjectResponse } from "@/app/(dashboard)/hooks/projects/useProjects";
 import {
@@ -26,16 +34,20 @@ export function EditProjectModal({
   const [form] = Form.useForm<ProjectFormValues>();
   const updateMutation = useUpdateProject();
 
-  // Populate form with existing project data when modal opens
   useEffect(() => {
     if (isOpen && project) {
-      // Model limits are stored inside metadata by the backend
       const metadataObj = (project.metadata ?? {}) as Record<string, unknown>;
-      const rpmLimits = (metadataObj.model_rpm_limit ?? {}) as Record<string, number>;
-      const tpmLimits = (metadataObj.model_tpm_limit ?? {}) as Record<string, number>;
-      const guardrails = (Array.isArray(metadataObj.guardrails)
-        ? metadataObj.guardrails
-        : []) as string[];
+      const rpmLimits = (metadataObj.model_rpm_limit ?? {}) as Record<
+        string,
+        number
+      >;
+      const tpmLimits = (metadataObj.model_tpm_limit ?? {}) as Record<
+        string,
+        number
+      >;
+      const guardrails = (
+        Array.isArray(metadataObj.guardrails) ? metadataObj.guardrails : []
+      ) as string[];
 
       const modelLimits: ProjectFormValues["modelLimits"] = [];
       const allLimitModels = new Set([
@@ -50,8 +62,11 @@ export function EditProjectModal({
         });
       }
 
-      // Filter out internal keys from user-facing metadata
-      const internalKeys = new Set(["model_rpm_limit", "model_tpm_limit", "guardrails"]);
+      const internalKeys = new Set([
+        "model_rpm_limit",
+        "model_tpm_limit",
+        "guardrails",
+      ]);
       const metadata: ProjectFormValues["metadata"] = [];
       for (const [key, value] of Object.entries(metadataObj)) {
         if (!internalKeys.has(key)) {
@@ -100,32 +115,30 @@ export function EditProjectModal({
   };
 
   return (
-    <Modal
-      title={
-        <Typography.Text strong style={{ fontSize: 18 }}>
-          Edit Project
-        </Typography.Text>
-      }
+    <Dialog
       open={isOpen}
-      onCancel={onClose}
-      width={720}
-      destroyOnHidden
-      footer={[
-        <Button key="cancel" onClick={onClose}>
-          Cancel
-        </Button>,
-        <Button
-          key="submit"
-          type="primary"
-          icon={<SaveOutlined />}
-          loading={updateMutation.isPending}
-          onClick={handleSubmit}
-        >
-          Save Changes
-        </Button>,
-      ]}
+      onOpenChange={(o) => (!o ? onClose() : undefined)}
     >
-      <ProjectBaseForm form={form} />
-    </Modal>
+      <DialogContent className="max-w-[720px]">
+        <DialogHeader>
+          <DialogTitle className="text-lg font-semibold">
+            Edit Project
+          </DialogTitle>
+        </DialogHeader>
+        <ProjectBaseForm form={form} />
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button
+            onClick={handleSubmit}
+            disabled={updateMutation.isPending}
+          >
+            <Save className="h-4 w-4" />
+            {updateMutation.isPending ? "Saving…" : "Save Changes"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
