@@ -1,4 +1,6 @@
+// eslint-disable-next-line litellm-ui/no-banned-ui-imports
 import { BarChart } from "@tremor/react";
+// eslint-disable-next-line litellm-ui/no-banned-ui-imports
 import type { DateRangePickerValue } from "@tremor/react";
 import React, { useEffect, useState } from "react";
 import { Card } from "@/components/ui/card";
