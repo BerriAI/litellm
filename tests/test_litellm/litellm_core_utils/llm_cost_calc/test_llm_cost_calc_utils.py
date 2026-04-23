@@ -365,6 +365,87 @@ def test_generic_cost_per_token_gpt55():
     )
 
 
+def test_generic_cost_per_token_azure_gpt55():
+    """azure/gpt-5.5: pricing identical to openai gpt-5.5 ($5/$0.50/$30 per 1M)."""
+    model = "azure/gpt-5.5"
+    custom_llm_provider = "azure"
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    model_cost_map = litellm.model_cost[model]
+
+    assert model_cost_map["input_cost_per_token"] == 5e-6
+    assert model_cost_map["output_cost_per_token"] == 3e-5
+    assert model_cost_map["cache_read_input_token_cost"] == 5e-7
+    assert model_cost_map["litellm_provider"] == "azure"
+    assert model_cost_map["mode"] == "chat"
+    assert model_cost_map["max_input_tokens"] == 272000
+
+    prompt_tokens = 1000
+    completion_tokens = 500
+    usage = Usage(
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        total_tokens=prompt_tokens + completion_tokens,
+    )
+    prompt_cost, completion_cost = generic_cost_per_token(
+        model=model,
+        usage=usage,
+        custom_llm_provider=custom_llm_provider,
+    )
+    assert round(prompt_cost, 10) == round(
+        model_cost_map["input_cost_per_token"] * prompt_tokens, 10
+    )
+    assert round(completion_cost, 10) == round(
+        model_cost_map["output_cost_per_token"] * completion_tokens, 10
+    )
+
+
+def test_azure_gpt55_pricing_matches_openai_gpt55():
+    """azure/gpt-5.5 cost fields must mirror gpt-5.5 exactly (excluding provider)."""
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    openai_entry = litellm.model_cost["gpt-5.5"]
+    azure_entry = litellm.model_cost["azure/gpt-5.5"]
+
+    # Provider differs by design; everything else should match.
+    assert openai_entry["litellm_provider"] == "openai"
+    assert azure_entry["litellm_provider"] == "azure"
+
+    parity_fields = [
+        "input_cost_per_token",
+        "output_cost_per_token",
+        "cache_read_input_token_cost",
+        "max_input_tokens",
+        "max_output_tokens",
+        "max_tokens",
+        "mode",
+        "supported_endpoints",
+        "supported_modalities",
+        "supported_output_modalities",
+        "supports_function_calling",
+        "supports_native_streaming",
+        "supports_parallel_function_calling",
+        "supports_pdf_input",
+        "supports_prompt_caching",
+        "supports_reasoning",
+        "supports_response_schema",
+        "supports_system_messages",
+        "supports_tool_choice",
+        "supports_service_tier",
+        "supports_vision",
+        "supports_none_reasoning_effort",
+        "supports_xhigh_reasoning_effort",
+        "supports_minimal_reasoning_effort",
+    ]
+    for field in parity_fields:
+        assert azure_entry.get(field) == openai_entry.get(field), (
+            f"azure/gpt-5.5.{field} ({azure_entry.get(field)!r}) "
+            f"does not match gpt-5.5.{field} ({openai_entry.get(field)!r})"
+        )
+
+
 def test_generic_cost_per_token_anthropic_prompt_caching():
     model = "claude-sonnet-4@20250514"
     usage = Usage(
