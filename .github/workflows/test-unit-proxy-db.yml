@@ -18,16 +18,18 @@ concurrency:
 #
 # Design targets:
 #   * Every shard runs in <= 7 minutes of wall-clock on the default runner.
-#     Setup + xdist worker spawn + coverage teardown is ~3 minutes per shard,
-#     so each shard's pytest runtime must stay under ~4 minutes. That drives
-#     the split granularity: shards get subdivided when pytest call time
-#     exceeds ~4m or any single test exceeds ~3m (it pins one xdist worker).
+#     Most of a shard's time is pytest plugin load + xdist worker imports +
+#     pytest-cov instrumentation, not the tests themselves. Keeping per-shard
+#     work low and matching worker count to runner cores is what controls it.
+#   * workers: 4 matches the 4-core ubuntu-latest runner. -n 8 on 4 cores
+#     oversubscribes 2x and workers fight for CPU during their cold-start
+#     imports (measured ~441% CPU for -n 8 locally, i.e. ~55% effective).
 #   * test_key_generate_prisma.py stays serial (workers=0) — it has event-loop
 #     conflicts with the logging worker when run in parallel.
-#   * test_proxy_utils.py is split into two -k-filtered shards (by first
-#     character of the test function name) so its 188 parametrized cases
-#     fan out across two runners rather than one. --dist=worksteal within
-#     each shard balances parametrized cases across xdist workers.
+#   * test_proxy_utils.py runs as a single shard with --dist=worksteal so
+#     xdist balances its 188 parametrized cases across workers instead of
+#     pinning the whole file to one worker (the default --dist=loadscope
+#     behavior for single-file targets).
 #   * test_db_schema_migration.py is isolated because one test in it
 #     (test_aaaasschema_migration_check) takes ~170s — by itself it
 #     determines the shard's wall-clock floor.
@@ -75,7 +77,7 @@ jobs:
   proxy-db:
     needs: assert-shard-coverage
     # Display only the semantic shard name in the checks UI instead of GHA's
-    # default "proxy-db (key-generation, tests/proxy_unit_tests/…, 0, loadscope, "", 20)"
+    # default "proxy-db (key-generation, tests/proxy_unit_tests/…, 0, loadscope, 20)"
     # which includes every matrix field and gets truncated past the test-path.
     name: ${{ matrix.test-group }}
     permissions:
@@ -91,17 +93,15 @@ jobs:
             test-path: "tests/proxy_unit_tests/test_key_generate_prisma.py"
             workers: 0
             dist: loadscope
-            keyword: ""
             timeout: 20
 
-          # ---- auth: split into 2 shards (was 1 at ~10.4m wall-clock) ----
+          # ---- auth: split into 2 shards ----
           - test-group: auth-checks
             test-path: >-
               tests/proxy_unit_tests/test_auth_checks.py
               tests/proxy_unit_tests/test_user_api_key_auth.py
-            workers: 8
+            workers: 4
             dist: loadscope
-            keyword: ""
             timeout: 15
           - test-group: jwt-and-keys
             test-path: >-
@@ -110,39 +110,18 @@ jobs:
               tests/proxy_unit_tests/test_proxy_custom_auth.py
               tests/proxy_unit_tests/test_key_generate_dynamodb.py
               tests/proxy_unit_tests/test_deployed_proxy_keygen.py
-            workers: 8
+            workers: 4
             dist: loadscope
-            keyword: ""
             timeout: 15
 
-          # ---- test_proxy_utils.py split into 2 by -k (was 1 at ~9.7m) ----
-          # Same file, same --dist=worksteal, filtered by first char of test
-          # function name. Keywords below cover all 63 test functions in the
-          # file. If new functions are added, balance between the two shards.
-          - test-group: proxy-utils-a-h
+          # ---- test_proxy_utils.py, single shard, worksteal distribution ----
+          - test-group: proxy-utils
             test-path: "tests/proxy_unit_tests/test_proxy_utils.py"
-            workers: 8
+            workers: 4
             dist: worksteal
-            keyword: >-
-              test_add or test_check or test_custom or test_during or
-              test_dynamic or test_end_user or test_enforced or test_foward or
-              test_get_admin or test_get_complete or test_get_docs or
-              test_get_known or test_get_model_group or test_get_openapi or
-              test_get_redoc or test_get_temp or test_get_user_info or
-              test_handle or test_health
-            timeout: 15
-          - test-group: proxy-utils-i-z
-            test-path: "tests/proxy_unit_tests/test_proxy_utils.py"
-            workers: 8
-            dist: worksteal
-            keyword: >-
-              test_is or test_litellm or test_merge or test_post_call or
-              test_prepare or test_provider or test_proxy_config or
-              test_reading or test_spend or test_team or test_traceparent or
-              test_update or test_get_key or test_get_team
             timeout: 15
 
-          # ---- proxy server: split into 2 shards (was 1 at ~11.1m) ----
+          # ---- proxy server: split into 2 shards ----
           - test-group: proxy-server-core
             test-path: >-
               tests/proxy_unit_tests/test_proxy_server.py
@@ -151,9 +130,8 @@ jobs:
               tests/proxy_unit_tests/test_proxy_server_langfuse.py
               tests/proxy_unit_tests/test_proxy_server_spend.py
               tests/proxy_unit_tests/test_aproxy_startup.py
-            workers: 8
+            workers: 4
             dist: loadscope
-            keyword: ""
             timeout: 15
           - test-group: proxy-runtime
             test-path: >-
@@ -163,41 +141,37 @@ jobs:
               tests/proxy_unit_tests/test_server_root_path.py
               tests/proxy_unit_tests/test_proxy_pass_user_config.py
               tests/proxy_unit_tests/test_proxy_token_counter.py
-            workers: 8
+            workers: 4
             dist: loadscope
-            keyword: ""
             timeout: 15
 
-          # ---- logging: split into 2 shards (was 1 at ~10.1m) ----
+          # ---- logging: split into 2 shards ----
           - test-group: custom-logging
             test-path: >-
               tests/proxy_unit_tests/test_custom_callback_input.py
               tests/proxy_unit_tests/test_custom_logger_s3_gcs.py
               tests/proxy_unit_tests/test_proxy_custom_logger.py
-            workers: 8
+            workers: 4
             dist: loadscope
-            keyword: ""
             timeout: 15
           - test-group: logging-misc
             test-path: >-
               tests/proxy_unit_tests/test_proxy_reject_logging.py
               tests/proxy_unit_tests/test_audit_logs_proxy.py
               tests/proxy_unit_tests/test_search_api_logging.py
-            workers: 8
+            workers: 4
             dist: loadscope
-            keyword: ""
             timeout: 15
 
-          # ---- db-and-spend: split out the 170s schema-migration test ----
+          # ---- db-and-spend: isolate the 170s schema-migration test ----
           # test_db_schema_migration.py has one test that runs ~170s; it
           # single-handedly pins one xdist worker and determined the whole
           # shard's 12.3m wall-clock. Isolated here so the other 45 tests
           # finish faster.
           - test-group: schema-migration
             test-path: "tests/proxy_unit_tests/test_db_schema_migration.py"
-            workers: 8
+            workers: 4
             dist: loadscope
-            keyword: ""
             timeout: 15
           - test-group: db-and-spend
             test-path: >-
@@ -209,32 +183,28 @@ jobs:
               tests/proxy_unit_tests/test_update_spend.py
               tests/proxy_unit_tests/test_project_endpoints_prisma.py
               tests/proxy_unit_tests/test_proxy_encrypt_decrypt.py
-            workers: 8
+            workers: 4
             dist: loadscope
-            keyword: ""
             timeout: 15
 
-          # ---- guardrails + budget + hooks: split into 2 (was 1 at ~10.1m) ----
+          # ---- guardrails + budget + hooks: split into 2 ----
           - test-group: guardrails-hooks
             test-path: >-
               tests/proxy_unit_tests/test_proxy_setting_guardrails.py
               tests/proxy_unit_tests/test_banned_keyword_list.py
               tests/proxy_unit_tests/test_unit_test_proxy_hooks.py
-            workers: 8
+            workers: 4
             dist: loadscope
-            keyword: ""
             timeout: 15
           - test-group: budgets
             test-path: >-
               tests/proxy_unit_tests/test_default_end_user_budget_simple.py
               tests/proxy_unit_tests/test_unit_test_max_model_budget_limiter.py
               tests/proxy_unit_tests/test_zero_cost_model_budget_bypass.py
-            workers: 8
+            workers: 4
             dist: loadscope
-            keyword: ""
             timeout: 15
 
-          # Already under 7m; left as a single shard.
           - test-group: endpoints-and-responses
             test-path: >-
               tests/proxy_unit_tests/test_blog_posts_endpoint.py
@@ -253,9 +223,8 @@ jobs:
               tests/proxy_unit_tests/test_proxy_exception_mapping.py
               tests/proxy_unit_tests/test_custom_tokenizer_bug.py
               tests/proxy_unit_tests/test_model_response_typing
-            workers: 8
+            workers: 4
             dist: loadscope
-            keyword: ""
             timeout: 15
     uses: ./.github/workflows/_test-unit-services-base.yml
     with:
@@ -265,7 +234,6 @@ jobs:
       timeout-minutes: ${{ matrix.timeout }}
       enable-postgres: true
       dist: ${{ matrix.dist }}
-      keyword: ${{ matrix.keyword }}
       artifact-name: proxy-db-${{ matrix.test-group }}
     secrets:
       DATABASE_URL: ${{ secrets.DATABASE_URL }}
