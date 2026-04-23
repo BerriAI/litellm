@@ -164,13 +164,15 @@ jobs:
             timeout: 15
 
           # ---- db-and-spend: isolate the 170s schema-migration test ----
-          # test_db_schema_migration.py has one test that runs ~170s; it
-          # single-handedly pins one xdist worker and determined the whole
-          # shard's 12.3m wall-clock. Isolated here so the other 45 tests
-          # finish faster.
+          # test_db_schema_migration.py has exactly one test, and that test
+          # is mostly waiting on `prisma migrate deploy` / `prisma migrate
+          # diff` subprocesses (~170s). It does no CPU-bound Python work
+          # inside the test. Running with workers=0 (serial, no xdist)
+          # skips the 4-worker cold-start cost we'd otherwise pay for a
+          # single test, saving ~4 minutes of wall-clock.
           - test-group: schema-migration
             test-path: "tests/proxy_unit_tests/test_db_schema_migration.py"
-            workers: 4
+            workers: 0
             dist: loadscope
             timeout: 15
           - test-group: db-and-spend
