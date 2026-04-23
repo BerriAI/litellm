@@ -577,13 +577,13 @@
     "credential_fields": [
       {
         "key": "api_key",
-        "label": "OAuth credential reference",
-        "placeholder": "oauth:my-chatgpt",
-        "tooltip": "Reference a stored ChatGPT OAuth credential by name, prefixed with 'oauth:'. Create the credential first via Credentials \u2192 Add Credential \u2192 ChatGPT (OAuth).",
+        "label": "OAuth credential",
+        "placeholder": "Select a stored ChatGPT OAuth credential",
+        "tooltip": "Pick a credential you signed in with via Credentials \u2192 Add Credential \u2192 ChatGPT (OAuth). The proxy resolves the chosen name to the stored OAuth tokens at request time.",
         "required": true,
-        "field_type": "text",
+        "field_type": "oauth_credential_select",
         "options": null,
-        "default_value": "oauth:"
+        "default_value": null
       }
     ],
     "default_model_placeholder": "gpt-5.3-codex"

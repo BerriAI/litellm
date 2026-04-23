@@ -272,7 +272,13 @@ export interface ProviderCredentialFieldMetadata {
   placeholder?: string | null;
   tooltip?: string | null;
   required?: boolean;
-  field_type?: "text" | "password" | "select" | "upload" | "textarea";
+  field_type?:
+    | "text"
+    | "password"
+    | "select"
+    | "upload"
+    | "textarea"
+    | "oauth_credential_select";
   options?: string[] | null;
   default_value?: string | null;
 }

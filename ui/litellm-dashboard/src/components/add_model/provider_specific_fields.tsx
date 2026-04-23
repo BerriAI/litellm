@@ -1,3 +1,4 @@
+import { useCredentials } from "@/app/(dashboard)/hooks/credentials/useCredentials";
 import { useProviderFields } from "@/app/(dashboard)/hooks/providers/useProviderFields";
 import { UploadOutlined } from "@ant-design/icons";
 import { Text, TextInput } from "@tremor/react";
@@ -5,6 +6,10 @@ import { Button as Button2, Col, Form, Input, Row, Select, Typography, Upload, U
 import React from "react";
 import { CredentialItem, ProviderCredentialFieldMetadata } from "../networking";
 import { provider_map, Providers } from "../provider_info_helpers";
+
+// credential_info.type values recognised as OAuth-backed credentials.
+// Add more as we ship OAuth flows for other providers.
+const OAUTH_CREDENTIAL_TYPES = new Set(["chatgpt_oauth", "copilot_oauth"]);
 const { Link } = Typography;
 
 interface ProviderSpecificFieldsProps {
@@ -18,7 +23,13 @@ interface ProviderCredentialField {
   placeholder?: string;
   tooltip?: string;
   required?: boolean;
-  type?: "text" | "password" | "select" | "upload" | "textarea";
+  type?:
+    | "text"
+    | "password"
+    | "select"
+    | "upload"
+    | "textarea"
+    | "oauth_credential_select";
   options?: string[];
   defaultValue?: string;
 }
@@ -38,7 +49,9 @@ const mapFieldMetadataToUiField = (field: ProviderCredentialFieldMetadata): Prov
           ? "upload"
           : field.field_type === "textarea"
             ? "textarea"
-            : "text";
+            : field.field_type === "oauth_credential_select"
+              ? "oauth_credential_select"
+              : "text";
 
   return {
     key: field.key,
@@ -97,6 +110,17 @@ const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({ selecte
   const form = Form.useFormInstance(); // Get form instance from context
 
   const { data: providerMetadata, isLoading, error: loadError } = useProviderFields();
+
+  // Fetched lazily; only used by oauth_credential_select fields. The hook
+  // is a no-op until ``accessToken`` is available.
+  const { data: credentialsResponse } = useCredentials();
+  const oauthCredentials = React.useMemo(() => {
+    const all = credentialsResponse?.credentials ?? [];
+    return all.filter((c: CredentialItem) => {
+      const type = (c.credential_info as Record<string, unknown> | undefined)?.type;
+      return typeof type === "string" && OAUTH_CREDENTIAL_TYPES.has(type);
+    });
+  }, [credentialsResponse]);
 
   // Memoize the expensive cache computation
   const cacheEntries = React.useMemo(() => {
@@ -223,7 +247,27 @@ const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({ selecte
             tooltip={field.tooltip}
             className={field.key === "vertex_credentials" ? "mb-0" : undefined}
           >
-            {field.type === "select" ? (
+            {field.type === "oauth_credential_select" ? (
+              <Select
+                placeholder={field.placeholder ?? "Select a stored OAuth credential"}
+                showSearch
+                notFoundContent={
+                  <Text className="text-sm text-gray-500">
+                    No OAuth credentials found. Create one via Credentials →
+                    Add Credential first.
+                  </Text>
+                }
+              >
+                {oauthCredentials.map((c) => (
+                  <Select.Option
+                    key={c.credential_name}
+                    value={`oauth:${c.credential_name}`}
+                  >
+                    {c.credential_name}
+                  </Select.Option>
+                ))}
+              </Select>
+            ) : field.type === "select" ? (
               <Select placeholder={field.placeholder} defaultValue={field.defaultValue}>
                 {field.options?.map((option) => (
                   <Select.Option key={option} value={option}>

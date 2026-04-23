@@ -19,7 +19,14 @@ class ProviderCredentialField(BaseModel):
     placeholder: Optional[str] = None
     tooltip: Optional[str] = None
     required: bool = False
-    field_type: Literal["text", "password", "select", "upload", "textarea"] = "text"
+    field_type: Literal[
+        "text",
+        "password",
+        "select",
+        "upload",
+        "textarea",
+        "oauth_credential_select",
+    ] = "text"
     options: Optional[List[str]] = None
     default_value: Optional[str] = None
 
