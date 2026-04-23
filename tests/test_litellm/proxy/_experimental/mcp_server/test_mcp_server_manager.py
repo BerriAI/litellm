@@ -2673,7 +2673,9 @@ class TestMCPServerManagerExpandPermissionList:
 
     def test_searches_config_and_registry_union(self):
         manager = MCPServerManager()
-        manager.config_mcp_servers["cfg-id"] = self._make_server("cfg-id", server_name="a")
+        manager.config_mcp_servers["cfg-id"] = self._make_server(
+            "cfg-id", server_name="a"
+        )
         manager.registry["reg-id"] = self._make_server("reg-id", server_name="b")
 
         assert manager.expand_permission_list(["a"]) == ["cfg-id"]
