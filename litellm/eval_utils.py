@@ -12,8 +12,7 @@ Usage:
 
 import asyncio
 import json
-from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional
 
 from litellm.types.utils import EvalCriterion, EvalResult, EvalVerdict
 
@@ -88,7 +87,6 @@ async def aevaluate(
     """
     import litellm
 
-    start_time = datetime.now(timezone.utc)
     response_text = _extract_response_text(response)
     messages = _build_judge_messages(response_text, criteria, system_prompt)
 
@@ -124,7 +122,11 @@ async def aevaluate(
         weighted_sum = 0.0
         for s in scores_raw:
             cname = s.get("criterion", "")
-            score = float(s.get("score", 0))
+            raw_score = s.get("score", 0)
+            try:
+                score = float(raw_score)
+            except (TypeError, ValueError):
+                score = 0.0
             weight = weight_map.get(cname, 0)
             weighted_sum += score * (weight / total_weight)
             verdicts.append(
@@ -133,18 +135,16 @@ async def aevaluate(
                     score=score,
                     reasoning=s.get("comment", ""),
                     passed=True,  # per-criterion pass/fail evaluated by caller if threshold set
+                    weight=weight_map.get(cname, 0),
                 )
             )
 
         overall_score = min(max(weighted_sum, 0.0), 100.0)
 
-        end_time = datetime.now(timezone.utc)
-        duration = (end_time - start_time).total_seconds()
-
         return EvalResult(
             overall_score=overall_score,
             verdicts=verdicts,
-            passed=False,  # caller sets this after threshold check
+            passed=True,  # no threshold applied at SDK level; caller gates via check_thresholds()
             judge_model=judge_model,
             iteration=iteration,
             raw_judge_response=raw_json,
@@ -169,13 +169,20 @@ def evaluate(
     litellm_kwargs: Optional[Dict] = None,
 ) -> EvalResult:
     """Sync wrapper for aevaluate(). See aevaluate() for full docs."""
-    return asyncio.run(
-        aevaluate(
-            response=response,
-            criteria=criteria,
-            judge_model=judge_model,
-            system_prompt=system_prompt,
-            iteration=iteration,
-            litellm_kwargs=litellm_kwargs,
-        )
+    import concurrent.futures
+
+    coro = aevaluate(
+        response=response,
+        criteria=criteria,
+        judge_model=judge_model,
+        system_prompt=system_prompt,
+        iteration=iteration,
+        litellm_kwargs=litellm_kwargs,
     )
+    try:
+        asyncio.get_running_loop()
+        # Already inside a running event loop — run in a fresh thread to avoid deadlock.
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            return executor.submit(asyncio.run, coro).result()
+    except RuntimeError:
+        return asyncio.run(coro)
