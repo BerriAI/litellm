@@ -85,6 +85,7 @@
         "src/components/AIHub/forms/MakeAgentPublicForm.tsx",
         "src/components/AIHub/forms/MakeMCPPublicForm.tsx",
         "src/components/AIHub/forms/MakeModelPublicForm.tsx",
+        "src/components/policies/policy_test_panel.tsx",
         "src/components/permissions/VectorStorePermissions.tsx",
         "src/components/permissions/AgentPermissions.tsx",
         "src/components/permissions/MCPServerPermissions.tsx",
