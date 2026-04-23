@@ -1,4 +1,9 @@
-import { Tab, TabGroup, TabList, TabPanel, TabPanels } from "@tremor/react";
+import {
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
+} from "@/components/ui/tabs";
 import type { FormInstance } from "antd";
 import { Form } from "antd";
 import type { UploadProps } from "antd/es/upload";
@@ -11,7 +16,8 @@ import AddModelForm from "./AddModelForm";
 import { handleAddAutoRouterSubmit } from "./handle_add_auto_router_submit";
 
 interface AddModelTabProps {
-  form: FormInstance; // For the Add Model tab
+  form: FormInstance;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   handleOk: (values?: any) => Promise<void>;
   selectedProvider: Providers;
   setSelectedProvider: (provider: Providers) => void;
@@ -43,14 +49,18 @@ const AddModelTab: React.FC<AddModelTabProps> = ({
   accessToken,
   userRole,
 }) => {
-  // Create separate form instance for auto router
   const [autoRouterForm] = Form.useForm();
 
   const handleAutoRouterOk = () => {
     autoRouterForm
       .validateFields()
       .then((values) => {
-        handleAddAutoRouterSubmit(values, accessToken, autoRouterForm, handleOk);
+        handleAddAutoRouterSubmit(
+          values,
+          accessToken,
+          autoRouterForm,
+          handleOk,
+        );
       })
       .catch((error) => {
         console.error("Validation failed:", error);
@@ -58,40 +68,36 @@ const AddModelTab: React.FC<AddModelTabProps> = ({
   };
 
   return (
-    <>
-      <TabGroup className="w-full">
-        <TabList className="mb-4">
-          <Tab>Add Model</Tab>
-          <Tab>Add Auto Router</Tab>
-        </TabList>
-        <TabPanels>
-          <TabPanel>
-            <AddModelForm
-              form={form}
-              handleOk={handleOk}
-              selectedProvider={selectedProvider}
-              setSelectedProvider={setSelectedProvider}
-              providerModels={providerModels}
-              setProviderModelsFn={setProviderModelsFn}
-              getPlaceholder={getPlaceholder}
-              uploadProps={uploadProps}
-              showAdvancedSettings={showAdvancedSettings}
-              setShowAdvancedSettings={setShowAdvancedSettings}
-              teams={teams}
-              credentials={credentials}
-            />
-          </TabPanel>
-          <TabPanel>
-            <AddAutoRouterTab
-              form={autoRouterForm}
-              handleOk={handleAutoRouterOk}
-              accessToken={accessToken}
-              userRole={userRole}
-            />
-          </TabPanel>
-        </TabPanels>
-      </TabGroup>
-    </>
+    <Tabs defaultValue="add-model" className="w-full">
+      <TabsList className="mb-4">
+        <TabsTrigger value="add-model">Add Model</TabsTrigger>
+        <TabsTrigger value="add-auto-router">Add Auto Router</TabsTrigger>
+      </TabsList>
+      <TabsContent value="add-model">
+        <AddModelForm
+          form={form}
+          handleOk={handleOk}
+          selectedProvider={selectedProvider}
+          setSelectedProvider={setSelectedProvider}
+          providerModels={providerModels}
+          setProviderModelsFn={setProviderModelsFn}
+          getPlaceholder={getPlaceholder}
+          uploadProps={uploadProps}
+          showAdvancedSettings={showAdvancedSettings}
+          setShowAdvancedSettings={setShowAdvancedSettings}
+          teams={teams}
+          credentials={credentials}
+        />
+      </TabsContent>
+      <TabsContent value="add-auto-router">
+        <AddAutoRouterTab
+          form={autoRouterForm}
+          handleOk={handleAutoRouterOk}
+          accessToken={accessToken}
+          userRole={userRole}
+        />
+      </TabsContent>
+    </Tabs>
   );
 };
 
