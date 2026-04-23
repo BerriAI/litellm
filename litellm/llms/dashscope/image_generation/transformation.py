@@ -27,9 +27,14 @@ from typing import TYPE_CHECKING, Any, List, Optional
 
 import httpx
 
-from litellm.llms.base_llm.image_generation.transformation import BaseImageGenerationConfig
+from litellm.llms.base_llm.image_generation.transformation import (
+    BaseImageGenerationConfig,
+)
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.llms.openai import AllMessageValues, OpenAIImageGenerationOptionalParams
+from litellm.types.llms.openai import (
+    AllMessageValues,
+    OpenAIImageGenerationOptionalParams,
+)
 from litellm.types.utils import ImageObject, ImageResponse
 
 if TYPE_CHECKING:
@@ -93,9 +98,7 @@ class DashScopeImageGenerationConfig(BaseImageGenerationConfig):
         stream: Optional[bool] = None,
     ) -> str:
         return (
-            api_base
-            or get_secret_str("DASHSCOPE_API_BASE_IMAGE")
-            or DEFAULT_API_BASE
+            api_base or get_secret_str("DASHSCOPE_API_BASE_IMAGE") or DEFAULT_API_BASE
         )
 
     def validate_environment(
@@ -176,9 +179,7 @@ class DashScopeImageGenerationConfig(BaseImageGenerationConfig):
 
         choices = response_data.get("output", {}).get("choices", [])
         for choice in choices:
-            content_list = (
-                choice.get("message", {}).get("content", [])
-            )
+            content_list = choice.get("message", {}).get("content", [])
             for content_item in content_list:
                 image_url = content_item.get("image")
                 if image_url:
