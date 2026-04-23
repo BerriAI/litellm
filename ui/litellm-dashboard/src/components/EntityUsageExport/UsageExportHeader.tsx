@@ -1,16 +1,30 @@
+// eslint-disable-next-line litellm-ui/no-banned-ui-imports
 import type { DateRangePickerValue } from "@tremor/react";
-import { Button, Text } from "@tremor/react";
-import { Select } from "antd";
+import { Button } from "@/components/ui/button";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Badge } from "@/components/ui/badge";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import { Download, X } from "lucide-react";
 import React, { useState } from "react";
 import EntityUsageExportModal from "./EntityUsageExportModal";
 import type { EntitySpendData, EntityType } from "./types";
 import type { Team } from "@/components/key_team_helpers/key_list";
+import { cn } from "@/lib/utils";
 
 interface UsageExportHeaderProps {
   dateValue: DateRangePickerValue;
   entityType: EntityType;
   spendData: EntitySpendData;
-  // Optional filter props
   showFilters?: boolean;
   filterLabel?: string;
   filterPlaceholder?: string;
@@ -19,9 +33,12 @@ interface UsageExportHeaderProps {
   filterOptions?: Array<{ label: string; value: string }>;
   filterMode?: "multiple" | "single";
   customTitle?: string;
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   compactLayout?: boolean;
   teams?: Team[];
 }
+
+const ALL = "__all__";
 
 const UsageExportHeader: React.FC<UsageExportHeaderProps> = ({
   dateValue,
@@ -35,63 +52,121 @@ const UsageExportHeader: React.FC<UsageExportHeaderProps> = ({
   filterOptions = [],
   filterMode = "multiple",
   customTitle,
-  compactLayout = false,
   teams = [],
 }) => {
   const [isExportModalOpen, setIsExportModalOpen] = useState(false);
+  const [multiOpen, setMultiOpen] = useState(false);
 
-  // Determine grid layout based on what's visible
-  const getGridCols = () => {
-    const hasFilters = showFilters && filterOptions.length > 0;
+  const hasFilters = showFilters && filterOptions.length > 0;
+  const gridCols = hasFilters ? "grid-cols-[1fr_auto]" : "grid-cols-[auto]";
 
-    if (hasFilters) return "grid-cols-[1fr_auto]";
-    return "grid-cols-[auto]";
-  };
+  const labelFor = (v: string) =>
+    filterOptions.find((o) => o.value === v)?.label ?? v;
 
   return (
     <>
       <div className="mb-4">
-        {/**
-         * Use CSS grid with items-end so all cells (filter, button)
-         * align to the same baseline regardless of label heights. This removes
-         * vertical drift when the right column has a label above the input.
-         */}
-        <div className={`grid ${getGridCols()} items-end gap-4`}>
-          {showFilters && filterOptions.length > 0 && (
+        <div className={`grid ${gridCols} items-end gap-4`}>
+          {hasFilters && (
             <div>
-              {filterLabel && <Text className="mb-2">{filterLabel}</Text>}
-              <Select
-                mode={filterMode === "single" ? undefined : "multiple"}
-                style={{ width: "100%" }}
-                placeholder={filterPlaceholder}
-                value={filterMode === "single" ? (selectedFilters[0] ?? undefined) : selectedFilters}
-                onChange={(value: any) => {
-                  if (filterMode === "single") {
-                    onFiltersChange?.(value ? [value] : []);
-                  } else {
-                    onFiltersChange?.(value);
+              {filterLabel && (
+                <p className="mb-2 text-sm text-muted-foreground">
+                  {filterLabel}
+                </p>
+              )}
+              {filterMode === "single" ? (
+                <Select
+                  value={selectedFilters[0] ?? ALL}
+                  onValueChange={(v) =>
+                    onFiltersChange?.(v === ALL ? [] : [v])
                   }
-                }}
-                options={filterOptions}
-                allowClear
-              />
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder={filterPlaceholder} />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value={ALL}>All</SelectItem>
+                    {filterOptions.map((o) => (
+                      <SelectItem key={o.value} value={o.value}>
+                        {o.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              ) : (
+                <Popover open={multiOpen} onOpenChange={setMultiOpen}>
+                  <PopoverTrigger asChild>
+                    <button
+                      type="button"
+                      className={cn(
+                        "min-h-9 w-full flex flex-wrap items-center gap-1 rounded-md border border-input bg-background px-2 py-1 text-sm text-left",
+                      )}
+                    >
+                      {selectedFilters.length === 0 ? (
+                        <span className="text-muted-foreground px-1">
+                          {filterPlaceholder ?? "Select…"}
+                        </span>
+                      ) : (
+                        selectedFilters.map((v) => (
+                          <Badge
+                            key={v}
+                            variant="secondary"
+                            className="gap-1 inline-flex items-center"
+                          >
+                            {labelFor(v)}
+                            <span
+                              role="button"
+                              tabIndex={0}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                onFiltersChange?.(
+                                  selectedFilters.filter((s) => s !== v),
+                                );
+                              }}
+                              className="inline-flex items-center"
+                              aria-label={`Remove ${labelFor(v)}`}
+                            >
+                              <X size={12} />
+                            </span>
+                          </Badge>
+                        ))
+                      )}
+                    </button>
+                  </PopoverTrigger>
+                  <PopoverContent
+                    align="start"
+                    className="w-[var(--radix-popover-trigger-width)] p-1 max-h-60 overflow-y-auto"
+                  >
+                    {filterOptions
+                      .filter((o) => !selectedFilters.includes(o.value))
+                      .map((opt) => (
+                        <button
+                          key={opt.value}
+                          type="button"
+                          className="w-full text-left px-2 py-1.5 text-sm rounded hover:bg-accent"
+                          onClick={() =>
+                            onFiltersChange?.([...selectedFilters, opt.value])
+                          }
+                        >
+                          {opt.label}
+                        </button>
+                      ))}
+                    {filterOptions.every((o) =>
+                      selectedFilters.includes(o.value),
+                    ) && (
+                      <div className="py-2 px-3 text-sm text-muted-foreground">
+                        All selected
+                      </div>
+                    )}
+                  </PopoverContent>
+                </Popover>
+              )}
             </div>
           )}
 
           <div className="justify-self-end">
-            <Button
-              onClick={() => setIsExportModalOpen(true)}
-              icon={() => (
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"
-                  />
-                </svg>
-              )}
-            >
+            <Button onClick={() => setIsExportModalOpen(true)}>
+              <Download className="h-4 w-4" />
               Export Data
             </Button>
           </div>
