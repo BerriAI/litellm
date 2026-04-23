@@ -37,6 +37,7 @@ from litellm.llms.chatgpt.common_utils import (
 from litellm.llms.chatgpt.db_authenticator import (
     CREDENTIAL_TYPE,
     DBAuthenticator,
+    _register_proxy_main_loop,
     persist_credential_to_db,
 )
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
@@ -141,9 +142,18 @@ async def start_oauth(
             "cancelled": False,
         }
 
+    # Capture the proxy's main event loop so the DBAuthenticator refresh
+    # path can schedule its fire-and-forget persist safely across threads
+    # (prevents the cross-event-loop errors you hit if you `asyncio.run`
+    # an async prisma call from a worker thread).
+    loop = asyncio.get_running_loop()
+    _register_proxy_main_loop(loop)
+
     authenticator = Authenticator()
     try:
-        device_code = authenticator._request_device_code()
+        device_code = await loop.run_in_executor(
+            None, authenticator._request_device_code
+        )
     except ChatGPTAuthError as exc:
         with _sessions_lock:
             _sessions.pop(session_id, None)
@@ -157,13 +167,15 @@ async def start_oauth(
         entry["status"] = "pending"
         entry["device_code"] = device_code
 
-    thread = threading.Thread(
-        target=_run_device_code_flow,
-        args=(session_id, body.credential_name, device_code, authenticator),
-        daemon=True,
-        name=f"chatgpt-oauth-{session_id[:8]}",
+    # Run the remaining poll → exchange → persist flow as a task on the main
+    # loop (was previously a thread doing ``asyncio.run``, which built a new
+    # loop and collided with prisma_client's main-loop-bound primitives).
+    # Blocking IO inside the task runs through ``loop.run_in_executor``.
+    asyncio.create_task(
+        _run_device_code_flow_async(
+            session_id, body.credential_name, device_code, authenticator
+        )
     )
-    thread.start()
 
     return StartResponse(
         session_id=session_id,
@@ -251,22 +263,29 @@ async def oauth_refresh(
     )
 
 
-def _run_device_code_flow(
+async def _run_device_code_flow_async(
     session_id: str,
     credential_name: str,
     device_code: Dict[str, str],
     authenticator: Authenticator,
 ) -> None:
     """
-    Background worker: polls for the authorization code, exchanges it for
-    tokens, then upserts the credential into the in-memory cache and DB.
+    Background async task: polls for the authorization code, exchanges it
+    for tokens, then upserts the credential into the in-memory cache and
+    DB. Runs on the proxy's main event loop so the DB persist step shares
+    a loop with ``prisma_client``.
     """
+    loop = asyncio.get_running_loop()
     try:
-        auth_code = authenticator._poll_for_authorization_code(device_code)
+        auth_code = await loop.run_in_executor(
+            None, authenticator._poll_for_authorization_code, device_code
+        )
         session_snapshot = _get_session(session_id)
         if session_snapshot is None or session_snapshot.get("cancelled"):
             return
-        tokens = authenticator._exchange_code_for_tokens(auth_code)
+        tokens = await loop.run_in_executor(
+            None, authenticator._exchange_code_for_tokens, auth_code
+        )
     except ChatGPTAuthError as exc:
         _update_session(session_id, status="error", message=exc.message)
         return
@@ -288,7 +307,7 @@ def _run_device_code_flow(
     CredentialAccessor.upsert_credentials([item])
 
     try:
-        asyncio.run(persist_credential_to_db(item))
+        await persist_credential_to_db(item)
     except Exception as exc:
         verbose_proxy_logger.error(
             "Failed to persist ChatGPT OAuth credential %s: %s",

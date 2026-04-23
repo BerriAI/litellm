@@ -15,6 +15,7 @@ Endpoints:
   POST /copilot/oauth/refresh    — force a Copilot API key refresh for a stored credential
 """
 
+import asyncio
 import threading
 import time
 import uuid
@@ -24,11 +25,18 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 from litellm._logging import verbose_proxy_logger
+from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.llms.github_copilot.authenticator import Authenticator
 from litellm.llms.github_copilot.common_utils import GithubCopilotError
-from litellm.llms.github_copilot.db_authenticator import DBAuthenticator
+from litellm.llms.github_copilot.db_authenticator import (
+    CREDENTIAL_TYPE,
+    DBAuthenticator,
+    _register_proxy_main_loop,
+    persist_credential_to_db,
+)
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.types.utils import CredentialItem
 
 router = APIRouter(prefix="/copilot/oauth", tags=["copilot oauth"])
 
@@ -128,9 +136,16 @@ async def start_oauth(
             "cancelled": False,
         }
 
+    # Capture the proxy's main event loop so the DBAuthenticator refresh
+    # path can schedule persist work cross-thread via run_coroutine_threadsafe.
+    loop = asyncio.get_running_loop()
+    _register_proxy_main_loop(loop)
+
     authenticator = Authenticator()
     try:
-        device_code_info = authenticator._get_device_code()
+        device_code_info = await loop.run_in_executor(
+            None, authenticator._get_device_code
+        )
     except GithubCopilotError as exc:
         with _sessions_lock:
             _sessions.pop(session_id, None)
@@ -143,13 +158,13 @@ async def start_oauth(
         entry["status"] = "pending"
         entry["device_code_info"] = device_code_info
 
-    thread = threading.Thread(
-        target=_run_device_code_flow,
-        args=(session_id, body.credential_name, device_code_info, authenticator),
-        daemon=True,
-        name=f"copilot-oauth-{session_id[:8]}",
+    # Run the remaining flow as a task on the main loop so the DB persist
+    # step shares an event loop with prisma_client.
+    asyncio.create_task(
+        _run_device_code_flow_async(
+            session_id, body.credential_name, device_code_info, authenticator
+        )
     )
-    thread.start()
 
     return StartResponse(
         session_id=session_id,
@@ -228,19 +243,23 @@ async def oauth_refresh(
     )
 
 
-def _run_device_code_flow(
+async def _run_device_code_flow_async(
     session_id: str,
     credential_name: str,
     device_code_info: Dict[str, str],
     authenticator: Authenticator,
 ) -> None:
     """
-    Background worker: polls GitHub for the access token, then persists it
-    via :class:`DBAuthenticator.store_access_token`.
+    Background async task: polls GitHub for the access token, then upserts
+    the credential into the in-memory cache and awaits the DB persist on
+    the same event loop as ``prisma_client``.
     """
+    loop = asyncio.get_running_loop()
     try:
-        access_token = authenticator._poll_for_access_token(
-            device_code_info["device_code"]
+        access_token = await loop.run_in_executor(
+            None,
+            authenticator._poll_for_access_token,
+            device_code_info["device_code"],
         )
         session_snapshot = _get_session(session_id)
         if session_snapshot is None or session_snapshot.get("cancelled"):
@@ -253,10 +272,20 @@ def _run_device_code_flow(
         _update_session(session_id, status="error", message=str(exc))
         return
 
+    item = CredentialItem(
+        credential_name=credential_name,
+        credential_values={"access_token": access_token},
+        credential_info={
+            "type": CREDENTIAL_TYPE,
+            "custom_llm_provider": "github_copilot",
+        },
+    )
+    CredentialAccessor.upsert_credentials([item])
+    # Invalidate any cached Copilot API key tied to an old access token.
+    DBAuthenticator._api_key_cache.pop(credential_name, None)
+
     try:
-        DBAuthenticator(credential_name=credential_name).store_access_token(
-            access_token
-        )
+        await persist_credential_to_db(item)
     except Exception as exc:
         verbose_proxy_logger.error(
             "Failed to persist Copilot OAuth credential %s: %s",

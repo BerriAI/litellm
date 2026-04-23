@@ -136,8 +136,23 @@ class DBAuthenticator(Authenticator):
 # Fire-and-forget DB persistence
 # ---------------------------------------------------------------------------
 
+# See chatgpt/db_authenticator.py for the full rationale: prisma_client's
+# internal asyncio primitives are bound to the proxy's main loop, so we
+# must schedule persist coroutines back onto that loop rather than spin
+# up a fresh one in a worker thread.
+_proxy_main_loop: Optional["asyncio.AbstractEventLoop"] = None
+
+
+def _register_proxy_main_loop(loop: "asyncio.AbstractEventLoop") -> None:
+    global _proxy_main_loop
+    _proxy_main_loop = loop
+
 
 def _schedule_db_persist(item: CredentialItem) -> None:
+    loop = _proxy_main_loop
+    if loop is not None and loop.is_running():
+        asyncio.run_coroutine_threadsafe(persist_credential_to_db(item), loop)
+        return
     thread = threading.Thread(
         target=_persist_item_sync,
         args=(item,),

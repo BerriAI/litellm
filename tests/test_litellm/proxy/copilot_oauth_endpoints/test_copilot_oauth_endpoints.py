@@ -109,12 +109,8 @@ class TestStartOAuth:
             "interval": 5,
         }
 
-        class _FakeThread:
-            def __init__(self, *args, **kwargs):
-                pass
-
-            def start(self):
-                pass
+        async def _noop(*args, **kwargs):
+            return None
 
         with (
             patch.object(
@@ -123,8 +119,8 @@ class TestStartOAuth:
                 return_value=fake_device_code,
             ),
             patch(
-                "litellm.proxy.copilot_oauth_endpoints.endpoints.threading.Thread",
-                _FakeThread,
+                "litellm.proxy.copilot_oauth_endpoints.endpoints._run_device_code_flow_async",
+                _noop,
             ),
         ):
             response = await start_oauth(
@@ -227,9 +223,11 @@ class TestRefreshEndpoint:
 
 
 class TestBackgroundWorker:
-    def test_worker_persists_access_token_on_success(self, monkeypatch):
+    @pytest.mark.asyncio
+    async def test_worker_persists_access_token_on_success(self, monkeypatch):
+        import litellm
         from litellm.proxy.copilot_oauth_endpoints.endpoints import (
-            _run_device_code_flow,
+            _run_device_code_flow_async,
         )
 
         session_id = "s1"
@@ -244,25 +242,37 @@ class TestBackgroundWorker:
         auth = MagicMock()
         auth._poll_for_access_token.return_value = "gho_fresh_token"
 
-        store_mock = MagicMock()
-        monkeypatch.setattr(
-            DBAuthenticator, "store_access_token", lambda self, tok: store_mock(tok)
-        )
+        persist_mock = MagicMock()
 
-        _run_device_code_flow(
+        async def _fake_persist(item):
+            persist_mock(item)
+
+        monkeypatch.setattr(
+            "litellm.proxy.copilot_oauth_endpoints.endpoints.persist_credential_to_db",
+            _fake_persist,
+        )
+        monkeypatch.setattr(litellm, "credential_list", [])
+
+        await _run_device_code_flow_async(
             session_id=session_id,
             credential_name="c",
             device_code_info={"device_code": "dc", "user_code": "UC"},
             authenticator=auth,
         )
 
-        store_mock.assert_called_once_with("gho_fresh_token")
+        persist_mock.assert_called_once()
+        assert persist_mock.call_args.args[0].credential_name == "c"
+        assert persist_mock.call_args.args[0].credential_values["access_token"] == (
+            "gho_fresh_token"
+        )
         with _sessions_lock:
             assert _sessions[session_id]["status"] == "success"
 
-    def test_worker_marks_error_on_db_persist_failure(self, monkeypatch):
+    @pytest.mark.asyncio
+    async def test_worker_marks_error_on_db_persist_failure(self, monkeypatch):
+        import litellm
         from litellm.proxy.copilot_oauth_endpoints.endpoints import (
-            _run_device_code_flow,
+            _run_device_code_flow_async,
         )
 
         session_id = "s1"
@@ -277,12 +287,16 @@ class TestBackgroundWorker:
         auth = MagicMock()
         auth._poll_for_access_token.return_value = "gho_fresh"
 
-        def _boom(self, tok):
+        async def _boom(item):
             raise RuntimeError("prisma disconnected")
 
-        monkeypatch.setattr(DBAuthenticator, "store_access_token", _boom)
+        monkeypatch.setattr(
+            "litellm.proxy.copilot_oauth_endpoints.endpoints.persist_credential_to_db",
+            _boom,
+        )
+        monkeypatch.setattr(litellm, "credential_list", [])
 
-        _run_device_code_flow(
+        await _run_device_code_flow_async(
             session_id=session_id,
             credential_name="c",
             device_code_info={"device_code": "dc", "user_code": "UC"},
@@ -293,9 +307,10 @@ class TestBackgroundWorker:
             assert _sessions[session_id]["status"] == "error"
             assert "DB persist failed" in _sessions[session_id]["message"]
 
-    def test_worker_marks_error_on_poll_failure(self):
+    @pytest.mark.asyncio
+    async def test_worker_marks_error_on_poll_failure(self):
         from litellm.proxy.copilot_oauth_endpoints.endpoints import (
-            _run_device_code_flow,
+            _run_device_code_flow_async,
         )
 
         session_id = "s1"
@@ -312,7 +327,7 @@ class TestBackgroundWorker:
             status_code=408, message="timed out"
         )
 
-        _run_device_code_flow(
+        await _run_device_code_flow_async(
             session_id=session_id,
             credential_name="c",
             device_code_info={"device_code": "dc", "user_code": "UC"},

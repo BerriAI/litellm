@@ -108,6 +108,21 @@ def _unpack_auth_record(values: Dict[str, Any]) -> Dict[str, Any]:
 # Fire-and-forget DB persistence
 # ---------------------------------------------------------------------------
 
+# The proxy's main asyncio event loop, captured by the OAuth start endpoint.
+# ``prisma_client``'s internal primitives (locks, futures) are bound to this
+# loop; awaiting them from a new loop spun up by ``asyncio.run`` in a worker
+# thread raises "bound to a different event loop". We schedule the persist
+# coroutine back onto this loop via ``run_coroutine_threadsafe`` from the
+# refresh path (which runs in a FastAPI threadpool thread, not on any loop).
+_proxy_main_loop: Optional["asyncio.AbstractEventLoop"] = None
+
+
+def _register_proxy_main_loop(loop: "asyncio.AbstractEventLoop") -> None:
+    """Called from the OAuth ``/start`` endpoint (guaranteed to be on the
+    proxy's main loop) so the refresh-path persist can find the loop."""
+    global _proxy_main_loop
+    _proxy_main_loop = loop
+
 
 def _schedule_db_persist(item: CredentialItem) -> None:
     """
@@ -119,6 +134,14 @@ def _schedule_db_persist(item: CredentialItem) -> None:
     lags or fails. Failures are logged; the cache will be reconciled on the
     next successful write.
     """
+    # If the proxy's main loop is known and running, schedule directly on it
+    # (cross-loop-safe for prisma_client's bound primitives). Otherwise fall
+    # back to spawning a thread + asyncio.run for non-proxy contexts (CLI,
+    # tests) where no prisma_client is set anyway.
+    loop = _proxy_main_loop
+    if loop is not None and loop.is_running():
+        asyncio.run_coroutine_threadsafe(persist_credential_to_db(item), loop)
+        return
     thread = threading.Thread(
         target=_persist_item_sync,
         args=(item,),
@@ -203,9 +226,7 @@ def resolve_authenticator(
         if isinstance(litellm_params, dict)
         else getattr(litellm_params, "api_key", None)
     )
-    if isinstance(api_key, str) and api_key.startswith(
-        OAUTH_CREDENTIAL_API_KEY_PREFIX
-    ):
+    if isinstance(api_key, str) and api_key.startswith(OAUTH_CREDENTIAL_API_KEY_PREFIX):
         return DBAuthenticator(
             credential_name=api_key[len(OAUTH_CREDENTIAL_API_KEY_PREFIX) :]
         )

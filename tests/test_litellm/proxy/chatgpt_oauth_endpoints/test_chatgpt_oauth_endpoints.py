@@ -117,12 +117,10 @@ class TestStartOAuth:
             "interval": "5",
         }
 
-        class _FakeThread:
-            def __init__(self, *args, **kwargs):
-                self.started = False
-
-            def start(self):
-                self.started = True
+        # Stub the background async task so start_oauth doesn't actually run
+        # the poll → exchange → persist flow during the test.
+        async def _noop(*args, **kwargs):
+            return None
 
         with (
             patch.object(
@@ -131,8 +129,8 @@ class TestStartOAuth:
                 return_value=fake_device_code,
             ),
             patch(
-                "litellm.proxy.chatgpt_oauth_endpoints.endpoints.threading.Thread",
-                _FakeThread,
+                "litellm.proxy.chatgpt_oauth_endpoints.endpoints._run_device_code_flow_async",
+                _noop,
             ),
         ):
             response = await start_oauth(
@@ -321,9 +319,10 @@ class TestRefreshEndpoint:
 
 
 class TestBackgroundWorker:
-    def test_worker_marks_success_and_persists(self, monkeypatch):
+    @pytest.mark.asyncio
+    async def test_worker_marks_success_and_persists(self, monkeypatch):
         from litellm.proxy.chatgpt_oauth_endpoints.endpoints import (
-            _run_device_code_flow,
+            _run_device_code_flow_async,
         )
 
         session_id = "s1"
@@ -365,7 +364,7 @@ class TestBackgroundWorker:
         )
         monkeypatch.setattr(litellm, "credential_list", [])
 
-        _run_device_code_flow(
+        await _run_device_code_flow_async(
             session_id=session_id,
             credential_name="my-creds",
             device_code={"interval": "5"},
@@ -377,17 +376,17 @@ class TestBackgroundWorker:
         persist_mock.assert_called_once()
         persisted_item = persist_mock.call_args.args[0]
         assert persisted_item.credential_name == "my-creds"
-        # Verify the item is in the in-memory cache too
         assert any(c.credential_name == "my-creds" for c in litellm.credential_list)
 
-    def test_worker_marks_error_on_db_persist_failure(self, monkeypatch):
+    @pytest.mark.asyncio
+    async def test_worker_marks_error_on_db_persist_failure(self, monkeypatch):
         """
         If tokens are obtained but the DB write fails, the session should
         flip to ``error`` with an informative message (the in-memory cache
         was already updated; next retry via UI will retry the DB write).
         """
         from litellm.proxy.chatgpt_oauth_endpoints.endpoints import (
-            _run_device_code_flow,
+            _run_device_code_flow_async,
         )
 
         session_id = "s1"
@@ -427,7 +426,7 @@ class TestBackgroundWorker:
         )
         monkeypatch.setattr(litellm, "credential_list", [])
 
-        _run_device_code_flow(
+        await _run_device_code_flow_async(
             session_id=session_id,
             credential_name="my-creds",
             device_code={"interval": "5"},
@@ -438,10 +437,11 @@ class TestBackgroundWorker:
             assert _sessions[session_id]["status"] == "error"
             assert "DB persist failed" in _sessions[session_id]["message"]
 
-    def test_worker_marks_error_on_auth_failure(self, monkeypatch):
+    @pytest.mark.asyncio
+    async def test_worker_marks_error_on_auth_failure(self, monkeypatch):
         from litellm.llms.chatgpt.common_utils import GetAccessTokenError
         from litellm.proxy.chatgpt_oauth_endpoints.endpoints import (
-            _run_device_code_flow,
+            _run_device_code_flow_async,
         )
 
         session_id = "s1"
@@ -458,7 +458,7 @@ class TestBackgroundWorker:
             status_code=408, message="timed out"
         )
 
-        _run_device_code_flow(
+        await _run_device_code_flow_async(
             session_id=session_id,
             credential_name="my-creds",
             device_code={"interval": "5"},
