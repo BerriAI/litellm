@@ -1732,13 +1732,16 @@ async def test_test_guardrail_submission_endpoint_success(mocker):
 
 
 @pytest.mark.asyncio
-async def test_approve_guardrail_submission_ignores_endpoint_probe_failures(mocker):
-    """Approve should remain independent from the manual endpoint probe."""
+async def test_approve_guardrail_submission_remains_independent_when_probe_fails(
+    mocker,
+):
+    """A failing manual probe should not prevent approval."""
     mock_prisma = mocker.Mock()
     row = mocker.Mock(
         guardrail_id="approve-me",
         guardrail_name="my-guard",
         status="pending_review",
+        team_id="team-1",
         litellm_params={
             "guardrail": "generic_guardrail_api",
             "mode": "pre_call",
@@ -1760,11 +1763,17 @@ async def test_approve_guardrail_submission_ignores_endpoint_probe_failures(mock
     )
     user = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
 
+    with pytest.raises(HTTPException) as exc_info:
+        await probe_guardrail_submission_endpoint("approve-me", user)
+
+    assert exc_info.value.status_code == 502
+    assert "timeout" in exc_info.value.detail
+
     result = await approve_guardrail_submission("approve-me", user)
 
     assert result["status"] == "active"
     mock_prisma.db.litellm_guardrailstable.update.assert_called_once()
-    test_submission.assert_not_awaited()
+    assert test_submission.await_count == 1
 
 
 @pytest.mark.asyncio
