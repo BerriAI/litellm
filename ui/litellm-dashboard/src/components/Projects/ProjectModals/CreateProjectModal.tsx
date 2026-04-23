@@ -1,5 +1,13 @@
-import { Modal, Form, Button, Typography } from "antd";
-import { FolderAddOutlined } from "@ant-design/icons";
+import { FolderPlus } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Form } from "antd";
 import MessageManager from "@/components/molecules/message_manager";
 import {
   useCreateProject,
@@ -52,32 +60,30 @@ export function CreateProjectModal({
   };
 
   return (
-    <Modal
-      title={
-        <Typography.Text strong style={{ fontSize: 18 }}>
-          Create New Project
-        </Typography.Text>
-      }
+    <Dialog
       open={isOpen}
-      onCancel={handleCancel}
-      width={720}
-      destroyOnHidden
-      footer={[
-        <Button key="cancel" onClick={handleCancel}>
-          Cancel
-        </Button>,
-        <Button
-          key="submit"
-          type="primary"
-          icon={<FolderAddOutlined />}
-          loading={createMutation.isPending}
-          onClick={handleSubmit}
-        >
-          Create Project
-        </Button>,
-      ]}
+      onOpenChange={(o) => (!o ? handleCancel() : undefined)}
     >
-      <ProjectBaseForm form={form} />
-    </Modal>
+      <DialogContent className="max-w-[720px]">
+        <DialogHeader>
+          <DialogTitle className="text-lg font-semibold">
+            Create New Project
+          </DialogTitle>
+        </DialogHeader>
+        <ProjectBaseForm form={form} />
+        <DialogFooter>
+          <Button variant="outline" onClick={handleCancel}>
+            Cancel
+          </Button>
+          <Button
+            onClick={handleSubmit}
+            disabled={createMutation.isPending}
+          >
+            <FolderPlus className="h-4 w-4" />
+            {createMutation.isPending ? "Creating…" : "Create Project"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }

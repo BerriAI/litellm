@@ -1,6 +1,13 @@
 import React, { useMemo, useState } from "react";
-import { Select } from "antd";
-import { TextInput } from "@tremor/react";
+import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+
 interface ModelSelectorProps {
   value: string;
   onChange: (value: string) => void;
@@ -8,7 +15,14 @@ interface ModelSelectorProps {
   loading?: boolean;
   disabled?: boolean;
 }
-export function ModelSelector({ value, onChange, models, loading, disabled }: ModelSelectorProps) {
+
+export function ModelSelector({
+  value,
+  onChange,
+  models,
+  loading,
+  disabled,
+}: ModelSelectorProps) {
   const [isAddingCustom, setIsAddingCustom] = useState(false);
   const [customValue, setCustomValue] = useState("");
 
@@ -48,31 +62,34 @@ export function ModelSelector({ value, onChange, models, loading, disabled }: Mo
     setIsAddingCustom(false);
     setCustomValue("");
   };
+
   return (
     <div className="flex-1 min-w-0">
-      <Select<string>
+      <Select
         value={selectValue}
-        onChange={handleSelectChange}
-        disabled={disabled}
-        loading={loading}
-        placeholder={loading ? "Loading models..." : "Select a model"}
-        className="w-full rounded-md"
-        showSearch
-        optionFilterProp="children"
+        onValueChange={handleSelectChange}
+        disabled={disabled || loading}
       >
-        {displayOptions.map((model) => (
-          <Select.Option key={model} value={model}>
-            {model}
-          </Select.Option>
-        ))}
-        <Select.Option value="__custom__">+ Add custom model</Select.Option>
+        <SelectTrigger className="w-full">
+          <SelectValue
+            placeholder={loading ? "Loading models..." : "Select a model"}
+          />
+        </SelectTrigger>
+        <SelectContent>
+          {displayOptions.map((model) => (
+            <SelectItem key={model} value={model}>
+              {model}
+            </SelectItem>
+          ))}
+          <SelectItem value="__custom__">+ Add custom model</SelectItem>
+        </SelectContent>
       </Select>
       {isAddingCustom && (
-        <TextInput
+        <Input
           className="mt-2"
           placeholder="Custom Model Name (Enter to add)"
           value={customValue}
-          onValueChange={setCustomValue}
+          onChange={(e) => setCustomValue(e.target.value)}
           onKeyDown={(event) => {
             if (event.key === "Enter") {
               event.preventDefault();
