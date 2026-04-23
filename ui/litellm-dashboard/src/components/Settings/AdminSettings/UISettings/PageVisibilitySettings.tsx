@@ -1,14 +1,24 @@
 "use client";
 
 import { getAvailablePages } from "@/components/page_utils";
-import { Button, Checkbox, Collapse, Space, Tag, Typography } from "antd";
+import {
+  Accordion,
+  AccordionContent,
+  AccordionItem,
+  AccordionTrigger,
+} from "@/components/ui/accordion";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { useMemo, useState } from "react";
 
 interface PageVisibilitySettingsProps {
   enabledPagesInternalUsers: string[] | null | undefined;
   enabledPagesPropertyDescription?: string;
   isUpdating: boolean;
-  onUpdate: (settings: { enabled_ui_pages_internal_users: string[] | null }) => void;
+  onUpdate: (settings: {
+    enabled_ui_pages_internal_users: string[] | null;
+  }) => void;
 }
 
 export default function PageVisibilitySettings({
@@ -17,13 +27,12 @@ export default function PageVisibilitySettings({
   isUpdating,
   onUpdate,
 }: PageVisibilitySettingsProps) {
-  // Check if page visibility is set (null/undefined means "not set" = all pages visible)
-  const isPageVisibilitySet = enabledPagesInternalUsers !== null && enabledPagesInternalUsers !== undefined;
+  const isPageVisibilitySet =
+    enabledPagesInternalUsers !== null &&
+    enabledPagesInternalUsers !== undefined;
 
-  // Get available pages from leftnav configuration
   const availablePages = useMemo(() => getAvailablePages(), []);
 
-  // Group pages by their group for better UI
   const pagesByGroup = useMemo(() => {
     const grouped: Record<string, typeof availablePages> = {};
     availablePages.forEach((page) => {
@@ -35,10 +44,10 @@ export default function PageVisibilitySettings({
     return grouped;
   }, [availablePages]);
 
-  // Local state for page selection
-  const [selectedPages, setSelectedPages] = useState<string[]>(enabledPagesInternalUsers || []);
+  const [selectedPages, setSelectedPages] = useState<string[]>(
+    enabledPagesInternalUsers || [],
+  );
 
-  // Update local state when data changes
   useMemo(() => {
     if (enabledPagesInternalUsers) {
       setSelectedPages(enabledPagesInternalUsers);
@@ -47,8 +56,19 @@ export default function PageVisibilitySettings({
     }
   }, [enabledPagesInternalUsers]);
 
+  const togglePage = (page: string, checked: boolean) => {
+    if (checked) {
+      setSelectedPages((prev) => [...prev, page]);
+    } else {
+      setSelectedPages((prev) => prev.filter((p) => p !== page));
+    }
+  };
+
   const handleSavePageVisibility = () => {
-    onUpdate({ enabled_ui_pages_internal_users: selectedPages.length > 0 ? selectedPages : null });
+    onUpdate({
+      enabled_ui_pages_internal_users:
+        selectedPages.length > 0 ? selectedPages : null,
+    });
   };
 
   const handleResetToDefault = () => {
@@ -57,90 +77,94 @@ export default function PageVisibilitySettings({
   };
 
   return (
-    <Space direction="vertical" size="middle" style={{ width: "100%" }}>
-      <Space direction="vertical" size={4}>
-        <Space align="center">
-          <Typography.Text strong>Internal User Page Visibility</Typography.Text>
+    <div className="flex flex-col gap-4 w-full">
+      <div className="flex flex-col gap-1">
+        <div className="flex items-center gap-2">
+          <span className="font-bold">Internal User Page Visibility</span>
           {!isPageVisibilitySet && (
-            <Tag color="default" style={{ marginLeft: "8px" }}>
-              Not set (all pages visible)
-            </Tag>
+            <Badge variant="secondary">Not set (all pages visible)</Badge>
           )}
           {isPageVisibilitySet && (
-            <Tag color="blue" style={{ marginLeft: "8px" }}>
-              {selectedPages.length} page{selectedPages.length !== 1 ? "s" : ""} selected
-            </Tag>
+            <Badge className="bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300">
+              {selectedPages.length} page{selectedPages.length !== 1 ? "s" : ""}{" "}
+              selected
+            </Badge>
           )}
-        </Space>
+        </div>
         {enabledPagesPropertyDescription && (
-          <Typography.Text type="secondary">{enabledPagesPropertyDescription}</Typography.Text>
+          <p className="text-muted-foreground text-sm">
+            {enabledPagesPropertyDescription}
+          </p>
         )}
-        <Typography.Text type="secondary" style={{ fontSize: "12px", fontStyle: "italic" }}>
-          By default, all pages are visible to internal users. Select specific pages to restrict visibility.
-        </Typography.Text>
-        <Typography.Text type="secondary" style={{ fontSize: "12px", color: "#8b5cf6" }}>
-          Note: Only pages accessible to internal user roles are shown here. Admin-only pages are excluded as they
-          cannot be made visible to internal users regardless of this setting.
-        </Typography.Text>
-      </Space>
+        <p className="text-muted-foreground text-xs italic">
+          By default, all pages are visible to internal users. Select specific
+          pages to restrict visibility.
+        </p>
+        <p className="text-purple-600 dark:text-purple-400 text-xs">
+          Note: Only pages accessible to internal user roles are shown here.
+          Admin-only pages are excluded as they cannot be made visible to
+          internal users regardless of this setting.
+        </p>
+      </div>
 
-      <Collapse
-        items={[
-          {
-            key: "page-visibility",
-            label: "Configure Page Visibility",
-            children: (
-              <Space direction="vertical" size="middle" style={{ width: "100%" }}>
-                <Checkbox.Group value={selectedPages} onChange={setSelectedPages} style={{ width: "100%" }}>
-                  <Space direction="vertical" size="middle" style={{ width: "100%" }}>
-                    {Object.entries(pagesByGroup).map(([groupName, pages]) => (
-                      <div key={groupName}>
-                        <Typography.Text
-                          strong
-                          style={{
-                            fontSize: "11px",
-                            color: "#6b7280",
-                            letterSpacing: "0.05em",
-                            display: "block",
-                            marginBottom: "8px",
-                          }}
-                        >
-                          {groupName}
-                        </Typography.Text>
-                        <Space direction="vertical" size="small" style={{ marginLeft: "16px", width: "100%" }}>
-                          {pages.map((page) => (
-                            <div key={page.page} style={{ marginBottom: "4px" }}>
-                              <Checkbox value={page.page}>
-                                <Space direction="vertical" size={0}>
-                                  <Typography.Text>{page.label}</Typography.Text>
-                                  <Typography.Text type="secondary" style={{ fontSize: "12px" }}>
-                                    {page.description}
-                                  </Typography.Text>
-                                </Space>
-                              </Checkbox>
-                            </div>
-                          ))}
-                        </Space>
-                      </div>
+      <Accordion type="single" collapsible>
+        <AccordionItem value="page-visibility">
+          <AccordionTrigger>Configure Page Visibility</AccordionTrigger>
+          <AccordionContent>
+            <div className="flex flex-col gap-4 w-full">
+              {Object.entries(pagesByGroup).map(([groupName, pages]) => (
+                <div key={groupName}>
+                  <div className="font-bold text-[11px] text-muted-foreground tracking-wider block mb-2">
+                    {groupName}
+                  </div>
+                  <div className="ml-4 flex flex-col gap-2 w-full">
+                    {pages.map((page) => (
+                      <label
+                        key={page.page}
+                        className="flex items-start gap-2 cursor-pointer"
+                      >
+                        <Checkbox
+                          checked={selectedPages.includes(page.page)}
+                          onCheckedChange={(c) =>
+                            togglePage(page.page, c === true)
+                          }
+                          className="mt-1"
+                        />
+                        <div className="flex flex-col">
+                          <span>{page.label}</span>
+                          <span className="text-muted-foreground text-xs">
+                            {page.description}
+                          </span>
+                        </div>
+                      </label>
                     ))}
-                  </Space>
-                </Checkbox.Group>
+                  </div>
+                </div>
+              ))}
 
-                <Space>
-                  <Button type="primary" onClick={handleSavePageVisibility} loading={isUpdating} disabled={isUpdating}>
-                    Save Page Visibility Settings
+              <div className="flex gap-2">
+                <Button
+                  onClick={handleSavePageVisibility}
+                  disabled={isUpdating}
+                >
+                  {isUpdating
+                    ? "Saving…"
+                    : "Save Page Visibility Settings"}
+                </Button>
+                {isPageVisibilitySet && (
+                  <Button
+                    variant="outline"
+                    onClick={handleResetToDefault}
+                    disabled={isUpdating}
+                  >
+                    Reset to Default (All Pages)
                   </Button>
-                  {isPageVisibilitySet && (
-                    <Button onClick={handleResetToDefault} loading={isUpdating} disabled={isUpdating}>
-                      Reset to Default (All Pages)
-                    </Button>
-                  )}
-                </Space>
-              </Space>
-            ),
-          },
-        ]}
-      />
-    </Space>
+                )}
+              </div>
+            </div>
+          </AccordionContent>
+        </AccordionItem>
+      </Accordion>
+    </div>
   );
 }
