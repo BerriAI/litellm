@@ -213,7 +213,7 @@ class BlackForestLabsImageEditConfig(BaseImageEditConfig):
                 return response.content
             else:
                 raise ValueError(
-                    f"Unsupported image input: plain string values that are not URLs are not accepted. "
+                    "Unsupported image input: plain string values that are not URLs are not accepted. "
                     "Provide image bytes or a file-like object."
                 )
         elif hasattr(image, "read"):
