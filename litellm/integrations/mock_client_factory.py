@@ -25,9 +25,9 @@ class MockClientConfig:
     default_latency_ms: int = 100  # Default mock latency in milliseconds
     default_status_code: int = 200  # Default HTTP status code
     default_json_data: Optional[Dict] = None  # Default JSON response data
-    url_matchers: Optional[
-        List[str]
-    ] = None  # List of strings to match in URLs (e.g., ["storage.googleapis.com"])
+    url_matchers: Optional[List[str]] = (
+        None  # List of strings to match in URLs (e.g., ["storage.googleapis.com"])
+    )
     patch_async_handler: bool = True  # Whether to patch AsyncHTTPHandler.post
     patch_sync_client: bool = False  # Whether to patch httpx.Client.post
     patch_http_handler: bool = (

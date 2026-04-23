@@ -655,9 +655,9 @@ class OpenTelemetry(CustomLogger):
 
     def _get_dynamic_otel_headers_from_kwargs(self, kwargs) -> Optional[dict]:
         """Extract dynamic headers from kwargs if available."""
-        standard_callback_dynamic_params: Optional[
-            StandardCallbackDynamicParams
-        ] = kwargs.get("standard_callback_dynamic_params")
+        standard_callback_dynamic_params: Optional[StandardCallbackDynamicParams] = (
+            kwargs.get("standard_callback_dynamic_params")
+        )
 
         if not standard_callback_dynamic_params:
             return None
@@ -1613,6 +1613,14 @@ class OpenTelemetry(CustomLogger):
                     span=span,
                     key="gen_ai.response.id",
                     value=response_id,
+                )
+
+            litellm_call_id = standard_logging_payload.get("litellm_call_id")
+            if litellm_call_id:
+                self.safe_set_attribute(
+                    span=span,
+                    key="litellm.call_id",
+                    value=litellm_call_id,
                 )
 
             # The model used to generate the response.
