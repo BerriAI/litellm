@@ -1,5 +1,5 @@
 import moment from "moment";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { uiSpendLogsCall } from "../networking";
 import { Team } from "../key_team_helpers/key_list";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
@@ -15,13 +15,16 @@ export interface PaginatedResponse {
   total_pages: number;
 }
 
-function useDebouncedValue<T>(value: T, delayMs: number): T {
+function useDebouncedValue<T>(
+  value: T,
+  delayMs: number,
+): [T, React.Dispatch<React.SetStateAction<T>>] {
   const [debounced, setDebounced] = useState(value);
   useEffect(() => {
     const timer = setTimeout(() => setDebounced(value), delayMs);
     return () => clearTimeout(timer);
   }, [value, delayMs]);
-  return debounced;
+  return [debounced, setDebounced];
 }
 
 export const FILTER_KEYS = {
@@ -39,6 +42,14 @@ export const FILTER_KEYS = {
 
 export type FilterKey = keyof typeof FILTER_KEYS;
 export type LogFilterState = Record<(typeof FILTER_KEYS)[FilterKey], string>;
+
+// Keys whose UI is a free-form text input; only these need debouncing.
+const TEXT_FILTER_KEYS: readonly (keyof LogFilterState)[] = [
+  FILTER_KEYS.KEY_HASH,
+  FILTER_KEYS.ERROR_MESSAGE,
+  FILTER_KEYS.REQUEST_ID,
+  FILTER_KEYS.USER_ID,
+];
 
 export const defaultFilters: LogFilterState = {
   [FILTER_KEYS.TEAM_ID]: "",
@@ -90,10 +101,16 @@ export function useLogFilterLogic({
   sortOrder?: "asc" | "desc";
   currentPage?: number;
 }) {
-  // Debounce filters so text inputs (Key Hash, Error Message) don't fire a
-  // request per keystroke. Dropdown selects get a 300ms delay too, which is
-  // imperceptible since the user just clicked an option.
-  const debouncedFilters = useDebouncedValue(filters, 300);
+  const [debouncedFilters, setDebouncedFilters] = useDebouncedValue(filters, 300);
+
+  // Live values for dropdown keys, debounced for text keys.
+  const effectiveFilters = useMemo(() => {
+    const merged = { ...filters };
+    for (const k of TEXT_FILTER_KEYS) {
+      merged[k] = debouncedFilters[k];
+    }
+    return merged;
+  }, [filters, debouncedFilters]);
 
   const logsQuery = useQuery<PaginatedResponse>({
     queryKey: [
@@ -103,7 +120,8 @@ export function useLogFilterLogic({
       pageSize,
       startTime,
       endTime,
-      debouncedFilters,
+      isCustomDate,
+      effectiveFilters,
       filterByCurrentUser ? userID : null,
       sortBy,
       sortOrder,
@@ -131,16 +149,16 @@ export function useLogFilterLogic({
         page: currentPage,
         page_size: pageSize,
         params: {
-          api_key: debouncedFilters[FILTER_KEYS.KEY_HASH] || undefined,
-          team_id: debouncedFilters[FILTER_KEYS.TEAM_ID] || undefined,
-          request_id: debouncedFilters[FILTER_KEYS.REQUEST_ID] || undefined,
-          user_id: debouncedFilters[FILTER_KEYS.USER_ID] || (filterByCurrentUser ? userID ?? undefined : undefined),
-          end_user: debouncedFilters[FILTER_KEYS.END_USER] || undefined,
-          status_filter: debouncedFilters[FILTER_KEYS.STATUS] || undefined,
-          model_id: debouncedFilters[FILTER_KEYS.MODEL] || undefined,
-          key_alias: debouncedFilters[FILTER_KEYS.KEY_ALIAS] || undefined,
-          error_code: debouncedFilters[FILTER_KEYS.ERROR_CODE] || undefined,
-          error_message: debouncedFilters[FILTER_KEYS.ERROR_MESSAGE] || undefined,
+          api_key: effectiveFilters[FILTER_KEYS.KEY_HASH] || undefined,
+          team_id: effectiveFilters[FILTER_KEYS.TEAM_ID] || undefined,
+          request_id: effectiveFilters[FILTER_KEYS.REQUEST_ID] || undefined,
+          user_id: effectiveFilters[FILTER_KEYS.USER_ID] || (filterByCurrentUser ? userID ?? undefined : undefined),
+          end_user: effectiveFilters[FILTER_KEYS.END_USER] || undefined,
+          status_filter: effectiveFilters[FILTER_KEYS.STATUS] || undefined,
+          model_id: effectiveFilters[FILTER_KEYS.MODEL] || undefined,
+          key_alias: effectiveFilters[FILTER_KEYS.KEY_ALIAS] || undefined,
+          error_code: effectiveFilters[FILTER_KEYS.ERROR_CODE] || undefined,
+          error_message: effectiveFilters[FILTER_KEYS.ERROR_MESSAGE] || undefined,
           sort_by: sortBy,
           sort_order: sortOrder,
         },
@@ -189,6 +207,7 @@ export function useLogFilterLogic({
 
   const handleFilterReset = () => {
     setFilters(defaultFilters);
+    setDebouncedFilters(defaultFilters);
     setCurrentPage(1);
   };
 

@@ -277,32 +277,94 @@ describe("useLogFilterLogic", () => {
   });
 
   describe("debounce", () => {
-    it("calls uiSpendLogsCall after the debounce elapses", async () => {
+    it("calls uiSpendLogsCall after the debounce elapses for text filters", async () => {
       const { result } = renderFilterHook();
 
       act(() => {
-        result.current.handleFilterChange({ "Key Alias": "alias-1" });
+        result.current.handleFilterChange({ "Key Hash": "hash-1" });
       });
 
-      await waitFor(() => expect(uiSpendLogsCall).toHaveBeenCalled(), { timeout: 500 });
+      await waitFor(
+        () =>
+          expect(uiSpendLogsCall).toHaveBeenCalledWith(
+            expect.objectContaining({
+              params: expect.objectContaining({ api_key: "hash-1" }),
+            }),
+          ),
+        { timeout: 500 },
+      );
     });
 
-    it("does not call uiSpendLogsCall before the debounce elapses", async () => {
+    it("does not call uiSpendLogsCall with a text filter before the debounce elapses", async () => {
       const { result } = renderFilterHook();
 
-      // Wait for the initial query fire, then reset the spy so we only observe
-      // calls triggered by the filter change below.
       await waitFor(() => expect(uiSpendLogsCall).toHaveBeenCalled(), { timeout: 500 });
       vi.mocked(uiSpendLogsCall).mockClear();
 
       act(() => {
-        result.current.handleFilterChange({ "Key Alias": "alias-1" });
+        result.current.handleFilterChange({ "Key Hash": "hash-1" });
       });
 
       await new Promise((resolve) => setTimeout(resolve, 100));
-      expect(uiSpendLogsCall).not.toHaveBeenCalled();
+      expect(uiSpendLogsCall).not.toHaveBeenCalledWith(
+        expect.objectContaining({
+          params: expect.objectContaining({ api_key: "hash-1" }),
+        }),
+      );
+
+      await waitFor(
+        () =>
+          expect(uiSpendLogsCall).toHaveBeenCalledWith(
+            expect.objectContaining({
+              params: expect.objectContaining({ api_key: "hash-1" }),
+            }),
+          ),
+        { timeout: 500 },
+      );
+    });
+
+    it("applies dropdown filter changes without waiting for the debounce", async () => {
+      const { result } = renderFilterHook();
 
       await waitFor(() => expect(uiSpendLogsCall).toHaveBeenCalled(), { timeout: 500 });
+      vi.mocked(uiSpendLogsCall).mockClear();
+
+      act(() => {
+        result.current.handleFilterChange({ "Team ID": "team-instant" });
+      });
+
+      await waitFor(
+        () =>
+          expect(uiSpendLogsCall).toHaveBeenCalledWith(
+            expect.objectContaining({
+              params: expect.objectContaining({ team_id: "team-instant" }),
+            }),
+          ),
+        { timeout: 100 },
+      );
+    });
+  });
+
+  describe("handleFilterReset", () => {
+    it("flushes the text-filter debounce so a pending typed value is not sent", async () => {
+      const { result } = renderFilterHook();
+
+      await waitFor(() => expect(uiSpendLogsCall).toHaveBeenCalled(), { timeout: 500 });
+      vi.mocked(uiSpendLogsCall).mockClear();
+
+      act(() => {
+        result.current.handleFilterChange({ "Key Hash": "pending-hash" });
+      });
+
+      act(() => {
+        result.current.handleFilterReset();
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 400));
+
+      for (const call of vi.mocked(uiSpendLogsCall).mock.calls) {
+        expect(call[0].params?.api_key).toBeUndefined();
+      }
     });
   });
 
@@ -348,24 +410,19 @@ describe("useLogFilterLogic", () => {
 
   describe("refetch triggers", () => {
     it("refetches when sortBy changes", async () => {
-      const { result, rerender } = renderHook(
+      const { rerender } = renderHook(
         (props: { sortBy: LogsSortField }) => {
           const [filters, setFilters] = useState<LogFilterState>(defaultFilters);
-          const hook = useLogFilterLogic({
+          return useLogFilterLogic({
             ...defaultProps,
             filters,
             setFilters,
             setCurrentPage: vi.fn(),
             sortBy: props.sortBy,
           });
-          return { ...hook, filters, setFilters };
         },
         { wrapper, initialProps: { sortBy: "startTime" } },
       );
-
-      act(() => {
-        result.current.handleFilterChange({ "Key Alias": "alias-1" });
-      });
 
       await waitFor(() => expect(uiSpendLogsCall).toHaveBeenCalledTimes(1), { timeout: 500 });
 
@@ -380,24 +437,19 @@ describe("useLogFilterLogic", () => {
     });
 
     it("refetches when sortOrder changes", async () => {
-      const { result, rerender } = renderHook(
+      const { rerender } = renderHook(
         (props: { sortOrder: "asc" | "desc" }) => {
           const [filters, setFilters] = useState<LogFilterState>(defaultFilters);
-          const hook = useLogFilterLogic({
+          return useLogFilterLogic({
             ...defaultProps,
             filters,
             setFilters,
             setCurrentPage: vi.fn(),
             sortOrder: props.sortOrder,
           });
-          return { ...hook, filters, setFilters };
         },
         { wrapper, initialProps: { sortOrder: "desc" } },
       );
-
-      act(() => {
-        result.current.handleFilterChange({ "Key Alias": "alias-1" });
-      });
 
       await waitFor(() => expect(uiSpendLogsCall).toHaveBeenCalledTimes(1), { timeout: 500 });
 
@@ -412,24 +464,19 @@ describe("useLogFilterLogic", () => {
     });
 
     it("refetches when currentPage changes", async () => {
-      const { result, rerender } = renderHook(
+      const { rerender } = renderHook(
         (props: { currentPage: number }) => {
           const [filters, setFilters] = useState<LogFilterState>(defaultFilters);
-          const hook = useLogFilterLogic({
+          return useLogFilterLogic({
             ...defaultProps,
             filters,
             setFilters,
             setCurrentPage: vi.fn(),
             currentPage: props.currentPage,
           });
-          return { ...hook, filters, setFilters };
         },
         { wrapper, initialProps: { currentPage: 1 } },
       );
-
-      act(() => {
-        result.current.handleFilterChange({ "Key Alias": "alias-1" });
-      });
 
       await waitFor(() => expect(uiSpendLogsCall).toHaveBeenCalledTimes(1), { timeout: 500 });
 
@@ -442,24 +489,19 @@ describe("useLogFilterLogic", () => {
     });
 
     it("refetches when startTime changes", async () => {
-      const { result, rerender } = renderHook(
+      const { rerender } = renderHook(
         (props: { startTime: string }) => {
           const [filters, setFilters] = useState<LogFilterState>(defaultFilters);
-          const hook = useLogFilterLogic({
+          return useLogFilterLogic({
             ...defaultProps,
             filters,
             setFilters,
             setCurrentPage: vi.fn(),
             startTime: props.startTime,
           });
-          return { ...hook, filters, setFilters };
         },
         { wrapper, initialProps: { startTime: "2025-01-01T00:00:00Z" } },
       );
-
-      act(() => {
-        result.current.handleFilterChange({ "Key Alias": "alias-1" });
-      });
 
       await waitFor(() => expect(uiSpendLogsCall).toHaveBeenCalledTimes(1), { timeout: 500 });
 
@@ -471,31 +513,33 @@ describe("useLogFilterLogic", () => {
       );
     });
 
-    it("refetches when isCustomDate changes", async () => {
-      const { result, rerender } = renderHook(
+    it("refetches with a different end_date when isCustomDate toggles", async () => {
+      const customEndTime = "2025-01-15T23:59:59Z";
+      const customEndFormatted = "2025-01-15 23:59:59";
+
+      const { rerender } = renderHook(
         (props: { isCustomDate: boolean }) => {
           const [filters, setFilters] = useState<LogFilterState>(defaultFilters);
-          const hook = useLogFilterLogic({
+          return useLogFilterLogic({
             ...defaultProps,
+            endTime: customEndTime,
             filters,
             setFilters,
             setCurrentPage: vi.fn(),
             isCustomDate: props.isCustomDate,
           });
-          return { ...hook, filters, setFilters };
         },
         { wrapper, initialProps: { isCustomDate: false } },
       );
 
-      act(() => {
-        result.current.handleFilterChange({ "Key Alias": "alias-1" });
-      });
-
       await waitFor(() => expect(uiSpendLogsCall).toHaveBeenCalledTimes(1), { timeout: 500 });
+      const firstEndDate = vi.mocked(uiSpendLogsCall).mock.calls[0][0].end_date;
+      expect(firstEndDate).not.toBe(customEndFormatted);
 
       rerender({ isCustomDate: true });
 
       await waitFor(() => expect(uiSpendLogsCall).toHaveBeenCalledTimes(2), { timeout: 500 });
+      expect(vi.mocked(uiSpendLogsCall).mock.calls[1][0].end_date).toBe(customEndFormatted);
     });
   });
 
