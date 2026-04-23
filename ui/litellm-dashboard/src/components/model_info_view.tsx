@@ -2,7 +2,7 @@ import { useModelCostMap } from "@/app/(dashboard)/hooks/models/useModelCostMap"
 import { useModelHub, useModelsInfo } from "@/app/(dashboard)/hooks/models/useModels";
 import { transformModelData } from "@/app/(dashboard)/models-and-endpoints/utils/modelDataTransformer";
 import { InfoCircleOutlined } from "@ant-design/icons";
-import { ArrowLeftIcon, KeyIcon, RefreshIcon, TrashIcon } from "@heroicons/react/outline";
+import { ArrowLeft as ArrowLeftIcon, Key as KeyIcon, RefreshCcw as RefreshIcon, Trash2 as TrashIcon } from "lucide-react";
 // eslint-disable-next-line litellm-ui/no-banned-ui-imports
 import {
   Card,

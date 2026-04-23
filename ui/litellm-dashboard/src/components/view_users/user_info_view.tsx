@@ -4,7 +4,7 @@ import {
   Card, Text, Button, Grid, Tab, TabList, TabGroup, TabPanel, TabPanels, Title,
   Table, TableHead, TableBody, TableRow, TableHeaderCell, TableCell,
 } from "@tremor/react";
-import { ArrowLeftIcon, TrashIcon, RefreshIcon, PlusIcon } from "@heroicons/react/outline";
+import { ArrowLeft as ArrowLeftIcon, Trash2 as TrashIcon, RefreshCcw as RefreshIcon, Plus as PlusIcon } from "lucide-react";
 import {
   userGetInfoV2,
   UserInfoV2Response,

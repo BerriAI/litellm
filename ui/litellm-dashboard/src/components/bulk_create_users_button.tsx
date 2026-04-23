@@ -12,7 +12,7 @@ import {
 } from "@ant-design/icons";
 import { userCreateCall, invitationCreateCall, getProxyUISettings } from "./networking";
 import Papa from "papaparse";
-import { CheckCircleIcon, XCircleIcon, ExclamationIcon } from "@heroicons/react/outline";
+import { CheckCircle2 as CheckCircleIcon, XCircle as XCircleIcon, AlertTriangle as ExclamationIcon } from "lucide-react";
 import { CopyToClipboard } from "react-copy-to-clipboard";
 import NotificationsManager from "./molecules/notifications_manager";
 

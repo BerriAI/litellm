@@ -3,8 +3,7 @@ import { Select, Typography, Spin } from "antd";
 import MessageManager from "@/components/molecules/message_manager";
 // eslint-disable-next-line litellm-ui/no-banned-ui-imports
 import { Button, TextInput } from "@tremor/react";
-import { ArrowLeftIcon, PlusIcon } from "@heroicons/react/outline";
-import { DotsVerticalIcon } from "@heroicons/react/solid";
+import { ArrowLeft as ArrowLeftIcon, Plus as PlusIcon, MoreVertical as DotsVerticalIcon } from "lucide-react";
 import { GuardrailPipeline, PipelineStep, PipelineTestResult, PolicyCreateRequest, PolicyUpdateRequest, Policy } from "./types";
 import { Guardrail } from "../guardrails/types";
 import { testPipelineCall, listPolicyVersions, createPolicyVersion, updatePolicyVersionStatus } from "../networking";

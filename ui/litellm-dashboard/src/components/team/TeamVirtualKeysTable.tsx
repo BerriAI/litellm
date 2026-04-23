@@ -3,7 +3,7 @@
 "use client";
 import { useKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
-import { ChevronDownIcon, ChevronRightIcon, ChevronUpIcon, SwitchVerticalIcon } from "@heroicons/react/outline";
+import { ChevronDown as ChevronDownIcon, ChevronRight as ChevronRightIcon, ChevronUp as ChevronUpIcon, ChevronsUpDown as SwitchVerticalIcon } from "lucide-react";
 import {
   ColumnDef,
   flexRender,

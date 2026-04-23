@@ -1,5 +1,5 @@
 import { ThemeProvider } from "@/contexts/ThemeContext";
-import { ExternalLinkIcon, SearchIcon } from "@heroicons/react/outline";
+import { ExternalLink as ExternalLinkIcon, Search as SearchIcon } from "lucide-react";
 import { ColumnDef } from "@tanstack/react-table";
 // eslint-disable-next-line litellm-ui/no-banned-ui-imports
 import { Button, Card, Text, Title } from "@tremor/react";

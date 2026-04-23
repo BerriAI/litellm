@@ -6,7 +6,7 @@ import {
 } from "@/components/networking";
 import { copyToClipboard as utilCopyToClipboard } from "@/utils/dataUtils";
 import { CodeOutlined, EyeInvisibleOutlined, InfoCircleOutlined, StopOutlined } from "@ant-design/icons";
-import { ArrowLeftIcon } from "@heroicons/react/outline";
+import { ArrowLeft as ArrowLeftIcon } from "lucide-react";
 // eslint-disable-next-line litellm-ui/no-banned-ui-imports
 import {
   Badge,
