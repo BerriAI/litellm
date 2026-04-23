@@ -125,7 +125,7 @@ class TestVertexGemmaCompletion:
                 "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler"
             ) as mock_http_handler,
             patch(
-                "litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini.VertexLLM._ensure_access_token",
+                "litellm.llms.vertex_ai.vertex_llm_base.VertexBase._ensure_access_token",
                 return_value=("fake-access-token", "PROJECT_ID"),
             ),
         ):
@@ -213,7 +213,7 @@ class TestVertexGemmaCompletion:
                 "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler"
             ) as mock_http_handler,
             patch(
-                "litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini.VertexLLM._ensure_access_token",
+                "litellm.llms.vertex_ai.vertex_llm_base.VertexBase._ensure_access_token",
                 return_value=("fake-access-token", "test-project"),
             ),
         ):
@@ -286,7 +286,7 @@ class TestVertexGemmaCompletion:
                 "litellm.llms.custom_httpx.http_handler.get_async_httpx_client"
             ) as mock_get_client,
             patch(
-                "litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini.VertexLLM._ensure_access_token",
+                "litellm.llms.vertex_ai.vertex_llm_base.VertexBase._ensure_access_token",
                 return_value=("fake-access-token", "PROJECT_ID"),
             ),
         ):
@@ -388,7 +388,7 @@ class TestVertexGemmaCompletion:
                 "litellm.llms.custom_httpx.http_handler.get_async_httpx_client"
             ) as mock_get_client,
             patch(
-                "litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini.VertexLLM._ensure_access_token",
+                "litellm.llms.vertex_ai.vertex_llm_base.VertexBase._ensure_access_token",
                 return_value=("fake-access-token", "PROJECT_ID"),
             ),
         ):
