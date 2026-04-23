@@ -1,15 +1,19 @@
-import { SearchOutlined } from "@ant-design/icons";
-import { Card, Tab, TabGroup, TabList, TabPanel, TabPanels, Text } from "@tremor/react";
-import { Input } from "antd";
+import { Card } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import {
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
+} from "@/components/ui/tabs";
+import { Search } from "lucide-react";
 import React, { useEffect, useMemo, useState } from "react";
 import {
   extractCategories,
   filterPluginsByCategory,
   filterPluginsBySearch,
 } from "../claude_code_plugins/helpers";
-import {
-  MarketplaceResponse
-} from "../claude_code_plugins/types";
+import { MarketplaceResponse } from "../claude_code_plugins/types";
 import { ModelDataTable } from "../model_dashboard/table";
 import NotificationsManager from "../molecules/notifications_manager";
 import { getClaudeCodeMarketplace } from "../networking";
@@ -26,49 +30,39 @@ const ClaudeCodeMarketplaceTab: React.FC<ClaudeCodeMarketplaceTabProps> = ({
     useState<MarketplaceResponse | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState("");
-  const [selectedCategoryIndex, setSelectedCategoryIndex] = useState(0);
+  const [selectedCategory, setSelectedCategory] = useState("All");
 
   useEffect(() => {
+    const fetchMarketplace = async () => {
+      setIsLoading(true);
+      try {
+        const data: MarketplaceResponse = await getClaudeCodeMarketplace();
+        console.log("Claude Code marketplace:", data);
+        setMarketplaceData(data);
+      } catch (error) {
+        console.error("Error fetching marketplace:", error);
+      } finally {
+        setIsLoading(false);
+      }
+    };
     fetchMarketplace();
   }, []);
-
-  const fetchMarketplace = async () => {
-    setIsLoading(true);
-    try {
-      const data: MarketplaceResponse = await getClaudeCodeMarketplace();
-      console.log("Claude Code marketplace:", data);
-      setMarketplaceData(data);
-    } catch (error) {
-      console.error("Error fetching marketplace:", error);
-    } finally {
-      setIsLoading(false);
-    }
-  };
 
   const copyToClipboard = (text: string) => {
     navigator.clipboard.writeText(text);
     NotificationsManager.success("Copied to clipboard!");
   };
 
-  // Extract unique categories from plugins
   const categories = useMemo(() => {
     if (!marketplaceData) return ["All"];
     return extractCategories(marketplaceData.plugins);
   }, [marketplaceData]);
 
-  // Get selected category name
-  const selectedCategory = categories[selectedCategoryIndex] || "All";
-
-  // Filter plugins by search and category
   const filteredPlugins = useMemo(() => {
     if (!marketplaceData) return [];
 
     let plugins = marketplaceData.plugins;
-
-    // Apply category filter
     plugins = filterPluginsByCategory(plugins, selectedCategory);
-
-    // Apply search filter
     plugins = filterPluginsBySearch(plugins, searchTerm);
 
     return plugins;
@@ -76,16 +70,16 @@ const ClaudeCodeMarketplaceTab: React.FC<ClaudeCodeMarketplaceTabProps> = ({
 
   const columns = useMemo(
     () => getMarketplaceTableColumns(copyToClipboard, publicPage),
-    [publicPage]
+    [publicPage],
   );
 
   if (!marketplaceData && !isLoading) {
     return (
       <Card>
         <div className="text-center p-12">
-          <Text className="text-gray-500">
+          <span className="text-muted-foreground">
             Failed to load marketplace. Please try again later.
-          </Text>
+          </span>
         </div>
       </Card>
     );
@@ -93,67 +87,59 @@ const ClaudeCodeMarketplaceTab: React.FC<ClaudeCodeMarketplaceTabProps> = ({
 
   return (
     <div className="space-y-4">
-      {/* Search Bar */}
-      <div className="max-w-md">
+      <div className="max-w-md relative">
+        <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
         <Input
           placeholder="Search plugins by name, description, or keywords..."
-          prefix={<SearchOutlined className="text-gray-400" />}
           value={searchTerm}
           onChange={(e) => setSearchTerm(e.target.value)}
-          allowClear
-          size="large"
+          className="pl-9 h-11"
         />
       </div>
 
-      {/* Category Tabs */}
-      <TabGroup index={selectedCategoryIndex} onIndexChange={setSelectedCategoryIndex}>
-        <TabList className="mb-4">
+      <Tabs value={selectedCategory} onValueChange={setSelectedCategory}>
+        <TabsList className="mb-4">
           {categories.map((category) => {
-            // Count plugins in this category
             const categoryPlugins = filterPluginsByCategory(
               marketplaceData?.plugins || [],
-              category
+              category,
             );
             const count = filterPluginsBySearch(
               categoryPlugins,
-              searchTerm
+              searchTerm,
             ).length;
 
             return (
-              <Tab key={category}>
+              <TabsTrigger key={category} value={category}>
                 {category} {count > 0 && `(${count})`}
-              </Tab>
+              </TabsTrigger>
             );
           })}
-        </TabList>
+        </TabsList>
 
-        <TabPanels>
-          {categories.map((category) => (
-            <TabPanel key={category}>
-              <Card>
-                {/* Plugin Table */}
-                <ModelDataTable
-                  columns={columns}
-                  data={filteredPlugins}
-                  isLoading={isLoading}
-                  defaultSorting={[{ id: "name", desc: false }]}
-                />
-              </Card>
+        {categories.map((category) => (
+          <TabsContent key={category} value={category}>
+            <Card>
+              <ModelDataTable
+                columns={columns}
+                data={filteredPlugins}
+                isLoading={isLoading}
+                defaultSorting={[{ id: "name", desc: false }]}
+              />
+            </Card>
 
-              {/* Footer Info */}
-              <div className="mt-4 text-center space-y-2">
-                <Text className="text-sm text-gray-600">
-                  Showing {filteredPlugins.length} of{" "}
-                  {marketplaceData?.plugins.length || 0} plugin
-                  {marketplaceData?.plugins.length !== 1 ? "s" : ""}
-                  {searchTerm && ` matching "${searchTerm}"`}
-                  {selectedCategory !== "All" && ` in ${selectedCategory}`}
-                </Text>
-              </div>
-            </TabPanel>
-          ))}
-        </TabPanels>
-      </TabGroup>
+            <div className="mt-4 text-center space-y-2">
+              <span className="text-sm text-muted-foreground">
+                Showing {filteredPlugins.length} of{" "}
+                {marketplaceData?.plugins.length || 0} plugin
+                {marketplaceData?.plugins.length !== 1 ? "s" : ""}
+                {searchTerm && ` matching "${searchTerm}"`}
+                {selectedCategory !== "All" && ` in ${selectedCategory}`}
+              </span>
+            </div>
+          </TabsContent>
+        ))}
+      </Tabs>
     </div>
   );
 };
