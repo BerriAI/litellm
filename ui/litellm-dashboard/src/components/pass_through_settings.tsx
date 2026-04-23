@@ -1,34 +1,40 @@
 import React, { useState, useEffect } from "react";
-import { Text, Button, Icon, Title } from "@tremor/react";
-import { deletePassThroughEndpointsCall, getPassThroughEndpointsCall } from "./networking";
-import { Badge, Tooltip } from "antd";
-import { PencilAltIcon, TrashIcon, InformationCircleIcon } from "@heroicons/react/outline";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import {
+  deletePassThroughEndpointsCall,
+  getPassThroughEndpointsCall,
+} from "./networking";
+import { Eye, EyeOff, Info, Pencil, Trash2 } from "lucide-react";
 import AddPassThroughEndpoint from "./add_pass_through";
 import PassThroughInfoView from "./pass_through_info";
 import { DataTable } from "./view_logs/table";
 import { ColumnDef } from "@tanstack/react-table";
-import { Eye, EyeOff } from "lucide-react";
 import NotificationsManager from "./molecules/notifications_manager";
 
 interface GeneralSettingsPageProps {
   accessToken: string | null;
   userRole: string | null;
   userID: string | null;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   modelData: any;
   premiumUser?: boolean;
-}
-
-interface routingStrategyArgs {
-  ttl?: number;
-  lowest_latency_buffer?: number;
-}
-
-interface nestedFieldItem {
-  field_name: string;
-  field_type: string;
-  field_value: any;
-  field_description: string;
-  stored_in_db: boolean | null;
 }
 
 export interface passThroughItem {
@@ -40,7 +46,10 @@ export interface passThroughItem {
   cost_per_request?: number;
   auth?: boolean;
   methods?: string[];
-  guardrails?: Record<string, { request_fields?: string[]; response_fields?: string[] } | null>;
+  guardrails?: Record<
+    string,
+    { request_fields?: string[]; response_fields?: string[] } | null
+  >;
   default_query_params?: Record<string, string>;
 }
 
@@ -51,17 +60,36 @@ const PasswordField: React.FC<{ value: object }> = ({ value }) => {
 
   return (
     <div className="flex items-center space-x-2">
-      <span className="font-mono text-xs">{showPassword ? headerString : "••••••••"}</span>
-      <button onClick={() => setShowPassword(!showPassword)} className="p-1 hover:bg-gray-100 rounded" type="button">
-        {showPassword ? <EyeOff className="w-4 h-4 text-gray-500" /> : <Eye className="w-4 h-4 text-gray-500" />}
+      <span className="font-mono text-xs">
+        {showPassword ? headerString : "••••••••"}
+      </span>
+      <button
+        onClick={() => setShowPassword(!showPassword)}
+        className="p-1 hover:bg-muted rounded"
+        type="button"
+      >
+        {showPassword ? (
+          <EyeOff className="w-4 h-4 text-muted-foreground" />
+        ) : (
+          <Eye className="w-4 h-4 text-muted-foreground" />
+        )}
       </button>
     </div>
   );
 };
 
-const PassThroughSettings: React.FC<GeneralSettingsPageProps> = ({ accessToken, userRole, userID, modelData, premiumUser }) => {
+const PassThroughSettings: React.FC<GeneralSettingsPageProps> = ({
+  accessToken,
+  userRole,
+  userID,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  modelData,
+  premiumUser,
+}) => {
   const [generalSettings, setGeneralSettings] = useState<passThroughItem[]>([]);
-  const [selectedEndpointId, setSelectedEndpointId] = useState<string | null>(null);
+  const [selectedEndpointId, setSelectedEndpointId] = useState<string | null>(
+    null,
+  );
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [endpointToDelete, setEndpointToDelete] = useState<string | null>(null);
 
@@ -70,23 +98,21 @@ const PassThroughSettings: React.FC<GeneralSettingsPageProps> = ({ accessToken, 
       return;
     }
     getPassThroughEndpointsCall(accessToken).then((data) => {
-      let general_settings = data["endpoints"];
+      const general_settings = data["endpoints"];
       setGeneralSettings(general_settings);
     });
   }, [accessToken, userRole, userID]);
 
   const handleEndpointUpdated = () => {
-    // Refresh the endpoints list when an endpoint is updated
     if (accessToken) {
       getPassThroughEndpointsCall(accessToken).then((data) => {
-        let general_settings = data["endpoints"];
+        const general_settings = data["endpoints"];
         setGeneralSettings(general_settings);
       });
     }
   };
 
   const handleDelete = async (endpointId: string) => {
-    // Set the endpoint to delete and open the confirmation modal
     setEndpointToDelete(endpointId);
     setIsDeleteModalOpen(true);
   };
@@ -99,45 +125,53 @@ const PassThroughSettings: React.FC<GeneralSettingsPageProps> = ({ accessToken, 
     try {
       await deletePassThroughEndpointsCall(accessToken, endpointToDelete);
 
-      const updatedSettings = generalSettings.filter((setting) => setting.id !== endpointToDelete);
+      const updatedSettings = generalSettings.filter(
+        (setting) => setting.id !== endpointToDelete,
+      );
       setGeneralSettings(updatedSettings);
 
       NotificationsManager.success("Endpoint deleted successfully.");
     } catch (error) {
       console.error("Error deleting the endpoint:", error);
-      NotificationsManager.fromBackend("Error deleting the endpoint: " + error);
+      NotificationsManager.fromBackend(
+        "Error deleting the endpoint: " + error,
+      );
     }
 
-    // Close the confirmation modal and reset the endpointToDelete
     setIsDeleteModalOpen(false);
     setEndpointToDelete(null);
   };
 
   const cancelDelete = () => {
-    // Close the confirmation modal and reset the endpointToDelete
     setIsDeleteModalOpen(false);
     setEndpointToDelete(null);
   };
 
-  const handleResetField = (endpointId: string, idx: number) => {
-    // Use handleDelete instead of direct deletion
+  const handleResetField = (endpointId: string) => {
     handleDelete(endpointId);
   };
 
-  // Define columns for the DataTable
   const columns: ColumnDef<passThroughItem>[] = [
     {
       header: "ID",
       accessorKey: "id",
-      cell: (info: any) => (
-        <Tooltip title={info.row.original.id}>
-          <div
-            className="font-mono text-blue-500 bg-blue-50 hover:bg-blue-100 text-xs font-normal px-2 py-0.5 text-left w-full truncate whitespace-nowrap cursor-pointer max-w-[15ch]"
-            onClick={() => info.row.original.id && setSelectedEndpointId(info.row.original.id)}
-          >
-            {info.row.original.id}
-          </div>
-        </Tooltip>
+      cell: (info) => (
+        <TooltipProvider>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <div
+                className="font-mono text-blue-500 bg-blue-50 hover:bg-blue-100 dark:bg-blue-950/30 dark:hover:bg-blue-950/60 text-xs font-normal px-2 py-0.5 text-left w-full truncate whitespace-nowrap cursor-pointer max-w-[15ch]"
+                onClick={() =>
+                  info.row.original.id &&
+                  setSelectedEndpointId(info.row.original.id)
+                }
+              >
+                {info.row.original.id}
+              </div>
+            </TooltipTrigger>
+            <TooltipContent>{info.row.original.id}</TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
       ),
     },
     {
@@ -147,27 +181,43 @@ const PassThroughSettings: React.FC<GeneralSettingsPageProps> = ({ accessToken, 
     {
       header: "Target",
       accessorKey: "target",
-      cell: (info: any) => <Text>{info.getValue()}</Text>,
+      cell: (info) => (
+        <span className="text-sm">{info.getValue() as string}</span>
+      ),
     },
     {
       header: () => (
         <div className="flex items-center gap-1">
           <span>Methods</span>
-          <Tooltip title="HTTP methods supported by this endpoint">
-            <InformationCircleIcon className="w-4 h-4 text-gray-400 cursor-help" />
-          </Tooltip>
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Info className="w-3.5 h-3.5 text-muted-foreground cursor-help" />
+              </TooltipTrigger>
+              <TooltipContent>
+                HTTP methods supported by this endpoint
+              </TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
         </div>
       ),
       accessorKey: "methods",
-      cell: (info: any) => {
-        const methods = info.getValue();
+      cell: (info) => {
+        const methods = info.getValue() as string[] | undefined;
         if (!methods || methods.length === 0) {
-          return <Badge color="blue">ALL</Badge>;
+          return (
+            <Badge className="bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300">
+              ALL
+            </Badge>
+          );
         }
         return (
           <div className="flex flex-wrap gap-1">
             {methods.map((method: string) => (
-              <Badge key={method} color="indigo" className="text-xs">
+              <Badge
+                key={method}
+                className="text-xs bg-indigo-100 text-indigo-700 dark:bg-indigo-950 dark:text-indigo-300"
+              >
                 {method}
               </Badge>
             ))}
@@ -179,36 +229,63 @@ const PassThroughSettings: React.FC<GeneralSettingsPageProps> = ({ accessToken, 
       header: () => (
         <div className="flex items-center gap-1">
           <span>Authentication</span>
-          <Tooltip title="LiteLLM Virtual Key required to call endpoint">
-            <InformationCircleIcon className="w-4 h-4 text-gray-400 cursor-help" />
-          </Tooltip>
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Info className="w-3.5 h-3.5 text-muted-foreground cursor-help" />
+              </TooltipTrigger>
+              <TooltipContent>
+                LiteLLM Virtual Key required to call endpoint
+              </TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
         </div>
       ),
       accessorKey: "auth",
-      cell: (info: any) => <Badge color={info.getValue() ? "green" : "gray"}>{info.getValue() ? "Yes" : "No"}</Badge>,
+      cell: (info) => (
+        <Badge
+          className={
+            info.getValue()
+              ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300"
+              : "bg-muted text-muted-foreground"
+          }
+        >
+          {info.getValue() ? "Yes" : "No"}
+        </Badge>
+      ),
     },
     {
       header: "Headers",
       accessorKey: "headers",
-      cell: (info: any) => <PasswordField value={info.getValue() || {}} />,
+      cell: (info) => <PasswordField value={(info.getValue() as object) || {}} />,
     },
     {
       header: "Actions",
       id: "actions",
       cell: ({ row }) => (
         <div className="flex space-x-1">
-          <Icon
-            icon={PencilAltIcon}
-            size="sm"
-            onClick={() => row.original.id && setSelectedEndpointId(row.original.id)}
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-7 w-7"
+            onClick={() =>
+              row.original.id && setSelectedEndpointId(row.original.id)
+            }
             title="Edit"
-          />
-          <Icon
-            icon={TrashIcon}
-            size="sm"
-            onClick={() => handleResetField(row.original.id!, row.index)}
+            aria-label="Edit"
+          >
+            <Pencil className="h-4 w-4" />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-7 w-7 text-destructive hover:text-destructive"
+            onClick={() => handleResetField(row.original.id!)}
             title="Delete"
-          />
+            aria-label="Delete"
+          >
+            <Trash2 className="h-4 w-4" />
+          </Button>
         </div>
       ),
     },
@@ -218,12 +295,10 @@ const PassThroughSettings: React.FC<GeneralSettingsPageProps> = ({ accessToken, 
     return null;
   }
 
-  // If a specific endpoint is selected, show the info view
   if (selectedEndpointId) {
-    // Find the endpoint by ID to get the endpoint data for the info view
-    console.log("selectedEndpointId", selectedEndpointId);
-    console.log("generalSettings", generalSettings);
-    const selectedEndpoint = generalSettings.find((endpoint) => endpoint.id === selectedEndpointId);
+    const selectedEndpoint = generalSettings.find(
+      (endpoint) => endpoint.id === selectedEndpointId,
+    );
 
     if (!selectedEndpoint) {
       return <div>Endpoint not found</div>;
@@ -244,8 +319,10 @@ const PassThroughSettings: React.FC<GeneralSettingsPageProps> = ({ accessToken, 
   return (
     <div>
       <div>
-        <Title>Pass Through Endpoints</Title>
-        <Text className="text-tremor-content">Configure and manage your pass-through endpoints</Text>
+        <h2 className="text-xl font-semibold">Pass Through Endpoints</h2>
+        <p className="text-muted-foreground">
+          Configure and manage your pass-through endpoints
+        </p>
       </div>
 
       <AddPassThroughEndpoint
@@ -264,42 +341,29 @@ const PassThroughSettings: React.FC<GeneralSettingsPageProps> = ({ accessToken, 
         noDataMessage="No pass-through endpoints configured"
       />
 
-      {isDeleteModalOpen && (
-        <div className="fixed z-10 inset-0 overflow-y-auto">
-          <div className="flex items-end justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
-            <div className="fixed inset-0 transition-opacity" aria-hidden="true">
-              <div className="absolute inset-0 bg-gray-500 opacity-75"></div>
-            </div>
-
-            {/* Modal Panel */}
-            <span className="hidden sm:inline-block sm:align-middle sm:h-screen" aria-hidden="true">
-              &#8203;
-            </span>
-
-            {/* Confirmation Modal Content */}
-            <div className="inline-block align-bottom bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-lg sm:w-full">
-              <div className="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
-                <div className="sm:flex sm:items-start">
-                  <div className="mt-3 text-center sm:mt-0 sm:ml-4 sm:text-left">
-                    <h3 className="text-lg leading-6 font-medium text-gray-900">Delete Pass-Through Endpoint</h3>
-                    <div className="mt-2">
-                      <p className="text-sm text-gray-500">
-                        Are you sure you want to delete this pass-through endpoint? This action cannot be undone.
-                      </p>
-                    </div>
-                  </div>
-                </div>
-              </div>
-              <div className="bg-gray-50 px-4 py-3 sm:px-6 sm:flex sm:flex-row-reverse">
-                <Button onClick={confirmDelete} color="red" className="ml-2">
-                  Delete
-                </Button>
-                <Button onClick={cancelDelete}>Cancel</Button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
+      <AlertDialog
+        open={isDeleteModalOpen}
+        onOpenChange={(o) => (!o ? cancelDelete() : undefined)}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete Pass-Through Endpoint</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to delete this pass-through endpoint? This
+              action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel onClick={cancelDelete}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={confirmDelete}
+              className="bg-destructive text-white hover:bg-destructive/90"
+            >
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 };
