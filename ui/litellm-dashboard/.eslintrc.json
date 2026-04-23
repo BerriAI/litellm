@@ -69,6 +69,7 @@
         "src/components/CostTrackingSettings/how_it_works.tsx",
         "src/components/Settings/AdminSettings/UISettings/PageVisibilitySettings.tsx",
         "src/components/AIHub/marketplace_table_columns.tsx",
+        "src/components/AIHub/AgentHubTableColumns.tsx",
         "src/components/UsagePage/components/EntityUsage/SpendByProvider.tsx",
         "src/components/view_logs/ToolsSection/FormattedToolView.tsx",
         "src/components/Settings/LoggingAndAlerts/LoggingCallbacks/LoggingCallbacksTable.tsx",
