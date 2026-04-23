@@ -1,10 +1,15 @@
 import { useInfiniteModelInfo } from "@/app/(dashboard)/hooks/models/useModels";
-import { LoadingOutlined } from "@ant-design/icons";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import { cn } from "@/lib/utils";
 import { useDebouncedState } from "@tanstack/react-pacer/debouncer";
-import { Select, Space, Typography } from "antd";
-import { useMemo, useState, type UIEvent } from "react";
-
-const { Text } = Typography;
+import { ChevronsUpDown, Loader2, X } from "lucide-react";
+import { useMemo, useRef, useState } from "react";
 
 export interface PaginatedModelSelectProps {
   value?: string;
@@ -28,31 +33,32 @@ export const PaginatedModelSelect = ({
   allowClear = true,
   disabled = false,
 }: PaginatedModelSelectProps) => {
+  const [open, setOpen] = useState(false);
   const [searchInput, setSearchInput] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useDebouncedState("", {
     wait: DEBOUNCE_MS,
   });
+  const listRef = useRef<HTMLDivElement>(null);
 
-  const {
-    data,
-    fetchNextPage,
-    hasNextPage,
-    isFetchingNextPage,
-    isLoading,
-  } = useInfiniteModelInfo(pageSize, debouncedSearch || undefined);
+  const { data, fetchNextPage, hasNextPage, isFetchingNextPage, isLoading } =
+    useInfiniteModelInfo(pageSize, debouncedSearch || undefined);
 
   const options = useMemo(() => {
     if (!data?.pages) return [];
 
     const seen = new Set<string>();
-    const result: { label: string; value: string; modelName: string; modelId: string }[] = [];
+    const result: {
+      label: string;
+      value: string;
+      modelName: string;
+      modelId: string;
+    }[] = [];
 
     for (const page of data.pages) {
       for (const model of page.data) {
         const modelId = model.model_info?.id ?? "";
         const modelName = model.model_name ?? "";
 
-        // Dedupe by id - skip models without id (can't uniquely identify)
         if (!modelId || seen.has(modelId)) continue;
         seen.add(modelId);
 
@@ -68,29 +74,9 @@ export const PaginatedModelSelect = ({
     return result;
   }, [data]);
 
-  const optionRender = (option: { data: { modelName: string; modelId: string; label: string } }) => {
-    const { modelName, modelId } = option.data;
+  const selected = value ? options.find((o) => o.value === value) : undefined;
 
-    return (
-      <>
-        {modelName ? (
-          <Space direction="vertical">
-            <Space direction="horizontal">
-              <Text strong>Model name:</Text>
-              <Text ellipsis>{modelName}</Text>
-            </Space>
-            <Text ellipsis type="secondary" >
-              Model ID: {modelId}
-            </Text>
-          </Space>
-        ) : (
-          <Text ellipsis type="secondary">Model ID: {modelId}</Text>
-        )}
-      </>
-    );
-  };
-
-  const handlePopupScroll = (e: UIEvent<HTMLDivElement>) => {
+  const handleScroll = (e: React.UIEvent<HTMLDivElement>) => {
     const target = e.currentTarget;
     const scrollRatio =
       (target.scrollTop + target.clientHeight) / target.scrollHeight;
@@ -100,44 +86,117 @@ export const PaginatedModelSelect = ({
     }
   };
 
-  const handleSearch = (value: string) => {
-    setSearchInput(value);
-    setDebouncedSearch(value);
+  const handleSearch = (v: string) => {
+    setSearchInput(v);
+    setDebouncedSearch(v);
   };
 
-  const handleChange = (v: string | string[] | null) => {
-    const normalized =
-      typeof v === "string" ? v : Array.isArray(v) ? v[0] ?? "" : "";
-    onChange?.(normalized);
+  const select = (id: string) => {
+    onChange?.(id);
+    setOpen(false);
+  };
+
+  const clear = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    onChange?.("");
   };
 
   return (
-    <Select
-      value={value || undefined}
-      onChange={handleChange}
-      placeholder={placeholder}
-      style={{ width: "100%", ...style }}
-      allowClear={allowClear}
-      disabled={disabled}
-      showSearch
-      filterOption={false}
-      onSearch={handleSearch}
-      searchValue={searchInput}
-      onPopupScroll={handlePopupScroll}
-      loading={isLoading}
-      notFoundContent={isLoading ? <LoadingOutlined spin /> : "No models found"}
-      options={options}
-      optionRender={optionRender}
-      popupRender={(menu) => (
-        <>
-          {menu}
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button
+          variant="outline"
+          role="combobox"
+          aria-expanded={open}
+          disabled={disabled}
+          style={style}
+          className="w-full justify-between"
+        >
+          {selected ? (
+            <span className="truncate">{selected.label}</span>
+          ) : value ? (
+            <span className="truncate">{value}</span>
+          ) : (
+            <span className="text-muted-foreground">{placeholder}</span>
+          )}
+          <div className="ml-2 flex items-center gap-1 shrink-0">
+            {allowClear && value && (
+              <span
+                role="button"
+                tabIndex={0}
+                onClick={clear}
+                className="text-muted-foreground hover:text-foreground"
+                aria-label="Clear"
+              >
+                <X className="h-3.5 w-3.5" />
+              </span>
+            )}
+            <ChevronsUpDown className="h-4 w-4 opacity-50" />
+          </div>
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent
+        className="w-[var(--radix-popover-trigger-width)] p-0"
+        align="start"
+      >
+        <div className="p-2 border-b">
+          <Input
+            autoFocus
+            placeholder="Search models…"
+            value={searchInput}
+            onChange={(e) => handleSearch(e.target.value)}
+            className="h-8"
+          />
+        </div>
+        <div
+          ref={listRef}
+          onScroll={handleScroll}
+          className="max-h-60 overflow-y-auto p-1"
+        >
+          {isLoading && options.length === 0 ? (
+            <div className="flex items-center justify-center py-6">
+              <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+            </div>
+          ) : options.length === 0 ? (
+            <div className="py-6 text-center text-sm text-muted-foreground">
+              No models found
+            </div>
+          ) : (
+            options.map((option) => (
+              <button
+                key={option.value}
+                type="button"
+                onClick={() => select(option.value)}
+                className={cn(
+                  "w-full text-left px-2 py-2 text-sm rounded hover:bg-accent",
+                  value === option.value && "bg-accent",
+                )}
+              >
+                {option.modelName ? (
+                  <div className="flex flex-col">
+                    <div className="flex items-center gap-2">
+                      <span className="font-bold">Model name:</span>
+                      <span className="truncate">{option.modelName}</span>
+                    </div>
+                    <span className="truncate text-muted-foreground">
+                      Model ID: {option.modelId}
+                    </span>
+                  </div>
+                ) : (
+                  <span className="truncate text-muted-foreground">
+                    Model ID: {option.modelId}
+                  </span>
+                )}
+              </button>
+            ))
+          )}
           {isFetchingNextPage && (
-            <div style={{ textAlign: "center", padding: 8 }}>
-              <LoadingOutlined spin />
+            <div className="flex items-center justify-center py-2">
+              <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
             </div>
           )}
-        </>
-      )}
-    />
+        </div>
+      </PopoverContent>
+    </Popover>
   );
 };
