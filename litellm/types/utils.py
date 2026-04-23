@@ -1300,6 +1300,12 @@ class Delta(SafeAttributeModel, OpenAIObject):
         self.images: Optional[List[ImageURLListItem]] = None
         self.annotations: Optional[List[ChatCompletionAnnotation]] = None
 
+        self._handle_reasoning(reasoning_content, thinking_blocks, reasoning_items)
+        self._handle_extra_fields(annotations, images)
+        self._handle_tool_calls(function_call, tool_calls)
+        self.audio = audio
+
+    def _handle_reasoning(self, reasoning_content, thinking_blocks, reasoning_items):
         if reasoning_content is not None:
             self.reasoning_content = reasoning_content
         else:
@@ -1319,6 +1325,7 @@ class Delta(SafeAttributeModel, OpenAIObject):
             if hasattr(self, "reasoning_items"):
                 del self.reasoning_items
 
+    def _handle_extra_fields(self, annotations, images):
         # Add annotations to the delta, ensure they are only on Delta if they exist (Match OpenAI spec)
         if annotations is not None:
             self.annotations = annotations
@@ -1330,6 +1337,7 @@ class Delta(SafeAttributeModel, OpenAIObject):
         else:
             del self.images
 
+    def _handle_tool_calls(self, function_call, tool_calls):
         if function_call is not None and isinstance(function_call, dict):
             self.function_call = FunctionCall(**function_call)
         else:
@@ -1349,8 +1357,6 @@ class Delta(SafeAttributeModel, OpenAIObject):
                     self.tool_calls.append(tool_call)
         else:
             self.tool_calls = tool_calls
-
-        self.audio = audio
 
     def __contains__(self, key):
         # Define custom behavior for the 'in' operator
@@ -1538,7 +1544,7 @@ class Usage(SafeAttributeModel, CompletionUsage):
     prompt_tokens_details: Optional[PromptTokensDetailsWrapper] = None
     """Breakdown of tokens used in the prompt."""
 
-    def __init__(  # noqa: PLR0915
+    def __init__(
         self,
         prompt_tokens: Optional[int] = None,
         completion_tokens: Optional[int] = None,
@@ -1554,7 +1560,45 @@ class Usage(SafeAttributeModel, CompletionUsage):
         cost: Optional[float] = None,
         **params,
     ):
-        # handle reasoning_tokens
+        _completion_tokens_details = self._handle_completion_tokens_details(
+            completion_tokens_details, reasoning_tokens, completion_tokens
+        )
+        _prompt_tokens_details = self._handle_prompt_tokens_details(
+            prompt_tokens_details, params
+        )
+
+        super().__init__(
+            prompt_tokens=prompt_tokens or 0,
+            completion_tokens=completion_tokens or 0,
+            total_tokens=total_tokens or 0,
+            completion_tokens_details=_completion_tokens_details or None,
+            prompt_tokens_details=_prompt_tokens_details or None,
+        )
+
+        if server_tool_use is not None:
+            if isinstance(server_tool_use, dict):
+                self.server_tool_use = ServerToolUse(**server_tool_use)
+            else:
+                self.server_tool_use = server_tool_use
+        else:  # maintain openai compatibility in usage object if possible
+            del self.server_tool_use
+
+        if cost is not None:
+            self.cost = cost
+        else:
+            del self.cost
+
+        self._handle_extra_mappings(params)
+
+        for k, v in params.items():
+            setattr(self, k, v)
+
+    def _handle_completion_tokens_details(
+        self,
+        completion_tokens_details,
+        reasoning_tokens: Optional[int],
+        completion_tokens: Optional[int],
+    ) -> Optional[CompletionTokensDetailsWrapper]:
         _completion_tokens_details: Optional[CompletionTokensDetailsWrapper] = None
 
         # First, handle existing completion_tokens_details
@@ -1592,7 +1636,11 @@ class Usage(SafeAttributeModel, CompletionUsage):
 
                 # Prevent negative token counts from inconsistent data
                 _completion_tokens_details.text_tokens = max(0, calculated_text_tokens)
+        return _completion_tokens_details
 
+    def _handle_prompt_tokens_details(
+        self, prompt_tokens_details, params: dict
+    ) -> Optional[PromptTokensDetailsWrapper]:
         # handle prompt_tokens_details
         _prompt_tokens_details: Optional[PromptTokensDetailsWrapper] = None
 
@@ -1642,25 +1690,9 @@ class Usage(SafeAttributeModel, CompletionUsage):
                 _prompt_tokens_details.cache_creation_tokens = params[
                     "cache_creation_input_tokens"
                 ]
+        return _prompt_tokens_details
 
-        super().__init__(
-            prompt_tokens=prompt_tokens or 0,
-            completion_tokens=completion_tokens or 0,
-            total_tokens=total_tokens or 0,
-            completion_tokens_details=_completion_tokens_details or None,
-            prompt_tokens_details=_prompt_tokens_details or None,
-        )
-
-        if server_tool_use is not None:
-            self.server_tool_use = server_tool_use
-        else:  # maintain openai compatibility in usage object if possible
-            del self.server_tool_use
-
-        if cost is not None:
-            self.cost = cost
-        else:
-            del self.cost
-
+    def _handle_extra_mappings(self, params: dict):
         ## ANTHROPIC MAPPING ##
         if "cache_creation_input_tokens" in params and isinstance(
             params["cache_creation_input_tokens"], int

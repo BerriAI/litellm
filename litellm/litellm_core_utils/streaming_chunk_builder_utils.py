@@ -583,11 +583,13 @@ class ChunkProcessor:
                     completion_tokens_details = usage_chunk_dict[
                         "completion_tokens_details"
                     ]
-                if (
-                    hasattr(usage_chunk, "server_tool_use")
-                    and usage_chunk.server_tool_use is not None
-                ):
-                    server_tool_use = usage_chunk.server_tool_use
+                _server_tool_use = (
+                    usage_chunk.get("server_tool_use")
+                    if isinstance(usage_chunk, dict)
+                    else getattr(usage_chunk, "server_tool_use", None)
+                )
+                if _server_tool_use is not None:
+                    server_tool_use = _server_tool_use
                 if (
                     usage_chunk_dict["prompt_tokens_details"] is not None
                     and getattr(

@@ -1,8 +1,6 @@
-import json
 import os
 import sys
 
-import pytest
 
 sys.path.insert(
     0, os.path.abspath("../../..")
@@ -520,7 +518,7 @@ def test_stream_chunk_builder_anthropic_web_search():
     assert usage.prompt_tokens == 50
     assert usage.completion_tokens == 27
     assert usage.total_tokens == 77
-    assert usage.server_tool_use["web_search_requests"] == 2
+    assert usage.server_tool_use.web_search_requests == 2
 
 
 def test_sort_chunks_handles_dict_hidden_params_created_at():
