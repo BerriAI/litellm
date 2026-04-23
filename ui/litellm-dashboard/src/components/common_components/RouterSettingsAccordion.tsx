@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useImperativeHandle, forwardRef, useRef } from "react";
+// eslint-disable-next-line litellm-ui/no-banned-ui-imports
 import { TabPanel, TabPanels, TabGroup, TabList, Tab } from "@tremor/react";
 import { getRouterSettingsCall } from "../networking";
 import RouterSettingsForm, { RouterSettingsFormValue } from "../router_settings/RouterSettingsForm";
