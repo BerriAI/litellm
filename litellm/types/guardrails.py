@@ -25,6 +25,7 @@ from litellm.types.proxy.guardrails.guardrail_hooks.litellm_content_filter impor
 )
 from litellm.types.proxy.guardrails.guardrail_hooks.ovalix import (
     OvalixGuardrailConfigModel,
+)
 from litellm.types.proxy.guardrails.guardrail_hooks.promptguard import (
     PromptGuardConfigModel,
 )
