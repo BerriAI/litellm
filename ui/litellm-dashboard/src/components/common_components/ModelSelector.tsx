@@ -1,8 +1,18 @@
-import React, { useState, useEffect, useRef } from "react";
-import { TextInput, Text } from "@tremor/react";
-import { Select } from "antd";
-import { RobotOutlined } from "@ant-design/icons";
-import { fetchAvailableModels, ModelGroup } from "../playground/llm_calls/fetch_models";
+import React, { useState, useEffect, useRef, useMemo } from "react";
+import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Bot } from "lucide-react";
+import { cn } from "@/lib/utils";
+import {
+  fetchAvailableModels,
+  ModelGroup,
+} from "../playground/llm_calls/fetch_models";
 
 interface ModelSelectorProps {
   accessToken: string;
@@ -28,7 +38,8 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
   labelText = "Select Model",
 }) => {
   const [selectedModel, setSelectedModel] = useState<string | undefined>(value);
-  const [showCustomModelInput, setShowCustomModelInput] = useState<boolean>(false);
+  const [showCustomModelInput, setShowCustomModelInput] =
+    useState<boolean>(false);
   const [modelInfo, setModelInfo] = useState<ModelGroup[]>([]);
   const customModelTimeout = useRef<NodeJS.Timeout | null>(null);
 
@@ -43,10 +54,7 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
       try {
         const uniqueModels = await fetchAvailableModels(accessToken);
         console.log("Fetched models for selector:", uniqueModels);
-
-        if (uniqueModels.length > 0) {
-          setModelInfo(uniqueModels);
-        }
+        if (uniqueModels.length > 0) setModelInfo(uniqueModels);
       } catch (error) {
         console.error("Error fetching model info:", error);
       }
@@ -55,62 +63,62 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
     loadModels();
   }, [accessToken]);
 
-  const onModelChange = (value: string) => {
-    if (value === "custom") {
+  const onModelChange = (v: string) => {
+    if (v === "custom") {
       setShowCustomModelInput(true);
       setSelectedModel(undefined);
     } else {
       setShowCustomModelInput(false);
-      setSelectedModel(value);
-      if (onChange) {
-        onChange(value);
-      }
+      setSelectedModel(v);
+      onChange?.(v);
     }
   };
 
-  const handleCustomModelChange = (value: string) => {
-    // Using setTimeout to create a simple debounce effect
-    if (customModelTimeout.current) {
-      clearTimeout(customModelTimeout.current);
-    }
-
+  const handleCustomModelChange = (v: string) => {
+    if (customModelTimeout.current) clearTimeout(customModelTimeout.current);
     customModelTimeout.current = setTimeout(() => {
-      setSelectedModel(value);
-      if (onChange) {
-        onChange(value);
-      }
-    }, 500); // 500ms delay after typing stops
+      setSelectedModel(v);
+      onChange?.(v);
+    }, 500);
   };
+
+  const uniqueModels = useMemo(
+    () => Array.from(new Set(modelInfo.map((o) => o.model_group))),
+    [modelInfo],
+  );
 
   return (
     <div>
       {showLabel && (
-        <Text className="font-medium block mb-2 text-gray-700 flex items-center">
-          <RobotOutlined className="mr-2" /> {labelText}
-        </Text>
+        <div className="font-medium mb-2 text-foreground flex items-center">
+          <Bot className="mr-2 h-4 w-4" /> {labelText}
+        </div>
       )}
       <Select
         value={selectedModel}
-        placeholder={placeholder}
-        onChange={onModelChange}
-        options={[
-          ...Array.from(new Set(modelInfo.map((option) => option.model_group))).map((model_group, index) => ({
-            value: model_group,
-            label: model_group,
-            key: index,
-          })),
-          { value: "custom", label: "Enter custom model", key: "custom" },
-        ]}
-        style={{ width: "100%", ...style }}
-        showSearch={true}
-        className={`rounded-md ${className || ""}`}
+        onValueChange={onModelChange}
         disabled={disabled}
-      />
+      >
+        <SelectTrigger
+          style={{ width: "100%", ...style }}
+          className={cn(className)}
+        >
+          <SelectValue placeholder={placeholder} />
+        </SelectTrigger>
+        <SelectContent>
+          {uniqueModels.map((g) => (
+            <SelectItem key={g} value={g}>
+              {g}
+            </SelectItem>
+          ))}
+          <SelectItem value="custom">Enter custom model</SelectItem>
+        </SelectContent>
+      </Select>
       {showCustomModelInput && (
-        <TextInput
+        <Input
           className="mt-2"
           placeholder="Enter custom model name"
-          onValueChange={handleCustomModelChange}
+          onChange={(e) => handleCustomModelChange(e.target.value)}
           disabled={disabled}
         />
       )}

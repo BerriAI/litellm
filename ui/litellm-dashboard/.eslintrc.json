@@ -46,7 +46,8 @@
         "src/components/activity_metrics.tsx",
         "src/components/skill_hub_table_columns.tsx",
         "src/components/common_components/PassThroughSecuritySection.tsx",
-        "src/components/common_components/DeleteResourceModal.tsx"
+        "src/components/common_components/DeleteResourceModal.tsx",
+        "src/components/common_components/PremiumLoggingSettings.tsx"
       ],
       "rules": {
         "litellm-ui/no-banned-ui-imports": "off",

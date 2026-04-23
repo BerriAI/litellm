@@ -1,9 +1,10 @@
 import React from "react";
-import { Text } from "@tremor/react";
 import LoggingSettings from "../team/LoggingSettings";
 
 interface PremiumLoggingSettingsProps {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   value: any[];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   onChange: (settings: any[]) => void;
   premiumUser?: boolean;
   disabledCallbacks?: string[];
@@ -21,22 +22,28 @@ export function PremiumLoggingSettings({
     return (
       <div>
         <div className="flex flex-wrap gap-2 mb-3">
-          <div className="inline-flex items-center px-3 py-1.5 rounded-lg bg-green-50 border border-green-200 text-green-800 text-sm font-medium opacity-50">
+          <div className="inline-flex items-center px-3 py-1.5 rounded-lg bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-900 text-emerald-800 dark:text-emerald-200 text-sm font-medium opacity-50">
             ✨ langfuse-logging
           </div>
-          <div className="inline-flex items-center px-3 py-1.5 rounded-lg bg-green-50 border border-green-200 text-green-800 text-sm font-medium opacity-50">
+          <div className="inline-flex items-center px-3 py-1.5 rounded-lg bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-900 text-emerald-800 dark:text-emerald-200 text-sm font-medium opacity-50">
             ✨ datadog-logging
           </div>
         </div>
-        <div className="p-3 bg-yellow-50 border border-yellow-200 rounded-lg">
-          <Text className="text-sm text-yellow-800">
-            Setting Key/Team logging settings is a LiteLLM Enterprise feature. Global Logging Settings are available for
-            all free users. Get a trial key{" "}
-            <a href="https://www.litellm.ai/#pricing" target="_blank" rel="noopener noreferrer" className="underline">
+        <div className="p-3 bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-900 rounded-lg">
+          <p className="text-sm text-amber-800 dark:text-amber-200">
+            Setting Key/Team logging settings is a LiteLLM Enterprise feature.
+            Global Logging Settings are available for all free users. Get a
+            trial key{" "}
+            <a
+              href="https://www.litellm.ai/#pricing"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="underline"
+            >
               here
             </a>
             .
-          </Text>
+          </p>
         </div>
       </div>
     );
