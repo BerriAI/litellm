@@ -4,8 +4,17 @@ import { ConfigType, GeneralSettingsFieldName, useDeleteProxyConfigField, usePro
 import { StoreRequestInSpendLogsParams, useStoreRequestInSpendLogs } from "@/app/(dashboard)/hooks/storeRequestInSpendLogs/useStoreRequestInSpendLogs";
 import NotificationsManager from "@/components/molecules/notifications_manager";
 import { parseErrorMessage } from "@/components/shared/errorUtils";
-import { ClockCircleOutlined } from "@ant-design/icons";
-import { Button, Form, Input, Modal, Skeleton, Space, Switch, Typography } from "antd";
+import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Clock } from "lucide-react";
+import { Form, Input, Switch } from "antd";
 import React, { useEffect, useMemo } from "react";
 
 interface SpendLogsSettingsModalProps {
@@ -97,59 +106,90 @@ const SpendLogsSettingsModal: React.FC<SpendLogsSettingsModalProps> = ({ isVisib
   };
 
   return (
-    <Modal
-      title={<Typography.Title level={5}>Spend Logs Settings</Typography.Title>}
+    <Dialog
       open={isVisible}
-      footer={
-        <Space>
-          <Button onClick={handleCancel} disabled={isPending || isDeletingField || isLoadingConfig}>
+      onOpenChange={(o) => (!o ? handleCancel() : undefined)}
+    >
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle className="text-base font-semibold">
+            Spend Logs Settings
+          </DialogTitle>
+        </DialogHeader>
+        <Form
+          key={proxyConfigData ? JSON.stringify(initialValues) : "loading"}
+          form={form}
+          layout="horizontal"
+          onFinish={handleFormSubmit}
+          initialValues={initialValues}
+        >
+          <Form.Item
+            label="Store Prompts in Spend Logs"
+            name="store_prompts_in_spend_logs"
+            tooltip={
+              proxyConfigData?.find(
+                (f) => f.field_name === "store_prompts_in_spend_logs",
+              )?.field_description ||
+              "When enabled, prompts will be stored in spend logs for tracking and analysis purposes."
+            }
+            valuePropName="checked"
+          >
+            <div>
+              {isLoadingConfig ? (
+                <Skeleton className="h-6 w-full" />
+              ) : (
+                <Switch
+                  checked={storePromptsValue ?? false}
+                  onChange={(checked) =>
+                    form.setFieldValue(
+                      "store_prompts_in_spend_logs",
+                      checked,
+                    )
+                  }
+                />
+              )}
+            </div>
+          </Form.Item>
+
+          <Form.Item
+            label="Maximum Spend Logs Retention Period (Optional)"
+            name="maximum_spend_logs_retention_period"
+            tooltip={
+              proxyConfigData?.find(
+                (f) =>
+                  f.field_name ===
+                  "maximum_spend_logs_retention_period",
+              )?.field_description ||
+              "Set the maximum retention period for spend logs (e.g., '7d' for 7 days, '30d' for 30 days). Leave empty for no limit."
+            }
+          >
+            {isLoadingConfig ? (
+              <Skeleton className="h-6 w-full" />
+            ) : (
+              <Input
+                placeholder="e.g., 7d, 30d"
+                prefix={<Clock className="h-3.5 w-3.5" />}
+              />
+            )}
+          </Form.Item>
+        </Form>
+        <DialogFooter>
+          <Button
+            variant="outline"
+            onClick={handleCancel}
+            disabled={isPending || isDeletingField || isLoadingConfig}
+          >
             Cancel
           </Button>
-          <Button type="primary" loading={isPending || isDeletingField} disabled={isLoadingConfig} onClick={() => form.submit()}>
+          <Button
+            onClick={() => form.submit()}
+            disabled={isPending || isDeletingField || isLoadingConfig}
+          >
             {isPending || isDeletingField ? "Saving..." : "Save Settings"}
           </Button>
-        </Space>
-      }
-      onCancel={handleCancel}
-    >
-
-      <Form
-        key={proxyConfigData ? JSON.stringify(initialValues) : 'loading'}
-        form={form}
-        layout="horizontal"
-        onFinish={handleFormSubmit}
-        initialValues={initialValues}
-      >
-        <Form.Item
-          label="Store Prompts in Spend Logs"
-          name="store_prompts_in_spend_logs"
-          tooltip={
-            proxyConfigData?.find(f => f.field_name === 'store_prompts_in_spend_logs')?.field_description ||
-            "When enabled, prompts will be stored in spend logs for tracking and analysis purposes."
-          }
-          valuePropName="checked"
-        >
-          <div>
-
-            {isLoadingConfig ? <Skeleton.Input active block /> : <Switch checked={storePromptsValue ?? false} onChange={(checked) => form.setFieldValue('store_prompts_in_spend_logs', checked)} />}
-          </div>
-        </Form.Item>
-
-        <Form.Item
-          label="Maximum Spend Logs Retention Period (Optional)"
-          name="maximum_spend_logs_retention_period"
-          tooltip={
-            proxyConfigData?.find(f => f.field_name === 'maximum_spend_logs_retention_period')?.field_description ||
-            "Set the maximum retention period for spend logs (e.g., '7d' for 7 days, '30d' for 30 days). Leave empty for no limit."
-          }
-        >
-          {isLoadingConfig ? <Skeleton.Input active block /> : <Input
-            placeholder="e.g., 7d, 30d"
-            prefix={<ClockCircleOutlined />}
-          />}
-        </Form.Item>
-      </Form>
-    </Modal>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 };
 
