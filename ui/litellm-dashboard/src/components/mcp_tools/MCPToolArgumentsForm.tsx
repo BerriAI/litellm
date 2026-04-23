@@ -1,6 +1,6 @@
 import React, { forwardRef, useImperativeHandle, useMemo } from "react";
 import { Form, Input, InputNumber, Select, Tooltip } from "antd";
-import { InfoCircleOutlined } from "@ant-design/icons";
+import { Info } from "lucide-react";
 import { MCPTool, InputSchema, InputSchemaProperty } from "./types";
 
 const isPlainObject = (value: unknown): value is Record<string, any> =>
@@ -237,7 +237,7 @@ const MCPToolArgumentsForm = forwardRef<MCPToolArgumentsFormRef, MCPToolArgument
                   {key} {actualSchema.required?.includes(key) && <span className="text-red-500">*</span>}
                   {prop.description && (
                     <Tooltip title={prop.description}>
-                      <InfoCircleOutlined className="ml-2 text-gray-400 hover:text-gray-600" />
+                      <Info className="ml-2 h-3.5 w-3.5 text-muted-foreground hover:text-foreground" />
                     </Tooltip>
                   )}
                 </span>
