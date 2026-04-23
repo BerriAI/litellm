@@ -114,6 +114,7 @@ class PagerDutyAlerting(SlackAlerting):
                 user_api_key_max_budget=_meta.get("user_api_key_max_budget"),
                 user_api_key_budget_reset_at=_meta.get("user_api_key_budget_reset_at"),
                 user_api_key_org_id=_meta.get("user_api_key_org_id"),
+                user_api_key_org_alias=_meta.get("user_api_key_org_alias"),
                 user_api_key_team_id=_meta.get("user_api_key_team_id"),
                 user_api_key_project_id=_meta.get("user_api_key_project_id"),
                 user_api_key_project_alias=_meta.get("user_api_key_project_alias"),
@@ -196,6 +197,7 @@ class PagerDutyAlerting(SlackAlerting):
                     else None
                 ),
                 user_api_key_org_id=user_api_key_dict.org_id,
+                user_api_key_org_alias=user_api_key_dict.organization_alias,
                 user_api_key_team_id=user_api_key_dict.team_id,
                 user_api_key_project_id=user_api_key_dict.project_id,
                 user_api_key_project_alias=user_api_key_dict.project_alias,

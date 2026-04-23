@@ -2,10 +2,16 @@ name: "Unit Tests: Core Utilities"
 
 on:
   pull_request:
-    branches: [main]
+    branches:
+      - main
+      - litellm_internal_staging
+      - litellm_oss_branch
+      - "litellm_**"
 
 permissions:
   contents: read
+  id-token: write
+  pull-requests: write
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -18,3 +24,4 @@ jobs:
       test-path: "tests/test_litellm/litellm_core_utils"
       workers: 2
       reruns: 1
+      artifact-name: core-utils
