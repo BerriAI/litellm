@@ -1,23 +1,20 @@
 import { useAccessGroupDetails } from "@/app/(dashboard)/hooks/accessGroups/useAccessGroupDetails";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
-  Button,
-  Card,
-  Col,
-  Descriptions,
-  Empty,
-  Flex,
-  Layout,
-  List,
-  Row,
-  Spin,
-  Tabs,
-  Tag,
-  theme,
-  Typography
-} from "antd";
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import { Skeleton } from "@/components/ui/skeleton";
+import { toast } from "sonner";
 import {
   ArrowLeftIcon,
   BotIcon,
+  CopyIcon,
   EditIcon,
   KeyIcon,
   LayersIcon,
@@ -28,12 +25,40 @@ import { useState } from "react";
 import DefaultProxyAdminTag from "../common_components/DefaultProxyAdminTag";
 import { AccessGroupEditModal } from "./AccessGroupsModal/AccessGroupEditModal";
 
-const { Title, Text } = Typography;
-const { Content } = Layout;
-
 interface AccessGroupDetailProps {
   accessGroupId: string;
   onBack: () => void;
+}
+
+function EmptyState({ description }: { description: string }) {
+  return (
+    <div className="py-12 flex flex-col items-center justify-center text-muted-foreground">
+      <div className="text-sm">{description}</div>
+    </div>
+  );
+}
+
+function CopyableId({ value }: { value: string }) {
+  return (
+    <TooltipProvider>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <button
+            type="button"
+            onClick={() => {
+              navigator.clipboard?.writeText(value);
+              toast.success("Copied to clipboard");
+            }}
+            className="inline-flex items-center gap-1 text-xs font-mono rounded bg-muted px-1.5 py-0.5 hover:bg-muted/80"
+          >
+            {value}
+            <CopyIcon size={12} />
+          </button>
+        </TooltipTrigger>
+        <TooltipContent>Copy</TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
+  );
 }
 
 export function AccessGroupDetail({
@@ -42,7 +67,6 @@ export function AccessGroupDetail({
 }: AccessGroupDetailProps) {
   const { data: accessGroup, isLoading } =
     useAccessGroupDetails(accessGroupId);
-  const { token } = theme.useToken();
   const [isEditModalVisible, setIsEditModalVisible] = useState(false);
   const [showAllKeys, setShowAllKeys] = useState(false);
   const [showAllTeams, setShowAllTeams] = useState(false);
@@ -51,35 +75,22 @@ export function AccessGroupDetail({
 
   if (isLoading) {
     return (
-      <Content
-        style={{
-          padding: token.paddingLG,
-          paddingInline: token.paddingLG * 2,
-        }}
-      >
-        <Flex justify="center" align="center" style={{ minHeight: 300 }}>
-          <Spin size="large" />
-        </Flex>
-      </Content>
+      <div className="p-6 md:px-12">
+        <div className="flex justify-center items-center min-h-[300px]">
+          <Skeleton className="h-10 w-10 rounded-full" />
+        </div>
+      </div>
     );
   }
 
   if (!accessGroup) {
     return (
-      <Content
-        style={{
-          padding: token.paddingLG,
-          paddingInline: token.paddingLG * 2,
-        }}
-      >
-        <Button
-          icon={<ArrowLeftIcon size={16} />}
-          onClick={onBack}
-          type="text"
-          style={{ marginBottom: 16 }}
-        />
-        <Empty description="Access group not found" />
-      </Content>
+      <div className="p-6 md:px-12">
+        <Button variant="ghost" size="sm" onClick={onBack} className="mb-4">
+          <ArrowLeftIcon size={16} />
+        </Button>
+        <EmptyState description="Access group not found" />
+      </div>
     );
   }
 
@@ -90,248 +101,195 @@ export function AccessGroupDetail({
   const teamIds = accessGroup.assigned_team_ids ?? [];
 
   const displayedKeys = showAllKeys ? keyIds : keyIds.slice(0, MAX_PREVIEW);
-  const displayedTeams = showAllTeams
-    ? teamIds
-    : teamIds.slice(0, MAX_PREVIEW);
+  const displayedTeams = showAllTeams ? teamIds : teamIds.slice(0, MAX_PREVIEW);
 
-  const handleEdit = () => {
-    setIsEditModalVisible(true);
-  };
-
-  const tabItems = [
-    {
-      key: "models",
-      label: (
-        <Flex align="center" gap={8}>
-          <LayersIcon size={16} />
-          Models
-          <Tag style={{ marginInlineEnd: 0 }}>{modelIds?.length}</Tag>
-        </Flex>
-      ),
-      children:
-        modelIds?.length > 0 ? (
-          <List
-            grid={{ gutter: 16, xs: 1, sm: 2, md: 3, lg: 4 }}
-            dataSource={modelIds}
-            renderItem={(id) => (
-              <List.Item>
-                <Card size="small">
-                  <Text code>{id}</Text>
-                </Card>
-              </List.Item>
-            )}
-          />
-        ) : (
-          <Empty description="No models assigned to this group" />
-        ),
-    },
-    {
-      key: "mcp",
-      label: (
-        <Flex align="center" gap={8}>
-          <ServerIcon size={16} />
-          MCP Servers
-          <Tag>{mcpServerIds?.length}</Tag>
-        </Flex>
-      ),
-      children:
-        mcpServerIds?.length > 0 ? (
-          <List
-            grid={{ gutter: 16, xs: 1, sm: 2, md: 3, lg: 4 }}
-            dataSource={mcpServerIds}
-            renderItem={(id) => (
-              <List.Item>
-                <Card size="small">
-                  <Text code>{id}</Text>
-                </Card>
-              </List.Item>
-            )}
-          />
-        ) : (
-          <Empty description="No MCP servers assigned to this group" />
-        ),
-    },
-    {
-      key: "agents",
-      label: (
-        <Flex align="center" gap={8}>
-          <BotIcon size={16} />
-          Agents
-          <Tag>{agentIds?.length}</Tag>
-        </Flex>
-      ),
-      children:
-        agentIds?.length > 0 ? (
-          <List
-            grid={{ gutter: 16, xs: 1, sm: 2, md: 3, lg: 4 }}
-            dataSource={agentIds}
-            renderItem={(id) => (
-              <List.Item>
-                <Card size="small">
-                  <Text code>{id}</Text>
-                </Card>
-              </List.Item>
-            )}
-          />
-        ) : (
-          <Empty description="No agents assigned to this group" />
-        ),
-    },
-  ];
+  const handleEdit = () => setIsEditModalVisible(true);
 
   return (
-    <Content
-      style={{ padding: token.paddingLG, paddingInline: token.paddingLG * 2 }}
-    >
+    <div className="p-6 md:px-12">
       {/* Header */}
-      <div
-        style={{
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "center",
-          marginBottom: 24,
-        }}
-      >
-        <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
-          <Button
-            icon={<ArrowLeftIcon size={16} />}
-            onClick={onBack}
-            type="text"
-          />
+      <div className="flex justify-between items-center mb-6">
+        <div className="flex items-center gap-4">
+          <Button variant="ghost" size="sm" onClick={onBack}>
+            <ArrowLeftIcon size={16} />
+          </Button>
           <div>
-            <Title level={2} style={{ margin: 0 }}>
+            <h2 className="text-2xl font-semibold m-0">
               {accessGroup.access_group_name}
-            </Title>
-            <Text type="secondary">
-              ID: <Text copyable>{accessGroup.access_group_id}</Text>
-            </Text>
+            </h2>
+            <div className="text-sm text-muted-foreground flex items-center gap-2">
+              ID: <CopyableId value={accessGroup.access_group_id} />
+            </div>
           </div>
         </div>
-        <Button
-          type="primary"
-          icon={<EditIcon size={16} />}
-          onClick={handleEdit}
-        >
+        <Button onClick={handleEdit}>
+          <EditIcon size={16} />
           Edit Access Group
         </Button>
       </div>
 
       {/* Group Details */}
-      <Row style={{ marginBottom: 24 }}>
-        <Card>
-          <Descriptions title="Group Details" column={1}>
-            <Descriptions.Item label="Description">
-              {accessGroup.description || "—"}
-            </Descriptions.Item>
-            <Descriptions.Item label="Created">
+      <Card className="p-6 mb-6">
+        <h3 className="text-lg font-semibold mb-3">Group Details</h3>
+        <dl className="space-y-2 text-sm">
+          <div className="flex gap-2">
+            <dt className="w-36 text-muted-foreground">Description</dt>
+            <dd>{accessGroup.description || "—"}</dd>
+          </div>
+          <div className="flex gap-2">
+            <dt className="w-36 text-muted-foreground">Created</dt>
+            <dd>
               {new Date(accessGroup.created_at).toLocaleString()}
               {accessGroup.created_by && (
-                <Text>
-                  &nbsp;{"by"}&nbsp;
+                <>
+                  &nbsp;by&nbsp;
                   <DefaultProxyAdminTag userId={accessGroup.created_by} />
-                </Text>
+                </>
               )}
-            </Descriptions.Item>
-            <Descriptions.Item label="Last Updated">
+            </dd>
+          </div>
+          <div className="flex gap-2">
+            <dt className="w-36 text-muted-foreground">Last Updated</dt>
+            <dd>
               {new Date(accessGroup.updated_at).toLocaleString()}
               {accessGroup.updated_by && (
-                <Text>
-                  &nbsp;{"by"}&nbsp;
+                <>
+                  &nbsp;by&nbsp;
                   <DefaultProxyAdminTag userId={accessGroup.updated_by} />
-                </Text>
+                </>
               )}
-            </Descriptions.Item>
-          </Descriptions>
-        </Card>
-      </Row>
+            </dd>
+          </div>
+        </dl>
+      </Card>
 
       {/* Attached Keys & Teams */}
-      <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>
-        <Col xs={24} lg={12}>
-          <Card
-            title={
-              <Flex align="center" gap={8}>
-                <KeyIcon size={16} />
-                Attached Keys
-                <Tag>{keyIds?.length}</Tag>
-              </Flex>
-            }
-            extra={
-              keyIds?.length > MAX_PREVIEW ? (
-                <Button
-                  type="link"
-                  onClick={() => setShowAllKeys(!showAllKeys)}
-                >
-                  {showAllKeys ? "Show Less" : `View All (${keyIds?.length})`}
-                </Button>
-              ) : null
-            }
-          >
-            {keyIds?.length > 0 ? (
-              <Flex wrap="wrap" gap={8}>
-                {displayedKeys.map((id) => (
-                  <Tag key={id}>
-                    <Text code style={{ fontSize: 12 }}>
-                      {id.length > 20
-                        ? `${id.slice(0, 10)}...${id.slice(-6)}`
-                        : id}
-                    </Text>
-                  </Tag>
-                ))}
-              </Flex>
-            ) : (
-              <Empty
-                description="No keys attached"
-                image={Empty.PRESENTED_IMAGE_SIMPLE}
-              />
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-6">
+        <Card className="p-6">
+          <div className="flex justify-between items-center mb-4">
+            <div className="flex items-center gap-2 font-semibold">
+              <KeyIcon size={16} />
+              Attached Keys
+              <Badge variant="secondary">{keyIds?.length}</Badge>
+            </div>
+            {keyIds?.length > MAX_PREVIEW && (
+              <Button
+                variant="link"
+                size="sm"
+                onClick={() => setShowAllKeys(!showAllKeys)}
+              >
+                {showAllKeys ? "Show Less" : `View All (${keyIds?.length})`}
+              </Button>
             )}
-          </Card>
-        </Col>
-        <Col xs={24} lg={12}>
-          <Card
-            title={
-              <Flex align="center" gap={8}>
-                <UsersIcon size={16} />
-                Attached Teams
-                <Tag>{teamIds?.length}</Tag>
-              </Flex>
-            }
-            extra={
-              teamIds?.length > MAX_PREVIEW ? (
-                <Button
-                  type="link"
-                  onClick={() => setShowAllTeams(!showAllTeams)}
-                >
-                  {showAllTeams
-                    ? "Show Less"
-                    : `View All (${teamIds?.length})`}
-                </Button>
-              ) : null
-            }
-          >
-            {teamIds?.length > 0 ? (
-              <Flex wrap="wrap" gap={8}>
-                {displayedTeams.map((id) => (
-                  <Tag key={id}>
-                    <Text code style={{ fontSize: 12 }}>
-                      {id}
-                    </Text>
-                  </Tag>
-                ))}
-              </Flex>
-            ) : (
-              <Empty
-                description="No teams attached"
-                image={Empty.PRESENTED_IMAGE_SIMPLE}
-              />
+          </div>
+          {keyIds?.length > 0 ? (
+            <div className="flex flex-wrap gap-2">
+              {displayedKeys.map((id) => (
+                <Badge key={id} variant="secondary" className="font-mono text-xs">
+                  {id.length > 20
+                    ? `${id.slice(0, 10)}...${id.slice(-6)}`
+                    : id}
+                </Badge>
+              ))}
+            </div>
+          ) : (
+            <EmptyState description="No keys attached" />
+          )}
+        </Card>
+        <Card className="p-6">
+          <div className="flex justify-between items-center mb-4">
+            <div className="flex items-center gap-2 font-semibold">
+              <UsersIcon size={16} />
+              Attached Teams
+              <Badge variant="secondary">{teamIds?.length}</Badge>
+            </div>
+            {teamIds?.length > MAX_PREVIEW && (
+              <Button
+                variant="link"
+                size="sm"
+                onClick={() => setShowAllTeams(!showAllTeams)}
+              >
+                {showAllTeams ? "Show Less" : `View All (${teamIds?.length})`}
+              </Button>
             )}
-          </Card>
-        </Col>
-      </Row>
+          </div>
+          {teamIds?.length > 0 ? (
+            <div className="flex flex-wrap gap-2">
+              {displayedTeams.map((id) => (
+                <Badge key={id} variant="secondary" className="font-mono text-xs">
+                  {id}
+                </Badge>
+              ))}
+            </div>
+          ) : (
+            <EmptyState description="No teams attached" />
+          )}
+        </Card>
+      </div>
 
       {/* Resources Tabs */}
-      <Card>
-        <Tabs defaultActiveKey="models" items={tabItems} />
+      <Card className="p-6">
+        <Tabs defaultValue="models" className="w-full">
+          <TabsList>
+            <TabsTrigger value="models" className="gap-1">
+              <LayersIcon size={16} />
+              Models
+              <Badge variant="secondary">{modelIds?.length}</Badge>
+            </TabsTrigger>
+            <TabsTrigger value="mcp" className="gap-1">
+              <ServerIcon size={16} />
+              MCP Servers
+              <Badge variant="secondary">{mcpServerIds?.length}</Badge>
+            </TabsTrigger>
+            <TabsTrigger value="agents" className="gap-1">
+              <BotIcon size={16} />
+              Agents
+              <Badge variant="secondary">{agentIds?.length}</Badge>
+            </TabsTrigger>
+          </TabsList>
+
+          <TabsContent value="models" className="pt-4">
+            {modelIds?.length > 0 ? (
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
+                {modelIds.map((id) => (
+                  <Card key={id} className="p-3">
+                    <code className="text-xs font-mono">{id}</code>
+                  </Card>
+                ))}
+              </div>
+            ) : (
+              <EmptyState description="No models assigned to this group" />
+            )}
+          </TabsContent>
+
+          <TabsContent value="mcp" className="pt-4">
+            {mcpServerIds?.length > 0 ? (
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
+                {mcpServerIds.map((id) => (
+                  <Card key={id} className="p-3">
+                    <code className="text-xs font-mono">{id}</code>
+                  </Card>
+                ))}
+              </div>
+            ) : (
+              <EmptyState description="No MCP servers assigned to this group" />
+            )}
+          </TabsContent>
+
+          <TabsContent value="agents" className="pt-4">
+            {agentIds?.length > 0 ? (
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
+                {agentIds.map((id) => (
+                  <Card key={id} className="p-3">
+                    <code className="text-xs font-mono">{id}</code>
+                  </Card>
+                ))}
+              </div>
+            ) : (
+              <EmptyState description="No agents assigned to this group" />
+            )}
+          </TabsContent>
+        </Tabs>
       </Card>
 
       {/* Edit Modal */}
@@ -340,6 +298,6 @@ export function AccessGroupDetail({
         accessGroup={accessGroup}
         onCancel={() => setIsEditModalVisible(false)}
       />
-    </Content>
+    </div>
   );
 }

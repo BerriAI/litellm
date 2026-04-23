@@ -1,5 +1,12 @@
-import React, { useEffect } from "react";
-import { Modal, Form } from "antd";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Button } from "@/components/ui/button";
 import MessageManager from "@/components/molecules/message_manager";
 import {
   AccessGroupBaseForm,
@@ -10,6 +17,8 @@ import {
   AccessGroupUpdateParams,
 } from "@/app/(dashboard)/hooks/accessGroups/useEditAccessGroup";
 import { AccessGroupResponse } from "@/app/(dashboard)/hooks/accessGroups/useAccessGroups";
+import { FormProvider, useForm } from "react-hook-form";
+import { useEffect } from "react";
 
 interface AccessGroupEditModalProps {
   visible: boolean;
@@ -24,13 +33,21 @@ export function AccessGroupEditModal({
   onCancel,
   onSuccess,
 }: AccessGroupEditModalProps) {
-  const [form] = Form.useForm<AccessGroupFormValues>();
+  const form = useForm<AccessGroupFormValues>({
+    defaultValues: {
+      name: "",
+      description: "",
+      modelIds: [],
+      mcpServerIds: [],
+      agentIds: [],
+    },
+    mode: "onSubmit",
+  });
   const editMutation = useEditAccessGroup();
 
-  // Populate the form with initial values whenever the modal opens or the data changes
   useEffect(() => {
     if (visible && accessGroup) {
-      form.setFieldsValue({
+      form.reset({
         name: accessGroup.access_group_name,
         description: accessGroup.description ?? "",
         modelIds: accessGroup.access_model_names ?? [],
@@ -38,49 +55,52 @@ export function AccessGroupEditModal({
         agentIds: accessGroup.access_agent_ids ?? [],
       });
     }
-  }, [visible, accessGroup, form]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visible, accessGroup]);
 
-  const handleOk = () => {
-    form
-      .validateFields()
-      .then((values) => {
-        const params: AccessGroupUpdateParams = {
-          access_group_name: values.name,
-          description: values.description,
-          access_model_names: values.modelIds,
-          access_mcp_server_ids: values.mcpServerIds,
-          access_agent_ids: values.agentIds,
-        };
-
-        editMutation.mutate(
-          { accessGroupId: accessGroup.access_group_id, params },
-          {
-            onSuccess: () => {
-              MessageManager.success("Access group updated successfully");
-              onSuccess?.();
-              onCancel();
-            },
-          },
-        );
-      })
-      .catch((info) => {
-        console.log("Validate Failed:", info);
-      });
-  };
+  const onSubmit = form.handleSubmit((values) => {
+    const params: AccessGroupUpdateParams = {
+      access_group_name: values.name,
+      description: values.description,
+      access_model_names: values.modelIds,
+      access_mcp_server_ids: values.mcpServerIds,
+      access_agent_ids: values.agentIds,
+    };
+    editMutation.mutate(
+      { accessGroupId: accessGroup.access_group_id, params },
+      {
+        onSuccess: () => {
+          MessageManager.success("Access group updated successfully");
+          onSuccess?.();
+          onCancel();
+        },
+      },
+    );
+  });
 
   return (
-    <Modal
-      title="Edit Access Group"
-      open={visible}
-      onOk={handleOk}
-      onCancel={onCancel}
-      width={700}
-      okText="Save Changes"
-      cancelText="Cancel"
-      confirmLoading={editMutation.isPending}
-      destroyOnHidden
-    >
-      <AccessGroupBaseForm form={form} />
-    </Modal>
+    <Dialog open={visible} onOpenChange={(o) => (!o ? onCancel() : undefined)}>
+      <DialogContent className="max-w-2xl">
+        <DialogHeader>
+          <DialogTitle>Edit Access Group</DialogTitle>
+          <DialogDescription className="sr-only">
+            Edit the access group and its resource assignments.
+          </DialogDescription>
+        </DialogHeader>
+        <FormProvider {...form}>
+          <form onSubmit={onSubmit}>
+            <AccessGroupBaseForm />
+            <DialogFooter className="mt-6">
+              <Button type="button" variant="outline" onClick={onCancel}>
+                Cancel
+              </Button>
+              <Button type="submit" disabled={editMutation.isPending}>
+                {editMutation.isPending ? "Saving…" : "Save Changes"}
+              </Button>
+            </DialogFooter>
+          </form>
+        </FormProvider>
+      </DialogContent>
+    </Dialog>
   );
 }

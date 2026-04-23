@@ -3,36 +3,34 @@ import {
   useAccessGroups,
 } from "@/app/(dashboard)/hooks/accessGroups/useAccessGroups";
 import { useDeleteAccessGroup } from "@/app/(dashboard)/hooks/accessGroups/useDeleteAccessGroup";
-import { PlusOutlined } from "@ant-design/icons";
 import {
   ColumnDef,
   flexRender,
   getCoreRowModel,
   getSortedRowModel,
-  Row,
   SortingState,
   useReactTable,
 } from "@tanstack/react-table";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
 import {
-  Button,
-  Card,
-  Flex,
-  Input,
-  Layout,
-  Pagination,
-  Space,
   Table,
-  Tag,
-  theme,
-  Tooltip,
-  Typography,
-} from "antd";
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import {
-  BotIcon,
-  LayersIcon,
-  SearchIcon,
-  ServerIcon
-} from "lucide-react";
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import { cn } from "@/lib/utils";
+import { BotIcon, LayersIcon, Plus, SearchIcon, ServerIcon } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import DeleteResourceModal from "../common_components/DeleteResourceModal";
 import TableIconActionButton from "../common_components/IconActionButton/TableIconActionButtons/TableIconActionButton";
@@ -43,16 +41,6 @@ import {
 import { AccessGroupDetail } from "./AccessGroupsDetailsPage";
 import { AccessGroupCreateModal } from "./AccessGroupsModal/AccessGroupCreateModal";
 import { AccessGroup } from "./types";
-
-declare module "@tanstack/react-table" {
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  interface ColumnMeta<TData, TValue> {
-    responsive?: string[];
-  }
-}
-
-const { Title, Text } = Typography;
-const { Content } = Layout;
 
 function mapResponseToAccessGroup(r: AccessGroupResponse): AccessGroup {
   return {
@@ -70,66 +58,8 @@ function mapResponseToAccessGroup(r: AccessGroupResponse): AccessGroup {
     updatedBy: r.updated_by ?? "",
   };
 }
-function buildAntdColumns(
-  table: ReturnType<typeof useReactTable<AccessGroup>>,
-  rowLookup: Map<string, Row<AccessGroup>>,
-  onSortingChange: (s: SortingState) => void,
-) {
-  const headers = table.getHeaderGroups()[0]?.headers ?? [];
-
-  return headers.map((header) => {
-    const canSort = header.column.getCanSort();
-    const isSorted = header.column.getIsSorted();
-    const meta = header.column.columnDef.meta as
-      | { responsive?: string[] }
-      | undefined;
-
-    const col: Record<string, unknown> = {
-      title: (
-        <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-          {header.isPlaceholder
-            ? null
-            : flexRender(header.column.columnDef.header, header.getContext())}
-          {canSort && (
-            <TableHeaderSortDropdown
-              sortState={isSorted === false ? false : (isSorted as SortState)}
-              onSortChange={(newState) => {
-                if (newState === false) {
-                  onSortingChange([]);
-                } else {
-                  onSortingChange([
-                    { id: header.column.id, desc: newState === "desc" },
-                  ]);
-                }
-              }}
-              columnId={header.column.id}
-            />
-          )}
-        </div>
-      ),
-      key: header.id,
-      width: header.column.columnDef.size,
-      render: (_: unknown, record: AccessGroup) => {
-        const row = rowLookup.get(record.id);
-        if (!row) return null;
-        const cell = row
-          .getVisibleCells()
-          .find((c) => c.column.id === header.id);
-        if (!cell) return null;
-        return flexRender(cell.column.columnDef.cell, cell.getContext());
-      },
-    };
-
-    if (meta?.responsive) {
-      col.responsive = meta.responsive;
-    }
-
-    return col;
-  });
-}
 
 export function AccessGroupsPage() {
-  const { token } = theme.useToken();
   const { data: groupsData, isLoading } = useAccessGroups();
   const groups = useMemo(
     () => (groupsData ?? []).map(mapResponseToAccessGroup),
@@ -149,7 +79,6 @@ export function AccessGroupsPage() {
     setCurrentPage(1);
   }, [searchText]);
 
-  // ---------- filtered data ----------
   const filteredGroups = useMemo(
     () =>
       groups.filter(
@@ -161,7 +90,6 @@ export function AccessGroupsPage() {
     [groups, searchText],
   );
 
-  // ---------- TanStack column definitions ----------
   const columnDefs = useMemo<ColumnDef<AccessGroup>[]>(
     () => [
       {
@@ -173,16 +101,21 @@ export function AccessGroupsPage() {
         cell: ({ row }) => {
           const record = row.original;
           return (
-            <Tooltip title={record.id}>
-              <Text
-                ellipsis
-                className="text-blue-500 bg-blue-50 hover:bg-blue-100 text-xs cursor-pointer"
-                style={{ fontSize: 14, padding: "1px 8px" }}
-                onClick={() => setSelectedGroupId(record.id)}
-              >
-                {record.id}
-              </Text>
-            </Tooltip>
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    className="truncate text-primary bg-primary/10 hover:bg-primary/20 text-xs cursor-pointer px-2 py-0.5 rounded max-w-full text-left"
+                    style={{ fontSize: 14 }}
+                    onClick={() => setSelectedGroupId(record.id)}
+                  >
+                    {record.id}
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent>{record.id}</TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
           );
         },
       },
@@ -203,32 +136,37 @@ export function AccessGroupsPage() {
           const mcpServerIds = record.mcpServerIds ?? [];
           const agentIds = record.agentIds ?? [];
           return (
-            <Flex gap={12} align="center">
-              <Tooltip title={`${modelIds?.length} Models`}>
-                <Tag color="blue" style={{ fontSize: 14, padding: "2px 8px", margin: 0 }}>
-                  <Flex align="center" gap={6}>
-                    <LayersIcon size={14} />
-                    {modelIds?.length}
-                  </Flex>
-                </Tag>
-              </Tooltip>
-              <Tooltip title={`${mcpServerIds?.length} MCP Servers`}>
-                <Tag color="cyan" style={{ fontSize: 14, padding: "2px 8px", margin: 0 }}>
-                  <Flex align="center" gap={6}>
-                    <ServerIcon size={14} />
-                    {mcpServerIds?.length}
-                  </Flex>
-                </Tag>
-              </Tooltip>
-              <Tooltip title={`${agentIds?.length} Agents`}>
-                <Tag color="purple" style={{ fontSize: 14, padding: "2px 8px", margin: 0 }}>
-                  <Flex align="center" gap={6}>
-                    <BotIcon size={14} />
-                    {agentIds?.length}
-                  </Flex>
-                </Tag>
-              </Tooltip>
-            </Flex>
+            <TooltipProvider>
+              <div className="flex items-center gap-3">
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Badge variant="secondary" className="flex items-center gap-1.5 px-2 py-0.5 text-sm">
+                      <LayersIcon size={14} />
+                      {modelIds?.length}
+                    </Badge>
+                  </TooltipTrigger>
+                  <TooltipContent>{`${modelIds?.length} Models`}</TooltipContent>
+                </Tooltip>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Badge variant="secondary" className="flex items-center gap-1.5 px-2 py-0.5 text-sm">
+                      <ServerIcon size={14} />
+                      {mcpServerIds?.length}
+                    </Badge>
+                  </TooltipTrigger>
+                  <TooltipContent>{`${mcpServerIds?.length} MCP Servers`}</TooltipContent>
+                </Tooltip>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Badge variant="secondary" className="flex items-center gap-1.5 px-2 py-0.5 text-sm">
+                      <BotIcon size={14} />
+                      {agentIds?.length}
+                    </Badge>
+                  </TooltipTrigger>
+                  <TooltipContent>{`${agentIds?.length} Agents`}</TooltipContent>
+                </Tooltip>
+              </div>
+            </TooltipProvider>
           );
         },
       },
@@ -240,7 +178,6 @@ export function AccessGroupsPage() {
         sortingFn: "datetime",
         cell: ({ getValue }) =>
           new Date(getValue() as string).toLocaleDateString(),
-        meta: { responsive: ["lg"] },
       },
       {
         id: "updatedAt",
@@ -249,29 +186,25 @@ export function AccessGroupsPage() {
         enableSorting: false,
         cell: ({ getValue }) =>
           new Date(getValue() as string).toLocaleDateString(),
-        meta: { responsive: ["xl"] },
       },
       {
         id: "actions",
         header: () => <span>Actions</span>,
         enableSorting: false,
         cell: ({ row }) => (
-          <Space>
+          <div className="flex gap-2">
             <TableIconActionButton
               variant="Delete"
               tooltipText="Delete access group"
               onClick={() => setGroupToDelete(row.original)}
             />
-          </Space>
+          </div>
         ),
       },
     ],
-    // setSelectedGroup is stable (useState setter)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
     [],
   );
 
-  // ---------- TanStack table instance ----------
   const table = useReactTable<AccessGroup>({
     data: filteredGroups,
     columns: columnDefs,
@@ -282,26 +215,12 @@ export function AccessGroupsPage() {
     getRowId: (row) => row.id,
   });
 
-  // All sorted rows from TanStack
   const sortedRows = table.getRowModel().rows;
-
-  // Paginated slice
   const paginatedRows = sortedRows.slice(
     (currentPage - 1) * pageSize,
     currentPage * pageSize,
   );
-
-  // Map for O(1) lookup by record id in antd render()
-  const rowLookup = useMemo(
-    () => new Map(paginatedRows.map((row) => [row.original.id, row])),
-    [paginatedRows],
-  );
-
-  // Convert TanStack headers → antd columns
-  const antdColumns = buildAntdColumns(table, rowLookup, setSorting);
-
-  // antd dataSource (just the originals for the current page)
-  const dataSource = paginatedRows.map((row) => row.original);
+  const totalPages = Math.max(1, Math.ceil(sortedRows.length / pageSize));
 
   if (selectedGroupId) {
     return (
@@ -313,64 +232,139 @@ export function AccessGroupsPage() {
   }
 
   return (
-    <Content
-      style={{ padding: token.paddingLG, paddingInline: token.paddingLG * 2 }}
-    >
-      <Flex
-        justify="space-between"
-        align="center"
-        style={{ marginBottom: 16 }}
-      >
-        <Space direction="vertical" size={0}>
-          <Title level={2} style={{ margin: 0 }}>
-            Access Groups
-          </Title>
-          <Text type="secondary">
+    <div className="p-6 md:px-12">
+      <div className="flex justify-between items-center mb-4">
+        <div>
+          <h2 className="text-2xl font-semibold m-0">Access Groups</h2>
+          <p className="text-muted-foreground text-sm m-0">
             Manage resource permissions for your organization
-          </Text>
-        </Space>
-        <Button
-          type="primary"
-          icon={<PlusOutlined />}
-          onClick={() => setIsCreateModalVisible(true)}
-        >
+          </p>
+        </div>
+        <Button onClick={() => setIsCreateModalVisible(true)}>
+          <Plus className="h-4 w-4" />
           Create Access Group
         </Button>
-      </Flex>
+      </div>
 
-      <Card styles={{ body: { padding: 0 } }}>
-        <Flex
-          justify="space-between"
-          align="center"
-          style={{
-            padding: "12px 16px",
-          }}
-        >
-          <Input
-            prefix={<SearchIcon size={16} />}
-            placeholder="Search groups by name, ID, or description..."
-            style={{ maxWidth: 400 }}
-            value={searchText}
-            onChange={(e) => setSearchText(e.target.value)}
-            allowClear
-          />
-          <Pagination
-            current={currentPage}
-            total={sortedRows?.length}
-            pageSize={pageSize}
-            onChange={(page) => setCurrentPage(page)}
-            size="small"
-            showTotal={(total) => `${total} groups`}
-            showSizeChanger={false}
-          />
-        </Flex>
-        <Table
-          columns={antdColumns}
-          dataSource={dataSource}
-          rowKey="id"
-          loading={isLoading}
-          pagination={false}
-        />
+      <Card>
+        <div className="flex justify-between items-center px-4 py-3 gap-3">
+          <div className="relative max-w-md w-full">
+            <SearchIcon
+              size={16}
+              className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none"
+            />
+            <Input
+              placeholder="Search groups by name, ID, or description..."
+              value={searchText}
+              onChange={(e) => setSearchText(e.target.value)}
+              className="pl-9"
+            />
+          </div>
+          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+            <span>{sortedRows.length} groups</span>
+            {totalPages > 1 && (
+              <div className="flex items-center gap-1">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                  disabled={currentPage === 1}
+                >
+                  Prev
+                </Button>
+                <span className="tabular-nums">
+                  {currentPage} / {totalPages}
+                </span>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                  disabled={currentPage >= totalPages}
+                >
+                  Next
+                </Button>
+              </div>
+            )}
+          </div>
+        </div>
+        <Table>
+          <TableHeader>
+            {table.getHeaderGroups().map((headerGroup) => (
+              <TableRow key={headerGroup.id}>
+                {headerGroup.headers.map((header) => {
+                  const canSort = header.column.getCanSort();
+                  const isSorted = header.column.getIsSorted();
+                  return (
+                    <TableHead
+                      key={header.id}
+                      style={{ width: header.column.columnDef.size }}
+                    >
+                      <div className={cn("flex items-center gap-1")}>
+                        {header.isPlaceholder
+                          ? null
+                          : flexRender(
+                              header.column.columnDef.header,
+                              header.getContext(),
+                            )}
+                        {canSort && (
+                          <TableHeaderSortDropdown
+                            sortState={
+                              isSorted === false ? false : (isSorted as SortState)
+                            }
+                            onSortChange={(newState) => {
+                              if (newState === false) {
+                                setSorting([]);
+                              } else {
+                                setSorting([
+                                  {
+                                    id: header.column.id,
+                                    desc: newState === "desc",
+                                  },
+                                ]);
+                              }
+                            }}
+                            columnId={header.column.id}
+                          />
+                        )}
+                      </div>
+                    </TableHead>
+                  );
+                })}
+              </TableRow>
+            ))}
+          </TableHeader>
+          <TableBody>
+            {isLoading ? (
+              <TableRow>
+                <TableCell
+                  colSpan={columnDefs.length}
+                  className="text-center text-muted-foreground py-8"
+                >
+                  Loading…
+                </TableCell>
+              </TableRow>
+            ) : paginatedRows.length === 0 ? (
+              <TableRow>
+                <TableCell
+                  colSpan={columnDefs.length}
+                  className="text-center text-muted-foreground py-8"
+                >
+                  No access groups found
+                </TableCell>
+              </TableRow>
+            ) : (
+              paginatedRows.map((row) => (
+                <TableRow key={row.id}>
+                  {row.getVisibleCells().map((cell) => (
+                    <TableCell key={cell.id}>
+                      {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                    </TableCell>
+                  ))}
+                </TableRow>
+              ))
+            )}
+          </TableBody>
+        </Table>
       </Card>
 
       <AccessGroupCreateModal
@@ -399,6 +393,6 @@ export function AccessGroupsPage() {
         }}
         confirmLoading={deleteMutation.isPending}
       />
-    </Content>
+    </div>
   );
 }
