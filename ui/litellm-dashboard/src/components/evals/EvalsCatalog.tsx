@@ -15,7 +15,7 @@ import {
   message,
 } from "antd";
 import { PlusOutlined, DeleteOutlined } from "@ant-design/icons";
-import { createLiteLLMEval, listLiteLLMEvals, deleteLiteLLMEval } from "../networking";
+import { createLiteLLMEval, listLiteLLMEvals, deleteLiteLLMEval, modelAvailableCall } from "../networking";
 
 const { Title, Text } = Typography;
 
@@ -44,11 +44,12 @@ interface Props {
   availableModels?: string[];
 }
 
-export default function EvalsCatalog({ accessToken, userRole, availableModels = [] }: Props) {
+export default function EvalsCatalog({ accessToken, userRole, availableModels: availableModelsProp = [] }: Props) {
   const [evals, setEvals] = useState<LiteLLMEval[]>([]);
   const [loading, setLoading] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [availableModels, setAvailableModels] = useState<string[]>(availableModelsProp);
   const [form] = Form.useForm();
 
   const fetchEvals = async () => {
@@ -64,8 +65,20 @@ export default function EvalsCatalog({ accessToken, userRole, availableModels = 
     }
   };
 
+  const fetchModels = async () => {
+    if (!accessToken || availableModelsProp.length > 0) return;
+    try {
+      const data = await modelAvailableCall(accessToken, null, null);
+      const names: string[] = data?.data?.map((m: any) => m.id) ?? [];
+      setAvailableModels(names);
+    } catch {
+      // best-effort; leave empty
+    }
+  };
+
   useEffect(() => {
     fetchEvals();
+    fetchModels();
   }, [accessToken]);
 
   const handleCreate = async (values: any) => {
