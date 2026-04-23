@@ -144,7 +144,7 @@ def _user_is_org_admin(
     user_object: Optional[LiteLLM_UserTable] = None,
 ) -> bool:
     """
-    Helper function to check if user is an org admin for any of the passed organizations.
+    Helper function to check if user is an org admin for all of the passed organizations.
 
     Checks both:
     - `organization_id` (singular string) — legacy callers
@@ -168,9 +168,13 @@ def _user_is_org_admin(
     if not candidate_org_ids:
         return False
 
-    for _membership in user_object.organization_memberships:
-        if _membership.organization_id in candidate_org_ids:
-            if _membership.user_role == LitellmUserRoles.ORG_ADMIN.value:
-                return True
+    # Build set of orgs where user is admin
+    admin_org_ids = {
+        _membership.organization_id
+        for _membership in user_object.organization_memberships
+        if _membership.user_role == LitellmUserRoles.ORG_ADMIN.value
+        and _membership.organization_id is not None
+    }
 
-    return False
+    # User must be admin of ALL requested orgs, not just any one
+    return all(org_id in admin_org_ids for org_id in candidate_org_ids)

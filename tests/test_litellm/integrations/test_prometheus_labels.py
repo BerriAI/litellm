@@ -1,6 +1,7 @@
 """
 Unit tests for prometheus metric labels configuration
 """
+
 from litellm.types.integrations.prometheus import (
     PrometheusMetricLabels,
     UserAPIKeyLabelNames,
@@ -136,12 +137,14 @@ def test_model_id_in_required_metrics():
         "litellm_proxy_total_requests_metric",
         "litellm_proxy_failed_requests_metric",
         "litellm_request_total_latency_metric",
-        "litellm_llm_api_time_to_first_token_metric"
+        "litellm_llm_api_time_to_first_token_metric",
     ]
 
     for metric_name in metrics_with_model_id:
         labels = PrometheusMetricLabels.get_labels(metric_name)
-        assert model_id_label in labels, f"Metric {metric_name} should contain model_id label"
+        assert (
+            model_id_label in labels
+        ), f"Metric {metric_name} should contain model_id label"
         print(f"✅ {metric_name} contains model_id label")
 
 
@@ -345,9 +348,9 @@ def test_prometheus_label_value_sanitization():
     )
 
     # U+2028 must be stripped
-    assert "\u2028" not in labels["requested_model"], (
-        f"U+2028 should be removed from label value, got: {repr(labels['requested_model'])}"
-    )
+    assert (
+        "\u2028" not in labels["requested_model"]
+    ), f"U+2028 should be removed from label value, got: {repr(labels['requested_model'])}"
     assert labels["requested_model"] == "claude-haiku-4-5-20251001"
 
     # Newlines must be replaced with spaces, quotes must be escaped

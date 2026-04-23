@@ -37,6 +37,20 @@ def initialize_callbacks_on_proxy(  # noqa: PLR0915
     if isinstance(value, list):
         imported_list: List[Any] = []
         for callback in value:  # ["presidio", <my-custom-callback>]
+            if isinstance(callback, str) and callback == "compression_interception":
+                from litellm.integrations.compression_interception.handler import (
+                    CompressionInterceptionLogger,
+                )
+
+                compression_interception_obj = (
+                    CompressionInterceptionLogger.initialize_from_proxy_config(
+                        litellm_settings=litellm_settings,
+                        callback_specific_params=callback_specific_params,
+                    )
+                )
+                imported_list.append(compression_interception_obj)
+                continue
+
             # check if callback is a custom logger compatible callback
             if isinstance(callback, str):
                 callback = LoggingCallbackManager._add_custom_callback_generic_api_str(
@@ -362,17 +376,17 @@ def get_remaining_tokens_and_requests_from_request_data(data: Dict) -> Dict[str,
     remaining_requests_variable_name = f"litellm-key-remaining-requests-{model_group}"
     remaining_requests = _metadata.get(remaining_requests_variable_name, None)
     if remaining_requests:
-        headers[
-            f"x-litellm-key-remaining-requests-{h11_model_group_name}"
-        ] = remaining_requests
+        headers[f"x-litellm-key-remaining-requests-{h11_model_group_name}"] = (
+            remaining_requests
+        )
 
     # Remaining Tokens
     remaining_tokens_variable_name = f"litellm-key-remaining-tokens-{model_group}"
     remaining_tokens = _metadata.get(remaining_tokens_variable_name, None)
     if remaining_tokens:
-        headers[
-            f"x-litellm-key-remaining-tokens-{h11_model_group_name}"
-        ] = remaining_tokens
+        headers[f"x-litellm-key-remaining-tokens-{h11_model_group_name}"] = (
+            remaining_tokens
+        )
 
     return headers
 
@@ -419,7 +433,8 @@ def add_guardrail_to_applied_guardrails_header(
         return
     _metadata = request_data.get("metadata", None) or {}
     if "applied_guardrails" in _metadata:
-        _metadata["applied_guardrails"].append(guardrail_name)
+        if guardrail_name not in _metadata["applied_guardrails"]:
+            _metadata["applied_guardrails"].append(guardrail_name)
     else:
         _metadata["applied_guardrails"] = [guardrail_name]
     # Ensure metadata is set back to request_data (important when metadata didn't exist)
@@ -472,9 +487,9 @@ def add_guardrail_response_to_standard_logging_object(
 ):
     if litellm_logging_obj is None:
         return
-    standard_logging_object: Optional[
-        StandardLoggingPayload
-    ] = litellm_logging_obj.model_call_details.get("standard_logging_object")
+    standard_logging_object: Optional[StandardLoggingPayload] = (
+        litellm_logging_obj.model_call_details.get("standard_logging_object")
+    )
     if standard_logging_object is None:
         return
     guardrail_information = standard_logging_object.get("guardrail_information", [])

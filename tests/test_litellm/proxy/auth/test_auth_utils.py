@@ -8,10 +8,13 @@ from unittest.mock import MagicMock, patch
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.auth_utils import (
     _get_customer_id_from_standard_headers,
+    check_complete_credentials,
     get_end_user_id_from_request_body,
     get_model_from_request,
     get_key_model_rpm_limit,
     get_key_model_tpm_limit,
+    get_project_model_rpm_limit,
+    get_project_model_tpm_limit,
 )
 
 
@@ -69,7 +72,6 @@ class TestGetKeyModelRpmLimit:
         user_api_key_dict = UserAPIKeyAuth(api_key="sk-123")
         result = get_key_model_rpm_limit(user_api_key_dict)
         assert result is None
-
 
     def test_team_metadata_empty_rpm_dict_falls_through_to_deployment_default(self):
         """Explicitly empty team model_rpm_limit ({}) should be returned as-is, not fallen through."""
@@ -149,7 +151,6 @@ class TestGetKeyModelTpmLimit:
         result = get_key_model_tpm_limit(user_api_key_dict)
         assert result == {"gpt-4": 10000}
 
-
     def test_team_metadata_empty_tpm_dict_falls_through_to_deployment_default(self):
         """Explicitly empty team model_tpm_limit ({}) should be returned as-is, not fallen through."""
         # An empty dict is a valid team limit map (no per-model limits configured).
@@ -162,13 +163,15 @@ class TestGetKeyModelTpmLimit:
         result = get_key_model_tpm_limit(user_api_key_dict)
         assert result == {}
 
-
     def test_skips_deployments_with_malformed_limit_value(self):
         """Deployments with non-integer-parseable limit values are skipped without raising."""
         user_api_key_dict = UserAPIKeyAuth(api_key="sk-123")
         mock_router = MagicMock()
         mock_router.get_model_list.return_value = [
-            {"model_name": "model1", "litellm_params": {"default_api_key_tpm_limit": "not-a-number"}},
+            {
+                "model_name": "model1",
+                "litellm_params": {"default_api_key_tpm_limit": "not-a-number"},
+            },
             _make_deployment_dict("model1", tpm=500),
         ]
         with patch(_ROUTER_PATCH, mock_router):
@@ -269,6 +272,7 @@ def test_get_customer_user_header_returns_none_for_single_non_customer_mapping()
     result = get_customer_user_header_from_mapping(mapping)
     assert result is None
 
+
 def test_get_customer_user_header_from_mapping_returns_customer_header():
     from litellm.proxy.auth.auth_utils import get_customer_user_header_from_mapping
 
@@ -289,8 +293,8 @@ def test_get_customer_user_header_returns_customers_header_in_config_order_when_
         {"header_name": "X-User-Id", "litellm_user_role": "customer"},
     ]
     result = get_customer_user_header_from_mapping(mappings)
-    assert result == ['x-openwebui-user-email', 'x-user-id']
-    
+    assert result == ["x-openwebui-user-email", "x-user-id"]
+
 
 def test_get_end_user_id_returns_id_from_user_header_mappings():
     from litellm.proxy.auth.auth_utils import get_end_user_id_from_request_body
@@ -302,9 +306,16 @@ def test_get_end_user_id_returns_id_from_user_header_mappings():
     general_settings = {"user_header_mappings": mappings}
     headers = {"x-openwebui-user-email": "1234"}
 
-    with patch("litellm.proxy.auth.auth_utils._get_customer_id_from_standard_headers", return_value=None), \
-         patch("litellm.proxy.proxy_server.general_settings", general_settings):
-        result = get_end_user_id_from_request_body(request_body={}, request_headers=headers)
+    with (
+        patch(
+            "litellm.proxy.auth.auth_utils._get_customer_id_from_standard_headers",
+            return_value=None,
+        ),
+        patch("litellm.proxy.proxy_server.general_settings", general_settings),
+    ):
+        result = get_end_user_id_from_request_body(
+            request_body={}, request_headers=headers
+        )
 
     assert result == "1234"
 
@@ -323,9 +334,16 @@ def test_get_end_user_id_returns_first_customer_header_when_multiple_mappings_ex
         "x-openwebui-user-email": "user@example.com",
     }
 
-    with patch("litellm.proxy.auth.auth_utils._get_customer_id_from_standard_headers", return_value=None), \
-         patch("litellm.proxy.proxy_server.general_settings", general_settings):
-        result = get_end_user_id_from_request_body(request_body={}, request_headers=headers)
+    with (
+        patch(
+            "litellm.proxy.auth.auth_utils._get_customer_id_from_standard_headers",
+            return_value=None,
+        ),
+        patch("litellm.proxy.proxy_server.general_settings", general_settings),
+    ):
+        result = get_end_user_id_from_request_body(
+            request_body={}, request_headers=headers
+        )
 
     assert result == "user-456"
 
@@ -339,11 +357,19 @@ def test_get_end_user_id_returns_none_when_no_customer_role_in_mappings():
     general_settings = {"user_header_mappings": mappings}
     headers = {"x-openwebui-user-id": "user-789"}
 
-    with patch("litellm.proxy.auth.auth_utils._get_customer_id_from_standard_headers", return_value=None), \
-         patch("litellm.proxy.proxy_server.general_settings", general_settings):
-        result = get_end_user_id_from_request_body(request_body={}, request_headers=headers)
+    with (
+        patch(
+            "litellm.proxy.auth.auth_utils._get_customer_id_from_standard_headers",
+            return_value=None,
+        ),
+        patch("litellm.proxy.proxy_server.general_settings", general_settings),
+    ):
+        result = get_end_user_id_from_request_body(
+            request_body={}, request_headers=headers
+        )
 
     assert result is None
+
 
 def test_get_end_user_id_falls_back_to_deprecated_user_header_name():
     from litellm.proxy.auth.auth_utils import get_end_user_id_from_request_body
@@ -351,14 +377,23 @@ def test_get_end_user_id_falls_back_to_deprecated_user_header_name():
     general_settings = {"user_header_name": "x-custom-user-id"}
     headers = {"x-custom-user-id": "user-legacy"}
 
-    with patch("litellm.proxy.auth.auth_utils._get_customer_id_from_standard_headers", return_value=None), \
-         patch("litellm.proxy.proxy_server.general_settings", general_settings):
-        result = get_end_user_id_from_request_body(request_body={}, request_headers=headers)
+    with (
+        patch(
+            "litellm.proxy.auth.auth_utils._get_customer_id_from_standard_headers",
+            return_value=None,
+        ),
+        patch("litellm.proxy.proxy_server.general_settings", general_settings),
+    ):
+        result = get_end_user_id_from_request_body(
+            request_body={}, request_headers=headers
+        )
 
     assert result == "user-legacy"
 
 
-def _make_deployment_dict(model_name: str, tpm: Optional[int] = None, rpm: Optional[int] = None) -> dict:
+def _make_deployment_dict(
+    model_name: str, tpm: Optional[int] = None, rpm: Optional[int] = None
+) -> dict:
     """Helper to build a minimal deployment dict as returned by router.get_model_list."""
     litellm_params: dict = {"model": model_name}
     if tpm is not None:
@@ -446,20 +481,22 @@ class TestDeploymentDefaultRpmLimit:
         user_api_key_dict = UserAPIKeyAuth(api_key="sk-123")
         mock_router = MagicMock()
         mock_router.get_model_list.return_value = [
-            _make_deployment_dict("model1"),        # no rpm default
+            _make_deployment_dict("model1"),  # no rpm default
             _make_deployment_dict("model1", rpm=75),
         ]
         with patch(_ROUTER_PATCH, mock_router):
             result = get_key_model_rpm_limit(user_api_key_dict, model_name="model1")
         assert result == {"model1": 75}
 
-
     def test_skips_deployments_with_malformed_limit_value(self):
         """Deployments with non-integer-parseable limit values are skipped without raising."""
         user_api_key_dict = UserAPIKeyAuth(api_key="sk-123")
         mock_router = MagicMock()
         mock_router.get_model_list.return_value = [
-            {"model_name": "model1", "litellm_params": {"default_api_key_rpm_limit": "not-a-number"}},
+            {
+                "model_name": "model1",
+                "litellm_params": {"default_api_key_rpm_limit": "not-a-number"},
+            },
             _make_deployment_dict("model1", rpm=100),
         ]
         with patch(_ROUTER_PATCH, mock_router):
@@ -543,9 +580,83 @@ class TestDeploymentDefaultTpmLimit:
         user_api_key_dict = UserAPIKeyAuth(api_key="sk-123")
         mock_router = MagicMock()
         mock_router.get_model_list.return_value = [
-            _make_deployment_dict("model1"),           # no tpm default
+            _make_deployment_dict("model1"),  # no tpm default
             _make_deployment_dict("model1", tpm=400),
         ]
         with patch(_ROUTER_PATCH, mock_router):
             result = get_key_model_tpm_limit(user_api_key_dict, model_name="model1")
         assert result == {"model1": 400}
+
+
+class TestGetProjectModelRpmLimit:
+    """Tests for get_project_model_rpm_limit function."""
+
+    def test_returns_project_metadata_rpm_limit(self):
+        user_api_key_dict = UserAPIKeyAuth(
+            api_key="sk-123",
+            project_metadata={"model_rpm_limit": {"gpt-4": 200}},
+        )
+        result = get_project_model_rpm_limit(user_api_key_dict)
+        assert result == {"gpt-4": 200}
+
+    def test_returns_none_when_no_project_metadata(self):
+        user_api_key_dict = UserAPIKeyAuth(api_key="sk-123")
+        result = get_project_model_rpm_limit(user_api_key_dict)
+        assert result is None
+
+    def test_returns_none_when_project_metadata_missing_key(self):
+        user_api_key_dict = UserAPIKeyAuth(
+            api_key="sk-123",
+            project_metadata={"other_key": "value"},
+        )
+        result = get_project_model_rpm_limit(user_api_key_dict)
+        assert result is None
+
+
+class TestGetProjectModelTpmLimit:
+    """Tests for get_project_model_tpm_limit function."""
+
+    def test_returns_project_metadata_tpm_limit(self):
+        user_api_key_dict = UserAPIKeyAuth(
+            api_key="sk-123",
+            project_metadata={"model_tpm_limit": {"gpt-4": 50000}},
+        )
+        result = get_project_model_tpm_limit(user_api_key_dict)
+        assert result == {"gpt-4": 50000}
+
+    def test_returns_none_when_no_project_metadata(self):
+        user_api_key_dict = UserAPIKeyAuth(api_key="sk-123")
+        result = get_project_model_tpm_limit(user_api_key_dict)
+        assert result is None
+
+    def test_returns_none_when_project_metadata_missing_key(self):
+        user_api_key_dict = UserAPIKeyAuth(
+            api_key="sk-123",
+            project_metadata={"other_key": "value"},
+        )
+        result = get_project_model_tpm_limit(user_api_key_dict)
+        assert result is None
+
+
+class TestCheckCompleteCredentials:
+    """Tests for the api_key validation in check_complete_credentials."""
+
+    def test_returns_false_when_api_key_missing(self):
+        result = check_complete_credentials({"model": "gpt-4"})
+        assert result is False
+
+    def test_returns_false_when_api_key_is_none(self):
+        result = check_complete_credentials({"model": "gpt-4", "api_key": None})
+        assert result is False
+
+    def test_returns_false_when_api_key_is_empty_string(self):
+        result = check_complete_credentials({"model": "gpt-4", "api_key": ""})
+        assert result is False
+
+    def test_returns_false_when_api_key_is_whitespace(self):
+        result = check_complete_credentials({"model": "gpt-4", "api_key": "   "})
+        assert result is False
+
+    def test_returns_true_when_api_key_is_valid(self):
+        result = check_complete_credentials({"model": "gpt-4", "api_key": "sk-valid"})
+        assert result is True

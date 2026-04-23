@@ -433,9 +433,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             # contain API keys or other secrets) in error responses.
             raise Exception(f"Presidio PII analysis failed: {type(e).__name__}") from e
 
-    async def _post_presidio_anonymize(
-        self, text: str, analyze_results: Any
-    ) -> Any:
+    async def _post_presidio_anonymize(self, text: str, analyze_results: Any) -> Any:
         """POST to Presidio anonymize; returns parsed JSON body."""
         # Use shared session to prevent memory leak (issue #14540)
         async with self._get_session_iterator() as session:
@@ -752,9 +750,9 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             if messages is None:
                 return data
             tasks = []
-            task_mappings: List[
-                Tuple[int, Optional[int]]
-            ] = []  # Track (message_index, content_index) for each task
+            task_mappings: List[Tuple[int, Optional[int]]] = (
+                []
+            )  # Track (message_index, content_index) for each task
 
             for msg_idx, m in enumerate(messages):
                 content = m.get("content", None)
@@ -855,9 +853,9 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         ):  # /chat/completions requests
             messages: Optional[List] = kwargs.get("messages", None)
             tasks = []
-            task_mappings: List[
-                Tuple[int, Optional[int]]
-            ] = []  # Track (message_index, content_index) for each task
+            task_mappings: List[Tuple[int, Optional[int]]] = (
+                []
+            )  # Track (message_index, content_index) for each task
 
             if messages is None:
                 return kwargs, result
