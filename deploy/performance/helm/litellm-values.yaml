@@ -91,10 +91,14 @@ redis:
     persistence:
       storageClass: gp2
 
+# Skip separate Batch Job + Argo PreSync: proxy image runs DB setup on startup when
+# DISABLE_SCHEMA_UPDATE is not set (see litellm/proxy/proxy_cli.py). Use the Job again if you
+# prefer migrations before any proxy pod starts, or if you run many replicas and want a single migration step.
 migrationJob:
+  enabled: false
   hooks:
     argocd:
-      enabled: true
+      enabled: false
 
 proxy_config:
   model_list:

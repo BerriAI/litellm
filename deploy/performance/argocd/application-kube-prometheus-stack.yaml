@@ -1,6 +1,7 @@
 # Argo CD Application: kube-prometheus-stack → namespace monitoring.
 #
 # Chart: https://github.com/prometheus-community/helm-charts/tree/main/charts/kube-prometheus-stack
+# Pinned to upstream chart release tag (not floating `main`). Bump `targetRevision` when upgrading.
 #
 # Apply:
 #   kubectl apply -n argocd -f deploy/performance/argocd/application-kube-prometheus-stack.yaml
@@ -14,7 +15,7 @@ spec:
   project: default
   source:
     repoURL: https://github.com/prometheus-community/helm-charts.git
-    targetRevision: main
+    targetRevision: kube-prometheus-stack-83.7.0
     path: charts/kube-prometheus-stack
     helm:
       releaseName: kube-prometheus-stack
