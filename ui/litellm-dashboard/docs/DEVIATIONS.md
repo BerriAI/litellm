@@ -45,6 +45,21 @@ Format per entry:
 
 ---
 
+## Section 6 (Tool Policies) — categorical colors (amber/emerald/red) on policy badges
+
+- **Type:** `blueprint deviation`
+- **Blueprint rule deviated from:** §1 "semantic Tailwind tokens only".
+- **What the agent did instead:** `PolicySelect.tsx` uses raw palette
+  classes (`bg-amber-100 text-amber-800 border-amber-300`,
+  `bg-emerald-100 ...`, `bg-red-100 ...`) and is added to the
+  `litellm-ui/no-raw-tailwind-colors` override list in `.eslintrc.json`.
+- **Why:** The policy badges encode a **categorical** (untrusted /
+  trusted / blocked), not a theme state. Semantic tokens (`primary`,
+  `muted`, `destructive`, ...) don't have three distinct hues suitable
+  for three categorical values. A phase-2 task could introduce semantic
+  policy tokens (`--policy-untrusted`, `--policy-trusted`,
+  `--policy-blocked`) backed by CSS variables; out of scope for phase 1.
+
 ## Section 1 (Access Groups) — custom MultiSelect shim in lieu of antd Select mode=multiple
 
 - **Type:** `blueprint deviation`

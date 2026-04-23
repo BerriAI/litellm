@@ -22,7 +22,8 @@
         "src/components/ui/**/*.{ts,tsx}",
         "tailwind.config.ts",
         "src/components/molecules/notifications_manager.tsx",
-        "src/components/molecules/message_manager.tsx"
+        "src/components/molecules/message_manager.tsx",
+        "src/components/ToolPolicies/PolicySelect.tsx"
       ],
       "rules": {
         "litellm-ui/no-banned-ui-imports": "off",

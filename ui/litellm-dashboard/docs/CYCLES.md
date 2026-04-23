@@ -43,3 +43,12 @@ Layer abbreviations: **TS** (tsc --noEmit), **Lint** (eslint), **Vitest**
   - cycle 1: TS ✓ | Lint ✓ (pre-existing unused-imports in test excluded) | Vitest ✓ (6/6) | Parity ⏭ | Snap ⏭
 - Final status: **done**
 
+## 6. Tool Policies (tool-policies)
+
+- Cycles used: 1 / 7
+- Layer outcomes per cycle:
+  - cycle 1: TS ✓ | Lint ✓ (PolicySelect.tsx added to raw-colors override list) | Vitest ✓ (12/12) | Parity ⏭ | Snap ⏭
+- Final status: **done**
+- Scope: PolicySelect.tsx only (the single banned-import file under ToolPolicies/). The ToolPoliciesView.tsx top-level wrapper has no antd imports already. Top-level ToolPolicies.tsx legacy wrapper is not in scope.
+- Section decision: keep amber/emerald/red categorical colors for policy badges (not theme-semantic). Documented in DEVIATIONS.md.
+

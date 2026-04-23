@@ -55,8 +55,9 @@ describe("PolicySelect", () => {
         onChange={vi.fn()}
       />
     );
-    expect(screen.getByRole("combobox")).toHaveAttribute("aria-expanded", "false");
-    expect(screen.getByRole("combobox").closest(".ant-select")).toHaveClass("ant-select-disabled");
+    // shadcn Select's combobox trigger exposes `data-disabled` when disabled.
+    const combobox = screen.getByRole("combobox");
+    expect(combobox).toBeDisabled();
   });
 
   it("should not be disabled when saving is false", () => {
@@ -68,7 +69,7 @@ describe("PolicySelect", () => {
         onChange={vi.fn()}
       />
     );
-    expect(screen.getByRole("combobox").closest(".ant-select")).not.toHaveClass("ant-select-disabled");
+    expect(screen.getByRole("combobox")).not.toBeDisabled();
   });
 });
 
