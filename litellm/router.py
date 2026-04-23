@@ -871,9 +871,11 @@ class Router:
                 not hasattr(self, "lowesttpm_logger_v2")
                 or self.lowesttpm_logger_v2 is None
             ):
-                self.lowesttpm_logger_v2: LowestTPMLoggingHandler_v2 = LowestTPMLoggingHandler_v2(
-                    router_cache=self.cache,
-                    routing_args=routing_strategy_args,
+                self.lowesttpm_logger_v2: LowestTPMLoggingHandler_v2 = (
+                    LowestTPMLoggingHandler_v2(
+                        router_cache=self.cache,
+                        routing_args=routing_strategy_args,
+                    )
                 )
                 if isinstance(litellm.callbacks, list):
                     litellm.logging_callback_manager.add_litellm_callback(self.lowesttpm_logger_v2)  # type: ignore
@@ -885,9 +887,11 @@ class Router:
                 not hasattr(self, "lowestlatency_logger")
                 or self.lowestlatency_logger is None
             ):
-                self.lowestlatency_logger: LowestLatencyLoggingHandler = LowestLatencyLoggingHandler(
-                    router_cache=self.cache,
-                    routing_args=routing_strategy_args,
+                self.lowestlatency_logger: LowestLatencyLoggingHandler = (
+                    LowestLatencyLoggingHandler(
+                        router_cache=self.cache,
+                        routing_args=routing_strategy_args,
+                    )
                 )
                 if isinstance(litellm.callbacks, list):
                     litellm.logging_callback_manager.add_litellm_callback(self.lowestlatency_logger)  # type: ignore
@@ -896,9 +900,11 @@ class Router:
             or routing_strategy == RoutingStrategy.COST_BASED
         ):
             if not hasattr(self, "lowestcost_logger") or self.lowestcost_logger is None:
-                self.lowestcost_logger: LowestCostLoggingHandler = LowestCostLoggingHandler(
-                    router_cache=self.cache,
-                    routing_args={},
+                self.lowestcost_logger: LowestCostLoggingHandler = (
+                    LowestCostLoggingHandler(
+                        router_cache=self.cache,
+                        routing_args={},
+                    )
                 )
                 if isinstance(litellm.callbacks, list):
                     litellm.logging_callback_manager.add_litellm_callback(self.lowestcost_logger)  # type: ignore
