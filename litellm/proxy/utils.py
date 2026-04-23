@@ -940,7 +940,11 @@ class ProxyLogging:
             Result from the guardrail execution
         """
         # Use unified_guardrail if callback has apply_guardrail method
-        use_unified = "apply_guardrail" in type(callback).__dict__
+        has_apply_guardrail = "apply_guardrail" in type(callback).__dict__
+        use_unified = has_apply_guardrail and not (
+            hook_type == "during_call"
+            and getattr(callback, "use_native_during_call_hook", False)
+        )
         if use_unified:
             data["guardrail_to_apply"] = callback
 
@@ -1540,6 +1544,7 @@ class ProxyLogging:
                 if (
                     "apply_guardrail" in type(callback).__dict__
                     and user_api_key_dict is not None
+                    and not getattr(callback, "use_native_during_call_hook", False)
                 ):
                     data["guardrail_to_apply"] = callback
                     guardrail_task = self._run_guardrail_task_with_enrichment(

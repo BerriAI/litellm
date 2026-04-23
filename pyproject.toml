@@ -1,6 +1,6 @@
 [project]
 name = "litellm"
-version = "1.83.10"
+version = "1.83.12"
 description = "Library to easily interface with LLM API providers"
 readme = "README.md"
 requires-python = ">=3.10, <3.14"
@@ -52,7 +52,7 @@ proxy = [
     "azure-identity==1.25.2",
     "azure-storage-blob==12.28.0",
     "mcp==1.26.0",
-    "litellm-proxy-extras==0.4.67",
+    "litellm-proxy-extras==0.4.68",
     "litellm-enterprise==0.1.38",
     "RestrictedPython==8.1",
     "rich==13.9.4",
@@ -208,7 +208,7 @@ build-backend = "uv_build"
 
 [tool.uv]
 default-groups = ["dev"]
-required-version = "==0.10.9"
+required-version = ">=0.10.9"
 exclude-newer = "3 days"
 
 [tool.uv.sources]
@@ -236,7 +236,7 @@ source-exclude = [
 profile = "black"
 
 [tool.commitizen]
-version = "1.83.10"
+version = "1.83.12"
 version_files = [
     "pyproject.toml:^version",
 ]

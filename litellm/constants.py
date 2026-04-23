@@ -164,6 +164,7 @@ MCP_STDIO_ALLOWED_COMMANDS: frozenset = frozenset(
 LITELLM_UI_ALLOW_HEADERS = [
     "x-litellm-semantic-filter",
     "x-litellm-semantic-filter-tools",
+    "x-litellm-adaptive-router-model",
 ]
 
 # Gemini model-specific minimal thinking budget constants

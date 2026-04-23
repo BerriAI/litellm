@@ -1336,7 +1336,9 @@ if MCP_AVAILABLE:
 
         return _redact_mcp_credentials(temp_record)
 
-    def _get_cached_temporary_mcp_server_or_404(server_id: str) -> MCPServer:
+    def _get_cached_temporary_mcp_server_or_404(
+        server_id: str, request: Optional[Request] = None
+    ) -> MCPServer:
         server = get_cached_temporary_mcp_server(server_id)
         if server is None:
             # Fall back to real DB/config server (e.g. for the user-side OAuth flow
@@ -1344,10 +1346,14 @@ if MCP_AVAILABLE:
             from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
                 global_mcp_server_manager,
             )
+            from litellm.proxy.auth.ip_address_utils import IPAddressUtils
 
+            client_ip = IPAddressUtils.get_mcp_client_ip(request) if request else None
             server = global_mcp_server_manager.get_mcp_server_by_id(
                 server_id
-            ) or global_mcp_server_manager.get_mcp_server_by_name(server_id)
+            ) or global_mcp_server_manager.get_mcp_server_by_name(
+                server_id, client_ip=client_ip
+            )
         if server is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -1358,10 +1364,12 @@ if MCP_AVAILABLE:
     @router.get(
         "/server/oauth/{server_id}/authorize",
         include_in_schema=False,
+        dependencies=[Depends(user_api_key_auth)],
     )
     async def mcp_authorize(
         request: Request,
         server_id: str,
+        user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
         client_id: Optional[str] = None,
         redirect_uri: str = Query(...),
         state: str = "",
@@ -1370,7 +1378,7 @@ if MCP_AVAILABLE:
         response_type: Optional[str] = None,
         scope: Optional[str] = None,
     ):
-        mcp_server = _get_cached_temporary_mcp_server_or_404(server_id)
+        mcp_server = _get_cached_temporary_mcp_server_or_404(server_id, request=request)
         # Use the server's stored client_id when the caller doesn't supply one
         resolved_client_id = mcp_server.client_id or client_id or ""
         if not resolved_client_id:
@@ -1399,10 +1407,12 @@ if MCP_AVAILABLE:
     @router.post(
         "/server/oauth/{server_id}/token",
         include_in_schema=False,
+        dependencies=[Depends(user_api_key_auth)],
     )
     async def mcp_token(
         request: Request,
         server_id: str,
+        user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
         grant_type: str = Form(...),
         code: Optional[str] = Form(None),
         redirect_uri: Optional[str] = Form(None),
@@ -1412,7 +1422,7 @@ if MCP_AVAILABLE:
         refresh_token: Optional[str] = Form(None),
         scope: Optional[str] = Form(None),
     ):
-        mcp_server = _get_cached_temporary_mcp_server_or_404(server_id)
+        mcp_server = _get_cached_temporary_mcp_server_or_404(server_id, request=request)
         resolved_client_id = mcp_server.client_id or client_id or ""
         if not resolved_client_id:
             raise HTTPException(
@@ -1441,9 +1451,14 @@ if MCP_AVAILABLE:
     @router.post(
         "/server/oauth/{server_id}/register",
         include_in_schema=False,
+        dependencies=[Depends(user_api_key_auth)],
     )
-    async def mcp_register(request: Request, server_id: str):
-        mcp_server = _get_cached_temporary_mcp_server_or_404(server_id)
+    async def mcp_register(
+        request: Request,
+        server_id: str,
+        user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    ):
+        mcp_server = _get_cached_temporary_mcp_server_or_404(server_id, request=request)
         request_data = await _read_request_body(request=request)
         data: dict = {**request_data}
 
