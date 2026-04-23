@@ -1,0 +1,10 @@
+{
+  "name": "eslint-plugin-litellm-ui",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Local ESLint rules for the phase-1 shadcn UI migration.",
+  "main": "index.js",
+  "peerDependencies": {
+    "eslint": ">=8"
+  }
+}

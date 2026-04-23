@@ -1,8 +1,10 @@
 {
   "extends": ["next/core-web-vitals", "eslint:recommended", "plugin:@typescript-eslint/recommended", "prettier"],
-  "plugins": ["unused-imports"],
+  "plugins": ["unused-imports", "litellm-ui"],
   "rules": {
     "unused-imports/no-unused-imports": "error",
+    "litellm-ui/no-banned-ui-imports": "error",
+    "litellm-ui/no-raw-tailwind-colors": "error",
     "@typescript-eslint/no-explicit-any": "off",
     "@typescript-eslint/no-unused-vars": "off",
     "@typescript-eslint/no-unused-expressions": "off",
@@ -13,5 +15,26 @@
     "no-useless-catch": "off",
     "no-useless-escape": "off",
     "no-self-assign": "off"
-  }
+  },
+  "overrides": [
+    {
+      "files": [
+        "src/components/ui/**/*.{ts,tsx}",
+        "tailwind.config.ts",
+        "src/components/molecules/notifications_manager.tsx",
+        "src/components/molecules/message_manager.tsx"
+      ],
+      "rules": {
+        "litellm-ui/no-banned-ui-imports": "off",
+        "litellm-ui/no-raw-tailwind-colors": "off"
+      }
+    },
+    {
+      "files": ["**/*.test.{ts,tsx}", "**/*.spec.{ts,tsx}", "tests/**/*.{ts,tsx}", "e2e_tests/**/*.{ts,tsx}"],
+      "rules": {
+        "litellm-ui/no-banned-ui-imports": "off",
+        "litellm-ui/no-raw-tailwind-colors": "off"
+      }
+    }
+  ]
 }
