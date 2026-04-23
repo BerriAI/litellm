@@ -70,6 +70,7 @@
         "src/components/model_dashboard/health_check_columns.tsx",
         "src/components/UsagePage/components/EntityUsage/TopKeyView.tsx",
         "src/components/policies/policy_templates.tsx",
+        "src/components/mcp_tools/mcp_server_view.tsx",
         "src/components/permissions/VectorStorePermissions.tsx",
         "src/components/permissions/AgentPermissions.tsx",
         "src/components/permissions/MCPServerPermissions.tsx",
