@@ -14,8 +14,8 @@ export function ScoreChart({ data }: ScoreChartProps) {
   const chartData = data && data.length > 0 ? data : [];
 
   return (
-    <Card className="bg-white border border-gray-200">
-      <Title className="text-base font-semibold text-gray-900 mb-4">
+    <Card className="bg-background border border-border">
+      <Title className="text-base font-semibold text-foreground mb-4">
         Request Outcomes Over Time
       </Title>
       <div className="h-80 min-h-[280px]">
@@ -31,7 +31,7 @@ export function ScoreChart({ data }: ScoreChartProps) {
             stack={true}
           />
         ) : (
-          <div className="flex items-center justify-center h-full text-sm text-gray-500">
+          <div className="flex items-center justify-center h-full text-sm text-muted-foreground">
             No chart data for this period
           </div>
         )}

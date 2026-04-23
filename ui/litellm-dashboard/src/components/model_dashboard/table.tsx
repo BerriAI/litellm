@@ -12,8 +12,16 @@ import {
   OnChangeFn,
 } from "@tanstack/react-table";
 import React from "react";
-import { Table, TableHead, TableHeaderCell, TableBody, TableRow, TableCell } from "@tremor/react";
-import { SwitchVerticalIcon, ChevronUpIcon, ChevronDownIcon } from "@heroicons/react/outline";
+// eslint-disable-next-line litellm-ui/no-banned-ui-imports
+import {
+  Table,
+  TableHead,
+  TableHeaderCell,
+  TableBody,
+  TableRow,
+  TableCell,
+} from "@tremor/react";
+import { ArrowUpDown, ChevronDown, ChevronUp } from "lucide-react";
 
 // Extend the column meta type to include className
 declare module "@tanstack/react-table" {
@@ -73,25 +81,6 @@ export function ModelDataTable<TData, TValue>({
     },
   });
 
-  const getHeaderText = (header: any): string => {
-    if (typeof header === "string") {
-      return header;
-    }
-    if (typeof header === "function") {
-      const headerElement = header();
-      if (headerElement && headerElement.props && headerElement.props.children) {
-        const children = headerElement.props.children;
-        if (typeof children === "string") {
-          return children;
-        }
-        if (children.props && children.props.children) {
-          return children.props.children;
-        }
-      }
-    }
-    return "";
-  };
-
   return (
     <div className="rounded-lg custom-border relative">
       <div className="overflow-x-auto">
@@ -112,7 +101,7 @@ export function ModelDataTable<TData, TValue>({
                       key={header.id}
                       className={`py-1 h-8 relative ${
                         header.id === "actions"
-                          ? "sticky right-0 bg-white shadow-[-4px_0_8px_-6px_rgba(0,0,0,0.1)] w-[120px] ml-8"
+                          ? "sticky right-0 bg-background shadow-[-4px_0_8px_-6px_rgba(0,0,0,0.1)] w-[120px] ml-8"
                           : ""
                       } ${header.column.columnDef.meta?.className || ""}`}
                       style={{
@@ -128,25 +117,32 @@ export function ModelDataTable<TData, TValue>({
                             ? null
                             : flexRender(header.column.columnDef.header, header.getContext())}
                         </div>
-                        {header.id !== "actions" && header.column.getCanSort() && (
-                          <div className="w-4">
-                            {header.column.getIsSorted() ? (
-                              {
-                                asc: <ChevronUpIcon className="h-4 w-4 text-blue-500" />,
-                                desc: <ChevronDownIcon className="h-4 w-4 text-blue-500" />,
-                              }[header.column.getIsSorted() as string]
-                            ) : (
-                              <SwitchVerticalIcon className="h-4 w-4 text-gray-400" />
-                            )}
-                          </div>
-                        )}
+                        {header.id !== "actions" &&
+                          header.column.getCanSort() && (
+                            <div className="w-4">
+                              {header.column.getIsSorted() ? (
+                                {
+                                  asc: (
+                                    <ChevronUp className="h-4 w-4 text-primary" />
+                                  ),
+                                  desc: (
+                                    <ChevronDown className="h-4 w-4 text-primary" />
+                                  ),
+                                }[header.column.getIsSorted() as string]
+                              ) : (
+                                <ArrowUpDown className="h-4 w-4 text-muted-foreground" />
+                              )}
+                            </div>
+                          )}
                       </div>
                       {header.column.getCanResize() && (
                         <div
                           onMouseDown={header.getResizeHandler()}
                           onTouchStart={header.getResizeHandler()}
                           className={`absolute right-0 top-0 h-full w-2 cursor-col-resize select-none touch-none ${
-                            header.column.getIsResizing() ? "bg-blue-500" : "hover:bg-blue-200"
+                            header.column.getIsResizing()
+                              ? "bg-primary"
+                              : "hover:bg-primary/20"
                           }`}
                         />
                       )}
@@ -158,8 +154,11 @@ export function ModelDataTable<TData, TValue>({
             <TableBody>
               {isLoading ? (
                 <TableRow>
-                  <TableCell colSpan={columns.length} className="h-8 text-center">
-                    <div className="text-center text-gray-500">
+                  <TableCell
+                    colSpan={columns.length}
+                    className="h-8 text-center"
+                  >
+                    <div className="text-center text-muted-foreground">
                       <p>🚅 Loading models...</p>
                     </div>
                   </TableCell>
@@ -169,14 +168,16 @@ export function ModelDataTable<TData, TValue>({
                   <TableRow
                     key={row.id}
                     onClick={() => onRowClick?.(row.original)}
-                    className={onRowClick ? "cursor-pointer hover:bg-gray-50" : ""}
+                    className={
+                      onRowClick ? "cursor-pointer hover:bg-muted" : ""
+                    }
                   >
                     {row.getVisibleCells().map((cell) => (
                       <TableCell
                         key={cell.id}
                         className={`py-0.5 overflow-hidden ${
                           cell.column.id === "actions"
-                            ? "sticky right-0 bg-white shadow-[-4px_0_8px_-6px_rgba(0,0,0,0.1)] w-[120px] ml-8"
+                            ? "sticky right-0 bg-background shadow-[-4px_0_8px_-6px_rgba(0,0,0,0.1)] w-[120px] ml-8"
                             : ""
                         } ${cell.column.columnDef.meta?.className || ""}`}
                         style={{
@@ -192,8 +193,11 @@ export function ModelDataTable<TData, TValue>({
                 ))
               ) : (
                 <TableRow>
-                  <TableCell colSpan={columns.length} className="h-8 text-center">
-                    <div className="text-center text-gray-500">
+                  <TableCell
+                    colSpan={columns.length}
+                    className="h-8 text-center"
+                  >
+                    <div className="text-center text-muted-foreground">
                       <p>No models found</p>
                     </div>
                   </TableCell>

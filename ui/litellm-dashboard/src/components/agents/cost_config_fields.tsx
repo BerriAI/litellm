@@ -1,5 +1,6 @@
 import React from "react";
-import { Form, Input } from "antd";
+import { Form } from "antd";
+import { Input } from "@/components/ui/input";
 import { AGENT_FORM_CONFIG } from "./agent_config";
 
 const CostConfigFields: React.FC = () => {
@@ -12,7 +13,11 @@ const CostConfigFields: React.FC = () => {
           name={field.name}
           tooltip={field.tooltip}
         >
-          <Input placeholder={field.placeholder} type="number" step="0.000001" />
+          <Input
+            placeholder={field.placeholder}
+            type="number"
+            step="0.000001"
+          />
         </Form.Item>
       ))}
     </>
@@ -20,4 +25,3 @@ const CostConfigFields: React.FC = () => {
 };
 
 export default CostConfigFields;
-
