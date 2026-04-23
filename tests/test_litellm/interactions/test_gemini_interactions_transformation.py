@@ -120,11 +120,21 @@ class TestInteractionOperationUrls:
         "method_name,interaction_id,expected_suffix",
         [
             ("transform_get_interaction_request", "interaction-123", "interaction-123"),
-            ("transform_delete_interaction_request", "interaction-456", "interaction-456"),
-            ("transform_cancel_interaction_request", "interaction-789", "interaction-789:cancel"),
+            (
+                "transform_delete_interaction_request",
+                "interaction-456",
+                "interaction-456",
+            ),
+            (
+                "transform_cancel_interaction_request",
+                "interaction-789",
+                "interaction-789:cancel",
+            ),
         ],
     )
-    def test_url_excludes_key(self, config, method_name, interaction_id, expected_suffix):
+    def test_url_excludes_key(
+        self, config, method_name, interaction_id, expected_suffix
+    ):
         with patch(_PATCH_GET_API_KEY, return_value="secret-key"):
             url, params = getattr(config, method_name)(
                 interaction_id=interaction_id,

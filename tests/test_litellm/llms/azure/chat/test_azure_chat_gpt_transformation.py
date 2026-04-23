@@ -29,7 +29,6 @@ class TestAzureOpenAIConfig:
         assert not config._is_response_format_supported_model("gpt-35-turbo-suffix")
         assert not config._is_response_format_supported_model("gpt-35-turbo")
 
-
     def test_prompt_cache_key_supported(self):
         """Test that 'prompt_cache_key' is in supported params for Azure OpenAI chat completion models.
 

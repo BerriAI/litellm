@@ -7,7 +7,19 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useResetKeySpend } from "@/app/(dashboard)/hooks/keys/useResetKeySpend";
 import { KeyResponse, Team } from "../key_team_helpers/key_list";
+import { keyUpdateCall } from "../networking";
 import KeyInfoView from "./key_info_view";
+
+const editViewMocks = vi.hoisted(() => ({
+  onSubmit: undefined as ((v: Record<string, any>) => Promise<void>) | undefined,
+}));
+
+vi.mock("./key_edit_view", () => ({
+  KeyEditView: ({ onSubmit }: { onSubmit: (v: Record<string, any>) => Promise<void> }) => {
+    editViewMocks.onSubmit = onSubmit;
+    return <div data-testid="key-edit-view-stub" />;
+  },
+}));
 
 vi.mock("@/app/(dashboard)/hooks/useTeams", () => ({
   default: vi.fn(),
@@ -678,6 +690,91 @@ describe("KeyInfoView", () => {
           expect.objectContaining({ onSuccess: expect.any(Function), onError: expect.any(Function) }),
         );
       });
+    });
+  });
+
+  describe("premium metadata payload normalization", () => {
+    const enterEditMode = async (keyData: KeyResponse) => {
+      vi.mocked(useAuthorized).mockReturnValue({
+        ...baseUseAuthorizedMock,
+        userId: "proxy-admin-user",
+        userRole: "proxy_admin",
+      });
+      renderWithProviders(
+        <KeyInfoView
+          keyData={keyData}
+          onClose={() => {}}
+          keyId="test-key-id"
+          onKeyDataUpdate={() => {}}
+          teams={[]}
+        />,
+      );
+      await userEvent.click(screen.getByRole("tab", { name: /settings/i }));
+      await userEvent.click(screen.getByRole("button", { name: /edit settings/i }));
+      await waitFor(() => expect(editViewMocks.onSubmit).toBeDefined());
+    };
+
+    beforeEach(() => {
+      editViewMocks.onSubmit = undefined;
+      vi.mocked(keyUpdateCall).mockClear();
+      vi.mocked(keyUpdateCall).mockResolvedValue({});
+    });
+
+    it("should drop an empty policies field when the key previously had no policies", async () => {
+      // Reproduces the real bug: after a successful /key/update, the response echoes
+      // top-level `policies: []` into client state. Without stripping, the next save
+      // resends `[]` and trips the premium gate in prepare_metadata_fields.
+      const keyData: KeyResponse = {
+        ...MOCK_KEY_DATA,
+        user_id: "proxy-admin-user",
+        metadata: {},
+        policies: [],
+      } as KeyResponse;
+
+      await enterEditMode(keyData);
+      await editViewMocks.onSubmit!({ key: keyData.token, token: keyData.token, policies: [] });
+
+      expect(keyUpdateCall).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.not.objectContaining({ policies: expect.anything() }),
+      );
+    });
+
+    it("should keep an empty policies field when the key previously had policies set", async () => {
+      // Premium users must still be able to clear existing policies by sending `[]`.
+      const keyData: KeyResponse = {
+        ...MOCK_KEY_DATA,
+        user_id: "proxy-admin-user",
+        metadata: { policies: ["existing-policy"] },
+        policies: ["existing-policy"],
+      } as KeyResponse;
+
+      await enterEditMode(keyData);
+      await editViewMocks.onSubmit!({ key: keyData.token, token: keyData.token, policies: [] });
+
+      expect(keyUpdateCall).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ policies: [] }),
+      );
+    });
+
+    it("should keep an empty policies field when the previous value lives only at the top level of keyData", async () => {
+      // Defensive: some premium fields may be present at the top level but not
+      // mirrored into metadata. A genuine clear must still be forwarded.
+      const keyData: KeyResponse = {
+        ...MOCK_KEY_DATA,
+        user_id: "proxy-admin-user",
+        metadata: {},
+        policies: ["existing-policy"],
+      } as KeyResponse;
+
+      await enterEditMode(keyData);
+      await editViewMocks.onSubmit!({ key: keyData.token, token: keyData.token, policies: [] });
+
+      expect(keyUpdateCall).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ policies: [] }),
+      );
     });
   });
 });

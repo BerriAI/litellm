@@ -2851,6 +2851,7 @@ class StandardAuditLogPayload(TypedDict):
 class StandardLoggingPayload(TypedDict):
     id: str
     trace_id: str  # Trace multiple LLM calls belonging to same overall request (e.g. fallbacks/retries)
+    litellm_call_id: Optional[str]  # UUID returned in x-litellm-call-id response header
     call_type: str
     stream: Optional[bool]
     response_cost: float
@@ -3290,6 +3291,7 @@ class LlmProviders(str, Enum):
     MANUS = "manus"
     WANDB = "wandb"
     OVHCLOUD = "ovhcloud"
+    SCALEWAY = "scaleway"
     LEMONADE = "lemonade"
     AMAZON_NOVA = "amazon_nova"
     A2A_AGENT = "a2a_agent"

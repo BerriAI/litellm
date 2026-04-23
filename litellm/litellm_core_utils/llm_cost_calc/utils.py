@@ -684,6 +684,9 @@ def generic_cost_per_token(  # noqa: PLR0915
             - cache_creation
             - image_tokens
         )
+        # Clamp to zero: inconsistent streaming usage
+        if text_tokens < 0:
+            text_tokens = 0
         prompt_tokens_details["text_tokens"] = text_tokens
 
     (

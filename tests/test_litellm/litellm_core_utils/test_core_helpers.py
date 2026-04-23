@@ -6,6 +6,7 @@ from litellm.litellm_core_utils.core_helpers import (
     _FINISH_REASON_MAP,
     map_finish_reason,
     reconstruct_model_name,
+    redact_nested_match_and_regex_keys,
 )
 
 
@@ -55,7 +56,13 @@ def test_reconstruct_model_name_returns_original_for_other_providers():
 # map_finish_reason tests
 # ---------------------------------------------------------------------------
 
-VALID_OPENAI_FINISH_REASONS = {"stop", "length", "tool_calls", "function_call", "content_filter"}
+VALID_OPENAI_FINISH_REASONS = {
+    "stop",
+    "length",
+    "tool_calls",
+    "function_call",
+    "content_filter",
+}
 
 
 class TestMapFinishReasonAnthropic:
@@ -70,7 +77,9 @@ class TestMapFinishReasonAnthropic:
             ("content_filtered", "content_filter"),
         ],
     )
-    def test_anthropic_finish_reasons(self, provider_reason: str, expected: str) -> None:
+    def test_anthropic_finish_reasons(
+        self, provider_reason: str, expected: str
+    ) -> None:
         assert map_finish_reason(provider_reason) == expected
 
     def test_refusal(self):
@@ -150,3 +159,37 @@ class TestFinishReasonMapOutputsAreValid:
                 f"Mapped value '{openai_reason}' (from '{provider_reason}') "
                 f"is not a valid OpenAI finish reason"
             )
+
+
+class TestRedactNestedMatchAndRegexKeys:
+    def test_redacts_match_and_regex_recursively(self):
+        payload = {
+            "assessments": [
+                {
+                    "sensitiveInformationPolicy": {
+                        "piiEntities": [
+                            {"type": "NAME", "match": "secret-name", "action": "BLOCKED"}
+                        ]
+                    },
+                    "wordPolicy": {
+                        "customWords": [{"match": "badword", "action": "BLOCKED"}]
+                    },
+                }
+            ],
+            "regex": "should-redact-key-named-regex",
+        }
+        out = redact_nested_match_and_regex_keys(payload)
+        assert out["assessments"][0]["sensitiveInformationPolicy"]["piiEntities"][0][
+            "match"
+        ] == "[REDACTED]"
+        assert out["assessments"][0]["wordPolicy"]["customWords"][0]["match"] == (
+            "[REDACTED]"
+        )
+        assert out["regex"] == "[REDACTED]"
+        assert payload["assessments"][0]["sensitiveInformationPolicy"]["piiEntities"][
+            0
+        ]["match"] == "secret-name"
+
+    def test_passes_through_none_and_str(self):
+        assert redact_nested_match_and_regex_keys(None) is None
+        assert redact_nested_match_and_regex_keys("plain") == "plain"
