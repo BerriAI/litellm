@@ -8,10 +8,18 @@
  */
 
 import React, { useCallback, useEffect, useState } from "react";
-import { Spin } from "antd";
+import { Badge } from "@/components/ui/badge";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import { cn } from "@/lib/utils";
+import { Link as LinkIcon, Loader2, Trash2 } from "lucide-react";
 import MessageManager from "@/components/molecules/message_manager";
-import { DeleteOutlined, LinkOutlined } from "@ant-design/icons";
-import { Badge, Table, TableBody, TableCell, TableHead, TableHeaderCell, TableRow } from "@tremor/react";
 import {
   deleteMCPOAuthUserCredential,
   listMCPUserCredentials,
@@ -58,7 +66,9 @@ function expiryLabel(isoString: string | null | undefined): string {
 }
 
 const MCPCredentialsTab: React.FC<Props> = ({ accessToken }) => {
-  const [credentials, setCredentials] = useState<MCPUserCredentialListItem[]>([]);
+  const [credentials, setCredentials] = useState<MCPUserCredentialListItem[]>(
+    [],
+  );
   const [loading, setLoading] = useState(true);
   const [revoking, setRevoking] = useState<Set<string>>(new Set());
 
@@ -70,7 +80,9 @@ const MCPCredentialsTab: React.FC<Props> = ({ accessToken }) => {
       .finally(() => setLoading(false));
   }, [accessToken]);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    load();
+  }, [load]);
 
   const handleRevoke = async (serverId: string) => {
     setRevoking((prev) => new Set(prev).add(serverId));
@@ -80,7 +92,11 @@ const MCPCredentialsTab: React.FC<Props> = ({ accessToken }) => {
     } catch {
       MessageManager.error("Failed to revoke connection. Please try again.");
     } finally {
-      setRevoking((prev) => { const n = new Set(prev); n.delete(serverId); return n; });
+      setRevoking((prev) => {
+        const n = new Set(prev);
+        n.delete(serverId);
+        return n;
+      });
     }
   };
 
@@ -89,44 +105,42 @@ const MCPCredentialsTab: React.FC<Props> = ({ accessToken }) => {
 
   return (
     <div className="w-full">
-      {/* Header */}
       <div className="mb-4">
-        <h2 className="text-base font-semibold text-gray-900 mb-0.5">App Credentials</h2>
-        <p className="text-sm text-gray-500 m-0">
+        <h2 className="text-base font-semibold text-foreground mb-0.5">
+          App Credentials
+        </h2>
+        <p className="text-sm text-muted-foreground m-0">
           Your stored OAuth connections — used automatically in chat.
         </p>
       </div>
 
       {loading ? (
         <div className="flex justify-center py-12">
-          <Spin />
+          <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
         </div>
       ) : credentials.length === 0 ? (
-        <div className="text-center text-gray-400 text-sm py-12 border border-dashed border-gray-200 rounded-lg">
-          <LinkOutlined className="text-2xl mb-3 block text-gray-300" />
+        <div className="text-center text-muted-foreground text-sm py-12 border border-dashed border-border rounded-lg">
+          <LinkIcon className="h-6 w-6 mx-auto mb-3 text-muted-foreground/60" />
           No connections yet.
           <br />
-          Go to <strong>Apps</strong> and click <strong>Connect</strong> to authorize an MCP server.
+          Go to <strong>Apps</strong> and click <strong>Connect</strong> to
+          authorize an MCP server.
         </div>
       ) : (
-        <div className="rounded-lg border border-gray-200 overflow-hidden">
+        <div className="rounded-lg border border-border overflow-hidden">
           <Table>
-            <TableHead>
+            <TableHeader>
               <TableRow>
-                <TableHeaderCell className="text-xs font-medium text-gray-500 py-2 px-4">
-                  App
-                </TableHeaderCell>
-                <TableHeaderCell className="text-xs font-medium text-gray-500 py-2 px-4">
+                <TableHead className="text-xs font-medium">App</TableHead>
+                <TableHead className="text-xs font-medium">
                   Connected
-                </TableHeaderCell>
-                <TableHeaderCell className="text-xs font-medium text-gray-500 py-2 px-4">
-                  Status
-                </TableHeaderCell>
-                <TableHeaderCell className="text-xs font-medium text-gray-500 py-2 px-4 text-right">
+                </TableHead>
+                <TableHead className="text-xs font-medium">Status</TableHead>
+                <TableHead className="text-xs font-medium text-right">
                   Actions
-                </TableHeaderCell>
+                </TableHead>
               </TableRow>
-            </TableHead>
+            </TableHeader>
             <TableBody>
               {credentials.map((cred) => {
                 const name = displayName(cred);
@@ -136,27 +150,50 @@ const MCPCredentialsTab: React.FC<Props> = ({ accessToken }) => {
                 const isExpired = exp === "Expired";
 
                 return (
-                  <TableRow key={cred.server_id} className="h-10 hover:bg-gray-50">
-                    <TableCell className="py-2 px-4">
-                      <span className="text-sm font-medium text-gray-900">{name}</span>
+                  <TableRow
+                    key={cred.server_id}
+                    className="h-10 hover:bg-muted"
+                  >
+                    <TableCell>
+                      <span className="text-sm font-medium text-foreground">
+                        {name}
+                      </span>
                     </TableCell>
-                    <TableCell className="py-2 px-4">
-                      <span className="text-sm text-gray-500">{connected || "—"}</span>
+                    <TableCell>
+                      <span className="text-sm text-muted-foreground">
+                        {connected || "—"}
+                      </span>
                     </TableCell>
-                    <TableCell className="py-2 px-4">
-                      <Badge color={isExpired ? "red" : "green"} size="xs">
+                    <TableCell>
+                      <Badge
+                        className={cn(
+                          "text-xs",
+                          isExpired
+                            ? "bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300"
+                            : "bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300",
+                        )}
+                      >
                         {exp}
                       </Badge>
                     </TableCell>
-                    <TableCell className="py-2 px-4 text-right">
+                    <TableCell className="text-right">
                       <button
+                        type="button"
                         onClick={() => handleRevoke(cred.server_id)}
                         disabled={isRevoking}
                         title="Revoke connection"
-                        className={`inline-flex items-center justify-center rounded-md border border-gray-200 px-2 py-1 text-gray-400 hover:text-red-500 hover:border-red-200 transition-colors ${isRevoking ? "opacity-50 cursor-not-allowed" : "cursor-pointer"}`}
-                        style={{ background: "none" }}
+                        className={cn(
+                          "inline-flex items-center justify-center rounded-md border border-border px-2 py-1 text-muted-foreground hover:text-destructive hover:border-destructive/30 transition-colors bg-transparent",
+                          isRevoking
+                            ? "opacity-50 cursor-not-allowed"
+                            : "cursor-pointer",
+                        )}
                       >
-                        {isRevoking ? <Spin size="small" /> : <DeleteOutlined className="text-sm" />}
+                        {isRevoking ? (
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        ) : (
+                          <Trash2 className="h-3.5 w-3.5" />
+                        )}
                       </button>
                     </TableCell>
                   </TableRow>
