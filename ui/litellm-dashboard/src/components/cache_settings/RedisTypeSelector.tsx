@@ -1,5 +1,12 @@
 import React from "react";
-import { Select, SelectItem } from "@tremor/react";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Label } from "@/components/ui/label";
 
 interface RedisTypeSelectorProps {
   redisType: string;
@@ -7,18 +14,28 @@ interface RedisTypeSelectorProps {
   onTypeChange: (type: string) => void;
 }
 
-const RedisTypeSelector: React.FC<RedisTypeSelectorProps> = ({ redisType, redisTypeDescriptions, onTypeChange }) => {
+const RedisTypeSelector: React.FC<RedisTypeSelectorProps> = ({
+  redisType,
+  redisTypeDescriptions,
+  onTypeChange,
+}) => {
   return (
     <div className="space-y-2">
-      <label className="text-sm font-medium text-gray-700">Redis Type</label>
+      <Label className="text-sm font-medium">Redis Type</Label>
       <Select value={redisType} onValueChange={onTypeChange}>
-        <SelectItem value="node">Node (Single Instance)</SelectItem>
-        <SelectItem value="cluster">Cluster</SelectItem>
-        <SelectItem value="sentinel">Sentinel</SelectItem>
-        <SelectItem value="semantic">Semantic</SelectItem>
+        <SelectTrigger>
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="node">Node (Single Instance)</SelectItem>
+          <SelectItem value="cluster">Cluster</SelectItem>
+          <SelectItem value="sentinel">Sentinel</SelectItem>
+          <SelectItem value="semantic">Semantic</SelectItem>
+        </SelectContent>
       </Select>
-      <p className="text-xs text-gray-500">
-        {redisTypeDescriptions[redisType] || "Select the type of Redis deployment you're using"}
+      <p className="text-xs text-muted-foreground">
+        {redisTypeDescriptions[redisType] ||
+          "Select the type of Redis deployment you're using"}
       </p>
     </div>
   );

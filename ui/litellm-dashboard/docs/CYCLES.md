@@ -100,6 +100,16 @@ Layer abbreviations: **TS** (tsc --noEmit), **Lint** (eslint), **Vitest**
   section (CostTrackingSettings/*) is pending in a follow-up commit.
 - Tests updated for required-field label regex matching.
 
+## 26. Caching (caching)
+
+- Cycles used: 1 / 7
+- Layer outcomes per cycle:
+  - cycle 1: TS ✓ | Lint ✓ | Vitest ✓ (9/9) | Build ✓ | Parity ⏭ | Snap ⏭
+- Final status: **done**
+- Scope: cache_settings/index.tsx (top-level CacheSettings), CacheFieldRenderer
+  (per-type input renderer), RedisTypeSelector. Inline searchable Select for
+  embedding models replaces antd Select with showSearch.
+
 ## 24. Guardrails Monitor (guardrails-monitor)
 
 - Cycles used: 1 / 7
