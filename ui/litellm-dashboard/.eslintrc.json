@@ -59,6 +59,7 @@
         "src/components/guardrails/content_filter/PatternTable.tsx",
         "src/components/guardrails/content_filter/ContentFilterDisplay.tsx",
         "src/components/guardrails/content_filter/CategoryTable.tsx",
+        "src/components/Settings/RouterSettings/Fallbacks/FallbackGroupConfig.tsx",
         "src/components/prompts/prompt_editor_view/PromptEditorHeader.tsx",
         "src/components/prompts/prompt_editor_view/VersionHistorySidePanel.tsx",
         "src/app/(dashboard)/teams/components/TeamsTable/ModelsCell.tsx",

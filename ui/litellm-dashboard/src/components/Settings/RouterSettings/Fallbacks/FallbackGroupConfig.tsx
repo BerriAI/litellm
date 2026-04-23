@@ -3,7 +3,13 @@
  * Handles primary model selection and fallback chain configuration
  */
 
-import { Select, Tooltip } from "antd";
+import { Select } from "antd";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { AlertCircle, ArrowDown, X } from "lucide-react";
 import React from "react";
 
@@ -68,8 +74,8 @@ export function FallbackGroupConfig({
     <div className="flex flex-col gap-8 py-4">
       {/* Primary Model Section */}
       <div className="relative">
-        <label className="block text-sm font-semibold text-gray-700 mb-2">
-          Primary Model <span className="text-red-500">*</span>
+        <label className="block text-sm font-semibold text-foreground mb-2">
+          Primary Model <span className="text-destructive">*</span>
         </label>
         <Select
           className="w-full h-12"
@@ -85,7 +91,7 @@ export function FallbackGroupConfig({
           options={availableModels.map((m) => ({ label: m, value: m }))}
         />
         {!group.primaryModel && (
-          <div className="mt-2 flex items-center gap-2 text-amber-600 text-xs bg-amber-50 p-2 rounded">
+          <div className="mt-2 flex items-center gap-2 text-amber-600 dark:text-amber-400 text-xs bg-amber-50 dark:bg-amber-950/30 p-2 rounded">
             <AlertCircle className="w-4 h-4" />
             <span>Select a model to begin configuring fallbacks</span>
           </div>
@@ -94,7 +100,7 @@ export function FallbackGroupConfig({
 
       {/* Visual Connection */}
       <div className="flex items-center justify-center -my-4 z-10">
-        <div className="bg-indigo-50 text-indigo-500 px-4 py-1 rounded-full text-xs font-bold border border-indigo-100 flex items-center gap-2 shadow-sm">
+        <div className="bg-indigo-50 dark:bg-indigo-950/30 text-indigo-500 dark:text-indigo-400 px-4 py-1 rounded-full text-xs font-bold border border-indigo-100 dark:border-indigo-900 flex items-center gap-2 shadow-sm">
           <ArrowDown className="w-4 h-4" />
           IF FAILS, TRY...
         </div>
@@ -104,14 +110,14 @@ export function FallbackGroupConfig({
       <div
         className={`transition-opacity duration-300 ${!group.primaryModel ? "opacity-50 pointer-events-none" : "opacity-100"}`}
       >
-        <label className="block text-sm font-semibold text-gray-700 mb-2">
-          Fallback Chain <span className="text-red-500">*</span>
-          <span className="text-xs text-gray-500 font-normal ml-2">
+        <label className="block text-sm font-semibold text-foreground mb-2">
+          Fallback Chain <span className="text-destructive">*</span>
+          <span className="text-xs text-muted-foreground font-normal ml-2">
             (Max {maxFallbacks} fallbacks at a time)
           </span>
         </label>
 
-        <div className="bg-gray-50 rounded-xl p-4 border border-gray-200">
+        <div className="bg-muted rounded-xl p-4 border border-border">
           {/* Add Fallback Input */}
           <div className="mb-4">
             <Select
@@ -131,15 +137,17 @@ export function FallbackGroupConfig({
                 label: m,
                 value: m,
               }))}
-              optionRender={(option, info) => {
-                const isSelected = group.fallbackModels.includes(option.value as string);
+              optionRender={(option) => {
+                const isSelected = group.fallbackModels.includes(
+                  option.value as string,
+                );
                 const orderIndex = isSelected
                   ? group.fallbackModels.indexOf(option.value as string) + 1
                   : null;
                 return (
                   <div className="flex items-center gap-2">
                     {isSelected && orderIndex !== null && (
-                      <span className="flex items-center justify-center w-5 h-5 rounded bg-indigo-100 text-indigo-600 text-xs font-bold">
+                      <span className="flex items-center justify-center w-5 h-5 rounded bg-indigo-100 text-indigo-600 dark:bg-indigo-950 dark:text-indigo-300 text-xs font-bold">
                         {orderIndex}
                       </span>
                     )}
@@ -149,19 +157,23 @@ export function FallbackGroupConfig({
               }}
               maxTagCount="responsive"
               maxTagPlaceholder={(omittedValues) => (
-                <Tooltip
-                  styles={{ root: { pointerEvents: "none" } }}
-                  title={omittedValues.map(({ value }) => value).join(", ")}
-                >
-                  <span>+{omittedValues.length} more</span>
-                </Tooltip>
+                <TooltipProvider>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <span>+{omittedValues.length} more</span>
+                    </TooltipTrigger>
+                    <TooltipContent>
+                      {omittedValues.map(({ value }) => value).join(", ")}
+                    </TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
               )}
               showSearch
               filterOption={(input, option) =>
                 (option?.label ?? "").toLowerCase().includes(input.toLowerCase())
               }
             />
-            <p className="text-xs text-gray-500 mt-1 ml-1">
+            <p className="text-xs text-muted-foreground mt-1 ml-1">
               {canAddMoreFallbacks
                 ? `Search and select multiple models. Selected models will appear below in order. (${group.fallbackModels.length}/${maxFallbacks} used)`
                 : `Maximum ${maxFallbacks} fallbacks reached. Remove some to add more.`}
@@ -171,36 +183,39 @@ export function FallbackGroupConfig({
           {/* Fallback List */}
           <div className="space-y-2 min-h-[100px]">
             {group.fallbackModels.length === 0 ? (
-              <div className="h-32 border-2 border-dashed border-gray-300 rounded-lg flex flex-col items-center justify-center text-gray-400">
+              <div className="h-32 border-2 border-dashed border-border rounded-lg flex flex-col items-center justify-center text-muted-foreground">
                 <span className="text-sm">No fallback models selected</span>
-                <span className="text-xs mt-1">Add models from the dropdown above</span>
+                <span className="text-xs mt-1">
+                  Add models from the dropdown above
+                </span>
               </div>
             ) : (
-              group.fallbackModels.map((modelValue, index) => {
-                return (
-                  <div
-                    key={`${modelValue}-${index}`}
-                    className="group flex items-center justify-between p-3 bg-white rounded-lg border border-gray-200 hover:border-indigo-300 hover:shadow-sm transition-all"
-                  >
-                    <div className="flex items-center gap-3">
-                      <div className="flex items-center justify-center w-6 h-6 rounded bg-gray-100 text-gray-400 group-hover:text-indigo-500 group-hover:bg-indigo-50">
-                        <span className="text-xs font-bold">{index + 1}</span>
-                      </div>
-                      <div>
-                        <span className="font-medium text-gray-800">{modelValue}</span>
-                      </div>
+              group.fallbackModels.map((modelValue, index) => (
+                <div
+                  key={`${modelValue}-${index}`}
+                  className="group flex items-center justify-between p-3 bg-background rounded-lg border border-border hover:border-indigo-300 dark:hover:border-indigo-700 hover:shadow-sm transition-all"
+                >
+                  <div className="flex items-center gap-3">
+                    <div className="flex items-center justify-center w-6 h-6 rounded bg-muted text-muted-foreground group-hover:text-indigo-500 group-hover:bg-indigo-50 dark:group-hover:bg-indigo-950/30">
+                      <span className="text-xs font-bold">{index + 1}</span>
                     </div>
-
-                    <button
-                      type="button"
-                      onClick={() => removeFallback(index)}
-                      className="opacity-0 group-hover:opacity-100 transition-opacity text-gray-400 hover:text-red-500 p-1"
-                    >
-                      <X className="w-4 h-4" />
-                    </button>
+                    <div>
+                      <span className="font-medium text-foreground">
+                        {modelValue}
+                      </span>
+                    </div>
                   </div>
-                );
-              })
+
+                  <button
+                    type="button"
+                    onClick={() => removeFallback(index)}
+                    className="opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-destructive p-1"
+                    aria-label="Remove fallback"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+              ))
             )}
           </div>
         </div>
