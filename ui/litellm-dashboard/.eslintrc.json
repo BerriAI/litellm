@@ -32,7 +32,8 @@
         "src/components/GuardrailSettingsView.tsx",
         "src/components/DebugWarningBanner.tsx",
         "src/components/SCIM.tsx",
-        "src/components/logging_settings_view.tsx"
+        "src/components/logging_settings_view.tsx",
+        "src/components/model_group_alias_settings.tsx"
       ],
       "rules": {
         "litellm-ui/no-banned-ui-imports": "off",
