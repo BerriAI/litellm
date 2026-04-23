@@ -197,3 +197,46 @@ class TestChatGPTResponsesAPITransformation:
         )
 
         assert parsed.output_text == "Hello!"
+
+    def test_chatgpt_codex_output_items_from_stream_when_completed_has_empty_output(
+        self,
+    ):
+        """
+        Regression: ChatGPT's Codex backend streams each output item via
+        ``response.output_item.done`` events and ships an *empty*
+        ``response.output`` on the final ``response.completed``. Without
+        accumulation, the downstream chat translator blows up with
+        "Unknown items in responses API response: []".
+        """
+        config = ChatGPTResponsesAPIConfig()
+        item = {
+            "type": "message",
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": "Hi there!"}],
+        }
+        completed_response = {
+            "id": "resp_test",
+            "object": "response",
+            "created_at": 1700000000,
+            "status": "completed",
+            "model": "gpt-5.4",
+            "output": [],  # Codex backend delivers items via output_item.done
+        }
+        sse_body = "\n".join(
+            [
+                f"data: {json.dumps({'type': 'response.output_item.done', 'item': item})}",
+                f"data: {json.dumps({'type': 'response.completed', 'response': completed_response})}",
+                "data: [DONE]",
+                "",
+            ]
+        )
+        raw_response = httpx.Response(
+            200, headers={"content-type": "text/event-stream"}, text=sse_body
+        )
+
+        parsed = config.transform_response_api_response(
+            model="chatgpt/gpt-5.4",
+            raw_response=raw_response,
+            logging_obj=MagicMock(),
+        )
+        assert parsed.output_text == "Hi there!"

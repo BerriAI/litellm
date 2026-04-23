@@ -1,5 +1,5 @@
 import json
-from typing import Any, Optional
+from typing import Any, Optional, Tuple
 
 from litellm.constants import STREAM_SSE_DONE_STRING
 from litellm.exceptions import AuthenticationError
@@ -134,8 +134,39 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
             additional_args={"complete_input_dict": {}},
         )
 
-        completed_response = None
-        error_message = None
+        completed_response, error_message = self._parse_codex_sse_response(body_text)
+        if completed_response is None:
+            raise OpenAIError(
+                message=error_message or raw_response.text,
+                status_code=raw_response.status_code,
+            )
+
+        raw_headers = dict(raw_response.headers)
+        processed_headers = process_response_headers(raw_headers)
+        if not hasattr(completed_response, "_hidden_params"):
+            setattr(completed_response, "_hidden_params", {})
+        completed_response._hidden_params["additional_headers"] = processed_headers
+        completed_response._hidden_params["headers"] = raw_headers
+        return completed_response
+
+    @staticmethod
+    def _parse_codex_sse_response(
+        body_text: str,
+    ) -> Tuple[Optional[ResponsesAPIResponse], Optional[str]]:
+        """
+        Walk the Codex-backend SSE stream and reconstruct a
+        :class:`ResponsesAPIResponse` from a mix of
+        ``response.output_item.done`` events (per-item payloads) and the
+        terminal ``response.completed`` frame (which ChatGPT may ship
+        with an empty ``output`` array).
+
+        Returns ``(completed_response, error_message)`` — at most one is
+        non-None. Caller raises if the response is None.
+        """
+        completed_response: Optional[ResponsesAPIResponse] = None
+        error_message: Optional[str] = None
+        output_items: list = []
+
         for chunk in body_text.splitlines():
             stripped_chunk = CustomStreamWrapper._strip_sse_data_from_chunk(chunk)
             if not stripped_chunk:
@@ -152,6 +183,11 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
             if not isinstance(parsed_chunk, dict):
                 continue
             event_type = parsed_chunk.get("type")
+            if event_type == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE:
+                item = parsed_chunk.get("item")
+                if isinstance(item, dict):
+                    output_items.append(item)
+                continue
             if event_type == ResponsesAPIStreamEvents.RESPONSE_COMPLETED:
                 response_payload = parsed_chunk.get("response")
                 if isinstance(response_payload, dict):
@@ -160,6 +196,10 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
                         response_payload["created_at"] = _safe_convert_created_field(
                             response_payload["created_at"]
                         )
+                    # Codex backend: fold per-item events in when the
+                    # completed frame's ``output`` is empty.
+                    if not response_payload.get("output") and output_items:
+                        response_payload["output"] = output_items
                     try:
                         completed_response = ResponsesAPIResponse(**response_payload)
                     except Exception:
@@ -180,19 +220,7 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
                     else:
                         error_message = str(error_obj)
 
-        if completed_response is None:
-            raise OpenAIError(
-                message=error_message or raw_response.text,
-                status_code=raw_response.status_code,
-            )
-
-        raw_headers = dict(raw_response.headers)
-        processed_headers = process_response_headers(raw_headers)
-        if not hasattr(completed_response, "_hidden_params"):
-            setattr(completed_response, "_hidden_params", {})
-        completed_response._hidden_params["additional_headers"] = processed_headers
-        completed_response._hidden_params["headers"] = raw_headers
-        return completed_response
+        return completed_response, error_message
 
     def get_complete_url(
         self,
