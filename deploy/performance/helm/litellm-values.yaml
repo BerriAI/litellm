@@ -1,7 +1,8 @@
-# Helm values for EKS performance stack: LiteLLM + Bitnami Postgres + Bitnami Redis (chart subcharts).
+# Helm values for EKS performance stack: LiteLLM + RDS (external Postgres) + Bitnami Redis.
 # Argo CD: deploy/performance/argocd/application-litellm.yaml
 #
-# Override postgresql.auth and redis.auth passwords for non-dev clusters.
+# RDS: create Secret `litellm-rds` in namespace `performance` before sync (see comments on `environmentSecrets`).
+# Redis: in-cluster Bitnami unchanged — set redis.auth.password for a stable password across syncs.
 #
 # Chart default image tag is main-<Chart.appVersion> (e.g. main-v1.80.12). That pattern is not always
 # published for ghcr.io/berriai/litellm-database; use main-latest or a tag from:
@@ -61,22 +62,18 @@ envVars:
   LITELLM_ENVIRONMENT: "production"
 
 db:
-  deployStandalone: true
+  deployStandalone: false
   useExisting: false
 
-# Bitnami subcharts: set StorageClass so PVCs provision on EKS (e.g. gp2 in-tree or gp3 via CSI).
-# Without this, claims stay Pending with an empty STORAGECLASS. If you already have Pending PVCs,
-# delete them after syncing so StatefulSets recreate claims (wiping local DB/Redis data).
-postgresql:
-  # docker.io/bitnami/postgresql tags from the subchart (e.g. 16.2.0-debian-12-r6) are often removed;
-  # use Bitnami Legacy Catalog: https://hub.docker.com/r/bitnamilegacy/postgresql/tags
-  image:
-    registry: docker.io
-    repository: bitnamilegacy/postgresql
-    tag: 16.6.0-debian-12-r2
-  primary:
-    persistence:
-      storageClass: gp2
+# Load DATABASE_URL (and optional DIRECT_URL) from a Secret — do not commit credentials to Git.
+# Create once (replace host/user/pass/db); use RDS endpoint and ?sslmode=require for RDS.
+#   kubectl -n performance create secret generic litellm-rds \
+#     --from-literal=DATABASE_URL='postgresql://USER:PASSWORD@RDS_HOST:5432/litellm?sslmode=require' \
+#     --from-literal=DIRECT_URL='postgresql://USER:PASSWORD@RDS_HOST:5432/litellm?sslmode=require'
+# URL-encode special characters in USER/PASSWORD. For RDS Proxy, pooler URL can be DATABASE_URL and
+# instance endpoint DIRECT_URL for Prisma; often the same string is fine for RDS without proxy.
+environmentSecrets:
+  - litellm-rds
 
 redis:
   enabled: true
@@ -121,4 +118,23 @@ proxy_config:
       type: redis
       supported_call_types: []
 
-extraResources: []
+# Internet-facing NLB :80 -> LiteLLM :4000 (same Argo app as chart). Prune removes it if deleted here.
+extraResources:
+  - apiVersion: v1
+    kind: Service
+    metadata:
+      name: litellm-nlb
+      namespace: performance
+      annotations:
+        service.beta.kubernetes.io/aws-load-balancer-type: "nlb"
+        service.beta.kubernetes.io/aws-load-balancer-scheme: "internet-facing"
+    spec:
+      type: LoadBalancer
+      ports:
+        - port: 80
+          targetPort: 4000
+          protocol: TCP
+          name: http
+      selector:
+        app.kubernetes.io/name: litellm
+        app.kubernetes.io/instance: litellm
