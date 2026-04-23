@@ -1,9 +1,7 @@
 import React from "react";
-import { ArrowUpOutlined } from "@ant-design/icons";
-import { Button as TremorButton } from "@tremor/react";
-import { Input } from "antd";
-
-const { TextArea } = Input;
+import { ArrowUp } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Textarea } from "@/components/ui/textarea";
 
 interface MessageInputProps {
   inputMessage: string;
@@ -26,46 +24,38 @@ const MessageInput: React.FC<MessageInputProps> = ({
 }) => {
   return (
     <div className="flex items-center gap-2">
-      <div className="flex items-center flex-1 bg-white border border-gray-300 rounded-xl px-3 py-1 min-h-[44px]">
-        <TextArea
+      <div className="flex items-center flex-1 bg-background border border-border rounded-xl px-3 py-1 min-h-[44px]">
+        <Textarea
           value={inputMessage}
           onChange={(e) => onInputChange(e.target.value)}
           onKeyDown={onKeyDown}
           placeholder="Type your message... (Shift+Enter for new line)"
           disabled={isLoading}
-          className="flex-1"
-          autoSize={{ minRows: 1, maxRows: 4 }}
-          style={{
-            resize: "none",
-            border: "none",
-            boxShadow: "none",
-            background: "transparent",
-            padding: "4px 0",
-            fontSize: "14px",
-            lineHeight: "20px",
-          }}
+          rows={1}
+          className="flex-1 resize-none border-0 shadow-none bg-transparent p-0 py-1 text-sm leading-5 min-h-[20px]"
         />
 
-        <TremorButton
+        <Button
           onClick={onSend}
           disabled={isDisabled}
-          className="flex-shrink-0 ml-2 !w-8 !h-8 !min-w-8 !p-0 !rounded-full !bg-blue-600 hover:!bg-blue-700 disabled:!bg-gray-300 !border-none !text-white disabled:!text-gray-500 !flex !items-center !justify-center"
+          size="icon"
+          className="flex-shrink-0 ml-2 h-8 w-8 rounded-full"
         >
-          <ArrowUpOutlined style={{ fontSize: "14px" }} />
-        </TremorButton>
+          <ArrowUp className="h-3.5 w-3.5" />
+        </Button>
       </div>
 
       {isLoading && (
-        <TremorButton
+        <Button
+          variant="outline"
           onClick={onCancel}
-          className="bg-red-50 hover:bg-red-100 text-red-600 border-red-200"
+          className="bg-destructive/10 hover:bg-destructive/20 text-destructive border-destructive/20"
         >
           Cancel
-        </TremorButton>
+        </Button>
       )}
     </div>
   );
 };
 
 export default MessageInput;
-

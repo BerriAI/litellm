@@ -1,5 +1,13 @@
 import React, { useState } from "react";
-import { Modal, Button } from "antd";
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Button } from "@/components/ui/button";
+import { Textarea } from "@/components/ui/textarea";
 
 interface ToolModalProps {
   visible: boolean;
@@ -30,7 +38,12 @@ const defaultToolJson = `{
   }
 }`;
 
-const ToolModal: React.FC<ToolModalProps> = ({ visible, initialJson, onSave, onClose }) => {
+const ToolModal: React.FC<ToolModalProps> = ({
+  visible,
+  initialJson,
+  onSave,
+  onClose,
+}) => {
   const [json, setJson] = useState(initialJson || defaultToolJson);
   const [error, setError] = useState<string | null>(null);
 
@@ -39,7 +52,8 @@ const ToolModal: React.FC<ToolModalProps> = ({ visible, initialJson, onSave, onC
       JSON.parse(json);
       setError(null);
       onSave(json);
-    } catch (e) {
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    } catch (_e) {
       setError("Invalid JSON format. Please check your syntax.");
     }
   };
@@ -50,40 +64,36 @@ const ToolModal: React.FC<ToolModalProps> = ({ visible, initialJson, onSave, onC
   };
 
   return (
-    <Modal
-      title={
-        <div className="flex items-center justify-between">
-          <span className="text-lg font-medium">Add Tool</span>
-        </div>
-      }
+    <Dialog
       open={visible}
-      onCancel={handleClose}
-      width={800}
-      footer={[
-        <Button key="cancel" onClick={handleClose}>
-          Cancel
-        </Button>,
-        <Button key="save" type="primary" onClick={handleSave}>
-          Add
-        </Button>,
-      ]}
+      onOpenChange={(o) => (!o ? handleClose() : undefined)}
     >
-      <div className="space-y-3">
-        {error && (
-          <div className="p-3 bg-red-50 border border-red-200 rounded text-red-600 text-sm">
-            {error}
-          </div>
-        )}
-        <textarea
-          value={json}
-          onChange={(e) => setJson(e.target.value)}
-          className="w-full min-h-[400px] px-4 py-3 border border-gray-300 rounded-lg text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
-          placeholder="Paste your tool JSON here..."
-        />
-      </div>
-    </Modal>
+      <DialogContent className="max-w-[800px]">
+        <DialogHeader>
+          <DialogTitle className="text-lg font-medium">Add Tool</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-3">
+          {error && (
+            <div className="p-3 bg-destructive/10 border border-destructive/30 rounded text-destructive text-sm">
+              {error}
+            </div>
+          )}
+          <Textarea
+            value={json}
+            onChange={(e) => setJson(e.target.value)}
+            className="w-full min-h-[400px] font-mono text-sm resize-none"
+            placeholder="Paste your tool JSON here..."
+          />
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={handleClose}>
+            Cancel
+          </Button>
+          <Button onClick={handleSave}>Add</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 };
 
 export default ToolModal;
-
