@@ -40,7 +40,8 @@ def _view_only_admin() -> UserAPIKeyAuth:
 
 
 @pytest.fixture(autouse=True)
-def _clear_sessions():
+def _clear_sessions(monkeypatch):
+    monkeypatch.setenv("STORE_MODEL_IN_DB", "True")
     with _sessions_lock:
         _sessions.clear()
     DBAuthenticator._api_key_cache.clear()
@@ -67,6 +68,17 @@ class TestStartOAuth:
                 user_api_key_dict=_view_only_admin(),
             )
         assert exc_info.value.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_rejects_when_store_model_in_db_unset(self, monkeypatch):
+        monkeypatch.delenv("STORE_MODEL_IN_DB", raising=False)
+        with pytest.raises(HTTPException) as exc_info:
+            await start_oauth(
+                StartRequest(credential_name="c"),
+                user_api_key_dict=_admin(),
+            )
+        assert exc_info.value.status_code == 400
+        assert "STORE_MODEL_IN_DB" in exc_info.value.detail
 
     @pytest.mark.asyncio
     async def test_rejects_when_session_cap_reached(self):

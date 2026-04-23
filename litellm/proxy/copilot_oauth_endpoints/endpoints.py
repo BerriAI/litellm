@@ -26,6 +26,7 @@ from pydantic import BaseModel
 
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
+from litellm.secret_managers.main import get_secret_bool
 from litellm.llms.github_copilot.authenticator import Authenticator
 from litellm.llms.github_copilot.common_utils import GithubCopilotError
 from litellm.llms.github_copilot.db_authenticator import (
@@ -73,6 +74,26 @@ class RefreshResponse(BaseModel):
     api_key_expires_at: Optional[int] = None
 
 
+def _require_store_model_in_db() -> None:
+    """
+    Fail fast if ``STORE_MODEL_IN_DB`` is not set — see the chatgpt
+    endpoints for the full rationale. Without this env var the OAuth
+    credential write succeeds but the proxy won't reload it on restart,
+    causing silent data loss after the user sits through the device-code
+    poll.
+    """
+    if not get_secret_bool("STORE_MODEL_IN_DB", False):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "OAuth sign-in requires STORE_MODEL_IN_DB=True so the "
+                "proxy can reload credentials from the database on "
+                "restart. Set the env var (or equivalent in your "
+                "deployment config) and restart before trying again."
+            ),
+        )
+
+
 def _require_admin(user_api_key_dict: UserAPIKeyAuth) -> None:
     # These endpoints write to LiteLLM_CredentialsTable (start → insert,
     # refresh → rotate). PROXY_ADMIN_VIEW_ONLY must not reach them.
@@ -115,6 +136,7 @@ async def start_oauth(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ) -> StartResponse:
     _require_admin(user_api_key_dict)
+    _require_store_model_in_db()
     _purge_expired_sessions()
 
     # Atomically reserve a slot so concurrent callers cannot all pass the

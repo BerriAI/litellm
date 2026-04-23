@@ -42,7 +42,11 @@ def _view_only_admin() -> UserAPIKeyAuth:
 
 
 @pytest.fixture(autouse=True)
-def _clear_sessions():
+def _clear_sessions(monkeypatch):
+    # The /start guard refuses to run without STORE_MODEL_IN_DB — set it
+    # here so the success-path tests in TestStartOAuth don't all have to
+    # opt in individually. The dedicated guard test overrides it.
+    monkeypatch.setenv("STORE_MODEL_IN_DB", "True")
     with _sessions_lock:
         _sessions.clear()
     yield
@@ -69,6 +73,23 @@ class TestStartOAuth:
                 user_api_key_dict=_view_only_admin(),
             )
         assert exc_info.value.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_rejects_when_store_model_in_db_unset(self, monkeypatch):
+        """
+        Without STORE_MODEL_IN_DB the proxy won't reload credentials from
+        LiteLLM_CredentialsTable on restart, so the OAuth write would be
+        silently lost. Refuse up front rather than have the admin sit
+        through the 15-minute device-code poll.
+        """
+        monkeypatch.delenv("STORE_MODEL_IN_DB", raising=False)
+        with pytest.raises(HTTPException) as exc_info:
+            await start_oauth(
+                StartRequest(credential_name="c"),
+                user_api_key_dict=_admin(),
+            )
+        assert exc_info.value.status_code == 400
+        assert "STORE_MODEL_IN_DB" in exc_info.value.detail
 
     @pytest.mark.asyncio
     async def test_rejects_when_session_cap_reached(self):
