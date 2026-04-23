@@ -1,8 +1,9 @@
 import React from "react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
 import { Info } from "lucide-react";
-import { Form, Input } from "antd";
+import { Form, Input as AntInput } from "antd";
 
 type OnboardingFormBodyProps = {
   variant: "signup" | "reset_password";
@@ -83,7 +84,7 @@ export function OnboardingFormBody({
                 : "Create a password for your account"
             }
           >
-            <Input.Password />
+            <AntInput.Password />
           </Form.Item>
 
           {claimError && (
