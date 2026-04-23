@@ -5,8 +5,10 @@ import { useTheme } from "@/contexts/ThemeContext";
 import { clearTokenCookies } from "@/utils/cookieUtils";
 import { clearStoredReturnUrl } from "@/utils/returnUrlUtils";
 import { fetchProxySettings } from "@/utils/proxyUtils";
-import { MenuFoldOutlined, MenuUnfoldOutlined, MoonOutlined, SunOutlined } from "@ant-design/icons";
-import { Button, Switch, Tag } from "antd";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Switch } from "@/components/ui/switch";
+import { Menu, Moon, PanelLeftClose, Sun } from "lucide-react";
 import Link from "next/link";
 import React, { useEffect, useState } from "react";
 import { BlogDropdown } from "./Navbar/BlogDropdown/BlogDropdown";
@@ -19,7 +21,9 @@ interface NavbarProps {
   userEmail: string | null;
   userRole: string | null;
   premiumUser: boolean;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   proxySettings: any;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   setProxySettings: React.Dispatch<React.SetStateAction<any>>;
   accessToken: string | null;
   isPublicPage: boolean;
@@ -30,9 +34,13 @@ interface NavbarProps {
 }
 
 const Navbar: React.FC<NavbarProps> = ({
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   userID,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   userEmail,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   userRole,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   premiumUser,
   proxySettings,
   setProxySettings,
@@ -50,7 +58,6 @@ const Navbar: React.FC<NavbarProps> = ({
   const version = healthData?.litellm_version;
   const disableBouncingIcon = useDisableBouncingIcon();
 
-  // Simple logo URL: use custom logo if available, otherwise default
   const imageUrl = logoUrl || `${baseUrl}/get_image`;
 
   useEffect(() => {
@@ -65,6 +72,7 @@ const Navbar: React.FC<NavbarProps> = ({
     };
 
     initializeProxySettings();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [accessToken]);
 
   useEffect(() => {
@@ -87,22 +95,32 @@ const Navbar: React.FC<NavbarProps> = ({
   };
 
   return (
-    <nav className="bg-white border-b border-gray-200 sticky top-0 z-10">
+    <nav className="bg-background border-b border-border sticky top-0 z-10">
       <div className="w-full">
         <div className="flex items-center h-14 px-4">
           <div className="flex items-center flex-shrink-0">
             {onToggleSidebar && (
               <button
                 onClick={onToggleSidebar}
-                className="flex items-center justify-center w-10 h-10 mr-2 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded transition-colors"
+                className="flex items-center justify-center w-10 h-10 mr-2 text-muted-foreground hover:text-foreground hover:bg-muted rounded transition-colors"
                 title={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+                aria-label={
+                  sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"
+                }
               >
-                <span className="text-lg">{sidebarCollapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}</span>
+                {sidebarCollapsed ? (
+                  <Menu className="h-5 w-5" />
+                ) : (
+                  <PanelLeftClose className="h-5 w-5" />
+                )}
               </button>
             )}
 
             <div className="flex items-center gap-2">
-              <Link href={baseUrl ? baseUrl : "/"} className="flex items-center">
+              <Link
+                href={baseUrl ? baseUrl : "/"}
+                className="flex items-center"
+              >
                 <div className="relative">
                   <div className="h-10 max-w-48 flex items-center justify-center overflow-hidden">
                     <img
@@ -124,7 +142,10 @@ const Navbar: React.FC<NavbarProps> = ({
                       🌑
                     </span>
                   )}
-                  <Tag className="relative text-xs font-medium cursor-pointer z-10">
+                  <Badge
+                    variant="outline"
+                    className="relative text-xs font-medium cursor-pointer z-10"
+                  >
                     <a
                       href="https://docs.litellm.ai/release_notes"
                       target="_blank"
@@ -133,28 +154,34 @@ const Navbar: React.FC<NavbarProps> = ({
                     >
                       v{version}
                     </a>
-                  </Tag>
+                  </Badge>
                 </div>
               )}
             </div>
           </div>
-          {/* Right side nav items */}
           <div className="flex items-center space-x-5 ml-auto">
             <WorkerDropdown onWorkerSwitch={handleWorkerSwitch} />
             <CommunityEngagementButtons />
-            {/* Dark mode is currently a work in progress. To test, you can change 'false' to 'true' below.
-            Do not set this to true by default until all components are confirmed to support dark mode styles. */}
+            {/* Dark mode is currently a work in progress. */}
             {false && (
-              <Switch
-                data-testid="dark-mode-toggle"
-                checked={isDarkMode}
-                onChange={toggleDarkMode}
-                checkedChildren={<MoonOutlined />}
-                unCheckedChildren={<SunOutlined />}
-              />
+              <div className="flex items-center gap-1">
+                <Sun className="h-3.5 w-3.5" />
+                <Switch
+                  data-testid="dark-mode-toggle"
+                  checked={isDarkMode}
+                  onCheckedChange={toggleDarkMode}
+                />
+                <Moon className="h-3.5 w-3.5" />
+              </div>
             )}
-            <Button type="text" href="https://docs.litellm.ai/docs/" target="_blank" rel="noopener noreferrer">
-              Docs
+            <Button variant="ghost" asChild>
+              <a
+                href="https://docs.litellm.ai/docs/"
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                Docs
+              </a>
             </Button>
             <BlogDropdown />
 
