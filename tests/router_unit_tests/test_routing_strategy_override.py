@@ -3,8 +3,9 @@ Unit tests for routing strategy override functionality.
 
 Tests verify:
 1. Algorithm correctness - each strategy selects the expected deployment
-2. Per-request routing strategy overrides work correctly
+2. Per-request routing strategy overrides work correctly and deterministically
 3. Critical regression fixes (NameError prevention, override preservation)
+4. Edge cases (invalid strategies, state preservation)
 """
 
 import sys
@@ -224,9 +225,9 @@ class TestRoutingAlgorithmCorrectness:
         )
 
         # Pre-populate usage cache (current minute format):
-        # deployment-1: 50/100 TPM used
-        # deployment-2: 20/100 TPM used  ← Should win (80 available)
-        # deployment-3: 90/100 TPM used
+        # deployment-1: 50/100 TPM used (50 available)
+        # deployment-2: 20/100 TPM used (80 available) ← Should win
+        # deployment-3: 90/100 TPM used (10 available)
         dt = get_utc_datetime()
         current_minute = dt.strftime("%H-%M")
         router.cache.set_cache(
@@ -297,12 +298,16 @@ class TestRoutingAlgorithmCorrectness:
         assert deployment["model_info"]["id"] == "deployment-2"
 
 
-class TestRequestBodyRoutingStrategyOverride:
-    """Test routing_strategy override passed in request body actually uses the correct algorithm."""
+class TestOverrideDeterminism:
+    """Test that overrides produce deterministic results (not random like simple-shuffle)."""
 
     @pytest.mark.asyncio
-    async def test_request_body_override_actually_uses_cost_based(self):
-        """Verify request body cost-based override ACTUALLY selects cheapest."""
+    async def test_override_from_shuffle_to_cost_based_is_deterministic(self):
+        """
+        Verify override from shuffle to cost-based ALWAYS selects cheapest.
+
+        Run 10 times to prove it's deterministic (not random like simple-shuffle).
+        """
         model_list = [
             {
                 "model_name": "test-model",
@@ -312,53 +317,61 @@ class TestRequestBodyRoutingStrategyOverride:
                     "input_cost_per_token": 0.002,  # Expensive
                     "output_cost_per_token": 0.002,
                 },
-                "model_info": {"id": "expensive-1"},
+                "model_info": {"id": "expensive-deployment"},
             },
             {
                 "model_name": "test-model",
                 "litellm_params": {
                     "model": "gpt-3.5-turbo",
                     "api_key": "key2",
-                    "input_cost_per_token": 0.001,  # ← Should win (cheapest)
+                    "input_cost_per_token": 0.001,  # ← Should ALWAYS win
                     "output_cost_per_token": 0.001,
                 },
-                "model_info": {"id": "cheap-1"},
+                "model_info": {"id": "cheap-deployment"},
             },
         ]
 
-        # Global: simple-shuffle
+        # Global: simple-shuffle (random selection)
         router = Router(
             model_list=model_list,
             routing_strategy="simple-shuffle",
         )
 
-        # Request override: cost-based-routing
-        deployment = await router.async_get_available_deployment(
-            model="test-model",
-            request_kwargs={"routing_strategy": "cost-based-routing"},
-            messages=[{"role": "user", "content": "test"}],
-        )
+        # Run 10 times with cost-based override
+        # If override works correctly, should ALWAYS select cheap-deployment
+        for i in range(10):
+            deployment = await router.async_get_available_deployment(
+                model="test-model",
+                request_kwargs={"routing_strategy": "cost-based-routing"},
+                messages=[{"role": "user", "content": "test"}],
+            )
 
-        # Verify cheap deployment is selected (not random from simple-shuffle)
-        assert deployment["model_info"]["id"] == "cheap-1"
+            assert deployment["model_info"]["id"] == "cheap-deployment", (
+                f"Iteration {i}: Expected cheap-deployment but got {deployment['model_info']['id']}. "
+                "Override should deterministically select cheapest, not random."
+            )
 
     @pytest.mark.asyncio
-    async def test_request_body_override_actually_uses_latency_based(self):
-        """Verify request body latency-based override ACTUALLY selects fastest."""
+    async def test_override_from_shuffle_to_latency_is_deterministic(self):
+        """
+        Verify override from shuffle to latency-based ALWAYS selects fastest.
+
+        Run 10 times to prove it's deterministic (not random like simple-shuffle).
+        """
         model_list = [
             {
                 "model_name": "test-model",
                 "litellm_params": {"model": "gpt-3.5-turbo", "api_key": "key1"},
-                "model_info": {"id": "deployment-1"},
+                "model_info": {"id": "slow-deployment"},
             },
             {
                 "model_name": "test-model",
                 "litellm_params": {"model": "gpt-3.5-turbo", "api_key": "key2"},
-                "model_info": {"id": "deployment-2"},
+                "model_info": {"id": "fast-deployment"},
             },
         ]
 
-        # Global: simple-shuffle
+        # Global: simple-shuffle (random selection)
         router = Router(
             model_list=model_list,
             routing_strategy="simple-shuffle",
@@ -366,20 +379,24 @@ class TestRequestBodyRoutingStrategyOverride:
 
         # Pre-populate latency cache
         latency_cache = {
-            "deployment-1": {"latency": [0.2, 0.2]},  # 200ms avg
-            "deployment-2": {"latency": [0.05, 0.05]},  # 50ms avg - fastest
+            "slow-deployment": {"latency": [0.2, 0.2]},  # 200ms avg
+            "fast-deployment": {"latency": [0.05, 0.05]},  # 50ms avg - fastest
         }
         router.cache.set_cache(key="test-model_map", value=latency_cache)
 
-        # Request override: latency-based-routing
-        deployment = await router.async_get_available_deployment(
-            model="test-model",
-            request_kwargs={"routing_strategy": "latency-based-routing"},
-            messages=[{"role": "user", "content": "test"}],
-        )
+        # Run 10 times with latency-based override
+        # If override works correctly, should ALWAYS select fast-deployment
+        for i in range(10):
+            deployment = await router.async_get_available_deployment(
+                model="test-model",
+                request_kwargs={"routing_strategy": "latency-based-routing"},
+                messages=[{"role": "user", "content": "test"}],
+            )
 
-        # Verify fastest deployment is selected (not random from simple-shuffle)
-        assert deployment["model_info"]["id"] == "deployment-2"
+            assert deployment["model_info"]["id"] == "fast-deployment", (
+                f"Iteration {i}: Expected fast-deployment but got {deployment['model_info']['id']}. "
+                "Override should deterministically select fastest, not random."
+            )
 
     @pytest.mark.asyncio
     async def test_request_body_routing_strategy_is_popped(self, base_model_list):
@@ -423,19 +440,19 @@ class TestRegressionFixes:
     """Test specific regression fixes for critical bugs."""
 
     @pytest.mark.asyncio
-    async def test_pass_through_cost_routing_no_name_error(
-        self, pass_through_model_list
-    ):
+    async def test_pass_through_no_name_error(self, pass_through_model_list):
         """
-        Test that deployment = None initialization prevents NameError.
-        Regression test for bug where uninitialized deployment variable caused NameError.
+        Regression test: deployment = None initialization prevents NameError.
+
+        Bug: Uninitialized deployment variable caused NameError in pass-through routing.
+        Fix: Added deployment = None initialization.
         """
         router = Router(
             model_list=pass_through_model_list,
             routing_strategy="simple-shuffle",
         )
 
-        # This should not raise NameError (fix adds deployment = None initialization)
+        # This should not raise NameError
         deployment = await router.async_get_available_deployment_for_pass_through(
             model="gpt-4",
             request_kwargs={},
@@ -445,10 +462,12 @@ class TestRegressionFixes:
         assert deployment is not None
         assert deployment.get("litellm_params", {}).get("use_in_pass_through") is True
 
-    def test_sync_latency_respects_per_request_override(self, base_model_list):
+    def test_sync_latency_uses_override_variable(self, base_model_list):
         """
-        Test that sync latency-based routing uses per-request override, not global strategy.
-        Regression test: verifies routing_strategy_to_use variable is used instead of self.routing_strategy.
+        Regression test: sync path uses routing_strategy_to_use, not self.routing_strategy.
+
+        Bug: Sync latency-based routing used global strategy instead of per-request override.
+        Fix: Changed to use routing_strategy_to_use variable.
         """
         router = Router(
             model_list=base_model_list,
@@ -456,7 +475,7 @@ class TestRegressionFixes:
             routing_strategy_args={"ttl": 1},
         )
 
-        # Override to latency-based (lazy init will create logger)
+        # Override to latency-based (will trigger lazy init)
         deployment = router.get_available_deployment(
             model="gpt-3.5-turbo",
             request_kwargs={"routing_strategy": "latency-based-routing"},
@@ -473,8 +492,10 @@ class TestRegressionFixes:
     @pytest.mark.asyncio
     async def test_async_to_sync_fallthrough_preserves_override(self, base_model_list):
         """
-        Test that routing_strategy override is preserved when async falls through to sync.
-        Regression test: verifies the override is not lost in the fallthrough path.
+        Regression test: routing_strategy override is preserved in async→sync fallthrough.
+
+        Bug: Override was lost when async fell through to sync for unsupported strategies.
+        Fix: Override is now passed through in fallthrough path.
         """
         router = Router(
             model_list=base_model_list,
@@ -492,26 +513,29 @@ class TestRegressionFixes:
         with patch.object(
             router, "get_available_deployment", side_effect=capture_kwargs
         ):
-            # Trigger the async→sync fallthrough path by using an unsupported routing strategy
+            # Trigger async→sync fallthrough with unsupported strategy
             deployment = await router.async_get_available_deployment(
                 model="gpt-3.5-turbo",
-                request_kwargs={
-                    "routing_strategy": "invalid-unknown-strategy"  # Not in async whitelist
-                },
+                request_kwargs={"routing_strategy": "invalid-unknown-strategy"},
                 messages=[{"role": "user", "content": "test"}],
             )
 
-            # Verify routing_strategy was preserved in request_kwargs
+            # Verify routing_strategy was preserved in fallthrough
             assert (
                 "routing_strategy" in captured_kwargs
             ), "routing_strategy should be preserved in fallthrough"
             assert captured_kwargs["routing_strategy"] == "invalid-unknown-strategy"
 
+
+class TestEdgeCases:
+    """Test edge cases and boundary conditions."""
+
     @pytest.mark.asyncio
-    async def test_routing_strategy_not_mutated_across_requests(self, base_model_list):
+    async def test_router_state_not_mutated_by_override(self, base_model_list):
         """
-        Test that routing_strategy override doesn't mutate router's global strategy.
-        Regression test: ensures per-request override is truly per-request.
+        Test that per-request override doesn't mutate router's global strategy.
+
+        Ensures override is truly per-request and doesn't affect router state.
         """
         router = Router(
             model_list=base_model_list,
@@ -520,7 +544,7 @@ class TestRegressionFixes:
 
         original_strategy = router.routing_strategy
 
-        # Make request with override (lazy init will create logger)
+        # Make request with override (will trigger lazy logger init)
         await router.async_get_available_deployment(
             model="gpt-3.5-turbo",
             request_kwargs={"routing_strategy": "latency-based-routing"},
@@ -531,13 +555,74 @@ class TestRegressionFixes:
         assert router.routing_strategy == original_strategy
         assert router.routing_strategy == "simple-shuffle"
 
+    @pytest.mark.asyncio
+    async def test_override_with_same_strategy_as_global(self, base_model_list):
+        """
+        Test that overriding with the same strategy as global still works.
+
+        Edge case: override to same strategy shouldn't cause issues.
+        """
+        router = Router(
+            model_list=base_model_list,
+            routing_strategy="simple-shuffle",
+        )
+
+        # Override to same strategy as global
+        deployment = await router.async_get_available_deployment(
+            model="gpt-3.5-turbo",
+            request_kwargs={"routing_strategy": "simple-shuffle"},
+            messages=[{"role": "user", "content": "test"}],
+        )
+
+        # Should still return a deployment
+        assert deployment is not None
+        assert "model_info" in deployment
+        assert "id" in deployment["model_info"]
+
+    @pytest.mark.asyncio
+    async def test_latency_routing_with_empty_cache_falls_back(self):
+        """
+        Test that latency-based routing handles empty cache gracefully.
+
+        Edge case: no latency data available yet - should fall back to available deployments.
+        """
+        model_list = [
+            {
+                "model_name": "test-model",
+                "litellm_params": {"model": "gpt-3.5-turbo", "api_key": "key1"},
+                "model_info": {"id": "deployment-1"},
+            },
+            {
+                "model_name": "test-model",
+                "litellm_params": {"model": "gpt-3.5-turbo", "api_key": "key2"},
+                "model_info": {"id": "deployment-2"},
+            },
+        ]
+
+        router = Router(
+            model_list=model_list,
+            routing_strategy="latency-based-routing",
+        )
+
+        # Don't populate latency cache - it's empty
+        # Should still return a deployment (falls back to available deployments)
+        deployment = await router.async_get_available_deployment(
+            model="test-model",
+            request_kwargs={},
+            messages=[{"role": "user", "content": "test"}],
+        )
+
+        # Should return a deployment even without latency data
+        assert deployment is not None
+        assert deployment["model_info"]["id"] in ["deployment-1", "deployment-2"]
+
 
 class TestOverridePrecedence:
     """Test that per-request override takes precedence over global settings."""
 
     @pytest.mark.asyncio
     async def test_override_takes_precedence_over_global_async(self):
-        """Verify request override takes precedence over global routing strategy."""
+        """Verify request override takes precedence over global routing strategy (async)."""
         model_list = [
             {
                 "model_name": "test-model",
@@ -559,8 +644,8 @@ class TestOverridePrecedence:
 
         # Pre-populate latency cache for override strategy
         latency_cache = {
-            "deployment-1": {"latency": [0.1]},
-            "deployment-2": {"latency": [0.05]},  # Faster
+            "deployment-1": {"latency": [0.1]},  # 100ms
+            "deployment-2": {"latency": [0.05]},  # 50ms - faster
         }
         router.cache.set_cache(key="test-model_map", value=latency_cache)
 
@@ -575,7 +660,7 @@ class TestOverridePrecedence:
         assert deployment["model_info"]["id"] == "deployment-2"
 
     def test_override_takes_precedence_over_global_sync(self):
-        """Test request override takes precedence in sync path."""
+        """Verify request override takes precedence over global routing strategy (sync)."""
         model_list = [
             {
                 "model_name": "test-model",
@@ -597,8 +682,8 @@ class TestOverridePrecedence:
 
         # Pre-populate latency cache for override strategy
         latency_cache = {
-            "deployment-1": {"latency": [0.1]},
-            "deployment-2": {"latency": [0.05]},  # Faster
+            "deployment-1": {"latency": [0.1]},  # 100ms
+            "deployment-2": {"latency": [0.05]},  # 50ms - faster
         }
         router.cache.set_cache(key="test-model_map", value=latency_cache)
 
