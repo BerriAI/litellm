@@ -110,6 +110,8 @@ jobs:
   create-branch:
     name: Create Release Branch
     needs: release
+    permissions:
+      contents: write
     uses: ./.github/workflows/create-release-branch.yml
     with:
       tag: ${{ inputs.tag }}
