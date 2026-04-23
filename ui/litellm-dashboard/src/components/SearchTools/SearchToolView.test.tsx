@@ -226,13 +226,18 @@ describe("SearchToolView", () => {
 
     const initialSvg = nameCopyButton!.querySelector("svg");
     expect(initialSvg).toBeInTheDocument();
+    // Pre-click: button has a copy icon (lucide CopyIcon).
+    const initialIconClass = initialSvg!.getAttribute("class") || "";
 
     await user.click(nameCopyButton!);
 
+    // Post-click: button should swap to the check icon. Detect by waiting for
+    // the SVG class signature to change (lucide-copy \u2192 lucide-check).
     await waitFor(() => {
       const updatedSvg = nameCopyButton!.querySelector("svg");
       expect(updatedSvg).toBeInTheDocument();
-      expect(nameCopyButton).toHaveClass("text-green-600");
+      const updatedIconClass = updatedSvg!.getAttribute("class") || "";
+      expect(updatedIconClass).not.toBe(initialIconClass);
     });
   });
 
@@ -257,7 +262,11 @@ describe("SearchToolView", () => {
       expect(copyToClipboard).toHaveBeenCalledWith("Test Search Tool");
     }, { timeout: 3000 });
 
-    expect(nameCopyButton).not.toHaveClass("text-green-600");
+    // Post phase-1 the visual confirmation is conveyed via icon swap,
+    // not a text-green-600 class. Failed copy: icon does not swap.
+    const svg = nameCopyButton!.querySelector("svg");
+    const cls = svg?.getAttribute("class") || "";
+    expect(cls).toContain("lucide-copy");
   });
 
   it("should render SearchToolTester when accessToken is provided", () => {
