@@ -1,11 +1,19 @@
 import { useProviderFields } from "@/app/(dashboard)/hooks/providers/useProviderFields";
-import { UploadOutlined } from "@ant-design/icons";
-import { Text, TextInput } from "@tremor/react";
-import { Button as Button2, Col, Form, Input, Row, Select, Typography, Upload, UploadProps } from "antd";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import { Upload as UploadIcon } from "lucide-react";
+import {
+  Col,
+  Form,
+  Row,
+  Select,
+  Upload,
+  UploadProps,
+} from "antd";
 import React from "react";
 import { CredentialItem, ProviderCredentialFieldMetadata } from "../networking";
 import { provider_map, Providers } from "../provider_info_helpers";
-const { Link } = Typography;
 
 interface ProviderSpecificFieldsProps {
   selectedProvider: Providers;
@@ -57,10 +65,14 @@ const mapFieldMetadataToUiField = (field: ProviderCredentialFieldMetadata): Prov
 // non-React helpers like createCredentialFromModel.
 const providerFieldsByDisplayName: Record<string, ProviderCredentialField[]> = {};
 
-export const createCredentialFromModel = (provider: string, modelData: any): CredentialItem => {
-  console.log("provider", provider);
-  console.log("modelData", modelData);
-  const enumKey = Object.keys(provider_map).find((key) => provider_map[key].toLowerCase() === provider.toLowerCase());
+export const createCredentialFromModel = (
+  provider: string,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  modelData: any,
+): CredentialItem => {
+  const enumKey = Object.keys(provider_map).find(
+    (key) => provider_map[key].toLowerCase() === provider.toLowerCase(),
+  );
   if (!enumKey) {
     throw new Error(`Provider ${provider} not found in provider_map`);
   }
@@ -68,13 +80,8 @@ export const createCredentialFromModel = (provider: string, modelData: any): Cre
   const providerFields = providerFieldsByDisplayName[providerDisplayName] || [];
   const credentialValues: object = {};
 
-  console.log("providerFields", providerFields);
-
-  // Go through each field defined for this provider
   providerFields.forEach((field) => {
     const value = modelData.litellm_params[field.key];
-    console.log("field", field);
-    console.log("value", value);
     if (value !== undefined) {
       (credentialValues as Record<string, string>)[field.key] = value.toString();
     }
@@ -170,29 +177,19 @@ const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({ selecte
   const handleUpload = {
     name: "file",
     accept: ".json",
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     beforeUpload: (file: any) => {
       if (file.type === "application/json") {
         const reader = new FileReader();
         reader.onload = (e) => {
           if (e.target) {
             const jsonStr = e.target.result as string;
-            console.log(`Setting field value from JSON, length: ${jsonStr.length}`);
             form.setFieldsValue({ vertex_credentials: jsonStr });
-            console.log("Form values after setting:", form.getFieldsValue());
           }
         };
         reader.readAsText(file);
       }
-      // Prevent upload
       return false;
-    },
-    onChange(info: any) {
-      console.log("Upload onChange triggered in ProviderSpecificFields");
-      console.log("Current form values:", form.getFieldsValue());
-
-      if (info.file.status !== "uploading") {
-        console.log(info.file, info.fileList);
-      }
     },
   };
 
@@ -201,16 +198,18 @@ const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({ selecte
       {isLoading && allFields.length === 0 && (
         <Row>
           <Col span={24}>
-            <Text className="mb-2">Loading provider fields...</Text>
+            <p className="mb-2">Loading provider fields...</p>
           </Col>
         </Row>
       )}
       {loadError && allFields.length === 0 && (
         <Row>
           <Col span={24}>
-            <Text className="mb-2 text-red-500">
-              {loadError instanceof Error ? loadError.message : "Failed to load provider credential fields"}
-            </Text>
+            <p className="mb-2 text-destructive">
+              {loadError instanceof Error
+                ? loadError.message
+                : "Failed to load provider credential fields"}
+            </p>
           </Col>
         </Row>
       )}
@@ -235,29 +234,25 @@ const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({ selecte
               <Upload
                 {...handleUpload}
                 onChange={(info) => {
-                  // First call the original onChange
                   if (uploadProps?.onChange) {
                     uploadProps.onChange(info);
                   }
-
-                  // Check the field value after a short delay
-                  setTimeout(() => {
-                    const value = form.getFieldValue(field.key);
-                    console.log(`${field.key} value after upload:`, JSON.stringify(value));
-                  }, 500);
                 }}
               >
-                <Button2 icon={<UploadOutlined />}>Click to Upload</Button2>
+                <Button type="button" variant="outline">
+                  <UploadIcon className="h-4 w-4" />
+                  Click to Upload
+                </Button>
               </Upload>
             ) : field.type === "textarea" ? (
-              <Input.TextArea
+              <Textarea
                 placeholder={field.placeholder}
                 defaultValue={field.defaultValue}
                 rows={6}
-                style={{ fontFamily: "monospace", fontSize: "12px" }}
+                className="font-mono text-xs"
               />
             ) : (
-              <TextInput
+              <Input
                 placeholder={field.placeholder}
                 type={field.type === "password" ? "password" : "text"}
                 defaultValue={field.defaultValue}
@@ -269,7 +264,9 @@ const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({ selecte
           {field.key === "vertex_credentials" && (
             <Row>
               <Col>
-                <Text className="mb-3 mt-1">Give a gcp service account(.json file)</Text>
+                <p className="mb-3 mt-1">
+                  Give a gcp service account(.json file)
+                </p>
               </Col>
             </Row>
           )}
@@ -279,15 +276,18 @@ const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({ selecte
             <Row>
               <Col span={10}></Col>
               <Col span={10}>
-                <Text className="mb-2">
-                  The actual model your azure deployment uses. Used for accurate cost tracking. Select name from{" "}
-                  <Link
+                <p className="mb-2">
+                  The actual model your azure deployment uses. Used for
+                  accurate cost tracking. Select name from{" "}
+                  <a
                     href="https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json"
                     target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-primary hover:text-primary/80 underline"
                   >
                     here
-                  </Link>
-                </Text>
+                  </a>
+                </p>
               </Col>
             </Row>
           )}
