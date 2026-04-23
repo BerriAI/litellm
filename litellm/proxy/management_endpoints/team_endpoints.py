@@ -302,14 +302,15 @@ class TeamMemberBudgetHandler:
         prisma_client: PrismaClient,
     ) -> None:
         """
-        Create team_memberships entries for existing members that don't have one.
+        Ensure every team member has a TeamMembership row linked to the
+        team_member_budget.
 
-        Called after team_member_budget is set/updated on a team to ensure
-        members who joined before the budget was configured also get budget
-        enforcement.
-
-        Only creates missing entries — does not touch existing memberships
-        (which may carry individual per-member budgets).
+        Called after team_member_budget is set/updated on a team. Creates
+        rows for members who don't have one, and populates budget_id on
+        existing rows where it is NULL. Rows with a non-NULL budget_id
+        are left untouched, which preserves per-member overrides but also
+        means rows pointing to a prior team-default budget_id are not
+        migrated to the new one.
         """
         if not members_with_roles:
             return
@@ -343,6 +344,21 @@ class TeamMemberBudgetHandler:
             verbose_proxy_logger.info(
                 "Backfilled %d team_memberships for team %s with budget %s",
                 len(missing),
+                _sanitize_for_log(team_id),
+                _sanitize_for_log(team_member_budget_id),
+            )
+
+        # Heal existing membership rows that predate the team_member_budget
+        # configuration: populate budget_id where it is currently NULL.
+        # Rows with an explicit budget_id (per-member override) are left alone.
+        updated = await prisma_client.db.litellm_teammembership.update_many(
+            where={"team_id": team_id, "budget_id": None},
+            data={"budget_id": team_member_budget_id},
+        )
+        if updated:
+            verbose_proxy_logger.info(
+                "Populated budget_id on %d existing team_memberships for team %s with budget %s",
+                updated,
                 _sanitize_for_log(team_id),
                 _sanitize_for_log(team_member_budget_id),
             )
