@@ -1,8 +1,7 @@
 import React from "react";
-import { Input, Button } from "antd";
-import { ArrowUpOutlined } from "@ant-design/icons";
-
-const { TextArea } = Input;
+import { Button } from "@/components/ui/button";
+import { Textarea } from "@/components/ui/textarea";
+import { ArrowUp } from "lucide-react";
 
 interface MessageInputProps {
   value: string;
@@ -13,8 +12,16 @@ interface MessageInputProps {
   uploadComponent?: React.ReactNode;
 }
 
-export function MessageInput({ value, onChange, onSend, disabled, hasAttachment, uploadComponent }: MessageInputProps) {
-  const canSend = !disabled && (value.trim().length > 0 || Boolean(hasAttachment));
+export function MessageInput({
+  value,
+  onChange,
+  onSend,
+  disabled,
+  hasAttachment,
+  uploadComponent,
+}: MessageInputProps) {
+  const canSend =
+    !disabled && (value.trim().length > 0 || Boolean(hasAttachment));
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Enter" && !e.shiftKey) {
@@ -27,27 +34,27 @@ export function MessageInput({ value, onChange, onSend, disabled, hasAttachment,
 
   return (
     <div className="flex items-center gap-2">
-      <div className="flex items-center flex-1 bg-white border border-gray-300 rounded-xl px-3 py-1 min-h-[44px]">
-        {uploadComponent && <div className="flex-shrink-0 mr-2">{uploadComponent}</div>}
-        <TextArea
+      <div className="flex items-center flex-1 bg-background border border-border rounded-xl px-3 py-1 min-h-[44px]">
+        {uploadComponent && (
+          <div className="flex-shrink-0 mr-2">{uploadComponent}</div>
+        )}
+        <Textarea
           value={value}
           onChange={(e) => onChange(e.target.value)}
           onKeyDown={handleKeyDown}
           placeholder="Type your message... (Shift+Enter for new line)"
           disabled={disabled}
-          className="flex-1"
-          autoSize={{ minRows: 1, maxRows: 4 }}
-          style={{
-            resize: "none",
-            border: "none",
-            boxShadow: "none",
-            background: "transparent",
-            padding: "4px 0",
-            fontSize: "14px",
-            lineHeight: "20px",
-          }}
+          rows={1}
+          className="flex-1 resize-none border-0 shadow-none bg-transparent p-0 py-1 text-sm leading-5 min-h-[20px]"
         />
-        <Button onClick={onSend} disabled={!canSend} icon={<ArrowUpOutlined />} shape="circle" />
+        <Button
+          onClick={onSend}
+          disabled={!canSend}
+          size="icon"
+          className="rounded-full h-8 w-8"
+        >
+          <ArrowUp className="h-4 w-4" />
+        </Button>
       </div>
     </div>
   );

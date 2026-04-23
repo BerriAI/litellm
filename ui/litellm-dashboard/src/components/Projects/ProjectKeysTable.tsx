@@ -1,58 +1,93 @@
 import { KeyResponse } from "@/components/key_team_helpers/key_list";
-import { Empty, Table, Tooltip } from "antd";
-import type { ColumnsType } from "antd/es/table";
-import type { SpinProps } from "antd";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import { Loader2 } from "lucide-react";
 import DefaultProxyAdminTag from "../common_components/DefaultProxyAdminTag";
 
 interface ProjectKeysTableProps {
   keys: KeyResponse[];
-  loading?: boolean | SpinProps;
+  loading?: boolean;
 }
-
-const columns: ColumnsType<KeyResponse> = [
-  {
-    title: "Key Name",
-    dataIndex: "key_alias",
-    key: "key_alias",
-    render: (alias: string | null) => alias || "—",
-  },
-  {
-    title: "Owner",
-    key: "owner",
-    render: (_: unknown, record: KeyResponse) => {
-      const email = record.user?.user_email ?? record.user_id ?? null;
-      if (!email) return "—";
-      return (
-        <Tooltip title={email}>
-          <DefaultProxyAdminTag userId={email} />
-        </Tooltip>
-      );
-    },
-  },
-  {
-    title: "Created",
-    dataIndex: "created_at",
-    key: "created_at",
-    render: (date: string) => (date ? new Date(date).toLocaleDateString() : "—"),
-  },
-  {
-    title: "Last Active",
-    dataIndex: "last_active",
-    key: "last_active",
-    render: (date: string | null) => (date ? new Date(date).toLocaleDateString() : "Never"),
-  },
-];
 
 export function ProjectKeysTable({ keys, loading }: ProjectKeysTableProps) {
   return (
-    <Table
-      columns={columns}
-      dataSource={keys}
-      rowKey="token"
-      loading={loading}
-      pagination={false}
-      size="small"
-      locale={{ emptyText: <Empty description="No keys found" image={Empty.PRESENTED_IMAGE_SIMPLE} /> }}
-    />
+    <div className="border border-border rounded-md overflow-hidden">
+      <Table>
+        <TableHeader>
+          <TableRow>
+            <TableHead>Key Name</TableHead>
+            <TableHead>Owner</TableHead>
+            <TableHead>Created</TableHead>
+            <TableHead>Last Active</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {loading ? (
+            <TableRow>
+              <TableCell colSpan={4} className="text-center py-6">
+                <Loader2 className="h-4 w-4 animate-spin mx-auto text-muted-foreground" />
+              </TableCell>
+            </TableRow>
+          ) : keys.length === 0 ? (
+            <TableRow>
+              <TableCell
+                colSpan={4}
+                className="text-center py-6 text-muted-foreground"
+              >
+                No keys found
+              </TableCell>
+            </TableRow>
+          ) : (
+            keys.map((k) => {
+              const alias = k.key_alias || "—";
+              const email = k.user?.user_email ?? k.user_id ?? null;
+              return (
+                <TableRow key={k.token}>
+                  <TableCell>{alias}</TableCell>
+                  <TableCell>
+                    {email ? (
+                      <TooltipProvider>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <span className="inline-flex">
+                              <DefaultProxyAdminTag userId={email} />
+                            </span>
+                          </TooltipTrigger>
+                          <TooltipContent>{email}</TooltipContent>
+                        </Tooltip>
+                      </TooltipProvider>
+                    ) : (
+                      "—"
+                    )}
+                  </TableCell>
+                  <TableCell>
+                    {k.created_at
+                      ? new Date(k.created_at).toLocaleDateString()
+                      : "—"}
+                  </TableCell>
+                  <TableCell>
+                    {k.last_active
+                      ? new Date(k.last_active).toLocaleDateString()
+                      : "Never"}
+                  </TableCell>
+                </TableRow>
+              );
+            })
+          )}
+        </TableBody>
+      </Table>
+    </div>
   );
 }
