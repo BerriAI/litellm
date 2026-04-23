@@ -232,9 +232,9 @@ def get_vertex_base_url(
     """
     if vertex_location == "global":
         return "https://aiplatform.googleapis.com"
-    if vertex_location is not None and not re.match(
-        r"^[a-z][a-z0-9-]*$", vertex_location
-    ):
+    if vertex_location is None:
+        raise ValueError("vertex_location is required")
+    if not re.match(r"^[a-z][a-z0-9-]*$", vertex_location):
         raise ValueError("Invalid vertex_location format")
     return f"https://{vertex_location}-aiplatform.googleapis.com"
 
