@@ -1,6 +1,19 @@
 import { useState, useCallback } from "react";
-import { Modal, Form, Button, Select, Tooltip } from "antd";
-import { UserAddOutlined } from "@ant-design/icons";
+import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import { Form, Select } from "antd";
+import { UserPlus } from "lucide-react";
 import debounce from "lodash/debounce";
 import { userFilterUICall } from "@/components/networking";
 interface User {
@@ -94,7 +107,12 @@ const UserSearchModal: React.FC<UserSearchModalProps> = ({
   };
 
   const debouncedSearch = useCallback(
-    debounce((text: string, fieldName: "user_email" | "user_id") => fetchUsers(text, fieldName), 300),
+    debounce(
+      (text: string, fieldName: "user_email" | "user_id") =>
+        fetchUsers(text, fieldName),
+      300,
+    ),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [],
   );
 
@@ -128,68 +146,90 @@ const UserSearchModal: React.FC<UserSearchModalProps> = ({
   };
 
   return (
-    <Modal title={title} open={isVisible} onCancel={handleClose} footer={null} width={800} maskClosable={!isSubmitting}>
-      <Form<FormValues>
-        form={form}
-        onFinish={handleSubmit}
-        labelCol={{ span: 8 }}
-        wrapperCol={{ span: 16 }}
-        labelAlign="left"
-        initialValues={{
-          role: defaultRole,
-        }}
-      >
-        <Form.Item label="Email" name="user_email" className="mb-4">
-          <Select
-            showSearch
-            className="w-full"
-            placeholder="Search by email"
-            filterOption={false}
-            onSearch={(value) => handleSearch(value, "user_email")}
-            onSelect={(value, option) => handleSelect(value, option as UserOption)}
-            options={selectedField === "user_email" ? userOptions : []}
-            loading={loading}
-            allowClear
-            data-testid="member-email-search"
-          />
-        </Form.Item>
+    <Dialog
+      open={isVisible}
+      onOpenChange={(o) => (!o && !isSubmitting ? handleClose() : undefined)}
+    >
+      <DialogContent className="max-w-[800px]">
+        <DialogHeader>
+          <DialogTitle>{title}</DialogTitle>
+        </DialogHeader>
+        <Form<FormValues>
+          form={form}
+          onFinish={handleSubmit}
+          labelCol={{ span: 8 }}
+          wrapperCol={{ span: 16 }}
+          labelAlign="left"
+          initialValues={{
+            role: defaultRole,
+          }}
+        >
+          <Form.Item label="Email" name="user_email" className="mb-4">
+            <Select
+              showSearch
+              className="w-full"
+              placeholder="Search by email"
+              filterOption={false}
+              onSearch={(value) => handleSearch(value, "user_email")}
+              onSelect={(value, option) =>
+                handleSelect(value, option as UserOption)
+              }
+              options={selectedField === "user_email" ? userOptions : []}
+              loading={loading}
+              allowClear
+              data-testid="member-email-search"
+            />
+          </Form.Item>
 
-        <div className="text-center mb-4">OR</div>
+          <div className="text-center mb-4">OR</div>
 
-        <Form.Item label="User ID" name="user_id" className="mb-4">
-          <Select
-            showSearch
-            className="w-full"
-            placeholder="Search by user ID"
-            filterOption={false}
-            onSearch={(value) => handleSearch(value, "user_id")}
-            onSelect={(value, option) => handleSelect(value, option as UserOption)}
-            options={selectedField === "user_id" ? userOptions : []}
-            loading={loading}
-            allowClear
-          />
-        </Form.Item>
+          <Form.Item label="User ID" name="user_id" className="mb-4">
+            <Select
+              showSearch
+              className="w-full"
+              placeholder="Search by user ID"
+              filterOption={false}
+              onSearch={(value) => handleSearch(value, "user_id")}
+              onSelect={(value, option) =>
+                handleSelect(value, option as UserOption)
+              }
+              options={selectedField === "user_id" ? userOptions : []}
+              loading={loading}
+              allowClear
+            />
+          </Form.Item>
 
-        <Form.Item label="Member Role" name="role" className="mb-4">
-          <Select defaultValue={defaultRole}>
-            {roles.map((role) => (
-              <Select.Option key={role.value} value={role.value}>
-                <Tooltip title={role.description}>
-                  <span className="font-medium">{role.label}</span>
-                  <span className="ml-2 text-gray-500 text-sm">- {role.description}</span>
-                </Tooltip>
-              </Select.Option>
-            ))}
-          </Select>
-        </Form.Item>
+          <Form.Item label="Member Role" name="role" className="mb-4">
+            <Select defaultValue={defaultRole}>
+              {roles.map((role) => (
+                <Select.Option key={role.value} value={role.value}>
+                  <TooltipProvider>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <span>
+                          <span className="font-medium">{role.label}</span>
+                          <span className="ml-2 text-muted-foreground text-sm">
+                            - {role.description}
+                          </span>
+                        </span>
+                      </TooltipTrigger>
+                      <TooltipContent>{role.description}</TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
+                </Select.Option>
+              ))}
+            </Select>
+          </Form.Item>
 
-        <div className="text-right mt-4">
-          <Button type="primary" htmlType="submit" icon={<UserAddOutlined />} loading={isSubmitting}>
-            {isSubmitting ? "Adding..." : "Add Member"}
-          </Button>
-        </div>
-      </Form>
-    </Modal>
+          <div className="text-right mt-4">
+            <Button type="submit" disabled={isSubmitting}>
+              <UserPlus className="h-4 w-4" />
+              {isSubmitting ? "Adding..." : "Add Member"}
+            </Button>
+          </div>
+        </Form>
+      </DialogContent>
+    </Dialog>
   );
 };
 
