@@ -1,14 +1,11 @@
-/**
- * Expanded content for a tool with view mode toggle
- */
-
 import { useState } from "react";
-import { Typography, Radio } from "antd";
+import {
+  ToggleGroup,
+  ToggleGroupItem,
+} from "@/components/ui/toggle-group";
 import { ParsedTool } from "./types";
 import { FormattedToolView } from "./FormattedToolView";
 import { JsonToolView } from "./JsonToolView";
-
-const { Text } = Typography;
 
 type ViewMode = "formatted" | "json";
 
@@ -21,25 +18,20 @@ export function ToolExpandedContent({ tool }: ToolExpandedContentProps) {
 
   return (
     <div>
-      {/* View Mode Toggle - Top Right */}
-      <div
-        style={{
-          display: "flex",
-          justifyContent: "space-between",
-          marginBottom: 12,
-        }}
-      >
-        <Text type="secondary" style={{ fontSize: 12 }}>
-          Description
-        </Text>
-        <Radio.Group
-          size="small"
+      <div className="flex justify-between mb-3">
+        <span className="text-xs text-muted-foreground">Description</span>
+        <ToggleGroup
+          type="single"
+          size="sm"
           value={viewMode}
-          onChange={(e) => setViewMode(e.target.value)}
+          onValueChange={(v) => {
+            if (!v) return;
+            setViewMode(v as ViewMode);
+          }}
         >
-          <Radio.Button value="formatted">Formatted</Radio.Button>
-          <Radio.Button value="json">JSON</Radio.Button>
-        </Radio.Group>
+          <ToggleGroupItem value="formatted">Formatted</ToggleGroupItem>
+          <ToggleGroupItem value="json">JSON</ToggleGroupItem>
+        </ToggleGroup>
       </div>
 
       {viewMode === "formatted" ? (
