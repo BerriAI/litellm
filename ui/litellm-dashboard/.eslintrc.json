@@ -34,7 +34,8 @@
         "src/components/SCIM.tsx",
         "src/components/logging_settings_view.tsx",
         "src/components/model_group_alias_settings.tsx",
-        "src/components/cache_dashboard.tsx"
+        "src/components/cache_dashboard.tsx",
+        "src/components/Settings/AdminSettings/MCPSemanticFilterSettings/MCPSemanticFilterTestPanel.tsx"
       ],
       "rules": {
         "litellm-ui/no-banned-ui-imports": "off",
