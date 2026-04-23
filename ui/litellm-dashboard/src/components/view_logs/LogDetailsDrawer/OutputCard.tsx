@@ -1,16 +1,8 @@
-/**
- * OutputCard - Displays output message with token count and cost
- * Datadog-style: header with icon/metrics, content below
- */
-
-import { useState } from 'react';
-import { Typography } from 'antd';
+import { useState } from "react";
 import MessageManager from "@/components/molecules/message_manager";
-import { ParsedMessage } from './prettyMessagesTypes';
-import { SectionHeader } from './SectionHeader';
-import { SimpleMessageBlock } from './SimpleMessageBlock';
-
-const { Text } = Typography;
+import { ParsedMessage } from "./prettyMessagesTypes";
+import { SectionHeader } from "./SectionHeader";
+import { SimpleMessageBlock } from "./SimpleMessageBlock";
 
 interface OutputCardProps {
   message: ParsedMessage | null;
@@ -18,26 +10,24 @@ interface OutputCardProps {
   outputCost?: number;
 }
 
-export function OutputCard({ message, completionTokens, outputCost }: OutputCardProps) {
+export function OutputCard({
+  message,
+  completionTokens,
+  outputCost,
+}: OutputCardProps) {
   const [isCollapsed, setIsCollapsed] = useState(false);
 
   const handleCopy = () => {
     if (!message) return;
-    
-    const content = message.content || '';
+
+    const content = message.content || "";
     navigator.clipboard.writeText(content);
-    MessageManager.success('Output copied');
+    MessageManager.success("Output copied");
   };
 
   if (!message) {
     return (
-      <div
-        style={{
-          border: '1px solid #f0f0f0',
-          borderRadius: 6,
-          overflow: 'hidden',
-        }}
-      >
+      <div className="border border-border rounded-md overflow-hidden">
         <SectionHeader
           type="output"
           tokens={completionTokens}
@@ -47,17 +37,16 @@ export function OutputCard({ message, completionTokens, outputCost }: OutputCard
           onToggleCollapse={() => setIsCollapsed(!isCollapsed)}
         />
         <div
+          className="overflow-hidden transition-[max-height,opacity] duration-300 ease-out"
           style={{
-            maxHeight: isCollapsed ? '0px' : '10000px',
-            overflow: 'hidden',
-            transition: 'max-height 0.3s ease-out, opacity 0.3s ease-out',
+            maxHeight: isCollapsed ? "0px" : "10000px",
             opacity: isCollapsed ? 0 : 1,
           }}
         >
-          <div style={{ padding: '12px 16px' }}>
-            <Text type="secondary" style={{ fontSize: 13, fontStyle: 'italic' }}>
+          <div className="px-4 py-3">
+            <span className="text-[13px] italic text-muted-foreground">
               No response data available
-            </Text>
+            </span>
           </div>
         </div>
       </div>
@@ -65,14 +54,7 @@ export function OutputCard({ message, completionTokens, outputCost }: OutputCard
   }
 
   return (
-    <div
-      style={{
-        border: '1px solid #f0f0f0',
-        borderRadius: 6,
-        overflow: 'hidden',
-      }}
-    >
-      {/* Datadog-style Header */}
+    <div className="border border-border rounded-md overflow-hidden">
       <SectionHeader
         type="output"
         tokens={completionTokens}
@@ -82,16 +64,14 @@ export function OutputCard({ message, completionTokens, outputCost }: OutputCard
         onToggleCollapse={() => setIsCollapsed(!isCollapsed)}
       />
 
-      {/* Content */}
       <div
+        className="overflow-hidden transition-[max-height,opacity] duration-300 ease-out"
         style={{
-          maxHeight: isCollapsed ? '0px' : '10000px',
-          overflow: 'hidden',
-          transition: 'max-height 0.3s ease-out, opacity 0.3s ease-out',
+          maxHeight: isCollapsed ? "0px" : "10000px",
           opacity: isCollapsed ? 0 : 1,
         }}
       >
-        <div style={{ padding: '12px 16px' }}>
+        <div className="px-4 py-3">
           <SimpleMessageBlock
             label="ASSISTANT"
             content={message.content}
@@ -102,4 +82,3 @@ export function OutputCard({ message, completionTokens, outputCost }: OutputCard
     </div>
   );
 }
-
