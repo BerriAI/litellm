@@ -1,8 +1,7 @@
 import React from "react";
-import { Form, Select, Typography, Input, Button } from "antd";
+import { Form, Select, Input as AntInput } from "antd";
+import { Button } from "@/components/ui/button";
 import NumericalInput from "../shared/numerical_input";
-
-const { Title } = Typography;
 
 interface ProviderParam {
   param: string;
@@ -19,6 +18,7 @@ interface ProviderParam {
 interface GuardrailOptionalParamsProps {
   optionalParams: ProviderParam;
   parentFieldKey: string;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   values?: Record<string, any>;
 }
 
@@ -26,9 +26,11 @@ interface DictFieldProps {
   field: ProviderParam;
   fieldKey: string;
   fullFieldKey: string | string[];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   value: any | null;
 }
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 const DictField: React.FC<DictFieldProps> = ({ field, fieldKey, fullFieldKey, value }) => {
   const [selectedEntries, setSelectedEntries] = React.useState<Array<{ key: string; id: string }>>([]);
   const [availableKeys, setAvailableKeys] = React.useState<string[]>(field.dict_key_options || []);
@@ -94,14 +96,14 @@ const DictField: React.FC<DictFieldProps> = ({ field, fieldKey, fullFieldKey, va
                   <Select.Option value={false}>False</Select.Option>
                 </Select>
               ) : (
-                <Input placeholder={`Enter ${entry.key} value`} />
+                <AntInput placeholder={`Enter ${entry.key} value`} />
               )}
             </Form.Item>
           </div>
           <Button
-            type="text"
-            danger
-            size="small"
+            variant="ghost"
+            size="sm"
+            className="text-destructive hover:text-destructive"
             onClick={() => removeEntry(entry.id, entry.key)}
           >
             Remove
@@ -124,7 +126,9 @@ const DictField: React.FC<DictFieldProps> = ({ field, fieldKey, fullFieldKey, va
               </Select.Option>
             ))}
           </Select>
-          <span className="text-sm text-gray-500">Select a category to add threshold configuration</span>
+          <span className="text-sm text-muted-foreground">
+            Select a category to add threshold configuration
+          </span>
         </div>
       )}
     </div>
@@ -143,22 +147,39 @@ const GuardrailOptionalParams: React.FC<GuardrailOptionalParamsProps> = ({
     // Handle dict fields separately since they manage their own Form.Items
     if (field.type === "dict" && field.dict_key_options) {
       return (
-        <div key={fullFieldKey} className="mb-8 p-6 bg-gray-50 rounded-lg border border-gray-200">
-          <div className="mb-4 font-medium text-gray-900 text-base">{fieldKey}</div>
-          <p className="text-sm text-gray-600 mb-4">{field.description}</p>
-          <DictField field={field} fieldKey={fieldKey} fullFieldKey={[parentFieldKey, fieldKey]} value={value} />
+        <div
+          key={fullFieldKey}
+          className="mb-8 p-6 bg-muted rounded-lg border border-border"
+        >
+          <div className="mb-4 font-medium text-foreground text-base">
+            {fieldKey}
+          </div>
+          <p className="text-sm text-muted-foreground mb-4">{field.description}</p>
+          <DictField
+            field={field}
+            fieldKey={fieldKey}
+            fullFieldKey={[parentFieldKey, fieldKey]}
+            value={value}
+          />
         </div>
       );
     }
 
     return (
-      <div key={fullFieldKey} className="mb-8 p-6 bg-white rounded-lg border border-gray-200 shadow-sm">
+      <div
+        key={fullFieldKey}
+        className="mb-8 p-6 bg-background rounded-lg border border-border shadow-sm"
+      >
         <Form.Item
           name={[parentFieldKey, fieldKey]}
           label={
             <div className="mb-2">
-              <div className="font-medium text-gray-900 text-base">{fieldKey}</div>
-              <p className="text-sm text-gray-600 mt-1">{field.description}</p>
+              <div className="font-medium text-foreground text-base">
+                {fieldKey}
+              </div>
+              <p className="text-sm text-muted-foreground mt-1">
+                {field.description}
+              </p>
             </div>
           }
           rules={field.required ? [{ required: true, message: `${fieldKey} is required` }] : undefined}
@@ -197,10 +218,12 @@ const GuardrailOptionalParams: React.FC<GuardrailOptionalParamsProps> = ({
             </Select>
           ) : field.type === "number" ? (
             <NumericalInput step={1} width={400} placeholder={field.description} />
-          ) : fieldKey.includes("password") || fieldKey.includes("secret") || fieldKey.includes("key") ? (
-            <Input.Password placeholder={field.description} />
+          ) : fieldKey.includes("password") ||
+            fieldKey.includes("secret") ||
+            fieldKey.includes("key") ? (
+            <AntInput.Password placeholder={field.description} />
           ) : (
-            <Input placeholder={field.description} />
+            <AntInput placeholder={field.description} />
           )}
         </Form.Item>
       </div>
@@ -213,12 +236,13 @@ const GuardrailOptionalParams: React.FC<GuardrailOptionalParamsProps> = ({
 
   return (
     <div className="guardrail-optional-params">
-      <div className="mb-8 pb-4 border-b border-gray-100">
-        <Title level={3} className="mb-2 font-semibold text-gray-900">
+      <div className="mb-8 pb-4 border-b border-border">
+        <h3 className="mb-2 font-semibold text-foreground text-xl">
           Optional Parameters
-        </Title>
-        <p className="text-gray-600 text-sm">
-          {optionalParams.description || "Configure additional settings for this guardrail provider"}
+        </h3>
+        <p className="text-muted-foreground text-sm">
+          {optionalParams.description ||
+            "Configure additional settings for this guardrail provider"}
         </p>
       </div>
 
