@@ -1,15 +1,20 @@
 import React, { useState } from "react";
-import { Button, Space } from "antd";
-import { MinusCircleOutlined, PlusOutlined } from "@ant-design/icons";
-import { TextInput } from "@tremor/react";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { MinusCircle, Plus } from "lucide-react";
 
 interface KeyValueInputProps {
   value?: Record<string, string>;
   onChange?: (value: Record<string, string>) => void;
 }
 
-const KeyValueInput: React.FC<KeyValueInputProps> = ({ value = {}, onChange }) => {
-  const [pairs, setPairs] = useState<[string, string][]>(Object.entries(value));
+const KeyValueInput: React.FC<KeyValueInputProps> = ({
+  value = {},
+  onChange,
+}) => {
+  const [pairs, setPairs] = useState<[string, string][]>(
+    Object.entries(value),
+  );
 
   const handleAdd = () => {
     setPairs([...pairs, ["", ""]]);
@@ -31,19 +36,36 @@ const KeyValueInput: React.FC<KeyValueInputProps> = ({ value = {}, onChange }) =
   return (
     <div>
       {pairs.map(([key, val], index) => (
-        <Space key={index} style={{ display: "flex", marginBottom: 8 }} align="center">
-          <TextInput placeholder="Header Name" value={key} onChange={(e) => handleChange(index, e.target.value, val)} />
-          <TextInput
+        <div key={index} className="flex items-center gap-2 mb-2">
+          <Input
+            placeholder="Header Name"
+            value={key}
+            onChange={(e) => handleChange(index, e.target.value, val)}
+          />
+          <Input
             placeholder="Header Value"
             value={val}
             onChange={(e) => handleChange(index, key, e.target.value)}
           />
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100%" }}>
-            <MinusCircleOutlined onClick={() => handleRemove(index)} style={{ cursor: "pointer" }} />
-          </div>
-        </Space>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            onClick={() => handleRemove(index)}
+            aria-label="Remove header"
+            className="h-8 w-8 shrink-0"
+          >
+            <MinusCircle className="h-4 w-4" />
+          </Button>
+        </div>
       ))}
-      <Button type="dashed" onClick={handleAdd} icon={<PlusOutlined />}>
+      <Button
+        type="button"
+        variant="outline"
+        onClick={handleAdd}
+        className="border-dashed"
+      >
+        <Plus className="h-4 w-4" />
         Add Header
       </Button>
     </div>
