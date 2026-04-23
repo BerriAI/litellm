@@ -1,11 +1,8 @@
-import {
-  ArrowLeftOutlined,
-  SafetyOutlined,
-  SettingOutlined,
-  WarningOutlined,
-} from "@ant-design/icons";
+import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useQuery } from "@tanstack/react-query";
-import { Button, Col, Row, Spin, Tabs } from "antd";
+import { ArrowLeft, Settings, Shield, AlertTriangle } from "lucide-react";
 import React, { useMemo, useState } from "react";
 import {
   getGuardrailsUsageDetail,
@@ -24,13 +21,25 @@ interface GuardrailDetailProps {
   endDate: string;
 }
 
-const statusColors: Record<
+const statusStyles: Record<
   string,
   { bg: string; text: string; dot: string }
 > = {
-  healthy: { bg: "bg-green-50", text: "text-green-700", dot: "bg-green-500" },
-  warning: { bg: "bg-amber-50", text: "text-amber-700", dot: "bg-amber-500" },
-  critical: { bg: "bg-red-50", text: "text-red-700", dot: "bg-red-500" },
+  healthy: {
+    bg: "bg-emerald-50 dark:bg-emerald-950/30",
+    text: "text-emerald-700 dark:text-emerald-400",
+    dot: "bg-emerald-500",
+  },
+  warning: {
+    bg: "bg-amber-50 dark:bg-amber-950/30",
+    text: "text-amber-700 dark:text-amber-400",
+    dot: "bg-amber-500",
+  },
+  critical: {
+    bg: "bg-red-50 dark:bg-red-950/30",
+    text: "text-red-700 dark:text-red-400",
+    dot: "bg-red-500",
+  },
 };
 
 export function GuardrailDetail({
@@ -42,12 +51,17 @@ export function GuardrailDetail({
 }: GuardrailDetailProps) {
   const [activeTab, setActiveTab] = useState("overview");
   const [evaluationModalOpen, setEvaluationModalOpen] = useState(false);
-  const [logsPage, setLogsPage] = useState(1);
+  const [logsPage] = useState(1);
   const logsPageSize = 50;
 
-  const { data: detailData, isLoading: detailLoading, error: detailError } = useQuery({
+  const {
+    data: detailData,
+    isLoading: detailLoading,
+    error: detailError,
+  } = useQuery({
     queryKey: ["guardrails-usage-detail", guardrailId, startDate, endDate],
-    queryFn: () => getGuardrailsUsageDetail(accessToken!, guardrailId, startDate, endDate),
+    queryFn: () =>
+      getGuardrailsUsageDetail(accessToken!, guardrailId, startDate, endDate),
     enabled: !!accessToken && !!guardrailId,
   });
   const { data: logsData, isLoading: logsLoading } = useQuery({
@@ -100,22 +114,23 @@ export function GuardrailDetail({
         avgScore: undefined as number | undefined,
         avgLatency: undefined as number | undefined,
       };
-  const statusStyle = statusColors[data.status] ?? statusColors.healthy;
+  const statusStyle = statusStyles[data.status] ?? statusStyles.healthy;
 
   if (detailLoading && !detailData) {
     return (
       <div className="flex items-center justify-center py-12">
-        <Spin size="large" />
+        <Skeleton className="h-10 w-10 rounded-full" />
       </div>
     );
   }
   if (detailError && !detailData) {
     return (
       <div>
-        <Button type="link" icon={<ArrowLeftOutlined />} onClick={onBack} className="pl-0 mb-4">
+        <Button variant="link" onClick={onBack} className="pl-0 mb-4">
+          <ArrowLeft className="h-4 w-4" />
           Back to Overview
         </Button>
-        <p className="text-red-600">Failed to load guardrail details.</p>
+        <p className="text-destructive">Failed to load guardrail details.</p>
       </div>
     );
   }
@@ -123,86 +138,97 @@ export function GuardrailDetail({
   return (
     <div>
       <div className="mb-6">
-        <Button
-          type="link"
-          icon={<ArrowLeftOutlined />}
-          onClick={onBack}
-          className="pl-0 mb-4"
-        >
+        <Button variant="link" onClick={onBack} className="pl-0 mb-4">
+          <ArrowLeft className="h-4 w-4" />
           Back to Overview
         </Button>
 
         <div className="flex items-start justify-between">
           <div>
             <div className="flex items-center gap-3 mb-1">
-              <SafetyOutlined className="text-xl text-gray-400" />
-              <h1 className="text-xl font-semibold text-gray-900">{data.name}</h1>
+              <Shield className="h-5 w-5 text-muted-foreground" />
+              <h1 className="text-xl font-semibold text-foreground">
+                {data.name}
+              </h1>
               <span
                 className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 text-xs font-medium rounded-full ${statusStyle.bg} ${statusStyle.text}`}
               >
-                <span className={`w-1.5 h-1.5 rounded-full ${statusStyle.dot}`} />
+                <span
+                  className={`w-1.5 h-1.5 rounded-full ${statusStyle.dot}`}
+                />
                 {data.status.charAt(0).toUpperCase() + data.status.slice(1)}
               </span>
             </div>
-            <p className="text-sm text-gray-500 ml-8">{data.description}</p>
+            <p className="text-sm text-muted-foreground ml-8">
+              {data.description}
+            </p>
           </div>
           <div className="flex items-center gap-2">
-            <span className="inline-flex items-center px-2.5 py-1 text-xs font-medium rounded-md bg-indigo-50 text-indigo-700 border border-indigo-200">
+            <span className="inline-flex items-center px-2.5 py-1 text-xs font-medium rounded-md bg-indigo-50 text-indigo-700 border border-indigo-200 dark:bg-indigo-950/30 dark:text-indigo-300 dark:border-indigo-800">
               {data.provider}
             </span>
             <Button
-              type="default"
-              icon={<SettingOutlined />}
+              variant="outline"
+              size="icon"
               onClick={() => setEvaluationModalOpen(true)}
               title="Evaluation settings"
-            />
+            >
+              <Settings className="h-4 w-4" />
+            </Button>
           </div>
         </div>
       </div>
 
-      <Tabs
-        activeKey={activeTab}
-        onChange={setActiveTab}
-        items={[
-          { key: "overview", label: "Overview" },
-          { key: "logs", label: "Logs" },
-        ]}
-      />
+      <Tabs value={activeTab} onValueChange={setActiveTab}>
+        <TabsList>
+          <TabsTrigger value="overview">Overview</TabsTrigger>
+          <TabsTrigger value="logs">Logs</TabsTrigger>
+        </TabsList>
+      </Tabs>
 
       {activeTab === "overview" && (
         <div className="space-y-6 mt-4">
-          <Row gutter={[16, 16]}>
-            <Col xs={12} md={8}>
-              <MetricCard label="Requests Evaluated" value={data.requestsEvaluated.toLocaleString()} />
-            </Col>
-            <Col xs={12} md={8}>
-              <MetricCard
-                label="Fail Rate"
-                value={`${data.failRate}%`}
-                valueColor={
-                  data.failRate > 15 ? "text-red-600" : data.failRate > 5 ? "text-amber-600" : "text-green-600"
-                }
-                subtitle={`${Math.round((data.requestsEvaluated * data.failRate) / 100).toLocaleString()} blocked`}
-                icon={data.failRate > 15 ? <WarningOutlined className="text-red-400" /> : undefined}
-              />
-            </Col>
-            <Col xs={12} md={8}>
-              <MetricCard
-                label="Avg. latency added"
-                value={data.avgLatency != null ? `${Math.round(data.avgLatency)}ms` : "—"}
-                valueColor={
-                  data.avgLatency != null
-                    ? data.avgLatency > 150
-                      ? "text-red-600"
-                      : data.avgLatency > 50
-                        ? "text-amber-600"
-                        : "text-green-600"
-                    : "text-gray-500"
-                }
-                subtitle={data.avgLatency != null ? "Per request (avg)" : "No data"}
-              />
-            </Col>
-          </Row>
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+            <MetricCard
+              label="Requests Evaluated"
+              value={data.requestsEvaluated.toLocaleString()}
+            />
+            <MetricCard
+              label="Fail Rate"
+              value={`${data.failRate}%`}
+              valueColor={
+                data.failRate > 15
+                  ? "text-red-600 dark:text-red-400"
+                  : data.failRate > 5
+                    ? "text-amber-600 dark:text-amber-400"
+                    : "text-emerald-600 dark:text-emerald-400"
+              }
+              subtitle={`${Math.round((data.requestsEvaluated * data.failRate) / 100).toLocaleString()} blocked`}
+              icon={
+                data.failRate > 15 ? (
+                  <AlertTriangle className="h-4 w-4 text-red-400" />
+                ) : undefined
+              }
+            />
+            <MetricCard
+              label="Avg. latency added"
+              value={
+                data.avgLatency != null
+                  ? `${Math.round(data.avgLatency)}ms`
+                  : "—"
+              }
+              valueColor={
+                data.avgLatency != null
+                  ? data.avgLatency > 150
+                    ? "text-red-600 dark:text-red-400"
+                    : data.avgLatency > 50
+                      ? "text-amber-600 dark:text-amber-400"
+                      : "text-emerald-600 dark:text-emerald-400"
+                  : "text-muted-foreground"
+              }
+              subtitle={data.avgLatency != null ? "Per request (avg)" : "No data"}
+            />
+          </div>
 
           <LogViewer
             guardrailName={data.name}

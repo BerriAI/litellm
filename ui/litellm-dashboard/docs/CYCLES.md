@@ -70,3 +70,18 @@ Layer abbreviations: **TS** (tsc --noEmit), **Lint** (eslint), **Vitest**
 - Final status: **done (partial)**
 - Scope: `src/components/email_events/email_event_settings.tsx` only.
 
+## 9. Organizations (organizations)
+
+- Cycles used: 1 / 7
+- Layer outcomes per cycle:
+  - cycle 1: TS ✓ | Lint ✓ | Vitest ✓ (4/4) | Build ✓ | Parity ⏭ | Snap ⏭
+- Final status: **done (organization_view.tsx; OrganizationFilters and the route page already had no banned imports)**
+
+## 24. Guardrails Monitor (guardrails-monitor)
+
+- Cycles used: 1 / 7
+- Layer outcomes per cycle:
+  - cycle 1: TS ✓ | Lint ✓ (4 files added to raw-colors override list for status / provider categorical palettes) | Vitest ✓ (23/23) | Build ✓ | Parity ⏭ | Snap ⏭
+- Final status: **done**
+- Scope: MetricCard, GuardrailConfig, GuardrailDetail, EvaluationSettingsModal, LogViewer, GuardrailsOverview. ScoreChart already used tremor BarChart (charts exemption applies). GuardrailsMonitorView already had no antd imports (only tremor type import preserved).
+

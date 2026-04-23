@@ -1,12 +1,13 @@
-import {
-  CheckCircleOutlined,
-  CloseOutlined,
-  DownOutlined,
-  WarningOutlined,
-} from "@ant-design/icons";
+import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
 import { useQuery } from "@tanstack/react-query";
 import moment from "moment";
-import { Button, Spin } from "antd";
+import {
+  AlertTriangle,
+  Check,
+  ChevronDown,
+  X,
+} from "lucide-react";
 import React, { useState } from "react";
 import { uiSpendLogsCall } from "@/components/networking";
 import { LogDetailsDrawer } from "@/components/view_logs/LogDetailsDrawer";
@@ -15,27 +16,33 @@ import type { LogEntry } from "./mockData";
 
 const actionConfig: Record<
   "blocked" | "passed" | "flagged",
-  { icon: React.ElementType; color: string; bg: string; border: string; label: string }
+  {
+    icon: React.ElementType;
+    color: string;
+    bg: string;
+    border: string;
+    label: string;
+  }
 > = {
   blocked: {
-    icon: CloseOutlined,
-    color: "text-red-600",
-    bg: "bg-red-50",
-    border: "border-red-200",
+    icon: X,
+    color: "text-red-600 dark:text-red-400",
+    bg: "bg-red-50 dark:bg-red-950/30",
+    border: "border-red-200 dark:border-red-800",
     label: "Blocked",
   },
   passed: {
-    icon: CheckCircleOutlined,
-    color: "text-green-600",
-    bg: "bg-green-50",
-    border: "border-green-200",
+    icon: Check,
+    color: "text-emerald-600 dark:text-emerald-400",
+    bg: "bg-emerald-50 dark:bg-emerald-950/30",
+    border: "border-emerald-200 dark:border-emerald-800",
     label: "Passed",
   },
   flagged: {
-    icon: WarningOutlined,
-    color: "text-amber-600",
-    bg: "bg-amber-50",
-    border: "border-amber-200",
+    icon: AlertTriangle,
+    color: "text-amber-600 dark:text-amber-400",
+    bg: "bg-amber-50 dark:bg-amber-950/30",
+    border: "border-amber-200 dark:border-amber-800",
     label: "Flagged",
   },
 };
@@ -63,11 +70,13 @@ export function LogViewer({
 }: LogViewerProps) {
   const [sampleSize, setSampleSize] = useState(10);
   const [activeFilter, setActiveFilter] = useState<string>(filterAction);
-  const [selectedRequestId, setSelectedRequestId] = useState<string | null>(null);
+  const [selectedRequestId, setSelectedRequestId] = useState<string | null>(
+    null,
+  );
   const [drawerOpen, setDrawerOpen] = useState(false);
 
   const filteredLogs = logs.filter(
-    (log) => activeFilter === "all" || log.action === activeFilter
+    (log) => activeFilter === "all" || log.action === activeFilter,
   );
   const displayLogs = filteredLogs.slice(0, sampleSize);
   const total = totalLogs ?? logs.length;
@@ -117,14 +126,14 @@ export function LogViewer({
   };
 
   return (
-    <div className="bg-white border border-gray-200 rounded-lg">
-      <div className="p-4 border-b border-gray-200">
+    <div className="bg-background border border-border rounded-lg">
+      <div className="p-4 border-b border-border">
         <div className="flex items-center justify-between flex-wrap gap-3">
           <div>
-            <h3 className="text-base font-semibold text-gray-900">
+            <h3 className="text-base font-semibold text-foreground">
               {guardrailName ? `Logs — ${guardrailName}` : "Request Logs"}
             </h3>
-            <p className="text-xs text-gray-500 mt-0.5">
+            <p className="text-xs text-muted-foreground mt-0.5">
               {logsLoading
                 ? "Loading…"
                 : logs.length > 0
@@ -138,22 +147,24 @@ export function LogViewer({
                 {filters.map((f) => (
                   <Button
                     key={f}
-                    type={activeFilter === f ? "primary" : "default"}
-                    size="small"
+                    variant={activeFilter === f ? "default" : "outline"}
+                    size="sm"
                     onClick={() => setActiveFilter(f)}
                   >
                     {f.charAt(0).toUpperCase() + f.slice(1)}
                   </Button>
                 ))}
               </div>
-              <div className="h-4 w-px bg-gray-200" />
+              <div className="h-4 w-px bg-border" />
               <div className="flex items-center gap-1">
-                <span className="text-xs text-gray-500 mr-1">Sample:</span>
+                <span className="text-xs text-muted-foreground mr-1">
+                  Sample:
+                </span>
                 {sampleSizes.map((size) => (
                   <Button
                     key={size}
-                    type={sampleSize === size ? "primary" : "default"}
-                    size="small"
+                    variant={sampleSize === size ? "default" : "outline"}
+                    size="sm"
                     onClick={() => setSampleSize(size)}
                   >
                     {size}
@@ -167,16 +178,16 @@ export function LogViewer({
 
       {logsLoading && (
         <div className="flex items-center justify-center py-12">
-          <Spin />
+          <Skeleton className="h-8 w-8 rounded-full" />
         </div>
       )}
       {!logsLoading && displayLogs.length === 0 && (
-        <div className="py-12 text-center text-sm text-gray-500">
+        <div className="py-12 text-center text-sm text-muted-foreground">
           No logs to display. Adjust filters or date range.
         </div>
       )}
       {!logsLoading && displayLogs.length > 0 && (
-        <div className="divide-y divide-gray-100">
+        <div className="divide-y divide-border">
           {displayLogs.map((log) => {
             const config = actionConfig[log.action];
             const ActionIcon = config.icon;
@@ -185,7 +196,7 @@ export function LogViewer({
                 key={log.id}
                 type="button"
                 onClick={() => handleLogClick(log)}
-                className="w-full text-left px-4 py-3 hover:bg-gray-50 transition-colors flex items-start gap-3"
+                className="w-full text-left px-4 py-3 hover:bg-muted transition-colors flex items-start gap-3"
               >
                 <ActionIcon
                   className={`w-4 h-4 mt-0.5 flex-shrink-0 ${config.color}`}
@@ -197,17 +208,21 @@ export function LogViewer({
                     >
                       {config.label}
                     </span>
-                    <span className="text-xs text-gray-400">{log.timestamp}</span>
-                    <span className="text-xs text-gray-400">·</span>
+                    <span className="text-xs text-muted-foreground">
+                      {log.timestamp}
+                    </span>
+                    <span className="text-xs text-muted-foreground">·</span>
                     {log.model && (
-                      <span className="text-xs text-gray-500">{log.model}</span>
+                      <span className="text-xs text-muted-foreground">
+                        {log.model}
+                      </span>
                     )}
                   </div>
-                  <p className="text-sm text-gray-800 truncate">
+                  <p className="text-sm text-foreground truncate">
                     {log.input_snippet ?? log.input ?? "—"}
                   </p>
                 </div>
-                <DownOutlined className="w-4 h-4 text-gray-400 flex-shrink-0 mt-1" />
+                <ChevronDown className="w-4 h-4 text-muted-foreground flex-shrink-0 mt-1" />
               </button>
             );
           })}

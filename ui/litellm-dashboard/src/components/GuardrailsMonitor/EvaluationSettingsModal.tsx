@@ -1,7 +1,26 @@
-import { CloseOutlined, PlayCircleOutlined } from "@ant-design/icons";
-import { Button, Modal, Select, Input } from "antd";
+import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Textarea } from "@/components/ui/textarea";
+import { PlayCircle } from "lucide-react";
 import React, { useEffect, useState } from "react";
-import { fetchAvailableModels, type ModelGroup } from "@/components/playground/llm_calls/fetch_models";
+import {
+  fetchAvailableModels,
+  type ModelGroup,
+} from "@/components/playground/llm_calls/fetch_models";
 
 const DEFAULT_PROMPT = `Evaluate whether this guardrail's decision was correct.
 Analyze the user input, the guardrail action taken, and determine if it was appropriate.
@@ -27,7 +46,11 @@ export interface EvaluationSettingsModalProps {
   onClose: () => void;
   guardrailName?: string;
   accessToken: string | null;
-  onRunEvaluation?: (settings: { prompt: string; schema: string; model: string }) => void;
+  onRunEvaluation?: (settings: {
+    prompt: string;
+    schema: string;
+    model: string;
+  }) => void;
 }
 
 export function EvaluationSettingsModal({
@@ -73,85 +96,94 @@ export function EvaluationSettingsModal({
     }
   };
 
-  const modelSelectOptions = modelOptions.map((m) => ({
-    value: m.model_group,
-    label: m.model_group,
-  }));
-
   return (
-    <Modal
-      title="Evaluation Settings"
-      open={open}
-      onCancel={onClose}
-      width={640}
-      footer={null}
-      closeIcon={<CloseOutlined />}
-      destroyOnClose
-    >
-      <p className="text-sm text-gray-500 mb-4">
-        {guardrailName
-          ? `Configure AI evaluation for ${guardrailName}`
-          : "Configure AI evaluation for re-running on logs"}
-      </p>
+    <Dialog open={open} onOpenChange={(o) => (!o ? onClose() : undefined)}>
+      <DialogContent className="max-w-2xl">
+        <DialogHeader>
+          <DialogTitle>Evaluation Settings</DialogTitle>
+          <DialogDescription>
+            {guardrailName
+              ? `Configure AI evaluation for ${guardrailName}`
+              : "Configure AI evaluation for re-running on logs"}
+          </DialogDescription>
+        </DialogHeader>
 
-      <div className="space-y-4">
-        <div>
-          <div className="flex items-center justify-between mb-1.5">
-            <label className="text-sm font-medium text-gray-700">Evaluation Prompt</label>
-            <button
-              type="button"
-              onClick={handleResetPrompt}
-              className="text-xs text-indigo-600 hover:text-indigo-700"
-            >
-              Reset to default
-            </button>
+        <div className="space-y-4">
+          <div>
+            <div className="flex items-center justify-between mb-1.5">
+              <Label>Evaluation Prompt</Label>
+              <button
+                type="button"
+                onClick={handleResetPrompt}
+                className="text-xs text-primary hover:underline"
+              >
+                Reset to default
+              </button>
+            </div>
+            <Textarea
+              value={prompt}
+              onChange={(e) => setPrompt(e.target.value)}
+              rows={6}
+              className="font-mono text-sm"
+            />
+            <p className="text-xs text-muted-foreground mt-1">
+              System prompt sent to the evaluation model. Output is structured
+              via response_format.
+            </p>
           </div>
-          <Input.TextArea
-            value={prompt}
-            onChange={(e) => setPrompt(e.target.value)}
-            rows={6}
-            className="font-mono text-sm"
-          />
-          <p className="text-xs text-gray-400 mt-1">
-            System prompt sent to the evaluation model. Output is structured via response_format.
-          </p>
+
+          <div>
+            <Label className="block mb-1.5">Response Schema</Label>
+            <p className="text-xs text-muted-foreground mb-1">
+              response_format: json_schema
+            </p>
+            <Textarea
+              value={schema}
+              onChange={(e) => setSchema(e.target.value)}
+              rows={6}
+              className="font-mono text-sm"
+            />
+          </div>
+
+          <div>
+            <Label className="block mb-1.5">Model</Label>
+            <Select
+              value={model ?? ""}
+              onValueChange={(v) => setModel(v || null)}
+              disabled={loadingModels}
+            >
+              <SelectTrigger>
+                <SelectValue
+                  placeholder={loadingModels ? "Loading models…" : "Select a model"}
+                />
+              </SelectTrigger>
+              <SelectContent>
+                {modelOptions.length === 0 ? (
+                  <div className="py-2 px-3 text-sm text-muted-foreground">
+                    {!accessToken ? "Sign in to see models" : "No models available"}
+                  </div>
+                ) : (
+                  modelOptions.map((m) => (
+                    <SelectItem key={m.model_group} value={m.model_group}>
+                      {m.model_group}
+                    </SelectItem>
+                  ))
+                )}
+              </SelectContent>
+            </Select>
+          </div>
         </div>
 
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1.5">
-            Response Schema
-          </label>
-          <p className="text-xs text-gray-400 mb-1">response_format: json_schema</p>
-          <Input.TextArea
-            value={schema}
-            onChange={(e) => setSchema(e.target.value)}
-            rows={6}
-            className="font-mono text-sm"
-          />
+        <div className="flex items-center justify-end gap-2 mt-6 pt-4 border-t border-border">
+          <Button variant="outline" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button onClick={handleRun} disabled={!model}>
+            <PlayCircle className="h-4 w-4" />
+            Run Evaluation
+          </Button>
         </div>
-
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1.5">Model</label>
-          <Select
-            placeholder={loadingModels ? "Loading models…" : "Select a model"}
-            value={model ?? undefined}
-            onChange={setModel}
-            options={modelSelectOptions}
-            style={{ width: "100%" }}
-            showSearch
-            optionFilterProp="label"
-            loading={loadingModels}
-            notFoundContent={!accessToken ? "Sign in to see models" : "No models available"}
-          />
-        </div>
-      </div>
-
-      <div className="flex items-center justify-end gap-2 mt-6 pt-4 border-t border-gray-100">
-        <Button onClick={onClose}>Cancel</Button>
-        <Button type="primary" icon={<PlayCircleOutlined />} onClick={handleRun} disabled={!model}>
-          Run Evaluation
-        </Button>
-      </div>
-    </Modal>
+      </DialogContent>
+    </Dialog>
   );
 }

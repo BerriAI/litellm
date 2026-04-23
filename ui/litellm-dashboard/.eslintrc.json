@@ -23,7 +23,11 @@
         "tailwind.config.ts",
         "src/components/molecules/notifications_manager.tsx",
         "src/components/molecules/message_manager.tsx",
-        "src/components/ToolPolicies/PolicySelect.tsx"
+        "src/components/ToolPolicies/PolicySelect.tsx",
+        "src/components/GuardrailsMonitor/GuardrailConfig.tsx",
+        "src/components/GuardrailsMonitor/GuardrailDetail.tsx",
+        "src/components/GuardrailsMonitor/LogViewer.tsx",
+        "src/components/GuardrailsMonitor/GuardrailsOverview.tsx"
       ],
       "rules": {
         "litellm-ui/no-banned-ui-imports": "off",

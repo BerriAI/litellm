@@ -1,8 +1,14 @@
 import React, { type ReactNode } from "react";
+import { cn } from "@/lib/utils";
 
 interface MetricCardProps {
   label: string;
   value: string | number;
+  /**
+   * Tailwind text-color class. Defaults to a foreground-tone token.
+   * Callers can pass any tone here including non-semantic ones (the
+   * label/value usage is decorative, not a theme state).
+   */
   valueColor?: string;
   icon?: ReactNode;
   subtitle?: string;
@@ -11,20 +17,24 @@ interface MetricCardProps {
 export function MetricCard({
   label,
   value,
-  valueColor = "text-gray-900",
+  valueColor = "text-foreground",
   icon,
   subtitle,
 }: MetricCardProps) {
   return (
-    <div className="h-full bg-white border border-gray-200 rounded-lg p-5 flex flex-col">
+    <div className="h-full bg-background border border-border rounded-lg p-5 flex flex-col">
       <div className="flex items-center justify-between mb-1">
-        <span className="text-sm font-medium text-gray-600">{label}</span>
-        {icon && <span className="text-gray-400">{icon}</span>}
+        <span className="text-sm font-medium text-muted-foreground">
+          {label}
+        </span>
+        {icon && <span className="text-muted-foreground">{icon}</span>}
       </div>
-      <div className={`text-3xl font-semibold ${valueColor} tracking-tight`}>
+      <div className={cn("text-3xl font-semibold tracking-tight", valueColor)}>
         {value}
       </div>
-      {subtitle && <p className="text-xs text-gray-500 mt-1">{subtitle}</p>}
+      {subtitle && (
+        <p className="text-xs text-muted-foreground mt-1">{subtitle}</p>
+      )}
     </div>
   );
 }

@@ -1,13 +1,22 @@
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { Skeleton } from "@/components/ui/skeleton";
 import {
-  DownloadOutlined,
-  RiseOutlined,
-  SafetyOutlined,
-  SettingOutlined,
-  WarningOutlined,
-} from "@ant-design/icons";
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import { useQuery } from "@tanstack/react-query";
-import { Button, Card, Col, Row, Spin, Table, Typography } from "antd";
-import type { ColumnsType } from "antd/es/table";
+import {
+  AlertTriangle,
+  Download,
+  Settings,
+  Shield,
+  TrendingUp,
+} from "lucide-react";
 import React, { useMemo, useState } from "react";
 import { getGuardrailsUsageOverview } from "@/components/networking";
 import { type PerformanceRow } from "./mockData";
@@ -30,26 +39,40 @@ type SortKey =
   | "falseNegativeRate";
 
 const providerColors: Record<string, string> = {
-  Bedrock: "bg-orange-100 text-orange-700 border-orange-200",
-  "Google Cloud": "bg-sky-100 text-sky-700 border-sky-200",
-  LiteLLM: "bg-indigo-100 text-indigo-700 border-indigo-200",
-  Custom: "bg-gray-100 text-gray-600 border-gray-200",
+  Bedrock:
+    "bg-orange-100 text-orange-700 border-orange-200 dark:bg-orange-950/30 dark:text-orange-300 dark:border-orange-800",
+  "Google Cloud":
+    "bg-sky-100 text-sky-700 border-sky-200 dark:bg-sky-950/30 dark:text-sky-300 dark:border-sky-800",
+  LiteLLM:
+    "bg-indigo-100 text-indigo-700 border-indigo-200 dark:bg-indigo-950/30 dark:text-indigo-300 dark:border-indigo-800",
+  Custom: "bg-muted text-muted-foreground border-border",
 };
 
 function computeMetricsFromRows(data: PerformanceRow[]) {
   const totalRequests = data.reduce((sum, r) => sum + r.requestsEvaluated, 0);
   const totalBlocked = data.reduce(
     (sum, r) => sum + Math.round((r.requestsEvaluated * r.failRate) / 100),
-    0
+    0,
   );
   const passRate =
-    totalRequests > 0 ? ((1 - totalBlocked / totalRequests) * 100).toFixed(1) : "0";
+    totalRequests > 0
+      ? ((1 - totalBlocked / totalRequests) * 100).toFixed(1)
+      : "0";
   const withLat = data.filter((r) => r.avgLatency != null);
   const avgLatency =
     withLat.length > 0
-      ? Math.round(withLat.reduce((sum, r) => sum + (r.avgLatency ?? 0), 0) / withLat.length)
+      ? Math.round(
+          withLat.reduce((sum, r) => sum + (r.avgLatency ?? 0), 0) /
+            withLat.length,
+        )
       : 0;
-  return { totalRequests, totalBlocked, passRate, avgLatency, count: data.length };
+  return {
+    totalRequests,
+    totalBlocked,
+    passRate,
+    avgLatency,
+    count: data.length,
+  };
 }
 
 export function GuardrailsOverview({
@@ -62,7 +85,11 @@ export function GuardrailsOverview({
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
   const [evaluationModalOpen, setEvaluationModalOpen] = useState(false);
 
-  const { data: guardrailsData, isLoading: guardrailsLoading, error: guardrailsError } = useQuery({
+  const {
+    data: guardrailsData,
+    isLoading: guardrailsLoading,
+    error: guardrailsError,
+  } = useQuery({
     queryKey: ["guardrails-usage-overview", startDate, endDate],
     queryFn: () => getGuardrailsUsageOverview(accessToken!, startDate, endDate),
     enabled: !!accessToken,
@@ -75,7 +102,12 @@ export function GuardrailsOverview({
         totalRequests: guardrailsData.totalRequests ?? 0,
         totalBlocked: guardrailsData.totalBlocked ?? 0,
         passRate: String(guardrailsData.passRate ?? 0),
-        avgLatency: activeData.length ? Math.round(activeData.reduce((s, r) => s + (r.avgLatency ?? 0), 0) / activeData.length) : 0,
+        avgLatency: activeData.length
+          ? Math.round(
+              activeData.reduce((s, r) => s + (r.avgLatency ?? 0), 0) /
+                activeData.length,
+            )
+          : 0,
         count: activeData.length,
       };
     }
@@ -93,108 +125,12 @@ export function GuardrailsOverview({
   const isLoading = guardrailsLoading;
   const error = guardrailsError;
 
-  const columns: ColumnsType<PerformanceRow> = [
-    {
-      title: "Guardrail",
-      dataIndex: "name",
-      key: "name",
-      render: (name: string, row) => (
-        <button
-          type="button"
-          className="text-sm font-medium text-gray-900 hover:text-indigo-600 text-left"
-          onClick={() => onSelectGuardrail(row.id)}
-        >
-          {name}
-        </button>
-      ),
-    },
-    {
-      title: "Provider",
-      dataIndex: "provider",
-      key: "provider",
-      render: (provider: string) => (
-        <span
-          className={`inline-flex items-center px-2 py-0.5 text-xs font-medium rounded border ${
-            providerColors[provider] ?? providerColors.Custom
-          }`}
-        >
-          {provider}
-        </span>
-      ),
-    },
-    {
-      title: "Requests",
-      dataIndex: "requestsEvaluated",
-      key: "requestsEvaluated",
-      align: "right",
-      sorter: true,
-      sortOrder: sortBy === "requestsEvaluated" ? (sortDir === "desc" ? "descend" : "ascend") : null,
-      render: (v: number) => v.toLocaleString(),
-    },
-    {
-      title: "Fail Rate",
-      dataIndex: "failRate",
-      key: "failRate",
-      align: "right",
-      sorter: true,
-      sortOrder: sortBy === "failRate" ? (sortDir === "desc" ? "descend" : "ascend") : null,
-      render: (v: number, row) => (
-        <span
-          className={
-            v > 15 ? "text-red-600" : v > 5 ? "text-amber-600" : "text-green-600"
-          }
-        >
-          {v}%
-          {row.trend === "up" && <span className="ml-1 text-xs text-red-400">↑</span>}
-          {row.trend === "down" && <span className="ml-1 text-xs text-green-400">↓</span>}
-        </span>
-      ),
-    },
-    {
-      title: "Avg. latency added",
-      dataIndex: "avgLatency",
-      key: "avgLatency",
-      align: "right",
-      sorter: true,
-      sortOrder: sortBy === "avgLatency" ? (sortDir === "desc" ? "descend" : "ascend") : null,
-      render: (v?: number) => (
-        <span
-          className={
-            v == null ? "text-gray-400" : v > 150 ? "text-red-600" : v > 50 ? "text-amber-600" : "text-green-600"
-          }
-        >
-          {v != null ? `${v}ms` : "—"}
-        </span>
-      ),
-    },
-    {
-      title: "Status",
-      dataIndex: "status",
-      key: "status",
-      align: "center",
-      render: (status: string) => (
-        <span className="inline-flex items-center gap-1.5">
-          <span
-            className={`w-2 h-2 rounded-full ${
-              status === "healthy"
-                ? "bg-green-500"
-                : status === "warning"
-                  ? "bg-amber-500"
-                  : "bg-red-500"
-            }`}
-          />
-          <span className="text-xs text-gray-600 capitalize">{status}</span>
-        </span>
-      ),
-    },
-  ];
-
-  const sortableKeys: SortKey[] = ["failRate", "requestsEvaluated", "avgLatency"];
-  const handleTableChange = (_pagination: unknown, _filters: unknown, sorter: unknown) => {
-    const s = sorter as { field?: keyof PerformanceRow; order?: string };
-    if (s?.field && sortableKeys.includes(s.field as SortKey)) {
-      setSortBy(s.field as SortKey);
-      setSortDir(s.order === "ascend" ? "asc" : "desc");
+  const toggleSort = (key: SortKey) => {
+    if (sortBy === key) {
+      setSortDir(sortDir === "asc" ? "desc" : "asc");
+    } else {
+      setSortBy(key);
+      setSortDir("desc");
     }
   };
 
@@ -203,103 +139,222 @@ export function GuardrailsOverview({
       <div className="flex items-start justify-between mb-5">
         <div>
           <div className="flex items-center gap-2 mb-1">
-            <SafetyOutlined className="text-lg text-indigo-500" />
-            <h1 className="text-xl font-semibold text-gray-900">Guardrails Monitor</h1>
+            <Shield className="h-5 w-5 text-indigo-500" />
+            <h1 className="text-xl font-semibold text-foreground">
+              Guardrails Monitor
+            </h1>
           </div>
-          <p className="text-sm text-gray-500">
+          <p className="text-sm text-muted-foreground">
             Monitor guardrail performance across all requests
           </p>
         </div>
         <div className="flex items-center gap-3">
-          <Button type="default" icon={<DownloadOutlined />} title="Coming soon">
+          <Button variant="outline" title="Coming soon">
+            <Download className="h-4 w-4" />
             Export Data
           </Button>
         </div>
       </div>
 
-      <Row gutter={[16, 16]} className="mb-6">
-        <Col xs={12} sm={12} md={8} flex="1 0 20%">
-          <MetricCard label="Total Evaluations" value={metrics.totalRequests.toLocaleString()} />
-        </Col>
-        <Col xs={12} sm={12} md={8} flex="1 0 20%">
-          <MetricCard
-            label="Blocked Requests"
-            value={metrics.totalBlocked.toLocaleString()}
-            valueColor="text-red-600"
-            icon={<WarningOutlined className="text-red-400" />}
-          />
-        </Col>
-        <Col xs={12} sm={12} md={8} flex="1 0 20%">
-          <MetricCard
-            label="Pass Rate"
-            value={`${metrics.passRate}%`}
-            valueColor="text-green-600"
-            icon={<RiseOutlined className="text-green-400" />}
-          />
-        </Col>
-        <Col xs={12} sm={12} md={8} flex="1 0 20%">
-          <MetricCard
-            label="Avg. latency added"
-            value={`${metrics.avgLatency}ms`}
-            valueColor={
-              metrics.avgLatency > 150
-                ? "text-red-600"
-                : metrics.avgLatency > 50
-                  ? "text-amber-600"
-                  : "text-green-600"
-            }
-          />
-        </Col>
-        <Col xs={12} sm={12} md={8} flex="1 0 20%">
-          <MetricCard label="Active Guardrails" value={metrics.count} />
-        </Col>
-      </Row>
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4 mb-6">
+        <MetricCard
+          label="Total Evaluations"
+          value={metrics.totalRequests.toLocaleString()}
+        />
+        <MetricCard
+          label="Blocked Requests"
+          value={metrics.totalBlocked.toLocaleString()}
+          valueColor="text-red-600 dark:text-red-400"
+          icon={<AlertTriangle className="h-4 w-4 text-red-400" />}
+        />
+        <MetricCard
+          label="Pass Rate"
+          value={`${metrics.passRate}%`}
+          valueColor="text-emerald-600 dark:text-emerald-400"
+          icon={<TrendingUp className="h-4 w-4 text-emerald-400" />}
+        />
+        <MetricCard
+          label="Avg. latency added"
+          value={`${metrics.avgLatency}ms`}
+          valueColor={
+            metrics.avgLatency > 150
+              ? "text-red-600 dark:text-red-400"
+              : metrics.avgLatency > 50
+                ? "text-amber-600 dark:text-amber-400"
+                : "text-emerald-600 dark:text-emerald-400"
+          }
+        />
+        <MetricCard label="Active Guardrails" value={metrics.count} />
+      </div>
 
       <div className="mb-6">
         <ScoreChart data={chartData} />
       </div>
 
-      <Card
-        className="border border-gray-200 rounded-lg bg-white"
-        styles={{ body: { padding: 0 } }}
-      >
+      <Card className="border border-border rounded-lg bg-background p-0">
         {(isLoading || error) && (
-          <div className="px-6 py-4 border-b border-gray-200 flex items-center gap-2">
-            {isLoading && <Spin size="small" />}
-            {error && <span className="text-sm text-red-600">Failed to load data. Try again.</span>}
+          <div className="px-6 py-4 border-b border-border flex items-center gap-2">
+            {isLoading && <Skeleton className="h-4 w-32" />}
+            {error && (
+              <span className="text-sm text-destructive">
+                Failed to load data. Try again.
+              </span>
+            )}
           </div>
         )}
-        <div className="px-6 py-4 border-b border-gray-200 flex items-start justify-between gap-4">
+        <div className="px-6 py-4 border-b border-border flex items-start justify-between gap-4">
           <div>
-            <Typography.Title level={5} className="!mb-0 text-gray-900">
+            <h5 className="text-base font-semibold text-foreground !mb-0">
               Guardrail Performance
-            </Typography.Title>
-            <p className="text-xs text-gray-500 mt-0.5">
+            </h5>
+            <p className="text-xs text-muted-foreground mt-0.5">
               Click a guardrail to view details, logs, and configuration
             </p>
           </div>
           <div className="flex items-center gap-2">
             <Button
-              type="default"
-              icon={<SettingOutlined />}
+              variant="outline"
+              size="icon"
               onClick={() => setEvaluationModalOpen(true)}
               title="Evaluation settings"
-            />
+            >
+              <Settings className="h-4 w-4" />
+            </Button>
           </div>
         </div>
-        <Table
-          columns={columns}
-          dataSource={sorted}
-          rowKey="id"
-          pagination={false}
-          loading={isLoading}
-          onChange={handleTableChange}
-          locale={activeData.length === 0 && !isLoading ? { emptyText: "No data for this period" } : undefined}
-          onRow={(row) => ({
-            onClick: () => onSelectGuardrail(row.id),
-            style: { cursor: "pointer" },
-          })}
-        />
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Guardrail</TableHead>
+              <TableHead>Provider</TableHead>
+              <TableHead
+                className="text-right cursor-pointer"
+                onClick={() => toggleSort("requestsEvaluated")}
+              >
+                Requests{" "}
+                {sortBy === "requestsEvaluated"
+                  ? sortDir === "desc"
+                    ? "↓"
+                    : "↑"
+                  : ""}
+              </TableHead>
+              <TableHead
+                className="text-right cursor-pointer"
+                onClick={() => toggleSort("failRate")}
+              >
+                Fail Rate{" "}
+                {sortBy === "failRate" ? (sortDir === "desc" ? "↓" : "↑") : ""}
+              </TableHead>
+              <TableHead
+                className="text-right cursor-pointer"
+                onClick={() => toggleSort("avgLatency")}
+              >
+                Avg. latency added{" "}
+                {sortBy === "avgLatency"
+                  ? sortDir === "desc"
+                    ? "↓"
+                    : "↑"
+                  : ""}
+              </TableHead>
+              <TableHead className="text-center">Status</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {sorted.length === 0 && !isLoading ? (
+              <TableRow>
+                <TableCell
+                  colSpan={6}
+                  className="text-center text-muted-foreground py-8"
+                >
+                  No data for this period
+                </TableCell>
+              </TableRow>
+            ) : (
+              sorted.map((row) => (
+                <TableRow
+                  key={row.id}
+                  className="cursor-pointer"
+                  onClick={() => onSelectGuardrail(row.id)}
+                >
+                  <TableCell>
+                    <button
+                      type="button"
+                      className="text-sm font-medium text-foreground hover:text-primary text-left"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onSelectGuardrail(row.id);
+                      }}
+                    >
+                      {row.name}
+                    </button>
+                  </TableCell>
+                  <TableCell>
+                    <span
+                      className={`inline-flex items-center px-2 py-0.5 text-xs font-medium rounded border ${
+                        providerColors[row.provider] ?? providerColors.Custom
+                      }`}
+                    >
+                      {row.provider}
+                    </span>
+                  </TableCell>
+                  <TableCell className="text-right">
+                    {row.requestsEvaluated.toLocaleString()}
+                  </TableCell>
+                  <TableCell className="text-right">
+                    <span
+                      className={
+                        row.failRate > 15
+                          ? "text-red-600 dark:text-red-400"
+                          : row.failRate > 5
+                            ? "text-amber-600 dark:text-amber-400"
+                            : "text-emerald-600 dark:text-emerald-400"
+                      }
+                    >
+                      {row.failRate}%
+                      {row.trend === "up" && (
+                        <span className="ml-1 text-xs text-red-400">↑</span>
+                      )}
+                      {row.trend === "down" && (
+                        <span className="ml-1 text-xs text-emerald-400">↓</span>
+                      )}
+                    </span>
+                  </TableCell>
+                  <TableCell className="text-right">
+                    <span
+                      className={
+                        row.avgLatency == null
+                          ? "text-muted-foreground"
+                          : row.avgLatency > 150
+                            ? "text-red-600 dark:text-red-400"
+                            : row.avgLatency > 50
+                              ? "text-amber-600 dark:text-amber-400"
+                              : "text-emerald-600 dark:text-emerald-400"
+                      }
+                    >
+                      {row.avgLatency != null ? `${row.avgLatency}ms` : "—"}
+                    </span>
+                  </TableCell>
+                  <TableCell className="text-center">
+                    <span className="inline-flex items-center gap-1.5">
+                      <span
+                        className={`w-2 h-2 rounded-full ${
+                          row.status === "healthy"
+                            ? "bg-emerald-500"
+                            : row.status === "warning"
+                              ? "bg-amber-500"
+                              : "bg-red-500"
+                        }`}
+                      />
+                      <span className="text-xs text-muted-foreground capitalize">
+                        {row.status}
+                      </span>
+                    </span>
+                  </TableCell>
+                </TableRow>
+              ))
+            )}
+          </TableBody>
+        </Table>
       </Card>
 
       <EvaluationSettingsModal
