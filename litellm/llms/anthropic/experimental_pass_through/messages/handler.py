@@ -47,6 +47,41 @@ def _should_route_to_responses_api(custom_llm_provider: Optional[str]) -> bool:
     return custom_llm_provider in _RESPONSES_API_PROVIDERS
 
 
+def _sanitize_think_tag_text_blocks(
+    response: Union[AnthropicMessagesResponse, AsyncIterator]
+) -> Union[AnthropicMessagesResponse, AsyncIterator]:
+    if not isinstance(response, dict):
+        return response
+
+    content = response.get("content")
+    if not isinstance(content, list):
+        return response
+
+    sanitized_content: List[Dict[str, Any]] = []
+    for block in content:
+        if not isinstance(block, dict):
+            sanitized_content.append(block)
+            continue
+
+        if block.get("type") != "text":
+            sanitized_content.append(block)
+            continue
+
+        text = block.get("text")
+        if not isinstance(text, str) or "</think>" not in text:
+            sanitized_content.append(block)
+            continue
+
+        cleaned_text = text.split("</think>", 1)[1].lstrip()
+        sanitized_block = dict(block)
+        sanitized_block["text"] = cleaned_text
+        sanitized_content.append(sanitized_block)
+
+    sanitized_response = dict(response)
+    sanitized_response["content"] = sanitized_content
+    return cast(AnthropicMessagesResponse, sanitized_response)
+
+
 ####### ENVIRONMENT VARIABLES ###################
 # Initialize any necessary instances or variables here
 base_llm_http_handler = BaseLLMHTTPHandler()
