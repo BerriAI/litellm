@@ -3332,6 +3332,7 @@ class SpendLogsMetadata(TypedDict):
     mcp_tool_call_metadata: Optional[StandardLoggingMCPToolCall]
     vector_store_request_metadata: Optional[List[StandardLoggingVectorStoreRequest]]
     guardrail_information: Optional[List[StandardLoggingGuardrailInformation]]
+    eval_information: Optional[Any]
     status: StandardLoggingPayloadStatus
     proxy_server_request: Optional[str]
     batch_models: Optional[List[str]]
