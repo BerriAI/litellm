@@ -1,4 +1,11 @@
-import { Select } from "antd";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { cn } from "@/lib/utils";
 
 interface DurationSelectProps {
   className?: string;
@@ -6,12 +13,21 @@ interface DurationSelectProps {
   onChange?: (value: string) => void;
 }
 
-export default function DurationSelect({ className, value, onChange }: DurationSelectProps) {
+export default function DurationSelect({
+  className,
+  value,
+  onChange,
+}: DurationSelectProps) {
   return (
-    <Select className={className} value={value} onChange={onChange}>
-      <Select.Option value="24h">Daily</Select.Option>
-      <Select.Option value="7d">Weekly</Select.Option>
-      <Select.Option value="30d">Monthly</Select.Option>
+    <Select value={value} onValueChange={(v) => onChange?.(v)}>
+      <SelectTrigger className={cn(className)}>
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent>
+        <SelectItem value="24h">Daily</SelectItem>
+        <SelectItem value="7d">Weekly</SelectItem>
+        <SelectItem value="30d">Monthly</SelectItem>
+      </SelectContent>
     </Select>
   );
 }

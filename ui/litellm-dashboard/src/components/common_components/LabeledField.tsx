@@ -1,8 +1,13 @@
-import React from "react";
-import { Typography, Space } from "antd";
+import React, { useState } from "react";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import { Check, Copy } from "lucide-react";
+import { cn } from "@/lib/utils";
 import DefaultProxyAdminTag from "./DefaultProxyAdminTag";
-
-const { Text } = Typography;
 
 interface LabeledFieldProps {
   label: string;
@@ -12,6 +17,55 @@ interface LabeledFieldProps {
   copyable?: boolean;
   defaultUserIdCheck?: boolean;
 }
+
+const CopyableValue: React.FC<{
+  value: string;
+  label: string;
+  truncate?: boolean;
+}> = ({ value, label, truncate }) => {
+  const [copied, setCopied] = useState(false);
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    } catch (_err) {
+      /* noop */
+    }
+  };
+  return (
+    <div className="inline-flex items-center gap-1.5">
+      <span
+        className={cn(
+          "font-semibold",
+          truncate && "block max-w-[160px] truncate",
+        )}
+      >
+        {value}
+      </span>
+      <TooltipProvider>
+        <Tooltip open={copied || undefined}>
+          <TooltipTrigger asChild>
+            <button
+              type="button"
+              onClick={handleCopy}
+              className="text-muted-foreground hover:text-foreground"
+              aria-label={`Copy ${label}`}
+            >
+              {copied ? (
+                <Check className="h-3 w-3 text-emerald-500" />
+              ) : (
+                <Copy className="h-3 w-3" />
+              )}
+            </button>
+          </TooltipTrigger>
+          <TooltipContent>{copied ? "Copied!" : `Copy ${label}`}</TooltipContent>
+        </Tooltip>
+      </TooltipProvider>
+    </div>
+  );
+};
 
 export default function LabeledField({
   label,
@@ -28,24 +82,25 @@ export default function LabeledField({
 
   const valueEl = isDefaultUser ? (
     <DefaultProxyAdminTag userId={value} />
+  ) : isCopyable ? (
+    <CopyableValue value={displayValue} label={label} truncate={truncate} />
   ) : (
-    <Text
-      strong
-      copyable={isCopyable ? { tooltips: [`Copy ${label}`, "Copied!"] } : false}
-      ellipsis={truncate}
-      style={truncate ? { maxWidth: 160, display: "block" } : undefined}
+    <span
+      className={cn(
+        "font-semibold",
+        truncate && "block max-w-[160px] truncate",
+      )}
     >
       {displayValue}
-    </Text>
+    </span>
   );
+
   return (
     <div>
-      <Space size={4}>
-        <Text type="secondary">{icon}</Text>
-        <Text type="secondary" style={{ fontSize: 12, textTransform: "uppercase", letterSpacing: "0.05em" }}>
-          {label}
-        </Text>
-      </Space>
+      <div className="flex items-center gap-1 text-muted-foreground">
+        {icon && <span className="text-xs">{icon}</span>}
+        <span className="text-xs uppercase tracking-wider">{label}</span>
+      </div>
       <div>{valueEl}</div>
     </div>
   );

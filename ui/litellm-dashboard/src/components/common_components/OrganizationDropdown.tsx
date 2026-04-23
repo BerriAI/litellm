@@ -1,8 +1,13 @@
 import React from "react";
-import { Select, Typography } from "antd";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Organization } from "../networking";
-
-const { Text } = Typography;
+import { cn } from "@/lib/utils";
 
 interface OrganizationDropdownProps {
   organizations?: Organization[] | null;
@@ -11,7 +16,10 @@ interface OrganizationDropdownProps {
   disabled?: boolean;
   loading?: boolean;
   style?: React.CSSProperties;
+  className?: string;
 }
+
+const ALL = "__all__";
 
 const OrganizationDropdown: React.FC<OrganizationDropdownProps> = ({
   organizations,
@@ -20,35 +28,34 @@ const OrganizationDropdown: React.FC<OrganizationDropdownProps> = ({
   disabled,
   loading,
   style,
+  className,
 }) => {
   return (
     <Select
-      showSearch
-      placeholder="All Organizations"
-      value={value}
-      onChange={onChange}
-      disabled={disabled}
-      loading={loading}
-      allowClear
-      style={{ minWidth: 280, ...style }}
-      filterOption={(input, option) => {
-        if (!option) return false;
-        const org = organizations?.find((o) => o.organization_id === option.key);
-        if (!org) return false;
-
-        const searchTerm = input.toLowerCase().trim();
-        const orgAlias = (org.organization_alias || "").toLowerCase();
-        const orgId = (org.organization_id || "").toLowerCase();
-
-        return orgAlias.includes(searchTerm) || orgId.includes(searchTerm);
-      }}
+      value={value ?? ALL}
+      onValueChange={(v) => onChange?.(v === ALL ? "" : v)}
+      disabled={disabled || loading}
     >
-      {organizations?.map((org) => (
-        <Select.Option key={org.organization_id} value={org.organization_id}>
-          <span className="font-medium">{org.organization_alias}</span>{" "}
-          <Text type="secondary">({org.organization_id})</Text>
-        </Select.Option>
-      ))}
+      <SelectTrigger
+        style={{ minWidth: 280, ...style }}
+        className={cn(className)}
+      >
+        <SelectValue placeholder="All Organizations" />
+      </SelectTrigger>
+      <SelectContent>
+        <SelectItem value={ALL}>All Organizations</SelectItem>
+        {organizations?.map((org) => (
+          <SelectItem
+            key={org.organization_id}
+            value={org.organization_id ?? ""}
+          >
+            <span className="font-medium">{org.organization_alias}</span>{" "}
+            <span className="text-muted-foreground">
+              ({org.organization_id})
+            </span>
+          </SelectItem>
+        ))}
+      </SelectContent>
     </Select>
   );
 };

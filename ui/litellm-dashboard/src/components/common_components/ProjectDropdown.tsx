@@ -1,6 +1,11 @@
 import React from "react";
-import { Select, Spin } from "antd";
-import { LoadingOutlined } from "@ant-design/icons";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { ProjectResponse } from "@/app/(dashboard)/hooks/projects/useProjects";
 
 interface ProjectDropdownProps {
@@ -12,6 +17,8 @@ interface ProjectDropdownProps {
   /** When set, only show projects belonging to this team */
   teamId?: string | null;
 }
+
+const ALL = "__all__";
 
 const ProjectDropdown: React.FC<ProjectDropdownProps> = ({
   projects,
@@ -27,34 +34,27 @@ const ProjectDropdown: React.FC<ProjectDropdownProps> = ({
 
   return (
     <Select
-      showSearch
-      placeholder="Search or select a project"
-      value={value}
-      onChange={onChange}
-      disabled={disabled}
-      loading={loading}
-      allowClear
-      notFoundContent={loading ? <Spin indicator={<LoadingOutlined spin />} size="small" /> : undefined}
-      filterOption={(input, option) => {
-        if (!option) return false;
-        const project = filtered?.find((p) => p.project_id === option.key);
-        if (!project) return false;
-
-        const searchTerm = input.toLowerCase().trim();
-        const alias = (project.project_alias || "").toLowerCase();
-        const id = (project.project_id || "").toLowerCase();
-
-        return alias.includes(searchTerm) || id.includes(searchTerm);
-      }}
-      optionFilterProp="children"
+      value={value ?? ALL}
+      onValueChange={(v) => onChange?.(v === ALL ? "" : v)}
+      disabled={disabled || loading}
     >
-      {!loading &&
-        filtered?.map((project) => (
-          <Select.Option key={project.project_id} value={project.project_id}>
-            <span className="font-medium">{project.project_alias || project.project_id}</span>{" "}
-            <span className="text-gray-500">({project.project_id})</span>
-          </Select.Option>
-        ))}
+      <SelectTrigger>
+        <SelectValue placeholder="Search or select a project" />
+      </SelectTrigger>
+      <SelectContent>
+        <SelectItem value={ALL}>All Projects</SelectItem>
+        {!loading &&
+          filtered?.map((project) => (
+            <SelectItem key={project.project_id} value={project.project_id}>
+              <span className="font-medium">
+                {project.project_alias || project.project_id}
+              </span>{" "}
+              <span className="text-muted-foreground">
+                ({project.project_id})
+              </span>
+            </SelectItem>
+          ))}
+      </SelectContent>
     </Select>
   );
 };
