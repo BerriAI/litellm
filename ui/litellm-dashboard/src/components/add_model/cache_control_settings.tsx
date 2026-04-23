@@ -1,9 +1,7 @@
 import React from "react";
-import { Form, Switch, Select, Typography } from "antd";
-import { PlusOutlined, MinusCircleOutlined } from "@ant-design/icons";
+import { Form, Switch, Select } from "antd";
+import { MinusCircle, Plus } from "lucide-react";
 import NumericalInput from "../shared/numerical_input";
-
-const { Text } = Typography;
 
 interface CacheControlInjectionPoint {
   location: "message";
@@ -12,7 +10,9 @@ interface CacheControlInjectionPoint {
 }
 
 interface CacheControlSettingsProps {
-  form: any; // Form instance from parent
+  // Form instance from parent (antd Form)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  form: any;
   showCacheControl: boolean;
   onCacheControlChange: (checked: boolean) => void;
 }
@@ -50,15 +50,16 @@ const CacheControlSettings: React.FC<CacheControlSettingsProps> = ({
         className="mb-4"
         tooltip="Tell litellm where to inject cache control checkpoints. You can specify either by role (to apply to all messages of that role) or by specific message index."
       >
-        <Switch onChange={onCacheControlChange} className="bg-gray-600" />
+        <Switch onChange={onCacheControlChange} />
       </Form.Item>
 
       {showCacheControl && (
-        <div className="ml-6 pl-4 border-l-2 border-gray-200">
-          <Text className="text-sm text-gray-500 block mb-4">
-            Providers like Anthropic, Bedrock API require users to specify where to inject cache control checkpoints,
-            litellm can automatically add them for you as a cost saving feature.
-          </Text>
+        <div className="ml-6 pl-4 border-l-2 border-border">
+          <p className="text-sm text-muted-foreground block mb-4">
+            Providers like Anthropic, Bedrock API require users to specify
+            where to inject cache control checkpoints, litellm can
+            automatically add them for you as a cost saving feature.
+          </p>
 
           <Form.List name="cache_control_injection_points" initialValue={[{ location: "message" }]}>
             {(fields, { add, remove }) => (
@@ -119,16 +120,22 @@ const CacheControlSettings: React.FC<CacheControlSettingsProps> = ({
                     </Form.Item>
 
                     {fields.length > 1 && (
-                      <MinusCircleOutlined
-                        className="text-red-500 cursor-pointer text-lg ml-12"
+                      <button
+                        type="button"
+                        className="text-destructive cursor-pointer ml-12"
+                        aria-label="Remove injection point"
                         onClick={() => {
                           remove(field.name);
                           setTimeout(() => {
-                            const values = form.getFieldValue("cache_control_points");
+                            const values = form.getFieldValue(
+                              "cache_control_points",
+                            );
                             updateCacheControlPoints(values);
                           }, 0);
                         }}
-                      />
+                      >
+                        <MinusCircle className="h-5 w-5" />
+                      </button>
                     )}
                   </div>
                 ))}
@@ -136,10 +143,10 @@ const CacheControlSettings: React.FC<CacheControlSettingsProps> = ({
                 <Form.Item>
                   <button
                     type="button"
-                    className="flex items-center justify-center w-full border border-dashed border-gray-300 py-2 px-4 text-gray-600 hover:text-blue-600 hover:border-blue-300 transition-all rounded"
+                    className="flex items-center justify-center w-full border border-dashed border-border py-2 px-4 text-muted-foreground hover:text-primary hover:border-primary/50 transition-all rounded"
                     onClick={() => add()}
                   >
-                    <PlusOutlined className="mr-2" />
+                    <Plus className="mr-2 h-4 w-4" />
                     Add Injection Point
                   </button>
                 </Form.Item>
