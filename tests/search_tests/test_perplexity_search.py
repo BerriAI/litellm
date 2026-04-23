@@ -33,7 +33,8 @@ _ENV_PROVIDER_ERROR_SUBSTRINGS = (
     "insufficient_quota",
     "credit balance is too low",
     "exceeded your current quota",
-    "billing",
+    "billing_hard_limit_reached",
+    "does not have billing enabled",
 )
 
 
