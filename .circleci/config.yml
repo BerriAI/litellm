@@ -175,11 +175,6 @@ jobs:
     steps:
       - checkout
       - setup_google_dns
-      - run:
-          name: Show git commit hash
-          command: |
-            echo "Git commit hash: $CIRCLE_SHA1"
-
       - restore_cache:
           keys:
             - v2-dependencies-{{ checksum "uv.lock" }}
@@ -201,13 +196,6 @@ jobs:
             chmod +x docker/entrypoint.sh
             ./docker/entrypoint.sh
             set -e
-      - run:
-          name: Black Formatting
-          command: |
-            cd litellm
-            uv run --no-sync python -m black .
-            cd ..
-
       # Run pytest and generate JUnit XML report
       - run:
           name: Run tests (Part 1 - A-M)
@@ -256,11 +244,6 @@ jobs:
     steps:
       - checkout
       - setup_google_dns
-      - run:
-          name: Show git commit hash
-          command: |
-            echo "Git commit hash: $CIRCLE_SHA1"
-
       - restore_cache:
           keys:
             - v2-dependencies-{{ checksum "uv.lock" }}
@@ -282,13 +265,6 @@ jobs:
             chmod +x docker/entrypoint.sh
             ./docker/entrypoint.sh
             set -e
-      - run:
-          name: Black Formatting
-          command: |
-            cd litellm
-            uv run --no-sync python -m black .
-            cd ..
-
       # Run pytest and generate JUnit XML report
       - run:
           name: Run tests (Part 2 - N-Z)
@@ -338,11 +314,6 @@ jobs:
     steps:
       - checkout
       - setup_google_dns
-      - run:
-          name: Show git commit hash
-          command: |
-            echo "Git commit hash: $CIRCLE_SHA1"
-
       - restore_cache:
           keys:
             - v2-dependencies-{{ checksum "uv.lock" }}
@@ -369,8 +340,6 @@ jobs:
       - run:
           name: Run tests
           command: |
-            pwd
-            ls
             uv run --no-sync python -m pytest -v tests/local_testing -x --junitxml=test-results/junit.xml --durations=5 -k "langfuse"
           no_output_timeout: 15m
       # Store test results
@@ -419,8 +388,6 @@ jobs:
       - run:
           name: Run tests
           command: |
-            pwd
-            ls
             uv run --no-sync python -m pytest -v tests/proxy_admin_ui_tests -x --junitxml=test-results/junit.xml --durations=5 -n 2
           no_output_timeout: 15m
 
@@ -459,8 +426,6 @@ jobs:
       - run:
           name: Run tests
           command: |
-            pwd
-            ls
             TEST_FILES=$(circleci tests glob "tests/local_testing/**/test_*.py")
 
             echo "$TEST_FILES" | circleci tests run \
@@ -509,8 +474,6 @@ jobs:
       - run:
           name: Run tests
           command: |
-            pwd
-            ls
             uv run --no-sync python -m pytest -v tests/router_unit_tests -x --junitxml=test-results/junit.xml --durations=5 -n 4
           no_output_timeout: 15m
       # Store test results
@@ -538,8 +501,6 @@ jobs:
       - run:
           name: Run tests
           command: |
-            pwd
-            ls
             uv run --no-sync python -m pytest tests/local_testing/ -v -k "assistants" -x --junitxml=test-results/junit.xml --durations=5
           no_output_timeout: 15m
       # Store test results
@@ -575,8 +536,6 @@ jobs:
       - run:
           name: Run tests
           command: |
-            pwd
-            ls
             # Add --timeout to kill hanging tests after 120s (2 min)
             # Add --durations=20 to show 20 slowest tests for debugging
             # Subdirectories with dedicated jobs (maintain this list as new jobs are added)
@@ -613,8 +572,6 @@ jobs:
       - run:
           name: Run realtime tests
           command: |
-            pwd
-            ls
             # Add --timeout to kill hanging tests after 120s (2 min)
             # Add --durations=20 to show 20 slowest tests for debugging
             uv run --no-sync python -m pytest -vv tests/llm_translation/realtime --cov=litellm --cov-report=xml -v --junitxml=test-results/junit.xml --durations=20 -n 4 --timeout=120 --timeout_method=thread
@@ -653,8 +610,6 @@ jobs:
       - run:
           name: Run tests
           command: |
-            pwd
-            ls
             uv run --no-sync python -m pytest -vv tests/mcp_tests --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit.xml --durations=5 -n 2
           no_output_timeout: 15m
       - run:
@@ -691,8 +646,6 @@ jobs:
       - run:
           name: Run tests
           command: |
-            pwd
-            ls
             uv run --no-sync python -m pytest -vv tests/agent_tests --ignore=tests/agent_tests/local_only_agent_tests --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit.xml --durations=5
           no_output_timeout: 15m
       - run:
@@ -729,8 +682,6 @@ jobs:
       - run:
           name: Run tests
           command: |
-            pwd
-            ls
             LITELLM_LOG=WARNING uv run --no-sync python -m pytest tests/guardrails_tests -vv --cov=litellm --cov-report=xml --junitxml=test-results/junit.xml --durations=5 -n 2 --timeout=120 --timeout_method=thread
           no_output_timeout: 15m
       - run:
@@ -768,8 +719,6 @@ jobs:
       - run:
           name: Run tests
           command: |
-            pwd
-            ls
             uv run --no-sync python -m pytest -vv tests/unified_google_tests --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit.xml --durations=5 --retries 3 --retry-delay 5
           no_output_timeout: 15m
       - run:
@@ -817,8 +766,6 @@ jobs:
       - run:
           name: Run tests
           command: |
-            pwd
-            ls
             uv run --no-sync python -m pytest -v tests/llm_responses_api_testing -x --junitxml=test-results/junit.xml --durations=5 -n 8
           no_output_timeout: 15m
 
@@ -845,8 +792,6 @@ jobs:
       - run:
           name: Run tests
           command: |
-            pwd
-            ls
             uv run --no-sync python -m pytest -vv tests/ocr_tests --cov=litellm --cov-report=xml -x -v --junitxml=test-results/junit.xml --durations=5 -n 4
           no_output_timeout: 15m
       - run:
@@ -883,8 +828,6 @@ jobs:
       - run:
           name: Run tests
           command: |
-            pwd
-            ls
             uv run --no-sync python -m pytest -vv tests/search_tests --cov=litellm --cov-report=xml -x -v --junitxml=test-results/junit.xml --durations=5 -n 4
           no_output_timeout: 15m
       - run:
@@ -961,8 +904,6 @@ jobs:
       - run:
           name: Run enterprise tests
           command: |
-            pwd
-            ls
             uv run --no-sync python -m prisma generate
             uv run --no-sync python -m pytest -v tests/enterprise -x --junitxml=test-results/junit-enterprise.xml --durations=10 -n 4
           no_output_timeout: 15m
@@ -989,8 +930,6 @@ jobs:
       - run:
           name: Run tests
           command: |
-            pwd
-            ls
             uv run --no-sync python -m pytest -vv tests/batches_tests --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit.xml --durations=5 -n 2
           no_output_timeout: 15m
       - run:
@@ -1027,8 +966,6 @@ jobs:
       - run:
           name: Run tests
           command: |
-            pwd
-            ls
             uv run --no-sync python -m pytest -vv tests/litellm_utils_tests --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit.xml --durations=5 -n 2
           no_output_timeout: 15m
       - run:
@@ -1066,8 +1003,6 @@ jobs:
       - run:
           name: Run tests
           command: |
-            pwd
-            ls
             uv run --no-sync python -m pytest -vv tests/pass_through_unit_tests --cov=litellm --cov-report=xml -x -v --junitxml=test-results/junit.xml --durations=5 -n 4
           no_output_timeout: 15m
       - run:
@@ -1105,8 +1040,6 @@ jobs:
       - run:
           name: Run tests
           command: |
-            pwd
-            ls
             uv run --no-sync python -m pytest -v tests/image_gen_tests -n 4 -x --junitxml=test-results/junit.xml --durations=5
           no_output_timeout: 15m
       # Store test results
@@ -1133,8 +1066,6 @@ jobs:
       - run:
           name: Run tests
           command: |
-            pwd
-            ls
             LITELLM_LOG=WARNING uv run --no-sync python -m pytest tests/logging_callback_tests -vv --cov=litellm --cov-report=xml -n 4 --junitxml=test-results/junit.xml --durations=5 --timeout=120 --timeout_method=thread
           no_output_timeout: 15m
       - run:
@@ -1171,8 +1102,6 @@ jobs:
       - run:
           name: Run tests
           command: |
-            pwd
-            ls
             uv run --no-sync python -m pytest -vv tests/audio_tests --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit.xml --durations=5
           no_output_timeout: 15m
       - run:
@@ -1260,8 +1189,6 @@ jobs:
       - run:
           name: Run tests
           command: |
-            pwd
-            ls
             uv run --no-sync python -m pytest -vv tests/local_testing/test_basic_python_version.py -k "not v2_resolver"
 
   installing_litellm_on_python_3_13:
@@ -1284,8 +1211,6 @@ jobs:
       - run:
           name: Run tests
           command: |
-            pwd
-            ls
             uv run --no-sync python -m pytest -v tests/local_testing/test_basic_python_version.py -k "not v2_resolver"
 
   installing_litellm_on_python_v2_migration_resolver:
@@ -1391,7 +1316,6 @@ jobs:
             kubectl logs $(kubectl get pods -l app.kubernetes.io/name=litellm -o jsonpath="{.items[0].metadata.name}")
 
             # Run the helm tests
-            helm test litellm --logs
             helm test litellm --logs
 
       # Cleanup
@@ -1550,8 +1474,6 @@ jobs:
       - run:
           name: Run tests
           command: |
-            pwd
-            ls
             uv run --no-sync python -m pytest -s -v tests/*.py -x --junitxml=test-results/junit.xml -n 4 --durations=5 --ignore=tests/otel_tests --ignore=tests/spend_tracking_tests --ignore=tests/pass_through_tests --ignore=tests/proxy_admin_ui_tests --ignore=tests/load_tests --ignore=tests/llm_translation --ignore=tests/llm_responses_api_testing --ignore=tests/mcp_tests --ignore=tests/guardrails_tests --ignore=tests/image_gen_tests --ignore=tests/pass_through_unit_tests
           no_output_timeout: 15m
 
@@ -1566,10 +1488,6 @@ jobs:
     steps:
       - checkout
       - setup_google_dns
-      - run:
-          name: Verify Docker is available
-          command: |
-            docker version
       - install_uv
       - run:
           name: Install Dependencies
@@ -1631,8 +1549,6 @@ jobs:
       - run:
           name: Run tests
           command: |
-            pwd
-            ls
             uv run --no-sync python -m pytest -s -vv tests/openai_endpoints_tests --junitxml=test-results/junit.xml --durations=5
           no_output_timeout: 15m
 
@@ -1647,10 +1563,6 @@ jobs:
     steps:
       - checkout
       - setup_google_dns
-      - run:
-          name: Verify Docker is available
-          command: |
-            docker version
       - install_uv
       - run:
           name: Install Dependencies
@@ -1706,8 +1618,6 @@ jobs:
       - run:
           name: Run tests
           command: |
-            pwd
-            ls
             uv run --no-sync python -m pytest -v tests/otel_tests -x --junitxml=test-results/junit.xml --durations=5
           no_output_timeout: 15m
             # Clean up first container
@@ -1765,10 +1675,6 @@ jobs:
     steps:
       - checkout
       - setup_google_dns
-      - run:
-          name: Verify Docker is available
-          command: |
-            docker version
       - install_uv
       - run:
           name: Install Dependencies
@@ -1820,8 +1726,6 @@ jobs:
       - run:
           name: Run tests
           command: |
-            pwd
-            ls
             uv run --no-sync python -m pytest -vv tests/spend_tracking_tests -x --junitxml=test-results/junit.xml --durations=5
           no_output_timeout: 15m
             # Clean up first container
@@ -1839,10 +1743,6 @@ jobs:
     steps:
       - checkout
       - setup_google_dns
-      - run:
-          name: Verify Docker is available
-          command: |
-            docker version
       - install_uv
       - run:
           name: Install Dependencies
@@ -1913,8 +1813,6 @@ jobs:
       - run:
           name: Run tests
           command: |
-            pwd
-            ls
             uv run --no-sync python -m pytest -vv tests/multi_instance_e2e_tests -x --junitxml=test-results/junit.xml --durations=5
           no_output_timeout: 15m
             # Clean up first container
@@ -1930,11 +1828,6 @@ jobs:
     steps:
       - checkout
       - setup_google_dns
-      - run:
-          name: Verify Docker is available
-          command: |
-            docker version
-            sudo systemctl restart docker
       - install_uv
       - run:
           name: Install Dependencies
@@ -1976,8 +1869,6 @@ jobs:
       - run:
           name: Run tests
           command: |
-            pwd
-            ls
             uv run --no-sync python -m pytest -vv tests/store_model_in_db_tests -x --junitxml=test-results/junit.xml --durations=5
           no_output_timeout: 15m
       - run:
@@ -2173,8 +2064,6 @@ jobs:
       - run:
           name: Run tests
           command: |
-            pwd
-            ls
             uv run --no-sync python -m pytest -v tests/pass_through_tests/ -x --junitxml=test-results/junit.xml --durations=5
           no_output_timeout: 15m
 
@@ -2190,10 +2079,6 @@ jobs:
     steps:
       - checkout
       - setup_google_dns
-      - run:
-          name: Verify Docker is available
-          command: |
-            docker version
       - install_uv
       - run:
           name: Install Dependencies
@@ -2238,8 +2123,6 @@ jobs:
           command: |
             export LITELLM_PROXY_URL="http://localhost:4000"
             export LITELLM_API_KEY="sk-1234"
-            pwd
-            ls
             uv run --no-sync python -m pytest -vv tests/proxy_e2e_anthropic_messages_tests/ -x -s --junitxml=test-results/junit.xml --durations=5
           no_output_timeout: 15m
 
