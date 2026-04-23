@@ -42,8 +42,9 @@ import ToolPoliciesView from "@/components/ToolPoliciesView";
 import SpendLogsTable from "@/components/view_logs";
 import ViewUserDashboard from "@/components/view_users";
 import { ThemeProvider } from "@/contexts/ThemeContext";
+import { clearTokenCookies, getCookie } from "@/utils/cookieUtils";
 import { isJwtExpired } from "@/utils/jwtUtils";
-import { buildLoginUrlWithReturn, consumeReturnUrl, normalizeUrlForCompare, storeReturnUrl } from "@/utils/returnUrlUtils";
+import { buildLoginUrlWithReturn, consumeReturnUrl, isValidReturnUrl, normalizeUrlForCompare, storeReturnUrl } from "@/utils/returnUrlUtils";
 import { formatUserRole, isAdminRole } from "@/utils/roles";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { jwtDecode } from "jwt-decode";
@@ -51,21 +52,12 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { ConfigProvider, theme } from "antd";
 
-function getCookie(name: string) {
-  // Safer cookie read + decoding; handles '=' inside values
-  const match = document.cookie.split("; ").find((row) => row.startsWith(name + "="));
-  if (!match) return null;
-  const value = match.slice(name.length + 1);
-  try {
-    return decodeURIComponent(value);
-  } catch {
-    return value;
-  }
-}
-
 function deleteCookie(name: string, path = "/") {
   // Best-effort client-side clear (works for non-HttpOnly cookies without Domain)
   document.cookie = `${name}=; Max-Age=0; Path=${path}`;
+  if (name === "token") {
+    clearTokenCookies();
+  }
 }
 
 interface ProxySettings {
@@ -276,14 +268,19 @@ function CreateKeyPageContent() {
 
     // Check for a stored return URL
     const returnUrl = consumeReturnUrl();
-    if (returnUrl) {
+    if (returnUrl && isValidReturnUrl(returnUrl)) {
+      // Inline origin check: only redirect to same-origin URLs to prevent open redirect.
+      const safeUrl = new URL(returnUrl, window.location.origin);
+      if (safeUrl.origin !== window.location.origin) {
+        return;
+      }
       const currentUrl = window.location.href;
       const normalizedReturnUrl = normalizeUrlForCompare(returnUrl);
       const normalizedCurrentUrl = normalizeUrlForCompare(currentUrl);
       // Only redirect if the return URL is different from the current URL
       // This prevents infinite redirect loops
       if (normalizedReturnUrl !== normalizedCurrentUrl) {
-        window.location.replace(returnUrl);
+        window.location.replace(safeUrl.href);
       }
     }
   }, [authLoading, token]);
@@ -615,7 +612,6 @@ function CreateKeyPageContent() {
                       userRole={userRole}
                       token={token}
                       accessToken={accessToken}
-                      allTeams={(teams as Team[]) ?? []}
                       premiumUser={premiumUser}
                     />
                   ) : page == "mcp-servers" ? (
@@ -624,7 +620,7 @@ function CreateKeyPageContent() {
                     <SearchTools accessToken={accessToken} userRole={userRole} userID={userID} />
                   ) : page == "tag-management" ? (
                     <TagManagement accessToken={accessToken} userRole={userRole} userID={userID} />
-                  ) : page == "claude-code-plugins" ? (
+                  ) : page == "skills" || page == "claude-code-plugins" ? (
                     <ClaudeCodePluginsPanel accessToken={accessToken} userRole={userRole} />
                   ) : page == "access-groups" ? (
                     <AccessGroupsPage />

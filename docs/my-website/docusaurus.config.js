@@ -187,6 +187,32 @@ const config = {
       },
     ],
 
+    [
+      '@signalwire/docusaurus-plugin-llms-txt',
+      {
+        markdown: {
+          enableFiles: true,
+          includeDocs: true,
+        },
+        llmsTxt: {
+          enableLlmsFullTxt: true,
+          includeDocs: true,
+        },
+        ui: {
+          copyPageContent: {
+            buttonLabel: 'Copy Page',
+            actions: {
+              viewMarkdown: true,
+              ai: {
+                chatGPT: true,
+                claude: true,
+              },
+            },
+          },
+        },
+      },
+    ],
+
     () => ({
       name: 'cripchat',
       injectHtmlTags() {
@@ -239,7 +265,7 @@ const config = {
     ],
   ],
 
-  themes: ['@docusaurus/theme-mermaid'],
+  themes: ['@docusaurus/theme-mermaid', '@signalwire/docusaurus-theme-llms-txt'],
   markdown: {
     mermaid: true,
   },
@@ -284,6 +310,7 @@ const config = {
             label: 'Enterprise',
             to: "docs/enterprise"
           },
+          { to: '/release_notes', label: 'Changelog', position: 'left' },
           { to: '/blog', label: 'Blog', position: 'left' },
           {
             href: 'https://github.com/BerriAI/litellm',

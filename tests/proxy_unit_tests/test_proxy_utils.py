@@ -10,7 +10,7 @@ import pytest
 from fastapi import Request
 from starlette.datastructures import State
 
-from litellm.proxy.utils import _get_docs_url, _get_redoc_url
+from litellm.proxy.utils import _get_docs_url, _get_openapi_url, _get_redoc_url
 
 sys.path.insert(
     0, os.path.abspath("../..")
@@ -19,7 +19,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import litellm
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
-from litellm.proxy.auth.auth_utils import is_request_body_safe
+from litellm.proxy.auth.auth_utils import (
+    check_complete_credentials,
+    is_request_body_safe,
+)
 from litellm.proxy.litellm_pre_call_utils import (
     _get_dynamic_logging_metadata,
     add_litellm_data_to_request,
@@ -33,7 +36,9 @@ def mock_request(monkeypatch):
     mock_request = Mock(spec=Request)
     mock_request.query_params = {}  # Set mock query_params to an empty dictionary
     mock_request.headers = {"traceparent": "test_traceparent"}
-    mock_request.state = State()  # Real State so _safe_get_request_headers caching works
+    mock_request.state = (
+        State()
+    )  # Real State so _safe_get_request_headers caching works
     monkeypatch.setattr(
         "litellm.proxy.litellm_pre_call_utils.add_litellm_data_to_request", mock_request
     )
@@ -162,9 +167,13 @@ async def test_add_key_or_team_level_spend_logs_metadata_to_request(
 
     print(f"team_sl_metadata: {team_sl_metadata}")
     mock_request.url.path = "/chat/completions"
+    # Opt the key into client-supplied tags so request_tags are preserved
+    # and merged with admin-configured key/team tags. Without this flag,
+    # request_tags would be stripped by add_litellm_data_to_request.
     key_metadata = {
         "tags": key_tags,
         "spend_logs_metadata": key_sl_metadata,
+        "allow_client_tags": True,
     }
     team_metadata = {
         "tags": team_tags,
@@ -465,6 +474,21 @@ def test_is_request_body_safe_model_enabled(
     assert expect_error == error_raised
 
 
+@pytest.mark.parametrize(
+    "api_key_value, expect_complete",
+    [
+        ("sk-real-key", True),
+        ("", False),
+        (None, False),
+        ("   ", False),
+    ],
+)
+def test_check_complete_credentials_api_key_values(api_key_value, expect_complete):
+    request_body = {"model": "gpt-3.5-turbo", "api_key": api_key_value}
+    result = check_complete_credentials(request_body=request_body)
+    assert result == expect_complete
+
+
 def test_reading_openai_org_id_from_headers():
     from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 
@@ -737,6 +761,31 @@ def test_get_docs_url(env_vars, expected_url):
 
 
 @pytest.mark.parametrize(
+    "env_vars, expected_url",
+    [
+        ({}, "/openapi.json"),  # default case
+        ({"OPENAPI_URL": "/custom-openapi.json"}, "/custom-openapi.json"),  # custom URL
+        (
+            {"OPENAPI_URL": "https://example.com/openapi.json"},
+            "https://example.com/openapi.json",
+        ),  # full URL
+        ({"NO_OPENAPI": "True"}, None),  # openapi disabled
+    ],
+)
+def test_get_openapi_url(env_vars, expected_url):
+    # Clear relevant environment variables
+    for key in ["OPENAPI_URL", "NO_OPENAPI"]:
+        os.environ.pop(key, None)
+
+    # Set test environment variables
+    for key, value in env_vars.items():
+        os.environ[key] = value
+
+    result = _get_openapi_url()
+    assert result == expected_url
+
+
+@pytest.mark.parametrize(
     "request_tags, tags_to_add, expected_tags",
     [
         (None, None, []),  # both None
@@ -814,12 +863,13 @@ async def test_add_litellm_data_to_request_duplicate_tags(
     mock_request.headers = {}
     mock_request.state = State()
 
-    # Setup key with tags in metadata
+    # Setup key with tags in metadata. Opt into client-supplied tags so the
+    # request_tags are preserved for the merge under test.
     user_api_key_dict = UserAPIKeyAuth(
         api_key="test_api_key",
         user_id="test_user_id",
         org_id="test_org_id",
-        metadata={"tags": key_tags},
+        metadata={"tags": key_tags, "allow_client_tags": True},
     )
 
     # Setup request data with tags
@@ -1492,7 +1542,7 @@ class MockPrismaClientDB:
         mock_key_data,
     ):
         self.db = MockDb(mock_team_data, mock_key_data)
-    
+
     async def get_data(
         self,
         token: Optional[Union[str, list]] = None,
@@ -1510,7 +1560,7 @@ class MockPrismaClientDB:
     ):
         """Mock get_data method to return user info for admin"""
         from litellm.proxy._types import LiteLLM_UserTable
-        
+
         # Return a proper LiteLLM_UserTable object when querying by user_id
         if user_id:
             return LiteLLM_UserTable(
@@ -2044,6 +2094,58 @@ def test_update_model_if_team_alias_exists(data, user_api_key_dict, expected_mod
     assert test_data.get("model") == expected_model
 
 
+def test_team_alias_stale_bypass_disabled_by_default(monkeypatch):
+    monkeypatch.delenv("LITELLM_ENABLE_TEAM_STALE_ALIAS_BYPASS", raising=False)
+    import litellm.proxy.litellm_pre_call_utils as pre_call_utils
+    from litellm.proxy.litellm_pre_call_utils import _update_model_if_team_alias_exists
+
+    # Reset module-level cache to ensure test isolation
+    pre_call_utils._ENABLE_TEAM_STALE_ALIAS_BYPASS = None
+
+    class _MockRouter:
+        team_model_to_deployment_indices = {("team-1", "gpt-4o"): [0]}
+
+    test_data = {"model": "gpt-4o"}
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test_key",
+        team_id="team-1",
+        team_model_aliases={"gpt-4o": "model_name_team-1_legacy-uuid"},
+    )
+
+    with patch("litellm.proxy.proxy_server.llm_router", _MockRouter()):
+        _update_model_if_team_alias_exists(
+            data=test_data, user_api_key_dict=user_api_key_dict
+        )
+
+    assert test_data.get("model") == "model_name_team-1_legacy-uuid"
+
+
+def test_team_alias_stale_bypass_enabled_by_flag(monkeypatch):
+    import litellm.proxy.litellm_pre_call_utils as pre_call_utils
+    from litellm.proxy.litellm_pre_call_utils import _update_model_if_team_alias_exists
+
+    # Reset module-level cache to ensure test isolation
+    pre_call_utils._ENABLE_TEAM_STALE_ALIAS_BYPASS = None
+
+    class _MockRouter:
+        team_model_to_deployment_indices = {("team-1", "gpt-4o"): [0]}
+
+    test_data = {"model": "gpt-4o"}
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test_key",
+        team_id="team-1",
+        team_model_aliases={"gpt-4o": "model_name_team-1_legacy-uuid"},
+    )
+    monkeypatch.setenv("LITELLM_ENABLE_TEAM_STALE_ALIAS_BYPASS", "true")
+
+    with patch("litellm.proxy.proxy_server.llm_router", _MockRouter()):
+        _update_model_if_team_alias_exists(
+            data=test_data, user_api_key_dict=user_api_key_dict
+        )
+
+    assert test_data.get("model") == "gpt-4o"
+
+
 @pytest.fixture
 def mock_prisma_client():
     client = MagicMock()
@@ -2318,16 +2420,17 @@ async def test_handle_logging_proxy_only_error_syncs_normalized_call_type(
         captured_logging_obj["logging_obj"] = logging_obj
         return logging_obj, data
 
-    with patch(
-        "litellm.proxy.utils.litellm.utils.function_setup",
-        side_effect=_capture_function_setup,
-    ), patch.object(
-        Logging, "async_failure_handler", new=AsyncMock(return_value=None)
-    ), patch.object(
-        Logging, "failure_handler", return_value=None
-    ), patch(
-        "litellm.proxy.utils.threading.Thread"
-    ) as mock_thread:
+    with (
+        patch(
+            "litellm.proxy.utils.litellm.utils.function_setup",
+            side_effect=_capture_function_setup,
+        ),
+        patch.object(
+            Logging, "async_failure_handler", new=AsyncMock(return_value=None)
+        ),
+        patch.object(Logging, "failure_handler", return_value=None),
+        patch("litellm.proxy.utils.threading.Thread") as mock_thread,
+    ):
         mock_thread.return_value.start = Mock()
 
         await proxy_logging._handle_logging_proxy_only_error(
@@ -2571,7 +2674,9 @@ async def test_handle_logging_proxy_only_error_skips_handlers_for_pass_through()
         "model": "claude-3-5-sonnet",
     }
 
-    with patch.object(logging_obj, "async_failure_handler", new_callable=AsyncMock) as mock_async:
+    with patch.object(
+        logging_obj, "async_failure_handler", new_callable=AsyncMock
+    ) as mock_async:
         with patch.object(logging_obj, "failure_handler") as mock_sync:
             await proxy_logging._handle_logging_proxy_only_error(
                 request_data=request_data,
@@ -2585,3 +2690,50 @@ async def test_handle_logging_proxy_only_error_skips_handlers_for_pass_through()
     mock_async.assert_not_called()
     mock_sync.assert_not_called()
     assert logging_obj.call_type == CallTypes.pass_through.value
+
+
+def test_handle_exception_on_proxy_preserves_status_code():
+    """
+    OpenAI batch creation returns 429 for rate limits. LiteLLM wraps this as a
+    RateLimitError with status_code=429. handle_exception_on_proxy must pass
+    that status code through instead of hardcoding 500.
+    """
+    from litellm.proxy.utils import handle_exception_on_proxy
+
+    rate_limit_error = litellm.RateLimitError(
+        message="Rate limit exceeded: batch creation limit of 2000/hour hit",
+        llm_provider="openai",
+        model="gpt-4o",
+    )
+
+    result = handle_exception_on_proxy(rate_limit_error)
+
+    assert int(result.code) == 429, f"Expected 429, got {result.code}"
+
+
+def test_handle_exception_on_proxy_defaults_to_500_for_unknown_exceptions():
+    """
+    Generic exceptions with no status_code should still return 500.
+    """
+    from litellm.proxy.utils import handle_exception_on_proxy
+
+    result = handle_exception_on_proxy(Exception("something went wrong"))
+
+    assert int(result.code) == 500, f"Expected 500, got {result.code}"
+
+
+def test_handle_exception_on_proxy_preserves_auth_error_status_code():
+    """
+    AuthenticationError (401) should also pass through correctly.
+    """
+    from litellm.proxy.utils import handle_exception_on_proxy
+
+    auth_error = litellm.AuthenticationError(
+        message="Invalid API key",
+        llm_provider="openai",
+        model="gpt-4o",
+    )
+
+    result = handle_exception_on_proxy(auth_error)
+
+    assert int(result.code) == 401, f"Expected 401, got {result.code}"

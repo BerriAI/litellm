@@ -127,9 +127,9 @@ class CustomStreamWrapper:
 
         self.system_fingerprint: Optional[str] = None
         self.received_finish_reason: Optional[str] = None
-        self.intermittent_finish_reason: Optional[
-            str
-        ] = None  # finish reasons that show up mid-stream
+        self.intermittent_finish_reason: Optional[str] = (
+            None  # finish reasons that show up mid-stream
+        )
         self.special_tokens = [
             "<|assistant|>",
             "<|system|>",
@@ -831,6 +831,10 @@ class CustomStreamWrapper:
                 "annotations" in model_response.choices[0].delta
                 and model_response.choices[0].delta.annotations is not None
             )
+            or (
+                getattr(model_response.choices[0].delta, "reasoning_items", None)
+                is not None
+            )
         ):
             return True
         else:
@@ -1130,7 +1134,11 @@ class CustomStreamWrapper:
             ):
                 if self.received_finish_reason is not None:
                     _chunk_has_content = isinstance(chunk, dict) and (
-                        bool(chunk.get("text", "")) or chunk.get("tool_use") is not None
+                        bool(chunk.get("text", ""))
+                        or chunk.get("tool_use") is not None
+                        # Usage-only final chunks are valid and needed to surface
+                        # finish_reason/usage to downstream translators.
+                        or chunk.get("usage") is not None
                     )
                     if not _chunk_has_content and (
                         not isinstance(chunk, dict)
@@ -1278,9 +1286,9 @@ class CustomStreamWrapper:
                             and chunk.candidates[0].finish_reason.name  # type: ignore
                             != "FINISH_REASON_UNSPECIFIED"
                         ):  # every non-final chunk in vertex ai has this
-                            self.received_finish_reason = chunk.candidates[  # type: ignore
-                                0
-                            ].finish_reason.name
+                            self.received_finish_reason = map_finish_reason(  # type: ignore
+                                chunk.candidates[0].finish_reason.name
+                            )
                     except Exception:
                         if chunk.candidates[0].finish_reason.name == "SAFETY":  # type: ignore
                             raise Exception(
@@ -1516,9 +1524,9 @@ class CustomStreamWrapper:
                                                 t.function.arguments = ""
                             _json_delta = delta.model_dump()
                             if "role" not in _json_delta or _json_delta["role"] is None:
-                                _json_delta[
-                                    "role"
-                                ] = "assistant"  # mistral's api returns role as None
+                                _json_delta["role"] = (
+                                    "assistant"  # mistral's api returns role as None
+                                )
                             if "tool_calls" in _json_delta and isinstance(
                                 _json_delta["tool_calls"], list
                             ):
@@ -2174,12 +2182,16 @@ class CustomStreamWrapper:
                     None,
                 )
                 if _deferred_cb is not None:
-                    # Proxy has post-call guardrails — let the closure
-                    # run guardrails on the assembled response, then
-                    # fire logging with guardrail_information populated.
-                    self.logging_obj._on_deferred_stream_complete = None  # type: ignore[attr-defined]
-                    asyncio.create_task(
-                        _deferred_cb(complete_streaming_response, cache_hit)
+                    # Proxy has post-call guardrails. Store the assembled
+                    # response so the outer streaming consumer
+                    # (ProxyLogging.async_post_call_streaming_iterator_hook)
+                    # can fire the deferred callback AFTER all guardrail
+                    # end-of-stream blocks complete.  Scheduling here via
+                    # create_task would race with unified_guardrail's
+                    # end-of-stream block for short-stream providers.
+                    self.logging_obj._deferred_stream_complete_args = (  # type: ignore[attr-defined]
+                        complete_streaming_response,
+                        cache_hit,
                     )
                 else:
                     asyncio.create_task(

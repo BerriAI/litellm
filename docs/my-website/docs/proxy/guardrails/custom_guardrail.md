@@ -417,7 +417,7 @@ curl -i  -X POST http://localhost:4000/v1/chat/completions \
 
 :::info
 
-✨ This is an Enterprise only feature [Contact us to get a free trial](https://calendly.com/d/cx9p-5yf-2nm/litellm-introductions)
+✨ This is an Enterprise only feature [Contact us to get a free trial](https://enterprise.litellm.ai/demo)
 
 :::
 

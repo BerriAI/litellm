@@ -36,7 +36,7 @@ from litellm import (
     log_raw_request_response,
     turn_off_message_logging,
 )
-from litellm._logging import _is_debugging_on, verbose_logger
+from litellm._logging import _is_debugging_on, _redact_string, verbose_logger
 from litellm._uuid import uuid
 from litellm.batches.batch_utils import _handle_completed_batch
 from litellm.caching.caching import DualCache, InMemoryCache
@@ -613,7 +613,17 @@ class Logging(LiteLLMLoggingBaseClass):
                 base_litellm_params["metadata"] = kwargs["litellm_metadata"].copy()
 
         if litellm_params:
+            # Merge metadata carefully — don't overwrite the merged metadata
+            # from kwargs/litellm_metadata with the caller's litellm_params metadata.
+            # e.g. anthropic_messages passes Anthropic's native metadata ({user_id: ...})
+            # in litellm_params, which would overwrite proxy key-auth fields.
+            lp_metadata = litellm_params.pop("metadata", None)
             base_litellm_params.update(litellm_params)
+            if lp_metadata and isinstance(lp_metadata, dict):
+                base_litellm_params.setdefault("metadata", {})
+                for k, v in lp_metadata.items():
+                    if k not in base_litellm_params["metadata"]:
+                        base_litellm_params["metadata"][k] = v
 
         self.update_environment_variables(
             litellm_params=base_litellm_params,
@@ -978,8 +988,10 @@ class Logging(LiteLLMLoggingBaseClass):
                 try:
                     # [Non-blocking Extra Debug Information in metadata]
                     if turn_off_message_logging is True:
-                        _metadata["raw_request"] = "redacted by litellm. \
+                        _metadata["raw_request"] = (
+                            "redacted by litellm. \
                             'litellm.turn_off_message_logging=True'"
+                        )
                     else:
                         curl_command = self._get_request_curl_command(
                             api_base=additional_args.get("api_base", ""),
@@ -1013,8 +1025,12 @@ class Logging(LiteLLMLoggingBaseClass):
                             error=str(e),
                         )
                     )
-                    _metadata["raw_request"] = "Unable to Log \
-                        raw request: {}".format(str(e))
+                    _metadata["raw_request"] = (
+                        "Unable to Log \
+                        raw request: {}".format(
+                            str(e)
+                        )
+                    )
             if getattr(self, "logger_fn", None) and callable(self.logger_fn):
                 try:
                     self.logger_fn(
@@ -1371,6 +1387,8 @@ class Logging(LiteLLMLoggingBaseClass):
         margin_percent: Optional[float] = None,
         margin_fixed_amount: Optional[float] = None,
         margin_total_amount: Optional[float] = None,
+        cache_read_cost: Optional[float] = None,
+        cache_creation_cost: Optional[float] = None,
     ) -> None:
         """
         Helper method to store cost breakdown in the logging object.
@@ -1395,6 +1413,10 @@ class Logging(LiteLLMLoggingBaseClass):
             total_cost=total_cost,
             tool_usage_cost=cost_for_built_in_tools_cost_usd_dollar,
         )
+        if cache_read_cost is not None and cache_read_cost > 0:
+            self.cost_breakdown["cache_read_cost"] = cache_read_cost
+        if cache_creation_cost is not None and cache_creation_cost > 0:
+            self.cost_breakdown["cache_creation_cost"] = cache_creation_cost
 
         # Store additional costs if provided (free-form dict for extensibility)
         if (
@@ -2832,7 +2854,11 @@ class Logging(LiteLLMLoggingBaseClass):
 
         self.model_call_details["log_event_type"] = "failed_api_call"
         self.model_call_details["exception"] = exception
-        self.model_call_details["traceback_exception"] = traceback_exception
+        self.model_call_details["traceback_exception"] = (
+            _redact_string(traceback_exception)
+            if isinstance(traceback_exception, str)
+            else traceback_exception
+        )
         self.model_call_details["end_time"] = end_time
         self.model_call_details.setdefault("original_response", None)
         self.model_call_details["response_cost"] = 0
@@ -2854,7 +2880,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 end_time=end_time,
                 logging_obj=self,
                 status="failure",
-                error_str=str(exception),
+                error_str=_redact_string(str(exception)),
                 original_exception=exception,
                 standard_built_in_tools_params=self.standard_built_in_tools_params,
             )
@@ -2994,9 +3020,10 @@ class Logging(LiteLLMLoggingBaseClass):
                             litellm_call_id=self.model_call_details["litellm_call_id"],
                             print_verbose=print_verbose,
                         )
-                    if (
-                        callable(callback) and customLogger is not None
-                    ):  # custom logger functions
+                    if callable(callback):  # custom logger functions
+                        global customLogger
+                        if customLogger is None:
+                            customLogger = CustomLogger()
                         customLogger.log_event(
                             kwargs=self.model_call_details,
                             response_obj=result,
@@ -3137,9 +3164,10 @@ class Logging(LiteLLMLoggingBaseClass):
                         start_time=start_time,
                         end_time=end_time,
                     )  # type: ignore
-                if (
-                    callable(callback) and customLogger is not None
-                ):  # custom logger functions
+                if callable(callback):  # custom logger functions
+                    global customLogger
+                    if customLogger is None:
+                        customLogger = CustomLogger()
                     await customLogger.async_log_event(
                         kwargs=self.model_call_details,
                         response_obj=result,
@@ -4746,7 +4774,9 @@ class StandardLoggingPayloadSetup:
             user_api_key_budget_reset_at=None,
             user_api_key_team_id=None,
             user_api_key_org_id=None,
+            user_api_key_org_alias=None,
             user_api_key_project_id=None,
+            user_api_key_project_alias=None,
             user_api_key_user_id=None,
             user_api_key_team_alias=None,
             user_api_key_user_email=None,
@@ -4961,16 +4991,22 @@ class StandardLoggingPayloadSetup:
 
         additional_logging_headers: StandardLoggingAdditionalHeaders = {}
 
+        # Populate well-known typed fields with int/str coercion where needed
+        typed_keys: dict = {}
         for key in StandardLoggingAdditionalHeaders.__annotations__.keys():
-            _key = key.lower()
-            _key = _key.replace("_", "-")
+            _key = key.lower().replace("_", "-")
+            typed_keys[_key] = key
             if _key in additiona_headers:
                 try:
                     additional_logging_headers[key] = int(additiona_headers[_key])  # type: ignore
                 except (ValueError, TypeError):
-                    verbose_logger.debug(
-                        f"Could not convert {additiona_headers[_key]} to int for key {key}."
-                    )
+                    additional_logging_headers[key] = additiona_headers[_key]  # type: ignore
+
+        # Preserve all remaining headers verbatim (e.g. llm_provider-x-request-id)
+        for k, v in additiona_headers.items():
+            if k.lower() not in typed_keys:
+                additional_logging_headers[k] = v  # type: ignore
+
         return additional_logging_headers
 
     @staticmethod
@@ -5476,6 +5512,8 @@ def get_standard_logging_object_payload(
 
         payload: StandardLoggingPayload = StandardLoggingPayload(
             id=str(id),
+            litellm_call_id=kwargs.get("litellm_call_id")
+            or litellm_params.get("litellm_call_id"),
             trace_id=StandardLoggingPayloadSetup._get_standard_logging_payload_trace_id(
                 logging_obj=logging_obj,
                 litellm_params=litellm_params,
@@ -5577,7 +5615,9 @@ def get_standard_logging_metadata(
         user_api_key_budget_reset_at=None,
         user_api_key_team_id=None,
         user_api_key_org_id=None,
+        user_api_key_org_alias=None,
         user_api_key_project_id=None,
+        user_api_key_project_alias=None,
         user_api_key_user_id=None,
         user_api_key_user_email=None,
         user_api_key_team_alias=None,

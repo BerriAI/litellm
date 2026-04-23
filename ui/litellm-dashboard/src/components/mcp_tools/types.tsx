@@ -223,12 +223,30 @@ export interface MCPServer {
   submitted_at?: string | null;
   reviewed_at?: string | null;
   review_notes?: string | null;
+
+  /** Per-user OAuth token storage settings (interactive OAuth only) */
+  token_validation?: Record<string, any> | null;
+  token_storage_ttl_seconds?: number | null;
 }
 
 export interface MCPServerProps {
   accessToken: string | null;
   userRole: string | null;
   userID: string | null;
+}
+
+export interface MCPToolsetTool {
+  server_id: string;
+  tool_name: string;
+}
+
+export interface MCPToolset {
+  toolset_id: string;
+  toolset_name: string;
+  description?: string;
+  tools: MCPToolsetTool[];
+  created_at?: string;
+  created_by?: string;
 }
 
 // Discoverable MCP server from the curated registry

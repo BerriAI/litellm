@@ -337,24 +337,35 @@ def _insert_assistant_continue_message(
     """
     Add assistant continuation messages between consecutive user messages.
 
-    Only checks directly adjacent messages to preserve backward compatibility.
+    Skips tool messages and assistant messages with tool calls in the
+    alternation check, matching strict templates like llama.cpp.
     """
     if not ensure_alternating_roles or len(messages) <= 1:
         return messages
 
     continue_message = assistant_continue_message or DEFAULT_ASSISTANT_CONTINUE_MESSAGE
 
+    # Find indexes where assistant_continue should be inserted (before that index)
+    insert_before_indexes: set = set()
+
+    for i in range(len(messages)):
+        curr = messages[i]
+        if _counts_for_alternation(curr) and curr["role"] == "user":
+            # Look backwards for the previous counted message
+            j = i - 1
+            while j >= 0:
+                if _counts_for_alternation(messages[j]):
+                    if messages[j]["role"] == "user":
+                        insert_before_indexes.add(i)
+                    break
+                j -= 1
+
+    # Build the result with assistant_continue inserted at the right positions
     modified_messages: List[AllMessageValues] = []
     for i, message in enumerate(messages):
-        if (
-            i < len(messages) - 1
-            and message.get("role") == "user"
-            and messages[i + 1].get("role") == "user"
-        ):
-            modified_messages.append(message)
+        if i in insert_before_indexes:
             modified_messages.append(continue_message)
-        else:
-            modified_messages.append(message)
+        modified_messages.append(message)
 
     return modified_messages
 
@@ -441,7 +452,14 @@ def update_messages_with_model_file_ids(
                 for c in content:
                     if c["type"] == "file":
                         file_object = cast(ChatCompletionFileObject, c)
-                        file_object_file_field = file_object["file"]
+                        file_object_file_field = file_object.get("file")
+                        if not isinstance(file_object_file_field, dict):
+                            # Content block has `type: "file"` but not the
+                            # OpenAI Chat Completions shape (e.g. a LangChain
+                            # v1 standardized file block, or a provider-native
+                            # shape that also uses `type: "file"`). Nothing to
+                            # remap here, so skip instead of crashing.
+                            continue
                         file_id = file_object_file_field.get("file_id")
                         format = file_object_file_field.get(
                             "format", get_format_from_file_id(file_id)
@@ -1049,7 +1067,12 @@ def get_file_ids_from_messages(messages: List[AllMessageValues]) -> List[str]:
                 for c in content:
                     if c["type"] == "file":
                         file_object = cast(ChatCompletionFileObject, c)
-                        file_object_file_field = file_object["file"]
+                        file_object_file_field = file_object.get("file")
+                        if not isinstance(file_object_file_field, dict):
+                            # Content block has `type: "file"` but not the
+                            # OpenAI Chat Completions shape. No file_id to
+                            # extract, so skip instead of raising KeyError.
+                            continue
                         file_id = file_object_file_field.get("file_id")
                         if file_id:
                             file_ids.append(file_id)

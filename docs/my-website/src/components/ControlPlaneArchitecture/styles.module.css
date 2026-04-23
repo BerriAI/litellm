@@ -284,45 +284,67 @@
   color: var(--cp-purple);
 }
 
-/* ── Infrastructure chips ── */
-.infraRow {
-  display: flex;
-  gap: 0.4rem;
-  justify-content: center;
-  flex-wrap: wrap;
-  margin-top: 0.5rem;
+/* ── Node caption ── */
+.nodeCaption {
+  font-size: 0.72rem;
+  color: var(--cp-text-muted);
+  margin-top: 0.4rem;
+  line-height: 1.4;
+  font-style: italic;
 }
 
-.infraChip {
+/* ── Infrastructure boxes (per-worker) ── */
+.infraStack {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  margin-top: 0.5rem;
+  width: 100%;
+}
+
+.infraBox {
   display: flex;
   align-items: center;
-  gap: 0.3rem;
-  font-size: 0.7rem;
-  font-weight: 500;
-  color: var(--cp-text-secondary);
-  background: var(--cp-infra-bg);
-  border: 1px solid var(--cp-infra-border);
-  border-radius: 6px;
-  padding: 0.2rem 0.5rem;
+  gap: 0.5rem;
+  padding: 0.45rem 0.75rem;
+  border-radius: 8px;
+  border: 1.5px solid var(--cp-border);
+  background: var(--cp-card-bg);
 }
 
-.infraDot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
+.infraBoxGreen {
+  border-color: var(--cp-green);
+  background: var(--cp-green-light);
+}
+
+.infraBoxBlue {
+  border-color: var(--cp-accent);
+  background: var(--cp-accent-light);
+}
+
+.infraBoxOrange {
+  border-color: var(--cp-orange);
+  background: var(--cp-orange-light);
+}
+
+.infraBoxIcon {
+  font-size: 0.85rem;
   flex-shrink: 0;
 }
 
-.infraDotGreen {
-  background: var(--cp-green);
+.infraBoxLabel {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--cp-text);
 }
 
-.infraDotBlue {
-  background: var(--cp-accent);
-}
-
-.infraDotOrange {
-  background: var(--cp-orange);
+/* ── Worker column (card + infra stack) ── */
+.workerColumn {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  min-width: 220px;
+  max-width: 260px;
 }
 
 /* ── Workers row ── */
@@ -331,6 +353,24 @@
   gap: 2rem;
   justify-content: center;
   flex-wrap: wrap;
+}
+
+/* ── Connector with label ── */
+.connectorBranchLabeled {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 100%;
+  max-width: 700px;
+}
+
+.connectorLabel {
+  font-size: 0.7rem;
+  color: var(--cp-text-muted);
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 0.25rem;
 }
 
 /* ── Animated flow ── */
@@ -509,6 +549,16 @@
     min-width: auto;
     width: 100%;
     max-width: 260px;
+  }
+
+  .workerColumn {
+    min-width: auto;
+    width: 100%;
+    max-width: 280px;
+  }
+
+  .connectorBranchLabeled {
+    display: none;
   }
 
   .connectorBranch {

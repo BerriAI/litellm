@@ -23,7 +23,7 @@ Looking for Qualifire Guardrails? Check out the [Qualifire Guardrails Integratio
 2. Get your API key and webhook URL from the Qualifire dashboard
 
 ```bash
-pip install litellm
+uv add litellm
 ```
 
 ## Quick Start

@@ -5,6 +5,7 @@ import * as Networking from "./networking";
 vi.mock("@/utils/cookieUtils", () => ({
   clearTokenCookies: vi.fn(),
   getCookie: vi.fn(),
+  storeLoginToken: vi.fn(),
 }));
 
 vi.mock("./molecules/notifications_manager", () => ({
@@ -76,6 +77,38 @@ describe("networking - expired session handling", () => {
     }
 
     expect(mockFetch).toHaveBeenCalledOnce();
+  });
+});
+
+describe("loginCall - storeLoginToken integration", () => {
+  const originalFetch = global.fetch;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+  });
+
+  it("calls storeLoginToken when response includes token", async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ redirect_url: "/ui/?login=success", token: "my-jwt" }),
+    }) as any;
+    const { storeLoginToken } = await import("@/utils/cookieUtils");
+    await Networking.loginCall("admin", "pass");
+    expect(storeLoginToken).toHaveBeenCalledWith("my-jwt");
+  });
+
+  it("does not call storeLoginToken when response has no token", async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ redirect_url: "/ui/?login=success" }),
+    }) as any;
+    const { storeLoginToken } = await import("@/utils/cookieUtils");
+    await Networking.loginCall("admin", "pass");
+    expect(storeLoginToken).not.toHaveBeenCalled();
   });
 });
 

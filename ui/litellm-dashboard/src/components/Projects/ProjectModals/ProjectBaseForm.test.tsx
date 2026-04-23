@@ -14,6 +14,10 @@ vi.mock("@/components/organisms/create_key_button", () => ({
   fetchTeamModels: vi.fn().mockResolvedValue([]),
 }));
 
+vi.mock("@/components/networking", () => ({
+  getGuardrailsList: vi.fn().mockResolvedValue({ guardrails: [] }),
+}));
+
 vi.mock("@/components/key_team_helpers/fetch_available_models_team_key", () => ({
   getModelDisplayName: (model: string) => model,
 }));
@@ -85,5 +89,14 @@ describe("ProjectBaseForm", () => {
   it("should show the Advanced Settings collapse panel", () => {
     renderWithProviders(<FormWrapper />);
     expect(screen.getByText("Advanced Settings")).toBeInTheDocument();
+  });
+
+  it("should show a Guardrails field in the Advanced Settings section", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<FormWrapper />);
+    await user.click(screen.getByText("Advanced Settings"));
+    await waitFor(() => {
+      expect(screen.getByText("Guardrails")).toBeInTheDocument();
+    });
   });
 });

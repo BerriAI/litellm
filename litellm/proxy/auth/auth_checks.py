@@ -8,6 +8,7 @@ Run checks for:
 2. If user is in budget
 3. If end_user ('user' passed to /chat/completions, /embeddings endpoint) is in budget
 """
+
 import asyncio
 import re
 import time
@@ -31,6 +32,7 @@ from litellm.constants import (
 )
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.proxy._types import (
     RBAC_ROLES,
     CallInfo,
@@ -165,9 +167,24 @@ def _is_model_cost_zero(
                 )
                 return False
 
-            # This model has zero cost explicitly configured
+            # Costs are 0 — verify this is from explicit configuration,
+            # not from defaulted sparse auto-registration entries.
+            # See: https://github.com/BerriAI/litellm/issues/24770
+            safe_name = str(model_name).replace("\n", "").replace("\r", "")
+            if not _is_cost_explicitly_configured(model_name, llm_router):
+                verbose_proxy_logger.debug(
+                    "Model %s has zero cost but no explicit cost "
+                    "configuration in model_cost entry — treating as unknown "
+                    "cost (enforce budget)",
+                    safe_name,
+                )
+                return False
+
             verbose_proxy_logger.debug(
-                f"Model {model_name} has zero cost explicitly configured (input: {input_cost}, output: {output_cost})"
+                "Model %s has zero cost explicitly configured (input: %s, output: %s)",
+                safe_name,
+                input_cost,
+                output_cost,
             )
 
         except Exception as e:
@@ -179,6 +196,28 @@ def _is_model_cost_zero(
 
     # All models checked have zero cost
     return True
+
+
+def _is_cost_explicitly_configured(model: str, llm_router: "Router") -> bool:
+    """
+    Check if any deployment in the model group has cost fields explicitly
+    set in its litellm.model_cost entry.
+
+    When Router._create_deployment() registers a model not in the global
+    cost map, it creates a sparse entry like {"id": "<hash>"} with no cost
+    fields. _get_model_info_helper() then defaults missing costs to 0.
+    This function detects that scenario by checking the raw model_cost entry.
+    """
+    for deployment in llm_router.model_list:
+        if deployment.get("model_name") != model:
+            continue
+        model_id = deployment.get("model_info", {}).get("id")
+        if model_id is None:
+            continue
+        raw_entry = litellm.model_cost.get(model_id, {})
+        if "input_cost_per_token" in raw_entry or "output_cost_per_token" in raw_entry:
+            return True
+    return False
 
 
 async def _run_project_checks(
@@ -290,14 +329,62 @@ def _global_proxy_budget_check(
             )
 
 
+_GUARDRAIL_MODIFICATION_KEYS: tuple = (
+    "guardrails",
+    "disable_global_guardrails",
+    "disable_global_guardrail",
+    "opted_out_global_guardrails",
+)
+
+
 def _guardrail_modification_check(
     request_body: dict, team_object: Optional[LiteLLM_TeamTable]
 ) -> None:
-    _request_metadata: dict = request_body.get("metadata", {}) or {}
-    if not _request_metadata.get("guardrails"):
-        return
+    """
+    Reject user-supplied metadata flags that would modify guardrail behavior
+    unless the team has explicit permission. Checked keys include the plural
+    ``guardrails`` list plus the per-request toggles that influence whether
+    default-on guardrails run (``disable_global_guardrails``,
+    ``disable_global_guardrail`` singular, and ``opted_out_global_guardrails``).
 
+    User-supplied values for the bypass toggles are also silently ignored by
+    ``_get_admin_metadata`` at read time; this check adds defense in depth by
+    failing loudly at the auth layer so operators see an explicit 403 instead
+    of a confusing silent-ignore.
+    """
     from litellm.proxy.guardrails.guardrail_helpers import can_modify_guardrails
+
+    def _coerce_to_dict(container: Any) -> Optional[dict]:
+        """Accept dict or JSON-string (from multipart/form-data or extra_body).
+
+        Without this, an attacker can smuggle guardrail keys past the check by
+        sending ``{"metadata": "{\\"disable_global_guardrails\\": true}"}`` —
+        ``isinstance(dict)`` on the string returns False, the check returns
+        no-modification, and ``add_litellm_data_to_request`` parses the string
+        to a dict downstream.
+        """
+        if isinstance(container, dict):
+            return container
+        if isinstance(container, str):
+            parsed = safe_json_loads(container)
+            return parsed if isinstance(parsed, dict) else None
+        return None
+
+    def _user_requested_modification(container: Any) -> bool:
+        coerced = _coerce_to_dict(container)
+        if coerced is None:
+            return False
+        return any(coerced.get(key) for key in _GUARDRAIL_MODIFICATION_KEYS)
+
+    # Check both metadata keys — callers can populate either depending on the
+    # endpoint. Cover the top-level too so root-level injection is rejected.
+    modifies = (
+        _user_requested_modification(request_body.get("metadata"))
+        or _user_requested_modification(request_body.get("litellm_metadata"))
+        or _user_requested_modification(request_body)
+    )
+    if not modifies:
+        return
 
     if not can_modify_guardrails(team_object):
         raise HTTPException(
@@ -414,9 +501,9 @@ async def common_checks(  # noqa: PLR0915
                 model=_model,
                 team_object=team_object,
                 llm_router=llm_router,
-                team_model_aliases=valid_token.team_model_aliases
-                if valid_token
-                else None,
+                team_model_aliases=(
+                    valid_token.team_model_aliases if valid_token else None
+                ),
             ):
                 raise ProxyException(
                     message=f"Team not allowed to access model. Team={team_object.team_id}, Model={_model}. Allowed team models = {team_object.models}",
@@ -424,6 +511,21 @@ async def common_checks(  # noqa: PLR0915
                     param="model",
                     code=status.HTTP_401_UNAUTHORIZED,
                 )
+
+    # 2.2. If team member has per-member model scope, enforce it
+    if _model and team_object and valid_token and valid_token.user_id:
+        with tracer.trace(
+            "litellm.proxy.auth.common_checks.check_team_member_model_access"
+        ):
+            await _check_team_member_model_access(
+                model=_model,
+                team_object=team_object,
+                valid_token=valid_token,
+                llm_router=llm_router,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                proxy_logging_obj=proxy_logging_obj,
+            )
 
     # Require trace id for agent keys when agent has require_trace_id_on_calls_by_agent
     if valid_token is not None and valid_token.agent_id:
@@ -476,6 +578,17 @@ async def common_checks(  # noqa: PLR0915
                 valid_token=valid_token,
             )
 
+        # 3.1. Multi-window budget check for team
+        with tracer.trace("litellm.proxy.auth.common_checks.team_multi_budget_check"):
+            await _team_multi_budget_check(team_object=team_object)
+
+        # 3.2. Multi-window budget check for key
+        with tracer.trace(
+            "litellm.proxy.auth.common_checks.virtual_key_multi_budget_check"
+        ):
+            if valid_token is not None:
+                await _virtual_key_multi_budget_check(valid_token=valid_token)
+
         # 3.0.5. If team is over soft budget (alert only, doesn't block)
         with tracer.trace("litellm.proxy.auth.common_checks.team_soft_budget_check"):
             await _team_soft_budget_check(
@@ -513,11 +626,17 @@ async def common_checks(  # noqa: PLR0915
             and user_object.max_budget is not None
         ):
             user_budget = user_object.max_budget
-            if user_budget < user_object.spend:
+            from litellm.proxy.proxy_server import get_current_spend
+
+            user_spend = await get_current_spend(
+                counter_key=f"spend:user:{user_object.user_id}",
+                fallback_spend=user_object.spend or 0.0,
+            )
+            if user_spend >= user_budget:
                 raise litellm.BudgetExceededError(
-                    current_cost=user_object.spend,
+                    current_cost=user_spend,
                     max_budget=user_budget,
-                    message=f"ExceededBudget: User={user_object.user_id} over budget. Spend={user_object.spend}, Budget={user_budget}",
+                    message=f"ExceededBudget: User={user_object.user_id} over budget. Spend={user_spend}, Budget={user_budget}",
                 )
 
         ## 4.2 check team member budget, if team key
@@ -554,17 +673,12 @@ async def common_checks(  # noqa: PLR0915
         user_object=user_object, route=route, request_body=request_body
     )
 
-    token_team = getattr(valid_token, "team_id", None)
-    token_type: Literal["ui", "api"] = (
-        "ui" if token_team is not None and token_team == "litellm-dashboard" else "api"
-    )
-    _is_route_allowed = _is_allowed_route(
+    _is_route_allowed = _is_api_route_allowed(
         route=route,
-        token_type=token_type,
-        user_obj=user_object,
         request=request,
         request_data=request_body,
         valid_token=valid_token,
+        user_obj=user_object,
     )
 
     # 11. [OPTIONAL] Vector store checks - is the object allowed to access the vector store
@@ -585,31 +699,6 @@ async def common_checks(  # noqa: PLR0915
         )
 
     return True
-
-
-def _is_ui_route(
-    route: str,
-    user_obj: Optional[LiteLLM_UserTable] = None,
-) -> bool:
-    """
-    - Check if the route is a UI used route
-    """
-    # this token is only used for managing the ui
-    allowed_routes = LiteLLMRoutes.ui_routes.value
-    # check if the current route startswith any of the allowed routes
-    if (
-        route is not None
-        and isinstance(route, str)
-        and any(route.startswith(allowed_route) for allowed_route in allowed_routes)
-    ):
-        # Do something if the current route starts with any of the allowed routes
-        return True
-    elif any(
-        RouteChecks._route_matches_pattern(route=route, pattern=allowed_route)
-        for allowed_route in allowed_routes
-    ):
-        return True
-    return False
 
 
 def _get_user_role(
@@ -673,30 +762,6 @@ def _is_user_proxy_admin(user_obj: Optional[LiteLLM_UserTable]):
         return True
 
     return False
-
-
-def _is_allowed_route(
-    route: str,
-    token_type: Literal["ui", "api"],
-    request: Request,
-    request_data: dict,
-    valid_token: Optional[UserAPIKeyAuth],
-    user_obj: Optional[LiteLLM_UserTable] = None,
-) -> bool:
-    """
-    - Route b/w ui token check and normal token check
-    """
-
-    if token_type == "ui" and _is_ui_route(route=route, user_obj=user_obj):
-        return True
-    else:
-        return _is_api_route_allowed(
-            route=route,
-            request=request,
-            request_data=request_data,
-            valid_token=valid_token,
-            user_obj=user_obj,
-        )
 
 
 def _allowed_routes_check(user_route: str, allowed_routes: list) -> bool:
@@ -2876,7 +2941,15 @@ async def _virtual_key_max_budget_check(
         Triggers a budget alert if the token is over it's max budget.
 
     """
-    if valid_token.spend is not None and valid_token.max_budget is not None:
+    if valid_token.max_budget is not None:
+        from litellm.proxy.proxy_server import get_current_spend
+
+        # Read spend from cross-pod counter (Redis-first) or cached object (fallback)
+        spend = await get_current_spend(
+            counter_key=f"spend:key:{valid_token.token}",
+            fallback_spend=valid_token.spend or 0.0,
+        )
+
         ####################################
         # collect information for alerting #
         ####################################
@@ -2888,7 +2961,7 @@ async def _virtual_key_max_budget_check(
 
         call_info = CallInfo(
             token=valid_token.token,
-            spend=valid_token.spend,
+            spend=spend,
             max_budget=valid_token.max_budget,
             soft_budget=valid_token.soft_budget,
             user_id=valid_token.user_id,
@@ -2909,10 +2982,47 @@ async def _virtual_key_max_budget_check(
         # collect information for alerting #
         ####################################
 
-        if valid_token.spend >= valid_token.max_budget:
+        if spend >= valid_token.max_budget:
             raise litellm.BudgetExceededError(
-                current_cost=valid_token.spend,
+                current_cost=spend,
                 max_budget=valid_token.max_budget,
+            )
+
+
+async def _virtual_key_multi_budget_check(
+    valid_token: UserAPIKeyAuth,
+):
+    """
+    Raises BudgetExceededError if any budget window in valid_token.budget_limits is exceeded.
+
+    Each window has its own Redis counter keyed by spend:key:{token}:window:{budget_duration}.
+    Using budget_duration (not list index) keeps counters stable when windows are reordered
+    or removed during a key update.
+
+    Note: counters are not seeded from DB on Redis cold-start. After a Redis flush,
+    per-window spend resets to zero within the current window period. This is an acceptable
+    trade-off: the DB stores reset_at timestamps but not per-window accumulated spend.
+    """
+    if not valid_token.budget_limits:
+        return
+
+    from litellm.proxy.proxy_server import get_current_spend
+
+    for window in valid_token.budget_limits:
+        w: dict = window if isinstance(window, dict) else window.model_dump()
+        counter_key = f"spend:key:{valid_token.token}:window:{w['budget_duration']}"
+        window_spend = await get_current_spend(
+            counter_key=counter_key,
+            fallback_spend=0.0,
+        )
+        if window_spend >= w["max_budget"]:
+            raise litellm.BudgetExceededError(
+                current_cost=window_spend,
+                max_budget=w["max_budget"],
+                message=(
+                    f"ExceededBudget: Key over {w['budget_duration']} budget. "
+                    f"Spend=${window_spend:.4f}, Limit=${w['max_budget']:.2f}"
+                ),
             )
 
 
@@ -2955,6 +3065,52 @@ async def _virtual_key_soft_budget_check(
         )
 
 
+def _parse_email_list(raw: Any) -> List[str]:
+    """Parse emails from a list or comma-separated string."""
+    if isinstance(raw, list):
+        return [e.strip() for e in raw if isinstance(e, str) and e.strip()]
+    elif isinstance(raw, str):
+        return [e.strip() for e in raw.split(",") if e.strip()]
+    return []
+
+
+def _normalize_alert_emails(
+    cfg: Optional[Dict[str, Any]],
+) -> Dict[str, List[str]]:
+    """Coerce user-supplied threshold→recipients mapping to Dict[str, List[str]].
+
+    Values may legitimately arrive as list, comma-separated string, or None
+    from YAML/metadata; _parse_email_list tolerates all three.
+    """
+    if not cfg:
+        return {}
+    return {k: _parse_email_list(v) for k, v in cfg.items()}
+
+
+def _merge_budget_alert_email_configs(
+    global_cfg: Optional[Dict[str, Any]],
+    per_key_cfg: Optional[Dict[str, Any]],
+) -> Optional[Dict[str, List[str]]]:
+    """
+    Per-threshold additive merge: each threshold's recipient list is the union
+    of global + per-key entries (deduped, global-first ordering). Missing
+    thresholds on one side are inherited from the other.
+    """
+    global_cfg_normalized = _normalize_alert_emails(global_cfg)
+    per_key_cfg_normalized = _normalize_alert_emails(per_key_cfg)
+    if not global_cfg_normalized and not per_key_cfg_normalized:
+        return None
+    thresholds = set(global_cfg_normalized) | set(per_key_cfg_normalized)
+    return {
+        t: list(
+            dict.fromkeys(
+                global_cfg_normalized.get(t, []) + per_key_cfg_normalized.get(t, [])
+            )
+        )
+        for t in thresholds
+    }
+
+
 async def _virtual_key_max_budget_alert_check(
     valid_token: UserAPIKeyAuth,
     proxy_logging_obj: ProxyLogging,
@@ -2972,22 +3128,25 @@ async def _virtual_key_max_budget_alert_check(
         and valid_token.spend is not None
         and valid_token.spend > 0
     ):
-        alert_threshold = (
-            valid_token.max_budget * EMAIL_BUDGET_ALERT_MAX_SPEND_ALERT_PERCENTAGE
+        owner_email = user_obj.user_email if user_obj else None
+        alert_email_config: Optional[Dict[str, List[str]]] = (
+            _merge_budget_alert_email_configs(
+                global_cfg=litellm.default_key_max_budget_alert_emails,
+                per_key_cfg=(valid_token.metadata or {}).get("max_budget_alert_emails"),
+            )
         )
 
-        # Only alert if we've crossed the threshold but haven't exceeded max_budget yet
-        if (
-            valid_token.spend >= alert_threshold
-            and valid_token.spend < valid_token.max_budget
-        ):
-            verbose_proxy_logger.debug(
-                "Reached Max Budget Alert Threshold for token %s, spend %s, max_budget %s, alert_threshold %s",
-                valid_token.token,
-                valid_token.spend,
-                valid_token.max_budget,
-                alert_threshold,
+        if isinstance(alert_email_config, dict) and alert_email_config:
+            # New path: only create task if spend has crossed the lowest threshold
+            min_pct = min(
+                (int(k) for k in alert_email_config if k.isdigit()),
+                default=None,
             )
+            if min_pct is None or valid_token.spend < valid_token.max_budget * (
+                min_pct / 100.0
+            ):
+                return
+
             call_info = CallInfo(
                 token=valid_token.token,
                 spend=valid_token.spend,
@@ -2997,17 +3156,54 @@ async def _virtual_key_max_budget_alert_check(
                 team_id=valid_token.team_id,
                 team_alias=valid_token.team_alias,
                 organization_id=valid_token.org_id,
-                user_email=user_obj.user_email if user_obj else None,
+                user_email=owner_email,
                 key_alias=valid_token.key_alias,
                 event_group=Litellm_EntityType.KEY,
+                max_budget_alert_emails=alert_email_config,
             )
-
             asyncio.create_task(
                 proxy_logging_obj.budget_alerts(
                     type="max_budget_alert",
                     user_info=call_info,
                 )
             )
+        else:
+            # Old path: existing single 80% threshold — completely unchanged
+            alert_threshold = (
+                valid_token.max_budget * EMAIL_BUDGET_ALERT_MAX_SPEND_ALERT_PERCENTAGE
+            )
+
+            if (
+                valid_token.spend >= alert_threshold
+                and valid_token.spend < valid_token.max_budget
+            ):
+                verbose_proxy_logger.debug(
+                    "Reached Max Budget Alert Threshold for token %s, spend %s, max_budget %s, alert_threshold %s",
+                    valid_token.token,
+                    valid_token.spend,
+                    valid_token.max_budget,
+                    alert_threshold,
+                )
+                call_info = CallInfo(
+                    token=valid_token.token,
+                    spend=valid_token.spend,
+                    max_budget=valid_token.max_budget,
+                    soft_budget=valid_token.soft_budget,
+                    user_id=valid_token.user_id,
+                    team_id=valid_token.team_id,
+                    team_alias=valid_token.team_alias,
+                    organization_id=valid_token.org_id,
+                    user_email=owner_email,
+                    key_alias=valid_token.key_alias,
+                    event_group=Litellm_EntityType.KEY,
+                )
+
+                asyncio.create_task(
+                    proxy_logging_obj.budget_alerts(
+                        type="max_budget_alert",
+                        user_info=call_info,
+                    )
+                )
 
 
 async def _check_team_member_budget(
@@ -3042,12 +3238,72 @@ async def _check_team_member_budget(
             team_member_budget = team_membership.litellm_budget_table.max_budget
             team_member_spend = team_membership.spend or 0.0
 
+            # Read from cross-pod counter (Redis-first) if available
+            from litellm.proxy.proxy_server import get_current_spend
+
+            team_member_spend = await get_current_spend(
+                counter_key=f"spend:team_member:{valid_token.user_id}:{team_object.team_id}",
+                fallback_spend=team_member_spend,
+            )
+
             if team_member_spend >= team_member_budget:
                 raise litellm.BudgetExceededError(
                     current_cost=team_member_spend,
                     max_budget=team_member_budget,
                     message=f"Budget has been exceeded! User={valid_token.user_id} in Team={team_object.team_id} Current cost: {team_member_spend}, Max budget: {team_member_budget}",
                 )
+
+
+async def _check_team_member_model_access(
+    model: Union[str, List[str]],
+    team_object: LiteLLM_TeamTable,
+    valid_token: UserAPIKeyAuth,
+    llm_router: Optional[Router],
+    prisma_client: Optional["PrismaClient"],
+    user_api_key_cache: DualCache,
+    proxy_logging_obj: ProxyLogging,
+) -> None:
+    """
+    Check if a team member's per-member model scope allows access to the requested model.
+
+    Only enforced when the member's budget table has a non-empty allowed_models list.
+    If allowed_models is empty or absent, the team-level models list applies (no extra restriction).
+    """
+    if valid_token.user_id is None or team_object.team_id is None:
+        return
+
+    team_membership = await get_team_membership(
+        user_id=valid_token.user_id,
+        team_id=team_object.team_id,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+
+    if (
+        team_membership is None
+        or team_membership.litellm_budget_table is None
+        or not team_membership.litellm_budget_table.allowed_models
+    ):
+        return  # no per-member restriction — inherit team-level check
+
+    member_allowed_models: List[str] = (
+        team_membership.litellm_budget_table.allowed_models
+    )
+    try:
+        _can_object_call_model(
+            model=model,
+            llm_router=llm_router,
+            models=member_allowed_models,
+            object_type="team",
+        )
+    except ProxyException:
+        raise ProxyException(
+            message=f"Team member not allowed to access model. User={valid_token.user_id}, Team={team_object.team_id}, Model={model}. Allowed member models = {member_allowed_models}",
+            type=ProxyErrorTypes.team_model_access_denied,
+            param="model",
+            code=status.HTTP_401_UNAUTHORIZED,
+        )
 
 
 async def _team_max_budget_check(
@@ -3062,35 +3318,72 @@ async def _team_max_budget_check(
         BudgetExceededError if the team is over it's max budget.
         Triggers a budget alert if the team is over it's max budget.
     """
-    if (
-        team_object is not None
-        and team_object.max_budget is not None
-        and team_object.spend is not None
-        and team_object.spend > team_object.max_budget
-    ):
-        if valid_token:
-            call_info = CallInfo(
-                token=valid_token.token,
-                spend=team_object.spend,
-                max_budget=team_object.max_budget,
-                user_id=valid_token.user_id,
-                team_id=valid_token.team_id,
-                team_alias=valid_token.team_alias,
-                organization_id=valid_token.org_id,
-                event_group=Litellm_EntityType.TEAM,
-            )
-            asyncio.create_task(
-                proxy_logging_obj.budget_alerts(
-                    type="team_budget",
-                    user_info=call_info,
+    if team_object is not None and team_object.max_budget is not None:
+        from litellm.proxy.proxy_server import get_current_spend
+
+        # Read spend from cross-pod counter (Redis-first) or cached object (fallback)
+        spend = await get_current_spend(
+            counter_key=f"spend:team:{team_object.team_id}",
+            fallback_spend=team_object.spend or 0.0,
+        )
+
+        if spend > team_object.max_budget:
+            if valid_token:
+                call_info = CallInfo(
+                    token=valid_token.token,
+                    spend=spend,
+                    max_budget=team_object.max_budget,
+                    user_id=valid_token.user_id,
+                    team_id=valid_token.team_id,
+                    team_alias=valid_token.team_alias,
+                    organization_id=valid_token.org_id,
+                    event_group=Litellm_EntityType.TEAM,
                 )
+                asyncio.create_task(
+                    proxy_logging_obj.budget_alerts(
+                        type="team_budget",
+                        user_info=call_info,
+                    )
+                )
+
+            raise litellm.BudgetExceededError(
+                current_cost=spend,
+                max_budget=team_object.max_budget,
+                message=f"Budget has been exceeded! Team={team_object.team_id} Current cost: {spend}, Max budget: {team_object.max_budget}",
             )
 
-        raise litellm.BudgetExceededError(
-            current_cost=team_object.spend,
-            max_budget=team_object.max_budget,
-            message=f"Budget has been exceeded! Team={team_object.team_id} Current cost: {team_object.spend}, Max budget: {team_object.max_budget}",
+
+async def _team_multi_budget_check(
+    team_object: Optional[LiteLLM_TeamTable],
+):
+    """
+    Raises BudgetExceededError if any budget window in team_object.budget_limits is exceeded.
+
+    Each window has its own Redis counter keyed by spend:team:{team_id}:window:{budget_duration}.
+    Using budget_duration (not list index) keeps counters stable when windows are reordered
+    or removed during a team update.
+    """
+    if team_object is None or not team_object.budget_limits:
+        return
+
+    from litellm.proxy.proxy_server import get_current_spend
+
+    for window in team_object.budget_limits:
+        w: dict = window if isinstance(window, dict) else window.model_dump()
+        counter_key = f"spend:team:{team_object.team_id}:window:{w['budget_duration']}"
+        window_spend = await get_current_spend(
+            counter_key=counter_key,
+            fallback_spend=0.0,
         )
+        if window_spend >= w["max_budget"]:
+            raise litellm.BudgetExceededError(
+                current_cost=window_spend,
+                max_budget=w["max_budget"],
+                message=(
+                    f"ExceededBudget: Team={team_object.team_id} over {w['budget_duration']} budget. "
+                    f"Spend=${window_spend:.4f}, Limit=${w['max_budget']:.2f}"
+                ),
+            )
 
 
 async def _team_soft_budget_check(
@@ -3378,12 +3671,20 @@ async def _organization_max_budget_check(
     if org_max_budget is None or org_max_budget <= 0:
         return
 
+    # Read spend from cross-pod counter (Redis-first) or cached object (fallback)
+    from litellm.proxy.proxy_server import get_current_spend
+
+    org_spend = await get_current_spend(
+        counter_key=f"spend:org:{org_id}",
+        fallback_spend=org_table.spend or 0.0,
+    )
+
     # Check if organization spend exceeds max budget
-    if org_table.spend >= org_max_budget:
+    if org_spend >= org_max_budget:
         # Trigger budget alert
         call_info = CallInfo(
             token=valid_token.token,
-            spend=org_table.spend,
+            spend=org_spend,
             max_budget=org_max_budget,
             user_id=valid_token.user_id,
             team_id=valid_token.team_id,
@@ -3399,9 +3700,9 @@ async def _organization_max_budget_check(
         )
 
         raise litellm.BudgetExceededError(
-            current_cost=org_table.spend,
+            current_cost=org_spend,
             max_budget=org_max_budget,
-            message=f"Budget has been exceeded! Organization={org_id} Current cost: {org_table.spend}, Max budget: {org_max_budget}",
+            message=f"Budget has been exceeded! Organization={org_id} Current cost: {org_spend}, Max budget: {org_max_budget}",
         )
 
 
