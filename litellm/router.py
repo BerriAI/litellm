@@ -829,19 +829,21 @@ class Router:
         self._ensure_routing_strategy_logger(routing_strategy, routing_strategy_args)
 
     def _ensure_routing_strategy_logger(
-        self, routing_strategy: Union[RoutingStrategy, str], routing_strategy_args: Optional[dict] = None
+        self,
+        routing_strategy: Union[RoutingStrategy, str],
+        routing_strategy_args: Optional[dict] = None,
     ):
         """
         Lazy initialization of routing strategy loggers.
         Creates logger if it doesn't exist yet. Supports per-request routing strategy overrides.
         """
         routing_strategy_args = routing_strategy_args or {}
-        
+
         if (
             routing_strategy == RoutingStrategy.LEAST_BUSY.value
             or routing_strategy == RoutingStrategy.LEAST_BUSY
         ):
-            if not hasattr(self, 'leastbusy_logger') or self.leastbusy_logger is None:
+            if not hasattr(self, "leastbusy_logger") or self.leastbusy_logger is None:
                 self.leastbusy_logger = LeastBusyLoggingHandler(router_cache=self.cache)
                 ## add callback
                 if isinstance(litellm.input_callback, list):
@@ -854,7 +856,7 @@ class Router:
             routing_strategy == RoutingStrategy.USAGE_BASED_ROUTING.value
             or routing_strategy == RoutingStrategy.USAGE_BASED_ROUTING
         ):
-            if not hasattr(self, 'lowesttpm_logger') or self.lowesttpm_logger is None:
+            if not hasattr(self, "lowesttpm_logger") or self.lowesttpm_logger is None:
                 self.lowesttpm_logger = LowestTPMLoggingHandler(
                     router_cache=self.cache,
                     routing_args=routing_strategy_args,
@@ -865,7 +867,10 @@ class Router:
             routing_strategy == RoutingStrategy.USAGE_BASED_ROUTING_V2.value
             or routing_strategy == RoutingStrategy.USAGE_BASED_ROUTING_V2
         ):
-            if not hasattr(self, 'lowesttpm_logger_v2') or self.lowesttpm_logger_v2 is None:
+            if (
+                not hasattr(self, "lowesttpm_logger_v2")
+                or self.lowesttpm_logger_v2 is None
+            ):
                 self.lowesttpm_logger_v2 = LowestTPMLoggingHandler_v2(
                     router_cache=self.cache,
                     routing_args=routing_strategy_args,
@@ -876,7 +881,10 @@ class Router:
             routing_strategy == RoutingStrategy.LATENCY_BASED.value
             or routing_strategy == RoutingStrategy.LATENCY_BASED
         ):
-            if not hasattr(self, 'lowestlatency_logger') or self.lowestlatency_logger is None:
+            if (
+                not hasattr(self, "lowestlatency_logger")
+                or self.lowestlatency_logger is None
+            ):
                 self.lowestlatency_logger = LowestLatencyLoggingHandler(
                     router_cache=self.cache,
                     routing_args=routing_strategy_args,
@@ -887,7 +895,7 @@ class Router:
             routing_strategy == RoutingStrategy.COST_BASED.value
             or routing_strategy == RoutingStrategy.COST_BASED
         ):
-            if not hasattr(self, 'lowestcost_logger') or self.lowestcost_logger is None:
+            if not hasattr(self, "lowestcost_logger") or self.lowestcost_logger is None:
                 self.lowestcost_logger = LowestCostLoggingHandler(
                     router_cache=self.cache,
                     routing_args={},
@@ -9506,8 +9514,10 @@ class Router:
 
             start_time = time.time()
             # Ensure logger is initialized for the routing strategy (lazy init)
-            self._ensure_routing_strategy_logger(routing_strategy_to_use, self.routing_strategy_args)
-            
+            self._ensure_routing_strategy_logger(
+                routing_strategy_to_use, self.routing_strategy_args
+            )
+
             if (
                 routing_strategy_to_use == "usage-based-routing-v2"
                 and self.lowesttpm_logger_v2 is not None
@@ -9677,7 +9687,9 @@ class Router:
             )  # Pass-through uses global routing strategy
 
             # Ensure logger is initialized (lazy init)
-            self._ensure_routing_strategy_logger(routing_strategy_to_use, self.routing_strategy_args)
+            self._ensure_routing_strategy_logger(
+                routing_strategy_to_use, self.routing_strategy_args
+            )
 
             if (
                 routing_strategy_to_use == "usage-based-routing-v2"
@@ -9830,7 +9842,9 @@ class Router:
 
         # Support per-request routing_strategy override from key/team config
         if request_kwargs is not None:
-            routing_strategy_to_use = request_kwargs.pop("routing_strategy", None) or self.routing_strategy
+            routing_strategy_to_use = (
+                request_kwargs.pop("routing_strategy", None) or self.routing_strategy
+            )
         else:
             routing_strategy_to_use = self.routing_strategy
 
@@ -9903,8 +9917,10 @@ class Router:
             )
 
         # Ensure logger is initialized for the routing strategy (lazy init)
-        self._ensure_routing_strategy_logger(routing_strategy_to_use, self.routing_strategy_args)
-        
+        self._ensure_routing_strategy_logger(
+            routing_strategy_to_use, self.routing_strategy_args
+        )
+
         if (
             routing_strategy_to_use == "least-busy"
             and self.leastbusy_logger is not None
