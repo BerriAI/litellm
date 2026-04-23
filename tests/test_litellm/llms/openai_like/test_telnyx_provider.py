@@ -86,21 +86,24 @@ class TestTelnyxProviderLoader:
         assert isinstance(supported, list)
         assert len(supported) > 0
 
-    def test_telnyx_custom_llm_provider(self):
-        """Test that Telnyx is recognized as a custom_llm_provider"""
-        from litellm.litellm_core_utils.get_llm_provider_logic import (
-            get_llm_provider,
+    def test_telnyx_provider_config_manager(self):
+        """Test that ProviderConfigManager returns Telnyx configs"""
+        from litellm import LlmProviders
+        from litellm.utils import ProviderConfigManager
+
+        config = ProviderConfigManager.get_provider_chat_config(
+            model="meta-llama/Meta-Llama-3.1-8B-Instruct", provider=LlmProviders.TELNYX
         )
 
-        model, provider, api_key, api_base = get_llm_provider(
-            model="telnyx/meta-llama/Meta-Llama-3.1-8B-Instruct",
-            custom_llm_provider=None,
-            api_base=None,
-            api_key=None,
-        )
+        assert config is not None
+        assert config.custom_llm_provider == "telnyx"
 
-        # Verify the provider string is correctly set
-        assert provider == "telnyx"
+    def test_telnyx_llm_providers_enum(self):
+        """Test that TELNYX exists in LlmProviders enum"""
+        from litellm import LlmProviders
+
+        assert hasattr(LlmProviders, "TELNYX")
+        assert LlmProviders.TELNYX.value == "telnyx"
 
 
 if __name__ == "__main__":
@@ -128,9 +131,13 @@ if __name__ == "__main__":
     test.test_telnyx_supported_params()
     print("   ✓ Supported params work")
 
-    print("\n6. Testing custom_llm_provider...")
-    test.test_telnyx_custom_llm_provider()
-    print("   ✓ Custom LLM provider works")
+    print("\n6. Testing config manager...")
+    test.test_telnyx_provider_config_manager()
+    print("   ✓ Config manager works")
+
+    print("\n7. Testing LlmProviders enum...")
+    test.test_telnyx_llm_providers_enum()
+    print("   ✓ LlmProviders enum works")
 
     print("\n" + "=" * 50)
     print("✓ All Telnyx provider tests passed!")
