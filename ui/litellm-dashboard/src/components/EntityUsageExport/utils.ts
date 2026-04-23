@@ -1,4 +1,5 @@
 import { formatNumberWithCommas } from "@/utils/dataUtils";
+// eslint-disable-next-line litellm-ui/no-banned-ui-imports
 import type { DateRangePickerValue } from "@tremor/react";
 import Papa from "papaparse";
 import type { EntityBreakdown, EntitySpendData, EntityType, ExportMetadata, ExportScope } from "./types";

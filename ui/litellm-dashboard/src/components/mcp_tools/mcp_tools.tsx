@@ -4,6 +4,7 @@ import { ToolTestPanel } from "./ToolTestPanel";
 import { MCPTool, MCPToolsViewerProps, MCPContent, CallMCPToolResponse } from "./types";
 import { listMCPTools, callMCPTool } from "../networking";
 
+// eslint-disable-next-line litellm-ui/no-banned-ui-imports
 import { Card, Title, Text } from "@tremor/react";
 import { RobotOutlined, ToolOutlined, SearchOutlined, KeyOutlined } from "@ant-design/icons";
 import { Input, Button as AntdButton } from "antd";

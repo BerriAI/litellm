@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { Modal, Form, Input, Select } from "antd";
 import MessageManager from "@/components/molecules/message_manager";
+// eslint-disable-next-line litellm-ui/no-banned-ui-imports
 import { Button } from "@tremor/react";
 import { registerClaudeCodePlugin } from "../networking";
 import {
