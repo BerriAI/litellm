@@ -1,6 +1,19 @@
-import { InfoCircleOutlined } from "@ant-design/icons";
-import { Text } from "@tremor/react";
-import { Checkbox, InputNumber, Popover, Slider, Tooltip, Typography } from "antd";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Input } from "@/components/ui/input";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import { Slider } from "@/components/ui/slider";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import { cn } from "@/lib/utils";
+import { Info } from "lucide-react";
 import React, { useEffect, useState } from "react";
 
 interface AdditionalModelSettingsProps {
@@ -24,13 +37,15 @@ const AdditionalModelSettings: React.FC<AdditionalModelSettingsProps> = ({
   mockTestFallbacks,
   onMockTestFallbacksChange,
 }) => {
-  const [internalUseAdvancedParams, setInternalUseAdvancedParams] = useState(false);
+  const [internalUseAdvancedParams, setInternalUseAdvancedParams] =
+    useState(false);
   const useAdvancedParams =
-    externalUseAdvancedParams !== undefined ? externalUseAdvancedParams : internalUseAdvancedParams;
+    externalUseAdvancedParams !== undefined
+      ? externalUseAdvancedParams
+      : internalUseAdvancedParams;
   const [localTemperature, setLocalTemperature] = useState(temperature);
   const [localMaxTokens, setLocalMaxTokens] = useState(maxTokens);
 
-  // Sync local state with props when they change
   useEffect(() => {
     setLocalTemperature(temperature);
   }, [temperature]);
@@ -39,20 +54,15 @@ const AdditionalModelSettings: React.FC<AdditionalModelSettingsProps> = ({
     setLocalMaxTokens(maxTokens);
   }, [maxTokens]);
 
-  const handleTemperatureChange = (value: number | null) => {
-    const newValue = value ?? 1.0;
-    setLocalTemperature(newValue);
-    onTemperatureChange?.(newValue);
+  const handleTemperatureChange = (value: number) => {
+    setLocalTemperature(value);
+    onTemperatureChange?.(value);
   };
 
-  const handleMaxTokensChange = (value: number | null) => {
-    const newValue = value ?? 1000;
-    setLocalMaxTokens(newValue);
-    onMaxTokensChange?.(newValue);
+  const handleMaxTokensChange = (value: number) => {
+    setLocalMaxTokens(value);
+    onMaxTokensChange?.(value);
   };
-
-  const disabledOpacity = useAdvancedParams ? 1 : 0.4;
-  const disabledTextColor = useAdvancedParams ? "text-gray-700" : "text-gray-400";
 
   const handleUseAdvancedParamsChange = (checked: boolean) => {
     if (onUseAdvancedParamsChange) {
@@ -62,115 +72,172 @@ const AdditionalModelSettings: React.FC<AdditionalModelSettingsProps> = ({
     }
   };
 
+  const disabledTextColor = useAdvancedParams
+    ? "text-foreground"
+    : "text-muted-foreground";
+
   return (
     <div className="space-y-4 p-4 w-80">
-      <Checkbox checked={useAdvancedParams} onChange={(e) => handleUseAdvancedParamsChange(e.target.checked)}>
+      <label className="flex items-center gap-2 cursor-pointer">
+        <Checkbox
+          checked={useAdvancedParams}
+          onCheckedChange={(c) => handleUseAdvancedParamsChange(c === true)}
+        />
         <span className="font-medium">Use Advanced Parameters</span>
-      </Checkbox>
+      </label>
 
       {onMockTestFallbacksChange && (
         <div className="flex items-center gap-1">
-          <Checkbox
-            checked={mockTestFallbacks ?? false}
-            onChange={(e) => onMockTestFallbacksChange(e.target.checked)}
-          >
-            <span className="font-medium">Simulate failure to test fallbacks</span>
-          </Checkbox>
-          <Popover
-            trigger="hover"
-            placement="right"
-            content={
-              <div style={{ maxWidth: 340 }}>
-                <Typography.Paragraph className="text-sm" style={{ marginBottom: 8 }}>
-                  Causes the first request to fail so the router tries fallbacks (if configured). Use
-                  this to verify your fallback setup.
-                </Typography.Paragraph>
-                <Typography.Paragraph className="text-sm" style={{ marginBottom: 0 }}>
-                  Behavior can differ when keys, teams, or router settings are configured.{" "}
-                  <a
-                    href="https://docs.litellm.ai/docs/proxy/keys_teams_router_settings"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-blue-600 hover:text-blue-800"
-                  >
-                    Learn more
-                  </a>
-                </Typography.Paragraph>
-              </div>
-            }
-          >
-            <InfoCircleOutlined
-              className="text-xs text-gray-400 cursor-pointer shrink-0 hover:text-gray-600"
-              aria-label="Help: Simulate failure to test fallbacks"
+          <label className="flex items-center gap-2 cursor-pointer">
+            <Checkbox
+              checked={mockTestFallbacks ?? false}
+              onCheckedChange={(c) =>
+                onMockTestFallbacksChange(c === true)
+              }
             />
+            <span className="font-medium">
+              Simulate failure to test fallbacks
+            </span>
+          </label>
+          <Popover>
+            <PopoverTrigger asChild>
+              <button
+                type="button"
+                className="text-xs text-muted-foreground cursor-pointer shrink-0 hover:text-foreground"
+                aria-label="Help: Simulate failure to test fallbacks"
+              >
+                <Info className="h-3 w-3" />
+              </button>
+            </PopoverTrigger>
+            <PopoverContent className="max-w-[340px]">
+              <p className="text-sm mb-2">
+                Causes the first request to fail so the router tries
+                fallbacks (if configured). Use this to verify your fallback
+                setup.
+              </p>
+              <p className="text-sm">
+                Behavior can differ when keys, teams, or router settings are
+                configured.{" "}
+                <a
+                  href="https://docs.litellm.ai/docs/proxy/keys_teams_router_settings"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-primary hover:underline"
+                >
+                  Learn more
+                </a>
+              </p>
+            </PopoverContent>
           </Popover>
         </div>
       )}
 
-      <div className="space-y-4 transition-opacity duration-200" style={{ opacity: disabledOpacity }}>
+      <div
+        className={cn(
+          "space-y-4 transition-opacity duration-200",
+          !useAdvancedParams && "opacity-40",
+        )}
+      >
         <div>
           <div className="flex items-center justify-between mb-2">
             <div className="flex items-center gap-1">
-              <Text className={`text-sm ${disabledTextColor}`}>Temperature</Text>
-              <Tooltip title="Controls randomness. Lower values make output more deterministic, higher values more creative.">
-                <InfoCircleOutlined className={`text-xs ${disabledTextColor} cursor-help`} />
-              </Tooltip>
+              <span className={cn("text-sm", disabledTextColor)}>
+                Temperature
+              </span>
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Info
+                      className={cn(
+                        "h-3 w-3 cursor-help",
+                        disabledTextColor,
+                      )}
+                    />
+                  </TooltipTrigger>
+                  <TooltipContent className="max-w-xs">
+                    Controls randomness. Lower values make output more
+                    deterministic, higher values more creative.
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
             </div>
-            <InputNumber
+            <Input
+              type="number"
               min={0}
               max={2}
               step={0.1}
               value={localTemperature}
-              onChange={handleTemperatureChange}
+              onChange={(e) => {
+                const v = parseFloat(e.target.value);
+                handleTemperatureChange(isNaN(v) ? 1.0 : v);
+              }}
               disabled={!useAdvancedParams}
-              precision={1}
-              className="w-20"
+              className="w-20 h-8"
             />
           </div>
           <Slider
             min={0}
             max={2}
             step={0.1}
-            value={localTemperature}
-            onChange={handleTemperatureChange}
+            value={[localTemperature]}
+            onValueChange={([v]) => handleTemperatureChange(v)}
             disabled={!useAdvancedParams}
-            marks={{
-              0: "0",
-              1: "1.0",
-              2: "2.0",
-            }}
           />
+          <div className="flex justify-between text-xs text-muted-foreground mt-1">
+            <span>0</span>
+            <span>1.0</span>
+            <span>2.0</span>
+          </div>
         </div>
 
         <div>
           <div className="flex items-center justify-between mb-2">
             <div className="flex items-center gap-1">
-              <Text className={`text-sm ${disabledTextColor}`}>Max Tokens</Text>
-              <Tooltip title="Maximum number of tokens to generate in the response.">
-                <InfoCircleOutlined className={`text-xs ${disabledTextColor} cursor-help`} />
-              </Tooltip>
+              <span className={cn("text-sm", disabledTextColor)}>
+                Max Tokens
+              </span>
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Info
+                      className={cn(
+                        "h-3 w-3 cursor-help",
+                        disabledTextColor,
+                      )}
+                    />
+                  </TooltipTrigger>
+                  <TooltipContent className="max-w-xs">
+                    Maximum number of tokens to generate in the response.
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
             </div>
-            <InputNumber
+            <Input
+              type="number"
               min={1}
               max={32768}
               step={1}
               value={localMaxTokens}
-              onChange={handleMaxTokensChange}
+              onChange={(e) => {
+                const v = parseInt(e.target.value, 10);
+                handleMaxTokensChange(isNaN(v) ? 1000 : v);
+              }}
               disabled={!useAdvancedParams}
+              className="w-24 h-8"
             />
           </div>
           <Slider
             min={1}
             max={32768}
             step={1}
-            value={localMaxTokens}
-            onChange={handleMaxTokensChange}
+            value={[localMaxTokens]}
+            onValueChange={([v]) => handleMaxTokensChange(v)}
             disabled={!useAdvancedParams}
-            marks={{
-              1: "1",
-              32768: "32768",
-            }}
           />
+          <div className="flex justify-between text-xs text-muted-foreground mt-1">
+            <span>1</span>
+            <span>32768</span>
+          </div>
         </div>
       </div>
     </div>
