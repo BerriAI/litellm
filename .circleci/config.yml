@@ -1921,19 +1921,25 @@ jobs:
       - run:
           name: Install Ruby and Bundler
           command: |
-            # Import GPG keys first
-            gpg --keyserver hkp://keyserver.ubuntu.com --recv-keys 409B6B1796C275462A1703113804BB82D39DC0E3 7D2BAF1CF37B13E2069D6956105BD0E739499BDB || {
-              curl -sSL https://rvm.io/mpapis.asc | gpg --import -
-              curl -sSL https://rvm.io/pkuczynski.asc | gpg --import -
-            }
+            # Clone RVM at pinned tag and verify the commit SHA matches the
+            # published tag before running its install script.
+            RVM_VERSION="1.29.12"
+            RVM_EXPECTED_SHA="6bfc9213c9d6914fe756f524eb034a403d51db81"
+            git clone --depth 1 --branch "$RVM_VERSION" https://github.com/rvm/rvm.git /tmp/rvm
+            RVM_ACTUAL_SHA="$(git -C /tmp/rvm rev-parse HEAD)"
+            if [ "$RVM_ACTUAL_SHA" != "$RVM_EXPECTED_SHA" ]; then
+              echo "RVM tag $RVM_VERSION resolved to $RVM_ACTUAL_SHA; expected $RVM_EXPECTED_SHA" >&2
+              exit 1
+            fi
 
-            # Install Ruby version manager (RVM)
-            curl -sSL https://get.rvm.io | bash -s stable
+            # Import RVM signing keys (used by `rvm install` to verify Ruby tarballs)
+            gpg --keyserver hkp://keyserver.ubuntu.com --recv-keys 409B6B1796C275462A1703113804BB82D39DC0E3 7D2BAF1CF37B13E2069D6956105BD0E739499BDB
 
-            # Source RVM from the correct location
-            source $HOME/.rvm/scripts/rvm
+            # Install RVM from the verified checkout
+            /tmp/rvm/install --path "$HOME/.rvm"
+            source "$HOME/.rvm/scripts/rvm"
 
-            # Install Ruby 3.2.2
+            # Install Ruby 3.2.2 (RVM verifies the tarball PGP signature)
             rvm install 3.2.2
             rvm use 3.2.2 --default
 
@@ -1948,28 +1954,33 @@ jobs:
             bundle install
             bundle exec rspec
           no_output_timeout: 30m
-      # New steps to run Node.js test
+      # Install Node.js directly from nodejs.org with SHA256 verification,
+      # instead of piping NodeSource's setup_18.x apt-repo installer into
+      # sudo bash (which runs a mutable upstream script unattended).
       - run:
-          name: Install Node.js
+          name: Install Node.js 18.20.8
           command: |
-            export DEBIAN_FRONTEND=noninteractive
-            curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
-            sudo apt-get update
-            sudo apt-get install -y nodejs
+            NODE_VERSION="18.20.8"
+            NODE_TARBALL="node-v${NODE_VERSION}-linux-x64.tar.xz"
+            NODE_EXPECTED_SHA="5467ee62d6af1411d46b6a10e3fb5cacc92734dbcef465fea14e7b90993001c9"
+            curl -sSLf -o "/tmp/${NODE_TARBALL}" "https://nodejs.org/dist/v${NODE_VERSION}/${NODE_TARBALL}"
+            echo "${NODE_EXPECTED_SHA}  /tmp/${NODE_TARBALL}" | sha256sum -c -
+            sudo tar -xJf "/tmp/${NODE_TARBALL}" -C /usr/local --strip-components=1
+            rm -f "/tmp/${NODE_TARBALL}"
             node --version
             npm --version
 
       - run:
-          name: Install Node.js dependencies
+          name: Install Node.js test dependencies
           command: |
-            npm install @google-cloud/vertexai
-            npm install @google/generative-ai
-            npm install --save-dev jest
+            cd tests/pass_through_tests
+            npm ci
 
       - run:
           name: Run Vertex AI, Google AI Studio Node.js tests
           command: |
-            npx jest tests/pass_through_tests --verbose
+            cd tests/pass_through_tests
+            npx jest . --verbose
           no_output_timeout: 30m
       - run:
           name: Run tests
