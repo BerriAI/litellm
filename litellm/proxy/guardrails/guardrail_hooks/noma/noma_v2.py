@@ -7,7 +7,6 @@
 import enum
 import json
 import os
-from copy import deepcopy
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Literal, Optional, Type, cast
 from urllib.parse import urlparse
@@ -17,6 +16,7 @@ from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
 )
+from litellm.litellm_core_utils.core_helpers import safe_deep_copy
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.llms.custom_httpx.http_handler import (
@@ -139,7 +139,7 @@ class NomaV2Guardrail(CustomGuardrail):
         logging_obj: Optional["LiteLLMLoggingObj"],
         application_id: Optional[str],
     ) -> dict:
-        payload_request_data = deepcopy(request_data)
+        payload_request_data = safe_deep_copy(request_data)
         if logging_obj is not None:
             payload_request_data["litellm_logging_obj"] = getattr(
                 logging_obj, "model_call_details", None
