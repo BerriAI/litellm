@@ -1,8 +1,27 @@
 import React, { useState } from "react";
-import { Table, TableBody, TableCell, TableHead, TableHeaderCell, TableRow, Button } from "@tremor/react";
-import { SwitchVerticalIcon, ChevronUpIcon, ChevronDownIcon, TrashIcon } from "@heroicons/react/outline";
-import { Tooltip } from "antd";
-import { CopyOutlined } from "@ant-design/icons";
+// eslint-disable-next-line litellm-ui/no-banned-ui-imports
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeaderCell,
+  TableRow,
+} from "@tremor/react";
+import { Button } from "@/components/ui/button";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import {
+  ArrowUpDown,
+  ChevronDown,
+  ChevronUp,
+  Copy,
+  Trash2,
+} from "lucide-react";
 import { Agent } from "./types";
 import {
   ColumnDef,
@@ -27,12 +46,12 @@ const AgentTable: React.FC<AgentTableProps> = ({
   agentsList,
   isLoading,
   onDeleteClick,
-  accessToken,
-  onAgentUpdated,
   isAdmin,
   onAgentClick,
 }) => {
-  const [sorting, setSorting] = useState<SortingState>([{ id: "created_at", desc: true }]);
+  const [sorting, setSorting] = useState<SortingState>([
+    { id: "created_at", desc: true },
+  ]);
 
   const formatDate = (dateString?: string) => {
     if (!dateString) return "-";
@@ -51,27 +70,40 @@ const AgentTable: React.FC<AgentTableProps> = ({
       cell: ({ row }) => {
         const agent = row.original;
         const name = agent.agent_name || "";
-  return (
+        return (
           <div className="flex items-center gap-2">
-            <Tooltip title={name}>
-                <Button
-                  size="xs"
-                  variant="light"
-                className="font-mono text-blue-500 bg-blue-50 hover:bg-blue-100 text-xs font-normal px-2 py-0.5 text-left overflow-hidden truncate min-w-[200px] justify-start"
-                  onClick={() => onAgentClick(agent.agent_id)}
-                >
-                {name}
-                </Button>
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    onClick={() => onAgentClick(agent.agent_id)}
+                    className="font-mono text-blue-500 bg-blue-50 hover:bg-blue-100 dark:bg-blue-950/30 dark:hover:bg-blue-950/60 text-xs font-normal px-2 py-0.5 text-left overflow-hidden truncate min-w-[200px] rounded"
+                  >
+                    {name}
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent>{name}</TooltipContent>
               </Tooltip>
-            <Tooltip title="Copy Agent ID">
-              <CopyOutlined
-                onClick={(e) => {
-                  e.stopPropagation();
-                  copyToClipboard(agent.agent_id);
-                }}
-                className="cursor-pointer text-gray-500 hover:text-blue-500 text-xs"
-              />
-            </Tooltip>
+            </TooltipProvider>
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      copyToClipboard(agent.agent_id);
+                    }}
+                    className="cursor-pointer text-muted-foreground hover:text-primary"
+                    aria-label="Copy Agent ID"
+                  >
+                    <Copy className="h-3 w-3" />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent>Copy Agent ID</TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
           </div>
         );
       },
@@ -80,9 +112,10 @@ const AgentTable: React.FC<AgentTableProps> = ({
       header: "Description",
       accessorKey: "agent_card_params.description",
       cell: ({ row }) => {
-        const description = row.original.agent_card_params?.description || "No description";
+        const description =
+          row.original.agent_card_params?.description || "No description";
         return (
-          <span className="text-xs text-gray-600 block max-w-[300px] truncate">
+          <span className="text-xs text-muted-foreground block max-w-[300px] truncate">
             {description}
           </span>
         );
@@ -94,9 +127,14 @@ const AgentTable: React.FC<AgentTableProps> = ({
       cell: ({ row }) => {
         const agent = row.original;
         return (
-          <Tooltip title={agent.created_at}>
-            <span className="text-xs">{formatDate(agent.created_at)}</span>
-          </Tooltip>
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span className="text-xs">{formatDate(agent.created_at)}</span>
+              </TooltipTrigger>
+              <TooltipContent>{agent.created_at}</TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
         );
       },
     },
@@ -106,24 +144,30 @@ const AgentTable: React.FC<AgentTableProps> = ({
             header: "Actions",
             id: "actions",
             enableSorting: false,
-            cell: ({ row }: any) => {
+            cell: ({ row }: { row: { original: Agent } }) => {
               const agent = row.original;
-              
+
               return (
                 <div className="flex items-center gap-1">
-                  <Tooltip title="Delete agent">
-                    <Button
-                      size="xs"
-                      variant="light"
-                      color="red"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onDeleteClick(agent.agent_id, agent.agent_name);
-                      }}
-                      icon={TrashIcon}
-                      className="text-red-500 hover:text-red-700 hover:bg-red-50"
-                    />
-                  </Tooltip>
+                  <TooltipProvider>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-7 w-7 text-destructive hover:text-destructive hover:bg-destructive/10"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onDeleteClick(agent.agent_id, agent.agent_name);
+                          }}
+                          aria-label="Delete agent"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent>Delete agent</TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
                 </div>
               );
             },
@@ -159,16 +203,25 @@ const AgentTable: React.FC<AgentTableProps> = ({
                   >
                     <div className="flex items-center justify-between gap-2">
                       <div className="flex items-center">
-                        {header.isPlaceholder ? null : flexRender(header.column.columnDef.header, header.getContext())}
+                        {header.isPlaceholder
+                          ? null
+                          : flexRender(
+                              header.column.columnDef.header,
+                              header.getContext(),
+                            )}
                       </div>
                       <div className="w-4">
                         {header.column.getIsSorted() ? (
                           {
-                            asc: <ChevronUpIcon className="h-4 w-4 text-blue-500" />,
-                            desc: <ChevronDownIcon className="h-4 w-4 text-blue-500" />,
+                            asc: (
+                              <ChevronUp className="h-4 w-4 text-primary" />
+                            ),
+                            desc: (
+                              <ChevronDown className="h-4 w-4 text-primary" />
+                            ),
                           }[header.column.getIsSorted() as string]
                         ) : (
-                          <SwitchVerticalIcon className="h-4 w-4 text-gray-400" />
+                          <ArrowUpDown className="h-4 w-4 text-muted-foreground" />
                         )}
                       </div>
                     </div>
@@ -180,8 +233,11 @@ const AgentTable: React.FC<AgentTableProps> = ({
           <TableBody>
             {isLoading ? (
               <TableRow>
-                <TableCell colSpan={columns.length} className="h-8 text-center">
-                  <div className="text-center text-gray-500">
+                <TableCell
+                  colSpan={columns.length}
+                  className="h-8 text-center"
+                >
+                  <div className="text-center text-muted-foreground">
                     <p>Loading...</p>
                   </div>
                 </TableCell>
@@ -190,7 +246,10 @@ const AgentTable: React.FC<AgentTableProps> = ({
               table.getRowModel().rows.map((row) => (
                 <TableRow key={row.id} className="h-8">
                   {row.getVisibleCells().map((cell) => (
-                    <TableCell key={cell.id} className="py-0.5 max-h-8 overflow-hidden text-ellipsis whitespace-nowrap">
+                    <TableCell
+                      key={cell.id}
+                      className="py-0.5 max-h-8 overflow-hidden text-ellipsis whitespace-nowrap"
+                    >
                       {flexRender(cell.column.columnDef.cell, cell.getContext())}
                     </TableCell>
                   ))}
@@ -198,15 +257,18 @@ const AgentTable: React.FC<AgentTableProps> = ({
               ))
             ) : (
               <TableRow>
-                <TableCell colSpan={columns.length} className="h-8 text-center">
-                  <div className="text-center text-gray-500">
+                <TableCell
+                  colSpan={columns.length}
+                  className="h-8 text-center"
+                >
+                  <div className="text-center text-muted-foreground">
                     <p>No agents found. Create one to get started.</p>
-                </div>
-              </TableCell>
+                  </div>
+                </TableCell>
               </TableRow>
             )}
-      </TableBody>
-    </Table>
+          </TableBody>
+        </Table>
       </div>
     </div>
   );
