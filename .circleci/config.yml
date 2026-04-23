@@ -146,7 +146,15 @@ jobs:
       - run:
           name: Install Dependencies
           command: |
-            Invoke-RestMethod https://astral.sh/uv/0.10.9/install.ps1 | Invoke-Expression
+            $installer = Join-Path $env:TEMP "uv-install.ps1"
+            Invoke-WebRequest -Uri https://astral.sh/uv/0.10.9/install.ps1 -OutFile $installer
+            $expected = "d43ffff8d28e7d1e7d1831a212465f12b24a43c7f87f386e95e2a5915aee5d7d"
+            $actual = (Get-FileHash -Path $installer -Algorithm SHA256).Hash.ToLower()
+            if ($actual -ne $expected) {
+              throw "uv installer hash mismatch: expected $expected got $actual"
+            }
+            & $installer
+            Remove-Item $installer
             $uvBin = Join-Path $HOME ".local\bin"
             $env:Path = "$uvBin;$env:Path"
             if (!(Test-Path $PROFILE)) {
@@ -1165,18 +1173,15 @@ jobs:
       - install_helm
       - install_kind
 
-      # Install kubectl (pinned version with official checksum verification)
+      # Install kubectl (pinned version with hardcoded checksum)
       - run:
           name: Install kubectl v1.31.4
           command: |
             curl -sSLf -o /tmp/kubectl \
               https://dl.k8s.io/release/v1.31.4/bin/linux/amd64/kubectl
-            curl -sSLf -o /tmp/kubectl.sha256 \
-              https://dl.k8s.io/release/v1.31.4/bin/linux/amd64/kubectl.sha256
-            echo "$(cat /tmp/kubectl.sha256)  /tmp/kubectl" | sha256sum -c -
+            echo "298e19e9c6c17199011404278f0ff8168a7eca4217edad9097af577023a5620f  /tmp/kubectl" | sha256sum -c -
             chmod +x /tmp/kubectl
             sudo mv /tmp/kubectl /usr/local/bin/
-            rm -f /tmp/kubectl.sha256
 
       # Create kind cluster
       - run:
