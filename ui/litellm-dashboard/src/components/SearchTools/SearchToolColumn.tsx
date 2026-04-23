@@ -1,4 +1,5 @@
-import { Tag } from "antd";
+import { Badge } from "@/components/ui/badge";
+import { cn } from "@/lib/utils";
 import { ColumnsType } from "antd/es/table";
 import TableIconActionButton from "../common_components/IconActionButton/TableIconActionButtons/TableIconActionButton";
 import { SearchTool } from "./types";
@@ -22,8 +23,9 @@ export const searchToolColumns = (
 
         return (
           <button
+            type="button"
             onClick={() => onView(tool.search_tool_id!)}
-            className="font-mono text-blue-500 bg-blue-50 hover:bg-blue-100 text-xs font-normal px-2 py-0.5 text-left cursor-pointer max-w-40"
+            className="font-mono text-blue-500 bg-blue-50 hover:bg-blue-100 dark:bg-blue-950/30 dark:hover:bg-blue-950/60 text-xs font-normal px-2 py-0.5 text-left cursor-pointer max-w-40 rounded"
           >
             <span className="truncate block">{tool.search_tool_id}</span>
           </button>
@@ -70,9 +72,16 @@ export const searchToolColumns = (
         const isFromConfig = tool.is_from_config ?? false;
 
         return (
-          <Tag color={isFromConfig ? "default" : "blue"}>
+          <Badge
+            className={cn(
+              "text-xs",
+              isFromConfig
+                ? "bg-muted text-muted-foreground"
+                : "bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300",
+            )}
+          >
             {isFromConfig ? "Config" : "DB"}
-          </Tag>
+          </Badge>
         );
       },
     },
