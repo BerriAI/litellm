@@ -1,20 +1,23 @@
 import React from "react";
-import { Typography, Collapse } from "antd";
+import {
+  Accordion,
+  AccordionContent,
+  AccordionItem,
+  AccordionTrigger,
+} from "@/components/ui/accordion";
+import { Check } from "lucide-react";
 import type { MCPEvent } from "../../mcp_tools/types";
-
-const { Text } = Typography;
-const { Panel } = Collapse;
 
 interface MCPEventsDisplayProps {
   events: MCPEvent[];
   className?: string;
 }
 
-const MCPEventsDisplay: React.FC<MCPEventsDisplayProps> = ({ events, className }) => {
-  console.log("MCPEventsDisplay: Received events:", events);
-
+const MCPEventsDisplay: React.FC<MCPEventsDisplayProps> = ({
+  events,
+  className,
+}) => {
   if (!events || events.length === 0) {
-    console.log("MCPEventsDisplay: No events, returning null");
     return null;
   }
 
@@ -29,201 +32,110 @@ const MCPEventsDisplay: React.FC<MCPEventsDisplayProps> = ({ events, className }
 
   // Find MCP call events
   const mcpCallEvents = events.filter(
-    (event) => event.type === "response.output_item.done" && event.item?.type === "mcp_call",
+    (event) =>
+      event.type === "response.output_item.done" &&
+      event.item?.type === "mcp_call",
   );
 
-  console.log("MCPEventsDisplay: toolsEvent:", toolsEvent);
-  console.log("MCPEventsDisplay: mcpCallEvents:", mcpCallEvents);
-
   if (!toolsEvent && mcpCallEvents.length === 0) {
-    console.log("MCPEventsDisplay: No valid events found, returning null");
     return null;
   }
 
+  const defaultValue = toolsEvent
+    ? ["list-tools"]
+    : mcpCallEvents.map((_, index) => `mcp-call-${index}`);
+
   return (
     <div className={`mcp-events-display ${className || ""}`}>
-      <style jsx>{`
-        .openai-mcp-tools {
-          position: relative;
-          margin: 0;
-          padding: 0;
-        }
-        .openai-mcp-tools .ant-collapse {
-          background: transparent !important;
-          border: none !important;
-        }
-        .openai-mcp-tools .ant-collapse-item {
-          border: none !important;
-          background: transparent !important;
-        }
-        .openai-mcp-tools .ant-collapse-header {
-          padding: 0 0 0 20px !important;
-          background: transparent !important;
-          border: none !important;
-          font-size: 14px !important;
-          color: #9ca3af !important;
-          font-weight: 400 !important;
-          line-height: 20px !important;
-          min-height: 20px !important;
-        }
-        .openai-mcp-tools .ant-collapse-header:hover {
-          background: transparent !important;
-          color: #6b7280 !important;
-        }
-        .openai-mcp-tools .ant-collapse-content {
-          border: none !important;
-          background: transparent !important;
-        }
-        .openai-mcp-tools .ant-collapse-content-box {
-          padding: 4px 0 0 20px !important;
-        }
-        .openai-mcp-tools .ant-collapse-expand-icon {
-          position: absolute !important;
-          left: 2px !important;
-          top: 2px !important;
-          color: #9ca3af !important;
-          font-size: 10px !important;
-          width: 16px !important;
-          height: 16px !important;
-          display: flex !important;
-          align-items: center !important;
-          justify-content: center !important;
-        }
-        .openai-mcp-tools .ant-collapse-expand-icon:hover {
-          color: #6b7280 !important;
-        }
-        .openai-vertical-line {
-          position: absolute;
-          left: 9px;
-          top: 18px;
-          bottom: 0;
-          width: 0.5px;
-          background-color: #f3f4f6;
-          opacity: 0.8;
-        }
-        .tool-item {
-          font-family: ui-monospace, SFMono-Regular, "SF Mono", Monaco, Consolas, "Liberation Mono", "Courier New",
-            monospace;
-          font-size: 13px;
-          color: #4b5563;
-          line-height: 18px;
-          padding: 0;
-          margin: 0;
-          background: white;
-          position: relative;
-          z-index: 1;
-        }
-        .mcp-section {
-          margin-bottom: 12px;
-          background: white;
-          position: relative;
-          z-index: 1;
-        }
-        .mcp-section:last-child {
-          margin-bottom: 0;
-        }
-        .mcp-section-header {
-          font-size: 13px;
-          color: #6b7280;
-          font-weight: 500;
-          margin-bottom: 4px;
-        }
-        .mcp-code-block {
-          background: #f9fafb;
-          border: 1px solid #f3f4f6;
-          border-radius: 6px;
-          padding: 8px;
-          font-size: 12px;
-        }
-        .mcp-json {
-          font-family: ui-monospace, SFMono-Regular, "SF Mono", Monaco, Consolas, "Liberation Mono", "Courier New",
-            monospace;
-          color: #374151;
-          margin: 0;
-          white-space: pre-wrap;
-          word-wrap: break-word;
-        }
-        .mcp-approved {
-          display: flex;
-          align-items: center;
-          font-size: 13px;
-          color: #6b7280;
-        }
-        .mcp-checkmark {
-          color: #10b981;
-          margin-right: 6px;
-          font-weight: bold;
-        }
-        .mcp-response-content {
-          font-size: 13px;
-          color: #374151;
-          line-height: 1.5;
-          white-space: pre-wrap;
-          font-family: ui-monospace, SFMono-Regular, "SF Mono", Monaco, Consolas, "Liberation Mono", "Courier New",
-            monospace;
-        }
-      `}</style>
-      <div className="openai-mcp-tools">
-        <div className="openai-vertical-line"></div>
-        <Collapse
-          ghost
-          size="small"
-          expandIconPosition="start"
-          defaultActiveKey={toolsEvent ? ["list-tools"] : mcpCallEvents.map((_, index) => `mcp-call-${index}`)}
+      <div className="relative pl-5">
+        {/* Vertical guide line */}
+        <div className="absolute left-[9px] top-[18px] bottom-0 w-[0.5px] bg-border opacity-80" />
+
+        <Accordion
+          type="multiple"
+          defaultValue={defaultValue}
+          className="w-full"
         >
-          {/* List Tools Panel */}
           {toolsEvent && (
-            <Panel header="List tools" key="list-tools">
-              <div>
-                {toolsEvent.item?.tools?.map((tool, index) => (
-                  <div key={index} className="tool-item">
-                    {tool.name}
-                  </div>
-                ))}
-              </div>
-            </Panel>
+            <AccordionItem value="list-tools" className="border-none">
+              <AccordionTrigger className="py-1 text-sm text-muted-foreground hover:text-foreground hover:no-underline">
+                List tools
+              </AccordionTrigger>
+              <AccordionContent className="pt-1">
+                <div>
+                  {toolsEvent.item?.tools?.map((tool, index) => (
+                    <div
+                      key={index}
+                      className="font-mono text-sm text-foreground/80 bg-background relative z-[1] py-0"
+                    >
+                      {tool.name}
+                    </div>
+                  ))}
+                </div>
+              </AccordionContent>
+            </AccordionItem>
           )}
 
-          {/* MCP Call Panels */}
           {mcpCallEvents.map((callEvent, index) => (
-            <Panel header={callEvent.item?.name || "Tool call"} key={`mcp-call-${index}`}>
-              <div>
-                {/* Request section */}
-                <div className="mcp-section">
-                  <div className="mcp-section-header">Request</div>
-                  <div className="mcp-code-block">
-                    {callEvent.item?.arguments && (
-                      <pre className="mcp-json">
-                        {(() => {
-                          try {
-                            return JSON.stringify(JSON.parse(callEvent.item.arguments), null, 2);
-                          } catch (e) {
-                            return callEvent.item.arguments;
-                          }
-                        })()}
-                      </pre>
-                    )}
+            <AccordionItem
+              key={`mcp-call-${index}`}
+              value={`mcp-call-${index}`}
+              className="border-none"
+            >
+              <AccordionTrigger className="py-1 text-sm text-muted-foreground hover:text-foreground hover:no-underline">
+                {callEvent.item?.name || "Tool call"}
+              </AccordionTrigger>
+              <AccordionContent className="pt-1">
+                <div>
+                  {/* Request section */}
+                  <div className="mb-3 bg-background relative z-[1]">
+                    <div className="text-sm text-muted-foreground font-medium mb-1">
+                      Request
+                    </div>
+                    <div className="bg-muted border border-border rounded-md p-2 text-xs">
+                      {callEvent.item?.arguments && (
+                        <pre className="font-mono text-foreground m-0 whitespace-pre-wrap break-words">
+                          {(() => {
+                            try {
+                              return JSON.stringify(
+                                JSON.parse(callEvent.item.arguments),
+                                null,
+                                2,
+                              );
+                              // eslint-disable-next-line @typescript-eslint/no-unused-vars
+                            } catch (_e) {
+                              return callEvent.item.arguments;
+                            }
+                          })()}
+                        </pre>
+                      )}
+                    </div>
                   </div>
-                </div>
 
-                {/* Approved section */}
-                <div className="mcp-section">
-                  <div className="mcp-approved">
-                    <span className="mcp-checkmark">✓</span> Approved
+                  {/* Approved section */}
+                  <div className="mb-3 bg-background relative z-[1]">
+                    <div className="flex items-center text-sm text-muted-foreground">
+                      <Check className="h-4 w-4 mr-1.5 text-emerald-500" />
+                      Approved
+                    </div>
                   </div>
-                </div>
 
-                {/* Response section */}
-                {callEvent.item?.output && (
-                  <div className="mcp-section">
-                    <div className="mcp-section-header">Response</div>
-                    <div className="mcp-response-content">{callEvent.item.output}</div>
-                  </div>
-                )}
-              </div>
-            </Panel>
+                  {/* Response section */}
+                  {callEvent.item?.output && (
+                    <div className="mb-0 bg-background relative z-[1]">
+                      <div className="text-sm text-muted-foreground font-medium mb-1">
+                        Response
+                      </div>
+                      <div className="text-sm text-foreground/80 leading-relaxed whitespace-pre-wrap font-mono">
+                        {callEvent.item.output}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </AccordionContent>
+            </AccordionItem>
           ))}
-        </Collapse>
+        </Accordion>
       </div>
     </div>
   );
