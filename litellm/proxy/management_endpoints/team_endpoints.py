@@ -1262,8 +1262,12 @@ async def _auto_add_team_members_to_organization(
                 organization_id=organization.organization_id,
                 prisma_client=prisma_client,
             )
-        except Exception:
-            pass  # already a member or race condition — safe to ignore
+        except Exception as e:
+            verbose_proxy_logger.debug(
+                "_auto_add_team_members_to_organization: skipping user_id=%s - %s",
+                member.user_id,
+                e,
+            )
 
 
 async def fetch_and_validate_organization(
