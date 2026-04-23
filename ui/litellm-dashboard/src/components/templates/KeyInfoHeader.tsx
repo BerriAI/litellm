@@ -1,21 +1,27 @@
-import React from "react";
-import { Button, Typography, Tooltip, Space, Divider, Flex } from "antd";
+import React, { useState } from "react";
+import { Button } from "@/components/ui/button";
 import {
-  ArrowLeftOutlined,
-  SyncOutlined,
-  DeleteOutlined,
-  PlusOutlined,
-  UserOutlined,
-  MailOutlined,
-  CalendarOutlined,
-  ClockCircleOutlined,
-  ThunderboltOutlined,
-  SafetyCertificateOutlined,
-  TransactionOutlined,
-} from "@ant-design/icons";
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import {
+  ArrowLeft,
+  Calendar,
+  Check,
+  Clock,
+  Copy,
+  Mail,
+  Plus,
+  RefreshCcw,
+  Shield,
+  Trash2,
+  User,
+  Wallet,
+  Zap,
+} from "lucide-react";
 import LabeledField from "../common_components/LabeledField";
-
-const { Title, Text } = Typography;
 
 export interface KeyInfoData {
   keyName: string;
@@ -41,6 +47,48 @@ interface KeyInfoHeaderProps {
   regenerateTooltip?: string;
 }
 
+const CopyableInline: React.FC<{
+  text: string;
+  label: string;
+  copyTooltip: string;
+}> = ({ text, label, copyTooltip }) => {
+  const [copied, setCopied] = useState(false);
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    } catch (_err) {
+      /* noop */
+    }
+  };
+  return (
+    <span className="inline-flex items-center gap-1">
+      <span>{label}</span>
+      <TooltipProvider>
+        <Tooltip open={copied || undefined}>
+          <TooltipTrigger asChild>
+            <button
+              type="button"
+              onClick={handleCopy}
+              className="text-muted-foreground hover:text-foreground"
+              aria-label={copyTooltip}
+            >
+              {copied ? (
+                <Check className="h-3 w-3 text-emerald-500" />
+              ) : (
+                <Copy className="h-3 w-3" />
+              )}
+            </button>
+          </TooltipTrigger>
+          <TooltipContent>{copied ? "Copied!" : copyTooltip}</TooltipContent>
+        </Tooltip>
+      </TooltipProvider>
+    </span>
+  );
+};
+
 export function KeyInfoHeader({
   data,
   onBack,
@@ -56,83 +104,131 @@ export function KeyInfoHeader({
   return (
     <div>
       {onCreateNew && (
-        <div style={{ marginBottom: 16 }}>
-          <Button type="primary" icon={<PlusOutlined />} onClick={onCreateNew}>
+        <div className="mb-4">
+          <Button onClick={onCreateNew}>
+            <Plus className="h-4 w-4" />
             Create New Key
           </Button>
         </div>
       )}
 
-      <div style={{ marginBottom: 16 }}>
-        <Button type="text" icon={<ArrowLeftOutlined />} onClick={onBack}>
+      <div className="mb-4">
+        <Button variant="ghost" onClick={onBack}>
+          <ArrowLeft className="h-4 w-4" />
           {backButtonText}
         </Button>
       </div>
 
-      <Flex justify="space-between" align="start" style={{ marginBottom: 20 }}>
+      <div className="flex justify-between items-start mb-5">
         <div>
-          <Title level={3} copyable={{ tooltips: ["Copy Key Alias", "Copied!"] }} style={{ margin: 0 }}>
-            {data.keyName}
-          </Title>
-          <Text type="secondary" copyable={{ text: data.keyId, tooltips: ["Copy Key ID", "Copied!"] }}>
-            Key ID: {data.keyId}
-          </Text>
+          <h3 className="text-xl font-semibold m-0">
+            <CopyableInline
+              text={data.keyName}
+              label={data.keyName}
+              copyTooltip="Copy Key Alias"
+            />
+          </h3>
+          <div className="text-sm text-muted-foreground">
+            <CopyableInline
+              text={data.keyId}
+              label={`Key ID: ${data.keyId}`}
+              copyTooltip="Copy Key ID"
+            />
+          </div>
         </div>
         {canModifyKey && (
-          <Space>
-            <Tooltip title={regenerateTooltip || ""}>
-              <span>
-                <Button icon={<SyncOutlined />} onClick={onRegenerate} disabled={regenerateDisabled}>
-                  Regenerate Key
-                </Button>
-              </span>
-            </Tooltip>
+          <div className="flex gap-2">
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span>
+                    <Button
+                      variant="outline"
+                      onClick={onRegenerate}
+                      disabled={regenerateDisabled}
+                    >
+                      <RefreshCcw className="h-4 w-4" />
+                      Regenerate Key
+                    </Button>
+                  </span>
+                </TooltipTrigger>
+                {regenerateTooltip && (
+                  <TooltipContent>{regenerateTooltip}</TooltipContent>
+                )}
+              </Tooltip>
+            </TooltipProvider>
             {onResetSpend && (
-              <Button danger icon={<TransactionOutlined />} onClick={onResetSpend}>
+              <Button
+                variant="outline"
+                className="text-destructive border-destructive/30 hover:bg-destructive/10"
+                onClick={onResetSpend}
+              >
+                <Wallet className="h-4 w-4" />
                 Reset Spend
               </Button>
             )}
-            <Button danger icon={<DeleteOutlined />} onClick={onDelete}>
+            <Button
+              variant="outline"
+              className="text-destructive border-destructive/30 hover:bg-destructive/10"
+              onClick={onDelete}
+            >
+              <Trash2 className="h-4 w-4" />
               Delete Key
             </Button>
-          </Space>
+          </div>
         )}
-      </Flex>
+      </div>
 
-      <Flex align="stretch" gap={40} style={{ marginBottom: 40 }}>
-        <Space direction="vertical" size={16}>
-          <LabeledField label="User Email" value={data.userEmail} icon={<MailOutlined />} />
+      <div className="flex items-stretch gap-10 mb-10">
+        <div className="flex flex-col gap-4">
+          <LabeledField
+            label="User Email"
+            value={data.userEmail}
+            icon={<Mail className="h-3 w-3" />}
+          />
           <LabeledField
             label="User ID"
             value={data.userId}
-            icon={<UserOutlined />}
+            icon={<User className="h-3 w-3" />}
             truncate
             copyable
             defaultUserIdCheck
           />
-        </Space>
+        </div>
 
-        <Divider type="vertical" style={{ height: "auto" }} />
+        <div className="w-px bg-border" />
 
-        <Space direction="vertical" size={16}>
-          <LabeledField label="Created At" value={data.createdAt} icon={<CalendarOutlined />} />
+        <div className="flex flex-col gap-4">
+          <LabeledField
+            label="Created At"
+            value={data.createdAt}
+            icon={<Calendar className="h-3 w-3" />}
+          />
           <LabeledField
             label="Created By"
             value={data.createdBy}
-            icon={<SafetyCertificateOutlined />}
+            icon={<Shield className="h-3 w-3" />}
             truncate
             copyable
             defaultUserIdCheck
           />
-        </Space>
+        </div>
 
-        <Divider type="vertical" style={{ height: "auto" }} />
+        <div className="w-px bg-border" />
 
-        <Space direction="vertical" size={16}>
-          <LabeledField label="Last Updated" value={data.lastUpdated} icon={<ClockCircleOutlined />} />
-          <LabeledField label="Last Active" value={data.lastActive} icon={<ThunderboltOutlined />} />
-        </Space>
-      </Flex>
+        <div className="flex flex-col gap-4">
+          <LabeledField
+            label="Last Updated"
+            value={data.lastUpdated}
+            icon={<Clock className="h-3 w-3" />}
+          />
+          <LabeledField
+            label="Last Active"
+            value={data.lastActive}
+            icon={<Zap className="h-3 w-3" />}
+          />
+        </div>
+      </div>
     </div>
   );
 }
