@@ -1627,13 +1627,10 @@ async def _get_team_object_from_cache(
     if cached_team_obj is None:
         cached_team_obj = await user_api_key_cache.async_get_cache(key=key)
 
-    if cached_team_obj is not None:
-        if isinstance(cached_team_obj, dict):
-            return LiteLLM_TeamTableCachedObj(**cached_team_obj)
-        elif isinstance(cached_team_obj, LiteLLM_TeamTableCachedObj):
-            return cached_team_obj
-
-    return None
+    if cached_team_obj is None:
+        return None
+    
+    return CacheCodec.deserialize(cached_team_obj, LiteLLM_TeamTableCachedObj)
 
 
 async def get_team_object(
@@ -1709,9 +1706,12 @@ async def _cache_access_object(
     proxy_logging_obj: Optional[ProxyLogging] = None,
 ):
     key = "access_group_id:{}".format(access_group_id)
+    cache_payload = CacheCodec.serialize(
+        access_group_table, model_type=LiteLLM_AccessGroupTable
+    )
     await user_api_key_cache.async_set_cache(
         key=key,
-        value=access_group_table,
+        value=cache_payload,
         ttl=DEFAULT_ACCESS_GROUP_CACHE_TTL,
     )
 
@@ -1758,13 +1758,10 @@ async def get_access_object(
 
     key = "access_group_id:{}".format(access_group_id)
 
-    # Always check cache first
     cached_access_obj = await user_api_key_cache.async_get_cache(key=key)
-    if cached_access_obj is not None:
-        if isinstance(cached_access_obj, dict):
-            return LiteLLM_AccessGroupTable(**cached_access_obj)
-        elif isinstance(cached_access_obj, LiteLLM_AccessGroupTable):
-            return cached_access_obj
+    deserialized = CacheCodec.deserialize(cached_access_obj, LiteLLM_AccessGroupTable)
+    if deserialized is not None:
+        return deserialized
 
     # Not in cache - fetch from DB
     try:
