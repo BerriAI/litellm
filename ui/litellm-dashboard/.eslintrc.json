@@ -83,6 +83,7 @@
         "src/components/SearchTools/SearchToolColumn.tsx",
         "src/components/team/available_teams.tsx",
         "src/components/AIHub/forms/MakeAgentPublicForm.tsx",
+        "src/components/AIHub/forms/MakeMCPPublicForm.tsx",
         "src/components/permissions/VectorStorePermissions.tsx",
         "src/components/permissions/AgentPermissions.tsx",
         "src/components/permissions/MCPServerPermissions.tsx",
