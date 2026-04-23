@@ -2770,6 +2770,7 @@ class EvalVerdict(TypedDict, total=False):
     score: float  # 0-100
     reasoning: str
     passed: bool
+    weight: int  # criterion weight (0-100) as configured in the eval
 
 
 class StandardLoggingEvalInformation(TypedDict, total=False):
@@ -2783,6 +2784,8 @@ class StandardLoggingEvalInformation(TypedDict, total=False):
     start_time: str
     end_time: str
     duration: float
+    verdicts: List[Any]
+    threshold: Optional[float]
 
 
 class EvalResult(BaseModel):
