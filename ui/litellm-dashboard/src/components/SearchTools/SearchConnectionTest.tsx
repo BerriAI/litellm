@@ -1,12 +1,11 @@
-import { InfoCircleOutlined, WarningOutlined } from "@ant-design/icons";
-import { Button, Divider, Typography } from "antd";
+import { AlertTriangle, CheckCircle2, Info, Loader2 } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import React, { useEffect, useState } from "react";
 import NotificationsManager from "../molecules/notifications_manager";
 import { testSearchToolConnection } from "../networking";
 
-const { Text } = Typography;
-
 interface SearchConnectionTestProps {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   litellmParams: Record<string, any>;
   accessToken: string;
   onTestComplete?: () => void;
@@ -31,7 +30,10 @@ const SearchConnectionTest: React.FC<SearchConnectionTestProps> = ({
     const runTest = async () => {
       setIsLoading(true);
       try {
-        const result = await testSearchToolConnection(accessToken, litellmParams);
+        const result = await testSearchToolConnection(
+          accessToken,
+          litellmParams,
+        );
         setTestResult(result);
         if (result.status === "success") {
           NotificationsManager.success("Connection test successful!");
@@ -39,7 +41,10 @@ const SearchConnectionTest: React.FC<SearchConnectionTestProps> = ({
       } catch (error) {
         setTestResult({
           status: "error",
-          message: error instanceof Error ? error.message : "Unknown error occurred",
+          message:
+            error instanceof Error
+              ? error.message
+              : "Unknown error occurred",
           error_type: "NetworkError",
         });
       } finally {
@@ -67,19 +72,19 @@ const SearchConnectionTest: React.FC<SearchConnectionTestProps> = ({
 
     // If the error contains HTML (like a 401 page), extract just the key info
     if (finalError.includes("<html>") || finalError.includes("<!DOCTYPE")) {
-      // Try to extract the title or main error from HTML
       const titleMatch = finalError.match(/<title>(.*?)<\/title>/);
       if (titleMatch) {
         return titleMatch[1];
       }
-      // If it's a 401 error
-      if (finalError.includes("401") || finalError.includes("Authorization Required")) {
+      if (
+        finalError.includes("401") ||
+        finalError.includes("Authorization Required")
+      ) {
         return "Authentication failed: Invalid API key or credentials";
       }
       return "Authentication error - please check your API key";
     }
 
-    // Limit very long error messages
     if (finalError.length > 200) {
       return finalError.substring(0, 200) + "...";
     }
@@ -87,38 +92,21 @@ const SearchConnectionTest: React.FC<SearchConnectionTestProps> = ({
     return finalError;
   };
 
-  const errorMessage = testResult?.message ? getCleanErrorMessage(testResult.message) : "Unknown error";
+  const errorMessage = testResult?.message
+    ? getCleanErrorMessage(testResult.message)
+    : "Unknown error";
 
   if (isLoading) {
     return (
-      <div style={{ padding: "24px", borderRadius: "8px", backgroundColor: "#fff" }}>
-        <div style={{ textAlign: "center", padding: "32px 20px" }}>
-          <div className="loading-spinner" style={{ marginBottom: "16px" }}>
-            <div
-              style={{
-                border: "3px solid #f3f3f3",
-                borderTop: "3px solid #1890ff",
-                borderRadius: "50%",
-                width: "30px",
-                height: "30px",
-                animation: "spin 1s linear infinite",
-                margin: "0 auto",
-              }}
-            />
+      <div className="p-6 rounded-lg bg-background">
+        <div className="text-center py-8 px-5">
+          <div className="mb-4 flex justify-center">
+            <Loader2 className="h-8 w-8 animate-spin text-primary" />
           </div>
-          <Text style={{ fontSize: "16px" }}>
-            Testing connection to {litellmParams.search_provider || "search provider"}...
-          </Text>
-          <style jsx>{`
-            @keyframes spin {
-              0% {
-                transform: rotate(0deg);
-              }
-              100% {
-                transform: rotate(360deg);
-              }
-            }
-          `}</style>
+          <span className="text-base">
+            Testing connection to{" "}
+            {litellmParams.search_provider || "search provider"}...
+          </span>
         </div>
       </div>
     );
@@ -129,139 +117,113 @@ const SearchConnectionTest: React.FC<SearchConnectionTestProps> = ({
   }
 
   return (
-    <div style={{ padding: "24px", borderRadius: "8px", backgroundColor: "#fff" }}>
+    <div className="p-6 rounded-lg bg-background">
       {testResult.status === "success" ? (
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "center", padding: "32px 20px" }}>
-          <div style={{ color: "#52c41a", fontSize: "24px", display: "flex", alignItems: "center" }}>
-            <svg
-              viewBox="64 64 896 896"
-              focusable="false"
-              data-icon="check-circle"
-              width="1em"
-              height="1em"
-              fill="currentColor"
-              aria-hidden="true"
-            >
-              <path d="M512 64C264.6 64 64 264.6 64 512s200.6 448 448 448 448-200.6 448-448S759.4 64 512 64zm193.5 301.7l-210.6 292a31.8 31.8 0 01-51.7 0L318.5 484.9c-3.8-5.3 0-12.7 6.5-12.7h46.9c10.2 0 19.9 4.9 25.9 13.3l71.2 98.8 157.2-218c6-8.3 15.6-13.3 25.9-13.3H699c6.5 0 10.3 7.4 6.5 12.7z"></path>
-            </svg>
-          </div>
-          <div style={{ marginLeft: "12px" }}>
-            <Text type="success" style={{ fontSize: "18px", fontWeight: 500, display: "block" }}>
+        <div className="flex items-center justify-center py-8 px-5">
+          <CheckCircle2 className="h-7 w-7 text-emerald-500" />
+          <div className="ml-3">
+            <span className="text-emerald-600 text-lg font-medium block">
               Connection to {litellmParams.search_provider} successful!
-            </Text>
+            </span>
             {testResult.test_query && (
-              <Text style={{ fontSize: "14px", color: "#666", marginTop: "8px", display: "block" }}>
-                Test query: <code style={{ backgroundColor: "#f0f0f0", padding: "2px 6px", borderRadius: "4px" }}>{testResult.test_query}</code>
-              </Text>
+              <span className="text-sm text-muted-foreground mt-2 block">
+                Test query:{" "}
+                <code className="bg-muted px-1.5 py-0.5 rounded">
+                  {testResult.test_query}
+                </code>
+              </span>
             )}
             {testResult.results_count !== undefined && (
-              <Text style={{ fontSize: "14px", color: "#666", display: "block" }}>
+              <span className="text-sm text-muted-foreground block">
                 Results retrieved: {testResult.results_count}
-              </Text>
+              </span>
             )}
           </div>
         </div>
       ) : (
-        <>
-          <div>
-            <div style={{ display: "flex", alignItems: "center", marginBottom: "20px" }}>
-              <WarningOutlined style={{ color: "#ff4d4f", fontSize: "24px", marginRight: "12px" }} />
-              <Text type="danger" style={{ fontSize: "18px", fontWeight: 500 }}>
-                Connection to {litellmParams.search_provider || "search provider"} failed
-              </Text>
-            </div>
+        <div>
+          <div className="flex items-center mb-5">
+            <AlertTriangle className="h-6 w-6 text-destructive mr-3" />
+            <span className="text-destructive text-lg font-medium">
+              Connection to{" "}
+              {litellmParams.search_provider || "search provider"} failed
+            </span>
+          </div>
 
-            <div
-              style={{
-                backgroundColor: "#fff2f0",
-                border: "1px solid #ffccc7",
-                borderRadius: "8px",
-                padding: "16px",
-                marginBottom: "20px",
-                boxShadow: "0 1px 2px rgba(0, 0, 0, 0.03)",
-              }}
-            >
-              <Text strong style={{ display: "block", marginBottom: "8px" }}>
-                Error:{" "}
-              </Text>
-              <Text type="danger" style={{ fontSize: "14px", lineHeight: "1.5" }}>
-                {errorMessage}
-              </Text>
+          <div className="bg-destructive/5 border border-destructive/30 rounded-lg p-4 mb-5">
+            <span className="block mb-2 font-semibold">Error: </span>
+            <span className="text-destructive text-sm leading-relaxed">
+              {errorMessage}
+            </span>
 
-              {testResult.error_type && (
-                <div style={{ marginTop: "8px" }}>
-                  <Text style={{ fontSize: "13px", color: "#666" }}>
-                    Error type:{" "}
-                    <code style={{ backgroundColor: "#ffebee", padding: "2px 6px", borderRadius: "4px", color: "#d32f2f" }}>
-                      {testResult.error_type}
-                    </code>
-                  </Text>
-                </div>
-              )}
-
-              {testResult.message && (
-                <div style={{ marginTop: "12px" }}>
-                  <Button
-                    type="link"
-                    onClick={() => setShowDetails(!showDetails)}
-                    style={{ paddingLeft: 0, height: "auto" }}
-                  >
-                    {showDetails ? "Hide Details" : "Show Details"}
-                  </Button>
-                </div>
-              )}
-            </div>
-
-            {showDetails && (
-              <div style={{ marginBottom: "20px" }}>
-                <Text strong style={{ display: "block", marginBottom: "8px", fontSize: "15px" }}>
-                  Full Error Details
-                </Text>
-                <pre
-                  style={{
-                    backgroundColor: "#f5f5f5",
-                    padding: "16px",
-                    borderRadius: "8px",
-                    fontSize: "13px",
-                    maxHeight: "200px",
-                    overflow: "auto",
-                    border: "1px solid #e8e8e8",
-                    lineHeight: "1.5",
-                    whiteSpace: "pre-wrap",
-                    wordBreak: "break-word",
-                  }}
-                >
-                  {testResult.message}
-                </pre>
+            {testResult.error_type && (
+              <div className="mt-2">
+                <span className="text-xs text-muted-foreground">
+                  Error type:{" "}
+                  <code className="bg-destructive/10 text-destructive px-1.5 py-0.5 rounded">
+                    {testResult.error_type}
+                  </code>
+                </span>
               </div>
             )}
 
-            <div
-              style={{
-                backgroundColor: "#fffbf0",
-                border: "1px solid #ffe58f",
-                borderLeft: "4px solid #faad14",
-                borderRadius: "8px",
-                padding: "16px",
-              }}
-            >
-              <Text strong style={{ display: "block", marginBottom: "8px", color: "#d48806" }}>
-                Troubleshooting tips:
-              </Text>
-              <ul style={{ margin: "8px 0", paddingLeft: "20px", color: "#ad6800" }}>
-                <li style={{ marginBottom: "6px" }}>Verify your API key is correct and active</li>
-                <li style={{ marginBottom: "6px" }}>Check if the search provider service is operational</li>
-                <li style={{ marginBottom: "6px" }}>Ensure you have sufficient credits/quota with the provider</li>
-                <li style={{ marginBottom: "6px" }}>Review the provider&apos;s documentation for any additional requirements</li>
-              </ul>
-            </div>
+            {testResult.message && (
+              <div className="mt-3">
+                <Button
+                  type="button"
+                  variant="link"
+                  onClick={() => setShowDetails(!showDetails)}
+                  className="p-0 h-auto"
+                >
+                  {showDetails ? "Hide Details" : "Show Details"}
+                </Button>
+              </div>
+            )}
           </div>
-        </>
+
+          {showDetails && (
+            <div className="mb-5">
+              <span className="block mb-2 text-[15px] font-semibold">
+                Full Error Details
+              </span>
+              <pre className="bg-muted p-4 rounded-lg text-xs max-h-[200px] overflow-auto border border-border leading-relaxed whitespace-pre-wrap break-words">
+                {testResult.message}
+              </pre>
+            </div>
+          )}
+
+          {/* eslint-disable-next-line litellm-ui/no-raw-tailwind-colors */}
+          <div className="bg-amber-50 border border-amber-200 border-l-4 border-l-amber-500 rounded-lg p-4 dark:bg-amber-950/30 dark:border-amber-900">
+            {/* eslint-disable-next-line litellm-ui/no-raw-tailwind-colors */}
+            <span className="block mb-2 text-amber-700 font-semibold dark:text-amber-300">
+              Troubleshooting tips:
+            </span>
+            {/* eslint-disable-next-line litellm-ui/no-raw-tailwind-colors */}
+            <ul className="my-2 pl-5 list-disc text-amber-900 dark:text-amber-200 space-y-1.5">
+              <li>Verify your API key is correct and active</li>
+              <li>Check if the search provider service is operational</li>
+              <li>
+                Ensure you have sufficient credits/quota with the provider
+              </li>
+              <li>
+                Review the provider&apos;s documentation for any additional
+                requirements
+              </li>
+            </ul>
+          </div>
+        </div>
       )}
-      <Divider style={{ margin: "24px 0 16px" }} />
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <Button type="link" href="https://docs.litellm.ai/docs/search" target="_blank" icon={<InfoCircleOutlined />}>
-          View Search Documentation
+      <hr className="border-border my-6" />
+      <div className="flex justify-between items-center">
+        <Button asChild variant="link" className="p-0 h-auto">
+          <a
+            href="https://docs.litellm.ai/docs/search"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            <Info className="h-4 w-4" />
+            View Search Documentation
+          </a>
         </Button>
       </div>
     </div>
@@ -269,4 +231,3 @@ const SearchConnectionTest: React.FC<SearchConnectionTestProps> = ({
 };
 
 export default SearchConnectionTest;
-
