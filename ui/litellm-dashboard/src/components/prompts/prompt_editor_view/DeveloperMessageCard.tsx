@@ -1,5 +1,5 @@
 import React from "react";
-import { Card, Text } from "@tremor/react";
+import { Card } from "@/components/ui/card";
 import VariableTextArea from "../variable_textarea";
 
 interface DeveloperMessageCardProps {
@@ -13,10 +13,10 @@ const DeveloperMessageCard: React.FC<DeveloperMessageCardProps> = ({
 }) => {
   return (
     <Card className="p-3">
-      <Text className="block mb-2 text-sm font-medium">Developer message</Text>
-      <Text className="text-gray-500 text-xs mb-2">
+      <p className="block mb-2 text-sm font-medium">Developer message</p>
+      <p className="text-muted-foreground text-xs mb-2">
         Optional system instructions for the model
-      </Text>
+      </p>
       <VariableTextArea
         value={value}
         onChange={onChange}
@@ -28,4 +28,3 @@ const DeveloperMessageCard: React.FC<DeveloperMessageCardProps> = ({
 };
 
 export default DeveloperMessageCard;
-

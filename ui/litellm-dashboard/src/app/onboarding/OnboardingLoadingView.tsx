@@ -1,11 +1,10 @@
 import React from "react";
-import { Spin } from "antd";
-import { LoadingOutlined } from "@ant-design/icons";
+import { Loader2 } from "lucide-react";
 
 export function OnboardingLoadingView() {
   return (
     <div className="mx-auto w-full max-w-md mt-10 flex justify-center">
-      <Spin indicator={<LoadingOutlined spin />} size="large" />
+      <Loader2 className="h-8 w-8 animate-spin text-primary" />
     </div>
   );
 }
