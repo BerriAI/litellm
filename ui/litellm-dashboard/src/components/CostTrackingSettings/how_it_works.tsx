@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from "react";
-import { Text, TextInput } from "@tremor/react";
+import { Input } from "@/components/ui/input";
 import CodeBlock from "@/app/(dashboard)/api-reference/components/CodeBlock";
 
 const HowItWorks: React.FC = () => {
@@ -9,7 +9,7 @@ const HowItWorks: React.FC = () => {
   const calculatedDiscount = useMemo(() => {
     const cost = parseFloat(responseCost);
     const discount = parseFloat(discountAmount);
-    
+
     if (isNaN(cost) || isNaN(discount) || cost === 0 || discount === 0) {
       return null;
     }
@@ -27,122 +27,156 @@ const HowItWorks: React.FC = () => {
 
   return (
     <div className="space-y-4 pt-2">
-          <div>
-            <Text className="font-medium text-gray-900 text-sm mb-1">Cost Calculation</Text>
-            <Text className="text-xs text-gray-600">
-              Discounts are applied to provider costs: <code className="bg-gray-100 px-1.5 py-0.5 rounded text-xs">final_cost = base_cost × (1 - discount%/100)</code>
-            </Text>
-          </div>
-          <div>
-            <Text className="font-medium text-gray-900 text-sm mb-1">Example</Text>
-            <Text className="text-xs text-gray-600">
-              A 5% discount on a $10.00 request results in: $10.00 × (1 - 0.05) = $9.50
-            </Text>
-          </div>
-          <div>
-            <Text className="font-medium text-gray-900 text-sm mb-1">Valid Range</Text>
-            <Text className="text-xs text-gray-600">
-              Discount percentages must be between 0% and 100%
-            </Text>
-          </div>
+      <div>
+        <p className="font-medium text-foreground text-sm mb-1">
+          Cost Calculation
+        </p>
+        <p className="text-xs text-muted-foreground">
+          Discounts are applied to provider costs:{" "}
+          <code className="bg-muted px-1.5 py-0.5 rounded text-xs">
+            final_cost = base_cost × (1 - discount%/100)
+          </code>
+        </p>
+      </div>
+      <div>
+        <p className="font-medium text-foreground text-sm mb-1">Example</p>
+        <p className="text-xs text-muted-foreground">
+          A 5% discount on a $10.00 request results in: $10.00 × (1 - 0.05) =
+          $9.50
+        </p>
+      </div>
+      <div>
+        <p className="font-medium text-foreground text-sm mb-1">Valid Range</p>
+        <p className="text-xs text-muted-foreground">
+          Discount percentages must be between 0% and 100%
+        </p>
+      </div>
 
-          <div className="pt-4 border-t border-gray-200">
-            <Text className="font-medium text-gray-900 text-sm mb-2">Validating Discounts</Text>
-            <Text className="text-xs text-gray-600 mb-3">
-              Make a test request and check the response headers to verify discounts are applied:
-            </Text>
-            <CodeBlock
-              language="bash"
-              code={`curl -X POST -i http://your-proxy:4000/chat/completions \\
+      <div className="pt-4 border-t border-border">
+        <p className="font-medium text-foreground text-sm mb-2">
+          Validating Discounts
+        </p>
+        <p className="text-xs text-muted-foreground mb-3">
+          Make a test request and check the response headers to verify
+          discounts are applied:
+        </p>
+        <CodeBlock
+          language="bash"
+          code={`curl -X POST -i http://your-proxy:4000/chat/completions \\
   -H "Content-Type: application/json" \\
   -H "Authorization: Bearer sk-1234" \\
   -d '{
     "model": "gemini/gemini-2.5-pro",
     "messages": [{"role": "user", "content": "Hello"}]
   }'`}
+        />
+        <p className="text-xs text-muted-foreground mt-3 mb-2">
+          Look for these headers in the response:
+        </p>
+        <div className="space-y-1.5">
+          <div className="flex items-start gap-3">
+            <code className="bg-muted px-2 py-1 rounded text-xs font-mono text-foreground whitespace-nowrap">
+              x-litellm-response-cost
+            </code>
+            <span className="text-xs text-muted-foreground">
+              Final cost after discount
+            </span>
+          </div>
+          <div className="flex items-start gap-3">
+            <code className="bg-muted px-2 py-1 rounded text-xs font-mono text-foreground whitespace-nowrap">
+              x-litellm-response-cost-original
+            </code>
+            <span className="text-xs text-muted-foreground">
+              Original cost before discount
+            </span>
+          </div>
+          <div className="flex items-start gap-3">
+            <code className="bg-muted px-2 py-1 rounded text-xs font-mono text-foreground whitespace-nowrap">
+              x-litellm-response-cost-discount-amount
+            </code>
+            <span className="text-xs text-muted-foreground">
+              Amount discounted
+            </span>
+          </div>
+        </div>
+      </div>
+
+      <div className="pt-4 border-t border-border">
+        <p className="font-medium text-foreground text-sm mb-3">
+          Discount Calculator
+        </p>
+        <p className="text-xs text-muted-foreground mb-3">
+          Enter values from your response headers to verify the discount:
+        </p>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+          <div>
+            <label className="block text-xs font-medium text-foreground mb-1">
+              Response Cost (x-litellm-response-cost)
+            </label>
+            <Input
+              placeholder="0.0171938125"
+              value={responseCost}
+              onChange={(e) => setResponseCost(e.target.value)}
+              className="text-sm"
             />
-            <Text className="text-xs text-gray-600 mt-3 mb-2">
-              Look for these headers in the response:
-            </Text>
-            <div className="space-y-1.5">
-              <div className="flex items-start gap-3">
-                <code className="bg-gray-100 px-2 py-1 rounded text-xs font-mono text-gray-800 whitespace-nowrap">
-                  x-litellm-response-cost
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-foreground mb-1">
+              Discount Amount (x-litellm-response-cost-discount-amount)
+            </label>
+            <Input
+              placeholder="0.0009049375"
+              value={discountAmount}
+              onChange={(e) => setDiscountAmount(e.target.value)}
+              className="text-sm"
+            />
+          </div>
+        </div>
+
+        {calculatedDiscount && (
+          <div className="bg-blue-50 border border-blue-200 dark:bg-blue-950/30 dark:border-blue-900 rounded-lg p-4">
+            <p className="text-sm font-medium text-blue-900 dark:text-blue-200 mb-2">
+              Calculated Results
+            </p>
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="text-xs text-blue-800 dark:text-blue-300">
+                  Original Cost:
+                </span>
+                <code className="text-xs font-mono text-blue-900 dark:text-blue-200">
+                  ${calculatedDiscount.originalCost}
                 </code>
-                <Text className="text-xs text-gray-600">Final cost after discount</Text>
               </div>
-              <div className="flex items-start gap-3">
-                <code className="bg-gray-100 px-2 py-1 rounded text-xs font-mono text-gray-800 whitespace-nowrap">
-                  x-litellm-response-cost-original
+              <div className="flex items-center justify-between">
+                <span className="text-xs text-blue-800 dark:text-blue-300">
+                  Final Cost:
+                </span>
+                <code className="text-xs font-mono text-blue-900 dark:text-blue-200">
+                  ${calculatedDiscount.finalCost}
                 </code>
-                <Text className="text-xs text-gray-600">Original cost before discount</Text>
               </div>
-              <div className="flex items-start gap-3">
-                <code className="bg-gray-100 px-2 py-1 rounded text-xs font-mono text-gray-800 whitespace-nowrap">
-                  x-litellm-response-cost-discount-amount
+              <div className="flex items-center justify-between">
+                <span className="text-xs text-blue-800 dark:text-blue-300">
+                  Discount Amount:
+                </span>
+                <code className="text-xs font-mono text-blue-900 dark:text-blue-200">
+                  ${calculatedDiscount.discountAmount}
                 </code>
-                <Text className="text-xs text-gray-600">Amount discounted</Text>
+              </div>
+              <div className="flex items-center justify-between pt-2 border-t border-blue-300 dark:border-blue-800">
+                <span className="text-xs font-semibold text-blue-900 dark:text-blue-200">
+                  Discount Applied:
+                </span>
+                <span className="text-sm font-bold text-blue-900 dark:text-blue-200">
+                  {calculatedDiscount.discountPercentage}%
+                </span>
               </div>
             </div>
           </div>
-
-          <div className="pt-4 border-t border-gray-200">
-            <Text className="font-medium text-gray-900 text-sm mb-3">Discount Calculator</Text>
-            <Text className="text-xs text-gray-600 mb-3">
-              Enter values from your response headers to verify the discount:
-            </Text>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
-              <div>
-                <label className="block text-xs font-medium text-gray-700 mb-1">
-                  Response Cost (x-litellm-response-cost)
-                </label>
-                <TextInput
-                  placeholder="0.0171938125"
-                  value={responseCost}
-                  onValueChange={setResponseCost}
-                  className="text-sm"
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-gray-700 mb-1">
-                  Discount Amount (x-litellm-response-cost-discount-amount)
-                </label>
-                <TextInput
-                  placeholder="0.0009049375"
-                  value={discountAmount}
-                  onValueChange={setDiscountAmount}
-                  className="text-sm"
-                />
-              </div>
-            </div>
-
-            {calculatedDiscount && (
-              <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
-                <Text className="text-sm font-medium text-blue-900 mb-2">Calculated Results</Text>
-                <div className="space-y-2">
-                  <div className="flex items-center justify-between">
-                    <Text className="text-xs text-blue-800">Original Cost:</Text>
-                    <code className="text-xs font-mono text-blue-900">${calculatedDiscount.originalCost}</code>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <Text className="text-xs text-blue-800">Final Cost:</Text>
-                    <code className="text-xs font-mono text-blue-900">${calculatedDiscount.finalCost}</code>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <Text className="text-xs text-blue-800">Discount Amount:</Text>
-                    <code className="text-xs font-mono text-blue-900">${calculatedDiscount.discountAmount}</code>
-                  </div>
-                  <div className="flex items-center justify-between pt-2 border-t border-blue-300">
-                    <Text className="text-xs font-semibold text-blue-900">Discount Applied:</Text>
-                    <Text className="text-sm font-bold text-blue-900">{calculatedDiscount.discountPercentage}%</Text>
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
+        )}
+      </div>
     </div>
   );
 };
 
 export default HowItWorks;
-
