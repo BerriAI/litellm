@@ -108,6 +108,7 @@ proxy-runtime = [
     "pypdf==6.10.2; python_version < '3.14'",
     "llm-sandbox==0.3.39",
     "detect-secrets==1.5.0",
+    "newrelic==12.1.0",
 ]
 
 [project.scripts]
