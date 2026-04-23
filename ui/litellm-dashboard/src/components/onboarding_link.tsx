@@ -1,7 +1,13 @@
 import React from "react";
-import { Button, Modal, Typography } from "antd";
+import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { CopyToClipboard } from "react-copy-to-clipboard";
-import { Text } from "@tremor/react";
 import NotificationsManager from "./molecules/notifications_manager";
 
 export interface InvitationLink {
@@ -19,7 +25,9 @@ export interface InvitationLink {
 
 interface OnboardingProps {
   isInvitationLinkModalVisible: boolean;
-  setIsInvitationLinkModalVisible: React.Dispatch<React.SetStateAction<boolean>>;
+  setIsInvitationLinkModalVisible: React.Dispatch<
+    React.SetStateAction<boolean>
+  >;
   baseUrl: string;
   invitationLinkData: InvitationLink | null;
   modalType?: "invitation" | "resetPassword";
@@ -32,23 +40,13 @@ export default function OnboardingModal({
   invitationLinkData,
   modalType = "invitation",
 }: OnboardingProps) {
-  const { Title, Paragraph } = Typography;
-  const handleInvitationOk = () => {
-    setIsInvitationLinkModalVisible(false);
-  };
-
-  const handleInvitationCancel = () => {
-    setIsInvitationLinkModalVisible(false);
-  };
+  const handleClose = () => setIsInvitationLinkModalVisible(false);
 
   const getInvitationUrl = () => {
-    if (!baseUrl) {
-      return "";
-    }
+    if (!baseUrl) return "";
     const baseUrlObj = new URL(baseUrl);
-    const basePath = baseUrlObj.pathname; // This will be "/litellm" or ""
+    const basePath = baseUrlObj.pathname;
     const path = basePath && basePath !== "/" ? `${basePath}/ui` : "ui";
-    // Get the path from the base URL
     if (invitationLinkData?.has_user_setup_sso) {
       return new URL(path, baseUrl).toString();
     }
@@ -56,41 +54,54 @@ export default function OnboardingModal({
     if (modalType === "resetPassword") {
       urlPath += "&action=reset_password";
     }
-    const url = new URL(urlPath, baseUrl).toString();
-    return url;
+    return new URL(urlPath, baseUrl).toString();
   };
 
   return (
-    <Modal
-      title={modalType === "invitation" ? "Invitation Link" : "Reset Password Link"}
+    <Dialog
       open={isInvitationLinkModalVisible}
-      width={800}
-      footer={null}
-      onOk={handleInvitationOk}
-      onCancel={handleInvitationCancel}
+      onOpenChange={(o) => (!o ? handleClose() : undefined)}
     >
-      <Paragraph>
-        {modalType === "invitation"
-          ? "Copy and send the generated link to onboard this user to the proxy."
-          : "Copy and send the generated link to the user to reset their password."}
-      </Paragraph>
-      <div className="flex justify-between pt-5 pb-2">
-        <Text className="text-base">User ID</Text>
-        <Text>{invitationLinkData?.user_id}</Text>
-      </div>
-      <div className="flex justify-between pt-5 pb-2">
-        <Text>{modalType === "invitation" ? "Invitation Link" : "Reset Password Link"}</Text>
-        <Text>
-          <Text>{getInvitationUrl()}</Text>
-        </Text>
-      </div>
-      <div className="flex justify-end mt-5">
-        <CopyToClipboard text={getInvitationUrl()} onCopy={() => NotificationsManager.success("Copied!")}>
-          <Button type="primary">
-            {modalType === "invitation" ? "Copy invitation link" : "Copy password reset link"}
-          </Button>
-        </CopyToClipboard>
-      </div>
-    </Modal>
+      <DialogContent className="max-w-3xl">
+        <DialogHeader>
+          <DialogTitle>
+            {modalType === "invitation"
+              ? "Invitation Link"
+              : "Reset Password Link"}
+          </DialogTitle>
+          <DialogDescription>
+            {modalType === "invitation"
+              ? "Copy and send the generated link to onboard this user to the proxy."
+              : "Copy and send the generated link to the user to reset their password."}
+          </DialogDescription>
+        </DialogHeader>
+        <div className="flex justify-between pt-2 pb-2">
+          <span className="text-base">User ID</span>
+          <span>{invitationLinkData?.user_id}</span>
+        </div>
+        <div className="flex justify-between pt-2 pb-2 gap-4">
+          <span>
+            {modalType === "invitation"
+              ? "Invitation Link"
+              : "Reset Password Link"}
+          </span>
+          <span className="text-right break-all font-mono text-sm">
+            {getInvitationUrl()}
+          </span>
+        </div>
+        <div className="flex justify-end mt-3">
+          <CopyToClipboard
+            text={getInvitationUrl()}
+            onCopy={() => NotificationsManager.success("Copied!")}
+          >
+            <Button>
+              {modalType === "invitation"
+                ? "Copy invitation link"
+                : "Copy password reset link"}
+            </Button>
+          </CopyToClipboard>
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 }
