@@ -1,7 +1,15 @@
 import { formatNumberWithCommas } from "@/utils/dataUtils";
+// eslint-disable-next-line litellm-ui/no-banned-ui-imports
 import { BarChart, Card, Title } from "@tremor/react";
-import { Table } from "antd";
-import type { ColumnsType } from "antd/es/table";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import { cn } from "@/lib/utils";
 import React, { useState } from "react";
 import { TopModelData } from "../types";
 
@@ -10,41 +18,7 @@ interface KeyModelUsageViewProps {
 }
 
 const VISIBLE_ROWS = 5;
-// antd Table with size="small" has a row height of ~39px
-const ANTD_SMALL_TABLE_ROW_HEIGHT = 39;
-
-const columns: ColumnsType<TopModelData> = [
-  {
-    title: "Model",
-    dataIndex: "model",
-    key: "model",
-    render: (value) => value || "-",
-  },
-  {
-    title: "Spend (USD)",
-    dataIndex: "spend",
-    key: "spend",
-    render: (value) => `$${formatNumberWithCommas(value, 2)}`,
-  },
-  {
-    title: "Successful",
-    dataIndex: "successful_requests",
-    key: "successful_requests",
-    render: (value) => <span className="text-green-600">{value?.toLocaleString() || 0}</span>,
-  },
-  {
-    title: "Failed",
-    dataIndex: "failed_requests",
-    key: "failed_requests",
-    render: (value) => <span className="text-red-600">{value?.toLocaleString() || 0}</span>,
-  },
-  {
-    title: "Tokens",
-    dataIndex: "tokens",
-    key: "tokens",
-    render: (value) => value?.toLocaleString() || 0,
-  },
-];
+const SMALL_TABLE_ROW_HEIGHT = 39;
 
 const KeyModelUsageView: React.FC<KeyModelUsageViewProps> = ({ topModels }) => {
   const [viewMode, setViewMode] = useState<"chart" | "table">("table");
@@ -59,14 +33,26 @@ const KeyModelUsageView: React.FC<KeyModelUsageViewProps> = ({ topModels }) => {
         <Title>Model Usage</Title>
         <div className="flex space-x-2">
           <button
+            type="button"
             onClick={() => setViewMode("table")}
-            className={`px-3 py-1 text-sm rounded-md ${viewMode === "table" ? "bg-blue-100 text-blue-700" : "bg-gray-100 text-gray-700"}`}
+            className={cn(
+              "px-3 py-1 text-sm rounded-md",
+              viewMode === "table"
+                ? "bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300"
+                : "bg-muted text-muted-foreground",
+            )}
           >
             Table
           </button>
           <button
+            type="button"
             onClick={() => setViewMode("chart")}
-            className={`px-3 py-1 text-sm rounded-md ${viewMode === "chart" ? "bg-blue-100 text-blue-700" : "bg-gray-100 text-gray-700"}`}
+            className={cn(
+              "px-3 py-1 text-sm rounded-md",
+              viewMode === "chart"
+                ? "bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300"
+                : "bg-muted text-muted-foreground",
+            )}
           >
             Chart
           </button>
@@ -88,18 +74,52 @@ const KeyModelUsageView: React.FC<KeyModelUsageViewProps> = ({ topModels }) => {
           />
         </div>
       ) : (
-        <Table
-          columns={columns}
-          dataSource={topModels}
-          rowKey="model"
-          size="small"
-          pagination={false}
-          scroll={
+        <div
+          className="border border-border rounded-md overflow-hidden"
+          style={
             topModels.length > VISIBLE_ROWS
-              ? { y: VISIBLE_ROWS * ANTD_SMALL_TABLE_ROW_HEIGHT }
+              ? {
+                  maxHeight: VISIBLE_ROWS * SMALL_TABLE_ROW_HEIGHT + 40,
+                  overflowY: "auto",
+                }
               : undefined
           }
-        />
+        >
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Model</TableHead>
+                <TableHead>Spend (USD)</TableHead>
+                <TableHead>Successful</TableHead>
+                <TableHead>Failed</TableHead>
+                <TableHead>Tokens</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {topModels.map((row) => (
+                <TableRow key={row.model}>
+                  <TableCell>{row.model || "-"}</TableCell>
+                  <TableCell>
+                    ${formatNumberWithCommas(row.spend, 2)}
+                  </TableCell>
+                  <TableCell>
+                    <span className="text-emerald-600 dark:text-emerald-400">
+                      {row.successful_requests?.toLocaleString() || 0}
+                    </span>
+                  </TableCell>
+                  <TableCell>
+                    <span className="text-destructive">
+                      {row.failed_requests?.toLocaleString() || 0}
+                    </span>
+                  </TableCell>
+                  <TableCell>
+                    {row.tokens?.toLocaleString() || 0}
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
       )}
     </Card>
   );
