@@ -1,6 +1,11 @@
+// eslint-disable-next-line litellm-ui/no-banned-ui-imports
 import { BarChart } from "@tremor/react";
-import { Segmented } from "antd";
+import {
+  ToggleGroup,
+  ToggleGroupItem,
+} from "@/components/ui/toggle-group";
 import { useState } from "react";
+import { cn } from "@/lib/utils";
 import { formatNumberWithCommas } from "../../../../utils/dataUtils";
 import { DataTable } from "../../../view_logs/table";
 
@@ -18,18 +23,26 @@ interface TopModelViewProps {
   setTopModelsLimit: (limit: number) => void;
 }
 
-export default function TopModelView({ topModels, topModelsLimit, setTopModelsLimit }: TopModelViewProps) {
-  const [modelViewMode, setModelViewMode] = useState<"chart" | "table">("table");
+export default function TopModelView({
+  topModels,
+  topModelsLimit,
+  setTopModelsLimit,
+}: TopModelViewProps) {
+  const [modelViewMode, setModelViewMode] = useState<"chart" | "table">(
+    "table",
+  );
 
   const columns = [
     {
       header: "Model",
       accessorKey: "key",
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       cell: (info: any) => info.getValue() || "-",
     },
     {
       header: "Spend (USD)",
       accessorKey: "spend",
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       cell: (info: any) => {
         const value = info.getValue();
         return `$${formatNumberWithCommas(value, 2)}`;
@@ -38,16 +51,27 @@ export default function TopModelView({ topModels, topModelsLimit, setTopModelsLi
     {
       header: "Successful",
       accessorKey: "successful_requests",
-      cell: (info: any) => <span className="text-green-600">{info.getValue()?.toLocaleString() || 0}</span>,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      cell: (info: any) => (
+        <span className="text-emerald-600 dark:text-emerald-400">
+          {info.getValue()?.toLocaleString() || 0}
+        </span>
+      ),
     },
     {
       header: "Failed",
       accessorKey: "failed_requests",
-      cell: (info: any) => <span className="text-red-600">{info.getValue()?.toLocaleString() || 0}</span>,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      cell: (info: any) => (
+        <span className="text-destructive">
+          {info.getValue()?.toLocaleString() || 0}
+        </span>
+      ),
     },
     {
       header: "Tokens",
       accessorKey: "tokens",
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       cell: (info: any) => info.getValue()?.toLocaleString() || 0,
     },
   ];
@@ -56,26 +80,42 @@ export default function TopModelView({ topModels, topModelsLimit, setTopModelsLi
   return (
     <>
       <div className="mb-4 flex justify-between items-center">
-        <Segmented
-          options={[
-            { label: "5", value: 5 },
-            { label: "10", value: 10 },
-            { label: "25", value: 25 },
-            { label: "50", value: 50 },
-          ]}
-          value={topModelsLimit}
-          onChange={(value) => setTopModelsLimit(value as number)}
-        />
+        <ToggleGroup
+          type="single"
+          value={String(topModelsLimit)}
+          onValueChange={(v) => {
+            if (!v) return;
+            setTopModelsLimit(parseInt(v));
+          }}
+        >
+          {[5, 10, 25, 50].map((n) => (
+            <ToggleGroupItem key={n} value={String(n)}>
+              {n}
+            </ToggleGroupItem>
+          ))}
+        </ToggleGroup>
         <div className="flex space-x-2">
           <button
+            type="button"
             onClick={() => setModelViewMode("table")}
-            className={`px-3 py-1 text-sm rounded-md ${modelViewMode === "table" ? "bg-blue-100 text-blue-700" : "bg-gray-100 text-gray-700"}`}
+            className={cn(
+              "px-3 py-1 text-sm rounded-md",
+              modelViewMode === "table"
+                ? "bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300"
+                : "bg-muted text-muted-foreground",
+            )}
           >
             Table View
           </button>
           <button
+            type="button"
             onClick={() => setModelViewMode("chart")}
-            className={`px-3 py-1 text-sm rounded-md ${modelViewMode === "chart" ? "bg-blue-100 text-blue-700" : "bg-gray-100 text-gray-700"}`}
+            className={cn(
+              "px-3 py-1 text-sm rounded-md",
+              modelViewMode === "chart"
+                ? "bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300"
+                : "bg-muted text-muted-foreground",
+            )}
           >
             Chart View
           </button>
@@ -85,7 +125,10 @@ export default function TopModelView({ topModels, topModelsLimit, setTopModelsLi
         <div className="relative max-h-[600px] overflow-y-auto">
           <BarChart
             className="mt-4 cursor-pointer hover:opacity-90"
-            style={{ height: Math.min(processedTopModels.length, topModelsLimit) * 52 }}
+            style={{
+              height:
+                Math.min(processedTopModels.length, topModelsLimit) * 52,
+            }}
             data={processedTopModels}
             index="key"
             categories={["spend"]}
