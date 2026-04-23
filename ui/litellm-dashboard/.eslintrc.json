@@ -55,6 +55,7 @@
         "src/components/view_users/columns.tsx",
         "src/components/Projects/ProjectsPage.tsx",
         "src/components/pass_through_settings.tsx",
+        "src/components/policies/attachment_table.tsx",
         "src/components/permissions/VectorStorePermissions.tsx",
         "src/components/permissions/AgentPermissions.tsx",
         "src/components/permissions/MCPServerPermissions.tsx",

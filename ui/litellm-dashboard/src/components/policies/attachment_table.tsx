@@ -1,7 +1,27 @@
 import React, { useState } from "react";
-import { Table, TableBody, TableCell, TableHead, TableHeaderCell, TableRow, Icon, Badge } from "@tremor/react";
-import { TrashIcon, SwitchVerticalIcon, ChevronUpIcon, ChevronDownIcon } from "@heroicons/react/outline";
-import { Tooltip, Tag } from "antd";
+// eslint-disable-next-line litellm-ui/no-banned-ui-imports
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeaderCell,
+  TableRow,
+} from "@tremor/react";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import {
+  ArrowUpDown,
+  ChevronDown,
+  ChevronUp,
+  Trash2,
+} from "lucide-react";
 import {
   ColumnDef,
   flexRender,
@@ -21,6 +41,37 @@ interface AttachmentTableProps {
   accessToken: string | null;
 }
 
+const listChip = (
+  items: string[],
+  classes: string,
+  maxVisible: number = 2,
+): React.ReactNode => {
+  if (items.length === 0) return <span className="text-xs text-muted-foreground">-</span>;
+  return (
+    <div className="flex flex-wrap gap-1">
+      {items.slice(0, maxVisible).map((t, i) => (
+        <Badge key={i} className={`text-xs ${classes}`}>
+          {t}
+        </Badge>
+      ))}
+      {items.length > maxVisible && (
+        <TooltipProvider>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Badge className="text-xs bg-muted text-muted-foreground">
+                +{items.length - maxVisible}
+              </Badge>
+            </TooltipTrigger>
+            <TooltipContent>
+              {items.slice(maxVisible).join(", ")}
+            </TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
+      )}
+    </div>
+  );
+};
+
 const AttachmentTable: React.FC<AttachmentTableProps> = ({
   attachments,
   isLoading,
@@ -28,9 +79,10 @@ const AttachmentTable: React.FC<AttachmentTableProps> = ({
   isAdmin,
   accessToken,
 }) => {
-  const [sorting, setSorting] = useState<SortingState>([{ id: "created_at", desc: true }]);
+  const [sorting, setSorting] = useState<SortingState>([
+    { id: "created_at", desc: true },
+  ]);
 
-  // Format date helper function
   const formatDate = (dateString?: string) => {
     if (!dateString) return "-";
     const date = new Date(dateString);
@@ -41,25 +93,30 @@ const AttachmentTable: React.FC<AttachmentTableProps> = ({
     {
       header: "Attachment ID",
       accessorKey: "attachment_id",
-      cell: (info: any) => (
-        <Tooltip title={String(info.getValue() || "")}>
-          <span className="font-mono text-xs text-gray-600">
-            {info.getValue() ? `${String(info.getValue()).slice(0, 7)}...` : ""}
-          </span>
-        </Tooltip>
-      ),
+      cell: (info) => {
+        const v = String(info.getValue() || "");
+        return (
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span className="font-mono text-xs text-muted-foreground">
+                  {v ? `${v.slice(0, 7)}...` : ""}
+                </span>
+              </TooltipTrigger>
+              <TooltipContent>{v}</TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
+        );
+      },
     },
     {
       header: "Policy",
       accessorKey: "policy_name",
-      cell: ({ row }) => {
-        const attachment = row.original;
-        return (
-          <Badge color="blue" size="xs">
-            {attachment.policy_name}
-          </Badge>
-        );
-      },
+      cell: ({ row }) => (
+        <Badge className="text-xs bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300">
+          {row.original.policy_name}
+        </Badge>
+      ),
     },
     {
       header: "Scope",
@@ -68,7 +125,7 @@ const AttachmentTable: React.FC<AttachmentTableProps> = ({
         const attachment = row.original;
         if (attachment.scope === "*") {
           return (
-            <Badge color="amber" size="xs">
+            <Badge className="text-xs bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300">
               Global (*)
             </Badge>
           );
@@ -76,109 +133,45 @@ const AttachmentTable: React.FC<AttachmentTableProps> = ({
         return attachment.scope ? (
           <span className="text-xs">{attachment.scope}</span>
         ) : (
-          <span className="text-xs text-gray-400">-</span>
+          <span className="text-xs text-muted-foreground">-</span>
         );
       },
     },
     {
       header: "Teams",
       accessorKey: "teams",
-      cell: ({ row }) => {
-        const attachment = row.original;
-        const teams = attachment.teams || [];
-        if (teams.length === 0) {
-          return <span className="text-xs text-gray-400">-</span>;
-        }
-        return (
-          <div className="flex flex-wrap gap-1">
-            {teams.slice(0, 2).map((t, i) => (
-              <Tag key={i} color="cyan" className="text-xs">
-                {t}
-              </Tag>
-            ))}
-            {teams.length > 2 && (
-              <Tooltip title={teams.slice(2).join(", ")}>
-                <Tag className="text-xs">+{teams.length - 2}</Tag>
-              </Tooltip>
-            )}
-          </div>
-        );
-      },
+      cell: ({ row }) =>
+        listChip(
+          row.original.teams || [],
+          "bg-cyan-100 text-cyan-700 dark:bg-cyan-950 dark:text-cyan-300",
+        ),
     },
     {
       header: "Keys",
       accessorKey: "keys",
-      cell: ({ row }) => {
-        const attachment = row.original;
-        const keys = attachment.keys || [];
-        if (keys.length === 0) {
-          return <span className="text-xs text-gray-400">-</span>;
-        }
-        return (
-          <div className="flex flex-wrap gap-1">
-            {keys.slice(0, 2).map((k, i) => (
-              <Tag key={i} color="purple" className="text-xs">
-                {k}
-              </Tag>
-            ))}
-            {keys.length > 2 && (
-              <Tooltip title={keys.slice(2).join(", ")}>
-                <Tag className="text-xs">+{keys.length - 2}</Tag>
-              </Tooltip>
-            )}
-          </div>
-        );
-      },
+      cell: ({ row }) =>
+        listChip(
+          row.original.keys || [],
+          "bg-purple-100 text-purple-700 dark:bg-purple-950 dark:text-purple-300",
+        ),
     },
     {
       header: "Models",
       accessorKey: "models",
-      cell: ({ row }) => {
-        const attachment = row.original;
-        const models = attachment.models || [];
-        if (models.length === 0) {
-          return <span className="text-xs text-gray-400">-</span>;
-        }
-        return (
-          <div className="flex flex-wrap gap-1">
-            {models.slice(0, 2).map((m, i) => (
-              <Tag key={i} color="green" className="text-xs">
-                {m}
-              </Tag>
-            ))}
-            {models.length > 2 && (
-              <Tooltip title={models.slice(2).join(", ")}>
-                <Tag className="text-xs">+{models.length - 2}</Tag>
-              </Tooltip>
-            )}
-          </div>
-        );
-      },
+      cell: ({ row }) =>
+        listChip(
+          row.original.models || [],
+          "bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300",
+        ),
     },
     {
       header: "Tags",
       accessorKey: "tags",
-      cell: ({ row }) => {
-        const attachment = row.original;
-        const tags = attachment.tags || [];
-        if (tags.length === 0) {
-          return <span className="text-xs text-gray-400">-</span>;
-        }
-        return (
-          <div className="flex flex-wrap gap-1">
-            {tags.slice(0, 2).map((t, i) => (
-              <Tag key={i} color="orange" className="text-xs">
-                {t}
-              </Tag>
-            ))}
-            {tags.length > 2 && (
-              <Tooltip title={tags.slice(2).join(", ")}>
-                <Tag className="text-xs">+{tags.length - 2}</Tag>
-              </Tooltip>
-            )}
-          </div>
-        );
-      },
+      cell: ({ row }) =>
+        listChip(
+          row.original.tags || [],
+          "bg-orange-100 text-orange-700 dark:bg-orange-950 dark:text-orange-300",
+        ),
     },
     {
       header: "Created At",
@@ -186,9 +179,16 @@ const AttachmentTable: React.FC<AttachmentTableProps> = ({
       cell: ({ row }) => {
         const attachment = row.original;
         return (
-          <Tooltip title={attachment.created_at}>
-            <span className="text-xs">{formatDate(attachment.created_at)}</span>
-          </Tooltip>
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span className="text-xs">
+                  {formatDate(attachment.created_at)}
+                </span>
+              </TooltipTrigger>
+              <TooltipContent>{attachment.created_at}</TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
         );
       },
     },
@@ -198,17 +198,25 @@ const AttachmentTable: React.FC<AttachmentTableProps> = ({
       cell: ({ row }) => {
         const attachment = row.original;
         return (
-          <div className="flex space-x-2">
+          <div className="flex space-x-2 items-center">
             <ImpactPopover attachment={attachment} accessToken={accessToken} />
             {isAdmin && (
-              <Tooltip title="Delete attachment">
-                <Icon
-                  icon={TrashIcon}
-                  size="sm"
-                  onClick={() => onDeleteClick(attachment.attachment_id)}
-                  className="cursor-pointer hover:text-red-500"
-                />
-              </Tooltip>
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-7 w-7 text-muted-foreground hover:text-destructive"
+                      onClick={() => onDeleteClick(attachment.attachment_id)}
+                      aria-label="Delete attachment"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>Delete attachment</TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
             )}
           </div>
         );
@@ -219,9 +227,7 @@ const AttachmentTable: React.FC<AttachmentTableProps> = ({
   const table = useReactTable({
     data: attachments,
     columns,
-    state: {
-      sorting,
-    },
+    state: { sorting },
     onSortingChange: setSorting,
     getCoreRowModel: getCoreRowModel(),
     getSortedRowModel: getSortedRowModel(),
@@ -239,23 +245,34 @@ const AttachmentTable: React.FC<AttachmentTableProps> = ({
                   <TableHeaderCell
                     key={header.id}
                     className={`py-1 h-8 ${
-                      header.id === "actions" ? "sticky right-0 bg-white shadow-[-4px_0_8px_-6px_rgba(0,0,0,0.1)]" : ""
+                      header.id === "actions"
+                        ? "sticky right-0 bg-background shadow-[-4px_0_8px_-6px_rgba(0,0,0,0.1)]"
+                        : ""
                     }`}
                     onClick={header.column.getToggleSortingHandler()}
                   >
                     <div className="flex items-center justify-between gap-2">
                       <div className="flex items-center">
-                        {header.isPlaceholder ? null : flexRender(header.column.columnDef.header, header.getContext())}
+                        {header.isPlaceholder
+                          ? null
+                          : flexRender(
+                              header.column.columnDef.header,
+                              header.getContext(),
+                            )}
                       </div>
                       {header.id !== "actions" && (
                         <div className="w-4">
                           {header.column.getIsSorted() ? (
                             {
-                              asc: <ChevronUpIcon className="h-4 w-4 text-blue-500" />,
-                              desc: <ChevronDownIcon className="h-4 w-4 text-blue-500" />,
+                              asc: (
+                                <ChevronUp className="h-4 w-4 text-primary" />
+                              ),
+                              desc: (
+                                <ChevronDown className="h-4 w-4 text-primary" />
+                              ),
                             }[header.column.getIsSorted() as string]
                           ) : (
-                            <SwitchVerticalIcon className="h-4 w-4 text-gray-400" />
+                            <ArrowUpDown className="h-4 w-4 text-muted-foreground" />
                           )}
                         </div>
                       )}
@@ -268,8 +285,11 @@ const AttachmentTable: React.FC<AttachmentTableProps> = ({
           <TableBody>
             {isLoading ? (
               <TableRow>
-                <TableCell colSpan={columns.length} className="h-8 text-center">
-                  <div className="text-center text-gray-500">
+                <TableCell
+                  colSpan={columns.length}
+                  className="h-8 text-center"
+                >
+                  <div className="text-center text-muted-foreground">
                     <p>Loading...</p>
                   </div>
                 </TableCell>
@@ -282,19 +302,25 @@ const AttachmentTable: React.FC<AttachmentTableProps> = ({
                       key={cell.id}
                       className={`py-0.5 max-h-8 overflow-hidden text-ellipsis whitespace-nowrap ${
                         cell.column.id === "actions"
-                          ? "sticky right-0 bg-white shadow-[-4px_0_8px_-6px_rgba(0,0,0,0.1)]"
+                          ? "sticky right-0 bg-background shadow-[-4px_0_8px_-6px_rgba(0,0,0,0.1)]"
                           : ""
                       }`}
                     >
-                      {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                      {flexRender(
+                        cell.column.columnDef.cell,
+                        cell.getContext(),
+                      )}
                     </TableCell>
                   ))}
                 </TableRow>
               ))
             ) : (
               <TableRow>
-                <TableCell colSpan={columns.length} className="h-8 text-center">
-                  <div className="text-center text-gray-500">
+                <TableCell
+                  colSpan={columns.length}
+                  className="h-8 text-center"
+                >
+                  <div className="text-center text-muted-foreground">
                     <p>No attachments found</p>
                   </div>
                 </TableCell>
