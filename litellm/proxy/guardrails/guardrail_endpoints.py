@@ -342,6 +342,19 @@ async def create_guardrail(
             verbose_proxy_logger.info(
                 f"Immediate sync: Successfully initialized guardrail '{guardrail_name}' (ID: {guardrail_id})"
             )
+        except (ValueError, TypeError) as init_error:
+            # Configuration error — roll back the DB write so the guardrail isn't orphaned
+            if prisma_client is not None:
+                try:
+                    await prisma_client.db.litellm_guardrailstable.delete(
+                        where={"id": guardrail_id}
+                    )
+                except Exception:
+                    pass
+            raise HTTPException(
+                status_code=400,
+                detail=f"Guardrail configuration error: {init_error}",
+            )
         except Exception as init_error:
             verbose_proxy_logger.warning(
                 f"Immediate sync: Failed to initialize guardrail '{guardrail_name}' (ID: {guardrail_id}) in memory: {init_error}"
