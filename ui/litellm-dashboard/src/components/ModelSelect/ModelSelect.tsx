@@ -2,7 +2,14 @@ import { ProxyModel, useAllProxyModels } from "@/app/(dashboard)/hooks/models/us
 import { useOrganization } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 import { useTeam } from "@/app/(dashboard)/hooks/teams/useTeams";
 import { useCurrentUser } from "@/app/(dashboard)/hooks/users/useCurrentUser";
-import { Select, Skeleton, Tooltip, type SelectProps } from "antd";
+import { Select } from "antd";
+import { Skeleton } from "@/components/ui/skeleton";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { Organization, Team } from "../networking";
 import { splitWildcardModels } from "./modelUtils";
 
@@ -106,12 +113,8 @@ export const ModelSelect = (props: ModelSelectProps) => {
     (organizationHasAllProxyModels && includeSpecialOptions) || context === "global";
 
   if (isLoading) {
-    return <Skeleton.Input active block />;
+    return <Skeleton className="h-10 w-full" />;
   }
-
-  const optionRender: NonNullable<SelectProps["optionRender"]> = (option) => {
-    return <span>{option.label}</span>;
-  };
 
   const handleChange = (values: string[]) => {
     const specialValues = values.filter(isSpecialOption);
@@ -204,12 +207,16 @@ export const ModelSelect = (props: ModelSelectProps) => {
       allowClear
       maxTagCount="responsive"
       maxTagPlaceholder={(omittedValues) => (
-        <Tooltip
-          styles={{ root: { pointerEvents: "none" } }}
-          title={omittedValues.map(({ value }) => value).join(", ")}
-        >
-          <span>+{omittedValues.length} more</span>
-        </Tooltip>
+        <TooltipProvider>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span>+{omittedValues.length} more</span>
+            </TooltipTrigger>
+            <TooltipContent>
+              {omittedValues.map(({ value }) => value).join(", ")}
+            </TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
       )}
     />
   );
