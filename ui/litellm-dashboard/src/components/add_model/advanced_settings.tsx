@@ -1,6 +1,13 @@
 import React from "react";
 import { Form, Switch, Select, Tooltip } from "antd";
-import { Text, Accordion, AccordionHeader, AccordionBody, TextInput } from "@tremor/react";
+// eslint-disable-next-line litellm-ui/no-banned-ui-imports
+import {
+  Text,
+  Accordion,
+  AccordionHeader,
+  AccordionBody,
+  TextInput,
+} from "@tremor/react";
 import { Row, Col, Typography } from "antd";
 import TextArea from "antd/es/input/TextArea";
 import { InfoCircleOutlined } from "@ant-design/icons";
