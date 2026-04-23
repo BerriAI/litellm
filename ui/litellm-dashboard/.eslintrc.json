@@ -44,7 +44,9 @@
         "src/components/shared/usage_date_picker.tsx",
         "src/components/shared/advanced_date_picker.tsx",
         "src/components/activity_metrics.tsx",
-        "src/components/skill_hub_table_columns.tsx"
+        "src/components/skill_hub_table_columns.tsx",
+        "src/components/common_components/PassThroughSecuritySection.tsx",
+        "src/components/common_components/DeleteResourceModal.tsx"
       ],
       "rules": {
         "litellm-ui/no-banned-ui-imports": "off",
