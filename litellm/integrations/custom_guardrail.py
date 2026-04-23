@@ -2,6 +2,7 @@ from datetime import datetime
 from typing import (
     TYPE_CHECKING,
     Any,
+    ClassVar,
     Dict,
     List,
     Literal,
@@ -12,6 +13,7 @@ from typing import (
 )
 
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.core_helpers import redact_nested_match_and_regex_keys
 from litellm.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.types.guardrails import (
@@ -81,6 +83,9 @@ class ModifyResponseException(Exception):
 
 
 class CustomGuardrail(CustomLogger):
+    # If True, during_call runs async_moderation_hook instead of the unified apply_guardrail path.
+    use_native_during_call_hook: ClassVar[bool] = False
+
     def __init__(
         self,
         guardrail_name: Optional[str] = None,
@@ -636,6 +641,13 @@ class CustomGuardrail(CustomLogger):
             for item in clean_guardrail_response:
                 if isinstance(item, dict):
                     item.pop("secret_fields", None)
+
+        # Default-safe behavior: never persist raw matched spans in standard
+        # guardrail logging payloads (single shared implementation; Bedrock hooks pass
+        # raw provider JSON so redaction is not duplicated upstream).
+        clean_guardrail_response = redact_nested_match_and_regex_keys(
+            clean_guardrail_response
+        )
 
         slg = StandardLoggingGuardrailInformation(
             guardrail_name=self.guardrail_name,
