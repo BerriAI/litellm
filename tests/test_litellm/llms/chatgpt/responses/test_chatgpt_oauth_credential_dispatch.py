@@ -14,19 +14,30 @@ class TestResolveAuthenticator:
     def test_plain_api_key_returns_fallback(self):
         fallback = MagicMock(spec=Authenticator)
         resolved = resolve_authenticator(
-            GenericLiteLLMParams(api_key="sk-plain"), fallback
+            None, GenericLiteLLMParams(api_key="sk-plain"), fallback
         )
         assert resolved is fallback
 
-    def test_none_litellm_params_returns_fallback(self):
+    def test_none_both_returns_fallback(self):
         fallback = MagicMock(spec=Authenticator)
-        assert resolve_authenticator(None, fallback) is fallback
+        assert resolve_authenticator(None, None, fallback) is fallback
 
-    def test_oauth_prefix_returns_db_authenticator(self):
+    def test_oauth_prefix_in_litellm_params_returns_db_authenticator(self):
         fallback = MagicMock(spec=Authenticator)
         resolved = resolve_authenticator(
+            None,
             GenericLiteLLMParams(api_key=f"{OAUTH_CREDENTIAL_API_KEY_PREFIX}my-creds"),
             fallback,
+        )
+        assert isinstance(resolved, DBAuthenticator)
+        assert resolved.credential_name == "my-creds"
+
+    def test_oauth_prefix_in_api_key_arg_returns_db_authenticator(self):
+        """Chat transformation's ``_get_openai_compatible_provider_info``
+        call-site passes ``api_key`` directly without ``litellm_params``."""
+        fallback = MagicMock(spec=Authenticator)
+        resolved = resolve_authenticator(
+            f"{OAUTH_CREDENTIAL_API_KEY_PREFIX}my-creds", None, fallback
         )
         assert isinstance(resolved, DBAuthenticator)
         assert resolved.credential_name == "my-creds"
@@ -34,7 +45,9 @@ class TestResolveAuthenticator:
     def test_oauth_prefix_with_empty_suffix(self):
         fallback = MagicMock(spec=Authenticator)
         resolved = resolve_authenticator(
-            GenericLiteLLMParams(api_key=OAUTH_CREDENTIAL_API_KEY_PREFIX), fallback
+            None,
+            GenericLiteLLMParams(api_key=OAUTH_CREDENTIAL_API_KEY_PREFIX),
+            fallback,
         )
         assert isinstance(resolved, DBAuthenticator)
         assert resolved.credential_name == ""

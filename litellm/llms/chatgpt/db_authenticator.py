@@ -218,23 +218,33 @@ async def persist_credential_to_db(item: CredentialItem) -> None:
 
 
 def resolve_authenticator(
+    api_key: Optional[str],
     litellm_params: Any,
     fallback: Authenticator,
 ) -> Authenticator:
     """
-    If ``litellm_params.api_key`` starts with ``oauth:``, returns a
-    :class:`DBAuthenticator` for the named credential. Otherwise returns
-    the given fallback (typically the filesystem :class:`Authenticator`).
+    If ``api_key`` (or ``litellm_params.api_key``) starts with ``oauth:``,
+    returns a :class:`DBAuthenticator` for the named credential. Otherwise
+    returns the given fallback (typically the filesystem
+    :class:`Authenticator`).
+
+    Two sources are checked because the chat transformation's
+    ``_get_openai_compatible_provider_info`` call-site has ``api_key`` but
+    not ``litellm_params``, while ``validate_environment`` on both chat
+    and responses has one or both.
     """
-    if litellm_params is None:
-        return fallback
-    api_key = (
-        litellm_params.get("api_key")
-        if isinstance(litellm_params, dict)
-        else getattr(litellm_params, "api_key", None)
-    )
-    if isinstance(api_key, str) and api_key.startswith(OAUTH_CREDENTIAL_API_KEY_PREFIX):
-        return DBAuthenticator(
-            credential_name=api_key[len(OAUTH_CREDENTIAL_API_KEY_PREFIX) :]
-        )
+    candidates = [api_key]
+    if litellm_params is not None:
+        if isinstance(litellm_params, dict):
+            candidates.append(litellm_params.get("api_key"))
+        else:
+            candidates.append(getattr(litellm_params, "api_key", None))
+
+    for candidate in candidates:
+        if isinstance(candidate, str) and candidate.startswith(
+            OAUTH_CREDENTIAL_API_KEY_PREFIX
+        ):
+            return DBAuthenticator(
+                credential_name=candidate[len(OAUTH_CREDENTIAL_API_KEY_PREFIX) :]
+            )
     return fallback

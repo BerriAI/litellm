@@ -43,7 +43,7 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
         model: str,
         litellm_params: Optional[GenericLiteLLMParams],
     ) -> dict:
-        authenticator = resolve_authenticator(litellm_params, self.authenticator)
+        authenticator = resolve_authenticator(None, litellm_params, self.authenticator)
         try:
             access_token = authenticator.get_access_token()
         except GetAccessTokenError as e:

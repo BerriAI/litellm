@@ -10,6 +10,7 @@ from ..common_utils import (
     ensure_chatgpt_session_id,
     get_chatgpt_default_headers,
 )
+from ..db_authenticator import resolve_authenticator
 from .streaming_utils import ChatGPTToolCallNormalizer
 
 
@@ -30,9 +31,10 @@ class ChatGPTConfig(OpenAIConfig):
         api_key: Optional[str],
         custom_llm_provider: str,
     ) -> Tuple[Optional[str], Optional[str], str]:
-        dynamic_api_base = self.authenticator.get_api_base()
+        authenticator = resolve_authenticator(api_key, None, self.authenticator)
+        dynamic_api_base = authenticator.get_api_base()
         try:
-            dynamic_api_key = self.authenticator.get_access_token()
+            dynamic_api_key = authenticator.get_access_token()
         except GetAccessTokenError as e:
             raise AuthenticationError(
                 model=model,
@@ -55,7 +57,10 @@ class ChatGPTConfig(OpenAIConfig):
             headers, model, messages, optional_params, litellm_params, api_key, api_base
         )
 
-        account_id = self.authenticator.get_account_id()
+        authenticator = resolve_authenticator(
+            api_key, litellm_params, self.authenticator
+        )
+        account_id = authenticator.get_account_id()
         session_id = ensure_chatgpt_session_id(litellm_params)
         default_headers = get_chatgpt_default_headers(
             api_key or "", account_id, session_id
