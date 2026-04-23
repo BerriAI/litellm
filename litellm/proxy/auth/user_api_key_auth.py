@@ -1716,9 +1716,14 @@ async def _run_centralized_common_checks(
             global_proxy_spend,
         ) = await asyncio.gather(*fetch_coros, return_exceptions=False)
     except HTTPException:
-        # get_team_object raises HTTPException when the team isn't found.
-        # Reconstruct from the token so enforcement can still run.
-        team_object = _team_obj_from_token(user_api_key_auth_obj)
+        # Any of the five gathered fetches can raise HTTPException. Only
+        # reconstruct from the token when a team_id is known — otherwise
+        # the exception came from a different fetch and the assert in
+        # _team_obj_from_token would fire.
+        if user_api_key_auth_obj.team_id is not None:
+            team_object = _team_obj_from_token(user_api_key_auth_obj)
+        else:
+            team_object = None
         user_object = None
         project_object = None
         end_user_object = None
