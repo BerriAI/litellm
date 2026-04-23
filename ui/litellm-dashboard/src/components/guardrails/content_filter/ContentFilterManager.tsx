@@ -1,10 +1,9 @@
-import { Alert, Divider, Typography } from "antd";
+import { AlertTriangle } from "lucide-react";
 import React, { useEffect, useState } from "react";
 import ContentFilterConfiguration from "./ContentFilterConfiguration";
 import ContentFilterDisplay from "./ContentFilterDisplay";
 import type { CompetitorIntentConfig } from "./CompetitorIntentConfiguration";
 
-const { Text } = Typography
 
 interface Pattern {
   id: string;
@@ -233,19 +232,21 @@ const ContentFilterManager: React.FC<ContentFilterManagerProps> = ({
   // Edit mode
   return (
     <>
-      <Divider orientation="left">Content Filter Configuration</Divider>
+      <div className="flex items-center my-4">
+        <span className="text-sm font-medium text-foreground mr-3">
+          Content Filter Configuration
+        </span>
+        <hr className="flex-1 border-border" />
+      </div>
       {hasUnsavedChanges && (
-        <Alert
-          type="warning"
-          showIcon
-          className="mb-4"
-          message={
-            <Text>
-              You have unsaved changes to patterns or keywords. Remember to click &quot;Save Changes&quot; at the
-              bottom.
-            </Text>
-          }
-        />
+        // eslint-disable-next-line litellm-ui/no-raw-tailwind-colors
+        <div className="flex gap-2 items-start p-3 mb-4 rounded-md bg-amber-50 border border-amber-200 text-amber-800 dark:bg-amber-950/30 dark:border-amber-900 dark:text-amber-200">
+          <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" />
+          <span className="text-sm">
+            You have unsaved changes to patterns or keywords. Remember to
+            click &quot;Save Changes&quot; at the bottom.
+          </span>
+        </div>
       )}
       <div className="mb-6">
         {guardrailSettings && guardrailSettings.content_filter_settings && (
