@@ -1,4 +1,5 @@
-import { RobotOutlined, UserOutlined } from "@ant-design/icons";
+import { Bot, User } from "lucide-react";
+import { cn } from "@/lib/utils";
 import React from "react";
 import ReactMarkdown from "react-markdown";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
@@ -41,32 +42,34 @@ function ChatMessageBubble({
   const isUser = message.role === "user";
 
   return (
-    <div className={`mb-4 ${isUser ? "text-right" : "text-left"}`}>
+    <div className={cn("mb-4", isUser ? "text-right" : "text-left")}>
       <div
-        className="inline-block max-w-[80%] rounded-lg shadow-sm p-3.5 px-4"
-        style={{
-          backgroundColor: isUser ? "#f0f8ff" : "#ffffff",
-          border: isUser ? "1px solid #e6f0fa" : "1px solid #f0f0f0",
-          textAlign: "left",
-        }}
+        className={cn(
+          "inline-block max-w-[80%] rounded-lg shadow-sm p-3.5 px-4 text-left border",
+          isUser
+            ? "bg-blue-50 dark:bg-blue-950/30 border-blue-100 dark:border-blue-900"
+            : "bg-background border-border",
+        )}
       >
         {/* Header: role icon + name + model badge */}
         <div className="flex items-center gap-2 mb-1.5">
           <div
-            className="flex items-center justify-center w-6 h-6 rounded-full mr-1"
-            style={{
-              backgroundColor: isUser ? "#e6f0fa" : "#f5f5f5",
-            }}
+            className={cn(
+              "flex items-center justify-center w-6 h-6 rounded-full mr-1",
+              isUser
+                ? "bg-blue-100 dark:bg-blue-950/60"
+                : "bg-muted",
+            )}
           >
             {isUser ? (
-              <UserOutlined style={{ fontSize: "12px", color: "#2563eb" }} />
+              <User className="h-3 w-3 text-blue-600 dark:text-blue-400" />
             ) : (
-              <RobotOutlined style={{ fontSize: "12px", color: "#4b5563" }} />
+              <Bot className="h-3 w-3 text-muted-foreground" />
             )}
           </div>
           <strong className="text-sm capitalize">{message.role}</strong>
           {message.role === "assistant" && message.model && (
-            <span className="text-xs px-2 py-0.5 rounded bg-gray-100 text-gray-600 font-normal">
+            <span className="text-xs px-2 py-0.5 rounded bg-muted text-muted-foreground font-normal">
               {message.model}
             </span>
           )}
@@ -114,10 +117,11 @@ function ChatMessageBubble({
           }}
         >
           {message.isImage ? (
+            // eslint-disable-next-line @next/next/no-img-element
             <img
               src={typeof message.content === "string" ? message.content : ""}
               alt="Generated image"
-              className="max-w-full rounded-md border border-gray-200 shadow-sm"
+              className="max-w-full rounded-md border border-border shadow-sm"
               style={{ maxHeight: "500px" }}
             />
           ) : message.isAudio ? (
@@ -143,6 +147,7 @@ function ChatMessageBubble({
                     const match = /language-(\w+)/.exec(className || "");
                     return !inline && match ? (
                       <SyntaxHighlighter
+                        // eslint-disable-next-line @typescript-eslint/no-explicit-any
                         style={coy as any}
                         language={match[1]}
                         PreTag="div"
@@ -155,16 +160,15 @@ function ChatMessageBubble({
                       </SyntaxHighlighter>
                     ) : (
                       <code
-                        className={`${className} px-1.5 py-0.5 rounded bg-gray-100 text-sm font-mono`}
-                        style={{ wordBreak: "break-word" }}
+                        className={`${className} px-1.5 py-0.5 rounded bg-muted text-sm font-mono break-words`}
                         {...props}
                       >
                         {children}
                       </code>
                     );
                   },
-                  pre: ({ node, ...props }) => (
-                    <pre style={{ overflowX: "auto", maxWidth: "100%" }} {...props} />
+                  pre: ({ ...props }) => (
+                    <pre className="overflow-x-auto max-w-full" {...props} />
                   ),
                 }}
               >
@@ -174,10 +178,11 @@ function ChatMessageBubble({
               {/* Generated image from chat completions */}
               {message.image && (
                 <div className="mt-3">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img
                     src={message.image.url}
                     alt="Generated image"
-                    className="max-w-full rounded-md border border-gray-200 shadow-sm"
+                    className="max-w-full rounded-md border border-border shadow-sm"
                     style={{ maxHeight: "500px" }}
                   />
                 </div>
