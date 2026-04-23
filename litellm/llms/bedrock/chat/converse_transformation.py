@@ -1442,11 +1442,12 @@ class AmazonConverseConfig(BaseConfig):
                     bedrock_tools.append({"cachePoint": {"type": "default"}})
                     break
 
+        # Always pop tool_choice — Bedrock Converse rejects it when toolConfig is absent.
+        tool_choice_values: ToolChoiceValuesBlock = inference_params.pop(
+            "tool_choice", None
+        )
         bedrock_tool_config: Optional[ToolConfigBlock] = None
         if len(bedrock_tools) > 0:
-            tool_choice_values: ToolChoiceValuesBlock = inference_params.pop(
-                "tool_choice", None
-            )
             bedrock_tool_config = ToolConfigBlock(
                 tools=bedrock_tools,
             )
