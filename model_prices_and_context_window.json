@@ -10397,6 +10397,22 @@
         "supports_reasoning": true,
         "supports_tool_choice": true
     },
+    "dashscope/qwen-image-2.0": {
+        "litellm_provider": "dashscope",
+        "mode": "image_generation",
+        "source": "https://www.alibabacloud.com/help/en/model-studio/models",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+    "dashscope/qwen-image-2.0-pro": {
+        "litellm_provider": "dashscope",
+        "mode": "image_generation",
+        "source": "https://www.alibabacloud.com/help/en/model-studio/models",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
     "databricks/databricks-bge-large-en": {
         "input_cost_per_token": 1.0003e-07,
         "input_dbu_cost_per_token": 1.429e-06,

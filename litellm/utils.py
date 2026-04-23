@@ -8952,6 +8952,12 @@ class ProviderConfigManager:
             )
 
             return get_openrouter_image_generation_config(model)
+        elif LlmProviders.DASHSCOPE == provider:
+            from litellm.llms.dashscope.image_generation import (
+                get_dashscope_image_generation_config,
+            )
+
+            return get_dashscope_image_generation_config(model)
         return None
 
     @staticmethod
