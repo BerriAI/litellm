@@ -15,6 +15,7 @@ import httpx
 
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.core_helpers import process_response_headers
+from litellm.llms.base_llm._url_utils import encode_path_segment
 from litellm.llms.base_llm.interactions.transformation import BaseInteractionsAPIConfig
 from litellm.llms.gemini.common_utils import GeminiError, GeminiModelInfo
 from litellm.types.interactions import (
@@ -206,7 +207,7 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
         if not GeminiModelInfo.get_api_key(litellm_params.api_key):
             raise ValueError("Google API key is required")
         return (
-            f"{resolved_api_base}/{self.api_version}/interactions/{interaction_id}",
+            f"{resolved_api_base}/{self.api_version}/interactions/{encode_path_segment(interaction_id)}",
             {},
         )
 
@@ -239,7 +240,7 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
         if not GeminiModelInfo.get_api_key(litellm_params.api_key):
             raise ValueError("Google API key is required")
         return (
-            f"{resolved_api_base}/{self.api_version}/interactions/{interaction_id}",
+            f"{resolved_api_base}/{self.api_version}/interactions/{encode_path_segment(interaction_id)}",
             {},
         )
 
@@ -269,7 +270,7 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
         if not GeminiModelInfo.get_api_key(litellm_params.api_key):
             raise ValueError("Google API key is required")
         return (
-            f"{resolved_api_base}/{self.api_version}/interactions/{interaction_id}:cancel",
+            f"{resolved_api_base}/{self.api_version}/interactions/{encode_path_segment(interaction_id)}:cancel",
             {},
         )
 

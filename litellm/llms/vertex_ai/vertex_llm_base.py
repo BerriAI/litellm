@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any, Dict, Literal, Optional, Tuple
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.asyncify import asyncify
+from litellm.llms.base_llm._url_utils import encode_path_segment, encode_url_path
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.vertex_ai import VERTEX_CREDENTIALS_TYPES, VertexPartnerProvider
@@ -273,23 +274,20 @@ class VertexBase:
 
         if api_base is None:
             api_base = get_vertex_base_url(vertex_location)
+        proj = encode_path_segment(vertex_project)
+        loc = encode_path_segment(vertex_location)
+        model_seg = encode_url_path(model)
         if partner == VertexPartnerProvider.llama:
-            return f"{api_base}/v1/projects/{vertex_project}/locations/{vertex_location}/endpoints/openapi/chat/completions"
+            return f"{api_base}/v1/projects/{proj}/locations/{loc}/endpoints/openapi/chat/completions"
         elif partner == VertexPartnerProvider.mistralai:
-            if stream:
-                return f"{api_base}/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/mistralai/models/{model}:streamRawPredict"
-            else:
-                return f"{api_base}/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/mistralai/models/{model}:rawPredict"
+            action = "streamRawPredict" if stream else "rawPredict"
+            return f"{api_base}/v1/projects/{proj}/locations/{loc}/publishers/mistralai/models/{model_seg}:{action}"
         elif partner == VertexPartnerProvider.ai21:
-            if stream:
-                return f"{api_base}/v1beta1/projects/{vertex_project}/locations/{vertex_location}/publishers/ai21/models/{model}:streamRawPredict"
-            else:
-                return f"{api_base}/v1beta1/projects/{vertex_project}/locations/{vertex_location}/publishers/ai21/models/{model}:rawPredict"
+            action = "streamRawPredict" if stream else "rawPredict"
+            return f"{api_base}/v1beta1/projects/{proj}/locations/{loc}/publishers/ai21/models/{model_seg}:{action}"
         elif partner == VertexPartnerProvider.claude:
-            if stream:
-                return f"{api_base}/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/anthropic/models/{model}:streamRawPredict"
-            else:
-                return f"{api_base}/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/anthropic/models/{model}:rawPredict"
+            action = "streamRawPredict" if stream else "rawPredict"
+            return f"{api_base}/v1/projects/{proj}/locations/{loc}/publishers/anthropic/models/{model_seg}:{action}"
 
     def get_complete_vertex_url(
         self,

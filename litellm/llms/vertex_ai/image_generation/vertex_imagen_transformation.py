@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING, Any, List, Optional
 import httpx
 
 import litellm
+from litellm.llms.base_llm._url_utils import encode_path_segment, encode_url_path
 from litellm.llms.base_llm.image_generation.transformation import (
     BaseImageGenerationConfig,
 )
@@ -148,7 +149,7 @@ class VertexAIImagenImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
 
         base_url = get_vertex_base_url(vertex_location)
 
-        return f"{base_url}/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model_name}:predict"
+        return f"{base_url}/v1/projects/{encode_path_segment(vertex_project)}/locations/{encode_path_segment(vertex_location)}/publishers/google/models/{encode_url_path(model_name)}:predict"
 
     def validate_environment(
         self,

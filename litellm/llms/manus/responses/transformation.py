@@ -9,6 +9,7 @@ from litellm.litellm_core_utils.core_helpers import process_response_headers
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
     _safe_convert_created_field,
 )
+from litellm.llms.base_llm._url_utils import encode_path_segment
 from litellm.llms.openai.common_utils import OpenAIError
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.secret_managers.main import get_secret_str
@@ -270,7 +271,7 @@ class ManusResponsesAPIConfig(OpenAIResponsesAPIConfig):
 
         Reference: https://open.manus.im/docs/openai-compatibility
         """
-        url = f"{api_base}/{response_id}"
+        url = f"{api_base}/{encode_path_segment(response_id)}"
         data: Dict = {}
         return url, data
 

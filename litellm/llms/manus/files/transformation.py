@@ -19,6 +19,7 @@ from openai.types.file_deleted import FileDeleted
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.prompt_templates.common_utils import extract_file_data
+from litellm.llms.base_llm._url_utils import encode_path_segment
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.files.transformation import (
     BaseFilesConfig,
@@ -306,7 +307,7 @@ class ManusFilesConfig(BaseFilesConfig):
             optional_params=optional_params,
             litellm_params=litellm_params,
         )
-        return f"{api_base}/{file_id}", {}
+        return f"{api_base}/{encode_path_segment(file_id)}", {}
 
     def transform_retrieve_file_response(
         self,
@@ -336,7 +337,7 @@ class ManusFilesConfig(BaseFilesConfig):
             optional_params=optional_params,
             litellm_params=litellm_params,
         )
-        return f"{api_base}/{file_id}", {}
+        return f"{api_base}/{encode_path_segment(file_id)}", {}
 
     def transform_delete_file_response(
         self,
@@ -422,7 +423,7 @@ class ManusFilesConfig(BaseFilesConfig):
             optional_params=optional_params,
             litellm_params=litellm_params,
         )
-        return f"{api_base}/{file_id}/content", {}
+        return f"{api_base}/{encode_path_segment(file_id)}/content", {}
 
     def transform_file_content_response(
         self,

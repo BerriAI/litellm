@@ -9,6 +9,7 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 from litellm.litellm_core_utils.prompt_templates.common_utils import unpack_defs
+from litellm.llms.base_llm._url_utils import encode_path_segment, encode_url_path
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo, BaseTokenCounter
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.llms.openai import AllMessageValues
@@ -275,11 +276,14 @@ def _get_embedding_url(
     endpoint = "embedContent" if uses_embed_content else "predict"
 
     base_url = get_vertex_base_url(vertex_location)
+    proj = encode_path_segment(vertex_project)
+    loc = encode_path_segment(vertex_location)
+    model_seg = encode_url_path(model)
 
     if model.isdigit():
-        url = f"{base_url}/{vertex_api_version}/projects/{vertex_project}/locations/{vertex_location}/endpoints/{model}:{endpoint}"
+        url = f"{base_url}/{vertex_api_version}/projects/{proj}/locations/{loc}/endpoints/{model_seg}:{endpoint}"
     else:
-        url = f"{base_url}/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model}:{endpoint}"
+        url = f"{base_url}/v1/projects/{proj}/locations/{loc}/publishers/google/models/{model_seg}:{endpoint}"
 
     return url, endpoint
 
@@ -297,6 +301,10 @@ def _get_vertex_url(
 
     model = litellm.VertexGeminiConfig.get_model_for_vertex_ai_url(model=model)
 
+    proj = encode_path_segment(vertex_project)
+    loc = encode_path_segment(vertex_location)
+    model_seg = encode_url_path(model)
+
     if mode == "chat":
         ### SET RUNTIME ENDPOINT ###
         endpoint = "generateContent"
@@ -310,10 +318,10 @@ def _get_vertex_url(
         # send to this url: url = f"{base_url}/{version}/projects/{vertex_project}/locations/{vertex_location}/endpoints/{model}:{endpoint}"
         if model.isdigit():
             # It's a fine-tuned Gemini model - use endpoints/ path
-            url = f"{base_url}/{vertex_api_version}/projects/{vertex_project}/locations/{vertex_location}/endpoints/{model}:{endpoint}"
+            url = f"{base_url}/{vertex_api_version}/projects/{proj}/locations/{loc}/endpoints/{model_seg}:{endpoint}"
         else:
             # Regular model - use publishers/google/models/ path
-            url = f"{base_url}/{vertex_api_version}/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model}:{endpoint}"
+            url = f"{base_url}/{vertex_api_version}/projects/{proj}/locations/{loc}/publishers/google/models/{model_seg}:{endpoint}"
 
         if stream is True:
             url += "?alt=sse"
@@ -329,14 +337,14 @@ def _get_vertex_url(
         base_url = get_vertex_base_url(vertex_location)
         if model.isdigit():
             # Numeric model -> custom endpoint
-            url = f"{base_url}/{vertex_api_version}/projects/{vertex_project}/locations/{vertex_location}/endpoints/{model}:{endpoint}"
+            url = f"{base_url}/{vertex_api_version}/projects/{proj}/locations/{loc}/endpoints/{model_seg}:{endpoint}"
         else:
             # Regular model -> publisher model
-            url = f"{base_url}/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model}:{endpoint}"
+            url = f"{base_url}/v1/projects/{proj}/locations/{loc}/publishers/google/models/{model_seg}:{endpoint}"
     elif mode == "count_tokens":
         endpoint = "countTokens"
         base_url = get_vertex_base_url(vertex_location)
-        url = f"{base_url}/{vertex_api_version}/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model}:{endpoint}"
+        url = f"{base_url}/{vertex_api_version}/projects/{proj}/locations/{loc}/publishers/google/models/{model_seg}:{endpoint}"
     if not url or not endpoint:
         raise ValueError(f"Unable to get vertex url/endpoint for mode: {mode}")
     return url, endpoint
@@ -357,7 +365,7 @@ def _get_gemini_url(
         VertexGeminiConfig,
     )
 
-    _gemini_model_name = "models/{}".format(model)
+    _gemini_model_name = "models/{}".format(encode_url_path(model))
     api_version = (
         "v1alpha" if VertexGeminiConfig._is_gemini_3_or_newer(model) else "v1beta"
     )

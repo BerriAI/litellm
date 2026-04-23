@@ -4,6 +4,7 @@ from typing import Literal, Optional, Union
 
 import httpx
 
+from litellm.llms.base_llm._url_utils import encode_url_path
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 
 HF_HUB_URL = "https://huggingface.co"
@@ -76,7 +77,7 @@ def _fetch_inference_provider_mapping(model: str) -> dict:
     if os.getenv("HUGGINGFACE_API_KEY"):
         headers["Authorization"] = f"Bearer {os.getenv('HUGGINGFACE_API_KEY')}"
 
-    path = f"{HF_HUB_URL}/api/models/{model}"
+    path = f"{HF_HUB_URL}/api/models/{encode_url_path(model)}"
     params = {"expand": ["inferenceProviderMapping"]}
 
     try:

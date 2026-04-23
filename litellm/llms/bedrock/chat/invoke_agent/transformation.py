@@ -15,6 +15,7 @@ from litellm._uuid import uuid
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     convert_content_list_to_str,
 )
+from litellm.llms.base_llm._url_utils import encode_path_segment
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.bedrock.common_utils import BedrockError
@@ -98,7 +99,7 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
         agent_id, agent_alias_id = self._get_agent_id_and_alias_id(model)
         session_id = self._get_session_id(optional_params)
 
-        endpoint_url = f"{endpoint_url}/agents/{agent_id}/agentAliases/{agent_alias_id}/sessions/{session_id}/text"
+        endpoint_url = f"{endpoint_url}/agents/{encode_path_segment(agent_id)}/agentAliases/{encode_path_segment(agent_alias_id)}/sessions/{encode_path_segment(session_id)}/text"
 
         return endpoint_url
 

@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union, cas
 import httpx
 from httpx import Headers, Response
 
+from litellm.llms.base_llm._url_utils import encode_path_segment
 from litellm.llms.base_llm.batches.transformation import BaseBatchesConfig
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.llms.openai import AllMessageValues, CreateBatchRequest
@@ -122,7 +123,7 @@ class AnthropicBatchesConfig(BaseBatchesConfig):
             Complete URL for Anthropic batch retrieval: {api_base}/v1/messages/batches/{batch_id}
         """
         api_base = api_base or self.anthropic_model_info.get_api_base(api_base)
-        return f"{api_base.rstrip('/')}/v1/messages/batches/{batch_id}"
+        return f"{api_base.rstrip('/')}/v1/messages/batches/{encode_path_segment(batch_id)}"
 
     def transform_retrieve_batch_request(
         self,

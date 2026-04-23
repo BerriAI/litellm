@@ -4,6 +4,7 @@ import httpx
 
 import litellm
 from litellm.llms.azure.common_utils import BaseAzureLLM
+from litellm.llms.base_llm._url_utils import encode_path_segment
 from litellm.llms.base_llm.vector_store.transformation import BaseVectorStoreConfig
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.vector_stores import (
@@ -139,7 +140,7 @@ class AzureAIVectorStoreConfig(BaseVectorStoreConfig, BaseAzureLLM):
 
         # Azure AI Search endpoint for search
         index_name = vector_store_id  # vector_store_id is the index name
-        url = f"{api_base}/indexes/{index_name}/docs/search?api-version=2024-07-01"
+        url = f"{api_base}/indexes/{encode_path_segment(index_name)}/docs/search?api-version=2024-07-01"
 
         # Build the request body for Azure AI Search with vector search
         request_body = {

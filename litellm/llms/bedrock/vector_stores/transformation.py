@@ -3,6 +3,7 @@ from urllib.parse import urlparse
 
 import httpx
 
+from litellm.llms.base_llm._url_utils import encode_path_segment
 from litellm.llms.base_llm.vector_store.transformation import BaseVectorStoreConfig
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.types.integrations.rag.bedrock_knowledgebase import (
@@ -206,7 +207,7 @@ class BedrockVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
         if isinstance(query, list):
             query = " ".join(query)
 
-        url = f"{api_base}/{vector_store_id}/retrieve"
+        url = f"{api_base}/{encode_path_segment(vector_store_id)}/retrieve"
 
         request_body: Dict[str, Any] = {
             "retrievalQuery": BedrockKBRetrievalQuery(text=query),

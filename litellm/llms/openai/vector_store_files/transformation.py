@@ -3,6 +3,7 @@ from typing import Any, Dict, Optional, Tuple, cast
 import httpx
 
 import litellm
+from litellm.llms.base_llm._url_utils import encode_path_segment
 from litellm.llms.base_llm.vector_store_files.transformation import (
     BaseVectorStoreFilesConfig,
 )
@@ -98,7 +99,7 @@ class OpenAIVectorStoreFilesConfig(BaseVectorStoreFilesConfig):
             or "https://api.openai.com/v1"
         )
         base_url = base_url.rstrip("/")
-        return f"{base_url}/vector_stores/{vector_store_id}/files"
+        return f"{base_url}/vector_stores/{encode_path_segment(vector_store_id)}/files"
 
     def transform_create_vector_store_file_request(
         self,
@@ -163,7 +164,7 @@ class OpenAIVectorStoreFilesConfig(BaseVectorStoreFilesConfig):
         file_id: str,
         api_base: str,
     ) -> Tuple[str, Dict[str, Any]]:
-        return f"{api_base}/{file_id}", {}
+        return f"{api_base}/{encode_path_segment(file_id)}", {}
 
     def transform_retrieve_vector_store_file_response(
         self,
@@ -186,7 +187,7 @@ class OpenAIVectorStoreFilesConfig(BaseVectorStoreFilesConfig):
         file_id: str,
         api_base: str,
     ) -> Tuple[str, Dict[str, Any]]:
-        return f"{api_base}/{file_id}/content", {}
+        return f"{api_base}/{encode_path_segment(file_id)}/content", {}
 
     def transform_retrieve_vector_store_file_content_response(
         self,
@@ -218,7 +219,7 @@ class OpenAIVectorStoreFilesConfig(BaseVectorStoreFilesConfig):
                 payload["attributes"] = filtered_attributes
             else:
                 payload.pop("attributes", None)
-        return f"{api_base}/{file_id}", payload
+        return f"{api_base}/{encode_path_segment(file_id)}", payload
 
     def transform_update_vector_store_file_response(
         self,
@@ -241,7 +242,7 @@ class OpenAIVectorStoreFilesConfig(BaseVectorStoreFilesConfig):
         file_id: str,
         api_base: str,
     ) -> Tuple[str, Dict[str, Any]]:
-        return f"{api_base}/{file_id}", {}
+        return f"{api_base}/{encode_path_segment(file_id)}", {}
 
     def transform_delete_vector_store_file_response(
         self,

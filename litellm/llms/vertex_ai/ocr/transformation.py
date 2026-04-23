@@ -9,6 +9,7 @@ from litellm.litellm_core_utils.prompt_templates.image_handling import (
     async_convert_url_to_base64,
     convert_url_to_base64,
 )
+from litellm.llms.base_llm._url_utils import encode_path_segment, encode_url_path
 from litellm.llms.base_llm.ocr.transformation import DocumentType, OCRRequestData
 from litellm.llms.mistral.ocr.transformation import MistralOCRConfig
 from litellm.llms.vertex_ai.common_utils import get_vertex_base_url
@@ -121,7 +122,7 @@ class VertexAIOCRConfig(MistralOCRConfig):
 
         # Vertex AI OCR endpoint format for Mistral publisher
         # Format: https://{region}-aiplatform.googleapis.com/v1/projects/{project}/locations/{region}/publishers/mistralai/models/{model}:rawPredict
-        return f"{api_base}/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/mistralai/models/{model}:rawPredict"
+        return f"{api_base}/v1/projects/{encode_path_segment(vertex_project)}/locations/{encode_path_segment(vertex_location)}/publishers/mistralai/models/{encode_url_path(model)}:rawPredict"
 
     def _convert_url_to_data_uri_sync(self, url: str) -> str:
         """

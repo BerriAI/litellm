@@ -3,6 +3,7 @@ from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple, Union
 import httpx
 
 import litellm
+from litellm.llms.base_llm._url_utils import encode_url_path
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.types.utils import LlmProviders
 
@@ -54,7 +55,7 @@ class GoogleAIStudioTokenCounter:
         Construct the URL for the Google Gen AI Studio countTokens endpoint.
         """
         base_url = api_base or "https://generativelanguage.googleapis.com"
-        return f"{base_url}/v1beta/models/{model}:countTokens"
+        return f"{base_url}/v1beta/models/{encode_url_path(model)}:countTokens"
 
     async def validate_environment(
         self,

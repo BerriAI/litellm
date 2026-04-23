@@ -6,6 +6,7 @@ from openai.types.responses import ResponseReasoningItem
 
 from litellm._logging import verbose_logger
 from litellm.llms.azure.common_utils import BaseAzureLLM
+from litellm.llms.base_llm._url_utils import encode_path_segment
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.types.llms.openai import *
 from litellm.types.responses.main import *
@@ -201,7 +202,7 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         # Insert the response_id at the end of the path component
         # Remove trailing slash if present to avoid double slashes
         path = parsed_url.path.rstrip("/")
-        new_path = f"{path}/{response_id}"
+        new_path = f"{path}/{encode_path_segment(response_id)}"
 
         # Reconstruct the URL with all original components but with the modified path
         constructed_url = urlunparse(
@@ -322,7 +323,7 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         # Insert the response_id and /cancel at the end of the path component
         # Remove trailing slash if present to avoid double slashes
         path = parsed_url.path.rstrip("/")
-        new_path = f"{path}/{response_id}/cancel"
+        new_path = f"{path}/{encode_path_segment(response_id)}/cancel"
 
         # Reconstruct the URL with all original components but with the modified path
         cancel_url = urlunparse(

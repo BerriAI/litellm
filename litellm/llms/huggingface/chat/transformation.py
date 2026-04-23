@@ -13,6 +13,7 @@ if TYPE_CHECKING:
 else:
     LoggingClass = Any
 
+from litellm.llms.base_llm._url_utils import encode_url_path
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
@@ -114,7 +115,7 @@ class HuggingFaceChatConfig(OpenAIGPTConfig):
             if "/" in remaining:
                 provider = first_part
                 if provider == "hf-inference":
-                    route = f"{provider}/models/{model}/v1/chat/completions"
+                    route = f"{provider}/models/{encode_url_path(model)}/v1/chat/completions"
                 elif provider == "novita":
                     route = f"{provider}/v3/openai/chat/completions"
                 elif provider == "fireworks-ai":

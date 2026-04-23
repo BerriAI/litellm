@@ -16,6 +16,7 @@ from litellm.constants import (
     RUNWAYML_DEFAULT_API_VERSION,
     RUNWAYML_POLLING_TIMEOUT,
 )
+from litellm.llms.base_llm._url_utils import encode_path_segment
 from litellm.llms.base_llm.text_to_speech.transformation import (
     BaseTextToSpeechConfig,
     TextToSpeechRequestData,
@@ -312,7 +313,7 @@ class RunwayMLTextToSpeechConfig(BaseTextToSpeechConfig):
 
         # Build task status URL
         api_base = api_base.rstrip("/")
-        task_url = f"{api_base}/v1/tasks/{task_id}"
+        task_url = f"{api_base}/v1/tasks/{encode_path_segment(task_id)}"
 
         verbose_logger.debug(f"Polling RunwayML TTS task: {task_url}")
 
@@ -360,7 +361,7 @@ class RunwayMLTextToSpeechConfig(BaseTextToSpeechConfig):
 
         # Build task status URL
         api_base = api_base.rstrip("/")
-        task_url = f"{api_base}/v1/tasks/{task_id}"
+        task_url = f"{api_base}/v1/tasks/{encode_path_segment(task_id)}"
 
         verbose_logger.debug(f"Polling RunwayML TTS task (async): {task_url}")
 

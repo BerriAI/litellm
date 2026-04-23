@@ -10,6 +10,7 @@ from litellm.litellm_core_utils.core_helpers import process_response_headers
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
     _safe_convert_created_field,
 )
+from litellm.llms.base_llm._url_utils import encode_path_segment
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import *
@@ -421,7 +422,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         OpenAI API expects the following request
         - DELETE /v1/responses/{response_id}
         """
-        url = f"{api_base}/{response_id}"
+        url = f"{api_base}/{encode_path_segment(response_id)}"
         data: Dict = {}
         return url, data
 
@@ -457,7 +458,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         OpenAI API expects the following request
         - GET /v1/responses/{response_id}
         """
-        url = f"{api_base}/{response_id}"
+        url = f"{api_base}/{encode_path_segment(response_id)}"
         data: Dict = {}
         return url, data
 
@@ -498,7 +499,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         limit: int = 20,
         order: Literal["asc", "desc"] = "desc",
     ) -> Tuple[str, Dict]:
-        url = f"{api_base}/{response_id}/input_items"
+        url = f"{api_base}/{encode_path_segment(response_id)}/input_items"
         params: Dict[str, Any] = {}
         if after is not None:
             params["after"] = after
@@ -540,7 +541,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         OpenAI API expects the following request
         - POST /v1/responses/{response_id}/cancel
         """
-        url = f"{api_base}/{response_id}/cancel"
+        url = f"{api_base}/{encode_path_segment(response_id)}/cancel"
         data: Dict = {}
         return url, data
 

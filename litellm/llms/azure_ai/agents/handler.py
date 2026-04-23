@@ -40,6 +40,7 @@ from litellm.llms.azure_ai.agents.transformation import (
     AzureAIAgentsConfig,
     AzureAIAgentsError,
 )
+from litellm.llms.base_llm._url_utils import encode_path_segment
 from litellm.types.utils import ModelResponse
 
 if TYPE_CHECKING:
@@ -75,20 +76,20 @@ class AzureAIAgentsHandler:
     def _build_messages_url(
         self, api_base: str, thread_id: str, api_version: str
     ) -> str:
-        return f"{api_base}/threads/{thread_id}/messages?api-version={api_version}"
+        return f"{api_base}/threads/{encode_path_segment(thread_id)}/messages?api-version={api_version}"
 
     def _build_runs_url(self, api_base: str, thread_id: str, api_version: str) -> str:
-        return f"{api_base}/threads/{thread_id}/runs?api-version={api_version}"
+        return f"{api_base}/threads/{encode_path_segment(thread_id)}/runs?api-version={api_version}"
 
     def _build_run_status_url(
         self, api_base: str, thread_id: str, run_id: str, api_version: str
     ) -> str:
-        return f"{api_base}/threads/{thread_id}/runs/{run_id}?api-version={api_version}"
+        return f"{api_base}/threads/{encode_path_segment(thread_id)}/runs/{encode_path_segment(run_id)}?api-version={api_version}"
 
     def _build_list_messages_url(
         self, api_base: str, thread_id: str, api_version: str
     ) -> str:
-        return f"{api_base}/threads/{thread_id}/messages?api-version={api_version}"
+        return f"{api_base}/threads/{encode_path_segment(thread_id)}/messages?api-version={api_version}"
 
     def _build_create_thread_and_run_url(self, api_base: str, api_version: str) -> str:
         """URL for the create-thread-and-run endpoint (supports streaming)."""

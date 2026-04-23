@@ -8,6 +8,7 @@ their respective publisher-specific count-tokens endpoints.
 
 from typing import Any, Dict, Optional
 
+from litellm.llms.base_llm._url_utils import encode_path_segment
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.llms.vertex_ai.common_utils import get_vertex_base_url
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
@@ -72,10 +73,7 @@ class VertexAIPartnerModelsTokenCounter(VertexBase):
 
         # Construct the count-tokens endpoint
         # Format: /v1/projects/{project}/locations/{location}/publishers/{publisher}/models/count-tokens:rawPredict
-        endpoint = (
-            f"{base_url}/v1/projects/{project_id}/locations/{vertex_location}/"
-            f"publishers/{publisher}/models/count-tokens:rawPredict"
-        )
+        endpoint = f"{base_url}/v1/projects/{encode_path_segment(project_id)}/locations/{encode_path_segment(vertex_location)}/publishers/{encode_path_segment(publisher)}/models/count-tokens:rawPredict"
 
         return endpoint
 

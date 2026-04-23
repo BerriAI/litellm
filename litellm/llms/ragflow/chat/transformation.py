@@ -13,6 +13,7 @@ Model name format:
 from typing import List, Optional, Tuple
 
 import litellm
+from litellm.llms.base_llm._url_utils import encode_path_segment
 from litellm.llms.openai.openai import OpenAIConfig
 from litellm.secret_managers.main import get_secret, get_secret_str
 from litellm.types.llms.openai import AllMessageValues
@@ -126,14 +127,11 @@ class RAGFlowConfig(OpenAIConfig):
             api_base = api_base[:-3]  # Remove /v1
 
         # Construct the RAGFlow-specific path
+        encoded_entity_id = encode_path_segment(entity_id)
         if endpoint_type == "chat":
-            path = f"/api/v1/chats_openai/{entity_id}/chat/completions"
+            path = f"/api/v1/chats_openai/{encoded_entity_id}/chat/completions"
         else:  # agent
-            path = f"/api/v1/agents_openai/{entity_id}/chat/completions"
-
-        # Ensure path starts with /
-        if not path.startswith("/"):
-            path = "/" + path
+            path = f"/api/v1/agents_openai/{encoded_entity_id}/chat/completions"
 
         return f"{api_base}{path}"
 

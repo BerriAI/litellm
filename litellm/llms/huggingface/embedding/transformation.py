@@ -15,6 +15,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     prompt_factory,
 )
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+from litellm.llms.base_llm._url_utils import encode_url_path
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
@@ -345,7 +346,9 @@ class HuggingFaceEmbeddingConfig(BaseConfig):
         elif "HUGGINGFACE_API_BASE" in os.environ:
             completion_url = os.getenv("HUGGINGFACE_API_BASE", "")
         else:
-            completion_url = f"https://api-inference.huggingface.co/models/{model}"
+            completion_url = (
+                f"https://api-inference.huggingface.co/models/{encode_url_path(model)}"
+            )
 
         return completion_url
 

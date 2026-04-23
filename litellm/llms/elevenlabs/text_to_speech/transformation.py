@@ -12,6 +12,7 @@ from httpx import Headers
 
 import litellm
 from litellm.types.utils import all_litellm_params
+from litellm.llms.base_llm._url_utils import encode_path_segment
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.text_to_speech.transformation import (
     BaseTextToSpeechConfig,
@@ -321,7 +322,7 @@ class ElevenLabsTextToSpeechConfig(BaseTextToSpeechConfig):
                 "ElevenLabs voice_id is required. Pass `voice` when calling `litellm.speech()`."
             )
 
-        url = f"{base_url}{self.TTS_ENDPOINT_PATH}/{voice_id}"
+        url = f"{base_url}{self.TTS_ENDPOINT_PATH}/{encode_path_segment(voice_id)}"
 
         query_params = litellm_params.get(self.ELEVENLABS_QUERY_PARAMS_KEY, {})
         if query_params:

@@ -8,6 +8,7 @@ to AWS Bedrock's CountTokens API format and vice versa.
 import re
 from typing import Any, Dict, List, Optional
 
+from litellm.llms.base_llm._url_utils import encode_path_segment
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.bedrock.common_utils import get_bedrock_base_model
 
@@ -207,7 +208,10 @@ class BedrockCountTokensConfig(BaseAWSLLM):
             aws_bedrock_runtime_endpoint=aws_bedrock_runtime_endpoint,
             aws_region_name=aws_region_name,
         )
-        endpoint = f"{base_url}/model/{model_id}/count-tokens"
+        # Bedrock model IDs use ':' for version (e.g. amazon.nova-pro-v1:0)
+        endpoint = (
+            f"{base_url}/model/{encode_path_segment(model_id, safe=':')}/count-tokens"
+        )
 
         return endpoint
 

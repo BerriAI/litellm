@@ -8,6 +8,7 @@ from openai import AsyncAzureOpenAI, AsyncOpenAI, AzureOpenAI, OpenAI
 import litellm
 from litellm._logging import verbose_logger
 from litellm.caching.caching import DualCache
+from litellm.llms.base_llm._url_utils import encode_path_segment
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.openai.common_utils import BaseOpenAILLM
 from litellm.secret_managers.get_azure_ad_token_provider import (
@@ -211,7 +212,7 @@ def get_azure_ad_token_from_oidc(
     client = litellm.module_level_client
 
     req_token = client.post(
-        f"{azure_authority_host}/{azure_tenant_id}/oauth2/v2.0/token",
+        f"{azure_authority_host}/{encode_path_segment(azure_tenant_id)}/oauth2/v2.0/token",
         data={
             "client_id": azure_client_id,
             "grant_type": "client_credentials",
