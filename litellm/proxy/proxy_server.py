@@ -7246,6 +7246,7 @@ async def chat_completion(  # noqa: PLR0915
             and user_api_key_dict.agent_id is not None
         ):
             data["metadata"]["agent_id"] = user_api_key_dict.agent_id
+
     base_llm_response_processor = ProxyBaseLLMRequestProcessing(data=data)
     try:
         result = await base_llm_response_processor.base_process_llm_request(
