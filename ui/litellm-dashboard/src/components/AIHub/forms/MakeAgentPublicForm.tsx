@@ -1,6 +1,15 @@
 import React, { useState, useEffect } from "react";
-import { Modal, Form, Steps, Button, Checkbox } from "antd";
-import { Text, Title, Badge } from "@tremor/react";
+import { Form, Steps } from "antd";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { cn } from "@/lib/utils";
 import { makeAgentsPublicCall } from "../../networking";
 import NotificationsManager from "../../molecules/notifications_manager";
 import { AgentHubData } from "@/components/AIHub/AgentHubTableColumns";
@@ -37,7 +46,9 @@ const MakeAgentPublicForm: React.FC<MakeAgentPublicFormProps> = ({
   const handleNext = () => {
     if (currentStep === 0) {
       if (selectedAgents.size === 0) {
-        NotificationsManager.fromBackend("Please select at least one agent to make public");
+        NotificationsManager.fromBackend(
+          "Please select at least one agent to make public",
+        );
         return;
       }
       setCurrentStep(1);
@@ -62,17 +73,17 @@ const MakeAgentPublicForm: React.FC<MakeAgentPublicFormProps> = ({
 
   const handleSelectAll = (checked: boolean) => {
     if (checked) {
-      const allAgentIds = agentHubData.map((agent) => agent.agent_id || agent.name);
+      const allAgentIds = agentHubData.map(
+        (agent) => agent.agent_id || agent.name,
+      );
       setSelectedAgents(new Set(allAgentIds));
     } else {
       setSelectedAgents(new Set());
     }
   };
 
-  // Initialize and preselect already public agents when modal opens
   useEffect(() => {
     if (visible && agentHubData.length > 0) {
-      // Preselect agents that are already public
       const alreadyPublicAgents = agentHubData
         .filter((agent) => agent.is_public === true)
         .map((agent) => agent.agent_id || agent.name);
@@ -83,23 +94,27 @@ const MakeAgentPublicForm: React.FC<MakeAgentPublicFormProps> = ({
 
   const handleSubmit = async () => {
     if (selectedAgents.size === 0) {
-      NotificationsManager.fromBackend("Please select at least one agent to make public");
+      NotificationsManager.fromBackend(
+        "Please select at least one agent to make public",
+      );
       return;
     }
 
     setLoading(true);
     try {
       const agentIdsToMakePublic = Array.from(selectedAgents);
-
-      // Make batch API call for all agents
       await makeAgentsPublicCall(accessToken, agentIdsToMakePublic);
 
-      NotificationsManager.success(`Successfully made ${agentIdsToMakePublic.length} agent(s) public!`);
+      NotificationsManager.success(
+        `Successfully made ${agentIdsToMakePublic.length} agent(s) public!`,
+      );
       handleClose();
       onSuccess();
     } catch (error) {
       console.error("Error making agents public:", error);
-      NotificationsManager.fromBackend("Failed to make agents public. Please try again.");
+      NotificationsManager.fromBackend(
+        "Failed to make agents public. Please try again.",
+      );
     } finally {
       setLoading(false);
     }
@@ -107,67 +122,91 @@ const MakeAgentPublicForm: React.FC<MakeAgentPublicFormProps> = ({
 
   const renderStep1Content = () => {
     const allAgentsSelected =
-      agentHubData.length > 0 && agentHubData.every((agent) => selectedAgents.has(agent.agent_id || agent.name));
+      agentHubData.length > 0 &&
+      agentHubData.every((agent) =>
+        selectedAgents.has(agent.agent_id || agent.name),
+      );
     const isIndeterminate = selectedAgents.size > 0 && !allAgentsSelected;
 
     return (
       <div className="space-y-4">
         <div className="flex items-center justify-between">
-          <Title>Select Agents to Make Public</Title>
-          <div className="flex items-center space-x-2">
+          <h3 className="text-lg font-semibold">Select Agents to Make Public</h3>
+          <label className="flex items-center gap-2 cursor-pointer">
             <Checkbox
-              checked={allAgentsSelected}
-              indeterminate={isIndeterminate}
-              onChange={(e) => handleSelectAll(e.target.checked)}
+              checked={
+                isIndeterminate
+                  ? "indeterminate"
+                  : allAgentsSelected
+                    ? true
+                    : false
+              }
+              onCheckedChange={(c) => handleSelectAll(c === true)}
               disabled={agentHubData.length === 0}
-            >
-              Select All {agentHubData.length > 0 && `(${agentHubData.length})`}
-            </Checkbox>
-          </div>
+            />
+            <span className="text-sm">
+              Select All{" "}
+              {agentHubData.length > 0 && `(${agentHubData.length})`}
+            </span>
+          </label>
         </div>
 
-        <Text className="text-sm text-gray-600">
-          Select the agents you want to be visible on the public model hub. Users will still require a valid Virtual Key
-          to use these agents.
-        </Text>
+        <p className="text-sm text-muted-foreground">
+          Select the agents you want to be visible on the public model hub.
+          Users will still require a valid Virtual Key to use these agents.
+        </p>
 
-        <div className="max-h-96 overflow-y-auto border rounded-lg p-4">
+        <div className="max-h-96 overflow-y-auto border border-border rounded-lg p-4">
           <div className="space-y-3">
             {agentHubData.length === 0 ? (
-              <div className="text-center py-8 text-gray-500">
-                <Text>No agents available.</Text>
+              <div className="text-center py-8 text-muted-foreground">
+                <p>No agents available.</p>
               </div>
             ) : (
               agentHubData.map((agent) => {
                 const agentId = agent.agent_id || agent.name;
                 return (
-                  <div key={agentId} className="flex items-center space-x-3 p-3 border rounded-lg hover:bg-gray-50">
+                  <label
+                    key={agentId}
+                    className={cn(
+                      "flex items-center space-x-3 p-3 border border-border rounded-lg hover:bg-muted cursor-pointer",
+                    )}
+                  >
                     <Checkbox
                       checked={selectedAgents.has(agentId)}
-                      onChange={(e) => handleAgentSelection(agentId, e.target.checked)}
+                      onCheckedChange={(c) =>
+                        handleAgentSelection(agentId, c === true)
+                      }
                     />
                     <div className="flex-1">
                       <div className="flex items-center space-x-2">
-                        <Text className="font-medium">{agent.name}</Text>
-                        <Badge color="blue" size="sm">
+                        <span className="font-medium">{agent.name}</span>
+                        <Badge className="text-xs bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300">
                           v{agent.version}
                         </Badge>
                       </div>
-                      <Text className="text-xs text-gray-600 mt-1">{agent.description}</Text>
+                      <p className="text-xs text-muted-foreground mt-1">
+                        {agent.description}
+                      </p>
                       {agent.skills && agent.skills.length > 0 && (
                         <div className="flex flex-wrap gap-1 mt-1">
                           {agent.skills.slice(0, 3).map((skill) => (
-                            <Badge key={skill.id} color="purple" size="xs">
+                            <Badge
+                              key={skill.id}
+                              className="text-[10px] bg-purple-100 text-purple-700 dark:bg-purple-950 dark:text-purple-300"
+                            >
                               {skill.name}
                             </Badge>
                           ))}
                           {agent.skills.length > 3 && (
-                            <Text className="text-xs text-gray-500">+{agent.skills.length - 3} more</Text>
+                            <span className="text-xs text-muted-foreground">
+                              +{agent.skills.length - 3} more
+                            </span>
                           )}
                         </div>
                       )}
                     </div>
-                  </div>
+                  </label>
                 );
               })
             )}
@@ -175,10 +214,11 @@ const MakeAgentPublicForm: React.FC<MakeAgentPublicFormProps> = ({
         </div>
 
         {selectedAgents.size > 0 && (
-          <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
-            <Text className="text-sm text-blue-800">
-              <strong>{selectedAgents.size}</strong> agent{selectedAgents.size !== 1 ? "s" : ""} selected
-            </Text>
+          <div className="bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-900 rounded-lg p-3">
+            <p className="text-sm text-blue-800 dark:text-blue-200">
+              <strong>{selectedAgents.size}</strong> agent
+              {selectedAgents.size !== 1 ? "s" : ""} selected
+            </p>
           </div>
         )}
       </div>
@@ -188,33 +228,45 @@ const MakeAgentPublicForm: React.FC<MakeAgentPublicFormProps> = ({
   const renderStep2Content = () => {
     return (
       <div className="space-y-4">
-        <Title>Confirm Making Agents Public</Title>
+        <h3 className="text-lg font-semibold">Confirm Making Agents Public</h3>
 
-        <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
-          <Text className="text-sm text-yellow-800">
-            <strong>Warning:</strong> Once you make these agents public, anyone who can go to the{" "}
-            <code>/ui/model_hub_table</code> will be able to know they exist on the proxy.
-          </Text>
+        <div className="bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-900 rounded-lg p-4">
+          <p className="text-sm text-amber-800 dark:text-amber-200">
+            <strong>Warning:</strong> Once you make these agents public, anyone
+            who can go to the <code>/ui/model_hub_table</code> will be able to
+            know they exist on the proxy.
+          </p>
         </div>
 
         <div className="space-y-3">
-          <Text className="font-medium">Agents to be made public:</Text>
-          <div className="max-h-48 overflow-y-auto border rounded-lg p-3">
+          <p className="font-medium">Agents to be made public:</p>
+          <div className="max-h-48 overflow-y-auto border border-border rounded-lg p-3">
             <div className="space-y-2">
               {Array.from(selectedAgents).map((agentId) => {
-                const agent = agentHubData.find((a) => (a.agent_id || a.name) === agentId);
+                const agent = agentHubData.find(
+                  (a) => (a.agent_id || a.name) === agentId,
+                );
                 return (
-                  <div key={agentId} className="flex items-center justify-between p-2 bg-gray-50 rounded">
+                  <div
+                    key={agentId}
+                    className="flex items-center justify-between p-2 bg-muted rounded"
+                  >
                     <div className="flex-1">
                       <div className="flex items-center space-x-2">
-                        <Text className="font-medium">{agent?.name || agentId}</Text>
+                        <span className="font-medium">
+                          {agent?.name || agentId}
+                        </span>
                         {agent && (
-                          <Badge color="blue" size="xs">
+                          <Badge className="text-[10px] bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300">
                             v{agent.version}
                           </Badge>
                         )}
                       </div>
-                      {agent?.description && <Text className="text-xs text-gray-600 mt-1">{agent.description}</Text>}
+                      {agent?.description && (
+                        <p className="text-xs text-muted-foreground mt-1">
+                          {agent.description}
+                        </p>
+                      )}
                     </div>
                   </div>
                 );
@@ -223,11 +275,11 @@ const MakeAgentPublicForm: React.FC<MakeAgentPublicFormProps> = ({
           </div>
         </div>
 
-        <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
-          <Text className="text-sm text-blue-800">
-            Total: <strong>{selectedAgents.size}</strong> agent{selectedAgents.size !== 1 ? "s" : ""} will be made
-            public
-          </Text>
+        <div className="bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-900 rounded-lg p-3">
+          <p className="text-sm text-blue-800 dark:text-blue-200">
+            Total: <strong>{selectedAgents.size}</strong> agent
+            {selectedAgents.size !== 1 ? "s" : ""} will be made public
+          </p>
         </div>
       </div>
     );
@@ -247,7 +299,10 @@ const MakeAgentPublicForm: React.FC<MakeAgentPublicFormProps> = ({
   const renderStepButtons = () => {
     return (
       <div className="flex justify-between mt-6">
-        <Button onClick={currentStep === 0 ? handleClose : handlePrevious}>
+        <Button
+          variant="outline"
+          onClick={currentStep === 0 ? handleClose : handlePrevious}
+        >
           {currentStep === 0 ? "Cancel" : "Previous"}
         </Button>
 
@@ -259,8 +314,8 @@ const MakeAgentPublicForm: React.FC<MakeAgentPublicFormProps> = ({
           )}
 
           {currentStep === 1 && (
-            <Button onClick={handleSubmit} loading={loading}>
-              Make Public
+            <Button onClick={handleSubmit} disabled={loading}>
+              {loading ? "Making Public..." : "Make Public"}
             </Button>
           )}
         </div>
@@ -269,24 +324,25 @@ const MakeAgentPublicForm: React.FC<MakeAgentPublicFormProps> = ({
   };
 
   return (
-    <Modal
-      title="Make Agents Public"
+    <Dialog
       open={visible}
-      onCancel={handleClose}
-      footer={null}
-      width={1200}
-      maskClosable={false}
+      onOpenChange={(o) => (!o ? handleClose() : undefined)}
     >
-      <Form form={form} layout="vertical">
-        <Steps current={currentStep} className="mb-6">
-          <Step title="Select Agents" />
-          <Step title="Confirm" />
-        </Steps>
+      <DialogContent className="max-w-[1200px]">
+        <DialogHeader>
+          <DialogTitle>Make Agents Public</DialogTitle>
+        </DialogHeader>
+        <Form form={form} layout="vertical">
+          <Steps current={currentStep} className="mb-6">
+            <Step title="Select Agents" />
+            <Step title="Confirm" />
+          </Steps>
 
-        {renderStepContent()}
-        {renderStepButtons()}
-      </Form>
-    </Modal>
+          {renderStepContent()}
+          {renderStepButtons()}
+        </Form>
+      </DialogContent>
+    </Dialog>
   );
 };
 
