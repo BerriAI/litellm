@@ -1,8 +1,14 @@
-import { Drawer, List, Skeleton, Tag, Typography } from "antd";
+import {
+  Sheet,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet";
+import { Badge } from "@/components/ui/badge";
+import { Skeleton } from "@/components/ui/skeleton";
+import { cn } from "@/lib/utils";
 import React, { useEffect, useState } from "react";
 import { getPromptVersions, PromptSpec } from "../../networking";
-
-const { Text } = Typography;
 
 interface VersionHistorySidePanelProps {
   isOpen: boolean;
@@ -25,33 +31,34 @@ const VersionHistorySidePanel: React.FC<VersionHistorySidePanelProps> = ({
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
+    const fetchVersions = async () => {
+      setLoading(true);
+      try {
+        const basePromptId = promptId.includes(".v")
+          ? promptId.split(".v")[0]
+          : promptId;
+        const response = await getPromptVersions(accessToken!, basePromptId);
+        setVersions(response.prompts);
+      } catch (error) {
+        console.error("Error fetching prompt versions:", error);
+      } finally {
+        setLoading(false);
+      }
+    };
+
     if (isOpen && accessToken && promptId) {
       fetchVersions();
     }
   }, [isOpen, accessToken, promptId]);
 
-  const fetchVersions = async () => {
-    setLoading(true);
-    try {
-      // Strip .v suffix if present to get base ID for querying all versions
-      const basePromptId = promptId.includes(".v") ? promptId.split(".v")[0] : promptId;
-      const response = await getPromptVersions(accessToken!, basePromptId);
-      setVersions(response.prompts);
-    } catch (error) {
-      console.error("Error fetching prompt versions:", error);
-    } finally {
-      setLoading(false);
-    }
-  };
-
   const getVersionNumber = (prompt: PromptSpec) => {
-    // Use explicit version field if available, otherwise try to extract from litellm_params.prompt_id
     if (prompt.version) {
       return `v${prompt.version}`;
     }
-    
-    // Fallback: try to extract from litellm_params.prompt_id
-    const versionedId = (prompt.litellm_params as any)?.prompt_id || prompt.prompt_id;
+
+    const versionedId =
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (prompt.litellm_params as any)?.prompt_id || prompt.prompt_id;
     if (versionedId.includes(".v")) {
       return `v${versionedId.split(".v")[1]}`;
     }
@@ -67,73 +74,95 @@ const VersionHistorySidePanel: React.FC<VersionHistorySidePanelProps> = ({
   };
 
   return (
-    <Drawer
-      title="Version History"
-      placement="right"
-      onClose={onClose}
+    <Sheet
       open={isOpen}
-      width={400}
-      mask={false} // Allow interacting with the main editor while drawer is open
-      maskClosable={false}
+      onOpenChange={(o) => (!o ? onClose() : undefined)}
+      modal={false}
     >
-      {loading ? (
-        <Skeleton active paragraph={{ rows: 4 }} />
-      ) : versions.length === 0 ? (
-        <div className="text-center py-8 text-gray-500">No version history available.</div>
-      ) : (
-        <List
-          dataSource={versions}
-          renderItem={(item, index) => {
-            // Use version field for comparison since all items have the same prompt_id
-            const itemVersionNum = item.version || parseInt(getVersionNumber(item).replace('v', ''));
-            
-            // Extract version number from activeVersionId (may have .vX suffix)
-            let activeVersionNum: number | null = null;
-            if (activeVersionId) {
-              if (activeVersionId.includes('.v')) {
-                activeVersionNum = parseInt(activeVersionId.split('.v')[1]);
-              } else if (activeVersionId.includes('_v')) {
-                activeVersionNum = parseInt(activeVersionId.split('_v')[1]);
-              }
-            }
-            
-            // Default to latest (first item) if no activeVersionId
-            const isSelected = activeVersionNum ? itemVersionNum === activeVersionNum : index === 0;
-            
-            return (
-              <div
-                key={`${item.prompt_id}-v${item.version || itemVersionNum}`}
-                className={`mb-4 p-4 rounded-lg border cursor-pointer transition-all hover:shadow-md ${
-                  isSelected ? "border-blue-500 bg-blue-50" : "border-gray-200 bg-white hover:border-blue-300"
-                }`}
-                onClick={() => onSelectVersion?.(item)}
-              >
-                <div className="flex justify-between items-start mb-2">
-                  <div className="flex items-center gap-2">
-                    <Tag className="m-0">
-                      {getVersionNumber(item)}
-                    </Tag>
-                    {index === 0 && <Tag color="blue" className="m-0">Latest</Tag>}
-                  </div>
-                  {isSelected && (
-                    <Tag color="green" className="m-0">
-                      Active
-                    </Tag>
-                  )}
-                </div>
+      <SheetContent
+        side="right"
+        className="w-[400px] sm:max-w-[400px]"
+        onInteractOutside={(e) => e.preventDefault()}
+      >
+        <SheetHeader>
+          <SheetTitle>Version History</SheetTitle>
+        </SheetHeader>
+        {loading ? (
+          <div className="space-y-3 mt-4">
+            {[1, 2, 3, 4].map((i) => (
+              <Skeleton key={i} className="h-16 w-full" />
+            ))}
+          </div>
+        ) : versions.length === 0 ? (
+          <div className="text-center py-8 text-muted-foreground">
+            No version history available.
+          </div>
+        ) : (
+          <div className="mt-4 overflow-y-auto">
+            {versions.map((item, index) => {
+              const itemVersionNum =
+                item.version ||
+                parseInt(getVersionNumber(item).replace("v", ""));
 
-                <div className="flex flex-col gap-1">
-                  <Text className="text-sm text-gray-600 font-medium">{formatDate(item.created_at)}</Text>
-                  <Text type="secondary" className="text-xs">
-                    {item.prompt_info?.prompt_type === "db" ? "Saved to Database" : "Config Prompt"}
-                  </Text>
+              let activeVersionNum: number | null = null;
+              if (activeVersionId) {
+                if (activeVersionId.includes(".v")) {
+                  activeVersionNum = parseInt(activeVersionId.split(".v")[1]);
+                } else if (activeVersionId.includes("_v")) {
+                  activeVersionNum = parseInt(activeVersionId.split("_v")[1]);
+                }
+              }
+
+              const isSelected = activeVersionNum
+                ? itemVersionNum === activeVersionNum
+                : index === 0;
+
+              return (
+                <div
+                  key={`${item.prompt_id}-v${item.version || itemVersionNum}`}
+                  className={cn(
+                    "mb-4 p-4 rounded-lg border cursor-pointer transition-all hover:shadow-md",
+                    isSelected
+                      ? "border-primary bg-primary/10"
+                      : "border-border bg-background hover:border-primary/50",
+                  )}
+                  onClick={() => onSelectVersion?.(item)}
+                >
+                  <div className="flex justify-between items-start mb-2">
+                    <div className="flex items-center gap-2">
+                      <Badge variant="outline" className="m-0">
+                        {getVersionNumber(item)}
+                      </Badge>
+                      {index === 0 && (
+                        <Badge className="m-0 bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300">
+                          Latest
+                        </Badge>
+                      )}
+                    </div>
+                    {isSelected && (
+                      <Badge className="m-0 bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300">
+                        Active
+                      </Badge>
+                    )}
+                  </div>
+
+                  <div className="flex flex-col gap-1">
+                    <span className="text-sm text-muted-foreground font-medium">
+                      {formatDate(item.created_at)}
+                    </span>
+                    <span className="text-xs text-muted-foreground">
+                      {item.prompt_info?.prompt_type === "db"
+                        ? "Saved to Database"
+                        : "Config Prompt"}
+                    </span>
+                  </div>
                 </div>
-              </div>
-            );
-          }}
-        />
-      )}
-    </Drawer>
+              );
+            })}
+          </div>
+        )}
+      </SheetContent>
+    </Sheet>
   );
 };
 

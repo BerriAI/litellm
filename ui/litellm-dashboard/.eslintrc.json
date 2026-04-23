@@ -59,6 +59,7 @@
         "src/components/guardrails/content_filter/PatternTable.tsx",
         "src/components/guardrails/content_filter/ContentFilterDisplay.tsx",
         "src/components/prompts/prompt_editor_view/PromptEditorHeader.tsx",
+        "src/components/prompts/prompt_editor_view/VersionHistorySidePanel.tsx",
         "src/app/(dashboard)/teams/components/TeamsTable/ModelsCell.tsx",
         "src/components/prompts/prompt_editor_view/conversation_panel/MessageBubble.tsx",
         "src/components/playground/chat_ui/SessionManagement.tsx",
