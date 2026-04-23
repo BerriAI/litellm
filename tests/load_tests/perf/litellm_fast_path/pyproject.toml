@@ -1,0 +1,17 @@
+[build-system]
+requires = ["maturin>=1.0,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "litellm_fast_path"
+version = "0.1.0"
+description = "Rust fast-path extension for the LiteLLM proxy hot path"
+requires-python = ">=3.8"
+classifiers = [
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: Implementation :: CPython",
+]
+
+[tool.maturin]
+bindings = "pyo3"
+features = ["pyo3/extension-module"]

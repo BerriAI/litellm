@@ -1,0 +1,5 @@
+model_list:
+  - model_name: fake-gpt
+    litellm_params:
+      model: gpt-3.5-turbo
+      mock_response: "hello this is a mock response"
