@@ -1,7 +1,15 @@
 import React from "react";
-import { Form, Input, InputNumber, Select, Tooltip } from "antd";
-import { InfoCircleOutlined } from "@ant-design/icons";
-import { Button, TextInput } from "@tremor/react";
+import { Form, InputNumber, Select } from "antd";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import { Info } from "lucide-react";
 import { OAUTH_FLOW } from "./types";
 
 interface OAuthFlowStatus {
@@ -20,14 +28,22 @@ interface OAuthFormFieldsProps {
   docsUrl?: string | null;
 }
 
-const fieldClassName = "rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500";
+const fieldClassName = "rounded-lg";
 
-const FieldLabel: React.FC<{ label: string; tooltip: string }> = ({ label, tooltip }) => (
-  <span className="text-sm font-medium text-gray-700 flex items-center">
+const FieldLabel: React.FC<{ label: string; tooltip: string }> = ({
+  label,
+  tooltip,
+}) => (
+  <span className="text-sm font-medium text-foreground flex items-center">
     {label}
-    <Tooltip title={tooltip}>
-      <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
-    </Tooltip>
+    <TooltipProvider>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Info className="ml-2 h-3 w-3 text-primary cursor-help" />
+        </TooltipTrigger>
+        <TooltipContent className="max-w-xs">{tooltip}</TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
   </span>
 );
 
@@ -56,13 +72,17 @@ const OAuthFormFields: React.FC<OAuthFormFieldsProps> = ({
           <Select.Option value={OAUTH_FLOW.M2M}>
             <div>
               <span className="font-medium">Machine-to-Machine (M2M)</span>
-              <span className="text-gray-400 text-xs ml-2">server-to-server, no user interaction</span>
+              <span className="text-muted-foreground text-xs ml-2">
+                server-to-server, no user interaction
+              </span>
             </div>
           </Select.Option>
           <Select.Option value={OAUTH_FLOW.INTERACTIVE}>
             <div>
               <span className="font-medium">Interactive (PKCE)</span>
-              <span className="text-gray-400 text-xs ml-2">browser-based user authorization</span>
+              <span className="text-muted-foreground text-xs ml-2">
+                browser-based user authorization
+              </span>
             </div>
           </Select.Option>
         </Select>
@@ -73,23 +93,53 @@ const OAuthFormFields: React.FC<OAuthFormFieldsProps> = ({
           <Form.Item
             label={<FieldLabel label="Client ID" tooltip="OAuth2 client ID for the client_credentials grant." />}
             name={["credentials", "client_id"]}
-            rules={[{ required: true, message: "Client ID is required for M2M OAuth" }]}
+            rules={[
+              { required: true, message: "Client ID is required for M2M OAuth" },
+            ]}
           >
-            <TextInput type="password" placeholder={`Enter OAuth client ID${placeholderSuffix}`} className={fieldClassName} />
+            <Input
+              type="password"
+              placeholder={`Enter OAuth client ID${placeholderSuffix}`}
+              className={fieldClassName}
+            />
           </Form.Item>
           <Form.Item
-            label={<FieldLabel label="Client Secret" tooltip="OAuth2 client secret for the client_credentials grant." />}
+            label={
+              <FieldLabel
+                label="Client Secret"
+                tooltip="OAuth2 client secret for the client_credentials grant."
+              />
+            }
             name={["credentials", "client_secret"]}
-            rules={[{ required: true, message: "Client Secret is required for M2M OAuth" }]}
+            rules={[
+              {
+                required: true,
+                message: "Client Secret is required for M2M OAuth",
+              },
+            ]}
           >
-            <TextInput type="password" placeholder={`Enter OAuth client secret${placeholderSuffix}`} className={fieldClassName} />
+            <Input
+              type="password"
+              placeholder={`Enter OAuth client secret${placeholderSuffix}`}
+              className={fieldClassName}
+            />
           </Form.Item>
           <Form.Item
-            label={<FieldLabel label="Token URL" tooltip="Token endpoint URL for the client_credentials grant." />}
+            label={
+              <FieldLabel
+                label="Token URL"
+                tooltip="Token endpoint URL for the client_credentials grant."
+              />
+            }
             name="token_url"
-            rules={[{ required: true, message: "Token URL is required for M2M OAuth" }]}
+            rules={[
+              { required: true, message: "Token URL is required for M2M OAuth" },
+            ]}
           >
-            <TextInput placeholder="https://auth.example.com/oauth/token" className={fieldClassName} />
+            <Input
+              placeholder="https://auth.example.com/oauth/token"
+              className={fieldClassName}
+            />
           </Form.Item>
           <Form.Item
             label={<FieldLabel label="Scopes (optional)" tooltip="Optional scopes to request with the client_credentials grant." />}
@@ -109,7 +159,7 @@ const OAuthFormFields: React.FC<OAuthFormFieldsProps> = ({
                     href={docsUrl}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="text-xs text-blue-500 hover:text-blue-700 ml-2 font-normal"
+                    className="text-xs text-primary hover:text-primary/80 ml-2 font-normal"
                     onClick={(e) => e.stopPropagation()}
                   >
                     Create OAuth App →
@@ -119,13 +169,26 @@ const OAuthFormFields: React.FC<OAuthFormFieldsProps> = ({
             }
             name={["credentials", "client_id"]}
           >
-            <TextInput type="password" placeholder={`Enter client ID${placeholderSuffix}`} className={fieldClassName} />
+            <Input
+              type="password"
+              placeholder={`Enter client ID${placeholderSuffix}`}
+              className={fieldClassName}
+            />
           </Form.Item>
           <Form.Item
-            label={<FieldLabel label="Client Secret (optional)" tooltip="Provide only if your MCP server cannot handle dynamic client registration." />}
+            label={
+              <FieldLabel
+                label="Client Secret (optional)"
+                tooltip="Provide only if your MCP server cannot handle dynamic client registration."
+              />
+            }
             name={["credentials", "client_secret"]}
           >
-            <TextInput type="password" placeholder={`Enter client secret${placeholderSuffix}`} className={fieldClassName} />
+            <Input
+              type="password"
+              placeholder={`Enter client secret${placeholderSuffix}`}
+              className={fieldClassName}
+            />
           </Form.Item>
           <Form.Item
             label={<FieldLabel label="Scopes (optional)" tooltip="Optional scopes requested during token exchange. Separate multiple scopes with enter or commas." />}
@@ -134,22 +197,46 @@ const OAuthFormFields: React.FC<OAuthFormFieldsProps> = ({
             <Select mode="tags" tokenSeparators={[","]} placeholder="Add scopes" className="rounded-lg" size="large" />
           </Form.Item>
           <Form.Item
-            label={<FieldLabel label="Authorization URL (optional)" tooltip="Optional override for the authorization endpoint." />}
+            label={
+              <FieldLabel
+                label="Authorization URL (optional)"
+                tooltip="Optional override for the authorization endpoint."
+              />
+            }
             name="authorization_url"
           >
-            <TextInput placeholder="https://example.com/oauth/authorize" className={fieldClassName} />
+            <Input
+              placeholder="https://example.com/oauth/authorize"
+              className={fieldClassName}
+            />
           </Form.Item>
           <Form.Item
-            label={<FieldLabel label="Token URL (optional)" tooltip="Optional override for the token endpoint." />}
+            label={
+              <FieldLabel
+                label="Token URL (optional)"
+                tooltip="Optional override for the token endpoint."
+              />
+            }
             name="token_url"
           >
-            <TextInput placeholder="https://example.com/oauth/token" className={fieldClassName} />
+            <Input
+              placeholder="https://example.com/oauth/token"
+              className={fieldClassName}
+            />
           </Form.Item>
           <Form.Item
-            label={<FieldLabel label="Registration URL (optional)" tooltip="Optional override for the dynamic client registration endpoint." />}
+            label={
+              <FieldLabel
+                label="Registration URL (optional)"
+                tooltip="Optional override for the dynamic client registration endpoint."
+              />
+            }
             name="registration_url"
           >
-            <TextInput placeholder="https://example.com/oauth/register" className={fieldClassName} />
+            <Input
+              placeholder="https://example.com/oauth/register"
+              className={fieldClassName}
+            />
           </Form.Item>
           <Form.Item
             label={
@@ -161,6 +248,7 @@ const OAuthFormFields: React.FC<OAuthFormFieldsProps> = ({
             name="token_validation_json"
             rules={[
               {
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
                 validator: (_: any, value: string) => {
                   if (!value || value.trim() === "") return Promise.resolve();
                   try {
@@ -173,10 +261,12 @@ const OAuthFormFields: React.FC<OAuthFormFieldsProps> = ({
               },
             ]}
           >
-            <Input.TextArea
-              placeholder={'{\n  "organization": "my-org",\n  "team.id": "123"\n}'}
+            <Textarea
+              placeholder={
+                '{\n  "organization": "my-org",\n  "team.id": "123"\n}'
+              }
               rows={4}
-              className="font-mono text-sm rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
+              className="font-mono text-sm rounded-lg"
             />
           </Form.Item>
           <Form.Item
@@ -196,14 +286,19 @@ const OAuthFormFields: React.FC<OAuthFormFieldsProps> = ({
             />
           </Form.Item>
           {oauthFlow && (
-            <div className="rounded-lg border border-dashed border-gray-300 p-4 space-y-2">
-              <p className="text-sm text-gray-600">
-                Use OAuth to fetch a fresh access token and temporarily save it in the session as the authentication value.
+            <div className="rounded-lg border border-dashed border-border p-4 space-y-2">
+              <p className="text-sm text-muted-foreground">
+                Use OAuth to fetch a fresh access token and temporarily save it
+                in the session as the authentication value.
               </p>
               <Button
+                type="button"
                 variant="secondary"
                 onClick={oauthFlow.startOAuthFlow}
-                disabled={oauthFlow.status === "authorizing" || oauthFlow.status === "exchanging"}
+                disabled={
+                  oauthFlow.status === "authorizing" ||
+                  oauthFlow.status === "exchanging"
+                }
               >
                 {oauthFlow.status === "authorizing"
                   ? "Waiting for authorization..."
@@ -211,12 +306,16 @@ const OAuthFormFields: React.FC<OAuthFormFieldsProps> = ({
                     ? "Exchanging authorization code..."
                     : "Authorize & Fetch Token"}
               </Button>
-              {oauthFlow.error && <p className="text-sm text-red-500">{oauthFlow.error}</p>}
-              {oauthFlow.status === "success" && oauthFlow.tokenResponse?.access_token && (
-                <p className="text-sm text-green-600">
-                  Token fetched. Expires in {oauthFlow.tokenResponse.expires_in ?? "?"} seconds.
-                </p>
+              {oauthFlow.error && (
+                <p className="text-sm text-destructive">{oauthFlow.error}</p>
               )}
+              {oauthFlow.status === "success" &&
+                oauthFlow.tokenResponse?.access_token && (
+                  <p className="text-sm text-emerald-600">
+                    Token fetched. Expires in{" "}
+                    {oauthFlow.tokenResponse.expires_in ?? "?"} seconds.
+                  </p>
+                )}
             </div>
           )}
         </>
