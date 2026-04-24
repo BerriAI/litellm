@@ -1,9 +1,17 @@
 name: Build and push ECR image
 
 on:
-  # Auto-build on every merge to main so the tag matches the shipping SHA
+  # Auto-build only when image content changes — docs/tests/CI don't affect the image
   push:
     branches: [main]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - 'tests/**'
+      - '.github/**'
+      - '.circleci/**'
+      - 'cookbook/**'
+      - 'ui/**/*.test.*'
   # Manual trigger for re-runs or emergency rebuilds
   workflow_dispatch:
     inputs:
