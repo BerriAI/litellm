@@ -22,6 +22,54 @@ from litellm.proxy.common_utils.openai_endpoint_utils import (
 from litellm.responses.utils import ResponsesAPIRequestUtils
 
 
+def _decode_container_routing_metadata(
+    container_id: str,
+    custom_llm_provider: str,
+) -> tuple[str, str, Any]:
+    """
+    Decode managed container IDs into original ID + routing metadata.
+    """
+    decoded = ResponsesAPIRequestUtils._decode_container_id(container_id)
+    original_container_id = decoded.get("response_id", container_id)
+    decoded_provider = decoded.get("custom_llm_provider")
+    decoded_model_id = decoded.get("model_id")
+
+    if decoded_provider and custom_llm_provider == "openai":
+        custom_llm_provider = decoded_provider
+
+    return original_container_id, custom_llm_provider, decoded_model_id
+
+
+def _get_deployment_credentials_for_model_id(model_id: Any) -> Dict[str, Any]:
+    """
+    Fetch router deployment credentials for a decoded model_id when available.
+    """
+    if not model_id:
+        return {}
+
+    from litellm.proxy.proxy_server import llm_router
+
+    if llm_router is None:
+        return {}
+
+    deployment_creds = llm_router.get_deployment_credentials(model_id=model_id)
+    if deployment_creds:
+        return deployment_creds
+
+    # Fallback: some ids may map via model group name instead of explicit model id.
+    deployment = llm_router.get_deployment_by_model_group_name(
+        model_group_name=str(model_id)
+    )
+    if deployment and deployment.litellm_params:
+        return deployment.litellm_params.model_dump(exclude_none=True)
+
+    # Final fallback: lookup helper that supports provider-aware resolution.
+    deployment_creds = llm_router.get_deployment_credentials_with_provider(
+        model_id=str(model_id)
+    )
+    return deployment_creds or {}
+
+
 def _load_endpoints_config() -> Dict:
     """Load the endpoints configuration from JSON file."""
     config_path = Path(__file__).parent.parent.parent / "containers" / "endpoints.json"
@@ -176,14 +224,28 @@ async def _process_binary_request(
     # Build litellm_params - credentials are resolved by provider config from env
     litellm_params = GenericLiteLLMParams()
 
-    # Decode container ID and extract provider info
-    decoded = ResponsesAPIRequestUtils._decode_container_id(container_id)
-    original_container_id = decoded.get("response_id", container_id)
+    (
+        original_container_id,
+        custom_llm_provider,
+        decoded_model_id,
+    ) = _decode_container_routing_metadata(
+        container_id=container_id,
+        custom_llm_provider=custom_llm_provider,
+    )
 
-    # If container ID has encoded provider info and user didn't explicitly set provider, use it
-    decoded_provider = decoded.get("custom_llm_provider")
-    if decoded_provider and custom_llm_provider == "openai":
-        custom_llm_provider = decoded_provider
+    if decoded_model_id and not litellm_params.get("model_id"):
+        litellm_params["model_id"] = decoded_model_id
+
+    # Resolve provider credentials for routed deployment, e.g. Azure multi-region api_base.
+    deployment_creds = _get_deployment_credentials_for_model_id(
+        model_id=decoded_model_id
+    )
+    if deployment_creds.get("api_base"):
+        litellm_params["api_base"] = deployment_creds["api_base"]
+    if deployment_creds.get("api_key"):
+        litellm_params["api_key"] = deployment_creds["api_key"]
+    if deployment_creds.get("api_version"):
+        litellm_params["api_version"] = deployment_creds["api_version"]
 
     # Get the provider config
     container_provider_config = _get_container_provider_config(custom_llm_provider)
@@ -284,17 +346,19 @@ async def _process_multipart_upload_request(
         or "openai"
     )
 
-    # Decode container ID and extract provider info
-    decoded = ResponsesAPIRequestUtils._decode_container_id(container_id)
-    original_container_id = decoded.get("response_id", container_id)
-
-    # If container ID has encoded provider info and user didn't explicitly set provider, use it
-    decoded_provider = decoded.get("custom_llm_provider")
-    if decoded_provider and custom_llm_provider == "openai":
-        custom_llm_provider = decoded_provider
+    (
+        original_container_id,
+        custom_llm_provider,
+        decoded_model_id,
+    ) = _decode_container_routing_metadata(
+        container_id=container_id,
+        custom_llm_provider=custom_llm_provider,
+    )
 
     data["container_id"] = original_container_id  # Use decoded original ID
     data["custom_llm_provider"] = custom_llm_provider
+    if decoded_model_id:
+        data["model_id"] = decoded_model_id
 
     processor = ProxyBaseLLMRequestProcessing(data=data)
     try:
@@ -361,18 +425,19 @@ async def _process_request(
 
     # Decode container_id if present in path_params
     if "container_id" in path_params:
-        decoded = ResponsesAPIRequestUtils._decode_container_id(
-            path_params["container_id"]
+        (
+            original_container_id,
+            custom_llm_provider,
+            decoded_model_id,
+        ) = _decode_container_routing_metadata(
+            container_id=path_params["container_id"],
+            custom_llm_provider=custom_llm_provider,
         )
-        original_container_id = decoded.get("response_id", path_params["container_id"])
-
-        # If container ID has encoded provider info and user didn't explicitly set provider, use it
-        decoded_provider = decoded.get("custom_llm_provider")
-        if decoded_provider and custom_llm_provider == "openai":
-            custom_llm_provider = decoded_provider
 
         # Update path_params with decoded original ID
         data["container_id"] = original_container_id
+        if decoded_model_id:
+            data["model_id"] = decoded_model_id
 
     data["custom_llm_provider"] = custom_llm_provider
 
