@@ -5151,6 +5151,9 @@ async def test_update_team_guardrails_with_org_id():
             return_value=mock_updated_team
         )
         mock_prisma.jsonify_team_object = MagicMock(side_effect=lambda db_data: db_data)
+        # async_get_cache must be an AsyncMock so `await` in get_org_object works
+        mock_cache.async_get_cache = AsyncMock(return_value=None)
+        mock_cache.async_set_cache = AsyncMock()
 
         # Mock llm_router
         mock_router = MagicMock()
