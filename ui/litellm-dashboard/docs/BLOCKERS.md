@@ -106,9 +106,21 @@ stay on antd for phase 1 and will be addressed in a targeted follow-up.
   prop for `setFieldsValue`/`resetFields`. Tightly coupled to the parent
   antd Form. Defer with parents.
 - `src/components/mcp_tools/MCPPermissionManagement.tsx`: uses
-  `Form.useFormInstance()` + `Form.List` for dynamic static-headers plus
-  several `Form.Item` fields (`allow_all_keys`, `available_on_public_internet`,
-  `mcp_access_groups`, `extra_headers`). Directly writes to the parent's
-  antd Form via `form.setFieldValue`. `MCPPermissionManagement.test.tsx`
-  wraps it in an antd `<Form form={form}>` harness.  Cannot migrate
-  independently of the parent forms. Defer with parents.
+ `Form.useFormInstance()` + `Form.List` for dynamic static-headers plus
+ several `Form.Item` fields (`allow_all_keys`, `available_on_public_internet`,
+ `mcp_access_groups`, `extra_headers`). Directly writes to the parent's
+ antd Form via `form.setFieldValue`. `MCPPermissionManagement.test.tsx`
+ wraps it in an antd `<Form form={form}>` harness.  Cannot migrate
+ independently of the parent forms. Defer with parents.
+- `src/components/playground/chat_ui/ChatUI.tsx` (2239 LoC): chrome-only
+ migration blocked by deeply-coupled antd `Select.OptGroup` + `optionLabelProp`
+ + `maxTagCount="responsive"` + custom `filterOption` on the MCP servers
+ multi-select (with "__all__" sentinel, toolset/server option groups, and per-
+ option custom JSX rendering). The direct-tool / arg selectors inside the MCP
+ tool picker use the same pattern. shadcn `<Select>` has no `OptGroup` and no
+ searchable multi-select primitive; a faithful rewrite needs a custom
+ `Command`+`Popover` combobox plus a chip display, in tandem with the "__all__"
+ sentinel handling. Migrating the surrounding chrome (Modal, Popover, Tooltip,
+ Spin, Button, TextArea, Dragger) alone would leave the file in an
+ inconsistent half-migrated state and exceeds the 2-attempt budget. Defer until
+ a reusable searchable-multi-select-with-groups primitive exists.

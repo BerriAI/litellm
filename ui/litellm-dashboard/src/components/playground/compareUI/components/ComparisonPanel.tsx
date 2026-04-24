@@ -6,8 +6,8 @@ import { UnifiedSelector } from "./UnifiedSelector";
 import TagSelector from "../../../tag_management/TagSelector";
 import VectorStoreSelector from "../../../vector_store_management/VectorStoreSelector";
 import GuardrailSelector from "../../../guardrails/GuardrailSelector";
-import { Slider as AntSlider } from "antd";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Slider } from "@/components/ui/slider";
 import {
   Popover,
   PopoverContent,
@@ -192,12 +192,12 @@ export function ComparisonPanel({
                     {comparison.temperature.toFixed(2)}
                   </span>
                 </div>
-                <AntSlider
+                <Slider
                   min={0}
                   max={2}
                   step={0.01}
-                  value={comparison.temperature}
-                  onChange={(value) => {
+                  value={[comparison.temperature]}
+                  onValueChange={(value) => {
                     const nextValue = Array.isArray(value) ? value[0] : value;
                     const clamped = Math.min(
                       2,
@@ -219,12 +219,12 @@ export function ComparisonPanel({
                     {comparison.maxTokens}
                   </span>
                 </div>
-                <AntSlider
+                <Slider
                   min={1}
                   max={32768}
                   step={1}
-                  value={comparison.maxTokens}
-                  onChange={(value) => {
+                  value={[comparison.maxTokens]}
+                  onValueChange={(value) => {
                     const nextValue = Array.isArray(value) ? value[0] : value;
                     const clamped = Math.min(
                       32768,

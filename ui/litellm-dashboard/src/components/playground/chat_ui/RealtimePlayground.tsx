@@ -1,12 +1,33 @@
 "use client";
 
-import { MicOff as AudioMutedOutlined, Mic as AudioOutlined, XCircle as CloseCircleOutlined, Send as SendOutlined, Volume2 as SoundOutlined } from "lucide-react";
-import { Button, Input, Select, Typography } from "antd";
+import {
+  MicOff as AudioMutedOutlined,
+  Mic as AudioOutlined,
+  XCircle as CloseCircleOutlined,
+  Send as SendOutlined,
+  Volume2 as SoundOutlined,
+  LoaderCircle,
+} from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { getProxyBaseUrl } from "../../networking";
 import { OPEN_AI_VOICE_SELECT_OPTIONS } from "./chatConstants";
 
-const { Text } = Typography;
+const Text = ({
+  className,
+  children,
+}: {
+  className?: string;
+  children?: React.ReactNode;
+}) => <span className={className}>{children}</span>;
 
 interface RealtimeMessage {
   role: "user" | "assistant" | "system" | "status";
@@ -356,19 +377,38 @@ const RealtimePlayground: React.FC<RealtimePlaygroundProps> = ({
         </div>
         <div className="flex items-center gap-2">
           <Select
-            size="small"
             value={selectedVoice}
-            onChange={setSelectedVoice}
-            options={OPEN_AI_VOICE_SELECT_OPTIONS}
-            style={{ width: 220 }}
+            onValueChange={setSelectedVoice}
             disabled={isConnected}
-          />
+          >
+            <SelectTrigger className="w-56 h-8 text-xs">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {OPEN_AI_VOICE_SELECT_OPTIONS.map((opt) => (
+                <SelectItem
+                  key={opt.value}
+                  value={opt.value}
+                >
+                  {opt.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
           {!isConnected ? (
-            <Button type="primary" onClick={connect} loading={isConnecting} size="small">
-              Connect
+            <Button onClick={connect} disabled={isConnecting} size="sm">
+              {isConnecting ? (
+                <>
+                  <LoaderCircle className="mr-2 h-3 w-3 animate-spin" />
+                  Connecting...
+                </>
+              ) : (
+                "Connect"
+              )}
             </Button>
           ) : (
-            <Button danger onClick={disconnect} size="small" icon={<CloseCircleOutlined />}>
+            <Button variant="destructive" onClick={disconnect} size="sm">
+              <CloseCircleOutlined className="mr-2 h-3 w-3" />
               Disconnect
             </Button>
           )}
@@ -418,30 +458,40 @@ const RealtimePlayground: React.FC<RealtimePlaygroundProps> = ({
         <div className="border-t border-gray-200 p-3 bg-white">
           <div className="flex items-center gap-2">
             <Button
-              shape="circle"
-              size="large"
-              type={isRecording ? "primary" : "default"}
-              danger={isRecording}
-              icon={isRecording ? <AudioMutedOutlined /> : <AudioOutlined />}
+              variant={isRecording ? "destructive" : "outline"}
+              size="icon"
               onClick={isRecording ? stopRecording : startRecording}
               title={isRecording ? "Stop recording" : "Start recording"}
-              className={isRecording ? "animate-pulse" : ""}
-            />
+              className={`rounded-full h-10 w-10 ${isRecording ? "animate-pulse" : ""}`}
+              aria-label={isRecording ? "Stop recording" : "Start recording"}
+            >
+              {isRecording ? (
+                <AudioMutedOutlined className="h-5 w-5" />
+              ) : (
+                <AudioOutlined className="h-5 w-5" />
+              )}
+            </Button>
             <Input
               placeholder="Type a message or use the mic..."
               value={inputText}
               onChange={(e) => setInputText(e.target.value)}
-              onPressEnter={sendTextMessage}
-              className="flex-1"
-              size="large"
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  sendTextMessage();
+                }
+              }}
+              className="flex-1 h-10"
             />
             <Button
-              type="primary"
-              icon={<SendOutlined />}
+              size="icon"
+              className="h-10 w-10"
               onClick={sendTextMessage}
               disabled={!inputText.trim()}
-              size="large"
-            />
+              aria-label="Send message"
+            >
+              <SendOutlined className="h-5 w-5" />
+            </Button>
           </div>
           {isRecording && (
             <div className="mt-2 flex items-center gap-2 text-red-500 text-xs">

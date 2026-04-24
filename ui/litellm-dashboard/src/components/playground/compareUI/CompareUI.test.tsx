@@ -1,4 +1,4 @@
-import { render, waitFor } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import CompareUI from "./CompareUI";
@@ -108,10 +108,11 @@ describe("CompareUI", () => {
     let comparisonPanels = container.querySelectorAll('[data-testid^="comparison-panel-"]');
     expect(comparisonPanels).toHaveLength(2);
 
-    const addButtons = Array.from(container.querySelectorAll('button[class*="ant-btn"]'));
-    const addComparisonButton = addButtons.find((btn) => btn.textContent?.includes("Add Comparison"));
+    const addComparisonButton = screen.getByRole("button", {
+      name: /add comparison/i,
+    });
     expect(addComparisonButton).toBeInTheDocument();
-    await user.click(addComparisonButton!);
+    await user.click(addComparisonButton);
 
     // Wait for the new comparison panel to be added (should have 3 total now)
     await waitFor(() => {

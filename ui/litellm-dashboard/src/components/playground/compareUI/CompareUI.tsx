@@ -1,8 +1,27 @@
 "use client";
 
 import NotificationsManager from "@/components/molecules/notifications_manager";
-import { Eraser as ClearOutlined, Trash2 as DeleteOutlined, FileText as FilePdfOutlined, Plus as PlusOutlined } from "lucide-react";
-import { Button, Input, Select, Tooltip } from "antd";
+import {
+  Eraser as ClearOutlined,
+  Trash2 as DeleteOutlined,
+  FileText as FilePdfOutlined,
+  Plus as PlusOutlined,
+} from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { useEffect, useMemo, useState } from "react";
 import { v4 as uuidv4 } from "uuid";
 import ChatImageUpload from "../chat_ui/ChatImageUpload";
@@ -698,17 +717,22 @@ export default function CompareUI({ accessToken, disabledPersonalKeyCreation }: 
               <span className="text-sm font-medium text-gray-600">Virtual Key Source</span>
               <Select
                 value={apiKeySource}
-                onChange={(value) => setApiKeySource(value as "session" | "custom")}
+                onValueChange={(value) => setApiKeySource(value as "session" | "custom")}
                 disabled={disabledPersonalKeyCreation}
-                className="w-48"
               >
-                <Select.Option value="session" disabled={!canUseSessionKey}>
-                  Current UI Session
-                </Select.Option>
-                <Select.Option value="custom">Virtual Key</Select.Option>
+                <SelectTrigger className="w-48">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="session" disabled={!canUseSessionKey}>
+                    Current UI Session
+                  </SelectItem>
+                  <SelectItem value="custom">Virtual Key</SelectItem>
+                </SelectContent>
               </Select>
               {apiKeySource === "custom" && (
-                <Input.Password
+                <Input
+                  type="password"
                   value={customApiKey}
                   onChange={(event) => setCustomApiKey(event.target.value)}
                   placeholder="Enter Virtual Key"
@@ -718,34 +742,52 @@ export default function CompareUI({ accessToken, disabledPersonalKeyCreation }: 
             </div>
             <div className="flex items-center gap-2">
               <span className="text-sm font-medium text-gray-600">Endpoint</span>
-              <Select 
-                value={selectedEndpoint} 
-                onChange={(value) => setSelectedEndpoint(value as EndpointIdType)}
-                className="w-56"
+              <Select
+                value={selectedEndpoint}
+                onValueChange={(value) => setSelectedEndpoint(value as EndpointIdType)}
               >
-                {getAvailableEndpoints().map((endpoint) => (
-                  <Select.Option 
-                    key={endpoint.value} 
-                    value={endpoint.value}
-                  >
-                    {endpoint.label}
-                  </Select.Option>
-                ))}
+                <SelectTrigger className="w-56">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {getAvailableEndpoints().map((endpoint) => (
+                    <SelectItem key={endpoint.value} value={endpoint.value}>
+                      {endpoint.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
               </Select>
             </div>
             <div className="flex items-center gap-3">
-              <Button onClick={clearAllChats} disabled={!hasMessages} icon={<ClearOutlined />}>
+              <Button
+                variant="outline"
+                onClick={clearAllChats}
+                disabled={!hasMessages}
+              >
+                <ClearOutlined className="mr-2 h-4 w-4" />
                 Clear All Chats
               </Button>
-              <Tooltip
-                title={
-                  comparisons.length >= maxComparisons ? "Compare up to 3 models at a time" : "Add another comparison"
-                }
-              >
-                <Button onClick={addComparison} disabled={comparisons.length >= maxComparisons} icon={<PlusOutlined />}>
-                  Add Comparison
-                </Button>
-              </Tooltip>
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <span>
+                      <Button
+                        variant="outline"
+                        onClick={addComparison}
+                        disabled={comparisons.length >= maxComparisons}
+                      >
+                        <PlusOutlined className="mr-2 h-4 w-4" />
+                        Add Comparison
+                      </Button>
+                    </span>
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    {comparisons.length >= maxComparisons
+                      ? "Compare up to 3 models at a time"
+                      : "Add another comparison"}
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
             </div>
           </div>
         </div>
