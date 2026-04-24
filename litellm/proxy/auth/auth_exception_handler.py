@@ -75,13 +75,31 @@ class UserAPIKeyAuthExceptionHandler:
                 request=request,
                 use_x_forwarded_for=general_settings.get("use_x_forwarded_for", False),
             )
-            verbose_proxy_logger.exception(
-                "litellm.proxy.proxy_server.user_api_key_auth(): Exception occured - {}\nRequester IP Address:{}".format(
-                    str(e),
-                    requester_ip,
-                ),
-                extra={"requester_ip": requester_ip},
+            # 401/403 are expected auth denials (wrong key, insufficient permissions,
+            # budget exceeded, etc.) — log at WARNING without traceback to avoid
+            # flooding error logs with routine access-control events.
+            # All other exceptions are unexpected and logged at ERROR with traceback.
+            _is_expected_auth_failure = (
+                isinstance(e, ProxyException) and e.code in (401, 403)
+            ) or (
+                isinstance(e, HTTPException) and e.status_code in (401, 403)
             )
+            if _is_expected_auth_failure:
+                verbose_proxy_logger.warning(
+                    "litellm.proxy.proxy_server.user_api_key_auth(): Auth denied - {}\nRequester IP Address:{}".format(
+                        str(e),
+                        requester_ip,
+                    ),
+                    extra={"requester_ip": requester_ip},
+                )
+            else:
+                verbose_proxy_logger.exception(
+                    "litellm.proxy.proxy_server.user_api_key_auth(): Exception occured - {}\nRequester IP Address:{}".format(
+                        str(e),
+                        requester_ip,
+                    ),
+                    extra={"requester_ip": requester_ip},
+                )
 
             # Log this exception to OTEL, Datadog etc
             user_api_key_dict = UserAPIKeyAuth(
