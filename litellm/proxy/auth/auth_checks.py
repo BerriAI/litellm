@@ -650,6 +650,16 @@ async def common_checks(  # noqa: PLR0915
                 proxy_logging_obj=proxy_logging_obj,
             )
 
+        ## 4.3 check team member per-model budget
+        with tracer.trace(
+            "litellm.proxy.auth.common_checks.check_team_member_model_budget"
+        ):
+            await _check_team_member_model_budget(
+                team_object=team_object,
+                valid_token=valid_token,
+                model=_model,
+            )
+
         # 5. If end_user ('user' passed to /chat/completions, /embeddings endpoint) is in budget
         if (
             end_user_object is not None
@@ -3327,6 +3337,70 @@ async def _check_team_member_budget(
                     max_budget=team_member_budget,
                     message=f"Budget has been exceeded! User={valid_token.user_id} in Team={team_object.team_id} Current cost: {team_member_spend}, Max budget: {team_member_budget}",
                 )
+
+
+async def _check_team_member_model_budget(
+    team_object: Optional[LiteLLM_TeamTable],
+    valid_token: Optional[UserAPIKeyAuth],
+    model: Optional[Union[str, List[str]]],
+):
+    """
+    Check if a team member has exceeded their per-model budget for this team.
+
+    The per-model limits are set at the team level via team_member_model_max_budget
+    (stored in team metadata) and apply to each member independently.
+    Spend is tracked via the spend counter cache keyed by
+    spend:team_member:{user_id}:{team_id}:model:{model}.
+    """
+    if (
+        team_object is None
+        or valid_token is None
+        or valid_token.user_id is None
+        or model is None
+    ):
+        return
+
+    team_metadata = team_object.metadata or {}
+    team_member_model_max_budget: dict = team_metadata.get(
+        "team_member_model_max_budget", {}
+    )
+    if not team_member_model_max_budget:
+        return
+
+    # resolve a single model string (skip list checks — model was already validated above)
+    model_str = model if isinstance(model, str) else (model[0] if model else None)
+    if model_str is None:
+        return
+
+    model_budget_config = team_member_model_max_budget.get(model_str)
+    if model_budget_config is None:
+        return
+
+    max_budget = (
+        model_budget_config.get("max_budget")
+        if isinstance(model_budget_config, dict)
+        else None
+    )
+    if max_budget is None:
+        return
+
+    from litellm.proxy.proxy_server import get_current_spend
+
+    model_spend = await get_current_spend(
+        counter_key=f"spend:team_member:{valid_token.user_id}:{team_object.team_id}:model:{model_str}",
+        fallback_spend=0.0,
+    )
+
+    if model_spend >= max_budget:
+        raise litellm.BudgetExceededError(
+            current_cost=model_spend,
+            max_budget=max_budget,
+            message=(
+                f"ExceededBudget: Team member model budget exceeded. "
+                f"User={valid_token.user_id}, Team={team_object.team_id}, "
+                f"Model={model_str}. Spend=${model_spend:.6f}, Budget=${max_budget:.6f}"
+            ),
+        )
 
 
 async def _check_team_member_model_access(
