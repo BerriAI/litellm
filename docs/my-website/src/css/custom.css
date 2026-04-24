@@ -799,17 +799,15 @@ video {
    BLOG — Ramp-style aesthetic
    ========================================= */
 
-/* Hide blog sidebar on post pages */
+/* Blog sidebar on post pages — keep visible for cross-post navigation */
 .blog-post-page aside.col {
-  display: none !important;
+  max-width: 260px;
+  flex: 0 0 260px;
 }
 
-/* Make blog post content full-width + constrained */
+/* Constrain blog post content when sidebar is visible */
 .blog-post-page main.col--7 {
-  --ifm-col-width: 100% !important;
   max-width: 820px !important;
-  margin: 0 auto !important;
-  flex: 0 0 100% !important;
 }
 
 /* Clean post header */
