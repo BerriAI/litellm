@@ -6,8 +6,6 @@ import { fetchTeams } from "@/components/common_components/fetch_teams";
 import TeamInfoView from "@/components/team/TeamInfo";
 import TeamSSOSettings from "@/components/TeamSSOSettings";
 import { isAdminRole } from "@/utils/roles";
-// eslint-disable-next-line litellm-ui/no-banned-ui-imports
-import { TabPanel } from "@tremor/react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import AvailableTeamsPanel from "@/components/team/available_teams";
@@ -273,57 +271,60 @@ const TeamsView: React.FC<TeamProps> = ({
               premiumUser={premiumUser}
             />
           ) : (
-            <TeamsHeaderTabs lastRefreshed={lastRefreshed} onRefresh={handleRefreshClick} userRole={userRole}>
-              <TabPanel>
-                <p className="text-sm">
-                  Click on &ldquo;Team ID&rdquo; to view team details <b>and</b> manage team members.
-                </p>
-                <div className="grid grid-cols-1 gap-2 pt-2 pb-2 h-[75vh] w-full mt-2">
-                  <div>
-                    <Card className="w-full mx-auto flex-auto overflow-hidden overflow-y-auto max-h-[50vh]">
-                      <div className="border-b px-6 py-4">
-                        <div className="flex flex-col space-y-4">
-                          <TeamsFilters
-                            filters={filters}
-                            organizations={organizations}
-                            showFilters={showFilters}
-                            onToggleFilters={setShowFilters}
-                            onChange={handleFilterChange}
-                            onReset={handleFilterReset}
-                          />
+            <TeamsHeaderTabs
+              lastRefreshed={lastRefreshed}
+              onRefresh={handleRefreshClick}
+              userRole={userRole}
+              yourTeamsPanel={
+                <>
+                  <p className="text-sm">
+                    Click on &ldquo;Team ID&rdquo; to view team details <b>and</b> manage team members.
+                  </p>
+                  <div className="grid grid-cols-1 gap-2 pt-2 pb-2 h-[75vh] w-full mt-2">
+                    <div>
+                      <Card className="w-full mx-auto flex-auto overflow-hidden overflow-y-auto max-h-[50vh]">
+                        <div className="border-b px-6 py-4">
+                          <div className="flex flex-col space-y-4">
+                            <TeamsFilters
+                              filters={filters}
+                              organizations={organizations}
+                              showFilters={showFilters}
+                              onToggleFilters={setShowFilters}
+                              onChange={handleFilterChange}
+                              onReset={handleFilterReset}
+                            />
+                          </div>
                         </div>
-                      </div>
-                      <TeamsTable
-                        teams={teams}
-                        currentOrg={currentOrg}
-                        perTeamInfo={perTeamInfo}
-                        userRole={userRole}
-                        userId={userID}
-                        setSelectedTeamId={setSelectedTeamId}
-                        setEditTeam={setEditTeam}
-                        onDeleteTeam={handleDelete}
-                      />
-                      {isDeleteModalOpen && (
-                        <DeleteTeamModal
+                        <TeamsTable
                           teams={teams}
-                          teamToDelete={teamToDelete}
-                          onCancel={cancelDelete}
-                          onConfirm={confirmDelete}
+                          currentOrg={currentOrg}
+                          perTeamInfo={perTeamInfo}
+                          userRole={userRole}
+                          userId={userID}
+                          setSelectedTeamId={setSelectedTeamId}
+                          setEditTeam={setEditTeam}
+                          onDeleteTeam={handleDelete}
                         />
-                      )}
-                    </Card>
+                        {isDeleteModalOpen && (
+                          <DeleteTeamModal
+                            teams={teams}
+                            teamToDelete={teamToDelete}
+                            onCancel={cancelDelete}
+                            onConfirm={confirmDelete}
+                          />
+                        )}
+                      </Card>
+                    </div>
                   </div>
-                </div>
-              </TabPanel>
-              <TabPanel>
+                </>
+              }
+              availableTeamsPanel={
                 <AvailableTeamsPanel accessToken={accessToken} userID={userID} />
-              </TabPanel>
-              {isAdminRole(userRole || "") && (
-                <TabPanel>
-                  <TeamSSOSettings accessToken={accessToken} userID={userID || ""} userRole={userRole || ""} />
-                </TabPanel>
-              )}
-            </TeamsHeaderTabs>
+              }
+              defaultTeamSettingsPanel={
+                <TeamSSOSettings accessToken={accessToken} userID={userID || ""} userRole={userRole || ""} />
+              }
+            />
           )}
           {(userRole == "Admin" || userRole == "Org Admin") && (
             <CreateTeamModal
