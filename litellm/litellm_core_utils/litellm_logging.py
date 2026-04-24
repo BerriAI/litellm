@@ -3517,6 +3517,8 @@ def _get_masked_values(
     mask_all_values: bool = False,
     unmasked_length: int = 4,
     number_of_asterisks: Optional[int] = 4,
+    _depth: int = 0,
+    _max_depth: int = 20,
 ) -> dict:
     """
     Internal debugging helper function
@@ -3540,12 +3542,16 @@ def _get_masked_values(
 
     def _mask_value(v: Any) -> Any:
         if isinstance(v, dict):
+            if _depth >= _max_depth:
+                return v
             return _get_masked_values(
                 v,
                 ignore_sensitive_values=ignore_sensitive_values,
                 mask_all_values=mask_all_values,
                 unmasked_length=unmasked_length,
                 number_of_asterisks=number_of_asterisks,
+                _depth=_depth + 1,
+                _max_depth=_max_depth,
             )
         if not isinstance(v, str):
             return v
