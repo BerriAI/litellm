@@ -105,7 +105,7 @@ def _build_responses_kwargs(
                 # Reclassify as acompletion so the success handler doesn't try to
                 # validate the Responses API event as an AnthropicResponse.
                 # (Mirrors the pattern used in LiteLLMMessagesToCompletionTransformationHandler.)
-                setattr(value, "call_type", CallTypes.acompletion.value)
+                setattr(value, "call_type", CallTypes.anthropic_messages.value)
             responses_kwargs[key] = value
         elif key not in excluded and key not in responses_kwargs and value is not None:
             responses_kwargs[key] = value

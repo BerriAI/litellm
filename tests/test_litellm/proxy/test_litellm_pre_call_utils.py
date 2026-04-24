@@ -1749,6 +1749,95 @@ async def test_add_litellm_metadata_from_request_headers():
         litellm.callbacks = original_callbacks
 
 
+@pytest.mark.asyncio
+async def test_anthropic_messages_standard_logging_object_matches_fixture():
+    """
+    Regression: /v1/messages calls routed to non-Anthropic providers should keep
+    call_type=anthropic_messages in standard logging payloads.
+    """
+    litellm._turn_on_debug()
+    test_logger = TestCustomLogger()
+    original_callbacks = litellm.callbacks
+    litellm.callbacks = [test_logger]
+
+    try:
+        data = {
+            "model": "gemini/gemini-2.5-flash",
+            "messages": [{"role": "user", "content": "Hi."}],
+            "stream": False,
+            "mock_response": "Hello! How can I help you today?",
+            "api_key": "fake-key",
+            "max_tokens": 4096,
+        }
+
+        mock_request = MagicMock(spec=Request)
+        mock_request.headers = {"user-agent": "PostmanRuntime/7.53.0"}
+        mock_request.url.path = "/v1/messages"
+        mock_request.url = MagicMock()
+        mock_request.url.__str__.return_value = "http://localhost/v1/messages"
+        mock_request.method = "POST"
+        mock_request.query_params = {}
+        mock_request.client = MagicMock()
+        mock_request.client.host = "127.0.0.1"
+
+        mock_fastapi_response = MagicMock(spec=Response)
+        mock_user_api_key_dict = UserAPIKeyAuth(
+            api_key="test-key", user_id="default_user_id"
+        )
+
+        mock_proxy_logging_obj = MagicMock(spec=ProxyLogging)
+
+        async def mock_during_call_hook(*args, **kwargs):
+            return None
+
+        async def mock_pre_call_hook(*args, **kwargs):
+            return data
+
+        async def mock_post_call_success_hook(*args, **kwargs):
+            return kwargs.get("response", args[2] if len(args) > 2 else None)
+
+        mock_proxy_logging_obj.during_call_hook = mock_during_call_hook
+        mock_proxy_logging_obj.pre_call_hook = mock_pre_call_hook
+        mock_proxy_logging_obj.post_call_success_hook = mock_post_call_success_hook
+
+        processor = ProxyBaseLLMRequestProcessing(data=data)
+        await processor.base_process_llm_request(
+            request=mock_request,
+            fastapi_response=mock_fastapi_response,
+            user_api_key_dict=mock_user_api_key_dict,
+            route_type="anthropic_messages",
+            proxy_logging_obj=mock_proxy_logging_obj,
+            general_settings={},
+            proxy_config=MagicMock(),
+            select_data_generator=None,
+            llm_router=None,
+            model="gemini/gemini-2.5-flash",
+            is_streaming_request=False,
+        )
+
+        await asyncio.sleep(3)
+
+        assert test_logger.standard_logging_object is not None
+        actual = test_logger.standard_logging_object
+
+        expected = {
+            "call_type": "anthropic_messages",
+            "status": "success",
+            "model": "gemini/gemini-2.5-flash",
+        }
+
+        # Compare only stable fields from the saved proxy log snapshot.
+        actual_projection = {
+            "call_type": actual.get("call_type"),
+            "status": actual.get("status"),
+            "model": actual.get("model"),
+        }
+        assert actual_projection == expected
+        assert actual.get("call_type") == "anthropic_messages"
+    finally:
+        litellm.callbacks = original_callbacks
+
+
 def test_add_litellm_metadata_from_request_headers_x_litellm_trace_id_sets_chain_id():
     """x-litellm-trace-id sets both metadata and top-level litellm_session_id/litellm_trace_id for call chaining."""
     headers = {"x-litellm-trace-id": "foo"}
