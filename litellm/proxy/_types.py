@@ -539,40 +539,44 @@ class LiteLLMRoutes(enum.Enum):
         KeyManagementRoutes.KEY_ALIASES.value,
     ]
 
-    management_routes = [
-        # user
-        "/user/new",
-        "/user/update",
-        "/user/bulk_update",
-        "/user/delete",
-        "/user/info",
-        "/user/list",
-        "/user/daily/activity",
-        "/user/daily/activity/aggregated",
-        # team
-        "/team/new",
-        "/team/update",
-        "/team/delete",
-        "/team/list",
-        "/v2/team/list",
-        "/team/info",
-        "/team/block",
-        "/team/unblock",
-        "/team/available",
-        "/team/permissions_list",
-        "/team/permissions_update",
-        "/team/daily/activity",
-        # model
-        "/model/new",
-        "/model/update",
-        "/model/delete",
-        "/model/info",
-        "/jwt/key/mapping/new",
-        "/jwt/key/mapping/update",
-        "/jwt/key/mapping/delete",
-        "/jwt/key/mapping/list",
-        "/jwt/key/mapping/info",
-    ] + key_management_routes + mcp_management_routes
+    management_routes = (
+        [
+            # user
+            "/user/new",
+            "/user/update",
+            "/user/bulk_update",
+            "/user/delete",
+            "/user/info",
+            "/user/list",
+            "/user/daily/activity",
+            "/user/daily/activity/aggregated",
+            # team
+            "/team/new",
+            "/team/update",
+            "/team/delete",
+            "/team/list",
+            "/v2/team/list",
+            "/team/info",
+            "/team/block",
+            "/team/unblock",
+            "/team/available",
+            "/team/permissions_list",
+            "/team/permissions_update",
+            "/team/daily/activity",
+            # model
+            "/model/new",
+            "/model/update",
+            "/model/delete",
+            "/model/info",
+            "/jwt/key/mapping/new",
+            "/jwt/key/mapping/update",
+            "/jwt/key/mapping/delete",
+            "/jwt/key/mapping/list",
+            "/jwt/key/mapping/info",
+        ]
+        + key_management_routes
+        + mcp_management_routes
+    )
 
     spend_tracking_routes = [
         # spend
