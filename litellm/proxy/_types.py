@@ -427,7 +427,8 @@ class LiteLLMRoutes(enum.Enum):
         "/v1/skills/{skill_id}",
     ]
 
-    mcp_routes = [
+    # MCP tool-call / passthrough routes — data-plane. Gated by DISABLE_LLM_API_ENDPOINTS.
+    mcp_inference_routes = [
         "/mcp",
         "/mcp/",
         "/mcp/{subpath}",
@@ -436,9 +437,17 @@ class LiteLLMRoutes(enum.Enum):
         "/mcp/tools/call",
         "/mcp-rest/tools/list",
         "/mcp-rest/tools/call",
+    ]
+
+    # MCP server CRUD routes — control-plane. Gated by DISABLE_ADMIN_ENDPOINTS.
+    mcp_management_routes = [
         "/v1/mcp/server",
         "/v1/mcp/server/{path:path}",
     ]
+
+    # Backwards-compat union — virtual keys may be configured with
+    # allowed_routes=["mcp_routes"], which should cover both halves.
+    mcp_routes = mcp_inference_routes + mcp_management_routes
 
     agent_routes = [
         "/v1/agents",
@@ -477,7 +486,7 @@ class LiteLLMRoutes(enum.Enum):
         + mapped_pass_through_routes
         + passthrough_routes_wildcard
         + apply_guardrail_routes
-        + mcp_routes
+        + mcp_inference_routes
         + litellm_native_routes
         + agent_routes
     )
@@ -530,40 +539,44 @@ class LiteLLMRoutes(enum.Enum):
         KeyManagementRoutes.KEY_ALIASES.value,
     ]
 
-    management_routes = [
-        # user
-        "/user/new",
-        "/user/update",
-        "/user/bulk_update",
-        "/user/delete",
-        "/user/info",
-        "/user/list",
-        "/user/daily/activity",
-        "/user/daily/activity/aggregated",
-        # team
-        "/team/new",
-        "/team/update",
-        "/team/delete",
-        "/team/list",
-        "/v2/team/list",
-        "/team/info",
-        "/team/block",
-        "/team/unblock",
-        "/team/available",
-        "/team/permissions_list",
-        "/team/permissions_update",
-        "/team/daily/activity",
-        # model
-        "/model/new",
-        "/model/update",
-        "/model/delete",
-        "/model/info",
-        "/jwt/key/mapping/new",
-        "/jwt/key/mapping/update",
-        "/jwt/key/mapping/delete",
-        "/jwt/key/mapping/list",
-        "/jwt/key/mapping/info",
-    ] + key_management_routes
+    management_routes = (
+        [
+            # user
+            "/user/new",
+            "/user/update",
+            "/user/bulk_update",
+            "/user/delete",
+            "/user/info",
+            "/user/list",
+            "/user/daily/activity",
+            "/user/daily/activity/aggregated",
+            # team
+            "/team/new",
+            "/team/update",
+            "/team/delete",
+            "/team/list",
+            "/v2/team/list",
+            "/team/info",
+            "/team/block",
+            "/team/unblock",
+            "/team/available",
+            "/team/permissions_list",
+            "/team/permissions_update",
+            "/team/daily/activity",
+            # model
+            "/model/new",
+            "/model/update",
+            "/model/delete",
+            "/model/info",
+            "/jwt/key/mapping/new",
+            "/jwt/key/mapping/update",
+            "/jwt/key/mapping/delete",
+            "/jwt/key/mapping/list",
+            "/jwt/key/mapping/info",
+        ]
+        + key_management_routes
+        + mcp_management_routes
+    )
 
     spend_tracking_routes = [
         # spend
@@ -691,6 +704,13 @@ class LiteLLMRoutes(enum.Enum):
         "/organization/delete",
         "/organization/member_add",
         "/organization/member_update",
+        # member_delete is equally destructive as member_add / member_update
+        # and must be scoped the same way — otherwise it falls through to
+        # the management_routes / self_managed_routes path and lets any
+        # non-PROXY_ADMIN caller that reaches the route delete arbitrary
+        # org memberships without the organization_role_based_access_check
+        # that member_add / member_update trigger.
+        "/organization/member_delete",
     ]
 
     # Routes accessible by Admin Viewer (read-only admin access)
@@ -1990,7 +2010,12 @@ class TeamRequest(LiteLLMPydanticObjectBase):
 
 
 class LiteLLM_BudgetTable(LiteLLMPydanticObjectBase):
-    """Represents user-controllable params for a LiteLLM_BudgetTable record"""
+    """Represents user-controllable params for a LiteLLM_BudgetTable record.
+
+    Budget-write paths use `model_fields.keys()` on this class as an allowlist
+    for user input. Keep server-managed fields (e.g. `budget_reset_at`) on
+    `LiteLLM_BudgetTableFull` so they aren't user-settable.
+    """
 
     budget_id: Optional[str] = None
     soft_budget: Optional[float] = None
@@ -2008,7 +2033,7 @@ class LiteLLM_BudgetTable(LiteLLMPydanticObjectBase):
 
 
 class LiteLLM_BudgetTableFull(LiteLLM_BudgetTable):
-    """Represents all params for a LiteLLM_BudgetTable record"""
+    """LiteLLM_BudgetTable + server-managed fields returned on API responses."""
 
     budget_reset_at: Optional[datetime] = None
     created_at: datetime
@@ -3141,6 +3166,10 @@ class CallInfo(LiteLLMPydanticObjectBase):
         default=None,
         description="Additional email addresses to send alerts to (e.g., from team metadata)",
     )
+    max_budget_alert_emails: Optional[Dict[str, List[str]]] = Field(
+        default=None,
+        description="Map of threshold percentage to email recipients (e.g., {'50': ['a@co.com'], '75': ['a@co.com', 'b@co.com']})",
+    )
 
 
 class WebhookEvent(CallInfo):
@@ -3697,7 +3726,11 @@ class LiteLLM_TeamMembership(LiteLLMPydanticObjectBase):
     team_id: str
     budget_id: Optional[str] = None
     spend: Optional[float] = 0.0
-    litellm_budget_table: Optional[LiteLLM_BudgetTable]
+    total_spend: Optional[float] = 0.0
+    # Union so Pydantic picks Full when data has server-managed fields
+    # (/team/info) and Base when callers/tests construct with only
+    # user-settable fields.
+    litellm_budget_table: Optional[Union[LiteLLM_BudgetTableFull, LiteLLM_BudgetTable]]
 
     def safe_get_team_member_rpm_limit(self) -> Optional[int]:
         if self.litellm_budget_table is not None:
@@ -3900,7 +3933,7 @@ class OrganizationMemberUpdateResponse(MemberUpdateResponse):
 
 
 class TeamInfoResponseObjectTeamTable(LiteLLM_TeamTable):
-    team_member_budget_table: Optional[LiteLLM_BudgetTable] = None
+    team_member_budget_table: Optional[LiteLLM_BudgetTableFull] = None
     # Resources inherited from access groups (separate from direct assignments)
     access_group_models: Optional[List[str]] = None
     access_group_mcp_server_ids: Optional[List[str]] = None

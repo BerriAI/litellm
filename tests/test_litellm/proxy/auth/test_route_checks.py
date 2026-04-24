@@ -152,6 +152,38 @@ def test_virtual_key_mcp_routes_allows_v1_mcp_server_subpaths(route):
     assert result is True
 
 
+@pytest.mark.parametrize(
+    "route",
+    [
+        "/v1/mcp/server",
+        "/v1/mcp/server/abc-123",
+        "/v1/mcp/server/abc-123/approve",
+    ],
+)
+def test_mcp_management_routes_classified_as_management_not_llm_api(route):
+    """MCP server CRUD must be management routes, not llm_api routes, so
+    DISABLE_LLM_API_ENDPOINTS on admin nodes does not block the Admin UI."""
+
+    assert RouteChecks.is_llm_api_route(route=route) is False
+    assert RouteChecks.is_management_route(route=route) is True
+
+
+@pytest.mark.parametrize(
+    "route",
+    [
+        "/mcp/tools/call",
+        "/mcp-rest/tools/call",
+        "/mcp/tools/list",
+    ],
+)
+def test_mcp_inference_routes_classified_as_llm_api(route):
+    """MCP tool-call / passthrough routes must remain llm_api routes so they
+    continue to be blocked by DISABLE_LLM_API_ENDPOINTS on admin nodes."""
+
+    assert RouteChecks.is_llm_api_route(route=route) is True
+    assert RouteChecks.is_management_route(route=route) is False
+
+
 def test_virtual_key_allowed_routes_with_litellm_routes_member_name_denied():
     """Test that virtual key is denied when route is not in the allowed LiteLLMRoutes group"""
 
@@ -1389,6 +1421,38 @@ def test_non_org_admin_with_organizations_list():
         organization_memberships=[membership],
     )
     assert _user_is_org_admin({"organizations": ["org-1"]}, user_obj) is False
+
+
+def test_org_admin_cannot_escalate_to_other_org():
+    """Regression: admin of org-A requesting [org-A, org-B] must be rejected."""
+    user_obj = _make_org_admin_user("org-A")
+    assert _user_is_org_admin({"organizations": ["org-A", "org-B"]}, user_obj) is False
+
+
+def test_org_admin_of_multiple_orgs_can_operate_on_both():
+    """Admin of both org-A and org-B can operate on both."""
+    memberships = [
+        LiteLLM_OrganizationMembershipTable(
+            user_id="multi-admin",
+            organization_id="org-A",
+            user_role=LitellmUserRoles.ORG_ADMIN.value,
+            created_at=datetime(2024, 1, 1),
+            updated_at=datetime(2024, 1, 1),
+        ),
+        LiteLLM_OrganizationMembershipTable(
+            user_id="multi-admin",
+            organization_id="org-B",
+            user_role=LitellmUserRoles.ORG_ADMIN.value,
+            created_at=datetime(2024, 1, 1),
+            updated_at=datetime(2024, 1, 1),
+        ),
+    ]
+    user_obj = LiteLLM_UserTable(
+        user_id="multi-admin",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+        organization_memberships=memberships,
+    )
+    assert _user_is_org_admin({"organizations": ["org-A", "org-B"]}, user_obj) is True
 
 
 @pytest.mark.asyncio

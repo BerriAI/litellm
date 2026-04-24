@@ -1975,22 +1975,57 @@ async def _validate_update_key_data(
         user_api_key_cache=user_api_key_cache,
     )
 
-    # Admin-only: only proxy admins, team admins, or org admins can modify max_budget or spend
-    if (
+    # Cross-key authorization. Previously only gated on max_budget/spend
+    # changes, which let a non-admin blanket-rewrite any OTHER field on
+    # any key (models, alias, metadata, tpm_limit, rpm_limit,
+    # allowed_routes, guardrails, blocked, duration, permissions, …) as
+    # long as they avoided budget/spend.
+    #
+    # Policy:
+    # - Key owner (same user_id): may update non-budget fields on their
+    #   own key without the admin check.
+    # - Team member with /key/update grant (on a team key): may update
+    #   non-budget fields. Team membership + permission is already
+    #   enforced by can_team_member_execute_key_management_endpoint
+    #   above, which raises 401 for non-members or members without the
+    #   grant — so reaching this point on a team key means the caller
+    #   was authorized via member_permissions. This preserves the
+    #   documented member_permissions feature while still blocking the
+    #   cross-org attack (an outside org admin is not a member of the
+    #   victim team and gets rejected at the earlier check).
+    # - Anyone else (non-PROXY_ADMIN, not the owner, not a team member
+    #   on a team key): must pass _check_key_admin_access (PROXY_ADMIN
+    #   / key-owner / team-admin / org-admin of the key).
+    # - max_budget / spend: always require the admin check, even for the
+    #   key owner or a team member (matches the existing admin-only
+    #   budget semantics).
+    is_key_owner = (
+        user_api_key_dict.user_id is not None
+        and existing_key_row.user_id == user_api_key_dict.user_id
+    )
+    _is_budget_change = (
         data.max_budget is not None and data.max_budget != existing_key_row.max_budget
     ) or (
         data.spend is not None
         and data.spend != getattr(existing_key_row, "spend", None)
+    )
+    is_team_key = existing_key_row.team_id is not None
+    can_skip_admin_check_for_non_budget = is_key_owner or is_team_key
+    if (
+        (not _is_proxy_admin)
+        and prisma_client is not None
+        and (_is_budget_change or not can_skip_admin_check_for_non_budget)
     ):
-        if prisma_client is not None:
-            hashed_key = existing_key_row.token
-            await _check_key_admin_access(
-                user_api_key_dict=user_api_key_dict,
-                hashed_token=hashed_key,
-                prisma_client=prisma_client,
-                user_api_key_cache=user_api_key_cache,
-                route="/key/update (max_budget/spend)",
-            )
+        hashed_key = existing_key_row.token
+        await _check_key_admin_access(
+            user_api_key_dict=user_api_key_dict,
+            hashed_token=hashed_key,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            route=(
+                "/key/update (max_budget/spend)" if _is_budget_change else "/key/update"
+            ),
+        )
 
     # Check team limits if key has a team_id (from request or existing key)
     team_obj: Optional[LiteLLM_TeamTableCachedObj] = None

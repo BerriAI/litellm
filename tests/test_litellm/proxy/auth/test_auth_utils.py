@@ -8,10 +8,13 @@ from unittest.mock import MagicMock, patch
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.auth_utils import (
     _get_customer_id_from_standard_headers,
+    check_complete_credentials,
     get_end_user_id_from_request_body,
     get_model_from_request,
     get_key_model_rpm_limit,
     get_key_model_tpm_limit,
+    get_project_model_rpm_limit,
+    get_project_model_tpm_limit,
 )
 
 
@@ -583,3 +586,77 @@ class TestDeploymentDefaultTpmLimit:
         with patch(_ROUTER_PATCH, mock_router):
             result = get_key_model_tpm_limit(user_api_key_dict, model_name="model1")
         assert result == {"model1": 400}
+
+
+class TestGetProjectModelRpmLimit:
+    """Tests for get_project_model_rpm_limit function."""
+
+    def test_returns_project_metadata_rpm_limit(self):
+        user_api_key_dict = UserAPIKeyAuth(
+            api_key="sk-123",
+            project_metadata={"model_rpm_limit": {"gpt-4": 200}},
+        )
+        result = get_project_model_rpm_limit(user_api_key_dict)
+        assert result == {"gpt-4": 200}
+
+    def test_returns_none_when_no_project_metadata(self):
+        user_api_key_dict = UserAPIKeyAuth(api_key="sk-123")
+        result = get_project_model_rpm_limit(user_api_key_dict)
+        assert result is None
+
+    def test_returns_none_when_project_metadata_missing_key(self):
+        user_api_key_dict = UserAPIKeyAuth(
+            api_key="sk-123",
+            project_metadata={"other_key": "value"},
+        )
+        result = get_project_model_rpm_limit(user_api_key_dict)
+        assert result is None
+
+
+class TestGetProjectModelTpmLimit:
+    """Tests for get_project_model_tpm_limit function."""
+
+    def test_returns_project_metadata_tpm_limit(self):
+        user_api_key_dict = UserAPIKeyAuth(
+            api_key="sk-123",
+            project_metadata={"model_tpm_limit": {"gpt-4": 50000}},
+        )
+        result = get_project_model_tpm_limit(user_api_key_dict)
+        assert result == {"gpt-4": 50000}
+
+    def test_returns_none_when_no_project_metadata(self):
+        user_api_key_dict = UserAPIKeyAuth(api_key="sk-123")
+        result = get_project_model_tpm_limit(user_api_key_dict)
+        assert result is None
+
+    def test_returns_none_when_project_metadata_missing_key(self):
+        user_api_key_dict = UserAPIKeyAuth(
+            api_key="sk-123",
+            project_metadata={"other_key": "value"},
+        )
+        result = get_project_model_tpm_limit(user_api_key_dict)
+        assert result is None
+
+
+class TestCheckCompleteCredentials:
+    """Tests for the api_key validation in check_complete_credentials."""
+
+    def test_returns_false_when_api_key_missing(self):
+        result = check_complete_credentials({"model": "gpt-4"})
+        assert result is False
+
+    def test_returns_false_when_api_key_is_none(self):
+        result = check_complete_credentials({"model": "gpt-4", "api_key": None})
+        assert result is False
+
+    def test_returns_false_when_api_key_is_empty_string(self):
+        result = check_complete_credentials({"model": "gpt-4", "api_key": ""})
+        assert result is False
+
+    def test_returns_false_when_api_key_is_whitespace(self):
+        result = check_complete_credentials({"model": "gpt-4", "api_key": "   "})
+        assert result is False
+
+    def test_returns_true_when_api_key_is_valid(self):
+        result = check_complete_credentials({"model": "gpt-4", "api_key": "sk-valid"})
+        assert result is True

@@ -32,6 +32,7 @@ from litellm.constants import (
 )
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.proxy._types import (
     RBAC_ROLES,
     CallInfo,
@@ -329,14 +330,62 @@ def _global_proxy_budget_check(
             )
 
 
+_GUARDRAIL_MODIFICATION_KEYS: tuple = (
+    "guardrails",
+    "disable_global_guardrails",
+    "disable_global_guardrail",
+    "opted_out_global_guardrails",
+)
+
+
 def _guardrail_modification_check(
     request_body: dict, team_object: Optional[LiteLLM_TeamTable]
 ) -> None:
-    _request_metadata: dict = request_body.get("metadata", {}) or {}
-    if not _request_metadata.get("guardrails"):
-        return
+    """
+    Reject user-supplied metadata flags that would modify guardrail behavior
+    unless the team has explicit permission. Checked keys include the plural
+    ``guardrails`` list plus the per-request toggles that influence whether
+    default-on guardrails run (``disable_global_guardrails``,
+    ``disable_global_guardrail`` singular, and ``opted_out_global_guardrails``).
 
+    User-supplied values for the bypass toggles are also silently ignored by
+    ``_get_admin_metadata`` at read time; this check adds defense in depth by
+    failing loudly at the auth layer so operators see an explicit 403 instead
+    of a confusing silent-ignore.
+    """
     from litellm.proxy.guardrails.guardrail_helpers import can_modify_guardrails
+
+    def _coerce_to_dict(container: Any) -> Optional[dict]:
+        """Accept dict or JSON-string (from multipart/form-data or extra_body).
+
+        Without this, an attacker can smuggle guardrail keys past the check by
+        sending ``{"metadata": "{\\"disable_global_guardrails\\": true}"}`` —
+        ``isinstance(dict)`` on the string returns False, the check returns
+        no-modification, and ``add_litellm_data_to_request`` parses the string
+        to a dict downstream.
+        """
+        if isinstance(container, dict):
+            return container
+        if isinstance(container, str):
+            parsed = safe_json_loads(container)
+            return parsed if isinstance(parsed, dict) else None
+        return None
+
+    def _user_requested_modification(container: Any) -> bool:
+        coerced = _coerce_to_dict(container)
+        if coerced is None:
+            return False
+        return any(coerced.get(key) for key in _GUARDRAIL_MODIFICATION_KEYS)
+
+    # Check both metadata keys — callers can populate either depending on the
+    # endpoint. Cover the top-level too so root-level injection is rejected.
+    modifies = (
+        _user_requested_modification(request_body.get("metadata"))
+        or _user_requested_modification(request_body.get("litellm_metadata"))
+        or _user_requested_modification(request_body)
+    )
+    if not modifies:
+        return
 
     if not can_modify_guardrails(team_object):
         raise HTTPException(
@@ -578,11 +627,17 @@ async def common_checks(  # noqa: PLR0915
             and user_object.max_budget is not None
         ):
             user_budget = user_object.max_budget
-            if user_budget < user_object.spend:
+            from litellm.proxy.proxy_server import get_current_spend
+
+            user_spend = await get_current_spend(
+                counter_key=f"spend:user:{user_object.user_id}",
+                fallback_spend=user_object.spend or 0.0,
+            )
+            if user_spend >= user_budget:
                 raise litellm.BudgetExceededError(
-                    current_cost=user_object.spend,
+                    current_cost=user_spend,
                     max_budget=user_budget,
-                    message=f"ExceededBudget: User={user_object.user_id} over budget. Spend={user_object.spend}, Budget={user_budget}",
+                    message=f"ExceededBudget: User={user_object.user_id} over budget. Spend={user_spend}, Budget={user_budget}",
                 )
 
         ## 4.2 check team member budget, if team key
@@ -851,6 +906,63 @@ async def get_default_end_user_budget(
 
     except Exception as e:
         verbose_proxy_logger.error(f"Error fetching default end user budget: {str(e)}")
+        return None
+
+
+@log_db_metrics
+async def get_team_member_default_budget(
+    budget_id: str,
+    prisma_client: Optional[PrismaClient],
+    user_api_key_cache: DualCache,
+) -> Optional[LiteLLM_BudgetTable]:
+    """
+    Fetches the team-level default per-member budget referenced by team.metadata["team_member_budget_id"].
+
+    This budget is applied to team members whose TeamMembership row has no
+    linked budget. Results are cached for performance.
+
+    Args:
+        budget_id: The budget_id pulled from team.metadata["team_member_budget_id"]
+        prisma_client: Database client instance
+        user_api_key_cache: Cache for storing/retrieving budget data
+
+    Returns:
+        LiteLLM_BudgetTable if found, None otherwise
+    """
+    if prisma_client is None:
+        return None
+
+    cache_key = f"team_member_default_budget:{budget_id}"
+
+    cached_budget = await user_api_key_cache.async_get_cache(key=cache_key)
+    if isinstance(cached_budget, LiteLLM_BudgetTable):
+        return cached_budget
+    if isinstance(cached_budget, dict):
+        return LiteLLM_BudgetTable(**cached_budget)
+
+    try:
+        budget_record = await prisma_client.db.litellm_budgettable.find_unique(
+            where={"budget_id": budget_id}
+        )
+
+        if budget_record is None:
+            verbose_proxy_logger.warning(
+                f"Team-default member budget not found in database: {budget_id}"
+            )
+            return None
+
+        await user_api_key_cache.async_set_cache(
+            key=cache_key,
+            value=budget_record.dict(),
+            ttl=DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL,
+        )
+
+        return LiteLLM_BudgetTable(**budget_record.dict())
+
+    except Exception:
+        verbose_proxy_logger.exception(
+            f"Error fetching team-default member budget {budget_id}"
+        )
         return None
 
 
@@ -3043,6 +3155,52 @@ async def _virtual_key_soft_budget_check(
         )
 
 
+def _parse_email_list(raw: Any) -> List[str]:
+    """Parse emails from a list or comma-separated string."""
+    if isinstance(raw, list):
+        return [e.strip() for e in raw if isinstance(e, str) and e.strip()]
+    elif isinstance(raw, str):
+        return [e.strip() for e in raw.split(",") if e.strip()]
+    return []
+
+
+def _normalize_alert_emails(
+    cfg: Optional[Dict[str, Any]],
+) -> Dict[str, List[str]]:
+    """Coerce user-supplied threshold→recipients mapping to Dict[str, List[str]].
+
+    Values may legitimately arrive as list, comma-separated string, or None
+    from YAML/metadata; _parse_email_list tolerates all three.
+    """
+    if not cfg:
+        return {}
+    return {k: _parse_email_list(v) for k, v in cfg.items()}
+
+
+def _merge_budget_alert_email_configs(
+    global_cfg: Optional[Dict[str, Any]],
+    per_key_cfg: Optional[Dict[str, Any]],
+) -> Optional[Dict[str, List[str]]]:
+    """
+    Per-threshold additive merge: each threshold's recipient list is the union
+    of global + per-key entries (deduped, global-first ordering). Missing
+    thresholds on one side are inherited from the other.
+    """
+    global_cfg_normalized = _normalize_alert_emails(global_cfg)
+    per_key_cfg_normalized = _normalize_alert_emails(per_key_cfg)
+    if not global_cfg_normalized and not per_key_cfg_normalized:
+        return None
+    thresholds = set(global_cfg_normalized) | set(per_key_cfg_normalized)
+    return {
+        t: list(
+            dict.fromkeys(
+                global_cfg_normalized.get(t, []) + per_key_cfg_normalized.get(t, [])
+            )
+        )
+        for t in thresholds
+    }
+
+
 async def _virtual_key_max_budget_alert_check(
     valid_token: UserAPIKeyAuth,
     proxy_logging_obj: ProxyLogging,
@@ -3060,22 +3218,25 @@ async def _virtual_key_max_budget_alert_check(
         and valid_token.spend is not None
         and valid_token.spend > 0
     ):
-        alert_threshold = (
-            valid_token.max_budget * EMAIL_BUDGET_ALERT_MAX_SPEND_ALERT_PERCENTAGE
+        owner_email = user_obj.user_email if user_obj else None
+        alert_email_config: Optional[Dict[str, List[str]]] = (
+            _merge_budget_alert_email_configs(
+                global_cfg=litellm.default_key_max_budget_alert_emails,
+                per_key_cfg=(valid_token.metadata or {}).get("max_budget_alert_emails"),
+            )
         )
 
-        # Only alert if we've crossed the threshold but haven't exceeded max_budget yet
-        if (
-            valid_token.spend >= alert_threshold
-            and valid_token.spend < valid_token.max_budget
-        ):
-            verbose_proxy_logger.debug(
-                "Reached Max Budget Alert Threshold for token %s, spend %s, max_budget %s, alert_threshold %s",
-                valid_token.token,
-                valid_token.spend,
-                valid_token.max_budget,
-                alert_threshold,
+        if isinstance(alert_email_config, dict) and alert_email_config:
+            # New path: only create task if spend has crossed the lowest threshold
+            min_pct = min(
+                (int(k) for k in alert_email_config if k.isdigit()),
+                default=None,
             )
+            if min_pct is None or valid_token.spend < valid_token.max_budget * (
+                min_pct / 100.0
+            ):
+                return
+
             call_info = CallInfo(
                 token=valid_token.token,
                 spend=valid_token.spend,
@@ -3085,17 +3246,54 @@ async def _virtual_key_max_budget_alert_check(
                 team_id=valid_token.team_id,
                 team_alias=valid_token.team_alias,
                 organization_id=valid_token.org_id,
-                user_email=user_obj.user_email if user_obj else None,
+                user_email=owner_email,
                 key_alias=valid_token.key_alias,
                 event_group=Litellm_EntityType.KEY,
+                max_budget_alert_emails=alert_email_config,
             )
-
             asyncio.create_task(
                 proxy_logging_obj.budget_alerts(
                     type="max_budget_alert",
                     user_info=call_info,
                 )
             )
+        else:
+            # Old path: existing single 80% threshold — completely unchanged
+            alert_threshold = (
+                valid_token.max_budget * EMAIL_BUDGET_ALERT_MAX_SPEND_ALERT_PERCENTAGE
+            )
+
+            if (
+                valid_token.spend >= alert_threshold
+                and valid_token.spend < valid_token.max_budget
+            ):
+                verbose_proxy_logger.debug(
+                    "Reached Max Budget Alert Threshold for token %s, spend %s, max_budget %s, alert_threshold %s",
+                    valid_token.token,
+                    valid_token.spend,
+                    valid_token.max_budget,
+                    alert_threshold,
+                )
+                call_info = CallInfo(
+                    token=valid_token.token,
+                    spend=valid_token.spend,
+                    max_budget=valid_token.max_budget,
+                    soft_budget=valid_token.soft_budget,
+                    user_id=valid_token.user_id,
+                    team_id=valid_token.team_id,
+                    team_alias=valid_token.team_alias,
+                    organization_id=valid_token.org_id,
+                    user_email=owner_email,
+                    key_alias=valid_token.key_alias,
+                    event_group=Litellm_EntityType.KEY,
+                )
+
+                asyncio.create_task(
+                    proxy_logging_obj.budget_alerts(
+                        type="max_budget_alert",
+                        user_info=call_info,
+                    )
+                )
 
 
 async def _check_team_member_budget(
@@ -3122,13 +3320,31 @@ async def _check_team_member_budget(
             proxy_logging_obj=proxy_logging_obj,
         )
 
+        # Per-member override wins; otherwise fall back to the team-level
+        # default configured via team.metadata["team_member_budget_id"].
+        team_member_budget: Optional[float] = None
         if (
             team_membership is not None
             and team_membership.litellm_budget_table is not None
-            and team_membership.litellm_budget_table.max_budget is not None
         ):
             team_member_budget = team_membership.litellm_budget_table.max_budget
-            team_member_spend = team_membership.spend or 0.0
+        else:
+            default_budget_id = (team_object.metadata or {}).get(
+                "team_member_budget_id"
+            )
+            if isinstance(default_budget_id, str):
+                default_budget = await get_team_member_default_budget(
+                    budget_id=default_budget_id,
+                    prisma_client=prisma_client,
+                    user_api_key_cache=user_api_key_cache,
+                )
+                if default_budget is not None:
+                    team_member_budget = default_budget.max_budget
+
+        if team_member_budget is not None:
+            team_member_spend = (
+                team_membership.spend if team_membership is not None else 0.0
+            ) or 0.0
 
             # Read from cross-pod counter (Redis-first) if available
             from litellm.proxy.proxy_server import get_current_spend
@@ -3565,12 +3781,20 @@ async def _organization_max_budget_check(
     if org_max_budget is None or org_max_budget <= 0:
         return
 
+    # Read spend from cross-pod counter (Redis-first) or cached object (fallback)
+    from litellm.proxy.proxy_server import get_current_spend
+
+    org_spend = await get_current_spend(
+        counter_key=f"spend:org:{org_id}",
+        fallback_spend=org_table.spend or 0.0,
+    )
+
     # Check if organization spend exceeds max budget
-    if org_table.spend >= org_max_budget:
+    if org_spend >= org_max_budget:
         # Trigger budget alert
         call_info = CallInfo(
             token=valid_token.token,
-            spend=org_table.spend,
+            spend=org_spend,
             max_budget=org_max_budget,
             user_id=valid_token.user_id,
             team_id=valid_token.team_id,
@@ -3586,9 +3810,9 @@ async def _organization_max_budget_check(
         )
 
         raise litellm.BudgetExceededError(
-            current_cost=org_table.spend,
+            current_cost=org_spend,
             max_budget=org_max_budget,
-            message=f"Budget has been exceeded! Organization={org_id} Current cost: {org_table.spend}, Max budget: {org_max_budget}",
+            message=f"Budget has been exceeded! Organization={org_id} Current cost: {org_spend}, Max budget: {org_max_budget}",
         )
 
 
