@@ -25,6 +25,7 @@ from litellm.proxy._types import (
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper
 from litellm.proxy.common_utils.rbac_utils import check_feature_access_for_user
+from litellm.proxy.vector_store_endpoints.utils import can_user_access_vector_store
 from litellm.secret_managers.main import get_secret
 from litellm.types.vector_stores import (
     LiteLLM_ManagedVectorStore,
@@ -274,37 +275,22 @@ async def _resolve_embedding_config(
 ########################################################
 # Helper Functions
 ########################################################
-def _check_vector_store_access(
+async def _check_vector_store_access(
     vector_store: LiteLLM_ManagedVectorStore,
     user_api_key_dict: UserAPIKeyAuth,
 ) -> bool:
     """
-    Check if the user has access to the vector store based on team membership.
+    Check if the user has access to the vector store.
 
-    Args:
-        vector_store: The vector store to check access for
-        user_api_key_dict: User API key authentication info
-
-    Returns:
-        True if user has access, False otherwise
-
-    Access rules:
-    - If vector store has no team_id, it's accessible to all (legacy behavior)
-    - If user's team_id matches the vector store's team_id, access is granted
-    - Otherwise, access is denied
+    Delegates to :func:`can_user_access_vector_store`, which honors:
+    - PROXY_ADMIN bypass
+    - legacy vector stores with no team_id
+    - key-level and team-level ``object_permission.vector_stores`` allowlists
+    - team_id match between key and store
     """
-    vector_store_team_id = vector_store.get("team_id")
-
-    # If vector store has no team_id, it's accessible to all (legacy behavior)
-    if vector_store_team_id is None:
-        return True
-
-    # Check if user's team matches the vector store's team
-    user_team_id = user_api_key_dict.team_id
-    if user_team_id == vector_store_team_id:
-        return True
-
-    return False
+    return await can_user_access_vector_store(
+        vector_store=vector_store, user_api_key_dict=user_api_key_dict
+    )
 
 
 async def create_vector_store_in_db(
@@ -565,12 +551,11 @@ async def list_vector_stores(
                         vector_store_id=vector_store_id, updated_data=vector_store
                     )
 
-        # Filter vector stores based on team access
-        accessible_vector_stores = [
-            vs
-            for vs in vector_store_map.values()
-            if _check_vector_store_access(vs, user_api_key_dict)
-        ]
+        # Filter vector stores based on access control
+        accessible_vector_stores = []
+        for vs in vector_store_map.values():
+            if await _check_vector_store_access(vs, user_api_key_dict):
+                accessible_vector_stores.append(vs)
 
         total_count = len(accessible_vector_stores)
         total_pages = (total_count + page_size - 1) // page_size
@@ -647,7 +632,7 @@ async def delete_vector_store(
             )
 
         # Check access control
-        if vector_store_to_check and not _check_vector_store_access(
+        if vector_store_to_check and not await _check_vector_store_access(
             vector_store_to_check, user_api_key_dict
         ):
             raise HTTPException(
@@ -703,7 +688,9 @@ async def get_vector_store_info(
             )
             if vector_store is not None:
                 # Check access control
-                if not _check_vector_store_access(vector_store, user_api_key_dict):
+                if not await _check_vector_store_access(
+                    vector_store, user_api_key_dict
+                ):
                     raise HTTPException(
                         status_code=403,
                         detail="Access denied: You do not have permission to access this vector store",
@@ -749,7 +736,7 @@ async def get_vector_store_info(
         # Check access control for DB vector store
         vector_store_dict = vector_store.model_dump()  # type: ignore[attr-defined]
         vector_store_typed = LiteLLM_ManagedVectorStore(**vector_store_dict)
-        if not _check_vector_store_access(vector_store_typed, user_api_key_dict):
+        if not await _check_vector_store_access(vector_store_typed, user_api_key_dict):
             raise HTTPException(
                 status_code=403,
                 detail="Access denied: You do not have permission to access this vector store",
