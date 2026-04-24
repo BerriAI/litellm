@@ -2164,11 +2164,11 @@ class TestCLIKeyRegenerationFlow:
         with pytest.raises(HTTPException) as exc_info:
             await auth_callback(request=mock_request, state="test-state")
 
-        assert exc_info.value.status_code == 401
+        assert exc_info.value.status_code == 400
         assert (
             exc_info.value.detail
             == "OAuth error: access_denied, error_description: User denied consent"
-        assert exc_info.value.status_code == 400
+        )
 
     def test_get_redirect_url_does_not_include_existing_key_in_url(self):
         """Test that redirect URL generation does NOT include existing_key in URL (uses state parameter instead)"""
