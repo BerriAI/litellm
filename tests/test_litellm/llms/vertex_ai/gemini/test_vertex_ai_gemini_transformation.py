@@ -967,6 +967,94 @@ class TestMediaResolution:
             assert "mediaResolution" not in result["generationConfig"]
 
 
+# Tests for VideoMetadata support across all Gemini models (Issue #25474)
+class TestVideoMetadataAllGeminiModels:
+    """Tests that video_metadata (fps, start_offset, end_offset) works for all Gemini models"""
+
+    def _make_video_messages(self, video_metadata: dict) -> list:
+        return [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Analyze this video"},
+                    {
+                        "type": "file",
+                        "file": {
+                            "file_id": "gs://bucket/video.mp4",
+                            "format": "video/mp4",
+                            "video_metadata": video_metadata,
+                        },
+                    },
+                ],
+            }
+        ]
+
+    def _get_file_part(self, contents: list) -> dict:
+        for part in contents[0]["parts"]:
+            if "file_data" in part:
+                return part
+        raise AssertionError("No file part found in contents")
+
+    def test_video_metadata_fps_gemini_2_5_flash(self):
+        """Gemini 2.5 Flash: fps in video_metadata should be forwarded (Issue #25474)"""
+        messages = self._make_video_messages({"fps": 5})
+        contents = _gemini_convert_messages_with_history(
+            messages=messages, model="gemini-2.5-flash"
+        )
+        file_part = self._get_file_part(contents)
+        assert "video_metadata" in file_part
+        assert file_part["video_metadata"]["fps"] == 5
+
+    def test_video_metadata_fps_gemini_2_5_pro(self):
+        """Gemini 2.5 Pro: fps in video_metadata should be forwarded (Issue #25474)"""
+        messages = self._make_video_messages({"fps": 10})
+        contents = _gemini_convert_messages_with_history(
+            messages=messages, model="gemini-2.5-pro"
+        )
+        file_part = self._get_file_part(contents)
+        assert "video_metadata" in file_part
+        assert file_part["video_metadata"]["fps"] == 10
+
+    def test_video_metadata_offsets_gemini_2_5_flash(self):
+        """Gemini 2.5 Flash: start_offset/end_offset converted to camelCase (Issue #25474)"""
+        messages = self._make_video_messages(
+            {"start_offset": "5s", "end_offset": "30s"}
+        )
+        contents = _gemini_convert_messages_with_history(
+            messages=messages, model="gemini-2.5-flash"
+        )
+        file_part = self._get_file_part(contents)
+        assert "video_metadata" in file_part
+        vm = file_part["video_metadata"]
+        assert vm["startOffset"] == "5s"
+        assert vm["endOffset"] == "30s"
+
+    def test_video_metadata_all_fields_gemini_2_5_flash(self):
+        """Gemini 2.5 Flash: all video_metadata fields forwarded correctly (Issue #25474)"""
+        messages = self._make_video_messages(
+            {"fps": 5, "start_offset": "10s", "end_offset": "60s"}
+        )
+        contents = _gemini_convert_messages_with_history(
+            messages=messages, model="gemini-2.5-flash"
+        )
+        file_part = self._get_file_part(contents)
+        assert "video_metadata" in file_part
+        vm = file_part["video_metadata"]
+        assert vm["fps"] == 5
+        assert vm["startOffset"] == "10s"
+        assert vm["endOffset"] == "60s"
+
+    def test_video_metadata_gemini_1_5_pro(self):
+        """Gemini 1.5 Pro: video_metadata should also be forwarded (Issue #25474)"""
+        messages = self._make_video_messages({"fps": 2})
+        contents = _gemini_convert_messages_with_history(
+            messages=messages, model="gemini-1.5-pro"
+        )
+        file_part = self._get_file_part(contents)
+        assert "video_metadata" in file_part
+        assert file_part["video_metadata"]["fps"] == 2
+
+
 def test_convert_tool_response_with_base64_image():
     """Test tool response with base64 data URI image."""
     # Create a small test image (1x1 red pixel PNG)

@@ -306,7 +306,9 @@ def _health_check_deployment_is_wildcard(litellm_params: dict) -> bool:
     return "*" in _deployment_model_string_for_health_check(litellm_params)
 
 
-def _resolve_health_check_max_tokens(model_info: dict, litellm_params: dict) -> Optional[int]:
+def _resolve_health_check_max_tokens(
+    model_info: dict, litellm_params: dict
+) -> Optional[int]:
     """
     Pick max_tokens for the health check request.
 
@@ -341,10 +343,7 @@ def _resolve_health_check_max_tokens(model_info: dict, litellm_params: dict) -> 
                 return int(tokens_reasoning)
             if not is_reasoning and tokens_non_reasoning is not None:
                 return int(tokens_non_reasoning)
-        if (
-            is_reasoning
-            and BACKGROUND_HEALTH_CHECK_MAX_TOKENS_REASONING is not None
-        ):
+        if is_reasoning and BACKGROUND_HEALTH_CHECK_MAX_TOKENS_REASONING is not None:
             return int(BACKGROUND_HEALTH_CHECK_MAX_TOKENS_REASONING)
 
     if BACKGROUND_HEALTH_CHECK_MAX_TOKENS is not None:

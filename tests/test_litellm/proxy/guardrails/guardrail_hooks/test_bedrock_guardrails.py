@@ -12,11 +12,16 @@ from fastapi import HTTPException
 
 sys.path.insert(0, os.path.abspath("../../../../../.."))
 
+import litellm
+from litellm.caching.caching import DualCache
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails import (
     BedrockGuardrail,
     _redact_pii_matches,
 )
+from litellm.proxy.utils import ProxyLogging
+from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.utils import ModelResponse
 
 
 @pytest.mark.asyncio
@@ -105,10 +110,12 @@ async def test__redact_pii_matches_malformed_response():
     # Test with completely malformed response
     malformed_response = {
         "action": "GUARDRAIL_INTERVENED",
-        "assessments": "not_a_list",  # This should cause an exception
+        # Wrong type for assessments; redact_nested_match_and_regex_keys walks dict
+        # values and skips non-dict/list nodes, so this must not raise.
+        "assessments": "not_a_list",
     }
 
-    # Should not crash and return original response
+    # Should not crash (deep copy + walk skips the string value under assessments)
     redacted_response = _redact_pii_matches(malformed_response)
     assert redacted_response == malformed_response
 
@@ -187,7 +194,7 @@ async def test__redact_pii_matches_multiple_assessments():
 
 @pytest.mark.asyncio
 async def test_bedrock_guardrail_logging_uses_redacted_response():
-    """Test that the Bedrock guardrail uses redacted response for logging"""
+    """Debug logs and standard_logging payloads must not include raw match values."""
 
     # Create proper mock objects
     mock_user_api_key_dict = UserAPIKeyAuth()
@@ -292,6 +299,14 @@ async def test_bedrock_guardrail_logging_uses_redacted_response():
                 "piiEntities"
             ][0]["type"]
             == "PHONE"
+        )
+
+        slg_list = request_data["metadata"]["standard_logging_guardrail_information"]
+        assert (
+            slg_list[0]["guardrail_response"]["assessments"][0][
+                "sensitiveInformationPolicy"
+            ]["piiEntities"][0]["match"]
+            == "[REDACTED]"
         )
 
         print("Bedrock guardrail logging redaction test passed")
@@ -1114,6 +1129,72 @@ async def test_bedrock_apply_guardrail_with_only_tool_calls_response():
 
 
 @pytest.mark.asyncio
+async def test_bedrock_apply_guardrail_response_uses_OUTPUT_source():
+    """input_type='response' must call Bedrock with source=OUTPUT and assistant content.
+
+    Regression: apply_guardrail used to always use source=INPUT. Output-only Bedrock
+    policies (e.g. PII on model output) then returned action=NONE for non-streaming
+    completions that go through unified_guardrail -> process_output_response.
+    """
+    guardrail = BedrockGuardrail(
+        guardrailIdentifier="test-guardrail", guardrailVersion="DRAFT"
+    )
+    bedrock_none = {"action": "NONE", "output": [], "outputs": []}
+
+    with patch.object(
+        guardrail, "make_bedrock_api_request", new_callable=AsyncMock
+    ) as mock_api:
+        mock_api.return_value = bedrock_none
+
+        await guardrail.apply_guardrail(
+            inputs={"texts": ["first line", "second line"]},
+            request_data={"model": "gpt-4o"},
+            input_type="response",
+        )
+
+        mock_api.assert_called_once()
+        kwargs = mock_api.call_args.kwargs
+        assert kwargs["source"] == "OUTPUT"
+        assert kwargs["request_data"] == {"model": "gpt-4o"}
+        synthetic = kwargs["response"]
+        assert isinstance(synthetic, ModelResponse)
+        assert len(synthetic.choices) == 2
+        assert synthetic.choices[0].message.content == "first line"
+        assert synthetic.choices[0].message.role == "assistant"
+        assert synthetic.choices[1].message.content == "second line"
+        assert synthetic.choices[1].message.role == "assistant"
+
+
+@pytest.mark.asyncio
+async def test_bedrock_apply_guardrail_request_uses_INPUT_source():
+    """input_type='request' must call Bedrock with source=INPUT and user messages."""
+    guardrail = BedrockGuardrail(
+        guardrailIdentifier="test-guardrail", guardrailVersion="DRAFT"
+    )
+    bedrock_none = {"action": "NONE", "output": [], "outputs": []}
+
+    with patch.object(
+        guardrail, "make_bedrock_api_request", new_callable=AsyncMock
+    ) as mock_api:
+        mock_api.return_value = bedrock_none
+
+        await guardrail.apply_guardrail(
+            inputs={"texts": ["user prompt"]},
+            request_data={},
+            input_type="request",
+        )
+
+        mock_api.assert_called_once()
+        kwargs = mock_api.call_args.kwargs
+        assert kwargs["source"] == "INPUT"
+        assert kwargs["messages"] is not None
+        assert len(kwargs["messages"]) == 1
+        assert kwargs["messages"][0]["role"] == "user"
+        assert kwargs["messages"][0]["content"] == "user prompt"
+        assert kwargs.get("response") is None
+
+
+@pytest.mark.asyncio
 async def test_bedrock_guardrail_blocked_content_with_masking_enabled():
     """Test that BLOCKED content raises exception even when masking is enabled
 
@@ -1685,6 +1766,124 @@ async def test_bedrock_guardrail_blocked_vs_anonymized_actions():
 
 
 # ---------------------------------------------------------------------------
+# Spend logs: guardrail_mode (pre/during/post) vs Bedrock INPUT/OUTPUT
+# ---------------------------------------------------------------------------
+
+
+def test_bedrock_guardrail_uses_native_during_call_hook():
+    """during_call must use async_moderation_hook, not unified apply_guardrail(input=request)."""
+    assert BedrockGuardrail.use_native_during_call_hook is True
+
+
+@pytest.mark.asyncio
+async def test_make_bedrock_api_request_logging_event_type_for_spend_logs():
+    """
+    Spend/UI use event_type from the proxy hook, not Bedrock's INPUT/OUTPUT alone.
+    When logging_event_type is set, it must be forwarded to standard guardrail logging.
+    When omitted, INPUT maps to pre_call (legacy).
+    """
+    guardrail = BedrockGuardrail(
+        guardrailIdentifier="test-guardrail", guardrailVersion="DRAFT"
+    )
+    mock_credentials = MagicMock()
+    mock_credentials.access_key = "test-access-key"
+    mock_credentials.secret_key = "test-secret-key"
+    mock_credentials.token = None
+
+    mock_bedrock_response = MagicMock()
+    mock_bedrock_response.status_code = 200
+    mock_bedrock_response.json.return_value = {
+        "action": "NONE",
+        "assessments": [
+            {
+                "sensitiveInformationPolicy": {
+                    "piiEntities": [
+                        {"type": "NAME", "match": "GG", "action": "BLOCKED"}
+                    ]
+                }
+            }
+        ],
+    }
+
+    request_data = {
+        "model": "gpt-4o",
+        "messages": [{"role": "user", "content": "hi"}],
+    }
+
+    with patch.object(
+        guardrail.async_handler, "post", new_callable=AsyncMock
+    ) as mock_post, patch.object(
+        guardrail, "_load_credentials", return_value=(mock_credentials, "us-east-1")
+    ), patch.object(guardrail, "_prepare_request", return_value=MagicMock()), patch.object(
+        guardrail,
+        "add_standard_logging_guardrail_information_to_request_data",
+    ) as mock_log:
+        mock_post.return_value = mock_bedrock_response
+
+        await guardrail.make_bedrock_api_request(
+            source="INPUT",
+            messages=request_data["messages"],
+            request_data=request_data,
+            logging_event_type=GuardrailEventHooks.during_call,
+        )
+        assert mock_log.call_args.kwargs["event_type"] == GuardrailEventHooks.during_call
+        # Raw Bedrock JSON is forwarded; redaction runs once in
+        # CustomGuardrail.add_standard_logging_guardrail_information_to_request_data.
+        assert (
+            mock_log.call_args.kwargs["guardrail_json_response"]["assessments"][0][
+                "sensitiveInformationPolicy"
+            ]["piiEntities"][0]["match"]
+            == "GG"
+        )
+
+        mock_log.reset_mock()
+
+        await guardrail.make_bedrock_api_request(
+            source="INPUT",
+            messages=request_data["messages"],
+            request_data=request_data,
+        )
+        assert mock_log.call_args.kwargs["event_type"] == GuardrailEventHooks.pre_call
+
+
+@pytest.mark.asyncio
+async def test_during_call_hook_invokes_bedrock_async_moderation_hook():
+    """
+    Bedrock sets use_native_during_call_hook so ProxyLogging runs the real
+    async_moderation_hook (unified apply_guardrail would log INPUT as pre_call).
+    """
+    cache = DualCache()
+    proxy_logging = ProxyLogging(user_api_key_cache=cache)
+
+    guardrail = BedrockGuardrail(
+        guardrail_name="bedrock-during-test",
+        guardrailIdentifier="gid",
+        guardrailVersion="1",
+        event_hook=GuardrailEventHooks.during_call,
+        default_on=True,
+    )
+    mock_mod = AsyncMock(return_value=None)
+    original_callbacks = litellm.callbacks.copy() if litellm.callbacks else []
+    try:
+        litellm.callbacks = [guardrail]
+        with patch.object(guardrail, "async_moderation_hook", new=mock_mod):
+            await proxy_logging.during_call_hook(
+                data={
+                    "model": "gpt-4",
+                    "messages": [{"role": "user", "content": "test"}],
+                },
+                user_api_key_dict=UserAPIKeyAuth(
+                    api_key="test_key", user_id="test_user"
+                ),
+                call_type="completion",
+            )
+    finally:
+        litellm.callbacks = original_callbacks
+
+    mock_mod.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
 # L3: _extract_blocked_assessments + _get_http_exception_for_blocked_guardrail
 # Regression coverage for case 2026-04-10-internal-bedrock-guardrail-streaming-error.
 # ---------------------------------------------------------------------------
@@ -1699,7 +1898,7 @@ def _make_guardrail() -> BedrockGuardrail:
 
 
 def test_extract_blocked_assessments_pii_entity():
-    """L3: PII entity match (BLOCKED) is surfaced with category, type, and matched term."""
+    """L3: PII entity match (BLOCKED) is surfaced with category, type, and match."""
     g = _make_guardrail()
     response = {
         "action": "GUARDRAIL_INTERVENED",
@@ -1810,6 +2009,7 @@ def test_get_http_exception_includes_assessments_and_identifier():
     assert exc.detail["guardrailVersion"] == "1"
     assert exc.detail["assessments"][0]["policy"] == "sensitiveInformationPolicy"
     assert exc.detail["assessments"][0]["matches"][0]["type"] == "NAME"
+    assert exc.detail["assessments"][0]["matches"][0]["match"] == "[REDACTED]"
 
 
 def test_get_http_exception_no_blocked_assessments_omits_field():
@@ -1832,3 +2032,135 @@ def test_get_http_exception_no_blocked_assessments_omits_field():
     assert isinstance(exc, HTTPException)
     assert "assessments" not in exc.detail
     assert exc.detail["guardrailIdentifier"] == "amgllac6xf3r"
+
+
+@pytest.mark.asyncio
+async def test_streaming_post_call_parallel_output_passes_request_data_to_make_bedrock():
+    """
+    async_post_call_streaming_iterator_hook must pass request_data into OUTPUT
+    make_bedrock_api_request so spend/standard_logging attaches to the real request
+    (Greptile: previously OUTPUT used request_data=None / ephemeral {}).
+    """
+    request_data = {
+        "model": "gpt-4o-mini",
+        "messages": [{"role": "user", "content": "hi"}],
+        "metadata": {"stream_guardrail_logging": True},
+    }
+    guardrail = BedrockGuardrail(
+        guardrail_name="bedrock-stream-reqdata",
+        guardrailIdentifier="test-id",
+        guardrailVersion="DRAFT",
+        event_hook=GuardrailEventHooks.post_call,
+        default_on=True,
+    )
+    mock_chunks = [
+        litellm.ModelResponseStream(
+            id="tid",
+            choices=[
+                litellm.types.utils.StreamingChoices(
+                    delta=litellm.types.utils.Delta(content="Hi", role="assistant"),
+                    finish_reason=None,
+                    index=0,
+                )
+            ],
+            created=1,
+            model="gpt-4o-mini",
+            object="chat.completion.chunk",
+        ),
+        litellm.ModelResponseStream(
+            id="tid",
+            choices=[
+                litellm.types.utils.StreamingChoices(
+                    delta=litellm.types.utils.Delta(content="!", role="assistant"),
+                    finish_reason="stop",
+                    index=0,
+                )
+            ],
+            created=1,
+            model="gpt-4o-mini",
+            object="chat.completion.chunk",
+        ),
+    ]
+
+    async def mock_stream():
+        for c in mock_chunks:
+            yield c
+
+    minimal = {"action": "NONE", "assessments": [], "outputs": []}
+    with patch.object(
+        guardrail, "make_bedrock_api_request", AsyncMock(return_value=minimal)
+    ) as mock_make:
+        out = []
+        async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=UserAPIKeyAuth(),
+            response=mock_stream(),
+            request_data=request_data,
+        ):
+            out.append(chunk)
+
+    assert len(out) >= 1
+    output_calls = [
+        c for c in mock_make.call_args_list if c.kwargs.get("source") == "OUTPUT"
+    ]
+    assert len(output_calls) == 1
+    assert output_calls[0].kwargs.get("request_data") is request_data
+    assert (
+        output_calls[0].kwargs.get("logging_event_type")
+        == GuardrailEventHooks.post_call
+    )
+    input_calls = [
+        c for c in mock_make.call_args_list if c.kwargs.get("source") == "INPUT"
+    ]
+    assert len(input_calls) == 1
+    assert input_calls[0].kwargs.get("request_data") is request_data
+
+
+@pytest.mark.asyncio
+async def test_streaming_post_call_output_only_path_passes_request_data_to_make_bedrock():
+    """When INPUT validation is skipped (pre/during already ran), OUTPUT still gets request_data."""
+    request_data = {
+        "model": "gpt-4o-mini",
+        "messages": [{"role": "user", "content": "hi"}],
+    }
+    guardrail = BedrockGuardrail(
+        guardrail_name="bedrock-stream-out-only",
+        guardrailIdentifier="test-id",
+        guardrailVersion="DRAFT",
+        event_hook=GuardrailEventHooks.during_call,
+        default_on=True,
+    )
+    mock_chunks = [
+        litellm.ModelResponseStream(
+            id="tid",
+            choices=[
+                litellm.types.utils.StreamingChoices(
+                    delta=litellm.types.utils.Delta(content="x", role="assistant"),
+                    finish_reason="stop",
+                    index=0,
+                )
+            ],
+            created=1,
+            model="gpt-4o-mini",
+            object="chat.completion.chunk",
+        ),
+    ]
+
+    async def mock_stream():
+        for c in mock_chunks:
+            yield c
+
+    minimal = {"action": "NONE", "assessments": [], "outputs": []}
+    with patch.object(
+        guardrail, "make_bedrock_api_request", AsyncMock(return_value=minimal)
+    ) as mock_make:
+        async for _ in guardrail.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=UserAPIKeyAuth(),
+            response=mock_stream(),
+            request_data=request_data,
+        ):
+            pass
+
+    assert mock_make.call_count == 1
+    c = mock_make.call_args
+    assert c.kwargs.get("source") == "OUTPUT"
+    assert c.kwargs.get("request_data") is request_data

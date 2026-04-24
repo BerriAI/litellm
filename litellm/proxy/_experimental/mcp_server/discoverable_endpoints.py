@@ -323,6 +323,14 @@ async def authorize_with_server(
         )
 
     parsed = urlparse(redirect_uri)
+    if parsed.scheme not in ("http", "https"):
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "invalid_redirect_uri",
+                "message": "redirect_uri must use http or https scheme",
+            },
+        )
     base_url = urlunparse(parsed._replace(query=""))
     request_base_url = get_request_base_url(request)
     encoded_state = encode_state_with_base_url(
