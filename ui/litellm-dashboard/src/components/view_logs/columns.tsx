@@ -1,8 +1,13 @@
 import { getSpendString } from "@/utils/dataUtils";
 import type { ColumnDef } from "@tanstack/react-table";
-// eslint-disable-next-line litellm-ui/no-banned-ui-imports
-import { Badge, Button } from "@tremor/react";
-import { Tooltip } from "antd";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import React, { useState } from "react";
 import { getProviderLogoAndName } from "../provider_info_helpers";
 import { TableHeaderSortDropdown } from "../common_components/TableHeaderSortDropdown/TableHeaderSortDropdown";
@@ -75,6 +80,26 @@ export type LogEntry = {
   onKeyHashClick?: (keyHash: string) => void;
   onSessionClick?: (sessionId: string) => void;
 };
+
+/** Small wrapper that renders a shadcn Tooltip with its own provider so it drops
+ *  in where antd's `<Tooltip title=...>` used to go without needing a root-level
+ *  provider in every call site. */
+const HoverTooltip = ({
+  content,
+  children,
+  asChild = true,
+}: {
+  content: React.ReactNode;
+  children: React.ReactNode;
+  asChild?: boolean;
+}) => (
+  <TooltipProvider>
+    <Tooltip>
+      <TooltipTrigger asChild={asChild}>{children}</TooltipTrigger>
+      <TooltipContent>{content}</TooltipContent>
+    </Tooltip>
+  </TooltipProvider>
+);
 
 const SortableHeader = ({
   label,
@@ -162,9 +187,9 @@ export const createColumns = (sortProps?: LogsSortProps): ColumnDef<LogEntry>[] 
         sessionMcpCount > 0 && `${sessionMcpCount} MCP`,
       ].filter(Boolean);
       return (
-        <Tooltip title={tooltipParts.join(" • ")}>
+        <HoverTooltip content={tooltipParts.join(" • ")}>
           {sessionTypeBadge}
-        </Tooltip>
+        </HoverTooltip>
       );
     },
   },
@@ -193,16 +218,16 @@ export const createColumns = (sortProps?: LogsSortProps): ColumnDef<LogEntry>[] 
       const value = String(info.getValue() || "");
       const onSessionClick = info.row.original.onSessionClick;
       return (
-        <Tooltip title={String(info.getValue() || "")}>
+        <HoverTooltip content={value}>
           <Button
-            size="xs"
-            variant="light"
-            className="font-mono text-blue-500 bg-blue-50 hover:bg-blue-100 text-xs font-normal text-xs max-w-[15ch] truncate block"
+            size="sm"
+            variant="ghost"
+            className="h-auto py-0.5 px-2 font-mono text-blue-500 bg-blue-50 hover:bg-blue-100 text-xs font-normal max-w-[15ch] truncate block"
             onClick={() => onSessionClick?.(value)}
           >
-            {String(info.getValue() || "")}
+            {value}
           </Button>
-        </Tooltip>
+        </HoverTooltip>
       );
     },
   },
@@ -211,9 +236,9 @@ export const createColumns = (sortProps?: LogsSortProps): ColumnDef<LogEntry>[] 
     header: "Request ID",
     accessorKey: "request_id",
     cell: (info: any) => (
-      <Tooltip title={String(info.getValue() || "")}>
+      <HoverTooltip content={String(info.getValue() || "")}>
         <span className="font-mono text-xs max-w-[15ch] truncate block">{String(info.getValue() || "")}</span>
-      </Tooltip>
+      </HoverTooltip>
     ),
   },
   {
@@ -236,9 +261,9 @@ export const createColumns = (sortProps?: LogsSortProps): ColumnDef<LogEntry>[] 
 
       return (
         <div className="flex flex-col">
-          <Tooltip title={`$${String(info.getValue() || 0)}`}>
+          <HoverTooltip content={`$${String(info.getValue() || 0)}`}>
             <span>{getSpendString(info.getValue() || 0)}</span>
-          </Tooltip>
+          </HoverTooltip>
           {mcpCount > 0 && mcpSpend > 0 && (
             <span className="text-[10px] text-amber-600">
               incl. {getSpendString(mcpSpend)} from {mcpCount} MCP
@@ -266,9 +291,9 @@ export const createColumns = (sortProps?: LogsSortProps): ColumnDef<LogEntry>[] 
       if (ms == null) return <span>-</span>;
       const seconds = (ms / 1000).toFixed(2);
       return (
-        <Tooltip title={`${ms}ms`}>
+        <HoverTooltip content={`${ms}ms`}>
           <span className="max-w-[15ch] truncate block">{seconds}</span>
-        </Tooltip>
+        </HoverTooltip>
       );
     },
   },
@@ -285,9 +310,9 @@ export const createColumns = (sortProps?: LogsSortProps): ColumnDef<LogEntry>[] 
       if (ttftMs <= 0) return <span>-</span>;
       const ttftSeconds = (ttftMs / 1000).toFixed(2);
       return (
-        <Tooltip title={`${ttftMs}ms`}>
+        <HoverTooltip content={`${ttftMs}ms`}>
           <span className="max-w-[15ch] truncate block">{ttftSeconds}</span>
-        </Tooltip>
+        </HoverTooltip>
       );
     },
   },
@@ -295,9 +320,9 @@ export const createColumns = (sortProps?: LogsSortProps): ColumnDef<LogEntry>[] 
     header: "Team Name",
     accessorKey: "metadata.user_api_key_team_alias",
     cell: (info: any) => (
-      <Tooltip title={String(info.getValue() || "-")}>
+      <HoverTooltip content={String(info.getValue() || "-")}>
         <span className="max-w-[15ch] truncate block">{String(info.getValue() || "-")}</span>
-      </Tooltip>
+      </HoverTooltip>
     ),
   },
   {
@@ -308,14 +333,14 @@ export const createColumns = (sortProps?: LogsSortProps): ColumnDef<LogEntry>[] 
       const onKeyHashClick = info.row.original.onKeyHashClick;
 
       return (
-        <Tooltip title={value}>
+        <HoverTooltip content={value}>
           <span
             className="font-mono max-w-[15ch] truncate block cursor-pointer hover:text-blue-600"
             onClick={() => onKeyHashClick?.(value)}
           >
             {value}
           </span>
-        </Tooltip>
+        </HoverTooltip>
       );
     },
   },
@@ -323,9 +348,9 @@ export const createColumns = (sortProps?: LogsSortProps): ColumnDef<LogEntry>[] 
     header: "Key Name",
     accessorKey: "metadata.user_api_key_alias",
     cell: (info: any) => (
-      <Tooltip title={String(info.getValue() || "-")}>
+      <HoverTooltip content={String(info.getValue() || "-")}>
         <span className="max-w-[15ch] truncate block">{String(info.getValue() || "-")}</span>
-      </Tooltip>
+      </HoverTooltip>
     ),
   },
   {
@@ -348,9 +373,9 @@ export const createColumns = (sortProps?: LogsSortProps): ColumnDef<LogEntry>[] 
               }}
             />
           )}
-          <Tooltip title={modelName}>
+          <HoverTooltip content={modelName}>
             <span className="max-w-[15ch] truncate block">{modelName}</span>
-          </Tooltip>
+          </HoverTooltip>
         </div>
       );
     },
@@ -373,7 +398,7 @@ export const createColumns = (sortProps?: LogsSortProps): ColumnDef<LogEntry>[] 
       return (
         <span className="text-sm">
           {String(row.total_tokens || "0")}
-          <span className="text-gray-400 text-xs ml-1">
+          <span className="text-muted-foreground text-xs ml-1">
             ({String(row.prompt_tokens || "0")}+{String(row.completion_tokens || "0")})
           </span>
         </span>
@@ -384,18 +409,18 @@ export const createColumns = (sortProps?: LogsSortProps): ColumnDef<LogEntry>[] 
     header: "Internal User",
     accessorKey: "user",
     cell: (info: any) => (
-      <Tooltip title={String(info.getValue() || "-")}>
+      <HoverTooltip content={String(info.getValue() || "-")}>
         <span className="max-w-[15ch] truncate block">{String(info.getValue() || "-")}</span>
-      </Tooltip>
+      </HoverTooltip>
     ),
   },
   {
     header: "End User",
     accessorKey: "end_user",
     cell: (info: any) => (
-      <Tooltip title={String(info.getValue() || "-")}>
+      <HoverTooltip content={String(info.getValue() || "-")}>
         <span className="max-w-[15ch] truncate block">{String(info.getValue() || "-")}</span>
-      </Tooltip>
+      </HoverTooltip>
     ),
   },
 
@@ -412,8 +437,8 @@ export const createColumns = (sortProps?: LogsSortProps): ColumnDef<LogEntry>[] 
 
       return (
         <div className="flex flex-wrap gap-1">
-          <Tooltip
-            title={
+          <HoverTooltip
+            content={
               <div className="flex flex-col gap-1">
                 {tagEntries.map(([key, value]) => (
                   <span key={key}>
@@ -423,11 +448,11 @@ export const createColumns = (sortProps?: LogsSortProps): ColumnDef<LogEntry>[] 
               </div>
             }
           >
-            <span className="px-2 py-1 bg-gray-100 rounded-full text-xs">
+            <span className="px-2 py-1 bg-muted rounded-full text-xs">
               {firstTag[0]}: {String(firstTag[1])}
               {remainingTags.length > 0 && ` +${remainingTags.length}`}
             </span>
-          </Tooltip>
+          </HoverTooltip>
         </div>
       );
     },
@@ -464,12 +489,12 @@ export const RequestResponsePanel = ({ request, response }: { request: any; resp
 
   return (
     <div className="grid grid-cols-2 gap-4 mt-4">
-      <div className="rounded-lg border border-gray-200 bg-gray-50">
-        <div className="flex justify-between items-center p-3 border-b border-gray-200">
+      <div className="rounded-lg border border-border bg-muted/40">
+        <div className="flex justify-between items-center p-3 border-b border-border">
           <h3 className="text-sm font-medium">Request</h3>
           <button
             onClick={() => copyToClipboard(requestStr)}
-            className="p-1 hover:bg-gray-200 rounded"
+            className="p-1 hover:bg-muted rounded"
             title="Copy request"
           >
             <svg
@@ -491,12 +516,12 @@ export const RequestResponsePanel = ({ request, response }: { request: any; resp
         <pre className="p-4 overflow-auto text-xs font-mono h-64 whitespace-pre-wrap break-words">{requestStr}</pre>
       </div>
 
-      <div className="rounded-lg border border-gray-200 bg-gray-50">
-        <div className="flex justify-between items-center p-3 border-b border-gray-200">
+      <div className="rounded-lg border border-border bg-muted/40">
+        <div className="flex justify-between items-center p-3 border-b border-border">
           <h3 className="text-sm font-medium">Response</h3>
           <button
             onClick={() => copyToClipboard(responseStr)}
-            className="p-1 hover:bg-gray-200 rounded"
+            className="p-1 hover:bg-muted rounded"
             title="Copy response"
           >
             <svg
@@ -536,7 +561,7 @@ const CollapsibleJsonCell = ({ jsonData }: { jsonData: any }) => {
         {isExpanded ? "Hide JSON" : "Show JSON"} ({Object.keys(jsonData).length} fields)
       </button>
       {isExpanded && (
-        <pre className="mt-2 p-2 bg-gray-50 border rounded text-xs overflow-auto max-h-60">{jsonString}</pre>
+        <pre className="mt-2 p-2 bg-muted/40 border rounded text-xs overflow-auto max-h-60">{jsonString}</pre>
       )}
     </div>
   );
@@ -556,7 +581,7 @@ export type AuditLogEntry = {
 
 const getActionBadge = (action: string) => {
   return (
-    <Badge color="gray" className="flex items-center gap-1">
+    <Badge variant="secondary" className="flex items-center gap-1">
       <span className="whitespace-nowrap text-xs">{action}</span>
     </Badge>
   );
@@ -647,13 +672,11 @@ export const auditLogColumns: ColumnDef<AuditLogEntry>[] = [
         <div className="space-y-1">
           <div className="font-medium">{changedBy}</div>
           {apiKey && ( // Only show API key if it exists
-            <Tooltip title={apiKey}>
+            <HoverTooltip content={apiKey}>
               <div className="text-xs text-muted-foreground max-w-[15ch] truncate">
-                {" "}
-                {/* Apply max-width and truncate */}
                 {apiKey}
               </div>
-            </Tooltip>
+            </HoverTooltip>
           )}
         </div>
       );
@@ -680,11 +703,11 @@ export const auditLogColumns: ColumnDef<AuditLogEntry>[] = [
         };
 
         return (
-          <Tooltip title={copied ? "Copied!" : String(objectId)}>
+          <HoverTooltip content={copied ? "Copied!" : String(objectId)}>
             <span className="max-w-[20ch] truncate block cursor-pointer hover:text-blue-600" onClick={handleCopy}>
               {String(objectId)}
             </span>
-          </Tooltip>
+          </HoverTooltip>
         );
       };
       return <ObjectIdDisplay />;

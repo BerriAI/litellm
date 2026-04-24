@@ -1,6 +1,18 @@
 import { useState } from "react";
-import { Typography, Descriptions, Card, Tag, Tabs, Alert, Collapse, Radio, Space, Spin } from "antd";
 import moment from "moment";
+import { Copy as CopyIcon, LoaderCircle } from "lucide-react";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
+import { Card } from "@/components/ui/card";
+import {
+  Accordion,
+  AccordionContent,
+  AccordionItem,
+  AccordionTrigger,
+} from "@/components/ui/accordion";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+import { Label } from "@/components/ui/label";
 import { LogEntry } from "../columns";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import GuardrailViewer from "../GuardrailViewer/GuardrailViewer";
@@ -28,12 +40,9 @@ import {
   FONT_SIZE_SMALL,
   FONT_FAMILY_MONO,
   SPACING_XLARGE,
-  SPACING_MEDIUM,
 } from "./constants";
 import { ToolsSection } from "../ToolsSection";
 import { PrettyMessagesView } from "./PrettyMessagesView";
-
-const { Text } = Typography;
 
 export interface LogDetailContentProps {
   logEntry: LogEntry;
@@ -93,13 +102,12 @@ export function LogDetailContent({ logEntry, onOpenSettings, isLoadingDetails = 
     <div style={{ padding: `${DRAWER_CONTENT_PADDING} ${DRAWER_CONTENT_PADDING} 0` }}>
       {/* Error Alert */}
       {hasError && errorInfo && (
-        <Alert
-          type="error"
-          showIcon
-          message="Request Failed"
-          description={<ErrorDescription errorInfo={errorInfo} />}
-          className="mb-6"
-        />
+        <Alert variant="destructive" className="mb-6">
+          <AlertTitle>Request Failed</AlertTitle>
+          <AlertDescription>
+            <ErrorDescription errorInfo={errorInfo} />
+          </AlertDescription>
+        </Alert>
       )}
 
       {/* Tags */}
@@ -108,27 +116,28 @@ export function LogDetailContent({ logEntry, onOpenSettings, isLoadingDetails = 
       )}
 
       {/* Request Details */}
-      <div className="bg-white rounded-lg shadow w-full max-w-full overflow-hidden mb-6">
-        <Card title="Request Details" size="small" bordered={false} style={{ marginBottom: 0 }}>
-          <Descriptions column={2} size="small">
-            <Descriptions.Item label="Model">{logEntry.model}</Descriptions.Item>
-            <Descriptions.Item label="Provider">{logEntry.custom_llm_provider || "-"}</Descriptions.Item>
-            <Descriptions.Item label="Call Type">{logEntry.call_type}</Descriptions.Item>
-            <Descriptions.Item label="Model ID">
+      <div className="bg-background rounded-lg shadow w-full max-w-full overflow-hidden mb-6">
+        <Card className="p-0 border-0 shadow-none rounded-none">
+          <SectionTitle>Request Details</SectionTitle>
+          <DescriptionGrid columns={2}>
+            <DescriptionItem label="Model">{logEntry.model}</DescriptionItem>
+            <DescriptionItem label="Provider">{logEntry.custom_llm_provider || "-"}</DescriptionItem>
+            <DescriptionItem label="Call Type">{logEntry.call_type}</DescriptionItem>
+            <DescriptionItem label="Model ID">
               <TruncatedValue value={logEntry.model_id} />
-            </Descriptions.Item>
-            <Descriptions.Item label="API Base">
+            </DescriptionItem>
+            <DescriptionItem label="API Base">
               <TruncatedValue value={logEntry.api_base} maxWidth={API_BASE_MAX_WIDTH} />
-            </Descriptions.Item>
+            </DescriptionItem>
             {logEntry.requester_ip_address && (
-              <Descriptions.Item label="IP Address">{logEntry.requester_ip_address}</Descriptions.Item>
+              <DescriptionItem label="IP Address">{logEntry.requester_ip_address}</DescriptionItem>
             )}
             {hasGuardrailData && (
-              <Descriptions.Item label="Guardrail">
+              <DescriptionItem label="Guardrail">
                 <GuardrailLabel label={primaryGuardrailLabel} maskedCount={totalMaskedEntities} />
-              </Descriptions.Item>
+              </DescriptionItem>
             )}
-          </Descriptions>
+          </DescriptionGrid>
         </Card>
       </div>
 
@@ -159,9 +168,9 @@ export function LogDetailContent({ logEntry, onOpenSettings, isLoadingDetails = 
 
       {/* Request/Response JSON */}
       {isLoadingDetails ? (
-        <div className="bg-white rounded-lg shadow w-full max-w-full overflow-hidden mb-6 p-8 text-center">
-          <Spin size="default" />
-          <div style={{ marginTop: 8, color: "#999" }}>Loading request &amp; response data...</div>
+        <div className="bg-background rounded-lg shadow w-full max-w-full overflow-hidden mb-6 p-8 text-center">
+          <LoaderCircle className="animate-spin mx-auto text-muted-foreground" size={20} />
+          <div className="mt-2 text-muted-foreground">Loading request &amp; response data...</div>
         </div>
       ) : (
         <RequestResponseSection
@@ -208,17 +217,51 @@ export function LogDetailContent({ logEntry, onOpenSettings, isLoadingDetails = 
 // Helper Components
 // ============================================================================
 
+function SectionTitle({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="px-4 py-2 border-b text-sm font-semibold">
+      {children}
+    </div>
+  );
+}
+
+/** Replacement for antd `Descriptions` with `column={n}` layout — renders a
+ *  semantic `<dl>` as a grid of label/value pairs. */
+function DescriptionGrid({
+  columns = 2,
+  children,
+}: {
+  columns?: number;
+  children: React.ReactNode;
+}) {
+  const gridCols = columns === 2 ? "md:grid-cols-2" : columns === 3 ? "md:grid-cols-3" : "md:grid-cols-1";
+  return (
+    <dl className={`grid grid-cols-1 ${gridCols} gap-x-6 gap-y-2 p-4 text-sm`}>
+      {children}
+    </dl>
+  );
+}
+
+function DescriptionItem({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="ant-descriptions-item flex gap-2" role="group" aria-label={label}>
+      <dt className="text-muted-foreground font-medium min-w-[8rem]">{label}</dt>
+      <dd className="text-foreground">{children}</dd>
+    </div>
+  );
+}
+
 function ErrorDescription({ errorInfo }: { errorInfo: any }) {
   return (
     <div>
       {errorInfo.error_code && (
         <div>
-          <Text strong>Error Code:</Text> {errorInfo.error_code}
+          <strong>Error Code:</strong> {errorInfo.error_code}
         </div>
       )}
       {errorInfo.error_message && (
         <div>
-          <Text strong>Message:</Text> {errorInfo.error_message}
+          <strong>Message:</strong> {errorInfo.error_message}
         </div>
       )}
     </div>
@@ -227,17 +270,15 @@ function ErrorDescription({ errorInfo }: { errorInfo: any }) {
 
 function TagsSection({ tags }: { tags: Record<string, any> }) {
   return (
-    <div className="bg-white rounded-lg shadow w-full max-w-full overflow-hidden p-4 mb-6">
-      <Text strong style={{ display: "block", marginBottom: 8, fontSize: 16 }}>
-        Tags
-      </Text>
-      <Space size={SPACING_MEDIUM} wrap>
+    <div className="bg-background rounded-lg shadow w-full max-w-full overflow-hidden p-4 mb-6">
+      <div className="font-semibold text-base mb-2">Tags</div>
+      <div className="flex flex-wrap gap-2">
         {Object.entries(tags).map(([key, value]) => (
-          <Tag key={key}>
+          <Badge key={key} variant="secondary">
             {key}: {String(value)}
-          </Tag>
+          </Badge>
         ))}
-      </Space>
+      </div>
     </div>
   );
 }
@@ -249,14 +290,14 @@ function GuardrailLabel({ label, maskedCount }: { label: string; maskedCount: nu
   };
 
   return (
-    <Space size={SPACING_MEDIUM}>
-      <a onClick={handleClick} style={{ cursor: "pointer" }}>{label}</a>
+    <span className="inline-flex items-center gap-2">
+      <a onClick={handleClick} className="cursor-pointer hover:underline">{label}</a>
       {maskedCount > 0 && (
-        <Tag color="blue">
+        <Badge className="bg-blue-100 text-blue-700 hover:bg-blue-100">
           {maskedCount} masked
-        </Tag>
+        </Badge>
       )}
-    </Space>
+    </span>
   );
 }
 
@@ -286,84 +327,85 @@ function MetricsSection({ logEntry, metadata }: { logEntry: LogEntry; metadata: 
       metadata.additional_usage_values.cache_read_input_tokens > 0);
 
   const cacheHitValue = String(logEntry.cache_hit ?? "None");
-  const cacheHitColor =
+  const cacheHitBadgeClass =
     cacheHitValue.toLowerCase() === "true"
-      ? "green"
+      ? "bg-green-100 text-green-700"
       : cacheHitValue.toLowerCase() === "false"
-        ? "red"
-        : "default";
+        ? "bg-red-100 text-red-700"
+        : "bg-muted text-foreground";
 
   const uncachedInputTokens = getUncachedInputTextTokens(metadata);
   const showAnthropicMessagesInputOutput =
     logEntry.call_type === "anthropic_messages" && uncachedInputTokens !== undefined;
 
   return (
-    <div className="bg-white rounded-lg shadow w-full max-w-full overflow-hidden mb-6">
-      <Card title="Metrics" size="small" style={{ marginBottom: 0 }}>
-        <Descriptions column={2} size="small">
+    <div className="bg-background rounded-lg shadow w-full max-w-full overflow-hidden mb-6">
+      <Card className="p-0 border-0 shadow-none rounded-none">
+        <SectionTitle>Metrics</SectionTitle>
+        <DescriptionGrid columns={2}>
           {showAnthropicMessagesInputOutput ? (
             <>
-              <Descriptions.Item label="Input Tokens">
+              <DescriptionItem label="Input Tokens">
                 {formatNumberWithCommas(uncachedInputTokens)}
-              </Descriptions.Item>
-              <Descriptions.Item label="Output Tokens">
+              </DescriptionItem>
+              <DescriptionItem label="Output Tokens">
                 {formatNumberWithCommas(logEntry.completion_tokens)}
-              </Descriptions.Item>
+              </DescriptionItem>
             </>
           ) : (
-            <Descriptions.Item label="Tokens">
+            <DescriptionItem label="Tokens">
               <TokenFlow
                 prompt={logEntry.prompt_tokens}
                 completion={logEntry.completion_tokens}
                 total={logEntry.total_tokens}
               />
-            </Descriptions.Item>
+            </DescriptionItem>
           )}
-          <Descriptions.Item label="Cost">${formatNumberWithCommas(logEntry.spend || 0, 8)}</Descriptions.Item>
-          <Descriptions.Item label="Duration">{logEntry.request_duration_ms != null ? (logEntry.request_duration_ms / 1000).toFixed(3) : "-"} s</Descriptions.Item>
+          <DescriptionItem label="Cost">${formatNumberWithCommas(logEntry.spend || 0, 8)}</DescriptionItem>
+          <DescriptionItem label="Duration">{logEntry.request_duration_ms != null ? (logEntry.request_duration_ms / 1000).toFixed(3) : "-"} s</DescriptionItem>
           {ttftMs != null && ttftMs > 0 && (
-            <Descriptions.Item label="Time to First Token">{(ttftMs / 1000).toFixed(3)} s</Descriptions.Item>
+            <DescriptionItem label="Time to First Token">{(ttftMs / 1000).toFixed(3)} s</DescriptionItem>
           )}
 
           {hasCacheActivity && (
             <>
-              <Descriptions.Item label="Cache Hit">
-                <Tag color={cacheHitColor}>{cacheHitValue}</Tag>
-              </Descriptions.Item>
+              <DescriptionItem label="Cache Hit">
+                <Badge className={cacheHitBadgeClass}>{cacheHitValue}</Badge>
+              </DescriptionItem>
               {metadata?.additional_usage_values?.cache_read_input_tokens > 0 && (
-                <Descriptions.Item label="Cache Read Tokens">
+                <DescriptionItem label="Cache Read Tokens">
                   {formatNumberWithCommas(metadata.additional_usage_values.cache_read_input_tokens)}
-                </Descriptions.Item>
+                </DescriptionItem>
               )}
               {metadata?.additional_usage_values?.cache_creation_input_tokens > 0 && (
-                <Descriptions.Item label="Cache Creation Tokens">
+                <DescriptionItem label="Cache Creation Tokens">
                   {formatNumberWithCommas(metadata.additional_usage_values.cache_creation_input_tokens)}
-                </Descriptions.Item>
+                </DescriptionItem>
               )}
             </>
           )}
 
           {metadata?.litellm_overhead_time_ms !== undefined && metadata.litellm_overhead_time_ms !== null && (
-            <Descriptions.Item label="LiteLLM Overhead">
+            <DescriptionItem label="LiteLLM Overhead">
               {metadata.litellm_overhead_time_ms.toFixed(2)} ms
-            </Descriptions.Item>
+            </DescriptionItem>
           )}
 
-          <Descriptions.Item label="Retries">
+          <DescriptionItem label="Retries">
             {metadata?.attempted_retries !== undefined && metadata?.attempted_retries !== null
               ? metadata.attempted_retries > 0
                 ? <>{metadata.attempted_retries}{metadata.max_retries !== undefined && metadata.max_retries !== null ? ` / ${metadata.max_retries}` : ''}</>
-                : <Tag color="green">None</Tag>
+                : <Badge className="bg-green-100 text-green-700 hover:bg-green-100">None</Badge>
               : "-"}
-          </Descriptions.Item>
+          </DescriptionItem>
 
-          <Descriptions.Item label="Start Time">
+          <DescriptionItem label="Start Time">
             {moment(logEntry.startTime).format("YYYY-MM-DDTHH:mm:ss.SSS[Z]")}
-          </Descriptions.Item>
-          <Descriptions.Item label="End Time">
+          </DescriptionItem>
+          <DescriptionItem label="End Time">
             {moment(logEntry.endTime).format("YYYY-MM-DDTHH:mm:ss.SSS[Z]")}
-          </Descriptions.Item>
-        </Descriptions>
+          </DescriptionItem>
+        </DescriptionGrid>
       </Card>
     </div>
   );
@@ -392,6 +434,14 @@ function RequestResponseSection({
     return JSON.stringify(data, null, 2);
   };
 
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(getCopyText());
+    } catch {
+      /* noop */
+    }
+  };
+
   const totalSpend = logEntry.spend ?? 0;
   const promptTokens = logEntry.prompt_tokens || 0;
   const completionTokens = logEntry.completion_tokens || 0;
@@ -412,93 +462,83 @@ function RequestResponseSection({
       : 0;
 
   return (
-    <div className="bg-white rounded-lg shadow w-full max-w-full overflow-hidden mb-6">
-      <Collapse
-        defaultActiveKey={["1"]}
-        expandIconPosition="start"
-        items={[
-          {
-            key: "1",
-            label: (
-              <div
-                style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%' }}
-                onClick={(e) => {
-                  const target = e.target as HTMLElement;
-                  if (target.closest('.ant-radio-group')) {
-                    e.stopPropagation();
-                  }
-                }}
+    <div className="bg-background rounded-lg shadow w-full max-w-full overflow-hidden mb-6">
+      <Accordion type="single" collapsible defaultValue="request-response" className="w-full">
+        <AccordionItem value="request-response" className="border-b-0">
+          <div className="flex items-center justify-between pr-4">
+            <AccordionTrigger className="flex-1 px-4 py-3 hover:no-underline">
+              <h3 className="text-lg font-medium text-foreground m-0">Request &amp; Response</h3>
+            </AccordionTrigger>
+            <div onClick={(e) => e.stopPropagation()}>
+              <RadioGroup
+                value={viewMode}
+                onValueChange={(v) => setViewMode(v as 'pretty' | 'json')}
+                className="flex items-center gap-2"
               >
-                <h3 className="text-lg font-medium text-gray-900" style={{ margin: 0 }}>Request & Response</h3>
-                <Radio.Group
-                  size="small"
-                  value={viewMode}
-                  onChange={(e) => setViewMode(e.target.value)}
-                >
-                  <Radio.Button value="pretty">Pretty</Radio.Button>
-                  <Radio.Button value="json">JSON</Radio.Button>
-                </Radio.Group>
-              </div>
-            ),
-            children: (
-              <div>
-                {viewMode === 'pretty' ? (
-                  <PrettyMessagesView
-                    request={getRawRequest()}
-                    response={getFormattedResponse()}
-                    metrics={{
-                      prompt_tokens: promptTokens,
-                      completion_tokens: completionTokens,
-                      input_cost: inputCost,
-                      output_cost: outputCost,
-                    }}
-                  />
-                ) : (
-                  <Tabs
-                    activeKey={activeTab}
-                    onChange={(key) => setActiveTab(key as typeof TAB_REQUEST | typeof TAB_RESPONSE)}
-                    tabBarExtraContent={
-                      <Text
-                        copyable={{
-                          text: getCopyText(),
-                          tooltips: ["Copy JSON", "Copied!"]
-                        }}
-                        disabled={activeTab === TAB_RESPONSE && !hasResponse && !hasError}
-                      />
-                    }
-                    items={[
-                      {
-                        key: TAB_REQUEST,
-                        label: "Request",
-                        children: (
-                          <div style={{ paddingTop: SPACING_XLARGE, paddingBottom: SPACING_XLARGE }}>
-                            <JsonViewer data={getRawRequest()} mode="formatted" />
-                          </div>
-                        ),
-                      },
-                      {
-                        key: TAB_RESPONSE,
-                        label: "Response",
-                        children: (
-                          <div style={{ paddingTop: SPACING_XLARGE, paddingBottom: SPACING_XLARGE }}>
-                            {hasResponse || hasError ? (
-                              <JsonViewer data={getFormattedResponse()} mode="formatted" />
-                            ) : (
-                              <div style={{ textAlign: "center", padding: 20, color: "#999", fontStyle: "italic" }}>
-                                Response data not available
-                              </div>
-                            )}
-                          </div>
-                        ),
-                      },
-                    ]}
-                  />
-                )}
-              </div>
-            ),
-          },
-        ]}
-      />
+                <div className="flex items-center gap-1">
+                  <RadioGroupItem value="pretty" id="view-mode-pretty" />
+                  <Label htmlFor="view-mode-pretty" className="cursor-pointer text-sm font-normal">Pretty</Label>
+                </div>
+                <div className="flex items-center gap-1">
+                  <RadioGroupItem value="json" id="view-mode-json" />
+                  <Label htmlFor="view-mode-json" className="cursor-pointer text-sm font-normal">JSON</Label>
+                </div>
+              </RadioGroup>
+            </div>
+          </div>
+          <AccordionContent>
+            <div className="px-4">
+              {viewMode === 'pretty' ? (
+                <PrettyMessagesView
+                  request={getRawRequest()}
+                  response={getFormattedResponse()}
+                  metrics={{
+                    prompt_tokens: promptTokens,
+                    completion_tokens: completionTokens,
+                    input_cost: inputCost,
+                    output_cost: outputCost,
+                  }}
+                />
+              ) : (
+                <Tabs value={activeTab} onValueChange={(k) => setActiveTab(k as typeof TAB_REQUEST | typeof TAB_RESPONSE)}>
+                  <div className="flex items-center justify-between">
+                    <TabsList>
+                      <TabsTrigger value={TAB_REQUEST}>Request</TabsTrigger>
+                      <TabsTrigger value={TAB_RESPONSE}>Response</TabsTrigger>
+                    </TabsList>
+                    <button
+                      type="button"
+                      onClick={handleCopy}
+                      disabled={activeTab === TAB_RESPONSE && !hasResponse && !hasError}
+                      className="p-1 text-muted-foreground hover:text-foreground disabled:opacity-40"
+                      aria-label="Copy JSON"
+                      title="Copy JSON"
+                    >
+                      <CopyIcon size={14} />
+                    </button>
+                  </div>
+                  <TabsContent value={TAB_REQUEST}>
+                    <div style={{ paddingTop: SPACING_XLARGE, paddingBottom: SPACING_XLARGE }}>
+                      <JsonViewer data={getRawRequest()} mode="formatted" />
+                    </div>
+                  </TabsContent>
+                  <TabsContent value={TAB_RESPONSE}>
+                    <div style={{ paddingTop: SPACING_XLARGE, paddingBottom: SPACING_XLARGE }}>
+                      {hasResponse || hasError ? (
+                        <JsonViewer data={getFormattedResponse()} mode="formatted" />
+                      ) : (
+                        <div className="text-center p-5 text-muted-foreground italic">
+                          Response data not available
+                        </div>
+                      )}
+                    </div>
+                  </TabsContent>
+                </Tabs>
+              )}
+            </div>
+          </AccordionContent>
+        </AccordionItem>
+      </Accordion>
     </div>
   );
 }
@@ -515,68 +555,68 @@ export function GuardrailJumpLink({ guardrailEntries }: { guardrailEntries: any[
   };
 
   return (
-    <div style={{ textAlign: "left", marginBottom: 12 }}>
+    <div className="text-left mb-3">
       <div
         onClick={handleClick}
-        style={{
-          display: "inline-flex",
-          alignItems: "center",
-          gap: 6,
-          padding: "4px 12px",
-          borderRadius: 16,
-          cursor: "pointer",
-          fontSize: 13,
-          fontWeight: 500,
-          backgroundColor: allPassed ? "#f0fdf4" : "#fef2f2",
-          color: allPassed ? "#15803d" : "#b91c1c",
-          border: `1px solid ${allPassed ? "#bbf7d0" : "#fecaca"}`,
-        }}
+        className={`inline-flex items-center gap-1.5 py-1 px-3 rounded-2xl cursor-pointer text-xs font-medium border ${
+          allPassed
+            ? "bg-green-50 text-green-700 border-green-200"
+            : "bg-red-50 text-red-700 border-red-200"
+        }`}
       >
         {allPassed ? "\u2713" : "\u2717"} {guardrailEntries.length} guardrail{guardrailEntries.length !== 1 ? "s" : ""} evaluated
-        <span style={{ fontSize: 11, opacity: 0.7 }}>{"\u2193"}</span>
+        <span className="text-[11px] opacity-70">{"\u2193"}</span>
       </div>
     </div>
   );
 }
 
 function MetadataSection({ metadata }: { metadata: Record<string, any> }) {
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(JSON.stringify(metadata, null, 2));
+    } catch {
+      /* noop */
+    }
+  };
+
   return (
-    <div className="bg-white rounded-lg shadow w-full max-w-full overflow-hidden mb-6">
-      <Collapse
-        defaultActiveKey={["1"]}
-        expandIconPosition="start"
-        items={[
-          {
-            key: "1",
-            label: <h3 className="text-lg font-medium text-gray-900">Metadata</h3>,
-            children: (
-              <div>
-                <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 8 }}>
-                  <Text
-                    copyable={{
-                      text: JSON.stringify(metadata, null, 2),
-                      tooltips: ["Copy Metadata", "Copied!"]
-                    }}
-                  />
-                </div>
-                <pre
-                  style={{
-                    maxHeight: METADATA_MAX_HEIGHT,
-                    overflowY: "auto",
-                    fontSize: FONT_SIZE_SMALL,
-                    fontFamily: FONT_FAMILY_MONO,
-                    whiteSpace: "pre-wrap",
-                    wordBreak: "break-all",
-                    margin: 0,
-                  }}
+    <div className="bg-background rounded-lg shadow w-full max-w-full overflow-hidden mb-6">
+      <Accordion type="single" collapsible defaultValue="metadata" className="w-full">
+        <AccordionItem value="metadata" className="border-b-0">
+          <AccordionTrigger className="px-4 py-3 hover:no-underline">
+            <h3 className="text-lg font-medium text-foreground m-0">Metadata</h3>
+          </AccordionTrigger>
+          <AccordionContent>
+            <div className="px-4 pb-4">
+              <div className="flex justify-end mb-2">
+                <button
+                  type="button"
+                  onClick={handleCopy}
+                  className="p-1 text-muted-foreground hover:text-foreground"
+                  aria-label="Copy Metadata"
+                  title="Copy Metadata"
                 >
-                  {JSON.stringify(metadata, null, 2)}
-                </pre>
+                  <CopyIcon size={14} />
+                </button>
               </div>
-            ),
-          },
-        ]}
-      />
+              <pre
+                style={{
+                  maxHeight: METADATA_MAX_HEIGHT,
+                  overflowY: "auto",
+                  fontSize: FONT_SIZE_SMALL,
+                  fontFamily: FONT_FAMILY_MONO,
+                  whiteSpace: "pre-wrap",
+                  wordBreak: "break-all",
+                  margin: 0,
+                }}
+              >
+                {JSON.stringify(metadata, null, 2)}
+              </pre>
+            </div>
+          </AccordionContent>
+        </AccordionItem>
+      </Accordion>
     </div>
   );
 }

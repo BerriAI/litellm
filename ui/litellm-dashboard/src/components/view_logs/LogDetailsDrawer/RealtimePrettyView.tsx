@@ -5,11 +5,32 @@
  */
 
 import { useState } from 'react';
-import { Typography, Tag, Tooltip } from 'antd';
+import { Badge } from "@/components/ui/badge";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { Volume2 as SoundOutlined, MessageSquare as MessageOutlined, Settings as SettingOutlined, Mic as AudioOutlined, ChevronDown as DownOutlined, ChevronUp as UpOutlined } from "lucide-react";
 import { SectionHeader } from './SectionHeader';
 
-const { Text } = Typography;
+/** Mimics antd `Typography.Text`'s `type="secondary"` mutted-gray style. */
+function SecondaryText({
+  children,
+  className = "",
+  style,
+}: {
+  children: React.ReactNode;
+  className?: string;
+  style?: React.CSSProperties;
+}) {
+  return (
+    <span className={`text-muted-foreground ${className}`} style={style}>
+      {children}
+    </span>
+  );
+}
 
 interface RealtimeEvent {
   type: string;
@@ -170,30 +191,27 @@ function SessionCard({ session, turnCount }: { session: RealtimeSession; turnCou
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <SettingOutlined style={{ color: '#8c8c8c', fontSize: 14 }} />
-            <Text style={{ fontWeight: 500, fontSize: 14 }}>Session</Text>
+            <span style={{ fontWeight: 500, fontSize: 14 }}>Session</span>
           </div>
-          <Text type="secondary" style={{ fontSize: 12 }}>
+          <SecondaryText style={{ fontSize: 12 }}>
             {session.model}
-          </Text>
+          </SecondaryText>
           {turnCount > 0 && (
-            <Tag
-              color="purple"
-              style={{ margin: 0, fontWeight: 500 }}
-            >
+            <Badge className="bg-purple-100 text-purple-700 hover:bg-purple-100 font-medium">
               {turnCount} {turnCount === 1 ? 'turn' : 'turns'}
-            </Tag>
+            </Badge>
           )}
           {session.voice && (
-            <Tag color="blue" style={{ margin: 0 }}>
-              <SoundOutlined /> {session.voice}
-            </Tag>
+            <Badge className="bg-blue-100 text-blue-700 hover:bg-blue-100 gap-1">
+              <SoundOutlined size={12} /> {session.voice}
+            </Badge>
           )}
           {session.modalities && (
             <div style={{ display: 'flex', gap: 4 }}>
               {session.modalities.map((m) => (
-                <Tag key={m} style={{ margin: 0 }}>
-                  {m === 'audio' ? <AudioOutlined /> : <MessageOutlined />} {m}
-                </Tag>
+                <Badge key={m} variant="secondary" className="gap-1">
+                  {m === 'audio' ? <AudioOutlined size={12} /> : <MessageOutlined size={12} />} {m}
+                </Badge>
               ))}
             </div>
           )}
@@ -248,8 +266,7 @@ function SessionCard({ session, turnCount }: { session: RealtimeSession; turnCou
 
           {session.instructions && (
             <div style={{ marginTop: 12 }}>
-              <Text
-                type="secondary"
+              <SecondaryText
                 style={{
                   fontSize: 10,
                   letterSpacing: '0.5px',
@@ -259,7 +276,7 @@ function SessionCard({ session, turnCount }: { session: RealtimeSession; turnCou
                 }}
               >
                 Instructions
-              </Text>
+              </SecondaryText>
               <div
                 style={{
                   fontSize: 12,
@@ -374,26 +391,31 @@ function ResponseTurn({
           marginBottom: 8,
         }}
       >
-        <Tag
-          color={response.status === 'completed' ? 'green' : 'orange'}
-          style={{ margin: 0 }}
+        <Badge
+          className={
+            response.status === 'completed'
+              ? "bg-green-100 text-green-700 hover:bg-green-100"
+              : "bg-orange-100 text-orange-700 hover:bg-orange-100"
+          }
         >
           {response.status || 'unknown'}
-        </Tag>
+        </Badge>
         {usage && (
-          <Text type="secondary" style={{ fontSize: 11 }}>
+          <SecondaryText style={{ fontSize: 11 }}>
             {usage.input_tokens ?? 0} in / {usage.output_tokens ?? 0} out tokens
-          </Text>
+          </SecondaryText>
         )}
         {response.conversation_id && (
-          <Tooltip title={response.conversation_id}>
-            <Text
-              type="secondary"
-              style={{ fontSize: 11, cursor: 'help' }}
-            >
-              conv: {response.conversation_id.slice(0, 12)}...
-            </Text>
-          </Tooltip>
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span className="text-muted-foreground cursor-help" style={{ fontSize: 11 }}>
+                  conv: {response.conversation_id.slice(0, 12)}...
+                </span>
+              </TooltipTrigger>
+              <TooltipContent>{response.conversation_id}</TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
         )}
       </div>
 
@@ -427,8 +449,7 @@ function OutputMessage({ output }: { output: RealtimeOutputItem }) {
 
   return (
     <div style={{ marginBottom: 8 }}>
-      <Text
-        type="secondary"
+      <SecondaryText
         style={{
           fontSize: 10,
           letterSpacing: '0.5px',
@@ -438,7 +459,7 @@ function OutputMessage({ output }: { output: RealtimeOutputItem }) {
         }}
       >
         {output.role?.toUpperCase() || 'ASSISTANT'}
-      </Text>
+      </SecondaryText>
       {contents.map((c, cIdx) => {
         const text = c.transcript || c.text;
         if (!text) return null;
@@ -507,12 +528,11 @@ function TokenBreakdown({
 
   return (
     <div style={{ marginTop: 4 }}>
-      <Text
-        type="secondary"
+      <SecondaryText
         style={{ fontSize: 10, letterSpacing: '0.5px', textTransform: 'uppercase' }}
       >
         {label} Token Breakdown
-      </Text>
+      </SecondaryText>
       <div
         style={{
           display: 'flex',
@@ -524,9 +544,9 @@ function TokenBreakdown({
         {entries.map(([key, value]) => {
           if (typeof value === 'number') {
             return (
-              <Tag key={key} style={{ margin: 0 }}>
+              <Badge key={key} variant="secondary">
                 {formatTokenLabel(key)}: {value.toLocaleString()}
-              </Tag>
+              </Badge>
             );
           }
           return null;
@@ -546,10 +566,10 @@ function ConfigRow({
   if (value === undefined || value === null) return null;
   return (
     <div>
-      <Text type="secondary" style={{ fontSize: 11 }}>
+      <SecondaryText style={{ fontSize: 11 }}>
         {label}
-      </Text>
-      <div style={{ fontSize: 13, color: '#262626' }}>
+      </SecondaryText>
+      <div style={{ fontSize: 13 }} className="text-foreground">
         {String(value)}
       </div>
     </div>

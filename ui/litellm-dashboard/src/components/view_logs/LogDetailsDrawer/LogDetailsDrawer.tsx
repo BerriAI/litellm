@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
-import { Button, Drawer } from "antd";
+import { Button } from "@/components/ui/button";
+import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { Check as CheckOutlined, Copy as CopyOutlined, ChevronLeft as LeftOutlined, ChevronRight as RightOutlined } from "lucide-react";
 import { Bot, Sparkles, Wrench } from "lucide-react";
 import { LogEntry } from "../columns";
@@ -239,39 +240,34 @@ export function LogDetailsDrawer({
   if (!currentLog || !enrichedLog) return null;
 
   return (
-    <Drawer
-      title={null}
-      placement="right"
-      onClose={onClose}
-      open={open}
-      width={DRAWER_WIDTH}
-      closable={false}
-      mask={true}
-      maskClosable={true}
-      styles={{
-        body: { padding: 0, overflow: "hidden" },
-        header: { display: "none" },
-      }}
-    >
-      <div style={{ height: "100%" }} className="flex relative">
+    <Sheet open={open} onOpenChange={(o) => { if (!o) onClose(); }}>
+      <SheetContent
+        side="right"
+        className="p-0 overflow-hidden sm:max-w-none"
+        style={{ width: DRAWER_WIDTH, maxWidth: "none" }}
+      >
+        <SheetTitle className="sr-only">Log Details</SheetTitle>
+        <div style={{ height: "100%" }} className="flex relative">
           {!isSidebarCollapsed ? (
             <Button
-              type="text"
-              size="small"
-              icon={<LeftOutlined />}
+              variant="ghost"
+              size="icon"
               onClick={() => setIsSidebarCollapsed(true)}
-              className="absolute top-2 left-2 z-20 !bg-white !border !border-slate-200 !rounded-md"
+              className="absolute top-2 left-2 z-20 h-7 w-7 bg-background border border-border rounded-md"
               aria-label="Collapse trace sidebar"
-            />
+            >
+              <LeftOutlined className="h-3.5 w-3.5" />
+            </Button>
           ) : (
             <Button
-              type="text"
-              size="small"
-              icon={<RightOutlined />}
+              variant="ghost"
+              size="icon"
               onClick={() => setIsSidebarCollapsed(false)}
-              className="absolute top-2 left-2 z-20 !bg-white !border !border-slate-200 !rounded-md"
+              className="absolute top-2 left-2 z-20 h-7 w-7 bg-background border border-border rounded-md"
               aria-label="Expand trace sidebar"
-            />
+            >
+              <RightOutlined className="h-3.5 w-3.5" />
+            </Button>
           )}
           {!isSidebarCollapsed && (
           <div
@@ -401,6 +397,7 @@ export function LogDetailsDrawer({
             </div>
           </div>
         </div>
-    </Drawer>
+      </SheetContent>
+    </Sheet>
   );
 }
