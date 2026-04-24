@@ -112,10 +112,9 @@ describe("InputCard", () => {
     render(<InputCard messages={messages} />);
 
     const copyButtons = screen.getAllByRole("button");
-    const copyButton = copyButtons.find((button) => {
-      const icon = button.querySelector('[aria-label="copy"]');
-      return icon !== null;
-    });
+    const copyButton = copyButtons.find((button) =>
+      button.querySelector(".lucide-copy"),
+    );
 
     expect(copyButton).toBeInTheDocument();
     
@@ -210,10 +209,9 @@ describe("InputCard", () => {
     ];
     render(<InputCard messages={messages} />);
     const copyButtons = screen.getAllByRole("button");
-    const copyButton = copyButtons.find((button) => {
-      const icon = button.querySelector('[aria-label="copy"]');
-      return icon !== null;
-    });
+    const copyButton = copyButtons.find((button) =>
+      button.querySelector(".lucide-copy"),
+    );
     expect(copyButton).toBeInTheDocument();
   });
 });

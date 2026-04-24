@@ -120,8 +120,8 @@ describe("Guardrail Info", () => {
       expect(getByText("Guardrail Settings")).toBeInTheDocument();
     });
 
-    // Find the info icon and hover over it
-    const infoIcon = container.querySelector(".anticon-info-circle");
+    // Find the info icon (lucide Info svg) and hover over it
+    const infoIcon = container.querySelector(".lucide-info");
     expect(infoIcon).toBeInTheDocument();
 
     if (infoIcon) {

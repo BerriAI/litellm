@@ -67,10 +67,9 @@ describe("OutputCard", () => {
     render(<OutputCard message={mockMessage} />);
 
     const copyButtons = screen.getAllByRole("button");
-    const copyButton = copyButtons.find((button) => {
-      const icon = button.querySelector('[aria-label="copy"]');
-      return icon !== null;
-    });
+    const copyButton = copyButtons.find((button) =>
+      button.querySelector(".lucide-copy"),
+    );
 
     expect(copyButton).toBeInTheDocument();
     
@@ -89,10 +88,9 @@ describe("OutputCard", () => {
     render(<OutputCard message={null} />);
 
     const copyButtons = screen.getAllByRole("button");
-    const copyButton = copyButtons.find((button) => {
-      const icon = button.querySelector('[aria-label="copy"]');
-      return icon !== null;
-    });
+    const copyButton = copyButtons.find((button) =>
+      button.querySelector(".lucide-copy"),
+    );
 
     expect(copyButton).toBeInTheDocument();
     await user.click(copyButton!);

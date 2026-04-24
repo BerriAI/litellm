@@ -1,4 +1,5 @@
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import GuardrailsPanel from "./guardrails";
 import { getGuardrailsList } from "./networking";
@@ -101,10 +102,13 @@ describe("GuardrailsPanel", () => {
   });
 
   it("should render the component", async () => {
+    const user = userEvent.setup();
     render(<GuardrailsPanel {...defaultProps} />);
-    expect(screen.getByText("Guardrails")).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Guardrails" })).toBeInTheDocument();
     // Activate the Guardrails tab so its content (including the Add button) is rendered
-    fireEvent.click(screen.getByText("Guardrails"));
-    expect(screen.getByText("+ Add New Guardrail")).toBeInTheDocument();
+    await user.click(screen.getByRole("tab", { name: "Guardrails" }));
+    expect(
+      await screen.findByRole("button", { name: /\+ Add New Guardrail/i }),
+    ).toBeInTheDocument();
   });
 });

@@ -1,5 +1,6 @@
 import * as networking from "@/components/networking";
 import { act, fireEvent, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { renderWithProviders } from "../../../tests/test-utils";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import MemberPermissions from "./member_permissions";
@@ -69,32 +70,30 @@ describe("MemberPermissions", () => {
       expect(screen.getByText("Member Permissions")).toBeInTheDocument();
     });
 
+    const user = userEvent.setup();
     const checkboxes = screen.getAllByRole("checkbox");
-    const unselectedCheckbox = checkboxes.find((cb) => !(cb as HTMLInputElement).checked);
+    const unselectedCheckbox = checkboxes.find(
+      (cb) => cb.getAttribute("aria-checked") === "false",
+    );
+    expect(unselectedCheckbox).toBeDefined();
 
-    if (unselectedCheckbox) {
-      await act(async () => {
-        fireEvent.click(unselectedCheckbox);
-      });
+    await user.click(unselectedCheckbox!);
 
-      await waitFor(() => {
-        const saveButton = screen.getByRole("button", { name: /save changes/i });
-        expect(saveButton).toBeInTheDocument();
-      });
-
+    await waitFor(() => {
       const saveButton = screen.getByRole("button", { name: /save changes/i });
-      await act(async () => {
-        fireEvent.click(saveButton);
-      });
+      expect(saveButton).toBeInTheDocument();
+    });
 
-      await waitFor(() => {
-        expect(networking.teamPermissionsUpdateCall).toHaveBeenCalledWith(
-          "token-123",
-          "team-123",
-          expect.arrayContaining(["/key/generate", "/key/list"]),
-        );
-      });
-    }
+    const saveButton = screen.getByRole("button", { name: /save changes/i });
+    await user.click(saveButton);
+
+    await waitFor(() => {
+      expect(networking.teamPermissionsUpdateCall).toHaveBeenCalledWith(
+        "token-123",
+        "team-123",
+        expect.arrayContaining(["/key/generate", "/key/list"]),
+      );
+    });
   });
 
   it("should render team daily activity permission with correct method and description", async () => {
