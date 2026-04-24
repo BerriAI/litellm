@@ -2,10 +2,10 @@
 Type definitions for Anthropic Skills API
 """
 
-from typing import Any, Dict, List, Literal, Optional, Union
+from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
-from typing_extensions import Required, TypedDict
+from typing_extensions import TypedDict
 
 
 # Skills API Request Types
@@ -156,3 +156,52 @@ class DeleteSkillVersionResponse(BaseModel):
 
     deleted: bool
     """Whether the version was successfully deleted"""
+
+
+class SkillRegistryItem(BaseModel):
+    """Lightweight skill entry returned by the registry discovery endpoint"""
+
+    skill_id: str
+    """Skill ID prefixed with 'litellm:' for use in agent requests"""
+
+    display_title: Optional[str] = None
+    """Human-readable title"""
+
+    description: Optional[str] = None
+    """What the skill does"""
+
+    examples: List[str] = Field(default_factory=list)
+    """Example phrases that should trigger this skill"""
+
+    tags: List[str] = Field(default_factory=list)
+    """Broad category tags for filtering"""
+
+
+class SkillRegistryResponse(BaseModel):
+    """Response from GET /v1/skills/registry"""
+
+    data: List[SkillRegistryItem]
+    """List of skills available for agent discovery"""
+
+    has_more: bool = False
+    """Whether there are more skills available"""
+
+
+class TestGitHubConnectionRequest(BaseModel):
+    """Request body for POST /v1/skills/test-github-connection"""
+
+    repo_url: str
+    """GitHub repo URL, e.g. https://github.com/org/my-skill"""
+
+    github_pat: str
+    """Personal Access Token to authenticate with GitHub"""
+
+
+class TestGitHubConnectionResponse(BaseModel):
+    """Response from POST /v1/skills/test-github-connection"""
+
+    status: str
+    """'ok' on success, 'error' on failure"""
+
+    message: Optional[str] = None
+    """Error message if status is 'error'"""

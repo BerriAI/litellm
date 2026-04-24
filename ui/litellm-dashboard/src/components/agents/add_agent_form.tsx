@@ -667,10 +667,10 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({
             </Form.Item>
           </div>
         ) : agentType === "a2a" ? (
-          <AgentFormFields showAgentName={true} />
+          <AgentFormFields showAgentName={true} accessToken={accessToken} />
         ) : selectedAgentTypeInfo?.use_a2a_form_fields ? (
           <>
-            <AgentFormFields showAgentName={true} />
+            <AgentFormFields showAgentName={true} accessToken={accessToken} />
             {selectedAgentTypeInfo.credential_fields.length > 0 && (
               <div className="mt-4 p-4 border border-gray-200 rounded-lg">
                 <h4 className="text-sm font-medium text-gray-700 mb-3">

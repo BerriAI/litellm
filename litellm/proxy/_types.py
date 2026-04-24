@@ -1423,6 +1423,8 @@ class NewSkillRequest(LiteLLMPydanticObjectBase):
     authorization_url: Optional[str] = None
     token_url: Optional[str] = None
     registration_url: Optional[str] = None
+    github_repo_url: Optional[str] = None  # e.g. "https://github.com/org/my-skill"
+    github_pat: Optional[str] = None  # raw PAT, encrypted before storage
 
 
 class UpdateSkillRequest(LiteLLMPydanticObjectBase):
