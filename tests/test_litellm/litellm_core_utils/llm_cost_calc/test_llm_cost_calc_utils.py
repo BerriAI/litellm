@@ -698,6 +698,34 @@ def test_cache_writing_cost_with_zero_creation_tokens_and_ephemeral_details():
     assert round(result, 6) == round(expected, 6)
 
 
+def test_vertex_ai_claude_sonnet_4_6_1h_cache_writes_are_priced():
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    usage = Usage(
+        prompt_tokens=0,
+        completion_tokens=0,
+        total_tokens=0,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            cached_tokens=0,
+            cache_creation_tokens=0,
+            cache_creation_token_details=CacheCreationTokenDetails(
+                ephemeral_5m_input_tokens=0,
+                ephemeral_1h_input_tokens=1_000_000,
+            ),
+        ),
+    )
+
+    prompt_cost, completion_cost = generic_cost_per_token(
+        model="claude-sonnet-4-6",
+        usage=usage,
+        custom_llm_provider="vertex_ai",
+    )
+
+    assert prompt_cost == 6.0
+    assert completion_cost == 0.0
+
+
 def test_service_tier_flex_pricing():
     """Test that flex service tier uses correct pricing (approximately 50% of standard)."""
     # Set up environment for local model cost map
