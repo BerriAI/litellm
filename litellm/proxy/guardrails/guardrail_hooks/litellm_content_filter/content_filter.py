@@ -1909,6 +1909,13 @@ class ContentFilterGuardrail(CustomGuardrail):
                         text_to_check += " "
 
                     try:
+                        # Reset before each scan: _filter_single_text scans the
+                        # whole accumulated buffer every chunk, so previous-chunk
+                        # matches are guaranteed to be re-found. Keeping only the
+                        # latest scan's detections avoids N× duplication in the
+                        # final log row. BLOCK still records correctly because
+                        # handlers append to detections before raising.
+                        detections.clear()
                         masked_text = self._filter_single_text(
                             text_to_check, detections=detections
                         )

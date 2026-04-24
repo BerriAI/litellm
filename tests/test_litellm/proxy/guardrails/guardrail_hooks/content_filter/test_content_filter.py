@@ -690,6 +690,96 @@ class TestContentFilterGuardrail:
         assert entry["guardrail_name"] == "test-streaming-logging-block"
         assert entry["guardrail_status"] == "guardrail_intervened"
 
+    @pytest.mark.asyncio
+    async def test_streaming_hook_logs_no_duplicate_detections_across_chunks(self):
+        """
+        Multi-chunk regression: _filter_single_text re-scans the whole accumulated
+        buffer on every chunk, so without per-chunk reset the same detection would
+        be appended once per chunk after it first appears, inflating
+        masked_entity_count and guardrail_response in the log.
+        """
+        from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+        patterns = [
+            ContentFilterPattern(
+                pattern_type="prebuilt",
+                pattern_name="email",
+                action=ContentFilterAction.MASK,
+            ),
+        ]
+
+        guardrail = ContentFilterGuardrail(
+            guardrail_name="test-streaming-logging-no-duplicates",
+            patterns=patterns,
+            event_hook=GuardrailEventHooks.post_call,
+        )
+
+        # The email straddles chunks 1 and 2; chunks 3 and 4 keep streaming after
+        # the match has already been found, exercising the re-scan path.
+        async def mock_stream():
+            yield ModelResponseStream(
+                id="c1",
+                choices=[
+                    StreamingChoices(
+                        delta=Delta(content="Contact me at test@"), index=0
+                    )
+                ],
+                model="gpt-4",
+            )
+            yield ModelResponseStream(
+                id="c2",
+                choices=[
+                    StreamingChoices(
+                        delta=Delta(content="example.com please."), index=0
+                    )
+                ],
+                model="gpt-4",
+            )
+            yield ModelResponseStream(
+                id="c3",
+                choices=[StreamingChoices(delta=Delta(content=" Thanks!"), index=0)],
+                model="gpt-4",
+            )
+            yield ModelResponseStream(
+                id="c4",
+                choices=[
+                    StreamingChoices(
+                        delta=Delta(content=""), index=0, finish_reason="stop"
+                    )
+                ],
+                model="gpt-4",
+            )
+
+        user_api_key_dict = MagicMock()
+        request_data = {
+            "messages": [{"role": "user", "content": "Hi"}],
+            "model": "gpt-4o",
+            "metadata": {},
+        }
+
+        async for _ in guardrail.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=user_api_key_dict,
+            response=mock_stream(),
+            request_data=request_data,
+        ):
+            pass
+
+        entries = request_data["metadata"]["standard_logging_guardrail_information"]
+        assert len(entries) == 1
+        entry = entries[0]
+        assert entry["guardrail_status"] == "success"
+
+        detections = entry["guardrail_response"]
+        pattern_detections = [d for d in detections if d.get("type") == "pattern"]
+        # Exactly one email detection — not one per chunk after the match appeared.
+        assert len(pattern_detections) == 1, (
+            f"expected exactly 1 email detection, got {len(pattern_detections)}: "
+            f"{detections}"
+        )
+        assert pattern_detections[0].get("pattern_name") == "email"
+        # masked_entity_count for email is the real count, not N×.
+        assert entry["masked_entity_count"].get("email") == 1
+
     def test_init_with_plain_dicts(self):
         """
         Test initialization with plain dicts (DB format).
