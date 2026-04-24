@@ -336,6 +336,7 @@ class TestAzureResponsesAPIConfig:
         }
         mock_response.text = "test response"
         mock_response.status_code = 200
+        mock_response.headers = {}
 
         # Mock logging object
         mock_logging_obj = Mock()
@@ -502,3 +503,62 @@ class TestAzureResponsesAPIConfig:
         """
         supported = self.config.get_supported_openai_params(self.model)
         assert "context_management" not in supported
+
+
+def test_transform_cancel_response_api_response_propagates_llm_provider_headers():
+    """
+    Azure cancel Responses API response should forward provider headers with
+    the `llm_provider-` prefix (e.g. `llm_provider-x-ms-region`), matching the
+    behavior of Azure chat completions and the rest of the Responses API surface.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/15232
+    """
+    import json
+
+    import httpx
+
+    config = AzureOpenAIResponsesAPIConfig()
+
+    mock_response_body = {
+        "id": "resp_123",
+        "object": "response",
+        "created_at": 1234567890,
+        "model": "gpt-5-codex",
+        "status": "cancelled",
+        "output": [],
+    }
+
+    mock_headers = {
+        "content-type": "application/json",
+        "x-request-id": "12086715-aca3-4006-a29f-2f1e1d552043",
+        "apim-request-id": "25664b0d-cf4b-4e10-8d27-c7272e7efd49",
+        "x-ms-region": "Sweden Central",
+    }
+
+    raw_response = httpx.Response(
+        status_code=200,
+        headers=mock_headers,
+        content=json.dumps(mock_response_body).encode("utf-8"),
+        request=httpx.Request(
+            method="POST",
+            url="https://test.openai.azure.com/openai/responses/resp_123/cancel",
+        ),
+    )
+
+    response = config.transform_cancel_response_api_response(
+        raw_response=raw_response, logging_obj=MagicMock()
+    )
+
+    assert hasattr(response, "_hidden_params")
+    additional_headers = response._hidden_params["additional_headers"]
+    assert additional_headers["llm_provider-x-ms-region"] == "Sweden Central"
+    assert (
+        additional_headers["llm_provider-x-request-id"]
+        == "12086715-aca3-4006-a29f-2f1e1d552043"
+    )
+    assert (
+        additional_headers["llm_provider-apim-request-id"]
+        == "25664b0d-cf4b-4e10-8d27-c7272e7efd49"
+    )
+    # raw headers should also be stored under `headers`
+    assert response._hidden_params["headers"]["x-ms-region"] == "Sweden Central"
