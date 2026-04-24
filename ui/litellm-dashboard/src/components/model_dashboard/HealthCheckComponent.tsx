@@ -1,8 +1,13 @@
 import React, { useState, useEffect, useRef } from "react";
-// eslint-disable-next-line litellm-ui/no-banned-ui-imports
-import { Title, Text, Button, Badge } from "@tremor/react";
-import { Modal } from "antd";
-import { Button as AntdButton } from "antd";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { ModelDataTable } from "./table";
 import { healthCheckColumns } from "./health_check_columns";
 import { errorPatterns } from "@/utils/errorPatterns";
@@ -452,15 +457,27 @@ const HealthCheckComponent: React.FC<HealthCheckComponentProps> = ({
   const getStatusBadge = (status: string) => {
     switch (status) {
       case "healthy":
-        return <Badge color="emerald">healthy</Badge>;
+        return (
+          <Badge className="bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300 hover:bg-emerald-100">
+            healthy
+          </Badge>
+        );
       case "unhealthy":
-        return <Badge color="red">unhealthy</Badge>;
+        return (
+          <Badge className="bg-red-100 text-red-800 dark:bg-red-950 dark:text-red-300 hover:bg-red-100">
+            unhealthy
+          </Badge>
+        );
       case "checking":
-        return <Badge color="blue">checking</Badge>;
+        return (
+          <Badge className="bg-blue-100 text-blue-800 dark:bg-blue-950 dark:text-blue-300 hover:bg-blue-100">
+            checking
+          </Badge>
+        );
       case "none":
-        return <Badge color="gray">none</Badge>;
+        return <Badge variant="secondary">none</Badge>;
       default:
-        return <Badge color="gray">unknown</Badge>;
+        return <Badge variant="secondary">unknown</Badge>;
     }
   };
 
@@ -496,14 +513,19 @@ const HealthCheckComponent: React.FC<HealthCheckComponentProps> = ({
       <div className="mb-6">
         <div className="flex justify-between items-center">
           <div>
-            <Title>Model Health Status</Title>
-            <Text className="text-gray-600 mt-1">
+            <h2 className="text-xl font-semibold m-0">Model Health Status</h2>
+            <p className="text-muted-foreground text-sm mt-1">
               Run health checks on individual models to verify they are working correctly
-            </Text>
+            </p>
           </div>
           <div className="flex items-center gap-3">
             {selectedModelsForHealth.length > 0 && (
-              <Button size="sm" variant="light" onClick={() => handleSelectAll(false)} className="px-3 py-1 text-sm">
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => handleSelectAll(false)}
+                className="px-3 py-1 text-sm"
+              >
                 Clear Selection
               </Button>
             )}
@@ -564,70 +586,88 @@ const HealthCheckComponent: React.FC<HealthCheckComponentProps> = ({
       </div>
 
       {/* Error Modal */}
-      <Modal
-        title={selectedErrorDetails ? `Health Check Error - ${selectedErrorDetails.modelName}` : "Error Details"}
+      <Dialog
         open={errorModalVisible}
-        onCancel={closeErrorModal}
-        footer={[
-          <AntdButton key="close" onClick={closeErrorModal}>
-            Close
-          </AntdButton>,
-        ]}
-        width={800}
+        onOpenChange={(o) => (!o ? closeErrorModal() : undefined)}
       >
-        {selectedErrorDetails && (
-          <div className="space-y-4">
-            <div>
-              <Text className="font-medium">Error:</Text>
-              <div className="mt-2 p-3 bg-red-50 border border-red-200 rounded-md">
-                <Text className="text-red-800">{selectedErrorDetails.cleanedError}</Text>
+        <DialogContent className="max-w-3xl">
+          <DialogHeader>
+            <DialogTitle>
+              {selectedErrorDetails
+                ? `Health Check Error - ${selectedErrorDetails.modelName}`
+                : "Error Details"}
+            </DialogTitle>
+          </DialogHeader>
+          {selectedErrorDetails && (
+            <div className="space-y-4">
+              <div>
+                <p className="font-medium">Error:</p>
+                <div className="mt-2 p-3 bg-red-50 border border-red-200 rounded-md dark:bg-red-950 dark:border-red-900">
+                  <p className="text-red-800 dark:text-red-300">
+                    {selectedErrorDetails.cleanedError}
+                  </p>
+                </div>
               </div>
-            </div>
 
-            <div>
-              <Text className="font-medium">Full Error Details:</Text>
-              <div className="mt-2 p-3 bg-gray-50 border border-gray-200 rounded-md max-h-96 overflow-y-auto">
-                <pre className="text-sm text-gray-800 whitespace-pre-wrap">{selectedErrorDetails.fullError}</pre>
+              <div>
+                <p className="font-medium">Full Error Details:</p>
+                <div className="mt-2 p-3 bg-muted border border-border rounded-md max-h-96 overflow-y-auto">
+                  <pre className="text-sm text-foreground whitespace-pre-wrap">
+                    {selectedErrorDetails.fullError}
+                  </pre>
+                </div>
               </div>
             </div>
-          </div>
-        )}
-      </Modal>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={closeErrorModal}>
+              Close
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Success Modal */}
-      <Modal
-        title={
-          selectedSuccessDetails ? `Health Check Response - ${selectedSuccessDetails.modelName}` : "Response Details"
-        }
+      <Dialog
         open={successModalVisible}
-        onCancel={closeSuccessModal}
-        footer={[
-          <AntdButton key="close" onClick={closeSuccessModal}>
-            Close
-          </AntdButton>,
-        ]}
-        width={800}
+        onOpenChange={(o) => (!o ? closeSuccessModal() : undefined)}
       >
-        {selectedSuccessDetails && (
-          <div className="space-y-4">
-            <div>
-              <Text className="font-medium">Status:</Text>
-              <div className="mt-2 p-3 bg-green-50 border border-green-200 rounded-md">
-                <Text className="text-green-800">Health check passed successfully</Text>
+        <DialogContent className="max-w-3xl">
+          <DialogHeader>
+            <DialogTitle>
+              {selectedSuccessDetails
+                ? `Health Check Response - ${selectedSuccessDetails.modelName}`
+                : "Response Details"}
+            </DialogTitle>
+          </DialogHeader>
+          {selectedSuccessDetails && (
+            <div className="space-y-4">
+              <div>
+                <p className="font-medium">Status:</p>
+                <div className="mt-2 p-3 bg-green-50 border border-green-200 rounded-md dark:bg-green-950 dark:border-green-900">
+                  <p className="text-green-800 dark:text-green-300">
+                    Health check passed successfully
+                  </p>
+                </div>
               </div>
-            </div>
 
-            <div>
-              <Text className="font-medium">Response Details:</Text>
-              <div className="mt-2 p-3 bg-gray-50 border border-gray-200 rounded-md max-h-96 overflow-y-auto">
-                <pre className="text-sm text-gray-800 whitespace-pre-wrap">
-                  {JSON.stringify(selectedSuccessDetails.response, null, 2)}
-                </pre>
+              <div>
+                <p className="font-medium">Response Details:</p>
+                <div className="mt-2 p-3 bg-muted border border-border rounded-md max-h-96 overflow-y-auto">
+                  <pre className="text-sm text-foreground whitespace-pre-wrap">
+                    {JSON.stringify(selectedSuccessDetails.response, null, 2)}
+                  </pre>
+                </div>
               </div>
             </div>
-          </div>
-        )}
-      </Modal>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={closeSuccessModal}>
+              Close
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 };

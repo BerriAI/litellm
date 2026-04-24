@@ -237,7 +237,7 @@ describe("ModelSettingsModal", () => {
 
     const saveButton = screen.getByRole("button", { name: /Saving/i });
     expect(saveButton).toBeInTheDocument();
-    expect(saveButton.className).toContain("ant-btn-loading");
+    expect(saveButton).toBeDisabled();
   });
 
   it("should not render modal when isVisible is false", () => {
@@ -282,7 +282,9 @@ describe("ModelSettingsModal", () => {
     renderWithProviders(<ModelSettingsModal {...defaultProps} />);
 
     expect(screen.queryByRole("switch")).not.toBeInTheDocument();
-    const skeletons = document.querySelectorAll(".ant-skeleton");
+    // shadcn Skeleton (rendered inside the Dialog portal) has the
+    // `animate-pulse` utility class.
+    const skeletons = document.body.querySelectorAll(".animate-pulse");
     expect(skeletons.length).toBeGreaterThan(0);
   });
 

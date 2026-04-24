@@ -237,16 +237,19 @@ const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({
                 field.key === "vertex_credentials" ? "mb-0" : ""
               }`}
             >
-              <Label
-                className="col-span-10 pt-2"
-                title={field.tooltip}
-                htmlFor={`provider-field-${field.key}`}
-              >
-                {field.label}
+              <div className="col-span-10 pt-2 flex items-start">
+                <Label
+                  title={field.tooltip}
+                  htmlFor={`provider-field-${field.key}`}
+                >
+                  {field.label}
+                </Label>
                 {field.required && (
-                  <span className="text-destructive ml-1">*</span>
+                  <span aria-hidden="true" className="text-destructive ml-1">
+                    *
+                  </span>
                 )}
-              </Label>
+              </div>
               <div className="col-span-14">
                 {field.type === "select" ? (
                   <Controller

@@ -5,20 +5,18 @@ import {
   credentialUpdateCall,
 } from "@/components/networking";
 import { Pencil, Trash2 } from "lucide-react";
-// eslint-disable-next-line litellm-ui/no-banned-ui-imports
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
 import {
   Table,
   TableBody,
   TableCell,
   TableHead,
-  TableHeaderCell,
+  TableHeader,
   TableRow,
-} from "@tremor/react";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
+} from "@/components/ui/table";
 import { cn } from "@/lib/utils";
-import { Form } from "antd";
 import { UploadProps } from "antd/es/upload";
 import { useState } from "react";
 import DeleteResourceModal from "../common_components/DeleteResourceModal";
@@ -33,8 +31,7 @@ interface CredentialsPanelProps {
 }
 
 const PROVIDER_BADGE_CLASSES: Record<string, string> = {
-  openai:
-    "bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300",
+  openai: "bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300",
   azure:
     "bg-indigo-100 text-indigo-700 dark:bg-indigo-950 dark:text-indigo-300",
   anthropic:
@@ -56,8 +53,6 @@ const CredentialsPanel: React.FC<CredentialsPanelProps> = ({ uploadProps }) => {
     useState<CredentialItem | null>(null);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [isCredentialDeleting, setIsCredentialDeleting] = useState(false);
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const [_form] = Form.useForm();
 
   const restrictedFields = ["credential_name", "custom_llm_provider"];
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -154,25 +149,25 @@ const CredentialsPanel: React.FC<CredentialsPanelProps> = ({ uploadProps }) => {
       <Button onClick={() => setIsAddModalOpen(true)}>Add Credential</Button>
       <div className="flex justify-between items-center mt-4 mb-4">
         <p className="text-muted-foreground">
-          Configured credentials for different AI providers. Add and manage
-          your API credentials.
+          Configured credentials for different AI providers. Add and manage your
+          API credentials.
         </p>
       </div>
 
       <Card>
         <Table>
-          <TableHead>
+          <TableHeader>
             <TableRow>
-              <TableHeaderCell>Credential Name</TableHeaderCell>
-              <TableHeaderCell>Provider</TableHeaderCell>
-              <TableHeaderCell>Actions</TableHeaderCell>
+              <TableHead>Credential Name</TableHead>
+              <TableHead>Provider</TableHead>
+              <TableHead>Actions</TableHead>
             </TableRow>
-          </TableHead>
+          </TableHeader>
           <TableBody>
             {!credentialList || credentialList.length === 0 ? (
               <TableRow>
                 <TableCell
-                  colSpan={4}
+                  colSpan={3}
                   className="text-center py-4 text-muted-foreground"
                 >
                   No credentials configured

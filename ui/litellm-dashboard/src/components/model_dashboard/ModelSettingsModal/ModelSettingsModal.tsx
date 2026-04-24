@@ -18,9 +18,11 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Form, Switch as AntdFormSwitch } from "antd";
+import { Switch } from "@/components/ui/switch";
 import React, { useEffect, useMemo } from "react";
+import { Controller, useForm } from "react-hook-form";
 
 interface ModelSettingsModalProps {
   isVisible: boolean;
@@ -28,12 +30,15 @@ interface ModelSettingsModalProps {
   onSuccess?: () => void;
 }
 
+type ModelSettingsFormValues = {
+  store_model_in_db: boolean;
+};
+
 const ModelSettingsModal: React.FC<ModelSettingsModalProps> = ({
   isVisible,
   onCancel,
   onSuccess,
 }) => {
-  const [form] = Form.useForm();
   const { mutateAsync, isPending } = useStoreModelInDB();
   const {
     data: proxyConfigData,
@@ -47,11 +52,9 @@ const ModelSettingsModal: React.FC<ModelSettingsModalProps> = ({
     }
   }, [isVisible, refetch]);
 
-  const initialValues = useMemo(() => {
+  const initialValues = useMemo<ModelSettingsFormValues>(() => {
     if (!proxyConfigData) {
-      return {
-        store_model_in_db: false,
-      };
+      return { store_model_in_db: false };
     }
 
     const storeModelField = proxyConfigData.find(
@@ -59,13 +62,23 @@ const ModelSettingsModal: React.FC<ModelSettingsModalProps> = ({
     );
 
     return {
-      store_model_in_db: storeModelField?.field_value ?? false,
+      store_model_in_db: Boolean(storeModelField?.field_value ?? false),
     };
   }, [proxyConfigData]);
 
-  const handleFormSubmit = async (formValues: StoreModelInDBParams) => {
+  const form = useForm<ModelSettingsFormValues>({
+    defaultValues: initialValues,
+  });
+
+  // Reset form when initial values change (e.g. fresh fetch).
+  useEffect(() => {
+    form.reset(initialValues);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialValues]);
+
+  const handleFormSubmit = form.handleSubmit(async (formValues) => {
     try {
-      await mutateAsync(formValues, {
+      await mutateAsync(formValues as StoreModelInDBParams, {
         onSuccess: () => {
           NotificationsManager.success(
             "Model storage settings updated successfully",
@@ -75,7 +88,8 @@ const ModelSettingsModal: React.FC<ModelSettingsModalProps> = ({
         },
         onError: (error) => {
           NotificationsManager.fromBackend(
-            "Failed to save model storage settings: " + parseErrorMessage(error),
+            "Failed to save model storage settings: " +
+              parseErrorMessage(error),
           );
         },
       });
@@ -84,10 +98,10 @@ const ModelSettingsModal: React.FC<ModelSettingsModalProps> = ({
         "Failed to save model storage settings: " + parseErrorMessage(error),
       );
     }
-  };
+  });
 
   const handleCancel = () => {
-    form.resetFields();
+    form.reset(initialValues);
     onCancel();
   };
 
@@ -107,26 +121,28 @@ const ModelSettingsModal: React.FC<ModelSettingsModalProps> = ({
             Model Settings
           </DialogTitle>
         </DialogHeader>
-        <Form
-          key={proxyConfigData ? JSON.stringify(initialValues) : "loading"}
-          form={form}
-          layout="horizontal"
-          onFinish={handleFormSubmit}
-          initialValues={initialValues}
-        >
-          <Form.Item
-            label="Store Model in DB"
-            name="store_model_in_db"
-            tooltip={storeFieldDescription}
-            valuePropName="checked"
-          >
+        <form onSubmit={handleFormSubmit}>
+          <div className="flex items-center gap-3 py-2">
+            <Label htmlFor="store_model_in_db" title={storeFieldDescription}>
+              Store Model in DB
+            </Label>
             {isLoadingConfig ? (
               <Skeleton className="h-6 w-full" />
             ) : (
-              <AntdFormSwitch />
+              <Controller
+                control={form.control}
+                name="store_model_in_db"
+                render={({ field }) => (
+                  <Switch
+                    id="store_model_in_db"
+                    checked={Boolean(field.value)}
+                    onCheckedChange={(checked) => field.onChange(Boolean(checked))}
+                  />
+                )}
+              />
             )}
-          </Form.Item>
-        </Form>
+          </div>
+        </form>
         <DialogFooter>
           <Button
             variant="outline"
@@ -136,7 +152,7 @@ const ModelSettingsModal: React.FC<ModelSettingsModalProps> = ({
             Cancel
           </Button>
           <Button
-            onClick={() => form.submit()}
+            onClick={handleFormSubmit}
             disabled={isPending || isLoadingConfig}
           >
             {isPending ? "Saving..." : "Save Settings"}

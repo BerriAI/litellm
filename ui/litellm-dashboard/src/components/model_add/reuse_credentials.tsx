@@ -1,5 +1,5 @@
-import React from "react";
-import { Form } from "antd";
+import React, { useEffect } from "react";
+import { FormProvider, useForm } from "react-hook-form";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -8,6 +8,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { CredentialItem } from "../networking";
 
 interface ReuseCredentialsModalProps {
@@ -19,6 +20,12 @@ interface ReuseCredentialsModalProps {
   setIsCredentialModalOpen: (isVisible: boolean) => void;
 }
 
+type ReuseCredentialFormValues = {
+  credential_name: string;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  [key: string]: any;
+};
+
 const ReuseCredentialsModal: React.FC<ReuseCredentialsModalProps> = ({
   isVisible,
   onCancel,
@@ -26,13 +33,46 @@ const ReuseCredentialsModal: React.FC<ReuseCredentialsModalProps> = ({
   existingCredential,
   setIsCredentialModalOpen,
 }) => {
-  const [form] = Form.useForm();
+  const credentialValueEntries = Object.entries(
+    existingCredential?.credential_values || {},
+  );
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const handleSubmit = (values: any) => {
+  const form = useForm<ReuseCredentialFormValues>({
+    defaultValues: {
+      credential_name: existingCredential?.credential_name ?? "",
+      ...credentialValueEntries.reduce(
+        (acc, [key, value]) => {
+          acc[key] = (value as string | number | null | undefined) ?? "";
+          return acc;
+        },
+        {} as Record<string, string | number | null | undefined>,
+      ),
+    },
+  });
+
+  useEffect(() => {
+    form.reset({
+      credential_name: existingCredential?.credential_name ?? "",
+      ...credentialValueEntries.reduce(
+        (acc, [key, value]) => {
+          acc[key] = (value as string | number | null | undefined) ?? "";
+          return acc;
+        },
+        {} as Record<string, string | number | null | undefined>,
+      ),
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [existingCredential]);
+
+  const handleSubmit = form.handleSubmit((values) => {
     onAddCredential(values);
-    form.resetFields();
+    form.reset();
     setIsCredentialModalOpen(false);
+  });
+
+  const handleCancel = () => {
+    onCancel();
+    form.reset();
   };
 
   return (
@@ -40,8 +80,7 @@ const ReuseCredentialsModal: React.FC<ReuseCredentialsModalProps> = ({
       open={isVisible}
       onOpenChange={(o) => {
         if (!o) {
-          onCancel();
-          form.resetFields();
+          handleCancel();
         }
       }}
     >
@@ -49,54 +88,63 @@ const ReuseCredentialsModal: React.FC<ReuseCredentialsModalProps> = ({
         <DialogHeader>
           <DialogTitle>Reuse Credentials</DialogTitle>
         </DialogHeader>
-        <Form form={form} onFinish={handleSubmit} layout="vertical">
-          {/* Credential Name */}
-          <Form.Item
-            label="Credential Name:"
-            name="credential_name"
-            rules={[
-              { required: true, message: "Credential name is required" },
-            ]}
-            initialValue={existingCredential?.credential_name}
-          >
-            <Input placeholder="Enter a friendly name for these credentials" />
-          </Form.Item>
+        <FormProvider {...form}>
+          <form onSubmit={handleSubmit}>
+            <div className="space-y-4 mb-4">
+              <div className="space-y-2">
+                <div className="flex items-center">
+                  <Label htmlFor="credential_name">Credential Name:</Label>
+                  <span aria-hidden="true" className="text-destructive ml-1">
+                    *
+                  </span>
+                </div>
+                <Input
+                  id="credential_name"
+                  placeholder="Enter a friendly name for these credentials"
+                  {...form.register("credential_name", {
+                    required: "Credential name is required",
+                  })}
+                />
+                {form.formState.errors.credential_name && (
+                  <p className="text-sm text-destructive">
+                    {String(form.formState.errors.credential_name.message)}
+                  </p>
+                )}
+              </div>
 
-          {/* Display Credential Values of existingCredential, don't allow user to edit. */}
-          {Object.entries(existingCredential?.credential_values || {}).map(
-            ([key, value]) => (
-              <Form.Item key={key} label={key} name={key} initialValue={value}>
-                <Input placeholder={`Enter ${key}`} disabled={true} />
-              </Form.Item>
-            ),
-          )}
-
-          <div className="flex justify-between items-center">
-            <a
-              href="https://github.com/BerriAI/litellm/issues"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-primary hover:text-primary/80 text-sm"
-              title="Get help on our github"
-            >
-              Need Help?
-            </a>
-
-            <div className="flex gap-2">
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => {
-                  onCancel();
-                  form.resetFields();
-                }}
-              >
-                Cancel
-              </Button>
-              <Button type="submit">Reuse Credentials</Button>
+              {credentialValueEntries.map(([key]) => (
+                <div key={key} className="space-y-2">
+                  <Label htmlFor={`reuse-${key}`}>{key}</Label>
+                  <Input
+                    id={`reuse-${key}`}
+                    placeholder={`Enter ${key}`}
+                    disabled
+                    {...form.register(key)}
+                  />
+                </div>
+              ))}
             </div>
-          </div>
-        </Form>
+
+            <div className="flex justify-between items-center">
+              <a
+                href="https://github.com/BerriAI/litellm/issues"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-primary hover:text-primary/80 text-sm"
+                title="Get help on our github"
+              >
+                Need Help?
+              </a>
+
+              <div className="flex gap-2">
+                <Button type="button" variant="outline" onClick={handleCancel}>
+                  Cancel
+                </Button>
+                <Button type="submit">Reuse Credentials</Button>
+              </div>
+            </div>
+          </form>
+        </FormProvider>
       </DialogContent>
     </Dialog>
   );
