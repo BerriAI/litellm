@@ -53,7 +53,7 @@ class ExpiredUISessionKeyCleanupManager:
                     or False
                 )
                 if not lock_acquired:
-                    verbose_proxy_logger.warning(
+                    verbose_proxy_logger.debug(
                         "Expired UI session key cleanup: another pod is already "
                         "running cleanup or Redis lock acquisition failed - "
                         "skipping this cycle."
