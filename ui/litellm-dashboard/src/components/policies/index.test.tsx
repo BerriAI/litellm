@@ -5,21 +5,6 @@ import { renderWithProviders } from "../../../tests/test-utils";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import PoliciesPanel from "./index";
 
-/**
- * Ant Design's static Modal.confirm often does not run onOk in the real app (React 18+).
- * In jsdom it may still run; we mock confirm as a no-op so the test fails until the panel
- * uses a controlled DeleteResourceModal instead of Modal.confirm.
- */
-vi.mock("antd", async (importOriginal) => {
-  const mod = await importOriginal<typeof import("antd")>();
-  return {
-    ...mod,
-    Modal: Object.assign(mod.Modal, {
-      confirm: vi.fn(),
-    }),
-  };
-});
-
 const EXPECTED_ATTACHMENT_ID = "att-11111111-2222-3333-4444-555555555555" as const;
 
 const networkingMocks = vi.hoisted(() => ({
