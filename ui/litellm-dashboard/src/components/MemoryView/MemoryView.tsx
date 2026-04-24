@@ -127,27 +127,39 @@ export const MemoryView: React.FC<MemoryViewProps> = ({ accessToken }) => {
     isCreate: boolean,
   ): Promise<boolean> => {
     if (!accessToken) return false;
-    let metadataParsed: unknown | undefined;
-    if (metadataText.trim()) {
+
+    // On edit, an empty textarea is a user's intent to CLEAR existing
+    // metadata — we must send explicit `null` (not `undefined`), or
+    // JSON.stringify drops the field and the backend's model_fields_set
+    // won't see it, leaving the stored value untouched.
+    //
+    // On create, an empty textarea just means "no metadata" — we omit the
+    // field so the DB default (NULL) applies and we avoid Prisma's
+    // `Json? = None` quirk on create.
+    let metadataPayload: unknown;
+    if (!metadataText.trim()) {
+      metadataPayload = isCreate ? undefined : null;
+    } else {
       try {
-        metadataParsed = JSON.parse(metadataText);
+        metadataPayload = JSON.parse(metadataText);
       } catch {
         message.error("Metadata must be valid JSON (or leave empty).");
         return false;
       }
     }
+
     try {
       if (isCreate) {
         await createMemory(accessToken, {
           key,
           value,
-          metadata: metadataParsed,
+          metadata: metadataPayload,
         });
         message.success(`Created ${key}`);
       } else {
         await updateMemory(accessToken, key, {
           value,
-          metadata: metadataParsed,
+          metadata: metadataPayload,
         });
         message.success(`Updated ${key}`);
       }
