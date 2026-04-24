@@ -318,4 +318,3 @@ class BaseResponsesAPIConfig(ABC):
                 data["input"]
             ),
         }
-
