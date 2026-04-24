@@ -2232,3 +2232,23 @@ def test_convert_to_bedrock_format_input_roles_does_not_affect_output():
     result = guardrail.convert_to_bedrock_format(source="OUTPUT", response=response)
     texts = [item["text"]["text"] for item in result.get("content", [])]
     assert texts == ["response text"], f"Expected assistant response, got: {texts}"
+
+
+def test_convert_to_bedrock_format_returns_empty_bedrock_request_when_all_messages_filtered():
+    """When role filtering removes all messages, return an empty BedrockRequest rather
+    than forwarding an empty content list to Bedrock (which would cause an API error)."""
+    guardrail = BedrockGuardrail(
+        guardrailIdentifier="test-id",
+        guardrailVersion="DRAFT",
+        experimental_guardrail_input_roles=["user"],
+    )
+    # Only system messages — all will be filtered out
+    messages = [
+        {"role": "system", "content": "You are a helpful assistant."},
+    ]
+    result = guardrail.convert_to_bedrock_format(source="INPUT", messages=messages)
+    # Should return the empty BedrockRequest rather than content: []
+    assert result.get("content", []) == [], f"Expected no content, got: {result}"
+    assert "guardrailIdentifier" not in result, (
+        "Should return empty BedrockRequest, not a populated one"
+    )

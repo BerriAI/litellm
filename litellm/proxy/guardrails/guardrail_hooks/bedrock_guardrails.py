@@ -226,6 +226,8 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                     for m in messages
                     if m.get("role") in self.experimental_guardrail_input_roles
                 ]
+                if not messages:
+                    return bedrock_request
             bedrock_request = self._create_bedrock_input_content_request(
                 messages=messages
             )
