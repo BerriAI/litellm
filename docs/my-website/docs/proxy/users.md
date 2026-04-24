@@ -683,6 +683,48 @@ curl 'http://0.0.0.0:4000/team/new' \
 }'
 ```
 </TabItem>
+<TabItem value="customers" label="Customers">
+
+Use `/customer/new` to create a customer with a `budget_duration`. The budget will automatically reset at the end of the specified duration.
+
+```bash
+curl 'http://0.0.0.0:4000/customer/new' \
+--header 'Authorization: Bearer <your-master-key>' \
+--header 'Content-Type: application/json' \
+--data-raw '{
+  "user_id": "my-customer-id",
+  "max_budget": 10,
+  "budget_duration": "30d", # 👈 KEY CHANGE
+}'
+```
+
+To update an existing customer's budget duration:
+
+```bash
+curl 'http://0.0.0.0:4000/customer/update' \
+--header 'Authorization: Bearer <your-master-key>' \
+--header 'Content-Type: application/json' \
+--data-raw '{
+  "user_id": "my-customer-id",
+  "max_budget": 10,
+  "budget_duration": "30d", # 👈 KEY CHANGE
+}'
+```
+
+Then pass the customer's `user_id` as the `user` parameter in `/chat/completions` requests:
+
+```bash
+curl 'http://0.0.0.0:4000/chat/completions' \
+--header 'Authorization: Bearer <your-api-key>' \
+--header 'Content-Type: application/json' \
+--data '{
+  "model": "gpt-4o",
+  "user": "my-customer-id",
+  "messages": [{"role": "user", "content": "Hello!"}]
+}'
+```
+
+</TabItem>
 </Tabs>
 
 **Note:** By default, the server checks for resets every 10 minutes, to minimize DB calls.
