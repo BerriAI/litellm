@@ -1,13 +1,11 @@
 import React, { useState } from "react";
 import { ArrowLeft, Check, Copy, Eye, EyeOff } from "lucide-react";
-// eslint-disable-next-line litellm-ui/no-banned-ui-imports
 import {
-  TabGroup,
-  TabList,
-  TabPanel,
-  TabPanels,
-  Tab,
-} from "@tremor/react";
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
+} from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
@@ -44,7 +42,7 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
   const [editing, setEditing] = useState(isEditing);
   const [showFullUrl, setShowFullUrl] = useState(false);
   const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({});
-  const [selectedTabIndex, setSelectedTabIndex] = useState(0);
+  const [selectedTab, setSelectedTab] = useState<string>("overview");
 
   const handleSuccess = () => {
     setEditing(false);
@@ -165,18 +163,15 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
         )}
       </div>
 
-      <TabGroup index={selectedTabIndex} onIndexChange={setSelectedTabIndex}>
-        <TabList className="mb-4">
-          {[
-            <Tab key="overview">Overview</Tab>,
-            <Tab key="tools">MCP Tools</Tab>,
-            ...(isProxyAdmin ? [<Tab key="settings">Settings</Tab>] : []),
-          ]}
-        </TabList>
+      <Tabs value={selectedTab} onValueChange={setSelectedTab}>
+        <TabsList className="mb-4 bg-transparent p-0 h-auto">
+          <TabsTrigger value="overview">Overview</TabsTrigger>
+          <TabsTrigger value="tools">MCP Tools</TabsTrigger>
+          {isProxyAdmin && <TabsTrigger value="settings">Settings</TabsTrigger>}
+        </TabsList>
 
-        <TabPanels>
-          {/* Overview Panel */}
-          <TabPanel>
+        {/* Overview Panel */}
+        <TabsContent value="overview">
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
               <Card className="p-4">
                 <span className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
@@ -235,23 +230,23 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
                 />
               </div>
             </Card>
-          </TabPanel>
+        </TabsContent>
 
-          {/* Tool Panel */}
-          <TabPanel>
-            <MCPToolsViewer
-              serverId={mcpServer.server_id}
-              accessToken={accessToken}
-              auth_type={mcpServer.auth_type}
-              userRole={userRole}
-              userID={userID}
-              serverAlias={mcpServer.alias}
-              extraHeaders={mcpServer.extra_headers}
-            />
-          </TabPanel>
+        {/* Tool Panel */}
+        <TabsContent value="tools">
+          <MCPToolsViewer
+            serverId={mcpServer.server_id}
+            accessToken={accessToken}
+            auth_type={mcpServer.auth_type}
+            userRole={userRole}
+            userID={userID}
+            serverAlias={mcpServer.alias}
+            extraHeaders={mcpServer.extra_headers}
+          />
+        </TabsContent>
 
-          {/* Settings Panel */}
-          <TabPanel>
+        {/* Settings Panel */}
+        <TabsContent value="settings">
             <Card className="p-4">
               <div className="flex justify-between items-center mb-4">
                 <h2 className="text-lg font-semibold">MCP Server Settings</h2>
@@ -459,9 +454,8 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
                 </div>
               )}
             </Card>
-          </TabPanel>
-        </TabPanels>
-      </TabGroup>
+        </TabsContent>
+      </Tabs>
     </div>
   );
 };
