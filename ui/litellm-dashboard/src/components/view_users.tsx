@@ -1,10 +1,12 @@
-// eslint-disable-next-line litellm-ui/no-banned-ui-imports
-import { Tab, TabGroup, TabList, TabPanel, TabPanels } from "@tremor/react";
 import React, { useEffect, useState } from "react";
 
-import { Button } from "antd";
+import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+
 import BulkEditUserModal from "./BulkEditUsers";
 import { CreateUserButton } from "./CreateUserButton";
+import DefaultUserSettings from "./DefaultUserSettings";
 import EditUserModal from "./edit_user";
 import {
   getPossibleUserRoles,
@@ -20,17 +22,12 @@ import { updateExistingKeys } from "@/utils/dataUtils";
 import { isAdminRole, isProxyAdminRole } from "@/utils/roles";
 import { useDebouncedState } from "@tanstack/react-pacer/debouncer";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Typography } from "antd";
 import DeleteResourceModal from "./common_components/DeleteResourceModal";
 import NotificationsManager from "./molecules/notifications_manager";
 import { modelAvailableCall, userDeleteCall } from "./networking";
-import DefaultUserSettings from "./DefaultUserSettings";
 import { columns } from "./view_users/columns";
 import { UserDataTable } from "./view_users/table";
 import { UserInfo } from "./view_users/types";
-import { Skeleton } from "antd";
-
-const { Text, Title } = Typography;
 
 interface ViewUserDashboardProps {
   accessToken: string | null;
@@ -40,7 +37,9 @@ interface ViewUserDashboardProps {
   userID: string | null;
   teams: any[] | null;
   setKeys: React.Dispatch<React.SetStateAction<object[] | null>>;
-  orgAdminOrgIds?: Array<{organization_id: string, organization_alias: string}> | null;
+  orgAdminOrgIds?:
+    | Array<{ organization_id: string; organization_alias: string }>
+    | null;
 }
 
 interface FilterState {
@@ -71,7 +70,14 @@ const initialFilters: FilterState = {
   sort_order: "desc",
 };
 
-const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({ accessToken, token, userRole, userID, teams, orgAdminOrgIds }) => {
+const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
+  accessToken,
+  token,
+  userRole,
+  userID,
+  teams,
+  orgAdminOrgIds,
+}) => {
   const isProxyAdmin = userRole ? isProxyAdminRole(userRole) : false;
   const queryClient = useQueryClient();
   const [currentPage, setCurrentPage] = useState(1);
@@ -80,11 +86,15 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({ accessToken, toke
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [isDeletingUser, setIsDeletingUser] = useState(false);
   const [userToDelete, setUserToDelete] = useState<UserInfo | null>(null);
-  const [activeTab, setActiveTab] = useState("users");
   const [filters, setFilters] = useState<FilterState>(initialFilters);
-  const [debouncedFilters, setDebouncedFilters, debouncer] = useDebouncedState(filters, { wait: 300 });
-  const [isInvitationLinkModalVisible, setIsInvitationLinkModalVisible] = useState(false);
-  const [invitationLinkData, setInvitationLinkData] = useState<InvitationLink | null>(null);
+  const [debouncedFilters, setDebouncedFilters, debouncer] = useDebouncedState(
+    filters,
+    { wait: 300 },
+  );
+  const [isInvitationLinkModalVisible, setIsInvitationLinkModalVisible] =
+    useState(false);
+  const [invitationLinkData, setInvitationLinkData] =
+    useState<InvitationLink | null>(null);
   const [baseUrl, setBaseUrl] = useState<string | null>(null);
   const [selectedUsers, setSelectedUsers] = useState<UserInfo[]>([]);
   const [isBulkEditModalVisible, setIsBulkEditModalVisible] = useState(false);
@@ -106,7 +116,6 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({ accessToken, toke
     setBaseUrl(getProxyBaseUrl());
   }, []);
 
-  // Fetch available models for bulk edit
   useEffect(() => {
     const fetchUserModels = async () => {
       try {
@@ -114,8 +123,14 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({ accessToken, toke
           return;
         }
 
-        const model_available = await modelAvailableCall(accessToken, userID, userRole);
-        let available_model_names = model_available["data"].map((element: { id: string }) => element.id);
+        const model_available = await modelAvailableCall(
+          accessToken,
+          userID,
+          userRole,
+        );
+        let available_model_names = model_available["data"].map(
+          (element: { id: string }) => element.id,
+        );
         console.log("available_model_names:", available_model_names);
         setUserModels(available_model_names);
       } catch (error) {
@@ -159,12 +174,16 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({ accessToken, toke
         setIsDeletingUser(true);
         await userDeleteCall(accessToken, [userToDelete.user_id]);
 
-        // Update the user list after deletion
-        queryClient.setQueriesData<UserListResponse>({ queryKey: ["userList"] }, (previousData) => {
-          if (previousData === undefined) return previousData;
-          const updatedUsers = previousData.users.filter((user) => user.user_id !== userToDelete.user_id);
-          return { ...previousData, users: updatedUsers };
-        });
+        queryClient.setQueriesData<UserListResponse>(
+          { queryKey: ["userList"] },
+          (previousData) => {
+            if (previousData === undefined) return previousData;
+            const updatedUsers = previousData.users.filter(
+              (user) => user.user_id !== userToDelete.user_id,
+            );
+            return { ...previousData, users: updatedUsers };
+          },
+        );
 
         NotificationsManager.success("User deleted successfully");
       } catch (error) {
@@ -197,25 +216,29 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({ accessToken, toke
 
     try {
       const response = await userUpdateUserCall(accessToken, editedUser, null);
-      queryClient.setQueriesData<UserListResponse>({ queryKey: ["userList"] }, (previousData) => {
-        if (previousData === undefined) return previousData;
-        const updatedUsers = previousData.users.map((user) => {
-          if (user.user_id === response.data.user_id) {
-            return updateExistingKeys(user, response.data);
-          }
-          return user;
-        });
+      queryClient.setQueriesData<UserListResponse>(
+        { queryKey: ["userList"] },
+        (previousData) => {
+          if (previousData === undefined) return previousData;
+          const updatedUsers = previousData.users.map((user) => {
+            if (user.user_id === response.data.user_id) {
+              return updateExistingKeys(user, response.data);
+            }
+            return user;
+          });
 
-        return { ...previousData, users: updatedUsers };
-      });
+          return { ...previousData, users: updatedUsers };
+        },
+      );
 
-      NotificationsManager.success(`User ${editedUser.user_id} updated successfully`);
+      NotificationsManager.success(
+        `User ${editedUser.user_id} updated successfully`,
+      );
     } catch (error) {
       console.error("There was an error updating the user", error);
     }
     setSelectedUser(null);
     setEditModalVisible(false);
-    // Close the modal
   };
 
   const handlePageChange = async (newPage: number) => {
@@ -241,14 +264,16 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({ accessToken, toke
   };
 
   const handleBulkEditSuccess = () => {
-    // Refresh the user list
     queryClient.invalidateQueries({ queryKey: ["userList"] });
     setSelectedUsers([]);
     setSelectionMode(false);
   };
 
   const userListQuery = useQuery({
-    queryKey: ["userList", { debouncedFilter: debouncedFilters, currentPage, orgAdminOrgIds }],
+    queryKey: [
+      "userList",
+      { debouncedFilter: debouncedFilters, currentPage, orgAdminOrgIds },
+    ],
     queryFn: async () => {
       if (!accessToken) throw new Error("Access token required");
 
@@ -263,7 +288,9 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({ accessToken, toke
         debouncedFilters.sso_user_id || null,
         debouncedFilters.sort_by,
         debouncedFilters.sort_order,
-        orgAdminOrgIds ? orgAdminOrgIds.map((o) => o.organization_id) : null,
+        orgAdminOrgIds
+          ? orgAdminOrgIds.map((o) => o.organization_id)
+          : null,
       );
     },
     enabled: Boolean(accessToken && token && userRole && userID),
@@ -290,8 +317,36 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({ accessToken, toke
     },
     handleDelete,
     handleResetPassword,
-    () => { }, // placeholder function, will be overridden in UserDataTable
+    () => {}, // placeholder function, will be overridden in UserDataTable
   );
+
+  const dataTableProps = {
+    data: userListQuery.data?.users || [],
+    columns: tableColumns,
+    isLoading: userListQuery.isLoading,
+    accessToken,
+    userRole,
+    onSortChange: handleSortChange,
+    currentSort: {
+      sortBy: filters.sort_by,
+      sortOrder: filters.sort_order,
+    },
+    possibleUIRoles,
+    handleEdit: (user: UserInfo) => {
+      setSelectedUser(user);
+      setEditModalVisible(true);
+    },
+    handleDelete,
+    handleResetPassword,
+    onSelectionChange: handleSelectionChange,
+    filters,
+    updateFilters,
+    initialFilters,
+    teams,
+    userListResponse,
+    currentPage,
+    handlePageChange,
+  };
 
   return (
     <div className="w-full p-8 overflow-hidden">
@@ -299,18 +354,23 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({ accessToken, toke
         <div className="flex space-x-3">
           {userListQuery.isLoading ? (
             <>
-              <Skeleton.Button active size="default" shape="default" style={{ width: 110, height: 36 }} />
-              <Skeleton.Button active size="default" shape="default" style={{ width: 145, height: 36 }} />
-              <Skeleton.Button active size="default" shape="default" style={{ width: 110, height: 36 }} />
+              <Skeleton className="h-9 w-[110px]" />
+              <Skeleton className="h-9 w-[145px]" />
+              <Skeleton className="h-9 w-[110px]" />
             </>
           ) : userID && accessToken ? (
             <>
-              <CreateUserButton userID={userID} accessToken={accessToken} teams={teams} possibleUIRoles={possibleUIRoles} />
+              <CreateUserButton
+                userID={userID}
+                accessToken={accessToken}
+                teams={teams}
+                possibleUIRoles={possibleUIRoles}
+              />
 
               {isProxyAdmin && (
                 <Button
                   onClick={handleToggleSelectionMode}
-                  type={selectionMode ? "primary" : "default"}
+                  variant={selectionMode ? "default" : "outline"}
                   className="flex items-center"
                 >
                   {selectionMode ? "Cancel Selection" : "Select Users"}
@@ -318,7 +378,11 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({ accessToken, toke
               )}
 
               {isProxyAdmin && selectionMode && (
-                <Button type="primary" onClick={handleBulkEdit} disabled={selectedUsers.length === 0} className="flex items-center">
+                <Button
+                  onClick={handleBulkEdit}
+                  disabled={selectedUsers.length === 0}
+                  className="flex items-center"
+                >
                   Bulk Edit ({selectedUsers.length} selected)
                 </Button>
               )}
@@ -328,90 +392,43 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({ accessToken, toke
       </div>
 
       {isProxyAdmin ? (
-        <TabGroup defaultIndex={0} onIndexChange={(index) => setActiveTab(index === 0 ? "users" : "settings")}>
-          <TabList className="mb-4">
-            <Tab>Users</Tab>
-            <Tab>Default User Settings</Tab>
-          </TabList>
+        <Tabs defaultValue="users">
+          <TabsList className="mb-4">
+            <TabsTrigger value="users">Users</TabsTrigger>
+            <TabsTrigger value="settings">Default User Settings</TabsTrigger>
+          </TabsList>
 
-          <TabPanels>
-            <TabPanel>
-              <UserDataTable
-                data={userListQuery.data?.users || []}
-                columns={tableColumns}
-                isLoading={userListQuery.isLoading}
+          <TabsContent value="users">
+            <UserDataTable
+              {...dataTableProps}
+              enableSelection={selectionMode}
+              selectedUsers={selectedUsers}
+            />
+          </TabsContent>
+
+          <TabsContent value="settings">
+            {!userID || !userRole || !accessToken ? (
+              <div className="flex flex-col gap-3 p-6">
+                <Skeleton className="h-6 w-48" />
+                <Skeleton className="h-4 w-full" />
+                <Skeleton className="h-4 w-full" />
+                <Skeleton className="h-4 w-3/4" />
+              </div>
+            ) : (
+              <DefaultUserSettings
                 accessToken={accessToken}
-                userRole={userRole}
-                onSortChange={handleSortChange}
-                currentSort={{
-                  sortBy: filters.sort_by,
-                  sortOrder: filters.sort_order,
-                }}
                 possibleUIRoles={possibleUIRoles}
-                handleEdit={(user) => {
-                  setSelectedUser(user);
-                  setEditModalVisible(true);
-                }}
-                handleDelete={handleDelete}
-                handleResetPassword={handleResetPassword}
-                enableSelection={selectionMode}
-                selectedUsers={selectedUsers}
-                onSelectionChange={handleSelectionChange}
-                filters={filters}
-                updateFilters={updateFilters}
-                initialFilters={initialFilters}
-                teams={teams}
-                userListResponse={userListResponse}
-                currentPage={currentPage}
-                handlePageChange={handlePageChange}
+                userID={userID}
+                userRole={userRole}
               />
-            </TabPanel>
-
-            <TabPanel>
-              {!userID || !userRole || !accessToken ? (
-                <div className="flex justify-center items-center h-64">
-                  <Skeleton active paragraph={{ rows: 4 }} />
-                </div>
-              ) : (
-                <DefaultUserSettings
-                  accessToken={accessToken}
-                  possibleUIRoles={possibleUIRoles}
-                  userID={userID}
-                  userRole={userRole}
-                />
-              )}
-            </TabPanel>
-          </TabPanels>
-        </TabGroup>
+            )}
+          </TabsContent>
+        </Tabs>
       ) : (
         <UserDataTable
-          data={userListQuery.data?.users || []}
-          columns={tableColumns}
-          isLoading={userListQuery.isLoading}
-          accessToken={accessToken}
-          userRole={userRole}
-          onSortChange={handleSortChange}
-          currentSort={{
-            sortBy: filters.sort_by,
-            sortOrder: filters.sort_order,
-          }}
-          possibleUIRoles={possibleUIRoles}
-          handleEdit={(user) => {
-            setSelectedUser(user);
-            setEditModalVisible(true);
-          }}
-          handleDelete={handleDelete}
-          handleResetPassword={handleResetPassword}
+          {...dataTableProps}
           enableSelection={false}
           selectedUsers={[]}
-          onSelectionChange={handleSelectionChange}
-          filters={filters}
-          updateFilters={updateFilters}
-          initialFilters={initialFilters}
-          teams={teams}
-          userListResponse={userListResponse}
-          currentPage={currentPage}
-          handlePageChange={handlePageChange}
         />
       )}
 
@@ -435,7 +452,10 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({ accessToken, toke
           {
             label: "Global Proxy Role",
             value:
-              (userToDelete && possibleUIRoles?.[userToDelete.user_role]?.ui_label) || userToDelete?.user_role || "-",
+              (userToDelete &&
+                possibleUIRoles?.[userToDelete.user_role]?.ui_label) ||
+              userToDelete?.user_role ||
+              "-",
           },
           { label: "Total Spend (USD)", value: userToDelete?.spend?.toFixed(2) },
         ]}

@@ -90,7 +90,14 @@ describe("UserInfoView", () => {
   });
 
   it("should render the user alias after loading", async () => {
+    const user = userEvent.setup();
     render(<UserInfoView {...defaultProps} />);
+
+    // The user alias is shown on the Details tab; activate it first.
+    await waitFor(() => {
+      expect(screen.getByRole("tab", { name: /details/i })).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("tab", { name: /details/i }));
 
     const aliases = await screen.findAllByText("Test Alias");
     expect(aliases.length).toBeGreaterThan(0);
@@ -203,9 +210,13 @@ describe("UserInfoView", () => {
       expect(screen.getByText("Remove from Team")).toBeInTheDocument();
     });
 
-    // The DeleteResourceModal's OK button has text "Delete" - find it within the modal
-    const modal = screen.getByText("Remove from Team").closest(".ant-modal") as HTMLElement;
-    const deleteConfirmButton = within(modal).getByRole("button", { name: /delete/i });
+    // The DeleteResourceModal's OK button has text "Delete" - find it within the alert dialog
+    const modal = screen
+      .getByText("Remove from Team")
+      .closest('[role="alertdialog"]') as HTMLElement;
+    const deleteConfirmButton = within(modal).getByRole("button", {
+      name: /delete/i,
+    });
     await user.click(deleteConfirmButton);
 
     await waitFor(() => {

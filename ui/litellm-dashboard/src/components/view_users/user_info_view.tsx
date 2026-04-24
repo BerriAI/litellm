@@ -1,10 +1,47 @@
 import React, { useState } from "react";
-// eslint-disable-next-line litellm-ui/no-banned-ui-imports
 import {
-  Card, Text, Button, Grid, Tab, TabList, TabGroup, TabPanel, TabPanels, Title,
-  Table, TableHead, TableBody, TableRow, TableHeaderCell, TableCell,
-} from "@tremor/react";
-import { ArrowLeft as ArrowLeftIcon, Trash2 as TrashIcon, RefreshCcw as RefreshIcon, Plus as PlusIcon } from "lucide-react";
+  ArrowLeft as ArrowLeftIcon,
+  Trash2 as TrashIcon,
+  RefreshCcw as RefreshIcon,
+  Plus as PlusIcon,
+  Copy as CopyIcon,
+  Check as CheckIcon,
+} from "lucide-react";
+
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+} from "@/components/ui/dialog";
+import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+
 import {
   userGetInfoV2,
   UserInfoV2Response,
@@ -19,12 +56,13 @@ import {
   teamMemberDeleteCall,
   Member,
 } from "../networking";
-import { Button as AntdButton, Modal, Select as AntdSelect, Form, Tooltip } from "antd";
 import { rolesWithWriteAccess } from "../../utils/roles";
 import { UserEditView } from "../user_edit_view";
 import OnboardingModal, { InvitationLink } from "../onboarding_link";
-import { formatNumberWithCommas, copyToClipboard as utilCopyToClipboard } from "@/utils/dataUtils";
-import { CopyIcon, CheckIcon } from "lucide-react";
+import {
+  formatNumberWithCommas,
+  copyToClipboard as utilCopyToClipboard,
+} from "@/utils/dataUtils";
 import NotificationsManager from "../molecules/notifications_manager";
 import { getBudgetDurationLabel } from "../common_components/budget_duration_dropdown";
 import DeleteResourceModal from "../common_components/DeleteResourceModal";
@@ -63,18 +101,26 @@ export default function UserInfoView({
   const [isLoading, setIsLoading] = useState(true);
   const [isEditing, setIsEditing] = useState(startInEditMode);
   const [userModels, setUserModels] = useState<string[]>([]);
-  const [isInvitationLinkModalVisible, setIsInvitationLinkModalVisible] = useState(false);
-  const [invitationLinkData, setInvitationLinkData] = useState<InvitationLink | null>(null);
+  const [isInvitationLinkModalVisible, setIsInvitationLinkModalVisible] =
+    useState(false);
+  const [invitationLinkData, setInvitationLinkData] =
+    useState<InvitationLink | null>(null);
   const [baseUrl, setBaseUrl] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState(initialTab);
+  const [activeTab, setActiveTab] = useState(
+    initialTab === 1 ? "details" : "overview",
+  );
   const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({});
   const [isTeamsExpanded, setIsTeamsExpanded] = useState(false);
   const [isAddTeamModalOpen, setIsAddTeamModalOpen] = useState(false);
   const [isRemoveTeamModalOpen, setIsRemoveTeamModalOpen] = useState(false);
-  const [teamToRemove, setTeamToRemove] = useState<TeamDisplayInfo | null>(null);
+  const [teamToRemove, setTeamToRemove] = useState<TeamDisplayInfo | null>(
+    null,
+  );
   const [isAddingTeam, setIsAddingTeam] = useState(false);
   const [isRemovingTeam, setIsRemovingTeam] = useState(false);
-  const [allTeams, setAllTeams] = useState<Array<{ team_id: string; team_alias: string }>>([]);
+  const [allTeams, setAllTeams] = useState<
+    Array<{ team_id: string; team_alias: string }>
+  >([]);
   const [selectedTeamId, setSelectedTeamId] = useState<string>("");
   const [selectedRole, setSelectedRole] = useState<string>("user");
   const [isLoadingTeams, setIsLoadingTeams] = useState(false);
@@ -84,14 +130,15 @@ export default function UserInfoView({
   }, []);
 
   React.useEffect(() => {
-    console.log(`userId: ${userId}, userRole: ${userRole}, accessToken: ${accessToken}`);
+    console.log(
+      `userId: ${userId}, userRole: ${userRole}, accessToken: ${accessToken}`,
+    );
     const fetchData = async () => {
       try {
         if (!accessToken) return;
         const data = await userGetInfoV2(accessToken, userId);
         setUserData(data);
 
-        // Fetch team details for display (team aliases)
         if (data.teams && data.teams.length > 0) {
           try {
             const teamPromises = data.teams.map(async (teamId: string) => {
@@ -108,14 +155,23 @@ export default function UserInfoView({
             const teams = await Promise.all(teamPromises);
             setTeamDetails(teams);
           } catch {
-            // Fall back to just team IDs
-            setTeamDetails(data.teams.map((id: string) => ({ team_id: id, team_alias: null })));
+            setTeamDetails(
+              data.teams.map((id: string) => ({
+                team_id: id,
+                team_alias: null,
+              })),
+            );
           }
         }
 
-        // Fetch available models
-        const modelDataResponse = await modelAvailableCall(accessToken, userId, userRole || "");
-        const availableModels = modelDataResponse.data.map((model: any) => model.id);
+        const modelDataResponse = await modelAvailableCall(
+          accessToken,
+          userId,
+          userRole || "",
+        );
+        const availableModels = modelDataResponse.data.map(
+          (model: any) => model.id,
+        );
         setUserModels(availableModels);
       } catch (error) {
         console.error("Error fetching user data:", error);
@@ -139,7 +195,7 @@ export default function UserInfoView({
         (teams || []).map((t: any) => ({
           team_id: t.team_id,
           team_alias: t.team_alias || t.team_id,
-        }))
+        })),
       );
     } catch (error) {
       console.error("Error fetching teams:", error);
@@ -155,7 +211,30 @@ export default function UserInfoView({
     fetchAllTeams();
   };
 
-  const handleAddTeamSubmit = async () => {
+  const refreshTeams = async () => {
+    if (!accessToken) return;
+    const data = await userGetInfoV2(accessToken, userId);
+    setUserData(data);
+    if (data.teams && data.teams.length > 0) {
+      const teamPromises = data.teams.map(async (teamId: string) => {
+        try {
+          const teamData = await teamInfoCall(accessToken, teamId);
+          return {
+            team_id: teamId,
+            team_alias: teamData?.team_info?.team_alias || null,
+          };
+        } catch {
+          return { team_id: teamId, team_alias: null };
+        }
+      });
+      setTeamDetails(await Promise.all(teamPromises));
+    } else {
+      setTeamDetails([]);
+    }
+  };
+
+  const handleAddTeamSubmit = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
     if (!accessToken || !selectedTeamId) return;
     setIsAddingTeam(true);
     try {
@@ -166,25 +245,12 @@ export default function UserInfoView({
       await teamMemberAddCall(accessToken, selectedTeamId, member);
       NotificationsManager.success("User added to team successfully");
       setIsAddTeamModalOpen(false);
-      // Re-fetch user data to refresh teams
-      const data = await userGetInfoV2(accessToken, userId);
-      setUserData(data);
-      if (data.teams && data.teams.length > 0) {
-        const teamPromises = data.teams.map(async (teamId: string) => {
-          try {
-            const teamData = await teamInfoCall(accessToken, teamId);
-            return { team_id: teamId, team_alias: teamData?.team_info?.team_alias || null };
-          } catch {
-            return { team_id: teamId, team_alias: null };
-          }
-        });
-        setTeamDetails(await Promise.all(teamPromises));
-      } else {
-        setTeamDetails([]);
-      }
+      await refreshTeams();
     } catch (error: any) {
       console.error("Error adding user to team:", error);
-      NotificationsManager.fromBackend(error?.message || "Failed to add user to team");
+      NotificationsManager.fromBackend(
+        error?.message || "Failed to add user to team",
+      );
     } finally {
       setIsAddingTeam(false);
     }
@@ -207,25 +273,12 @@ export default function UserInfoView({
       NotificationsManager.success("User removed from team successfully");
       setIsRemoveTeamModalOpen(false);
       setTeamToRemove(null);
-      // Re-fetch user data to refresh teams
-      const data = await userGetInfoV2(accessToken, userId);
-      setUserData(data);
-      if (data.teams && data.teams.length > 0) {
-        const teamPromises = data.teams.map(async (teamId: string) => {
-          try {
-            const teamData = await teamInfoCall(accessToken, teamId);
-            return { team_id: teamId, team_alias: teamData?.team_info?.team_alias || null };
-          } catch {
-            return { team_id: teamId, team_alias: null };
-          }
-        });
-        setTeamDetails(await Promise.all(teamPromises));
-      } else {
-        setTeamDetails([]);
-      }
+      await refreshTeams();
     } catch (error: any) {
       console.error("Error removing user from team:", error);
-      NotificationsManager.fromBackend(error?.message || "Failed to remove user from team");
+      NotificationsManager.fromBackend(
+        error?.message || "Failed to remove user from team",
+      );
     } finally {
       setIsRemovingTeam(false);
     }
@@ -237,7 +290,7 @@ export default function UserInfoView({
   };
 
   const availableTeamsForAdd = allTeams.filter(
-    (t) => !teamDetails.some((td) => td.team_id === t.team_id)
+    (t) => !teamDetails.some((td) => td.team_id === t.team_id),
   );
 
   const handleResetPassword = async () => {
@@ -282,9 +335,9 @@ export default function UserInfoView({
     try {
       if (!accessToken || !userData) return;
 
-      const response = await userUpdateUserCall(accessToken, formValues, null);
+      // Response is unused here; local state is updated from form values
+      await userUpdateUserCall(accessToken, formValues, null);
 
-      // Update local state with new values
       setUserData({
         ...userData,
         user_email: formValues.user_email ?? userData.user_email,
@@ -306,10 +359,15 @@ export default function UserInfoView({
   if (isLoading) {
     return (
       <div className="p-4">
-        <Button icon={ArrowLeftIcon} variant="light" onClick={onClose} className="mb-4">
+        <Button
+          variant="ghost"
+          onClick={onClose}
+          className="mb-4 flex items-center gap-1"
+        >
+          <ArrowLeftIcon className="h-4 w-4" />
           Back to Users
         </Button>
-        <Text>Loading user data...</Text>
+        <span>Loading user data...</span>
       </div>
     );
   }
@@ -317,10 +375,15 @@ export default function UserInfoView({
   if (!userData) {
     return (
       <div className="p-4">
-        <Button icon={ArrowLeftIcon} variant="light" onClick={onClose} className="mb-4">
+        <Button
+          variant="ghost"
+          onClick={onClose}
+          className="mb-4 flex items-center gap-1"
+        >
+          <ArrowLeftIcon className="h-4 w-4" />
           Back to Users
         </Button>
-        <Text>User not found</Text>
+        <span>User not found</span>
       </div>
     );
   }
@@ -335,7 +398,6 @@ export default function UserInfoView({
     }
   };
 
-  // Build a legacy-compatible shape for UserEditView
   const userDataForEdit = {
     user_id: userData.user_id,
     user_info: {
@@ -353,36 +415,56 @@ export default function UserInfoView({
     <div className="p-4">
       <div className="flex justify-between items-center mb-6">
         <div>
-          <Button icon={ArrowLeftIcon} variant="light" onClick={onClose} className="mb-4">
+          <Button
+            variant="ghost"
+            onClick={onClose}
+            className="mb-4 flex items-center gap-1"
+          >
+            <ArrowLeftIcon className="h-4 w-4" />
             Back to Users
           </Button>
-          <Title>{userData.user_email || "User"}</Title>
+          <h2 className="text-2xl font-semibold m-0">
+            {userData.user_email || "User"}
+          </h2>
           <div className="flex items-center cursor-pointer">
-            <Text className="text-gray-500 font-mono">{userData.user_id}</Text>
-            <AntdButton
-              type="text"
-              size="small"
-              icon={copiedStates["user-id"] ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
+            <span className="text-muted-foreground font-mono">
+              {userData.user_id}
+            </span>
+            <Button
+              variant="ghost"
+              size="sm"
               onClick={() => copyToClipboard(userData.user_id, "user-id")}
-              className={`left-2 z-10 transition-all duration-200 ${
+              className={`ml-2 z-10 h-7 w-7 p-0 transition-all duration-200 ${
                 copiedStates["user-id"]
-                  ? "text-green-600 bg-green-50 border-green-200"
-                  : "text-gray-500 hover:text-gray-700 hover:bg-gray-100"
+                  ? "text-green-600 bg-green-50 border-green-200 dark:bg-green-950/30"
+                  : "text-muted-foreground hover:text-foreground hover:bg-muted"
               }`}
-            />
+              aria-label="Copy user id"
+            >
+              {copiedStates["user-id"] ? (
+                <CheckIcon size={12} />
+              ) : (
+                <CopyIcon size={12} />
+              )}
+            </Button>
           </div>
         </div>
         {userRole && rolesWithWriteAccess.includes(userRole) && (
           <div className="flex items-center space-x-2">
-            <Button icon={RefreshIcon} variant="secondary" onClick={handleResetPassword} className="flex items-center">
+            <Button
+              variant="outline"
+              onClick={handleResetPassword}
+              className="flex items-center"
+            >
+              <RefreshIcon className="h-4 w-4 mr-1" />
               Reset Password
             </Button>
             <Button
-              icon={TrashIcon}
-              variant="secondary"
+              variant="outline"
               onClick={() => setIsDeleteModalOpen(true)}
-              className="flex items-center text-red-500 border-red-500 hover:text-red-600 hover:border-red-600"
+              className="flex items-center text-destructive border-destructive hover:text-destructive hover:border-destructive"
             >
+              <TrashIcon className="h-4 w-4 mr-1" />
               Delete User
             </Button>
           </div>
@@ -400,7 +482,8 @@ export default function UserInfoView({
           {
             label: "Global Proxy Role",
             value:
-              (userData.user_role && possibleUIRoles?.[userData.user_role]?.ui_label) ||
+              (userData.user_role &&
+                possibleUIRoles?.[userData.user_role]?.ui_label) ||
               userData.user_role ||
               "-",
           },
@@ -417,228 +500,263 @@ export default function UserInfoView({
         confirmLoading={isDeletingUser}
       />
 
-      <TabGroup defaultIndex={activeTab} onIndexChange={setActiveTab}>
-        <TabList className="mb-4">
-          <Tab>Overview</Tab>
-          <Tab>Details</Tab>
-        </TabList>
+      <Tabs value={activeTab} onValueChange={setActiveTab}>
+        <TabsList className="mb-4">
+          <TabsTrigger value="overview">Overview</TabsTrigger>
+          <TabsTrigger value="details">Details</TabsTrigger>
+        </TabsList>
 
-        <TabPanels>
-          {/* Overview Panel */}
-          <TabPanel>
-            <Grid numItems={1} numItemsSm={2} numItemsLg={3} className="gap-6">
-              <Card>
-                <Text>Spend</Text>
-                <div className="mt-2">
-                  <Title>${formatNumberWithCommas(userData.spend || 0, 4)}</Title>
-                  <Text>
-                    of{" "}
-                    {userData.max_budget !== null
-                      ? `$${formatNumberWithCommas(userData.max_budget, 4)}`
-                      : "Unlimited"}
-                  </Text>
-                </div>
-              </Card>
+        <TabsContent value="overview">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+            <Card className="p-4">
+              <span>Spend</span>
+              <div className="mt-2">
+                <h3 className="text-xl font-semibold m-0">
+                  ${formatNumberWithCommas(userData.spend || 0, 4)}
+                </h3>
+                <span>
+                  of{" "}
+                  {userData.max_budget !== null
+                    ? `$${formatNumberWithCommas(userData.max_budget, 4)}`
+                    : "Unlimited"}
+                </span>
+              </div>
+            </Card>
 
-              <Card>
-                <div className="flex justify-between items-center mb-2">
-                  <Text>Teams</Text>
-                  {isProxyAdmin && (
-                    <Button
-                      icon={PlusIcon}
-                      variant="light"
-                      size="xs"
-                      onClick={handleOpenAddTeamModal}
-                    >
-                      Add Team
-                    </Button>
-                  )}
-                </div>
-                <div className="mt-2">
-                  {teamDetails.length > 0 ? (
-                    <div className="max-h-60 overflow-y-auto">
-                    <Table>
-                      <TableHead>
-                        <TableRow>
-                          <TableHeaderCell>Team Name</TableHeaderCell>
-                          {isProxyAdmin && <TableHeaderCell className="text-right">Actions</TableHeaderCell>}
-                        </TableRow>
-                      </TableHead>
-                      <TableBody>
-                        {teamDetails.slice(0, isTeamsExpanded ? teamDetails.length : 20).map((team) => (
-                          <TableRow key={team.team_id}>
-                            <TableCell>{team.team_alias || team.team_id}</TableCell>
-                            {isProxyAdmin && (
-                              <TableCell className="text-right">
-                                <Button
-                                  icon={TrashIcon}
-                                  variant="light"
-                                  size="xs"
-                                  color="red"
-                                  onClick={() => handleOpenRemoveTeamModal(team)}
-                                />
-                              </TableCell>
-                            )}
-                          </TableRow>
-                        ))}
-                      </TableBody>
-                    </Table>
-                    </div>
-                  ) : (
-                    <Text>No teams</Text>
-                  )}
-                  {!isTeamsExpanded && teamDetails.length > 20 && (
-                    <Button
-                      variant="light"
-                      size="xs"
-                      className="mt-2"
-                      onClick={() => setIsTeamsExpanded(true)}
-                    >
-                      +{teamDetails.length - 20} more
-                    </Button>
-                  )}
-                  {isTeamsExpanded && teamDetails.length > 20 && (
-                    <Button
-                      variant="light"
-                      size="xs"
-                      className="mt-2"
-                      onClick={() => setIsTeamsExpanded(false)}
-                    >
-                      Show Less
-                    </Button>
-                  )}
-                </div>
-              </Card>
-
-              <Card>
-                <Text>Personal Models</Text>
-                <div className="mt-2">
-                  {userData.models?.length && userData.models?.length > 0 ? (
-                    userData.models?.map((model, index) => <Text key={index}>{model}</Text>)
-                  ) : (
-                    <Text>All proxy models</Text>
-                  )}
-                </div>
-              </Card>
-            </Grid>
-          </TabPanel>
-
-          {/* Details Panel */}
-          <TabPanel>
-            <Card>
-              <div className="flex justify-between items-center mb-4">
-                <Title>User Settings</Title>
-                {!isEditing && userRole && rolesWithWriteAccess.includes(userRole) && (
-                  <Button onClick={() => setIsEditing(true)}>Edit Settings</Button>
+            <Card className="p-4">
+              <div className="flex justify-between items-center mb-2">
+                <span>Teams</span>
+                {isProxyAdmin && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={handleOpenAddTeamModal}
+                    className="h-7 gap-1"
+                  >
+                    <PlusIcon className="h-4 w-4" />
+                    Add Team
+                  </Button>
                 )}
               </div>
-
-              {isEditing && userData ? (
-                <UserEditView
-                  userData={userDataForEdit}
-                  onCancel={() => setIsEditing(false)}
-                  onSubmit={handleUserUpdate}
-                  teams={teamDetails}
-                  accessToken={accessToken}
-                  userID={userId}
-                  userRole={userRole}
-                  userModels={userModels}
-                  possibleUIRoles={possibleUIRoles}
-                />
-              ) : (
-                <div className="space-y-4">
-                  <div>
-                    <Text className="font-medium">User ID</Text>
-                    <div className="flex items-center cursor-pointer">
-                      <Text className="font-mono">{userData.user_id}</Text>
-                      <AntdButton
-                        type="text"
-                        size="small"
-                        icon={copiedStates["user-id"] ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
-                        onClick={() => copyToClipboard(userData.user_id, "user-id")}
-                        className={`left-2 z-10 transition-all duration-200 ${
-                          copiedStates["user-id"]
-                            ? "text-green-600 bg-green-50 border-green-200"
-                            : "text-gray-500 hover:text-gray-700 hover:bg-gray-100"
-                        }`}
-                      />
-                    </div>
+              <div className="mt-2">
+                {teamDetails.length > 0 ? (
+                  <div className="max-h-60 overflow-y-auto">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Team Name</TableHead>
+                          {isProxyAdmin && (
+                            <TableHead className="text-right">
+                              Actions
+                            </TableHead>
+                          )}
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {teamDetails
+                          .slice(
+                            0,
+                            isTeamsExpanded ? teamDetails.length : 20,
+                          )
+                          .map((team) => (
+                            <TableRow key={team.team_id}>
+                              <TableCell>
+                                {team.team_alias || team.team_id}
+                              </TableCell>
+                              {isProxyAdmin && (
+                                <TableCell className="text-right">
+                                  <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    onClick={() =>
+                                      handleOpenRemoveTeamModal(team)
+                                    }
+                                    aria-label={`Remove ${team.team_alias || team.team_id}`}
+                                    className="h-7 w-7 p-0 text-destructive hover:text-destructive"
+                                  >
+                                    <TrashIcon className="h-4 w-4" />
+                                  </Button>
+                                </TableCell>
+                              )}
+                            </TableRow>
+                          ))}
+                      </TableBody>
+                    </Table>
                   </div>
+                ) : (
+                  <span>No teams</span>
+                )}
+                {!isTeamsExpanded && teamDetails.length > 20 && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="mt-2"
+                    onClick={() => setIsTeamsExpanded(true)}
+                  >
+                    +{teamDetails.length - 20} more
+                  </Button>
+                )}
+                {isTeamsExpanded && teamDetails.length > 20 && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="mt-2"
+                    onClick={() => setIsTeamsExpanded(false)}
+                  >
+                    Show Less
+                  </Button>
+                )}
+              </div>
+            </Card>
 
-                  <div>
-                    <Text className="font-medium">Email</Text>
-                    <Text>{userData.user_email || "Not Set"}</Text>
-                  </div>
+            <Card className="p-4">
+              <span>Personal Models</span>
+              <div className="mt-2">
+                {userData.models?.length && userData.models?.length > 0 ? (
+                  userData.models?.map((model, index) => (
+                    <div key={index}>{model}</div>
+                  ))
+                ) : (
+                  <span>All proxy models</span>
+                )}
+              </div>
+            </Card>
+          </div>
+        </TabsContent>
 
-                  <div>
-                    <Text className="font-medium">User Alias</Text>
-                    <Text>{userData.user_alias || "Not Set"}</Text>
-                  </div>
+        <TabsContent value="details">
+          <Card className="p-6">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-lg font-semibold m-0">User Settings</h3>
+              {!isEditing &&
+                userRole &&
+                rolesWithWriteAccess.includes(userRole) && (
+                  <Button onClick={() => setIsEditing(true)}>
+                    Edit Settings
+                  </Button>
+                )}
+            </div>
 
-                  <div>
-                    <Text className="font-medium">Global Proxy Role</Text>
-                    <Text>{userData.user_role || "Not Set"}</Text>
-                  </div>
-
-                  <div>
-                    <Text className="font-medium">Created</Text>
-                    <Text>
-                      {userData.created_at
-                        ? new Date(userData.created_at).toLocaleString()
-                        : "Unknown"}
-                    </Text>
-                  </div>
-
-                  <div>
-                    <Text className="font-medium">Last Updated</Text>
-                    <Text>
-                      {userData.updated_at
-                        ? new Date(userData.updated_at).toLocaleString()
-                        : "Unknown"}
-                    </Text>
-                  </div>
-
-                  <div>
-                    <Text className="font-medium">Personal Models</Text>
-                    <div className="flex flex-wrap gap-2 mt-1">
-                      {userData.models?.length && userData.models?.length > 0 ? (
-                        userData.models?.map((model, index) => (
-                          <span key={index} className="px-2 py-1 bg-blue-100 rounded text-xs">
-                            {model}
-                          </span>
-                        ))
+            {isEditing && userData ? (
+              <UserEditView
+                userData={userDataForEdit}
+                onCancel={() => setIsEditing(false)}
+                onSubmit={handleUserUpdate}
+                teams={teamDetails}
+                accessToken={accessToken}
+                userID={userId}
+                userRole={userRole}
+                userModels={userModels}
+                possibleUIRoles={possibleUIRoles}
+              />
+            ) : (
+              <div className="space-y-4">
+                <div>
+                  <span className="font-medium block">User ID</span>
+                  <div className="flex items-center cursor-pointer">
+                    <span className="font-mono">{userData.user_id}</span>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() =>
+                        copyToClipboard(userData.user_id, "user-id-details")
+                      }
+                      className={`ml-2 z-10 h-7 w-7 p-0 transition-all duration-200 ${
+                        copiedStates["user-id-details"]
+                          ? "text-green-600 bg-green-50 border-green-200 dark:bg-green-950/30"
+                          : "text-muted-foreground hover:text-foreground hover:bg-muted"
+                      }`}
+                      aria-label="Copy user id"
+                    >
+                      {copiedStates["user-id-details"] ? (
+                        <CheckIcon size={12} />
                       ) : (
-                        <Text>All proxy models</Text>
+                        <CopyIcon size={12} />
                       )}
-                    </div>
-                  </div>
-
-                  <div>
-                    <Text className="font-medium">Max Budget</Text>
-                    <Text>
-                      {userData.max_budget !== null && userData.max_budget !== undefined
-                        ? `$${formatNumberWithCommas(userData.max_budget, 4)}`
-                        : "Unlimited"}
-                    </Text>
-                  </div>
-
-                  <div>
-                    <Text className="font-medium">Budget Reset</Text>
-                    <Text>{getBudgetDurationLabel(userData.budget_duration ?? null)}</Text>
-                  </div>
-
-                  <div>
-                    <Text className="font-medium">Metadata</Text>
-                    <pre className="bg-gray-100 p-2 rounded text-xs overflow-auto mt-1">
-                      {JSON.stringify(userData.metadata || {}, null, 2)}
-                    </pre>
+                    </Button>
                   </div>
                 </div>
-              )}
-            </Card>
-          </TabPanel>
-        </TabPanels>
-      </TabGroup>
+
+                <div>
+                  <span className="font-medium block">Email</span>
+                  <span>{userData.user_email || "Not Set"}</span>
+                </div>
+
+                <div>
+                  <span className="font-medium block">User Alias</span>
+                  <span>{userData.user_alias || "Not Set"}</span>
+                </div>
+
+                <div>
+                  <span className="font-medium block">Global Proxy Role</span>
+                  <span>{userData.user_role || "Not Set"}</span>
+                </div>
+
+                <div>
+                  <span className="font-medium block">Created</span>
+                  <span>
+                    {userData.created_at
+                      ? new Date(userData.created_at).toLocaleString()
+                      : "Unknown"}
+                  </span>
+                </div>
+
+                <div>
+                  <span className="font-medium block">Last Updated</span>
+                  <span>
+                    {userData.updated_at
+                      ? new Date(userData.updated_at).toLocaleString()
+                      : "Unknown"}
+                  </span>
+                </div>
+
+                <div>
+                  <span className="font-medium block">Personal Models</span>
+                  <div className="flex flex-wrap gap-2 mt-1">
+                    {userData.models?.length && userData.models?.length > 0 ? (
+                      userData.models?.map((model, index) => (
+                        <span
+                          key={index}
+                          className="px-2 py-1 bg-blue-100 dark:bg-blue-950/50 text-blue-800 dark:text-blue-300 rounded text-xs"
+                        >
+                          {model}
+                        </span>
+                      ))
+                    ) : (
+                      <span>All proxy models</span>
+                    )}
+                  </div>
+                </div>
+
+                <div>
+                  <span className="font-medium block">Max Budget</span>
+                  <span>
+                    {userData.max_budget !== null &&
+                    userData.max_budget !== undefined
+                      ? `$${formatNumberWithCommas(userData.max_budget, 4)}`
+                      : "Unlimited"}
+                  </span>
+                </div>
+
+                <div>
+                  <span className="font-medium block">Budget Reset</span>
+                  <span>
+                    {getBudgetDurationLabel(userData.budget_duration ?? null)}
+                  </span>
+                </div>
+
+                <div>
+                  <span className="font-medium block">Metadata</span>
+                  <pre className="bg-muted p-2 rounded text-xs overflow-auto mt-1">
+                    {JSON.stringify(userData.metadata || {}, null, 2)}
+                  </pre>
+                </div>
+              </div>
+            )}
+          </Card>
+        </TabsContent>
+      </Tabs>
+
       <OnboardingModal
         isInvitationLinkModalVisible={isInvitationLinkModalVisible}
         setIsInvitationLinkModalVisible={setIsInvitationLinkModalVisible}
@@ -655,7 +773,10 @@ export default function UserInfoView({
         message="Are you sure you want to remove this user from the team? This action cannot be undone."
         resourceInformationTitle="Team Membership"
         resourceInformation={[
-          { label: "Team", value: teamToRemove?.team_alias || teamToRemove?.team_id },
+          {
+            label: "Team",
+            value: teamToRemove?.team_alias || teamToRemove?.team_id,
+          },
           { label: "User ID", value: userData?.user_id, code: true },
           { label: "Email", value: userData?.user_email },
         ]}
@@ -665,68 +786,100 @@ export default function UserInfoView({
       />
 
       {/* Add to Team Modal */}
-      <Modal
-        title="Add User to Team"
+      <Dialog
         open={isAddTeamModalOpen}
-        onCancel={() => setIsAddTeamModalOpen(false)}
-        footer={null}
-        width={500}
-        maskClosable={!isAddingTeam}
+        onOpenChange={(o) =>
+          !isAddingTeam && !o ? setIsAddTeamModalOpen(false) : undefined
+        }
       >
-        <Form
-          layout="vertical"
-          onFinish={handleAddTeamSubmit}
-        >
-          <Form.Item label="Team" required>
-            <AntdSelect
-              showSearch
-              value={selectedTeamId || undefined}
-              onChange={setSelectedTeamId}
-              placeholder="Select a team"
-              filterOption={(input, option) => {
-                const team = availableTeamsForAdd.find((t) => t.team_id === option?.value);
-                if (!team) return false;
-                return team.team_alias.toLowerCase().includes(input.toLowerCase());
-              }}
-              loading={isLoadingTeams}
-            >
-              {availableTeamsForAdd.map((team) => (
-                <AntdSelect.Option key={team.team_id} value={team.team_id}>
-                  {team.team_alias}
-                </AntdSelect.Option>
-              ))}
-            </AntdSelect>
-          </Form.Item>
+        <DialogContent className="max-w-[500px]">
+          <DialogHeader>
+            <DialogTitle>Add User to Team</DialogTitle>
+            <DialogDescription className="sr-only">
+              Add the user to an existing team.
+            </DialogDescription>
+          </DialogHeader>
+          <form onSubmit={handleAddTeamSubmit} className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="add-team-team">
+                Team <span className="text-destructive">*</span>
+              </Label>
+              <Select
+                value={selectedTeamId}
+                onValueChange={setSelectedTeamId}
+                disabled={isLoadingTeams}
+              >
+                <SelectTrigger id="add-team-team">
+                  <SelectValue placeholder="Select a team" />
+                </SelectTrigger>
+                <SelectContent>
+                  {availableTeamsForAdd.map((team) => (
+                    <SelectItem key={team.team_id} value={team.team_id}>
+                      {team.team_alias}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
 
-          <Form.Item label="Member Role">
-            <AntdSelect value={selectedRole} onChange={setSelectedRole}>
-              <AntdSelect.Option value="user">
-                <Tooltip title="Can view team info, but not manage it">
-                  <span className="font-medium">user</span>
-                  <span className="ml-2 text-gray-500 text-sm">- Can view team info, but not manage it</span>
-                </Tooltip>
-              </AntdSelect.Option>
-              <AntdSelect.Option value="admin">
-                <Tooltip title="Can create team keys, add members, and manage settings">
-                  <span className="font-medium">admin</span>
-                  <span className="ml-2 text-gray-500 text-sm">- Can create team keys, add members, and manage settings</span>
-                </Tooltip>
-              </AntdSelect.Option>
-            </AntdSelect>
-          </Form.Item>
+            <div className="space-y-2">
+              <Label htmlFor="add-team-role">Member Role</Label>
+              <Select value={selectedRole} onValueChange={setSelectedRole}>
+                <SelectTrigger id="add-team-role">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="user">
+                    <TooltipProvider>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <span>
+                            <span className="font-medium">user</span>
+                            <span className="ml-2 text-muted-foreground text-sm">
+                              - Can view team info, but not manage it
+                            </span>
+                          </span>
+                        </TooltipTrigger>
+                        <TooltipContent>
+                          Can view team info, but not manage it
+                        </TooltipContent>
+                      </Tooltip>
+                    </TooltipProvider>
+                  </SelectItem>
+                  <SelectItem value="admin">
+                    <TooltipProvider>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <span>
+                            <span className="font-medium">admin</span>
+                            <span className="ml-2 text-muted-foreground text-sm">
+                              - Can create team keys, add members, and manage
+                              settings
+                            </span>
+                          </span>
+                        </TooltipTrigger>
+                        <TooltipContent>
+                          Can create team keys, add members, and manage
+                          settings
+                        </TooltipContent>
+                      </Tooltip>
+                    </TooltipProvider>
+                  </SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
 
-          <div className="text-right mt-4">
-            <AntdButton
-              type="primary"
-              htmlType="submit"
-              loading={isAddingTeam}
-              disabled={!selectedTeamId}
-            >
-              {isAddingTeam ? "Adding..." : "Add to Team"}
-            </AntdButton>
-          </div>
-        </Form>
-      </Modal>
+            <DialogFooter>
+              <Button
+                type="submit"
+                disabled={!selectedTeamId || isAddingTeam}
+              >
+                {isAddingTeam ? "Adding..." : "Add to Team"}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

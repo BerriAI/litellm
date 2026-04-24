@@ -1,4 +1,5 @@
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { describe, it, expect, vi, beforeEach, beforeAll } from "vitest";
 import UserAgentActivity from "./user_agent_activity";
 import * as networking from "./networking";
@@ -146,6 +147,7 @@ describe("UserAgentActivity", () => {
   });
 
   it("should switch between DAU, WAU, and MAU tabs", async () => {
+    const user = userEvent.setup();
     render(<UserAgentActivity {...defaultProps} />);
 
     // Wait for data to load
@@ -158,20 +160,16 @@ describe("UserAgentActivity", () => {
     // Check default DAU tab content
     expect(screen.getByText("Daily Active Users - Last 7 Days")).toBeInTheDocument();
 
-    // Find all WAU tab buttons (there might be multiple)
-    const wauTabs = screen.getAllByText("WAU");
-    fireEvent.click(wauTabs[0]);
+    // Switch to WAU tab (use role=tab to target the actual Radix tab trigger)
+    await user.click(screen.getByRole("tab", { name: /^WAU$/ }));
 
-    // Check WAU tab content
     await waitFor(() => {
       expect(screen.getByText("Weekly Active Users - Last 7 Weeks")).toBeInTheDocument();
     });
 
-    // Find all MAU tab buttons
-    const mauTabs = screen.getAllByText("MAU");
-    fireEvent.click(mauTabs[0]);
+    // Switch to MAU tab
+    await user.click(screen.getByRole("tab", { name: /^MAU$/ }));
 
-    // Check MAU tab content
     await waitFor(() => {
       expect(screen.getByText("Monthly Active Users - Last 7 Months")).toBeInTheDocument();
     });
