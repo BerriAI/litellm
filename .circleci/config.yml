@@ -98,6 +98,19 @@ commands:
       - wait_for_service:
           url: tcp://localhost:5432
           timeout: "60"
+  start_redis:
+    description: "Start a redis container on port 6379 and wait until it accepts connections. Use this to isolate a job from the shared remote Redis so concurrent CI pipelines don't contend for pod locks or buffer keys."
+    steps:
+      - run:
+          name: Start Redis
+          command: |
+            docker run -d \
+              --name redis-cache \
+              -p 6379:6379 \
+              redis:7-alpine@sha256:7aec734b2bb298a1d769fd8729f13b8514a41bf90fcdd1f38ec52267fbaa8ee6
+      - wait_for_service:
+          url: tcp://localhost:6379
+          timeout: "60"
   setup_litellm_enterprise_pip:
     steps:
       - run:
@@ -112,11 +125,10 @@ commands:
     steps:
       - checkout
       - setup_google_dns
+      - install_uv
       - restore_cache:
           keys:
-            - v3-litellm-uv-deps-{{ checksum "uv.lock" }}
-            - v3-litellm-uv-deps-
-      - install_uv
+            - v1-uv-cache-{{ checksum "uv.lock" }}
       - run:
           name: Install Dependencies
           command: |
@@ -124,10 +136,8 @@ commands:
       - setup_litellm_enterprise_pip
       - save_cache:
           paths:
-            - ~/.local/lib
-            - ~/.local/bin
             - ~/.cache/uv
-          key: v3-litellm-uv-deps-{{ checksum "uv.lock" }}
+          key: v1-uv-cache-{{ checksum "uv.lock" }}
 
 jobs:
   # Add Windows testing job
@@ -149,7 +159,15 @@ jobs:
       - run:
           name: Install Dependencies
           command: |
-            Invoke-RestMethod https://astral.sh/uv/0.10.9/install.ps1 | Invoke-Expression
+            $installer = Join-Path $env:TEMP "uv-install.ps1"
+            Invoke-WebRequest -Uri https://astral.sh/uv/0.10.9/install.ps1 -OutFile $installer
+            $expected = "d43ffff8d28e7d1e7d1831a212465f12b24a43c7f87f386e95e2a5915aee5d7d"
+            $actual = (Get-FileHash -Path $installer -Algorithm SHA256).Hash.ToLower()
+            if ($actual -ne $expected) {
+              throw "uv installer hash mismatch: expected $expected got $actual"
+            }
+            & $installer
+            Remove-Item $installer
             $uvBin = Join-Path $HOME ".local\bin"
             $env:Path = "$uvBin;$env:Path"
             if (!(Test-Path $PROFILE)) {
@@ -166,7 +184,8 @@ jobs:
 
   local_testing_part1:
     docker:
-      - image: cimg/python:3.12@sha256:9c796c23c84e84a66a964acb508d39dc5433c81a47e07efd56dccbbc2427e07c
+      - &python312_image
+        image: cimg/python:3.12@sha256:9c796c23c84e84a66a964acb508d39dc5433c81a47e07efd56dccbbc2427e07c
         auth:
           username: ${DOCKERHUB_USERNAME}
           password: ${DOCKERHUB_PASSWORD}
@@ -175,15 +194,9 @@ jobs:
     steps:
       - checkout
       - setup_google_dns
-      - run:
-          name: Show git commit hash
-          command: |
-            echo "Git commit hash: $CIRCLE_SHA1"
-
       - restore_cache:
           keys:
-            - v2-dependencies-{{ checksum "uv.lock" }}
-            - v2-dependencies-
+            - v1-uv-cache-{{ checksum "uv.lock" }}
       - install_uv
       - run:
           name: Install Dependencies
@@ -192,8 +205,8 @@ jobs:
       - setup_litellm_enterprise_pip
       - save_cache:
           paths:
-            - ./.venv
-          key: v2-dependencies-{{ checksum "uv.lock" }}
+            - ~/.cache/uv
+          key: v1-uv-cache-{{ checksum "uv.lock" }}
       - run:
           name: Run prisma ./docker/entrypoint.sh
           command: |
@@ -201,13 +214,6 @@ jobs:
             chmod +x docker/entrypoint.sh
             ./docker/entrypoint.sh
             set -e
-      - run:
-          name: Black Formatting
-          command: |
-            cd litellm
-            uv run --no-sync python -m black .
-            cd ..
-
       # Run pytest and generate JUnit XML report
       - run:
           name: Run tests (Part 1 - A-M)
@@ -247,24 +253,15 @@ jobs:
             - local_testing_part1_coverage
   local_testing_part2:
     docker:
-      - image: cimg/python:3.12@sha256:9c796c23c84e84a66a964acb508d39dc5433c81a47e07efd56dccbbc2427e07c
-        auth:
-          username: ${DOCKERHUB_USERNAME}
-          password: ${DOCKERHUB_PASSWORD}
+      - *python312_image
     working_directory: ~/project
     parallelism: 4
     steps:
       - checkout
       - setup_google_dns
-      - run:
-          name: Show git commit hash
-          command: |
-            echo "Git commit hash: $CIRCLE_SHA1"
-
       - restore_cache:
           keys:
-            - v2-dependencies-{{ checksum "uv.lock" }}
-            - v2-dependencies-
+            - v1-uv-cache-{{ checksum "uv.lock" }}
       - install_uv
       - run:
           name: Install Dependencies
@@ -273,8 +270,8 @@ jobs:
       - setup_litellm_enterprise_pip
       - save_cache:
           paths:
-            - ./.venv
-          key: v2-dependencies-{{ checksum "uv.lock" }}
+            - ~/.cache/uv
+          key: v1-uv-cache-{{ checksum "uv.lock" }}
       - run:
           name: Run prisma ./docker/entrypoint.sh
           command: |
@@ -282,13 +279,6 @@ jobs:
             chmod +x docker/entrypoint.sh
             ./docker/entrypoint.sh
             set -e
-      - run:
-          name: Black Formatting
-          command: |
-            cd litellm
-            uv run --no-sync python -m black .
-            cd ..
-
       # Run pytest and generate JUnit XML report
       - run:
           name: Run tests (Part 2 - N-Z)
@@ -328,25 +318,16 @@ jobs:
             - local_testing_part2_coverage
   langfuse_logging_unit_tests:
     docker:
-      - image: cimg/python:3.12@sha256:9c796c23c84e84a66a964acb508d39dc5433c81a47e07efd56dccbbc2427e07c
-        auth:
-          username: ${DOCKERHUB_USERNAME}
-          password: ${DOCKERHUB_PASSWORD}
+      - *python312_image
     working_directory: ~/project
     resource_class: medium
 
     steps:
       - checkout
       - setup_google_dns
-      - run:
-          name: Show git commit hash
-          command: |
-            echo "Git commit hash: $CIRCLE_SHA1"
-
       - restore_cache:
           keys:
-            - v2-dependencies-{{ checksum "uv.lock" }}
-            - v2-dependencies-
+            - v1-uv-cache-{{ checksum "uv.lock" }}
       - install_uv
       - run:
           name: Install Dependencies
@@ -355,8 +336,8 @@ jobs:
       - setup_litellm_enterprise_pip
       - save_cache:
           paths:
-            - ./.venv
-          key: v2-dependencies-{{ checksum "uv.lock" }}
+            - ~/.cache/uv
+          key: v1-uv-cache-{{ checksum "uv.lock" }}
       - run:
           name: Run prisma ./docker/entrypoint.sh
           command: |
@@ -369,8 +350,6 @@ jobs:
       - run:
           name: Run tests
           command: |
-            pwd
-            ls
             uv run --no-sync python -m pytest -v tests/local_testing -x --junitxml=test-results/junit.xml --durations=5 -k "langfuse"
           no_output_timeout: 15m
       # Store test results
@@ -378,10 +357,7 @@ jobs:
           path: test-results
   auth_ui_unit_tests:
     docker:
-      - image: cimg/python:3.12@sha256:9c796c23c84e84a66a964acb508d39dc5433c81a47e07efd56dccbbc2427e07c
-        auth:
-          username: ${DOCKERHUB_USERNAME}
-          password: ${DOCKERHUB_PASSWORD}
+      - *python312_image
       - image: cimg/postgres:16.0@sha256:b125148bc76e8e8eee5eb3ad6020a3a14110a14e8192f1c645128afebe2e2f84
         environment:
           POSTGRES_USER: postgres
@@ -401,8 +377,8 @@ jobs:
             uv sync --frozen --all-groups --all-extras --python 3.12
       - save_cache:
           paths:
-            - ./.venv
-          key: v2-dependencies-{{ checksum "uv.lock" }}
+            - ~/.cache/uv
+          key: v1-uv-cache-{{ checksum "uv.lock" }}
       - wait_for_service:
           url: tcp://localhost:5432
           timeout: "60"
@@ -419,8 +395,6 @@ jobs:
       - run:
           name: Run tests
           command: |
-            pwd
-            ls
             uv run --no-sync python -m pytest -v tests/proxy_admin_ui_tests -x --junitxml=test-results/junit.xml --durations=5 -n 2
           no_output_timeout: 15m
 
@@ -430,37 +404,30 @@ jobs:
 
   litellm_router_testing: # Runs all tests with the "router" keyword
     docker:
-      - image: cimg/python:3.12@sha256:9c796c23c84e84a66a964acb508d39dc5433c81a47e07efd56dccbbc2427e07c
-        auth:
-          username: ${DOCKERHUB_USERNAME}
-          password: ${DOCKERHUB_PASSWORD}
+      - *python312_image
     working_directory: ~/project
     resource_class: large
     parallelism: 4
     steps:
       - checkout
       - setup_google_dns
+      - install_uv
       - restore_cache:
           keys:
-            - v1-router-testing-deps-{{ checksum "uv.lock" }}
-            - v1-router-testing-deps-
-      - install_uv
+            - v1-uv-cache-{{ checksum "uv.lock" }}
       - run:
           name: Install Dependencies
           command: |
             uv sync --frozen --all-groups --all-extras --python 3.12
       - save_cache:
           paths:
-            - /home/circleci/.pyenv
-            - /home/circleci/.local
-          key: v1-router-testing-deps-{{ checksum "uv.lock" }}
+            - ~/.cache/uv
+          key: v1-uv-cache-{{ checksum "uv.lock" }}
       # Run pytest and generate JUnit XML report
       - setup_litellm_enterprise_pip
       - run:
           name: Run tests
           command: |
-            pwd
-            ls
             TEST_FILES=$(circleci tests glob "tests/local_testing/**/test_*.py")
 
             echo "$TEST_FILES" | circleci tests run \
@@ -480,37 +447,30 @@ jobs:
 
   litellm_router_unit_testing: # Runs all tests with the "router" keyword
     docker:
-      - image: cimg/python:3.12@sha256:9c796c23c84e84a66a964acb508d39dc5433c81a47e07efd56dccbbc2427e07c
-        auth:
-          username: ${DOCKERHUB_USERNAME}
-          password: ${DOCKERHUB_PASSWORD}
+      - *python312_image
     working_directory: ~/project
     resource_class: large
 
     steps:
       - checkout
       - setup_google_dns
+      - install_uv
       - restore_cache:
           keys:
-            - v1-router-unit-deps-{{ checksum "uv.lock" }}
-            - v1-router-unit-deps-
-      - install_uv
+            - v1-uv-cache-{{ checksum "uv.lock" }}
       - run:
           name: Install Dependencies
           command: |
             uv sync --frozen --all-groups --all-extras --python 3.12
       - save_cache:
           paths:
-            - /home/circleci/.pyenv
-            - /home/circleci/.local
-          key: v1-router-unit-deps-{{ checksum "uv.lock" }}
+            - ~/.cache/uv
+          key: v1-uv-cache-{{ checksum "uv.lock" }}
       # Run pytest and generate JUnit XML report
       - setup_litellm_enterprise_pip
       - run:
           name: Run tests
           command: |
-            pwd
-            ls
             uv run --no-sync python -m pytest -v tests/router_unit_tests -x --junitxml=test-results/junit.xml --durations=5 -n 4
           no_output_timeout: 15m
       # Store test results
@@ -518,10 +478,7 @@ jobs:
           path: test-results
   litellm_assistants_api_testing: # Runs all tests with the "assistants" keyword
     docker:
-      - image: cimg/python:3.12@sha256:9c796c23c84e84a66a964acb508d39dc5433c81a47e07efd56dccbbc2427e07c
-        auth:
-          username: ${DOCKERHUB_USERNAME}
-          password: ${DOCKERHUB_PASSWORD}
+      - *python312_image
     working_directory: ~/project
     resource_class: medium
 
@@ -538,8 +495,6 @@ jobs:
       - run:
           name: Run tests
           command: |
-            pwd
-            ls
             uv run --no-sync python -m pytest tests/local_testing/ -v -k "assistants" -x --junitxml=test-results/junit.xml --durations=5
           no_output_timeout: 15m
       # Store test results
@@ -547,36 +502,29 @@ jobs:
           path: test-results
   llm_translation_testing:
     docker:
-      - image: cimg/python:3.12@sha256:9c796c23c84e84a66a964acb508d39dc5433c81a47e07efd56dccbbc2427e07c
-        auth:
-          username: ${DOCKERHUB_USERNAME}
-          password: ${DOCKERHUB_PASSWORD}
+      - *python312_image
     working_directory: ~/project
     resource_class: xlarge
 
     steps:
       - checkout
       - setup_google_dns
+      - install_uv
       - restore_cache:
           keys:
-            - v1-llm-translation-deps-{{ checksum "uv.lock" }}
-            - v1-llm-translation-deps-
-      - install_uv
+            - v1-uv-cache-{{ checksum "uv.lock" }}
       - run:
           name: Install Dependencies
           command: |
             uv sync --frozen --all-groups --all-extras --python 3.12
       - save_cache:
           paths:
-            - /home/circleci/.pyenv
-            - /home/circleci/.local
-          key: v1-llm-translation-deps-{{ checksum "uv.lock" }}
+            - ~/.cache/uv
+          key: v1-uv-cache-{{ checksum "uv.lock" }}
       # Run pytest and generate JUnit XML report
       - run:
           name: Run tests
           command: |
-            pwd
-            ls
             # Add --timeout to kill hanging tests after 120s (2 min)
             # Add --durations=20 to show 20 slowest tests for debugging
             # Subdirectories with dedicated jobs (maintain this list as new jobs are added)
@@ -595,10 +543,7 @@ jobs:
           path: test-results
   realtime_translation_testing:
     docker:
-      - image: cimg/python:3.12@sha256:9c796c23c84e84a66a964acb508d39dc5433c81a47e07efd56dccbbc2427e07c
-        auth:
-          username: ${DOCKERHUB_USERNAME}
-          password: ${DOCKERHUB_PASSWORD}
+      - *python312_image
     working_directory: ~/project
 
     steps:
@@ -613,8 +558,6 @@ jobs:
       - run:
           name: Run realtime tests
           command: |
-            pwd
-            ls
             # Add --timeout to kill hanging tests after 120s (2 min)
             # Add --durations=20 to show 20 slowest tests for debugging
             uv run --no-sync python -m pytest -vv tests/llm_translation/realtime --cov=litellm --cov-report=xml -v --junitxml=test-results/junit.xml --durations=20 -n 4 --timeout=120 --timeout_method=thread
@@ -633,50 +576,9 @@ jobs:
           paths:
             - realtime_translation_coverage.xml
             - realtime_translation_coverage
-  mcp_testing:
-    docker:
-      - image: cimg/python:3.12@sha256:9c796c23c84e84a66a964acb508d39dc5433c81a47e07efd56dccbbc2427e07c
-        auth:
-          username: ${DOCKERHUB_USERNAME}
-          password: ${DOCKERHUB_PASSWORD}
-    working_directory: ~/project
-
-    steps:
-      - checkout
-      - setup_google_dns
-      - install_uv
-      - run:
-          name: Install Dependencies
-          command: |
-            uv sync --frozen --all-groups --all-extras --python 3.12
-      # Run pytest and generate JUnit XML report
-      - run:
-          name: Run tests
-          command: |
-            pwd
-            ls
-            uv run --no-sync python -m pytest -vv tests/mcp_tests --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit.xml --durations=5 -n 2
-          no_output_timeout: 15m
-      - run:
-          name: Rename the coverage files
-          command: |
-            mv coverage.xml mcp_coverage.xml
-            mv .coverage mcp_coverage
-
-      # Store test results
-      - store_test_results:
-          path: test-results
-      - persist_to_workspace:
-          root: .
-          paths:
-            - mcp_coverage.xml
-            - mcp_coverage
   agent_testing:
     docker:
-      - image: cimg/python:3.12@sha256:9c796c23c84e84a66a964acb508d39dc5433c81a47e07efd56dccbbc2427e07c
-        auth:
-          username: ${DOCKERHUB_USERNAME}
-          password: ${DOCKERHUB_PASSWORD}
+      - *python312_image
     working_directory: ~/project
 
     steps:
@@ -691,8 +593,6 @@ jobs:
       - run:
           name: Run tests
           command: |
-            pwd
-            ls
             uv run --no-sync python -m pytest -vv tests/agent_tests --ignore=tests/agent_tests/local_only_agent_tests --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit.xml --durations=5
           no_output_timeout: 15m
       - run:
@@ -711,10 +611,7 @@ jobs:
             - agent_coverage
   guardrails_testing:
     docker:
-      - image: cimg/python:3.12@sha256:9c796c23c84e84a66a964acb508d39dc5433c81a47e07efd56dccbbc2427e07c
-        auth:
-          username: ${DOCKERHUB_USERNAME}
-          password: ${DOCKERHUB_PASSWORD}
+      - *python312_image
     working_directory: ~/project
 
     steps:
@@ -729,8 +626,6 @@ jobs:
       - run:
           name: Run tests
           command: |
-            pwd
-            ls
             LITELLM_LOG=WARNING uv run --no-sync python -m pytest tests/guardrails_tests -vv --cov=litellm --cov-report=xml --junitxml=test-results/junit.xml --durations=5 -n 2 --timeout=120 --timeout_method=thread
           no_output_timeout: 15m
       - run:
@@ -750,10 +645,7 @@ jobs:
 
   google_generate_content_endpoint_testing:
     docker:
-      - image: cimg/python:3.12@sha256:9c796c23c84e84a66a964acb508d39dc5433c81a47e07efd56dccbbc2427e07c
-        auth:
-          username: ${DOCKERHUB_USERNAME}
-          password: ${DOCKERHUB_PASSWORD}
+      - *python312_image
     working_directory: ~/project
 
     steps:
@@ -768,8 +660,6 @@ jobs:
       - run:
           name: Run tests
           command: |
-            pwd
-            ls
             uv run --no-sync python -m pytest -vv tests/unified_google_tests --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit.xml --durations=5 --retries 3 --retry-delay 5
           no_output_timeout: 15m
       - run:
@@ -789,36 +679,29 @@ jobs:
 
   llm_responses_api_testing:
     docker:
-      - image: cimg/python:3.12@sha256:9c796c23c84e84a66a964acb508d39dc5433c81a47e07efd56dccbbc2427e07c
-        auth:
-          username: ${DOCKERHUB_USERNAME}
-          password: ${DOCKERHUB_PASSWORD}
+      - *python312_image
     working_directory: ~/project
     resource_class: large
 
     steps:
       - checkout
       - setup_google_dns
+      - install_uv
       - restore_cache:
           keys:
-            - v1-llm-responses-deps-{{ checksum "uv.lock" }}
-            - v1-llm-responses-deps-
-      - install_uv
+            - v1-uv-cache-{{ checksum "uv.lock" }}
       - run:
           name: Install Dependencies
           command: |
             uv sync --frozen --all-groups --all-extras --python 3.12
       - save_cache:
           paths:
-            - /home/circleci/.pyenv
-            - /home/circleci/.local
-          key: v1-llm-responses-deps-{{ checksum "uv.lock" }}
+            - ~/.cache/uv
+          key: v1-uv-cache-{{ checksum "uv.lock" }}
       # Run pytest and generate JUnit XML report
       - run:
           name: Run tests
           command: |
-            pwd
-            ls
             uv run --no-sync python -m pytest -v tests/llm_responses_api_testing -x --junitxml=test-results/junit.xml --durations=5 -n 8
           no_output_timeout: 15m
 
@@ -827,10 +710,7 @@ jobs:
           path: test-results
   ocr_testing:
     docker:
-      - image: cimg/python:3.12@sha256:9c796c23c84e84a66a964acb508d39dc5433c81a47e07efd56dccbbc2427e07c
-        auth:
-          username: ${DOCKERHUB_USERNAME}
-          password: ${DOCKERHUB_PASSWORD}
+      - *python312_image
     working_directory: ~/project
 
     steps:
@@ -845,8 +725,6 @@ jobs:
       - run:
           name: Run tests
           command: |
-            pwd
-            ls
             uv run --no-sync python -m pytest -vv tests/ocr_tests --cov=litellm --cov-report=xml -x -v --junitxml=test-results/junit.xml --durations=5 -n 4
           no_output_timeout: 15m
       - run:
@@ -865,10 +743,7 @@ jobs:
             - ocr_coverage
   search_testing:
     docker:
-      - image: cimg/python:3.12@sha256:9c796c23c84e84a66a964acb508d39dc5433c81a47e07efd56dccbbc2427e07c
-        auth:
-          username: ${DOCKERHUB_USERNAME}
-          password: ${DOCKERHUB_PASSWORD}
+      - *python312_image
     working_directory: ~/project
 
     steps:
@@ -883,8 +758,6 @@ jobs:
       - run:
           name: Run tests
           command: |
-            pwd
-            ls
             uv run --no-sync python -m pytest -vv tests/search_tests --cov=litellm --cov-report=xml -x -v --junitxml=test-results/junit.xml --durations=5 -n 4
           no_output_timeout: 15m
       - run:
@@ -901,51 +774,9 @@ jobs:
           paths:
             - search_coverage.xml
             - search_coverage
-  # Split litellm_mapped_tests into parallel jobs
-  litellm_mapped_tests_proxy_part1:
-    docker:
-      - image: cimg/python:3.12@sha256:9c796c23c84e84a66a964acb508d39dc5433c81a47e07efd56dccbbc2427e07c
-        auth:
-          username: ${DOCKERHUB_USERNAME}
-          password: ${DOCKERHUB_PASSWORD}
-    working_directory: ~/project
-    resource_class: large
-    steps:
-      - setup_litellm_test_deps
-      - run:
-          name: Run proxy tests part 1 (high-volume directories)
-          command: |
-            uv run --no-sync python -m prisma generate
-            export PYTHONUNBUFFERED=1
-            uv run --no-sync python -m pytest tests/test_litellm/proxy/guardrails tests/test_litellm/proxy/management_endpoints tests/test_litellm/proxy/_experimental tests/test_litellm/proxy/client tests/test_litellm/proxy/auth --junitxml=test-results/junit-proxy-part1.xml --durations=10 -n 4 --maxfail=5 --timeout=60 -vv --log-cli-level=WARNING -r A
-          no_output_timeout: 15m
-      - store_test_results:
-          path: test-results
-  litellm_mapped_tests_proxy_part2:
-    docker:
-      - image: cimg/python:3.12@sha256:9c796c23c84e84a66a964acb508d39dc5433c81a47e07efd56dccbbc2427e07c
-        auth:
-          username: ${DOCKERHUB_USERNAME}
-          password: ${DOCKERHUB_PASSWORD}
-    working_directory: ~/project
-    resource_class: large
-    steps:
-      - setup_litellm_test_deps
-      - run:
-          name: Run proxy tests part 2 (all other tests)
-          command: |
-            uv run --no-sync python -m prisma generate
-            export PYTHONUNBUFFERED=1
-            uv run --no-sync python -m pytest tests/test_litellm/proxy --ignore=tests/test_litellm/proxy/guardrails --ignore=tests/test_litellm/proxy/management_endpoints --ignore=tests/test_litellm/proxy/_experimental --ignore=tests/test_litellm/proxy/client --ignore=tests/test_litellm/proxy/auth --junitxml=test-results/junit-proxy-part2.xml --durations=10 -n 4 --maxfail=5 --timeout=120 -vv --log-cli-level=WARNING -r A
-          no_output_timeout: 15m
-      - store_test_results:
-          path: test-results
   litellm_mapped_enterprise_tests:
     docker:
-      - image: cimg/python:3.12@sha256:9c796c23c84e84a66a964acb508d39dc5433c81a47e07efd56dccbbc2427e07c
-        auth:
-          username: ${DOCKERHUB_USERNAME}
-          password: ${DOCKERHUB_PASSWORD}
+      - *python312_image
     working_directory: ~/project
     resource_class: large
 
@@ -961,8 +792,6 @@ jobs:
       - run:
           name: Run enterprise tests
           command: |
-            pwd
-            ls
             uv run --no-sync python -m prisma generate
             uv run --no-sync python -m pytest -v tests/enterprise -x --junitxml=test-results/junit-enterprise.xml --durations=10 -n 4
           no_output_timeout: 15m
@@ -971,10 +800,7 @@ jobs:
           path: test-results
   batches_testing:
     docker:
-      - image: cimg/python:3.12@sha256:9c796c23c84e84a66a964acb508d39dc5433c81a47e07efd56dccbbc2427e07c
-        auth:
-          username: ${DOCKERHUB_USERNAME}
-          password: ${DOCKERHUB_PASSWORD}
+      - *python312_image
     working_directory: ~/project
 
     steps:
@@ -989,8 +815,6 @@ jobs:
       - run:
           name: Run tests
           command: |
-            pwd
-            ls
             uv run --no-sync python -m pytest -vv tests/batches_tests --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit.xml --durations=5 -n 2
           no_output_timeout: 15m
       - run:
@@ -1009,10 +833,7 @@ jobs:
             - batches_coverage
   litellm_utils_testing:
     docker:
-      - image: cimg/python:3.12@sha256:9c796c23c84e84a66a964acb508d39dc5433c81a47e07efd56dccbbc2427e07c
-        auth:
-          username: ${DOCKERHUB_USERNAME}
-          password: ${DOCKERHUB_PASSWORD}
+      - *python312_image
     working_directory: ~/project
 
     steps:
@@ -1027,8 +848,6 @@ jobs:
       - run:
           name: Run tests
           command: |
-            pwd
-            ls
             uv run --no-sync python -m pytest -vv tests/litellm_utils_tests --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit.xml --durations=5 -n 2
           no_output_timeout: 15m
       - run:
@@ -1048,10 +867,7 @@ jobs:
 
   pass_through_unit_testing:
     docker:
-      - image: cimg/python:3.12@sha256:9c796c23c84e84a66a964acb508d39dc5433c81a47e07efd56dccbbc2427e07c
-        auth:
-          username: ${DOCKERHUB_USERNAME}
-          password: ${DOCKERHUB_PASSWORD}
+      - *python312_image
     working_directory: ~/project
 
     steps:
@@ -1066,8 +882,6 @@ jobs:
       - run:
           name: Run tests
           command: |
-            pwd
-            ls
             uv run --no-sync python -m pytest -vv tests/pass_through_unit_tests --cov=litellm --cov-report=xml -x -v --junitxml=test-results/junit.xml --durations=5 -n 4
           no_output_timeout: 15m
       - run:
@@ -1086,10 +900,7 @@ jobs:
             - pass_through_unit_tests_coverage
   image_gen_testing:
     docker:
-      - image: cimg/python:3.12@sha256:9c796c23c84e84a66a964acb508d39dc5433c81a47e07efd56dccbbc2427e07c
-        auth:
-          username: ${DOCKERHUB_USERNAME}
-          password: ${DOCKERHUB_PASSWORD}
+      - *python312_image
     working_directory: ~/project
     resource_class: large
 
@@ -1105,8 +916,6 @@ jobs:
       - run:
           name: Run tests
           command: |
-            pwd
-            ls
             uv run --no-sync python -m pytest -v tests/image_gen_tests -n 4 -x --junitxml=test-results/junit.xml --durations=5
           no_output_timeout: 15m
       # Store test results
@@ -1114,10 +923,7 @@ jobs:
           path: test-results
   logging_testing:
     docker:
-      - image: cimg/python:3.12@sha256:9c796c23c84e84a66a964acb508d39dc5433c81a47e07efd56dccbbc2427e07c
-        auth:
-          username: ${DOCKERHUB_USERNAME}
-          password: ${DOCKERHUB_PASSWORD}
+      - *python312_image
     working_directory: ~/project
 
     steps:
@@ -1133,8 +939,6 @@ jobs:
       - run:
           name: Run tests
           command: |
-            pwd
-            ls
             LITELLM_LOG=WARNING uv run --no-sync python -m pytest tests/logging_callback_tests -vv --cov=litellm --cov-report=xml -n 4 --junitxml=test-results/junit.xml --durations=5 --timeout=120 --timeout_method=thread
           no_output_timeout: 15m
       - run:
@@ -1153,10 +957,7 @@ jobs:
             - logging_coverage
   audio_testing:
     docker:
-      - image: cimg/python:3.12@sha256:9c796c23c84e84a66a964acb508d39dc5433c81a47e07efd56dccbbc2427e07c
-        auth:
-          username: ${DOCKERHUB_USERNAME}
-          password: ${DOCKERHUB_PASSWORD}
+      - *python312_image
     working_directory: ~/project
 
     steps:
@@ -1171,8 +972,6 @@ jobs:
       - run:
           name: Run tests
           command: |
-            pwd
-            ls
             uv run --no-sync python -m pytest -vv tests/audio_tests --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit.xml --durations=5
           no_output_timeout: 15m
       - run:
@@ -1191,10 +990,7 @@ jobs:
             - audio_coverage
   redis_caching_unit_tests:
     docker:
-      - image: cimg/python:3.12@sha256:9c796c23c84e84a66a964acb508d39dc5433c81a47e07efd56dccbbc2427e07c
-        auth:
-          username: ${DOCKERHUB_USERNAME}
-          password: ${DOCKERHUB_PASSWORD}
+      - *python312_image
     working_directory: ~/project
 
     steps:
@@ -1202,8 +998,7 @@ jobs:
       - setup_google_dns
       - restore_cache:
           keys:
-            - v2-dependencies-{{ checksum "uv.lock" }}
-            - v2-dependencies-
+            - v1-uv-cache-{{ checksum "uv.lock" }}
       - install_uv
       - run:
           name: Install Dependencies
@@ -1211,8 +1006,8 @@ jobs:
             uv sync --frozen --all-groups --all-extras --python 3.12
       - save_cache:
           paths:
-            - ./.venv
-          key: v2-dependencies-{{ checksum "uv.lock" }}
+            - ~/.cache/uv
+          key: v1-uv-cache-{{ checksum "uv.lock" }}
       # Run pytest and generate JUnit XML report
       - run:
           name: Run tests
@@ -1242,10 +1037,7 @@ jobs:
             - redis_caching_coverage
   installing_litellm_on_python:
     docker:
-      - image: cimg/python:3.12@sha256:9c796c23c84e84a66a964acb508d39dc5433c81a47e07efd56dccbbc2427e07c
-        auth:
-          username: ${DOCKERHUB_USERNAME}
-          password: ${DOCKERHUB_PASSWORD}
+      - *python312_image
     working_directory: ~/project
 
     steps:
@@ -1260,8 +1052,6 @@ jobs:
       - run:
           name: Run tests
           command: |
-            pwd
-            ls
             uv run --no-sync python -m pytest -vv tests/local_testing/test_basic_python_version.py -k "not v2_resolver"
 
   installing_litellm_on_python_3_13:
@@ -1284,16 +1074,11 @@ jobs:
       - run:
           name: Run tests
           command: |
-            pwd
-            ls
             uv run --no-sync python -m pytest -v tests/local_testing/test_basic_python_version.py -k "not v2_resolver"
 
   installing_litellm_on_python_v2_migration_resolver:
     docker:
-      - image: cimg/python:3.12@sha256:9c796c23c84e84a66a964acb508d39dc5433c81a47e07efd56dccbbc2427e07c
-        auth:
-          username: ${DOCKERHUB_USERNAME}
-          password: ${DOCKERHUB_PASSWORD}
+      - *python312_image
       - image: cimg/postgres:16.0@sha256:b125148bc76e8e8eee5eb3ad6020a3a14110a14e8192f1c645128afebe2e2f84
         environment:
           POSTGRES_USER: postgres
@@ -1335,18 +1120,15 @@ jobs:
       - install_helm
       - install_kind
 
-      # Install kubectl (pinned version with official checksum verification)
+      # Install kubectl (pinned version with hardcoded checksum)
       - run:
           name: Install kubectl v1.31.4
           command: |
             curl -sSLf -o /tmp/kubectl \
               https://dl.k8s.io/release/v1.31.4/bin/linux/amd64/kubectl
-            curl -sSLf -o /tmp/kubectl.sha256 \
-              https://dl.k8s.io/release/v1.31.4/bin/linux/amd64/kubectl.sha256
-            echo "$(cat /tmp/kubectl.sha256)  /tmp/kubectl" | sha256sum -c -
+            echo "298e19e9c6c17199011404278f0ff8168a7eca4217edad9097af577023a5620f  /tmp/kubectl" | sha256sum -c -
             chmod +x /tmp/kubectl
             sudo mv /tmp/kubectl /usr/local/bin/
-            rm -f /tmp/kubectl.sha256
 
       # Create kind cluster
       - run:
@@ -1391,7 +1173,6 @@ jobs:
             kubectl logs $(kubectl get pods -l app.kubernetes.io/name=litellm -o jsonpath="{.items[0].metadata.name}")
 
             # Run the helm tests
-            helm test litellm --logs
             helm test litellm --logs
 
       # Cleanup
@@ -1550,8 +1331,6 @@ jobs:
       - run:
           name: Run tests
           command: |
-            pwd
-            ls
             uv run --no-sync python -m pytest -s -v tests/*.py -x --junitxml=test-results/junit.xml -n 4 --durations=5 --ignore=tests/otel_tests --ignore=tests/spend_tracking_tests --ignore=tests/pass_through_tests --ignore=tests/proxy_admin_ui_tests --ignore=tests/load_tests --ignore=tests/llm_translation --ignore=tests/llm_responses_api_testing --ignore=tests/mcp_tests --ignore=tests/guardrails_tests --ignore=tests/image_gen_tests --ignore=tests/pass_through_unit_tests
           no_output_timeout: 15m
 
@@ -1566,10 +1345,6 @@ jobs:
     steps:
       - checkout
       - setup_google_dns
-      - run:
-          name: Verify Docker is available
-          command: |
-            docker version
       - install_uv
       - run:
           name: Install Dependencies
@@ -1631,8 +1406,6 @@ jobs:
       - run:
           name: Run tests
           command: |
-            pwd
-            ls
             uv run --no-sync python -m pytest -s -vv tests/openai_endpoints_tests --junitxml=test-results/junit.xml --durations=5
           no_output_timeout: 15m
 
@@ -1647,10 +1420,6 @@ jobs:
     steps:
       - checkout
       - setup_google_dns
-      - run:
-          name: Verify Docker is available
-          command: |
-            docker version
       - install_uv
       - run:
           name: Install Dependencies
@@ -1706,8 +1475,6 @@ jobs:
       - run:
           name: Run tests
           command: |
-            pwd
-            ls
             uv run --no-sync python -m pytest -v tests/otel_tests -x --junitxml=test-results/junit.xml --durations=5
           no_output_timeout: 15m
             # Clean up first container
@@ -1765,16 +1532,13 @@ jobs:
     steps:
       - checkout
       - setup_google_dns
-      - run:
-          name: Verify Docker is available
-          command: |
-            docker version
       - install_uv
       - run:
           name: Install Dependencies
           command: |
             uv sync --frozen --all-groups --all-extras --python 3.12
       - start_postgres
+      - start_redis
       - attach_workspace:
           at: ~/project
       - run:
@@ -1784,15 +1548,18 @@ jobs:
             docker images | grep litellm-docker-database
       - run:
           name: Run Docker container
-          # intentionally give bad redis credentials here
-          # the OTEL test - should get this as a trace
+          # Point the proxy at the job-local Redis (start_redis) instead of the
+          # shared remote Redis. The Redis transaction buffer uses a single
+          # global pod-lock key (cronjob_lock:db_spend_update_job) and a single
+          # global buffer list (litellm_spend_update_buffer); sharing those
+          # across concurrent CI pipelines causes spend flushes to stall or
+          # land in the wrong DB, which is what makes this test flaky.
           command: |
             docker run -d \
               -p 4000:4000 \
               -e DATABASE_URL=postgresql://postgres:postgres@host.docker.internal:5432/circle_test \
-              -e REDIS_HOST=$REDIS_HOST \
-              -e REDIS_PASSWORD=$REDIS_PASSWORD \
-              -e REDIS_PORT=$REDIS_PORT \
+              -e REDIS_HOST=host.docker.internal \
+              -e REDIS_PORT=6379 \
               -e LITELLM_MASTER_KEY="sk-1234" \
               -e OPENAI_API_KEY=$OPENAI_API_KEY \
               -e LITELLM_LICENSE=$LITELLM_LICENSE \
@@ -1820,16 +1587,16 @@ jobs:
       - run:
           name: Run tests
           command: |
-            pwd
-            ls
             uv run --no-sync python -m pytest -vv tests/spend_tracking_tests -x --junitxml=test-results/junit.xml --durations=5
           no_output_timeout: 15m
-            # Clean up first container
       - run:
           name: Stop and remove first container
+          when: always
           command: |
             docker stop my-app
             docker rm my-app
+            docker stop redis-cache
+            docker rm redis-cache
 
   proxy_multi_instance_tests:
     machine:
@@ -1839,10 +1606,6 @@ jobs:
     steps:
       - checkout
       - setup_google_dns
-      - run:
-          name: Verify Docker is available
-          command: |
-            docker version
       - install_uv
       - run:
           name: Install Dependencies
@@ -1913,8 +1676,6 @@ jobs:
       - run:
           name: Run tests
           command: |
-            pwd
-            ls
             uv run --no-sync python -m pytest -vv tests/multi_instance_e2e_tests -x --junitxml=test-results/junit.xml --durations=5
           no_output_timeout: 15m
             # Clean up first container
@@ -1930,11 +1691,6 @@ jobs:
     steps:
       - checkout
       - setup_google_dns
-      - run:
-          name: Verify Docker is available
-          command: |
-            docker version
-            sudo systemctl restart docker
       - install_uv
       - run:
           name: Install Dependencies
@@ -1976,8 +1732,6 @@ jobs:
       - run:
           name: Run tests
           command: |
-            pwd
-            ls
             uv run --no-sync python -m pytest -vv tests/store_model_in_db_tests -x --junitxml=test-results/junit.xml --durations=5
           no_output_timeout: 15m
       - run:
@@ -2005,7 +1759,7 @@ jobs:
       - run:
           name: Install Dependencies
           command: |
-            uv sync --frozen --all-groups --all-extras --python 3.13
+            uv sync --frozen --all-groups --all-extras --python 3.12
       - run:
           name: Build Docker image
           command: |
@@ -2120,19 +1874,27 @@ jobs:
       - run:
           name: Install Ruby and Bundler
           command: |
-            # Import GPG keys first
-            gpg --keyserver hkp://keyserver.ubuntu.com --recv-keys 409B6B1796C275462A1703113804BB82D39DC0E3 7D2BAF1CF37B13E2069D6956105BD0E739499BDB || {
-              curl -sSL https://rvm.io/mpapis.asc | gpg --import -
-              curl -sSL https://rvm.io/pkuczynski.asc | gpg --import -
-            }
+            # Clone RVM at pinned tag and verify the commit SHA matches the
+            # published tag before running its install script.
+            RVM_VERSION="1.29.12"
+            RVM_EXPECTED_SHA="6bfc9213c9d6914fe756f524eb034a403d51db81"
+            git clone --depth 1 --branch "$RVM_VERSION" https://github.com/rvm/rvm.git /tmp/rvm
+            RVM_ACTUAL_SHA="$(git -C /tmp/rvm rev-parse HEAD)"
+            if [ "$RVM_ACTUAL_SHA" != "$RVM_EXPECTED_SHA" ]; then
+              echo "RVM tag $RVM_VERSION resolved to $RVM_ACTUAL_SHA; expected $RVM_EXPECTED_SHA" >&2
+              exit 1
+            fi
 
-            # Install Ruby version manager (RVM)
-            curl -sSL https://get.rvm.io | bash -s stable
+            # Import RVM signing keys (used by `rvm install` to verify Ruby tarballs)
+            gpg --keyserver hkp://keyserver.ubuntu.com --recv-keys 409B6B1796C275462A1703113804BB82D39DC0E3 7D2BAF1CF37B13E2069D6956105BD0E739499BDB
 
-            # Source RVM from the correct location
-            source $HOME/.rvm/scripts/rvm
+            # Install RVM from the verified checkout. The install script
+            # sources `scripts/functions/installer` using paths relative to
+            # its own working directory, so it must be run from /tmp/rvm.
+            (cd /tmp/rvm && ./install --path "$HOME/.rvm")
+            source "$HOME/.rvm/scripts/rvm"
 
-            # Install Ruby 3.2.2
+            # Install Ruby 3.2.2 (RVM verifies the tarball PGP signature)
             rvm install 3.2.2
             rvm use 3.2.2 --default
 
@@ -2147,34 +1909,37 @@ jobs:
             bundle install
             bundle exec rspec
           no_output_timeout: 30m
-      # New steps to run Node.js test
+      # Install Node.js directly from nodejs.org with SHA256 verification,
+      # instead of piping NodeSource's setup_18.x apt-repo installer into
+      # sudo bash (which runs a mutable upstream script unattended).
       - run:
-          name: Install Node.js
+          name: Install Node.js 18.20.8
           command: |
-            export DEBIAN_FRONTEND=noninteractive
-            curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
-            sudo apt-get update
-            sudo apt-get install -y nodejs
+            NODE_VERSION="18.20.8"
+            NODE_TARBALL="node-v${NODE_VERSION}-linux-x64.tar.xz"
+            NODE_EXPECTED_SHA="5467ee62d6af1411d46b6a10e3fb5cacc92734dbcef465fea14e7b90993001c9"
+            curl -sSLf -o "/tmp/${NODE_TARBALL}" "https://nodejs.org/dist/v${NODE_VERSION}/${NODE_TARBALL}"
+            echo "${NODE_EXPECTED_SHA}  /tmp/${NODE_TARBALL}" | sha256sum -c -
+            sudo tar -xJf "/tmp/${NODE_TARBALL}" -C /usr/local --strip-components=1
+            rm -f "/tmp/${NODE_TARBALL}"
             node --version
             npm --version
 
       - run:
-          name: Install Node.js dependencies
+          name: Install Node.js test dependencies
           command: |
-            npm install @google-cloud/vertexai
-            npm install @google/generative-ai
-            npm install --save-dev jest
+            cd tests/pass_through_tests
+            npm ci
 
       - run:
           name: Run Vertex AI, Google AI Studio Node.js tests
           command: |
-            npx jest tests/pass_through_tests --verbose
+            cd tests/pass_through_tests
+            npx jest . --verbose
           no_output_timeout: 30m
       - run:
           name: Run tests
           command: |
-            pwd
-            ls
             uv run --no-sync python -m pytest -v tests/pass_through_tests/ -x --junitxml=test-results/junit.xml --durations=5
           no_output_timeout: 15m
 
@@ -2190,10 +1955,6 @@ jobs:
     steps:
       - checkout
       - setup_google_dns
-      - run:
-          name: Verify Docker is available
-          command: |
-            docker version
       - install_uv
       - run:
           name: Install Dependencies
@@ -2238,8 +1999,6 @@ jobs:
           command: |
             export LITELLM_PROXY_URL="http://localhost:4000"
             export LITELLM_API_KEY="sk-1234"
-            pwd
-            ls
             uv run --no-sync python -m pytest -vv tests/proxy_e2e_anthropic_messages_tests/ -x -s --junitxml=test-results/junit.xml --durations=5
           no_output_timeout: 15m
 
@@ -2249,7 +2008,7 @@ jobs:
 
   upload-coverage:
     docker:
-      - image: cimg/python:3.12@sha256:9c796c23c84e84a66a964acb508d39dc5433c81a47e07efd56dccbbc2427e07c
+      - *python312_image
     steps:
       - checkout
       - attach_workspace:
@@ -2266,7 +2025,7 @@ jobs:
       - run:
           name: Combine Coverage
           command: |
-            uv tool run --from 'coverage[toml]==7.10.6' coverage combine realtime_translation_coverage ocr_coverage search_coverage mcp_coverage logging_coverage audio_coverage local_testing_part1_coverage local_testing_part2_coverage pass_through_unit_tests_coverage batches_coverage guardrails_coverage redis_caching_coverage
+            uv tool run --from 'coverage[toml]==7.10.6' coverage combine realtime_translation_coverage ocr_coverage search_coverage logging_coverage audio_coverage local_testing_part1_coverage local_testing_part2_coverage pass_through_unit_tests_coverage batches_coverage guardrails_coverage redis_caching_coverage
             uv tool run --from 'coverage[toml]==7.10.6' coverage xml
       - codecov/upload:
           file: ./coverage.xml
@@ -2364,20 +2123,19 @@ jobs:
     steps:
       - checkout
       - setup_google_dns
+      - install_uv
       - restore_cache:
           keys:
-            - ui-e2e-py-deps-v2-{{ checksum "uv.lock" }}
-            - ui-e2e-py-deps-v2-
-      - install_uv
+            - v1-uv-cache-{{ checksum "uv.lock" }}
       - run:
           name: Install Python dependencies
           command: |
             uv sync --frozen --all-groups --all-extras --python 3.12
             uv run --no-sync python -m prisma generate --schema litellm/proxy/schema.prisma
       - save_cache:
-          key: ui-e2e-py-deps-v2-{{ checksum "uv.lock" }}
+          key: v1-uv-cache-{{ checksum "uv.lock" }}
           paths:
-            - ./.venv
+            - ~/.cache/uv
       - restore_cache:
           keys:
             - ui-e2e-node-deps-v1-{{ checksum "ui/litellm-dashboard/package-lock.json" }}
@@ -2535,274 +2293,109 @@ workflows:
   build_and_test:
     jobs:
       - using_litellm_on_windows:
-          filters:
+          filters: &main_branches
             branches:
               only:
                 - main
                 - /litellm_.*/
       - local_testing_part1:
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
+          filters: *main_branches
       - local_testing_part2:
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
+          filters: *main_branches
       - langfuse_logging_unit_tests:
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
+          filters: *main_branches
       - litellm_assistants_api_testing:
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
+          filters: *main_branches
       - litellm_router_testing:
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
+          filters: *main_branches
       - litellm_router_unit_testing:
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
+          filters: *main_branches
       - ui_build:
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
+          filters: *main_branches
       - ui_unit_tests:
           requires:
             - ui_build
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
+          filters: *main_branches
       - auth_ui_unit_tests:
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
+          filters: *main_branches
       - build_docker_database_image:
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
+          filters: *main_branches
       - e2e_ui_testing:
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
+          filters: *main_branches
       - build_and_test:
           requires:
             - build_docker_database_image
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
+          filters: *main_branches
       - e2e_openai_endpoints:
           requires:
             - build_docker_database_image
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
+          filters: *main_branches
       - proxy_logging_guardrails_model_info_tests:
           requires:
             - build_docker_database_image
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
+          filters: *main_branches
       - proxy_spend_accuracy_tests:
           requires:
             - build_docker_database_image
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
+          filters: *main_branches
       - proxy_multi_instance_tests:
           requires:
             - build_docker_database_image
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
+          filters: *main_branches
       - proxy_store_model_in_db_tests:
           requires:
             - build_docker_database_image
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
+          filters: *main_branches
       - proxy_build_from_pip_tests:
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
+          filters: *main_branches
       - proxy_pass_through_endpoint_tests:
           requires:
             - build_docker_database_image
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
+          filters: *main_branches
       - proxy_e2e_anthropic_messages_tests:
           requires:
             - build_docker_database_image
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
+          filters: *main_branches
       - llm_translation_testing:
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
+          filters: *main_branches
       - realtime_translation_testing:
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
-      - mcp_testing:
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
+          filters: *main_branches
       - agent_testing:
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
+          filters: *main_branches
       - guardrails_testing:
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
+          filters: *main_branches
       - google_generate_content_endpoint_testing:
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
+          filters: *main_branches
       - llm_responses_api_testing:
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
+          filters: *main_branches
       - ocr_testing:
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
+          filters: *main_branches
       - search_testing:
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
+          filters: *main_branches
       - litellm_mapped_enterprise_tests:
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
-      - litellm_mapped_tests_proxy_part1:
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
-      - litellm_mapped_tests_proxy_part2:
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
+          filters: *main_branches
       - batches_testing:
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
+          filters: *main_branches
       - litellm_utils_testing:
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
+          filters: *main_branches
       - pass_through_unit_testing:
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
+          filters: *main_branches
       - image_gen_testing:
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
+          filters: *main_branches
       - logging_testing:
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
+          filters: *main_branches
       - audio_testing:
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
+          filters: *main_branches
       - redis_caching_unit_tests:
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
+          filters: *main_branches
       - upload-coverage:
           requires:
             - realtime_translation_testing
-            - mcp_testing
             - agent_testing
             - google_generate_content_endpoint_testing
             - guardrails_testing
             - ocr_testing
             - search_testing
-            - litellm_mapped_tests_proxy_part1
-            - litellm_mapped_tests_proxy_part2
             - litellm_mapped_enterprise_tests
             - batches_testing
             - litellm_utils_testing
@@ -2818,42 +2411,18 @@ workflows:
       - db_migration_disable_update_check:
           requires:
             - build_docker_database_image
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
+          filters: *main_branches
       - installing_litellm_on_python:
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
+          filters: *main_branches
       - installing_litellm_on_python_3_13:
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
+          filters: *main_branches
       - installing_litellm_on_python_v2_migration_resolver:
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
+          filters: *main_branches
       - helm_chart_testing:
           requires:
             - build_docker_database_image
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
+          filters: *main_branches
       - test_bad_database_url:
           requires:
             - build_docker_database_image
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
+          filters: *main_branches

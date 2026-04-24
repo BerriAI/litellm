@@ -60,6 +60,7 @@ export interface TeamMembership {
   team_id: string;
   budget_id: string;
   spend: number;
+  total_spend: number | null;
   litellm_budget_table: {
     budget_id: string;
     soft_budget: number | null;
@@ -69,6 +70,7 @@ export interface TeamMembership {
     rpm_limit: number | null;
     model_max_budget: Record<string, number> | null;
     budget_duration: string | null;
+    budget_reset_at: string | null;
     allowed_models?: string[] | null;
   };
 }

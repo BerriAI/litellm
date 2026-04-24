@@ -5517,6 +5517,8 @@ class BaseLLMHTTPHandler:
             api_key=litellm_params.api_key,
             headers=image_edit_optional_request_params.get("extra_headers", {}) or {},
             model=model,
+            litellm_params=dict(litellm_params),
+            api_base=litellm_params.api_base,
         )
 
         if extra_headers:
@@ -5613,6 +5615,8 @@ class BaseLLMHTTPHandler:
             api_key=litellm_params.api_key,
             headers=image_edit_optional_request_params.get("extra_headers", {}) or {},
             model=model,
+            litellm_params=dict(litellm_params),
+            api_base=litellm_params.api_base,
         )
 
         if extra_headers:
