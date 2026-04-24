@@ -143,7 +143,10 @@
         "src/components/DeletedTeamsPage/DeletedTeamsPage.tsx",
         "src/components/molecules/models/columns.tsx",
         "src/components/common_components/MemberTable.tsx",
-        "src/components/price_data_reload.tsx"
+        "src/components/price_data_reload.tsx",
+        "src/components/mcp_tools/mcp_connect.tsx",
+        "src/components/mcp_tools/mcp_tools.tsx",
+        "src/components/mcp_tools/ToolTestPanel.tsx"
       ],
       "rules": {
         "litellm-ui/no-banned-ui-imports": "off",

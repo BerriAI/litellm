@@ -306,33 +306,22 @@ describe("MCPServers", () => {
     expect(screen.getByText("Team B Server")).toBeInTheDocument();
     expect(screen.getByText("Team A Server 2")).toBeInTheDocument();
 
-    // Find the team select dropdown by looking for the "Team" label
-    const teamLabel = screen.getByText("Team");
-    const teamSelectContainer = teamLabel.closest("div")?.querySelector(".ant-select");
-    expect(teamSelectContainer).toBeTruthy();
-
-    // Open the dropdown by clicking on the selector
-    const selectSelector = teamSelectContainer?.querySelector(".ant-select-selector");
-    expect(selectSelector).toBeTruthy();
-
+    // Open the Team dropdown (shadcn Radix Select)
+    const teamTrigger = screen.getByRole("combobox", { name: "Team" });
     act(() => {
-      fireEvent.mouseDown(selectSelector!);
+      fireEvent.click(teamTrigger);
     });
 
-    // Wait for dropdown to open
     await waitFor(
       () => {
-        const dropdownOptions = document.querySelectorAll(".ant-select-item-option");
-        expect(dropdownOptions.length).toBeGreaterThan(0);
+        expect(screen.getAllByRole("option").length).toBeGreaterThan(0);
       },
       { timeout: 5000 },
     );
 
-    // Find and click on "Team A" option
-    const dropdownOptions = document.querySelectorAll(".ant-select-item-option");
-    const teamAOption = Array.from(dropdownOptions).find((option) =>
-      option.textContent?.includes("Team A"),
-    );
+    const teamAOption = screen
+      .getAllByRole("option")
+      .find((option) => option.textContent?.includes("Team A"));
     expect(teamAOption).toBeTruthy();
 
     act(() => {

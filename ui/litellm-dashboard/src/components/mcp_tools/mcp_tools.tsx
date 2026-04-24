@@ -4,10 +4,16 @@ import { ToolTestPanel } from "./ToolTestPanel";
 import { MCPTool, MCPToolsViewerProps, MCPContent, CallMCPToolResponse } from "./types";
 import { listMCPTools, callMCPTool } from "../networking";
 
-// eslint-disable-next-line litellm-ui/no-banned-ui-imports
-import { Card, Title, Text } from "@tremor/react";
-import { Bot as RobotOutlined, Wrench as ToolOutlined, Search as SearchOutlined, Key as KeyOutlined } from "lucide-react";
-import { Input, Button as AntdButton } from "antd";
+import { Card } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
+import {
+  Bot as RobotOutlined,
+  Wrench as ToolOutlined,
+  Search as SearchOutlined,
+  Key as KeyOutlined,
+  Check as CheckIcon,
+} from "lucide-react";
 
 const MCPToolsViewer = ({
   serverId,
@@ -22,33 +28,27 @@ const MCPToolsViewer = ({
   const [toolResult, setToolResult] = useState<MCPContent[] | null>(null);
   const [toolError, setToolError] = useState<Error | null>(null);
   const [toolSearchTerm, setToolSearchTerm] = useState("");
-  
-  // State for passthrough headers
+
   const [passthroughHeaders, setPassthroughHeaders] = useState<Record<string, string>>({});
   const [showHeaderInput, setShowHeaderInput] = useState(false);
 
-  // Check if this server has extra headers configured
   const hasExtraHeaders = extraHeaders && extraHeaders.length > 0;
 
-  // Build custom headers for MCP server requests
   const buildCustomHeaders = () => {
     if (!serverAlias || !hasExtraHeaders) return undefined;
-    
+
     const customHeaders: Record<string, string> = {};
-    
-    // Add passthrough headers with server-specific prefix
+
     Object.entries(passthroughHeaders).forEach(([headerName, headerValue]) => {
       if (headerValue && headerValue.trim()) {
-        // Format: x-mcp-{alias}-{header_name}
         const mcpHeaderName = `x-mcp-${serverAlias}-${headerName.toLowerCase()}`;
         customHeaders[mcpHeaderName] = headerValue;
       }
     });
-    
+
     return Object.keys(customHeaders).length > 0 ? customHeaders : undefined;
   };
 
-  // Query to fetch MCP tools
   const {
     data: mcpToolsResponse,
     isLoading: isLoadingTools,
@@ -61,21 +61,20 @@ const MCPToolsViewer = ({
       return listMCPTools(accessToken, serverId, buildCustomHeaders());
     },
     enabled: !!accessToken,
-    staleTime: 30000, // Consider data fresh for 30 seconds
+    staleTime: 30000,
   });
 
-  // Mutation for calling a tool
   const { mutate: executeTool, isPending: isCallingTool } = useMutation({
     mutationFn: async (args: { tool: MCPTool; arguments: Record<string, any> }) => {
       if (!accessToken) throw new Error("Access Token required");
 
       try {
         const result: CallMCPToolResponse = await callMCPTool(
-          accessToken, 
-          serverId, 
-          args.tool.name, 
+          accessToken,
+          serverId,
+          args.tool.name,
           args.arguments,
-          { customHeaders: buildCustomHeaders() }
+          { customHeaders: buildCustomHeaders() },
         );
         return result;
       } catch (error) {
@@ -94,7 +93,6 @@ const MCPToolsViewer = ({
 
   const toolsData = mcpToolsResponse?.tools || [];
 
-  // Filter tools based on search term
   const filteredTools = toolsData.filter((tool: MCPTool) => {
     const searchLower = toolSearchTerm.toLowerCase();
     return (
@@ -105,83 +103,83 @@ const MCPToolsViewer = ({
   });
 
   return (
-    <div className="w-full h-screen p-4 bg-white">
+    <div className="w-full h-screen p-4 bg-background">
       <Card className="w-full rounded-xl shadow-md overflow-hidden">
         <div className="flex h-auto w-full gap-4">
           {/* Left Sidebar with Controls */}
-          <div className="w-1/4 p-4 bg-gray-50 flex flex-col">
-            <Title className="text-xl font-semibold mb-6 mt-2">MCP Tools</Title>
+          <div className="w-1/4 p-4 bg-muted flex flex-col">
+            <h2 className="text-xl font-semibold mb-6 mt-2 text-foreground">MCP Tools</h2>
 
             <div className="flex flex-col flex-1">
               {/* Extra Headers Input Section */}
               {hasExtraHeaders && (
-                <div className="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-lg">
+                <div className="mb-4 p-3 bg-primary/5 border border-primary/20 rounded-lg">
                   <div className="flex items-center justify-between mb-2">
                     <div className="flex items-center">
-                      <KeyOutlined className="text-blue-600 mr-2" />
-                      <Text className="text-sm font-medium text-blue-800">
+                      <KeyOutlined className="text-primary mr-2 h-4 w-4" />
+                      <span className="text-sm font-medium text-foreground">
                         Additional Headers
-                      </Text>
+                      </span>
                     </div>
-                    <AntdButton
-                      size="small"
-                      type="link"
+                    <Button
+                      size="sm"
+                      variant="link"
                       onClick={() => setShowHeaderInput(!showHeaderInput)}
-                      className="text-blue-700 p-0 h-auto"
+                      className="text-primary p-0 h-auto"
                     >
                       {showHeaderInput ? "Hide" : "Configure"}
-                    </AntdButton>
+                    </Button>
                   </div>
-                  
+
                   {!showHeaderInput && Object.keys(passthroughHeaders).length === 0 && (
-                    <Text className="text-xs text-blue-700">
+                    <span className="text-xs text-muted-foreground">
                       This server requires additional headers. Click &quot;Configure&quot; to provide values.
-                    </Text>
+                    </span>
                   )}
-                  
+
                   {showHeaderInput && (
                     <div className="mt-3 space-y-2">
                       {extraHeaders?.map((headerName) => (
                         <div key={headerName}>
-                          <label className="block text-xs font-medium text-gray-700 mb-1">
+                          <label className="block text-xs font-medium text-foreground mb-1">
                             {headerName}
                           </label>
-                          <Input
-                            size="small"
-                            placeholder={`Enter ${headerName}`}
-                            value={passthroughHeaders[headerName] || ""}
-                            onChange={(e) => {
-                              setPassthroughHeaders({
-                                ...passthroughHeaders,
-                                [headerName]: e.target.value,
-                              });
-                            }}
-                            prefix={<KeyOutlined className="text-gray-400" />}
-                            className="rounded"
-                          />
+                          <div className="relative">
+                            <KeyOutlined className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+                            <Input
+                              placeholder={`Enter ${headerName}`}
+                              value={passthroughHeaders[headerName] || ""}
+                              onChange={(e) => {
+                                setPassthroughHeaders({
+                                  ...passthroughHeaders,
+                                  [headerName]: e.target.value,
+                                });
+                              }}
+                              className="pl-9 h-8"
+                            />
+                          </div>
                         </div>
                       ))}
-                      <AntdButton
-                        size="small"
-                        type="primary"
+                      <Button
+                        size="sm"
                         onClick={() => {
                           refetchTools();
                           setShowHeaderInput(false);
                         }}
-                        disabled={Object.values(passthroughHeaders).every(v => !v || !v.trim())}
+                        disabled={Object.values(passthroughHeaders).every((v) => !v || !v.trim())}
                         className="w-full mt-2"
                       >
                         Load Tools
-                      </AntdButton>
+                      </Button>
                     </div>
                   )}
-                  
+
                   {!showHeaderInput && Object.keys(passthroughHeaders).length > 0 && (
                     <div className="mt-2">
-                      <Text className="text-xs text-green-700 flex items-center">
+                      <span className="text-xs text-green-700 dark:text-green-400 flex items-center">
                         <span className="inline-block w-2 h-2 bg-green-500 rounded-full mr-2"></span>
                         {Object.keys(passthroughHeaders).length} header(s) configured
-                      </Text>
+                      </span>
                     </div>
                   )}
                 </div>
@@ -189,74 +187,60 @@ const MCPToolsViewer = ({
 
               {/* Tool Selection - Show tools first */}
               <div className="flex flex-col flex-1 min-h-0">
-                <Text className="font-medium block mb-3 text-gray-700 flex items-center">
-                  <ToolOutlined className="mr-2" /> Available Tools
+                <span className="font-medium block mb-3 text-foreground flex items-center">
+                  <ToolOutlined className="mr-2 h-4 w-4" /> Available Tools
                   {toolsData.length > 0 && (
-                    <span className="ml-2 bg-blue-100 text-blue-800 text-xs font-medium px-2 py-0.5 rounded-full">
+                    <span className="ml-2 bg-primary/10 text-primary text-xs font-medium px-2 py-0.5 rounded-full">
                       {toolsData.length}
                     </span>
                   )}
-                </Text>
+                </span>
 
-                {/* Search Bar */}
                 {toolsData.length > 0 && (
-                  <div className="mb-3">
+                  <div className="mb-3 relative">
+                    <SearchOutlined className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                     <Input
                       placeholder="Search tools..."
-                      prefix={<SearchOutlined className="text-gray-400" />}
                       value={toolSearchTerm}
                       onChange={(e) => setToolSearchTerm(e.target.value)}
-                      allowClear
-                      className="rounded-lg"
-                      size="middle"
+                      className="pl-9"
                     />
                   </div>
                 )}
 
-                {/* Loading State */}
                 {isLoadingTools && (
-                  <div className="flex flex-col items-center justify-center py-8 bg-white border border-gray-200 rounded-lg">
+                  <div className="flex flex-col items-center justify-center py-8 bg-background border border-border rounded-lg">
                     <div className="relative mb-3">
-                      <div className="animate-spin rounded-full h-6 w-6 border-2 border-gray-200"></div>
-                      <div className="animate-spin rounded-full h-6 w-6 border-2 border-blue-600 border-t-transparent absolute top-0"></div>
+                      <div className="animate-spin rounded-full h-6 w-6 border-2 border-muted"></div>
+                      <div className="animate-spin rounded-full h-6 w-6 border-2 border-primary border-t-transparent absolute top-0"></div>
                     </div>
-                    <p className="text-xs font-medium text-gray-700">Loading tools...</p>
+                    <p className="text-xs font-medium text-foreground">Loading tools...</p>
                   </div>
                 )}
 
-                {/* Error State */}
                 {mcpToolsResponse?.error && !isLoadingTools && !toolsData.length && (
-                  <div className="p-3 text-xs text-red-800 rounded-lg bg-red-50 border border-red-200">
+                  <div className="p-3 text-xs text-destructive rounded-lg bg-destructive/10 border border-destructive/30">
                     <p className="font-medium">Error: {mcpToolsResponse.message}</p>
                   </div>
                 )}
 
-                {/* No Tools State */}
                 {!isLoadingTools && !mcpToolsResponse?.error && (!toolsData || toolsData.length === 0) && (
-                  <div className="p-4 text-center bg-white border border-gray-200 rounded-lg">
-                    <div className="mx-auto w-8 h-8 bg-gray-200 rounded-full flex items-center justify-center mb-2">
-                      <svg className="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          strokeWidth={2}
-                          d="M19.428 15.428a2 2 0 00-1.022-.547l-2.387-.477a6 6 0 00-3.86.517l-.318.158a6 6 0 01-3.86.517L6.05 15.21a2 2 0 00-1.806.547M8 4h8l-1 1v5.172a2 2 0 00.586 1.414l5 5c1.26 1.26.367 3.414-1.415 3.414H4.828c-1.782 0-2.674-2.154-1.414-3.414l5-5A2 2 0 009 8.172V5L8 4z"
-                        />
-                      </svg>
+                  <div className="p-4 text-center bg-background border border-border rounded-lg">
+                    <div className="mx-auto w-8 h-8 bg-muted rounded-full flex items-center justify-center mb-2">
+                      <ToolOutlined className="w-4 h-4 text-muted-foreground" />
                     </div>
-                    <p className="text-xs font-medium text-gray-700 mb-1">No tools available</p>
-                    <p className="text-xs text-gray-500">No tools found for this server</p>
+                    <p className="text-xs font-medium text-foreground mb-1">No tools available</p>
+                    <p className="text-xs text-muted-foreground">No tools found for this server</p>
                   </div>
                 )}
 
-                {/* Tools List */}
                 {!isLoadingTools && !mcpToolsResponse?.error && toolsData.length > 0 && (
                   <>
                     {filteredTools.length === 0 ? (
-                      <div className="p-4 text-center bg-white border border-gray-200 rounded-lg">
-                        <SearchOutlined className="text-2xl text-gray-400 mb-2" />
-                        <p className="text-xs font-medium text-gray-700 mb-1">No tools found</p>
-                        <p className="text-xs text-gray-500">No tools match &quot;{toolSearchTerm}&quot;</p>
+                      <div className="p-4 text-center bg-background border border-border rounded-lg">
+                        <SearchOutlined className="text-2xl text-muted-foreground mb-2 mx-auto h-5 w-5" />
+                        <p className="text-xs font-medium text-foreground mb-1">No tools found</p>
+                        <p className="text-xs text-muted-foreground">No tools match &quot;{toolSearchTerm}&quot;</p>
                       </div>
                     ) : (
                       <div
@@ -264,53 +248,51 @@ const MCPToolsViewer = ({
                         style={{
                           maxHeight: "400px",
                           scrollbarWidth: "auto",
-                          scrollbarColor: "#cbd5e0 #f7fafc",
                         }}
                       >
                         {filteredTools.map((tool: MCPTool) => (
-                      <div
-                        key={tool.name}
-                        className={`border rounded-lg p-3 cursor-pointer transition-all hover:shadow-sm ${selectedTool?.name === tool.name
-                            ? "border-blue-500 bg-blue-50 ring-1 ring-blue-200"
-                            : "border-gray-200 bg-white hover:border-gray-300"
-                          }`}
-                        onClick={() => {
-                          setSelectedTool(tool);
-                          setToolResult(null);
-                          setToolError(null);
-                        }}
-                      >
-                        <div className="flex items-start space-x-2">
-                          {tool.mcp_info.logo_url && (
-                            <img
-                              src={tool.mcp_info.logo_url}
-                              alt={`${tool.mcp_info.server_name} logo`}
-                              className="w-4 h-4 object-contain flex-shrink-0 mt-0.5"
-                            />
-                          )}
-                          <div className="flex-1 min-w-0">
-                            <h4 className="font-mono text-xs font-medium text-gray-900 truncate">{tool.name}</h4>
-                            <p className="text-xs text-gray-500 truncate">{tool.mcp_info.server_name}</p>
-                            <p className="text-xs text-gray-600 mt-1 line-clamp-2 leading-relaxed">
-                              {tool.description}
-                            </p>
-                          </div>
-                        </div>
-                        {selectedTool?.name === tool.name && (
-                          <div className="mt-2 pt-2 border-t border-blue-200">
-                            <div className="flex items-center text-xs font-medium text-blue-700">
-                              <svg className="w-3 h-3 mr-1" fill="currentColor" viewBox="0 0 20 20">
-                                <path
-                                  fillRule="evenodd"
-                                  d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z"
-                                  clipRule="evenodd"
+                          <div
+                            key={tool.name}
+                            className={`border rounded-lg p-3 cursor-pointer transition-all hover:shadow-sm ${
+                              selectedTool?.name === tool.name
+                                ? "border-primary bg-primary/5 ring-1 ring-primary/40"
+                                : "border-border bg-background hover:border-muted-foreground/40"
+                            }`}
+                            onClick={() => {
+                              setSelectedTool(tool);
+                              setToolResult(null);
+                              setToolError(null);
+                            }}
+                          >
+                            <div className="flex items-start space-x-2">
+                              {tool.mcp_info.logo_url && (
+                                <img
+                                  src={tool.mcp_info.logo_url}
+                                  alt={`${tool.mcp_info.server_name} logo`}
+                                  className="w-4 h-4 object-contain flex-shrink-0 mt-0.5"
                                 />
-                              </svg>
-                              Selected
+                              )}
+                              <div className="flex-1 min-w-0">
+                                <h4 className="font-mono text-xs font-medium text-foreground truncate">
+                                  {tool.name}
+                                </h4>
+                                <p className="text-xs text-muted-foreground truncate">
+                                  {tool.mcp_info.server_name}
+                                </p>
+                                <p className="text-xs text-muted-foreground mt-1 line-clamp-2 leading-relaxed">
+                                  {tool.description}
+                                </p>
+                              </div>
                             </div>
+                            {selectedTool?.name === tool.name && (
+                              <div className="mt-2 pt-2 border-t border-primary/30">
+                                <div className="flex items-center text-xs font-medium text-primary">
+                                  <CheckIcon className="w-3 h-3 mr-1" />
+                                  Selected
+                                </div>
+                              </div>
+                            )}
                           </div>
-                        )}
-                      </div>
                         ))}
                       </div>
                     )}
@@ -321,23 +303,24 @@ const MCPToolsViewer = ({
           </div>
 
           {/* Main Testing Area */}
-          <div className="w-3/4 flex flex-col bg-white">
-            <div className="p-4 border-b border-gray-200 flex justify-between items-center">
-              <Title className="text-xl font-semibold mb-0">Tool Testing Playground</Title>
+          <div className="w-3/4 flex flex-col bg-background">
+            <div className="p-4 border-b border-border flex justify-between items-center">
+              <h2 className="text-xl font-semibold mb-0 text-foreground">Tool Testing Playground</h2>
             </div>
 
             <div className="flex-1 overflow-auto p-4">
               {!selectedTool ? (
-                /* Empty State */
-                <div className="h-full flex flex-col items-center justify-center text-gray-400">
-                  <RobotOutlined style={{ fontSize: "48px", marginBottom: "16px" }} />
-                  <Text className="text-lg font-medium text-gray-600 mb-2">Select a Tool to Test</Text>
-                  <Text className="text-center text-gray-500 max-w-md">
-                    Choose a tool from the left sidebar to start testing its functionality with custom inputs.
-                  </Text>
+                <div className="h-full flex flex-col items-center justify-center text-muted-foreground">
+                  <RobotOutlined className="h-12 w-12 mb-4" />
+                  <span className="text-lg font-medium text-foreground mb-2">
+                    Select a Tool to Test
+                  </span>
+                  <span className="text-center text-muted-foreground max-w-md">
+                    Choose a tool from the left sidebar to start testing its functionality with custom
+                    inputs.
+                  </span>
                 </div>
               ) : (
-                /* Tool Test Panel */
                 <div className="h-full">
                   <ToolTestPanel
                     tool={selectedTool}
