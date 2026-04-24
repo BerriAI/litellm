@@ -125,6 +125,144 @@ async def test_async_build_agentic_loop_plan_returns_request_patch():
 
 
 @pytest.mark.asyncio
+async def test_anthropic_path_dedup_overlapping_keys():
+    """Regression test: overlapping keys between kwargs and optional_params must be deduped.
+
+    When the same key (e.g. temperature, top_p) appears in both kwargs and
+    anthropic_messages_optional_request_params, the follow-up request would fail with
+    ``TypeError: got multiple values for keyword argument`` because both dicts are
+    unpacked via ``**`` at the call site.  The fix removes overlapping keys from
+    kwargs_for_followup so that optional_params takes precedence.
+    """
+    logger = WebSearchInterceptionLogger(enabled_providers=["bedrock"])
+    logger._execute_search = AsyncMock(  # type: ignore
+        return_value="Title: LiteLLM\nURL: docs\nSnippet: test"
+    )
+
+    tools_dict = {
+        "tool_calls": [
+            {
+                "id": "toolu_456",
+                "type": "tool_use",
+                "name": "litellm_web_search",
+                "input": {"query": "test query"},
+            }
+        ],
+        "response_format": "anthropic",
+    }
+    logging_obj = MagicMock()
+    logging_obj.model_call_details = {
+        "agentic_loop_params": {"model": "bedrock/invoke/claude-3-5-sonnet"}
+    }
+
+    # temperature and top_p appear in BOTH kwargs and optional_params
+    kwargs = {
+        "temperature": 0.2,
+        "top_p": 0.9,
+        "custom_param": "keep_me",
+        "litellm_logging_obj": object(),
+        "_websearch_interception_converted_stream": True,
+    }
+    optional_params = {
+        "max_tokens": 2048,
+        "temperature": 0.5,
+        "top_p": 0.8,
+        "tools": [{"name": "litellm_web_search"}],
+    }
+
+    plan = await logger.async_build_agentic_loop_plan(
+        tools=tools_dict,
+        model="claude-3-5-sonnet",
+        messages=[{"role": "user", "content": "search test"}],
+        response=None,
+        anthropic_messages_provider_config=None,
+        anthropic_messages_optional_request_params=optional_params,
+        logging_obj=logging_obj,
+        stream=False,
+        kwargs=kwargs,
+    )
+
+    assert plan.request_patch is not None
+    # Overlapping keys must be removed from kwargs (optional_params takes precedence)
+    assert "temperature" not in plan.request_patch.kwargs
+    assert "top_p" not in plan.request_patch.kwargs
+    # Non-overlapping key must be preserved
+    assert plan.request_patch.kwargs["custom_param"] == "keep_me"
+    # Internal keys must still be filtered
+    assert "litellm_logging_obj" not in plan.request_patch.kwargs
+    assert "_websearch_interception_converted_stream" not in plan.request_patch.kwargs
+    # optional_params values must be preserved
+    assert plan.request_patch.optional_params["temperature"] == 0.5
+    assert plan.request_patch.optional_params["top_p"] == 0.8
+
+
+@pytest.mark.asyncio
+async def test_chat_completion_path_dedup_overlapping_keys():
+    """Regression test: overlapping keys between kwargs and optional_params in chat completion path.
+
+    Same issue as the Anthropic path, but for the OpenAI-style chat completion flow
+    where ``optional_params_clean`` and ``kwargs_for_followup`` are both unpacked via
+    ``**`` in ``_execute_chat_completion_agentic_loop``.
+    """
+    logger = WebSearchInterceptionLogger(enabled_providers=["openai"])
+    logger._execute_search = AsyncMock(  # type: ignore
+        return_value="Title: LiteLLM\nURL: docs\nSnippet: test"
+    )
+
+    tools_dict = {
+        "tool_calls": [
+            {
+                "id": "call_789",
+                "type": "tool_use",
+                "name": "litellm_web_search",
+                "input": {"query": "test query"},
+            }
+        ],
+        "response_format": "openai",
+    }
+
+    # temperature and stop appear in BOTH kwargs and optional_params
+    kwargs = {
+        "temperature": 0.3,
+        "stop": ["\n"],
+        "api_key": "fake-key",
+        "custom_llm_provider": "openai",
+        "litellm_logging_obj": object(),
+        "_websearch_interception_converted_stream": True,
+    }
+    optional_params = {
+        "temperature": 0.7,
+        "stop": ["END"],
+        "tools": [{"type": "function", "function": {"name": "litellm_web_search"}}],
+    }
+
+    plan = await logger.async_build_chat_completion_agentic_loop_plan(
+        tools=tools_dict,
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "search test"}],
+        response=None,
+        optional_params=optional_params,
+        logging_obj=None,
+        stream=False,
+        kwargs=kwargs,
+    )
+
+    assert plan.request_patch is not None
+    # Overlapping keys must be removed from kwargs (optional_params takes precedence)
+    assert "temperature" not in plan.request_patch.kwargs
+    assert "stop" not in plan.request_patch.kwargs
+    # Non-overlapping keys must be preserved
+    assert plan.request_patch.kwargs["api_key"] == "fake-key"
+    # Internal keys must still be filtered
+    assert "litellm_logging_obj" not in plan.request_patch.kwargs
+    assert "custom_llm_provider" not in plan.request_patch.kwargs
+    assert "_websearch_interception_converted_stream" not in plan.request_patch.kwargs
+    # optional_params values must be preserved
+    assert plan.request_patch.optional_params["temperature"] == 0.7
+    assert plan.request_patch.optional_params["stop"] == ["END"]
+
+
+@pytest.mark.asyncio
 async def test_internal_flags_filtered_from_followup_kwargs():
     """Test that internal _websearch_interception flags are filtered from follow-up request kwargs.
 
