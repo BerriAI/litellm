@@ -3,15 +3,22 @@
  * Handles primary model selection and fallback chain configuration
  */
 
-import { Select } from "antd";
 import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
-import { AlertCircle, ArrowDown, X } from "lucide-react";
-import React from "react";
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Input } from "@/components/ui/input";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import { Badge } from "@/components/ui/badge";
+import { AlertCircle, ArrowDown, Check, X } from "lucide-react";
+import React, { useMemo, useState } from "react";
 
 export interface FallbackGroup {
   id: string;
@@ -26,20 +33,129 @@ interface FallbackGroupConfigProps {
   maxFallbacks: number;
 }
 
+function SearchableMultiSelect({
+  options,
+  values,
+  onChange,
+  placeholder,
+  disabled,
+  maxSelected,
+}: {
+  options: string[];
+  values: string[];
+  onChange: (next: string[]) => void;
+  placeholder: string;
+  disabled?: boolean;
+  maxSelected: number;
+}) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+
+  const filtered = useMemo(
+    () =>
+      options.filter((o) =>
+        query ? o.toLowerCase().includes(query.toLowerCase()) : true,
+      ),
+    [options, query],
+  );
+
+  const toggle = (value: string) => {
+    if (values.includes(value)) {
+      onChange(values.filter((v) => v !== value));
+    } else if (values.length < maxSelected) {
+      onChange([...values, value]);
+    }
+  };
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          disabled={disabled}
+          className="min-h-10 w-full flex flex-wrap items-center gap-1 rounded-md border border-input bg-background px-2 py-1.5 text-sm text-left disabled:opacity-50"
+        >
+          {values.length === 0 ? (
+            <span className="text-muted-foreground px-1">{placeholder}</span>
+          ) : (
+            <>
+              {values.map((v, i) => (
+                <Badge key={v} variant="secondary" className="inline-flex items-center gap-1">
+                  <span className="text-xs">{i + 1}.</span>
+                  {v}
+                  <span
+                    role="button"
+                    tabIndex={0}
+                    aria-label={`Remove ${v}`}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onChange(values.filter((x) => x !== v));
+                    }}
+                    className="inline-flex items-center"
+                  >
+                    <X size={12} />
+                  </span>
+                </Badge>
+              ))}
+            </>
+          )}
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align="start" className="w-[var(--radix-popover-trigger-width)] p-2">
+        <Input
+          autoFocus
+          placeholder="Search models…"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          className="h-8 mb-2"
+        />
+        <div className="max-h-60 overflow-y-auto">
+          {filtered.length === 0 ? (
+            <div className="py-2 px-3 text-sm text-muted-foreground">No models found</div>
+          ) : (
+            filtered.map((opt) => {
+              const isSelected = values.includes(opt);
+              const orderIndex = isSelected ? values.indexOf(opt) + 1 : null;
+              return (
+                <button
+                  key={opt}
+                  type="button"
+                  onClick={() => toggle(opt)}
+                  className="w-full text-left px-2 py-1.5 text-sm rounded hover:bg-accent flex items-center gap-2"
+                >
+                  {isSelected && orderIndex !== null ? (
+                    /* eslint-disable-next-line litellm-ui/no-raw-tailwind-colors */
+                    <span className="flex items-center justify-center w-5 h-5 rounded bg-indigo-100 text-indigo-600 dark:bg-indigo-950 dark:text-indigo-300 text-xs font-bold">
+                      {orderIndex}
+                    </span>
+                  ) : (
+                    <span className="w-5 h-5 inline-flex items-center justify-center">
+                      {isSelected ? <Check size={14} /> : null}
+                    </span>
+                  )}
+                  <span>{opt}</span>
+                </button>
+              );
+            })
+          )}
+        </div>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
 export function FallbackGroupConfig({
   group,
   onChange,
   availableModels,
   maxFallbacks,
 }: FallbackGroupConfigProps) {
-  // Filter available options for fallbacks (exclude primary only, allow already selected to be shown for deselection)
   const availableFallbackOptions = availableModels.filter(
     (m) => m !== group.primaryModel,
   );
 
   const handlePrimaryChange = (value: string) => {
     let newFallbacks = [...group.fallbackModels];
-    // Remove from fallbacks if it was there
     if (newFallbacks.includes(value)) {
       newFallbacks = newFallbacks.filter((m) => m !== value);
     }
@@ -51,9 +167,7 @@ export function FallbackGroupConfig({
   };
 
   const handleFallbackSelect = (values: string[]) => {
-    // Limit to maxFallbacks
     const limitedValues = values.slice(0, maxFallbacks);
-
     onChange({
       ...group,
       fallbackModels: limitedValues,
@@ -78,19 +192,22 @@ export function FallbackGroupConfig({
           Primary Model <span className="text-destructive">*</span>
         </label>
         <Select
-          className="w-full h-12"
-          size="large"
-          placeholder="Select primary model"
-          value={group.primaryModel}
-          onChange={handlePrimaryChange}
-          showSearch
-          getPopupContainer={(trigger) => trigger.parentElement || document.body}
-          filterOption={(input, option) =>
-            (option?.label ?? "").toLowerCase().includes(input.toLowerCase())
-          }
-          options={availableModels.map((m) => ({ label: m, value: m }))}
-        />
+          value={group.primaryModel ?? ""}
+          onValueChange={handlePrimaryChange}
+        >
+          <SelectTrigger className="w-full h-12">
+            <SelectValue placeholder="Select primary model" />
+          </SelectTrigger>
+          <SelectContent>
+            {availableModels.map((m) => (
+              <SelectItem key={m} value={m}>
+                {m}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
         {!group.primaryModel && (
+          /* eslint-disable-next-line litellm-ui/no-raw-tailwind-colors */
           <div className="mt-2 flex items-center gap-2 text-amber-600 dark:text-amber-400 text-xs bg-amber-50 dark:bg-amber-950/30 p-2 rounded">
             <AlertCircle className="w-4 h-4" />
             <span>Select a model to begin configuring fallbacks</span>
@@ -100,6 +217,7 @@ export function FallbackGroupConfig({
 
       {/* Visual Connection */}
       <div className="flex items-center justify-center -my-4 z-10">
+        {/* eslint-disable-next-line litellm-ui/no-raw-tailwind-colors */}
         <div className="bg-indigo-50 dark:bg-indigo-950/30 text-indigo-500 dark:text-indigo-400 px-4 py-1 rounded-full text-xs font-bold border border-indigo-100 dark:border-indigo-900 flex items-center gap-2 shadow-sm">
           <ArrowDown className="w-4 h-4" />
           IF FAILS, TRY...
@@ -120,58 +238,17 @@ export function FallbackGroupConfig({
         <div className="bg-muted rounded-xl p-4 border border-border">
           {/* Add Fallback Input */}
           <div className="mb-4">
-            <Select
-              mode="multiple"
-              className="w-full"
-              size="large"
+            <SearchableMultiSelect
+              options={availableFallbackOptions}
+              values={group.fallbackModels}
+              onChange={handleFallbackSelect}
               placeholder={
                 canAddMoreFallbacks
                   ? "Select fallback models to add..."
                   : `Maximum ${maxFallbacks} fallbacks reached`
               }
-              value={group.fallbackModels}
-              onChange={handleFallbackSelect}
               disabled={!group.primaryModel}
-              getPopupContainer={(trigger) => trigger.parentElement || document.body}
-              options={availableFallbackOptions.map((m) => ({
-                label: m,
-                value: m,
-              }))}
-              optionRender={(option) => {
-                const isSelected = group.fallbackModels.includes(
-                  option.value as string,
-                );
-                const orderIndex = isSelected
-                  ? group.fallbackModels.indexOf(option.value as string) + 1
-                  : null;
-                return (
-                  <div className="flex items-center gap-2">
-                    {isSelected && orderIndex !== null && (
-                      <span className="flex items-center justify-center w-5 h-5 rounded bg-indigo-100 text-indigo-600 dark:bg-indigo-950 dark:text-indigo-300 text-xs font-bold">
-                        {orderIndex}
-                      </span>
-                    )}
-                    <span>{option.label}</span>
-                  </div>
-                );
-              }}
-              maxTagCount="responsive"
-              maxTagPlaceholder={(omittedValues) => (
-                <TooltipProvider>
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <span>+{omittedValues.length} more</span>
-                    </TooltipTrigger>
-                    <TooltipContent>
-                      {omittedValues.map(({ value }) => value).join(", ")}
-                    </TooltipContent>
-                  </Tooltip>
-                </TooltipProvider>
-              )}
-              showSearch
-              filterOption={(input, option) =>
-                (option?.label ?? "").toLowerCase().includes(input.toLowerCase())
-              }
+              maxSelected={maxFallbacks}
             />
             <p className="text-xs text-muted-foreground mt-1 ml-1">
               {canAddMoreFallbacks
@@ -193,9 +270,11 @@ export function FallbackGroupConfig({
               group.fallbackModels.map((modelValue, index) => (
                 <div
                   key={`${modelValue}-${index}`}
+                  /* eslint-disable-next-line litellm-ui/no-raw-tailwind-colors */
                   className="group flex items-center justify-between p-3 bg-background rounded-lg border border-border hover:border-indigo-300 dark:hover:border-indigo-700 hover:shadow-sm transition-all"
                 >
                   <div className="flex items-center gap-3">
+                    {/* eslint-disable-next-line litellm-ui/no-raw-tailwind-colors */}
                     <div className="flex items-center justify-center w-6 h-6 rounded bg-muted text-muted-foreground group-hover:text-indigo-500 group-hover:bg-indigo-50 dark:group-hover:bg-indigo-950/30">
                       <span className="text-xs font-bold">{index + 1}</span>
                     </div>

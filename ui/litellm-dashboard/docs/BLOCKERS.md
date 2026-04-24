@@ -31,6 +31,15 @@ stay on antd for phase 1 and will be addressed in a targeted follow-up.
   with Switch/InputNumber/Select controls. Defer until shared section
   unblocks.
 - `src/components/add_pass_through.tsx`: same dependency chain.
+- `src/components/settings.tsx` (840 LoC): logging-callbacks settings page.
+  Two separate antd `Form`s (`addForm`, `editForm`) with `Form.useForm`,
+  `validateFields`, `setFieldsValue`, `resetFields`, plus Tremor
+  `TabGroup`/`TabList`/`Tab`/`TabPanels`/`TabPanel` and Tremor `Table`
+  containers, dynamic provider-specific field rendering via `DynamicParamsFields`
+  (which imports `antd/es/form/FormItem` directly and registers under the
+  parent antd Form). A faithful migration needs both forms rewritten to RHF,
+  the tabs flipped to shadcn, and `DynamicParamsFields` ported in lockstep
+  with its two parents — exceeds the 2-attempt budget.
 - `src/components/OldTeams.tsx` (1577 LoC): legacy teams page that mirrors
   `team/TeamInfo.tsx` in structure — deeply coupled antd `Form` with model /
   guardrail multi-selects, `Form.List`-style panels, antd `Pagination` + `Table`

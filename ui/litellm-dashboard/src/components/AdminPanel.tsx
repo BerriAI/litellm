@@ -3,20 +3,33 @@
  * Use this to avoid sharing master key with others
  */
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
-// eslint-disable-next-line litellm-ui/no-banned-ui-imports
+import React, { useEffect, useRef, useState } from "react";
+import { AlertTriangle, LogIn } from "lucide-react";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
 import {
-  Button,
-  Callout,
-  Card,
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import {
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
+} from "@/components/ui/tabs";
+import {
   Table,
   TableBody,
   TableCell,
   TableHead,
-  TableHeaderCell,
+  TableHeader,
   TableRow,
-} from "@tremor/react";
-import { Alert, Button as Button2, Form, Input, Modal, Space, Tabs, Typography } from "antd";
-import React, { useEffect, useState } from "react";
+} from "@/components/ui/table";
 import NewBadge from "./common_components/NewBadge";
 import { useBaseUrl } from "./constants";
 import NotificationsManager from "./molecules/notifications_manager";
@@ -28,15 +41,20 @@ import HashicorpVault from "./Settings/AdminSettings/HashicorpVault/HashicorpVau
 import SSOModals from "./SSOModals";
 import UIAccessControlForm from "./UIAccessControlForm";
 
-const { Title, Paragraph, Text } = Typography;
-
 interface AdminPanelProps {
   proxySettings?: any;
 }
 
 const AdminPanel: React.FC<AdminPanelProps> = ({ proxySettings }) => {
   const { premiumUser, accessToken, userId: userID } = useAuthorized();
-  const [form] = Form.useForm();
+  // Legacy antd `Form` handle — retained as a no-op bridge so the
+  // SSOModals component (which still accepts a `form` prop for back-compat)
+  // has something to call `resetFields` on.
+  const ssoFormHandle = useRef({
+    resetFields: () => {},
+    setFieldsValue: () => {},
+    getFieldsValue: () => ({}),
+  });
   const [isAddSSOModalVisible, setIsAddSSOModalVisible] = useState(false);
   const [isInstructionsModalVisible, setIsInstructionsModalVisible] = useState(false);
   const [isAllowedIPModalVisible, setIsAllowedIPModalVisible] = useState(false);
@@ -46,6 +64,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ proxySettings }) => {
   const [allowedIPs, setAllowedIPs] = useState<string[]>([]);
   const [ipToDelete, setIPToDelete] = useState<string | null>(null);
   const [ssoConfigured, setSsoConfigured] = useState<boolean>(false);
+  const [newIP, setNewIP] = useState<string>("");
 
   const baseUrl = useBaseUrl();
   const all_ip_address_allowed = "All IP Addresses Allowed";
@@ -99,14 +118,19 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ proxySettings }) => {
     }
   };
 
-  const handleAddIP = async (values: { ip: string }) => {
+  const handleAddIP = async (e?: React.FormEvent) => {
+    e?.preventDefault();
+    if (!newIP.trim()) {
+      NotificationsManager.fromBackend("Please enter an IP address");
+      return;
+    }
     try {
       if (accessToken) {
-        await addAllowedIP(accessToken, values.ip);
-        // Fetch the updated list of IPs
+        await addAllowedIP(accessToken, newIP.trim());
         const updatedIPs = await getAllowedIPs(accessToken);
         setAllowedIPs(updatedIPs);
         NotificationsManager.success("IP address added successfully");
+        setNewIP("");
       }
     } catch (error) {
       console.error("Error adding IP:", error);
@@ -125,7 +149,6 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ proxySettings }) => {
     if (ipToDelete && accessToken) {
       try {
         await deleteAllowedIP(accessToken, ipToDelete);
-        // Fetch the updated list of IPs
         const updatedIPs = await getAllowedIPs(accessToken);
         setAllowedIPs(updatedIPs.length > 0 ? updatedIPs : [all_ip_address_allowed]);
         NotificationsManager.success("IP address deleted successfully");
@@ -141,7 +164,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ proxySettings }) => {
 
   const handleAddSSOOk = () => {
     setIsAddSSOModalVisible(false);
-    form.resetFields();
+    ssoFormHandle.current.resetFields();
     if (accessToken && premiumUser) {
       checkSSOConfiguration();
     }
@@ -149,10 +172,10 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ proxySettings }) => {
 
   const handleAddSSOCancel = () => {
     setIsAddSSOModalVisible(false);
-    form.resetFields();
+    ssoFormHandle.current.resetFields();
   };
 
-  const handleShowInstructions = (formValues: Record<string, any>) => {
+  const handleShowInstructions = (_formValues: Record<string, any>) => {
     setIsAddSSOModalVisible(false);
     setIsInstructionsModalVisible(true);
   };
@@ -173,7 +196,8 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ proxySettings }) => {
 
   useEffect(() => {
     checkSSOConfiguration();
-  }, [accessToken, premiumUser, checkSSOConfiguration]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [accessToken, premiumUser]);
 
   const handleUIAccessControlOk = () => {
     setIsUIAccessControlModalVisible(false);
@@ -183,47 +207,55 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ proxySettings }) => {
     setIsUIAccessControlModalVisible(false);
   };
 
-  const tabItems = [
-    {
-      key: "sso-settings",
-      label: "SSO Settings",
-      children: <SSOSettings />,
-    },
-    {
-      key: "security-settings",
-      label: "Security Settings",
-      children: (
-        <>
-          <Card>
-            <Title level={4}> ✨ Security Settings</Title>
-            <Alert
-              message="SSO Configuration Deprecated"
-              description="Editing SSO Settings on this page is deprecated and will be removed in a future version. Please use the SSO Settings tab for SSO configuration."
-              type="warning"
-              showIcon
-            />
-            <div
-              style={{
-                display: "flex",
-                flexDirection: "column",
-                gap: "1rem",
-                marginTop: "1rem",
-                marginLeft: "0.5rem",
-              }}
-            >
+  return (
+    <div className="w-full m-2 mt-2 p-8">
+      <h1 className="text-xl font-semibold">Admin Access </h1>
+      <p className="text-sm text-muted-foreground mb-4">
+        Go to &apos;Internal Users&apos; page to add other admins.
+      </p>
+      <Tabs defaultValue="sso-settings">
+        <TabsList>
+          <TabsTrigger value="sso-settings">SSO Settings</TabsTrigger>
+          <TabsTrigger value="security-settings">Security Settings</TabsTrigger>
+          <TabsTrigger value="scim">SCIM</TabsTrigger>
+          <TabsTrigger value="ui-settings">
+            <span className="inline-flex items-center gap-2">
+              UI Settings
+              <NewBadge />
+            </span>
+          </TabsTrigger>
+          <TabsTrigger value="hashicorp-vault">Hashicorp Vault</TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="sso-settings">
+          <SSOSettings />
+        </TabsContent>
+
+        <TabsContent value="security-settings">
+          <Card className="p-6">
+            <h3 className="text-lg font-semibold mb-3">✨ Security Settings</h3>
+            <Alert>
+              <AlertTriangle className="h-4 w-4" />
+              <AlertTitle>SSO Configuration Deprecated</AlertTitle>
+              <AlertDescription>
+                Editing SSO Settings on this page is deprecated and will be removed in a future
+                version. Please use the SSO Settings tab for SSO configuration.
+              </AlertDescription>
+            </Alert>
+            <div className="flex flex-col gap-4 mt-4 ml-2">
               <div>
-                <Button style={{ width: "150px" }} onClick={() => setIsAddSSOModalVisible(true)}>
+                <Button className="w-[150px]" onClick={() => setIsAddSSOModalVisible(true)}>
                   {ssoConfigured ? "Edit SSO Settings" : "Add SSO"}
                 </Button>
               </div>
               <div>
-                <Button style={{ width: "150px" }} onClick={handleShowAllowedIPs}>
+                <Button className="w-[150px]" onClick={handleShowAllowedIPs}>
                   Allowed IPs
                 </Button>
               </div>
               <div>
                 <Button
-                  style={{ width: "150px" }}
+                  className="w-[150px]"
                   onClick={() =>
                     premiumUser === true
                       ? setIsUIAccessControlModalVisible(true)
@@ -245,136 +277,150 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ proxySettings }) => {
               handleShowInstructions={handleShowInstructions}
               handleInstructionsOk={handleInstructionsOk}
               handleInstructionsCancel={handleInstructionsCancel}
-              form={form}
+              form={ssoFormHandle.current}
               accessToken={accessToken}
               ssoConfigured={ssoConfigured}
             />
-            <Modal
-              title="Manage Allowed IP Addresses"
-              width={800}
+
+            <Dialog
               open={isAllowedIPModalVisible}
-              onCancel={() => setIsAllowedIPModalVisible(false)}
-              footer={[
-                <Button className="mx-1" key="add" onClick={() => setIsAddIPModalVisible(true)}>
-                  Add IP Address
-                </Button>,
-                <Button key="close" onClick={() => setIsAllowedIPModalVisible(false)}>
-                  Close
-                </Button>,
-              ]}
+              onOpenChange={(o) => {
+                if (!o) setIsAllowedIPModalVisible(false);
+              }}
             >
-              <Table>
-                <TableHead>
-                  <TableRow>
-                    <TableHeaderCell>IP Address</TableHeaderCell>
-                    <TableHeaderCell className="text-right">Action</TableHeaderCell>
-                  </TableRow>
-                </TableHead>
-                <TableBody>
-                  {allowedIPs.map((ip, index) => (
-                    <TableRow key={index}>
-                      <TableCell>{ip}</TableCell>
-                      <TableCell className="text-right">
-                        {ip !== all_ip_address_allowed && (
-                          <Button onClick={() => handleDeleteIP(ip)} color="red" size="xs">
-                            Delete
-                          </Button>
-                        )}
-                      </TableCell>
+              <DialogContent className="max-w-[800px]">
+                <DialogHeader>
+                  <DialogTitle>Manage Allowed IP Addresses</DialogTitle>
+                </DialogHeader>
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>IP Address</TableHead>
+                      <TableHead className="text-right">Action</TableHead>
                     </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </Modal>
+                  </TableHeader>
+                  <TableBody>
+                    {allowedIPs.map((ip, index) => (
+                      <TableRow key={index}>
+                        <TableCell>{ip}</TableCell>
+                        <TableCell className="text-right">
+                          {ip !== all_ip_address_allowed && (
+                            <Button
+                              onClick={() => handleDeleteIP(ip)}
+                              variant="destructive"
+                              size="sm"
+                            >
+                              Delete
+                            </Button>
+                          )}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+                <DialogFooter>
+                  <Button onClick={() => setIsAddIPModalVisible(true)}>Add IP Address</Button>
+                  <Button variant="outline" onClick={() => setIsAllowedIPModalVisible(false)}>
+                    Close
+                  </Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
 
-            <Modal
-              title="Add Allowed IP Address"
+            <Dialog
               open={isAddIPModalVisible}
-              onCancel={() => setIsAddIPModalVisible(false)}
-              footer={null}
+              onOpenChange={(o) => {
+                if (!o) setIsAddIPModalVisible(false);
+              }}
             >
-              <Form onFinish={handleAddIP}>
-                <Form.Item name="ip" rules={[{ required: true, message: "Please enter an IP address" }]}>
-                  <Input placeholder="Enter IP address" />
-                </Form.Item>
-                <Form.Item>
-                  <Button2 htmlType="submit">Add IP Address</Button2>
-                </Form.Item>
-              </Form>
-            </Modal>
+              <DialogContent>
+                <DialogHeader>
+                  <DialogTitle>Add Allowed IP Address</DialogTitle>
+                </DialogHeader>
+                <form onSubmit={handleAddIP} className="space-y-4">
+                  <Input
+                    placeholder="Enter IP address"
+                    value={newIP}
+                    onChange={(e) => setNewIP(e.target.value)}
+                  />
+                  <DialogFooter>
+                    <Button type="submit">Add IP Address</Button>
+                  </DialogFooter>
+                </form>
+              </DialogContent>
+            </Dialog>
 
-            <Modal
-              title="Confirm Delete"
+            <Dialog
               open={isDeleteIPModalVisible}
-              onCancel={() => setIsDeleteIPModalVisible(false)}
-              onOk={confirmDeleteIP}
-              footer={[
-                <Button className="mx-1" key="delete" onClick={() => confirmDeleteIP()}>
-                  Yes
-                </Button>,
-                <Button key="close" onClick={() => setIsDeleteIPModalVisible(false)}>
-                  Close
-                </Button>,
-              ]}
+              onOpenChange={(o) => {
+                if (!o) setIsDeleteIPModalVisible(false);
+              }}
             >
-              <Text>Are you sure you want to delete the IP address: {ipToDelete}?</Text>
-            </Modal>
+              <DialogContent>
+                <DialogHeader>
+                  <DialogTitle>Confirm Delete</DialogTitle>
+                </DialogHeader>
+                <p>Are you sure you want to delete the IP address: {ipToDelete}?</p>
+                <DialogFooter>
+                  <Button variant="destructive" onClick={() => confirmDeleteIP()}>
+                    Yes
+                  </Button>
+                  <Button variant="outline" onClick={() => setIsDeleteIPModalVisible(false)}>
+                    Close
+                  </Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
 
             {/* UI Access Control Modal */}
-            <Modal
-              title="UI Access Control Settings"
+            <Dialog
               open={isUIAccessControlModalVisible}
-              width={600}
-              footer={null}
-              onOk={handleUIAccessControlOk}
-              onCancel={handleUIAccessControlCancel}
+              onOpenChange={(o) => {
+                if (!o) handleUIAccessControlCancel();
+              }}
             >
-              <UIAccessControlForm
-                accessToken={accessToken}
-                onSuccess={() => {
-                  handleUIAccessControlOk();
-                  NotificationsManager.success("UI Access Control settings updated successfully");
-                }}
-              />
-            </Modal>
+              <DialogContent className="max-w-[600px]">
+                <DialogHeader>
+                  <DialogTitle>UI Access Control Settings</DialogTitle>
+                </DialogHeader>
+                <UIAccessControlForm
+                  accessToken={accessToken}
+                  onSuccess={() => {
+                    handleUIAccessControlOk();
+                    NotificationsManager.success("UI Access Control settings updated successfully");
+                  }}
+                />
+              </DialogContent>
+            </Dialog>
           </div>
-          <Callout title="Login without SSO" color="teal">
-            If you need to login without sso, you can access{" "}
-            <a href={nonSssoUrl} target="_blank" rel="noopener noreferrer">
-              <b>{nonSssoUrl}</b>{" "}
-            </a>
-          </Callout>
-        </>
-      ),
-    },
-    {
-      key: "scim",
-      label: "SCIM",
-      children: <SCIMConfig accessToken={accessToken} userID={userID} proxySettings={proxySettings} />,
-    },
-    {
-      key: "ui-settings",
-      label: (
-        <Space>
-          <Text>
-            UI Settings <NewBadge />
-          </Text>
-        </Space>
-      ),
-      children: <UISettings />,
-    },
-    {
-      key: "hashicorp-vault",
-      label: "Hashicorp Vault",
-      children: <HashicorpVault />,
-    },
-  ];
 
-  return (
-    <div className="w-full m-2 mt-2 p-8">
-      <Title level={4}>Admin Access </Title>
-      <Paragraph>Go to &apos;Internal Users&apos; page to add other admins.</Paragraph>
-      <Tabs items={tabItems} />
+          {/* eslint-disable-next-line litellm-ui/no-raw-tailwind-colors */}
+          <div className="rounded-md border border-teal-200 bg-teal-50 text-teal-900 dark:bg-teal-950/30 dark:border-teal-900 dark:text-teal-200 p-4 flex gap-3">
+            <LogIn className="h-5 w-5 mt-0.5 shrink-0" />
+            <div>
+              <p className="font-medium">Login without SSO</p>
+              <p className="text-sm">
+                If you need to login without sso, you can access{" "}
+                <a href={nonSssoUrl} target="_blank" rel="noopener noreferrer">
+                  <b>{nonSssoUrl}</b>
+                </a>
+              </p>
+            </div>
+          </div>
+        </TabsContent>
+
+        <TabsContent value="scim">
+          <SCIMConfig accessToken={accessToken} userID={userID} proxySettings={proxySettings} />
+        </TabsContent>
+
+        <TabsContent value="ui-settings">
+          <UISettings />
+        </TabsContent>
+
+        <TabsContent value="hashicorp-vault">
+          <HashicorpVault />
+        </TabsContent>
+      </Tabs>
     </div>
   );
 };
