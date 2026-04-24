@@ -226,6 +226,22 @@ def test_opus_4_6_alias_and_dated_metadata_match():
         assert alias[key] == dated[key], f"Mismatch for {key}"
 
 
+def test_vertex_ai_claude_sonnet_4_6_has_1h_cache_write_pricing_in_root_map():
+    json_path = os.path.join(
+        os.path.dirname(__file__), "../../model_prices_and_context_window.json"
+    )
+    with open(json_path) as f:
+        model_data = json.load(f)
+
+    vertex_entries = [
+        "vertex_ai/claude-sonnet-4-6",
+        "vertex_ai/claude-sonnet-4-6@default",
+    ]
+
+    for model_name in vertex_entries:
+        assert model_data[model_name]["cache_creation_input_token_cost_above_1hr"] == 6e-06
+
+
 def test_opus_4_6_bedrock_converse_registration():
     assert "anthropic.claude-opus-4-6-v1" in litellm.BEDROCK_CONVERSE_MODELS
     assert "global.anthropic.claude-opus-4-6-v1" in litellm.bedrock_converse_models
