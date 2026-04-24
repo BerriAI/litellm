@@ -52,6 +52,7 @@
         "src/components/common_components/AutoRotationView.tsx",
         "src/components/agents/agent_card.tsx",
         "src/components/agents/agent_table.tsx",
+        "src/components/agents/add_agent_form.tsx",
         "src/components/view_users/columns.tsx",
         "src/components/Projects/ProjectsPage.tsx",
         "src/components/pass_through_settings.tsx",

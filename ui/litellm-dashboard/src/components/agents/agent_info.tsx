@@ -1,9 +1,10 @@
 import React, { useState, useEffect, useCallback } from "react";
-// eslint-disable-next-line litellm-ui/no-banned-ui-imports
-import { Tab, TabGroup, TabList, TabPanel, TabPanels } from "@tremor/react";
-import { Form, Input, InputNumber, Descriptions } from "antd";
+import { FormProvider, useForm } from "react-hook-form";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ArrowLeft, Loader2 } from "lucide-react";
 import MessageManager from "@/components/molecules/message_manager";
 import { getAgentInfo, patchAgentCall, getAgentCreateMetadata, AgentCreateInfo } from "../networking";
@@ -21,6 +22,31 @@ interface AgentInfoViewProps {
   isAdmin: boolean;
 }
 
+function DescRow({
+  label,
+  children,
+}: {
+  label: React.ReactNode;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="grid grid-cols-[220px_1fr] border-t border-border first:border-t-0">
+      <dt className="bg-muted px-4 py-3 text-sm font-medium text-foreground border-r border-border">
+        {label}
+      </dt>
+      <dd className="px-4 py-3 text-sm text-foreground">{children}</dd>
+    </div>
+  );
+}
+
+function DescList({ children }: { children: React.ReactNode }) {
+  return (
+    <dl className="border border-border rounded-md overflow-hidden">
+      {children}
+    </dl>
+  );
+}
+
 const AgentInfoView: React.FC<AgentInfoViewProps> = ({
   agentId,
   onClose,
@@ -31,7 +57,8 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({
   const [isLoading, setIsLoading] = useState(true);
   const [isEditing, setIsEditing] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
-  const [form] = Form.useForm();
+  const form = useForm<any>({ defaultValues: {} });
+  const { register, reset, handleSubmit } = form;
   const [agentTypeMetadata, setAgentTypeMetadata] = useState<AgentCreateInfo[]>([]);
   const [detectedAgentType, setDetectedAgentType] = useState<string>("a2a");
 
@@ -59,15 +86,15 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({
       setDetectedAgentType(agentType);
 
       if (agentType === "a2a") {
-        form.setFieldsValue(parseAgentForForm(data));
+        reset(parseAgentForForm(data));
       } else {
         const typeInfo = agentTypeMetadata.find(
           (t) => t.agent_type === agentType,
         );
         if (typeInfo) {
-          form.setFieldsValue(parseDynamicAgentForForm(data, typeInfo));
+          reset(parseDynamicAgentForForm(data, typeInfo));
         } else {
-          form.setFieldsValue(parseAgentForForm(data));
+          reset(parseAgentForForm(data));
         }
       }
     } catch (error) {
@@ -76,13 +103,12 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({
     } finally {
       setIsLoading(false);
     }
-  }, [accessToken, agentId, agentTypeMetadata, form]);
+  }, [accessToken, agentId, agentTypeMetadata, reset]);
 
   useEffect(() => {
     fetchAgentInfo();
   }, [fetchAgentInfo]);
 
-  // Re-parse form when metadata is loaded
   useEffect(() => {
     if (agent && agentTypeMetadata.length > 0) {
       const agentType = detectAgentType(agent);
@@ -91,36 +117,32 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({
           (t) => t.agent_type === agentType,
         );
         if (typeInfo) {
-          form.setFieldsValue(parseDynamicAgentForForm(agent, typeInfo));
+          reset(parseDynamicAgentForForm(agent, typeInfo));
         }
       }
     }
-  }, [agentTypeMetadata, agent, form]);
+  }, [agentTypeMetadata, agent, reset]);
 
   const selectedAgentTypeInfo = agentTypeMetadata.find(
     (t) => t.agent_type === detectedAgentType,
   );
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const handleUpdate = async (values: any) => {
     if (!accessToken || !agent) return;
 
     setIsSaving(true);
     try {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       let updateData: any;
-
 
       if (detectedAgentType === "a2a") {
         updateData = buildAgentDataFromForm(values, agent);
       } else if (selectedAgentTypeInfo) {
         updateData = buildDynamicAgentData(values, selectedAgentTypeInfo);
-        // Preserve the agent_name from form
         updateData.agent_name = values.agent_name;
       } else {
         updateData = buildAgentDataFromForm(values, agent);
       }
-      
+
       await patchAgentCall(accessToken, agentId, updateData);
       MessageManager.success("Agent updated successfully");
       setIsEditing(false);
@@ -154,7 +176,6 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({
     );
   }
 
-  // Format date helper function
   const formatDate = (dateString?: string) => {
     if (!dateString) return "-";
     const date = new Date(dateString);
@@ -174,104 +195,135 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({
         <span className="text-muted-foreground font-mono">{agent.agent_id}</span>
       </div>
 
-      <TabGroup>
-        <TabList className="mb-4">
-          <Tab key="overview">Overview</Tab>
-          {isAdmin ? <Tab key="settings">Settings</Tab> : <></>}
-        </TabList>
+      <Tabs defaultValue="overview" className="mt-4">
+        <TabsList className="mb-4">
+          <TabsTrigger value="overview">Overview</TabsTrigger>
+          {isAdmin && <TabsTrigger value="settings">Settings</TabsTrigger>}
+        </TabsList>
 
-        <TabPanels>
-          {/* Overview Panel */}
-          <TabPanel>
-            <Descriptions bordered column={1}>
-              <Descriptions.Item label="Agent ID">{agent.agent_id}</Descriptions.Item>
-              <Descriptions.Item label="Agent Name">{agent.agent_name}</Descriptions.Item>
-              <Descriptions.Item label="Display Name">{agent.agent_card_params?.name || "-"}</Descriptions.Item>
-              <Descriptions.Item label="Description">{agent.agent_card_params?.description || "-"}</Descriptions.Item>
-              <Descriptions.Item label="URL">{agent.agent_card_params?.url || "-"}</Descriptions.Item>
-              <Descriptions.Item label="Version">{agent.agent_card_params?.version || "-"}</Descriptions.Item>
-              <Descriptions.Item label="Protocol Version">{agent.agent_card_params?.protocolVersion || "-"}</Descriptions.Item>
-              <Descriptions.Item label="Streaming">
-                {agent.agent_card_params?.capabilities?.streaming ? "Yes" : "No"}
-              </Descriptions.Item>
-              {agent.agent_card_params?.capabilities?.pushNotifications && (
-                <Descriptions.Item label="Push Notifications">Yes</Descriptions.Item>
-              )}
-              {agent.agent_card_params?.capabilities?.stateTransitionHistory && (
-                <Descriptions.Item label="State Transition History">Yes</Descriptions.Item>
-              )}
-              <Descriptions.Item label="Skills">
-                {agent.agent_card_params?.skills?.length || 0} configured
-              </Descriptions.Item>
-              {agent.litellm_params?.model && (
-                <Descriptions.Item label="Model">{agent.litellm_params.model}</Descriptions.Item>
-              )}
-              {agent.litellm_params?.make_public !== undefined && (
-                <Descriptions.Item label="Make Public">{agent.litellm_params.make_public ? "Yes" : "No"}</Descriptions.Item>
-              )}
-              {agent.agent_card_params?.iconUrl && (
-                <Descriptions.Item label="Icon URL">{agent.agent_card_params.iconUrl}</Descriptions.Item>
-              )}
-              {agent.agent_card_params?.documentationUrl && (
-                <Descriptions.Item label="Documentation URL">{agent.agent_card_params.documentationUrl}</Descriptions.Item>
-              )}
-              <Descriptions.Item label="TPM Limit">{agent.tpm_limit ?? "Unlimited"}</Descriptions.Item>
-              <Descriptions.Item label="RPM Limit">{agent.rpm_limit ?? "Unlimited"}</Descriptions.Item>
-              <Descriptions.Item label="Session TPM Limit">{agent.session_tpm_limit ?? "Unlimited"}</Descriptions.Item>
-              <Descriptions.Item label="Session RPM Limit">{agent.session_rpm_limit ?? "Unlimited"}</Descriptions.Item>
-              <Descriptions.Item label="Created At">{formatDate(agent.created_at)}</Descriptions.Item>
-              <Descriptions.Item label="Updated At">{formatDate(agent.updated_at)}</Descriptions.Item>
-            </Descriptions>
+        <TabsContent value="overview">
+          <DescList>
+            <DescRow label="Agent ID">{agent.agent_id}</DescRow>
+            <DescRow label="Agent Name">{agent.agent_name}</DescRow>
+            <DescRow label="Display Name">
+              {agent.agent_card_params?.name || "-"}
+            </DescRow>
+            <DescRow label="Description">
+              {agent.agent_card_params?.description || "-"}
+            </DescRow>
+            <DescRow label="URL">
+              {agent.agent_card_params?.url || "-"}
+            </DescRow>
+            <DescRow label="Version">
+              {agent.agent_card_params?.version || "-"}
+            </DescRow>
+            <DescRow label="Protocol Version">
+              {agent.agent_card_params?.protocolVersion || "-"}
+            </DescRow>
+            <DescRow label="Streaming">
+              {agent.agent_card_params?.capabilities?.streaming ? "Yes" : "No"}
+            </DescRow>
+            {agent.agent_card_params?.capabilities?.pushNotifications && (
+              <DescRow label="Push Notifications">Yes</DescRow>
+            )}
+            {agent.agent_card_params?.capabilities?.stateTransitionHistory && (
+              <DescRow label="State Transition History">Yes</DescRow>
+            )}
+            <DescRow label="Skills">
+              {agent.agent_card_params?.skills?.length || 0} configured
+            </DescRow>
+            {agent.litellm_params?.model && (
+              <DescRow label="Model">{agent.litellm_params.model}</DescRow>
+            )}
+            {agent.litellm_params?.make_public !== undefined && (
+              <DescRow label="Make Public">
+                {agent.litellm_params.make_public ? "Yes" : "No"}
+              </DescRow>
+            )}
+            {agent.agent_card_params?.iconUrl && (
+              <DescRow label="Icon URL">
+                {agent.agent_card_params.iconUrl}
+              </DescRow>
+            )}
+            {agent.agent_card_params?.documentationUrl && (
+              <DescRow label="Documentation URL">
+                {agent.agent_card_params.documentationUrl}
+              </DescRow>
+            )}
+            <DescRow label="TPM Limit">
+              {agent.tpm_limit ?? "Unlimited"}
+            </DescRow>
+            <DescRow label="RPM Limit">
+              {agent.rpm_limit ?? "Unlimited"}
+            </DescRow>
+            <DescRow label="Session TPM Limit">
+              {agent.session_tpm_limit ?? "Unlimited"}
+            </DescRow>
+            <DescRow label="Session RPM Limit">
+              {agent.session_rpm_limit ?? "Unlimited"}
+            </DescRow>
+            <DescRow label="Created At">{formatDate(agent.created_at)}</DescRow>
+            <DescRow label="Updated At">{formatDate(agent.updated_at)}</DescRow>
+          </DescList>
 
-            {agent.object_permission &&
-              (agent.object_permission.mcp_servers?.length ||
-                agent.object_permission.mcp_access_groups?.length ||
-                (agent.object_permission.mcp_tool_permissions &&
-                  Object.keys(agent.object_permission.mcp_tool_permissions).length > 0)) && (
+          {agent.object_permission &&
+            (agent.object_permission.mcp_servers?.length ||
+              agent.object_permission.mcp_access_groups?.length ||
+              (agent.object_permission.mcp_tool_permissions &&
+                Object.keys(agent.object_permission.mcp_tool_permissions)
+                  .length > 0)) && (
               <div className="mt-6">
-                <h2 className="text-lg font-semibold">MCP Tool Permissions</h2>
-                <Descriptions bordered column={1} className="mt-4">
-                  {agent.object_permission.mcp_servers && agent.object_permission.mcp_servers.length > 0 && (
-                    <Descriptions.Item label="MCP Servers">
-                      {agent.object_permission.mcp_servers.join(", ")}
-                    </Descriptions.Item>
-                  )}
-                  {agent.object_permission.mcp_access_groups &&
-                    agent.object_permission.mcp_access_groups.length > 0 && (
-                      <Descriptions.Item label="MCP Access Groups">
-                        {agent.object_permission.mcp_access_groups.join(", ")}
-                      </Descriptions.Item>
-                    )}
-                  {agent.object_permission.mcp_tool_permissions &&
-                    Object.keys(agent.object_permission.mcp_tool_permissions).length > 0 && (
-                      <Descriptions.Item label="Tool permissions per server">
-                        <div className="space-y-1">
-                          {Object.entries(agent.object_permission.mcp_tool_permissions).map(
-                            ([serverId, tools]) => (
+                <h2 className="text-lg font-semibold">
+                  MCP Tool Permissions
+                </h2>
+                <div className="mt-4">
+                  <DescList>
+                    {agent.object_permission.mcp_servers &&
+                      agent.object_permission.mcp_servers.length > 0 && (
+                        <DescRow label="MCP Servers">
+                          {agent.object_permission.mcp_servers.join(", ")}
+                        </DescRow>
+                      )}
+                    {agent.object_permission.mcp_access_groups &&
+                      agent.object_permission.mcp_access_groups.length > 0 && (
+                        <DescRow label="MCP Access Groups">
+                          {agent.object_permission.mcp_access_groups.join(", ")}
+                        </DescRow>
+                      )}
+                    {agent.object_permission.mcp_tool_permissions &&
+                      Object.keys(agent.object_permission.mcp_tool_permissions)
+                        .length > 0 && (
+                        <DescRow label="Tool permissions per server">
+                          <div className="space-y-1">
+                            {Object.entries(
+                              agent.object_permission.mcp_tool_permissions,
+                            ).map(([serverId, tools]) => (
                               <div key={serverId}>
                                 <span className="font-medium">{serverId}:</span>{" "}
-                                {Array.isArray(tools) ? tools.join(", ") : String(tools)}
+                                {Array.isArray(tools)
+                                  ? tools.join(", ")
+                                  : String(tools)}
                               </div>
-                            )
-                          )}
-                        </div>
-                      </Descriptions.Item>
-                    )}
-                </Descriptions>
+                            ))}
+                          </div>
+                        </DescRow>
+                      )}
+                  </DescList>
+                </div>
               </div>
             )}
 
-            <AgentCostView agent={agent} />
+          <AgentCostView agent={agent} />
 
-            {agent.agent_card_params?.skills &&
-              agent.agent_card_params.skills.length > 0 && (
-                <div className="mt-6">
-                  <h2 className="text-lg font-semibold">Skills</h2>
-                  <Descriptions bordered column={1} className="mt-4">
+          {agent.agent_card_params?.skills &&
+            agent.agent_card_params.skills.length > 0 && (
+              <div className="mt-6">
+                <h2 className="text-lg font-semibold">Skills</h2>
+                <div className="mt-4">
+                  <DescList>
                     {agent.agent_card_params.skills.map(
-                      // eslint-disable-next-line @typescript-eslint/no-explicit-any
                       (skill: any, index: number) => (
-                        <Descriptions.Item
+                        <DescRow
                           label={skill.name || `Skill ${index + 1}`}
                           key={index}
                         >
@@ -297,62 +349,106 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({
                               </div>
                             )}
                           </div>
-                        </Descriptions.Item>
+                        </DescRow>
                       ),
                     )}
-                  </Descriptions>
+                  </DescList>
                 </div>
-              )}
-          </TabPanel>
+              </div>
+            )}
+        </TabsContent>
 
-          {/* Settings Panel (only for admins) */}
-          {isAdmin && (
-            <TabPanel>
-              <Card className="p-4">
-                <div className="flex justify-between items-center mb-4">
-                  <h2 className="text-lg font-semibold">Agent Settings</h2>
-                  {!isEditing && (
-                    <Button onClick={() => setIsEditing(true)}>
-                      Edit Settings
-                    </Button>
-                  )}
-                </div>
+        {isAdmin && (
+          <TabsContent value="settings">
+            <Card className="p-4">
+              <div className="flex justify-between items-center mb-4">
+                <h2 className="text-lg font-semibold">Agent Settings</h2>
+                {!isEditing && (
+                  <Button onClick={() => setIsEditing(true)}>
+                    Edit Settings
+                  </Button>
+                )}
+              </div>
 
-                {isEditing ? (
-                  <Form
-                    form={form}
-                    layout="vertical"
-                    onFinish={handleUpdate}
+              {isEditing ? (
+                <FormProvider {...form}>
+                  <form
+                    onSubmit={handleSubmit(handleUpdate)}
+                    className="space-y-4"
                   >
-                    <Form.Item label="Agent ID">
-                      <Input value={agent.agent_id} disabled />
-                    </Form.Item>
+                    <div className="space-y-2">
+                      <Label htmlFor="agent-id-readonly">Agent ID</Label>
+                      <Input
+                        id="agent-id-readonly"
+                        value={agent.agent_id}
+                        disabled
+                        readOnly
+                      />
+                    </div>
 
                     {detectedAgentType === "a2a" ? (
                       <AgentFormFields showAgentName={true} />
                     ) : selectedAgentTypeInfo ? (
-                      <DynamicAgentFormFields agentTypeInfo={selectedAgentTypeInfo} />
+                      <DynamicAgentFormFields
+                        agentTypeInfo={selectedAgentTypeInfo}
+                      />
                     ) : (
-                    <AgentFormFields showAgentName={true} />
+                      <AgentFormFields showAgentName={true} />
                     )}
 
                     <hr className="my-4 border-border" />
                     <h3 className="text-lg font-semibold mb-4">Rate Limits</h3>
                     <div className="grid grid-cols-2 gap-4">
-                      <Form.Item label="TPM Limit" name="tpm_limit">
-                        <InputNumber className="w-full" min={0} placeholder="Unlimited" />
-                      </Form.Item>
-                      <Form.Item label="RPM Limit" name="rpm_limit">
-                        <InputNumber className="w-full" min={0} placeholder="Unlimited" />
-                      </Form.Item>
+                      <div className="space-y-2">
+                        <Label htmlFor="tpm_limit">TPM Limit</Label>
+                        <Input
+                          id="tpm_limit"
+                          type="number"
+                          min={0}
+                          placeholder="Unlimited"
+                          {...register("tpm_limit", { valueAsNumber: true })}
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <Label htmlFor="rpm_limit">RPM Limit</Label>
+                        <Input
+                          id="rpm_limit"
+                          type="number"
+                          min={0}
+                          placeholder="Unlimited"
+                          {...register("rpm_limit", { valueAsNumber: true })}
+                        />
+                      </div>
                     </div>
                     <div className="grid grid-cols-2 gap-4">
-                      <Form.Item label="Session TPM Limit" name="session_tpm_limit">
-                        <InputNumber className="w-full" min={0} placeholder="Unlimited" />
-                      </Form.Item>
-                      <Form.Item label="Session RPM Limit" name="session_rpm_limit">
-                        <InputNumber className="w-full" min={0} placeholder="Unlimited" />
-                      </Form.Item>
+                      <div className="space-y-2">
+                        <Label htmlFor="session_tpm_limit">
+                          Session TPM Limit
+                        </Label>
+                        <Input
+                          id="session_tpm_limit"
+                          type="number"
+                          min={0}
+                          placeholder="Unlimited"
+                          {...register("session_tpm_limit", {
+                            valueAsNumber: true,
+                          })}
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <Label htmlFor="session_rpm_limit">
+                          Session RPM Limit
+                        </Label>
+                        <Input
+                          id="session_rpm_limit"
+                          type="number"
+                          min={0}
+                          placeholder="Unlimited"
+                          {...register("session_rpm_limit", {
+                            valueAsNumber: true,
+                          })}
+                        />
+                      </div>
                     </div>
 
                     <div className="flex justify-end gap-2 mt-6">
@@ -370,21 +466,19 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({
                         {isSaving ? "Saving..." : "Save Changes"}
                       </Button>
                     </div>
-                  </Form>
-                ) : (
-                  <p className="text-muted-foreground">
-                    Click &quot;Edit Settings&quot; to modify agent
-                    configuration.
-                  </p>
-                )}
-              </Card>
-            </TabPanel>
-          )}
-        </TabPanels>
-      </TabGroup>
+                  </form>
+                </FormProvider>
+              ) : (
+                <p className="text-muted-foreground">
+                  Click &quot;Edit Settings&quot; to modify agent configuration.
+                </p>
+              )}
+            </Card>
+          </TabsContent>
+        )}
+      </Tabs>
     </div>
   );
 };
 
 export default AgentInfoView;
-

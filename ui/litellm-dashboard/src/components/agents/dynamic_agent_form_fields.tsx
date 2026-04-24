@@ -1,5 +1,5 @@
-import React from "react";
-import { Form, Input as AntInput, Select } from "antd";
+import React, { useEffect } from "react";
+import { Controller, useFormContext } from "react-hook-form";
 import {
   Accordion,
   AccordionContent,
@@ -7,7 +7,22 @@ import {
   AccordionTrigger,
 } from "@/components/ui/accordion";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import { Info } from "lucide-react";
 import { AgentCreateInfo, AgentCredentialFieldMetadata } from "../networking";
 import { AGENT_FORM_CONFIG } from "./agent_config";
 import CostConfigFields from "./cost_config_fields";
@@ -15,6 +30,17 @@ import CostConfigFields from "./cost_config_fields";
 interface DynamicAgentFormFieldsProps {
   agentTypeInfo: AgentCreateInfo;
 }
+
+const InfoTip: React.FC<{ children: React.ReactNode }> = ({ children }) => (
+  <TooltipProvider>
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Info className="ml-1 inline h-3 w-3 text-muted-foreground" />
+      </TooltipTrigger>
+      <TooltipContent className="max-w-xs">{children}</TooltipContent>
+    </Tooltip>
+  </TooltipProvider>
+);
 
 /**
  * Form fields for dynamic agent types (e.g., LangGraph).
@@ -24,66 +50,146 @@ interface DynamicAgentFormFieldsProps {
 const DynamicAgentFormFields: React.FC<DynamicAgentFormFieldsProps> = ({
   agentTypeInfo,
 }) => {
-  return (
-    <>
-      <Form.Item
-        label="Agent Name"
-        name="agent_name"
-        rules={[
-          { required: true, message: "Please enter a unique agent name" },
-        ]}
-        tooltip="Unique identifier for the agent"
-      >
-        <Input placeholder="e.g., my-langgraph-agent" />
-      </Form.Item>
+  const { register, control, setValue, formState, getValues } =
+    useFormContext();
 
-      <Form.Item
-        label="Description"
-        name="description"
-        tooltip="Brief description of what this agent does"
-      >
+  useEffect(() => {
+    for (const field of agentTypeInfo.credential_fields) {
+      if (field.default_value !== undefined) {
+        const current = getValues(field.key);
+        if (current === undefined || current === null || current === "") {
+          setValue(field.key, field.default_value);
+        }
+      }
+    }
+  }, [agentTypeInfo, setValue, getValues]);
+
+  const agentNameError = (formState.errors as any)?.agent_name;
+
+  return (
+    <div className="space-y-4">
+      <div className="space-y-2">
+        <Label htmlFor="agent_name">
+          Agent Name <span className="text-destructive">*</span>
+          <InfoTip>Unique identifier for the agent</InfoTip>
+        </Label>
+        <Input
+          id="agent_name"
+          placeholder="e.g., my-langgraph-agent"
+          aria-invalid={!!agentNameError}
+          {...register("agent_name", {
+            required: "Please enter a unique agent name",
+          })}
+        />
+        {agentNameError && (
+          <p className="text-sm text-destructive">
+            {agentNameError.message as string}
+          </p>
+        )}
+      </div>
+
+      <div className="space-y-2">
+        <Label htmlFor="description">
+          Description
+          <InfoTip>Brief description of what this agent does</InfoTip>
+        </Label>
         <Textarea
+          id="description"
           rows={2}
           placeholder="Describe what this agent does..."
+          {...register("description")}
         />
-      </Form.Item>
+      </div>
 
       {agentTypeInfo.credential_fields.map(
-        (field: AgentCredentialFieldMetadata) => (
-          <Form.Item
-            key={field.key}
-            label={field.label}
-            name={field.key}
-            rules={
-              field.required
-                ? [
-                    {
-                      required: true,
-                      message: `Please enter ${field.label}`,
-                    },
-                  ]
-                : undefined
-            }
-            tooltip={field.tooltip}
-            initialValue={field.default_value}
-          >
-            {field.field_type === "password" ? (
-              <AntInput.Password placeholder={field.placeholder || ""} />
-            ) : field.field_type === "textarea" ? (
-              <Textarea rows={3} placeholder={field.placeholder || ""} />
-            ) : field.field_type === "select" && field.options ? (
-              <Select placeholder={field.placeholder || ""}>
-                {field.options.map((opt) => (
-                  <Select.Option key={opt} value={opt}>
-                    {opt}
-                  </Select.Option>
-                ))}
-              </Select>
-            ) : (
-              <Input placeholder={field.placeholder || ""} />
-            )}
-          </Form.Item>
-        ),
+        (field: AgentCredentialFieldMetadata) => {
+          const error = (formState.errors as any)?.[field.key];
+          const inputId = `credential-${field.key}`;
+          return (
+            <div key={field.key} className="space-y-2">
+              <Label htmlFor={inputId}>
+                {field.label}
+                {field.required && (
+                  <span className="text-destructive"> *</span>
+                )}
+                {field.tooltip ? <InfoTip>{field.tooltip}</InfoTip> : null}
+              </Label>
+              {field.field_type === "password" ? (
+                <Input
+                  id={inputId}
+                  type="password"
+                  placeholder={field.placeholder || ""}
+                  aria-invalid={!!error}
+                  {...register(
+                    field.key,
+                    field.required
+                      ? { required: `Please enter ${field.label}` }
+                      : undefined,
+                  )}
+                />
+              ) : field.field_type === "textarea" ? (
+                <Textarea
+                  id={inputId}
+                  rows={3}
+                  placeholder={field.placeholder || ""}
+                  aria-invalid={!!error}
+                  {...register(
+                    field.key,
+                    field.required
+                      ? { required: `Please enter ${field.label}` }
+                      : undefined,
+                  )}
+                />
+              ) : field.field_type === "select" && field.options ? (
+                <Controller
+                  control={control}
+                  name={field.key}
+                  rules={
+                    field.required
+                      ? { required: `Please enter ${field.label}` }
+                      : undefined
+                  }
+                  render={({ field: rhfField }) => (
+                    <Select
+                      value={(rhfField.value as string) ?? ""}
+                      onValueChange={rhfField.onChange}
+                    >
+                      <SelectTrigger id={inputId} aria-invalid={!!error}>
+                        <SelectValue
+                          placeholder={field.placeholder || ""}
+                        />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {field.options?.map((opt) => (
+                          <SelectItem key={opt} value={opt}>
+                            {opt}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  )}
+                />
+              ) : (
+                <Input
+                  id={inputId}
+                  placeholder={field.placeholder || ""}
+                  aria-invalid={!!error}
+                  {...register(
+                    field.key,
+                    field.required
+                      ? { required: `Please enter ${field.label}` }
+                      : undefined,
+                  )}
+                />
+              )}
+              {error && (
+                <p className="text-sm text-destructive">
+                  {error.message as string}
+                </p>
+              )}
+            </div>
+          );
+        },
       )}
 
       <Accordion type="single" collapsible className="mb-4">
@@ -99,7 +205,7 @@ const DynamicAgentFormFields: React.FC<DynamicAgentFormFieldsProps> = ({
           </AccordionContent>
         </AccordionItem>
       </Accordion>
-    </>
+    </div>
   );
 };
 
@@ -182,4 +288,3 @@ export const buildDynamicAgentData = (
 };
 
 export default DynamicAgentFormFields;
-
