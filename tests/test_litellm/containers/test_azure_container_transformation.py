@@ -11,6 +11,7 @@ sys.path.insert(0, os.path.abspath("../../../"))
 import litellm
 from litellm.llms.azure.containers.transformation import AzureContainerConfig
 from litellm.llms.base_llm.containers.transformation import BaseContainerConfig
+from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.containers.main import (
     ContainerFileListResponse,
     ContainerListResponse,
@@ -518,3 +519,119 @@ class TestAzureContainerKnownFailureRegressions:
         c2 = _get_container_provider_config("azure_text")
         assert type(c1) is type(c2)
         assert isinstance(c1, AzureContainerConfig)
+
+    def test_regression_decode_container_routing_metadata_includes_model_id(self):
+        from litellm.proxy.container_endpoints.handler_factory import (
+            _decode_container_routing_metadata,
+        )
+
+        encoded_id = ResponsesAPIRequestUtils._build_container_id(
+            custom_llm_provider="azure",
+            model_id="model_abc123",
+            container_id="cntr_123",
+        )
+        original_id, provider, model_id = _decode_container_routing_metadata(
+            container_id=encoded_id,
+            custom_llm_provider="openai",
+        )
+
+        assert original_id == "cntr_123"
+        assert provider == "azure"
+        assert model_id == "model_abc123"
+
+    @pytest.mark.asyncio
+    async def test_regression_binary_file_request_uses_deployment_api_base(
+        self, monkeypatch
+    ):
+        from starlette.requests import Request
+
+        from litellm.proxy.container_endpoints import handler_factory
+        from litellm.types.router import GenericLiteLLMParams
+
+        encoded_id = ResponsesAPIRequestUtils._build_container_id(
+            custom_llm_provider="azure",
+            model_id="model_abc123",
+            container_id="cntr_123",
+        )
+
+        class _FakeContainerProviderConfig:
+            def validate_environment(self, headers, api_key=None):
+                return headers
+
+            def get_complete_url(self, api_base, litellm_params):
+                return f"{api_base}/openai/v1/containers?api-version=v1"
+
+            def transform_container_file_content_request(
+                self, container_id, file_id, api_base, litellm_params, headers
+            ):
+                return (
+                    f"{api_base}/{container_id}/files/{file_id}/content",
+                    {},
+                )
+
+            def transform_container_file_content_response(
+                self, raw_response, logging_obj
+            ):
+                return raw_response
+
+        monkeypatch.setattr(
+            handler_factory,
+            "_get_container_provider_config",
+            lambda *_: _FakeContainerProviderConfig(),
+        )
+        monkeypatch.setattr(
+            handler_factory,
+            "_get_deployment_credentials_for_model_id",
+            lambda model_id: {
+                "api_base": "https://swedencentral.openai.azure.com",
+                "api_key": "test-key",
+                "api_version": "v1",
+            },
+        )
+
+        async def _mock_async_content_handler(
+            self,
+            container_id,
+            file_id,
+            container_provider_config,
+            litellm_params: GenericLiteLLMParams,
+            logging_obj,
+        ):
+            assert container_id == "cntr_123"
+            assert file_id == "cfile_abc"
+            assert litellm_params.get("model_id") == "model_abc123"
+            assert (
+                litellm_params.get("api_base")
+                == "https://swedencentral.openai.azure.com"
+            )
+            assert litellm_params.get("api_key") == "test-key"
+            assert litellm_params.get("api_version") == "v1"
+            return b"csv-bytes"
+
+        from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
+
+        monkeypatch.setattr(
+            BaseLLMHTTPHandler,
+            "async_container_file_content_handler",
+            _mock_async_content_handler,
+        )
+
+        request = Request(
+            {
+                "type": "http",
+                "method": "GET",
+                "path": "/v1/containers/id/files/id/content",
+                "headers": [],
+                "query_string": b"",
+            }
+        )
+
+        response = await handler_factory._process_binary_request(
+            request=request,
+            container_id=encoded_id,
+            file_id="cfile_abc",
+            user_api_key_dict=MagicMock(),
+        )
+
+        assert response.status_code == 200
+        assert response.body == b"csv-bytes"
