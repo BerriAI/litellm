@@ -1,5 +1,4 @@
 import React, { useState, useEffect } from "react";
-import { Form, Steps } from "antd";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -9,6 +8,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { cn } from "@/lib/utils";
+import { Check } from "lucide-react";
 import {
   enableClaudeCodePlugin,
   disableClaudeCodePlugin,
@@ -16,14 +17,55 @@ import {
 import NotificationsManager from "../molecules/notifications_manager";
 import { Plugin } from "./types";
 
-const { Step } = Steps;
-
 interface MakeSkillPublicFormProps {
   visible: boolean;
   onClose: () => void;
   accessToken: string;
   skillsList: Plugin[];
   onSuccess: () => void;
+}
+
+function Stepper({ current, steps }: { current: number; steps: string[] }) {
+  return (
+    <ol className="flex items-center gap-2 mb-6">
+      {steps.map((label, i) => {
+        const active = i === current;
+        const completed = i < current;
+        return (
+          <li
+            key={label}
+            className="flex items-center gap-2 flex-1 min-w-0"
+          >
+            <div
+              className={cn(
+                "flex h-6 w-6 items-center justify-center rounded-full border text-xs font-medium",
+                completed
+                  ? "bg-primary text-primary-foreground border-primary"
+                  : active
+                    ? "border-primary text-primary"
+                    : "border-border text-muted-foreground",
+              )}
+            >
+              {completed ? <Check className="h-3 w-3" /> : i + 1}
+            </div>
+            <span
+              className={cn(
+                "text-sm truncate",
+                active || completed
+                  ? "text-foreground"
+                  : "text-muted-foreground",
+              )}
+            >
+              {label}
+            </span>
+            {i < steps.length - 1 && (
+              <div className="h-px flex-1 bg-border" />
+            )}
+          </li>
+        );
+      })}
+    </ol>
+  );
 }
 
 const MakeSkillPublicForm: React.FC<MakeSkillPublicFormProps> = ({
@@ -36,12 +78,10 @@ const MakeSkillPublicForm: React.FC<MakeSkillPublicFormProps> = ({
   const [currentStep, setCurrentStep] = useState(0);
   const [selectedSkills, setSelectedSkills] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(false);
-  const [form] = Form.useForm();
 
   const handleClose = () => {
     setCurrentStep(0);
     setSelectedSkills(new Set());
-    form.resetFields();
     onClose();
   };
 
@@ -251,40 +291,35 @@ const MakeSkillPublicForm: React.FC<MakeSkillPublicFormProps> = ({
         <DialogHeader>
           <DialogTitle>Publish to Skill Hub</DialogTitle>
         </DialogHeader>
-        <Form form={form} layout="vertical">
-          <Steps current={currentStep} className="mb-6">
-            <Step title="Select Skills" />
-            <Step title="Confirm" />
-          </Steps>
+        <Stepper current={currentStep} steps={["Select Skills", "Confirm"]} />
 
-          {currentStep === 0 ? renderStep1() : renderStep2()}
+        {currentStep === 0 ? renderStep1() : renderStep2()}
 
-          <div className="flex justify-between mt-6">
-            <Button
-              variant="outline"
-              onClick={
-                currentStep === 0 ? handleClose : () => setCurrentStep(0)
-              }
-            >
-              {currentStep === 0 ? "Cancel" : "Previous"}
-            </Button>
-            <div className="flex space-x-2">
-              {currentStep === 0 && (
-                <Button
-                  onClick={handleNext}
-                  disabled={selectedSkills.size === 0}
-                >
-                  Next
-                </Button>
-              )}
-              {currentStep === 1 && (
-                <Button onClick={handleSubmit} disabled={loading}>
-                  {loading ? "Publishing..." : "Publish to Hub"}
-                </Button>
-              )}
-            </div>
+        <div className="flex justify-between mt-6">
+          <Button
+            variant="outline"
+            onClick={
+              currentStep === 0 ? handleClose : () => setCurrentStep(0)
+            }
+          >
+            {currentStep === 0 ? "Cancel" : "Previous"}
+          </Button>
+          <div className="flex space-x-2">
+            {currentStep === 0 && (
+              <Button
+                onClick={handleNext}
+                disabled={selectedSkills.size === 0}
+              >
+                Next
+              </Button>
+            )}
+            {currentStep === 1 && (
+              <Button onClick={handleSubmit} disabled={loading}>
+                {loading ? "Publishing..." : "Publish to Hub"}
+              </Button>
+            )}
           </div>
-        </Form>
+        </div>
       </DialogContent>
     </Dialog>
   );

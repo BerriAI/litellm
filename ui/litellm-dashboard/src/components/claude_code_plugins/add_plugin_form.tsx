@@ -1,8 +1,23 @@
 import React, { useState } from "react";
-import { Modal, Form, Input, Select } from "antd";
+import { useForm, Controller } from "react-hook-form";
+import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Textarea } from "@/components/ui/textarea";
 import MessageManager from "@/components/molecules/message_manager";
-// eslint-disable-next-line litellm-ui/no-banned-ui-imports
-import { Button } from "@tremor/react";
 import { registerClaudeCodePlugin } from "../networking";
 import {
   validatePluginName,
@@ -12,14 +27,25 @@ import {
   parseKeywords,
 } from "./helpers";
 
-const { TextArea } = Input;
-const { Option } = Select;
-
 interface AddPluginFormProps {
   visible: boolean;
   onClose: () => void;
   accessToken: string | null;
   onSuccess: () => void;
+}
+
+interface FormValues {
+  skillUrl: string;
+  name: string;
+  domain?: string;
+  namespace?: string;
+  description?: string;
+  category?: string;
+  keywords?: string;
+  version?: string;
+  authorName?: string;
+  authorEmail?: string;
+  homepage?: string;
 }
 
 const PREDEFINED_CATEGORIES = [
@@ -113,7 +139,21 @@ const AddPluginForm: React.FC<AddPluginFormProps> = ({
   accessToken,
   onSuccess,
 }) => {
-  const [form] = Form.useForm();
+  const form = useForm<FormValues>({
+    defaultValues: {
+      skillUrl: "",
+      name: "",
+      domain: "",
+      namespace: "",
+      description: "",
+      category: "",
+      keywords: "",
+      version: "",
+      authorName: "",
+      authorEmail: "",
+    },
+  });
+  const { register, handleSubmit, setValue, getValues, reset, control, formState } = form;
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [urlPreview, setUrlPreview] = useState<ParsePreview | null>(null);
 
@@ -122,15 +162,14 @@ const AddPluginForm: React.FC<AddPluginFormProps> = ({
     const preview = parseGitHubUrl(val);
     setUrlPreview(preview);
     if (preview) {
-      // Auto-fill name only if it's currently empty
-      const currentName = form.getFieldValue("name");
+      const currentName = getValues("name");
       if (!currentName) {
-        form.setFieldsValue({ name: preview.suggestedName });
+        setValue("name", preview.suggestedName, { shouldValidate: false });
       }
     }
   };
 
-  const handleSubmit = async (values: any) => {
+  const onSubmit = async (values: FormValues) => {
     if (!accessToken) {
       MessageManager.error("No access token available");
       return;
@@ -185,7 +224,7 @@ const AddPluginForm: React.FC<AddPluginFormProps> = ({
 
       await registerClaudeCodePlugin(accessToken, pluginData);
       MessageManager.success("Skill registered successfully");
-      form.resetFields();
+      reset();
       setUrlPreview(null);
       onSuccess();
       onClose();
@@ -198,168 +237,247 @@ const AddPluginForm: React.FC<AddPluginFormProps> = ({
   };
 
   const handleCancel = () => {
-    form.resetFields();
+    reset();
     setUrlPreview(null);
     onClose();
   };
 
+  const urlRegister = register("skillUrl", {
+    required: "Please enter a GitHub URL",
+  });
+
   return (
-    <Modal
-      title="Add New Skill"
+    <Dialog
       open={visible}
-      onCancel={handleCancel}
-      footer={null}
-      width={700}
-      className="top-8"
+      onOpenChange={(o) => (!o ? handleCancel() : undefined)}
     >
-      <Form
-        form={form}
-        layout="vertical"
-        onFinish={handleSubmit}
-        className="mt-4"
-      >
-        {/* Smart URL Input */}
-        <Form.Item
-          label="GitHub URL"
-          name="skillUrl"
-          rules={[{ required: true, message: "Please enter a GitHub URL" }]}
-          tooltip="Paste a GitHub URL — repo, folder, or file link. E.g. github.com/org/repo or github.com/org/repo/tree/main/my-skill"
+      <DialogContent className="max-w-[700px] max-h-[90vh] overflow-y-auto top-8">
+        <DialogHeader>
+          <DialogTitle>Add New Skill</DialogTitle>
+        </DialogHeader>
+        <form
+          onSubmit={handleSubmit(onSubmit)}
+          className="mt-4 space-y-4"
         >
-          <Input
-            placeholder="https://github.com/org/repo/tree/main/my-skill"
-            className="rounded-lg"
-            onChange={handleUrlChange}
-          />
-        </Form.Item>
-
-        {/* Parsed preview */}
-        {urlPreview && (
-          <div className="mb-4 px-3 py-2 bg-blue-50 border border-blue-200 rounded-lg text-sm text-blue-700">
-            Detected: {urlPreview.label}
+          {/* Smart URL Input */}
+          <div className="space-y-2">
+            <Label htmlFor="skillUrl">
+              GitHub URL <span className="text-destructive">*</span>
+            </Label>
+            <Input
+              id="skillUrl"
+              placeholder="https://github.com/org/repo/tree/main/my-skill"
+              className="rounded-lg"
+              aria-invalid={!!formState.errors.skillUrl}
+              {...urlRegister}
+              onChange={(e) => {
+                urlRegister.onChange(e);
+                handleUrlChange(e);
+              }}
+            />
+            <p className="text-xs text-muted-foreground">
+              Paste a GitHub URL — repo, folder, or file link. E.g.
+              github.com/org/repo or github.com/org/repo/tree/main/my-skill
+            </p>
+            {formState.errors.skillUrl && (
+              <p className="text-sm text-destructive">
+                {formState.errors.skillUrl.message as string}
+              </p>
+            )}
           </div>
-        )}
 
-        {/* Skill Name */}
-        <Form.Item
-          label="Skill Name"
-          name="name"
-          rules={[
-            { required: true, message: "Please enter skill name" },
-            {
-              pattern: /^[a-z0-9-]+$/,
-              message: "Name must be kebab-case (lowercase, numbers, hyphens only)",
-            },
-          ]}
-          tooltip="Unique identifier in kebab-case format (e.g., my-skill)"
-        >
-          <Input placeholder="my-skill" className="rounded-lg" />
-        </Form.Item>
+          {/* Parsed preview */}
+          {urlPreview && (
+            <div className="px-3 py-2 bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-900 rounded-lg text-sm text-blue-700 dark:text-blue-300">
+              Detected: {urlPreview.label}
+            </div>
+          )}
 
-        {/* Domain and Namespace — side by side */}
-        <div className="flex gap-4">
-          <Form.Item
-            label="Domain (Optional)"
-            name="domain"
-            tooltip="Top-level grouping in the Skill Hub (e.g., Productivity)"
-            className="flex-1"
-          >
-            <Input placeholder="Productivity" className="rounded-lg" />
-          </Form.Item>
-          <Form.Item
-            label="Namespace (Optional)"
-            name="namespace"
-            tooltip="Sub-grouping within domain (e.g., workflows)"
-            className="flex-1"
-          >
-            <Input placeholder="workflows" className="rounded-lg" />
-          </Form.Item>
-        </div>
+          {/* Skill Name */}
+          <div className="space-y-2">
+            <Label htmlFor="name">
+              Skill Name <span className="text-destructive">*</span>
+            </Label>
+            <Input
+              id="name"
+              placeholder="my-skill"
+              className="rounded-lg"
+              aria-invalid={!!formState.errors.name}
+              {...register("name", {
+                required: "Please enter skill name",
+                pattern: {
+                  value: /^[a-z0-9-]+$/,
+                  message:
+                    "Name must be kebab-case (lowercase, numbers, hyphens only)",
+                },
+              })}
+            />
+            <p className="text-xs text-muted-foreground">
+              Unique identifier in kebab-case format (e.g., my-skill)
+            </p>
+            {formState.errors.name && (
+              <p className="text-sm text-destructive">
+                {formState.errors.name.message as string}
+              </p>
+            )}
+          </div>
 
-        {/* Description */}
-        <Form.Item
-          label="Description (Optional)"
-          name="description"
-          tooltip="Brief description of what the skill does"
-        >
-          <TextArea
-            rows={3}
-            placeholder="A skill that helps with..."
-            maxLength={500}
-            className="rounded-lg"
-          />
-        </Form.Item>
+          {/* Domain and Namespace — side by side */}
+          <div className="flex gap-4">
+            <div className="flex-1 space-y-2">
+              <Label htmlFor="domain">Domain (Optional)</Label>
+              <Input
+                id="domain"
+                placeholder="Productivity"
+                className="rounded-lg"
+                {...register("domain")}
+              />
+              <p className="text-xs text-muted-foreground">
+                Top-level grouping in the Skill Hub (e.g., Productivity)
+              </p>
+            </div>
+            <div className="flex-1 space-y-2">
+              <Label htmlFor="namespace">Namespace (Optional)</Label>
+              <Input
+                id="namespace"
+                placeholder="workflows"
+                className="rounded-lg"
+                {...register("namespace")}
+              />
+              <p className="text-xs text-muted-foreground">
+                Sub-grouping within domain (e.g., workflows)
+              </p>
+            </div>
+          </div>
 
-        {/* Category */}
-        <Form.Item
-          label="Category (Optional)"
-          name="category"
-          tooltip="Select a category or enter a custom one"
-        >
-          <Select
-            placeholder="Select or type a category"
-            allowClear
-            showSearch
-            optionFilterProp="children"
-            className="rounded-lg"
-          >
-            {PREDEFINED_CATEGORIES.map((cat) => (
-              <Option key={cat} value={cat}>
-                {cat}
-              </Option>
-            ))}
-          </Select>
-        </Form.Item>
+          {/* Description */}
+          <div className="space-y-2">
+            <Label htmlFor="description">Description (Optional)</Label>
+            <Textarea
+              id="description"
+              rows={3}
+              placeholder="A skill that helps with..."
+              maxLength={500}
+              className="rounded-lg"
+              {...register("description")}
+            />
+            <p className="text-xs text-muted-foreground">
+              Brief description of what the skill does
+            </p>
+          </div>
 
-        {/* Keywords */}
-        <Form.Item
-          label="Keywords (Optional)"
-          name="keywords"
-          tooltip="Comma-separated list of keywords for search"
-        >
-          <Input placeholder="search, web, api" className="rounded-lg" />
-        </Form.Item>
+          {/* Category */}
+          <div className="space-y-2">
+            <Label htmlFor="category">Category (Optional)</Label>
+            <Controller
+              control={control}
+              name="category"
+              render={({ field }) => (
+                <Select
+                  value={field.value || ""}
+                  onValueChange={(v) => field.onChange(v === "__none__" ? "" : v)}
+                >
+                  <SelectTrigger id="category" className="rounded-lg">
+                    <SelectValue placeholder="Select a category" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__none__">
+                      <span className="text-muted-foreground">None</span>
+                    </SelectItem>
+                    {PREDEFINED_CATEGORIES.map((cat) => (
+                      <SelectItem key={cat} value={cat}>
+                        {cat}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
+            />
+          </div>
 
-        {/* Version */}
-        <Form.Item
-          label="Version (Optional)"
-          name="version"
-          tooltip="Semantic version (e.g., 1.0.0)"
-        >
-          <Input placeholder="1.0.0" className="rounded-lg" />
-        </Form.Item>
+          {/* Keywords */}
+          <div className="space-y-2">
+            <Label htmlFor="keywords">Keywords (Optional)</Label>
+            <Input
+              id="keywords"
+              placeholder="search, web, api"
+              className="rounded-lg"
+              {...register("keywords")}
+            />
+            <p className="text-xs text-muted-foreground">
+              Comma-separated list of keywords for search
+            </p>
+          </div>
 
-        {/* Author Name */}
-        <Form.Item
-          label="Author Name (Optional)"
-          name="authorName"
-          tooltip="Name of the skill author or organization"
-        >
-          <Input placeholder="Your Name or Organization" className="rounded-lg" />
-        </Form.Item>
+          {/* Version */}
+          <div className="space-y-2">
+            <Label htmlFor="version">Version (Optional)</Label>
+            <Input
+              id="version"
+              placeholder="1.0.0"
+              className="rounded-lg"
+              {...register("version")}
+            />
+            <p className="text-xs text-muted-foreground">
+              Semantic version (e.g., 1.0.0)
+            </p>
+          </div>
 
-        {/* Author Email */}
-        <Form.Item
-          label="Author Email (Optional)"
-          name="authorEmail"
-          rules={[{ type: "email", message: "Please enter a valid email" }]}
-          tooltip="Contact email for the skill author"
-        >
-          <Input type="email" placeholder="author@example.com" className="rounded-lg" />
-        </Form.Item>
+          {/* Author Name */}
+          <div className="space-y-2">
+            <Label htmlFor="authorName">Author Name (Optional)</Label>
+            <Input
+              id="authorName"
+              placeholder="Your Name or Organization"
+              className="rounded-lg"
+              {...register("authorName")}
+            />
+            <p className="text-xs text-muted-foreground">
+              Name of the skill author or organization
+            </p>
+          </div>
 
-        {/* Submit Buttons */}
-        <Form.Item className="mb-0 mt-6">
-          <div className="flex justify-end gap-2">
-            <Button variant="secondary" onClick={handleCancel} disabled={isSubmitting}>
+          {/* Author Email */}
+          <div className="space-y-2">
+            <Label htmlFor="authorEmail">Author Email (Optional)</Label>
+            <Input
+              id="authorEmail"
+              type="email"
+              placeholder="author@example.com"
+              className="rounded-lg"
+              aria-invalid={!!formState.errors.authorEmail}
+              {...register("authorEmail", {
+                validate: (v) =>
+                  !v || isValidEmail(v) || "Please enter a valid email",
+              })}
+            />
+            <p className="text-xs text-muted-foreground">
+              Contact email for the skill author
+            </p>
+            {formState.errors.authorEmail && (
+              <p className="text-sm text-destructive">
+                {formState.errors.authorEmail.message as string}
+              </p>
+            )}
+          </div>
+
+          {/* Submit Buttons */}
+          <div className="flex justify-end gap-2 pt-6 mt-6">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={handleCancel}
+              disabled={isSubmitting}
+            >
               Cancel
             </Button>
-            <Button type="submit" loading={isSubmitting}>
+            <Button type="submit" disabled={isSubmitting}>
               {isSubmitting ? "Adding..." : "Add Skill"}
             </Button>
           </div>
-        </Form.Item>
-      </Form>
-    </Modal>
+        </form>
+      </DialogContent>
+    </Dialog>
   );
 };
 
