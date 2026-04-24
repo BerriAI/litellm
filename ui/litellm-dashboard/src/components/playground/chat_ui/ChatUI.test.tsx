@@ -67,34 +67,27 @@ describe("ChatUI", () => {
       expect(getByText("Test Key")).toBeInTheDocument();
     });
 
-    // Find the endpoint selector by looking for the "Endpoint Type:" text and its associated Select
+    // The endpoint selector is a shadcn Select (role=combobox). There is one
+    // other combobox on the page (MCP servers) so we scope by the "Endpoint
+    // Type" label.
     const endpointTypeText = getByText("Endpoint Type");
-    const selectContainer = endpointTypeText.parentElement;
-    const selectElement = selectContainer?.querySelector(".ant-select-selector");
+    const selectContainer = endpointTypeText.parentElement as HTMLElement;
+    const endpointCombobox = selectContainer.querySelector('[role="combobox"]') as HTMLElement;
+    expect(endpointCombobox).toBeInTheDocument();
 
-    expect(selectElement).toBeInTheDocument();
+    const user = (await import("@testing-library/user-event")).default.setup();
+    await user.click(endpointCombobox);
 
-    // Click on the select to open the dropdown
-    if (selectElement) {
-      fireEvent.mouseDown(selectElement);
-    }
-
-    // Wait for the dropdown to appear and find the audio_speech option
-    await waitFor(() => {
-      const audioSpeechOption = screen.getByText("/v1/audio/speech");
-      expect(audioSpeechOption).toBeInTheDocument();
-    });
-
-    // Click on the audio_speech option
-    const audioSpeechOption = screen.getByText("/v1/audio/speech");
-    fireEvent.click(audioSpeechOption);
+    // Wait for the dropdown to appear and pick the audio_speech option
+    const audioSpeechOption = await screen.findByRole("option", { name: "/v1/audio/speech" });
+    await user.click(audioSpeechOption);
 
     // Verify the voice selector appears
     await waitFor(() => {
       expect(getByText("Voice")).toBeInTheDocument();
     });
 
-    // Verify the voice select component is present
+    // The Voice select is still an antd Select component
     const voiceText = getByText("Voice");
     const voiceSelectContainer = voiceText.parentElement;
     const voiceSelectElement = voiceSelectContainer?.querySelector(".ant-select");
@@ -154,14 +147,14 @@ describe("ChatUI", () => {
       expect(getByText("Test Key")).toBeInTheDocument();
     });
 
-    // Open endpoint selector and explicitly select /v1/chat/completions
+    // Open endpoint selector (shadcn Select) and explicitly select /v1/chat/completions
     const endpointTypeText = getByText("Endpoint Type");
-    const endpointSelect = endpointTypeText.parentElement?.querySelector(".ant-select-selector");
-    expect(endpointSelect).toBeTruthy();
-    act(() => {
-      fireEvent.mouseDown(endpointSelect!);
-      fireEvent.click(screen.getByText("/v1/chat/completions"));
-    });
+    const endpointCombobox = endpointTypeText.parentElement?.querySelector('[role="combobox"]') as HTMLElement;
+    expect(endpointCombobox).toBeTruthy();
+    const user = (await import("@testing-library/user-event")).default.setup();
+    await user.click(endpointCombobox);
+    const chatOption = await screen.findByRole("option", { name: "/v1/chat/completions" });
+    await user.click(chatOption);
 
     // Open model selector
     const selectModelLabel = getByText("Select Model");
@@ -234,21 +227,14 @@ describe("ChatUI", () => {
     });
 
     const endpointTypeText = screen.getByText("Endpoint Type");
-    const endpointSelect = endpointTypeText.parentElement?.querySelector(".ant-select-selector") as HTMLElement | null;
-    expect(endpointSelect).not.toBeNull();
+    const endpointCombobox = endpointTypeText.parentElement?.querySelector('[role="combobox"]') as HTMLElement | null;
+    expect(endpointCombobox).not.toBeNull();
 
+    const user = (await import("@testing-library/user-event")).default.setup();
     const selectEndpointOption = async (label: string) => {
-      act(() => {
-        fireEvent.mouseDown(endpointSelect!);
-      });
-
-      await waitFor(() => {
-        expect(screen.getByText(label)).toBeInTheDocument();
-      });
-
-      act(() => {
-        fireEvent.click(screen.getByText(label));
-      });
+      await user.click(endpointCombobox!);
+      const option = await screen.findByRole("option", { name: label });
+      await user.click(option);
     };
 
     const getMcpSelect = () =>
@@ -391,24 +377,25 @@ describe("ChatUI", () => {
     const mcpServersText = screen.queryByText("MCP Servers");
     expect(mcpServersText).toBeInTheDocument();
 
-    if (mcpServersText) {
-      const selectContainer = mcpServersText.parentElement?.nextElementSibling;
-      const selectElement = selectContainer?.querySelector(".ant-select-selector");
-      expect(selectElement).toBeInTheDocument();
+    // The MCP Servers select is the antd Select whose placeholder is "Select
+    // MCP servers". It lives below the "MCP Servers" label.
+    const mcpSelectInput = document.querySelector<HTMLElement>(
+      "input.ant-select-selection-search-input",
+    );
+    expect(mcpSelectInput).toBeInTheDocument();
 
-      if (selectElement) {
-        fireEvent.mouseDown(selectElement);
+    const mcpSelect = mcpSelectInput!.closest(".ant-select") as HTMLElement;
+    const selector = mcpSelect.querySelector(".ant-select-selector") as HTMLElement;
+    fireEvent.mouseDown(selector);
 
-        await waitFor(() => {
-          const allServersOption = screen.queryByText("All MCP Servers");
-          if (allServersOption) {
-            expect(allServersOption).toBeInTheDocument();
-          }
-        });
-
-        const searchInput = document.querySelector(".ant-select-selection-search-input");
-        expect(searchInput).toBeInTheDocument();
+    await waitFor(() => {
+      const allServersOption = screen.queryByText("All MCP Servers");
+      if (allServersOption) {
+        expect(allServersOption).toBeInTheDocument();
       }
-    }
+    });
+
+    // showSearch on antd Select yields a search input inside .ant-select
+    expect(mcpSelect.querySelector("input.ant-select-selection-search-input")).toBeInTheDocument();
   });
 });

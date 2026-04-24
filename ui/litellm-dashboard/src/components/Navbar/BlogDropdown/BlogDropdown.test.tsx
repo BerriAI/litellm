@@ -36,7 +36,7 @@ const MOCK_POSTS = [
 
 async function openDropdown() {
   const user = userEvent.setup();
-  await user.hover(screen.getByRole("button", { name: /blog/i }));
+  await user.click(screen.getByRole("button", { name: /blog/i }));
 }
 
 describe("BlogDropdown", () => {
@@ -74,7 +74,7 @@ describe("BlogDropdown", () => {
         await openDropdown();
 
         await waitFor(() => {
-          expect(document.querySelector(".anticon-loading")).toBeInTheDocument();
+          expect(document.querySelector(".lucide-loader-circle")).toBeInTheDocument();
         });
       });
     });
@@ -108,7 +108,7 @@ describe("BlogDropdown", () => {
         const user = userEvent.setup();
         renderWithProviders(<BlogDropdown />);
 
-        await user.hover(screen.getByRole("button", { name: /blog/i }));
+        await user.click(screen.getByRole("button", { name: /blog/i }));
 
         await waitFor(() => {
           expect(screen.getByRole("button", { name: /retry/i })).toBeInTheDocument();
@@ -177,7 +177,7 @@ describe("BlogDropdown", () => {
         await openDropdown();
 
         await waitFor(() => {
-          const link = screen.getByRole("link", { name: /post one/i });
+          const link = screen.getByRole("menuitem", { name: /post one/i });
           expect(link).toHaveAttribute("href", "https://example.com/1");
           expect(link).toHaveAttribute("target", "_blank");
           expect(link).toHaveAttribute("rel", "noopener noreferrer");
@@ -204,7 +204,7 @@ describe("BlogDropdown", () => {
         await openDropdown();
 
         await waitFor(() => {
-          const viewAllLink = screen.getByRole("link", { name: /view all posts/i });
+          const viewAllLink = screen.getByRole("menuitem", { name: /view all posts/i });
           expect(viewAllLink).toHaveAttribute("href", "https://docs.litellm.ai/blog");
           expect(viewAllLink).toHaveAttribute("target", "_blank");
           expect(viewAllLink).toHaveAttribute("rel", "noopener noreferrer");
