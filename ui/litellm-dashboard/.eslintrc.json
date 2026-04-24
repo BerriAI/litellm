@@ -182,7 +182,8 @@
         "src/components/EntityUsageExport/UsageExportHeader.tsx",
         "src/components/EntityUsageExport/ExportSummary.tsx",
         "src/components/UsagePage/components/EntityUsage/TopModelView.tsx",
-        "src/components/UsagePage/components/KeyModelUsageView.tsx"
+        "src/components/UsagePage/components/KeyModelUsageView.tsx",
+        "src/components/per_user_usage.tsx"
       ],
       "rules": {
         "litellm-ui/no-banned-ui-imports": "off",

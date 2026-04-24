@@ -1,19 +1,19 @@
 import React, { useCallback, useState, useEffect } from "react";
-// eslint-disable-next-line litellm-ui/no-banned-ui-imports
+import { BarChart } from "@tremor/react";
 import {
   Table,
-  TableHead,
-  TableRow,
-  TableHeaderCell,
   TableBody,
   TableCell,
-  BarChart,
-  Tab,
-  TabGroup,
-  TabList,
-  TabPanel,
-  TabPanels,
-} from "@tremor/react";
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import {
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
+} from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { perUserAnalyticsCall } from "./networking";
 
@@ -99,27 +99,26 @@ const PerUserUsage: React.FC<PerUserUsageProps> = ({ accessToken, selectedTags, 
         Individual developer usage metrics
       </p>
 
-      <TabGroup>
-        <TabList className="mb-6">
-          <Tab>User Details</Tab>
-          <Tab>Usage Distribution</Tab>
-        </TabList>
+      <Tabs defaultValue="details">
+        <TabsList className="mb-6">
+          <TabsTrigger value="details">User Details</TabsTrigger>
+          <TabsTrigger value="distribution">Usage Distribution</TabsTrigger>
+        </TabsList>
 
-        <TabPanels>
-          {/* Tab 1: Existing User Details Table */}
-          <TabPanel>
+        {/* Tab 1: Existing User Details Table */}
+        <TabsContent value="details">
             <Table>
-              <TableHead>
+              <TableHeader>
                 <TableRow>
-                  <TableHeaderCell>User ID</TableHeaderCell>
-                  <TableHeaderCell>User Email</TableHeaderCell>
-                  <TableHeaderCell>User Agent</TableHeaderCell>
-                  <TableHeaderCell className="text-right">Success Generations</TableHeaderCell>
-                  <TableHeaderCell className="text-right">Total Tokens</TableHeaderCell>
-                  <TableHeaderCell className="text-right">Failed Requests</TableHeaderCell>
-                  <TableHeaderCell className="text-right">Total Cost</TableHeaderCell>
+                  <TableHead>User ID</TableHead>
+                  <TableHead>User Email</TableHead>
+                  <TableHead>User Agent</TableHead>
+                  <TableHead className="text-right">Success Generations</TableHead>
+                  <TableHead className="text-right">Total Tokens</TableHead>
+                  <TableHead className="text-right">Failed Requests</TableHead>
+                  <TableHead className="text-right">Total Cost</TableHead>
                 </TableRow>
-              </TableHead>
+              </TableHeader>
               <TableBody>
                 {perUserData.results
                   .slice(0, 10)
@@ -184,10 +183,10 @@ const PerUserUsage: React.FC<PerUserUsageProps> = ({ accessToken, selectedTags, 
                 </div>
               </div>
             )}
-          </TabPanel>
+        </TabsContent>
 
-          {/* Tab 2: Usage Distribution Histogram */}
-          <TabPanel>
+        {/* Tab 2: Usage Distribution Histogram */}
+        <TabsContent value="distribution">
             <div className="mb-4">
               <h3 className="text-lg font-semibold">
                 User Usage Distribution
@@ -277,9 +276,8 @@ const PerUserUsage: React.FC<PerUserUsageProps> = ({ accessToken, selectedTags, 
               showLegend={true}
               stack={true}
             />
-          </TabPanel>
-        </TabPanels>
-      </TabGroup>
+        </TabsContent>
+      </Tabs>
     </div>
   );
 };
