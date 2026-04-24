@@ -63,11 +63,7 @@ def _get_deployment_credentials_for_model_id(model_id: Any) -> Dict[str, Any]:
     if deployment and deployment.litellm_params:
         return deployment.litellm_params.model_dump(exclude_none=True)
 
-    # Final fallback: lookup helper that supports provider-aware resolution.
-    deployment_creds = llm_router.get_deployment_credentials_with_provider(
-        model_id=str(model_id)
-    )
-    return deployment_creds or {}
+    return {}
 
 
 def _load_endpoints_config() -> Dict:
@@ -233,7 +229,7 @@ async def _process_binary_request(
         custom_llm_provider=custom_llm_provider,
     )
 
-    if decoded_model_id and not litellm_params.get("model_id"):
+    if decoded_model_id:
         litellm_params["model_id"] = decoded_model_id
 
     # Resolve provider credentials for routed deployment, e.g. Azure multi-region api_base.
