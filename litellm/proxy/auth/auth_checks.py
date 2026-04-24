@@ -905,6 +905,63 @@ async def get_default_end_user_budget(
         return None
 
 
+@log_db_metrics
+async def get_team_member_default_budget(
+    budget_id: str,
+    prisma_client: Optional[PrismaClient],
+    user_api_key_cache: DualCache,
+) -> Optional[LiteLLM_BudgetTable]:
+    """
+    Fetches the team-level default per-member budget referenced by team.metadata["team_member_budget_id"].
+
+    This budget is applied to team members whose TeamMembership row has no
+    linked budget. Results are cached for performance.
+
+    Args:
+        budget_id: The budget_id pulled from team.metadata["team_member_budget_id"]
+        prisma_client: Database client instance
+        user_api_key_cache: Cache for storing/retrieving budget data
+
+    Returns:
+        LiteLLM_BudgetTable if found, None otherwise
+    """
+    if prisma_client is None:
+        return None
+
+    cache_key = f"team_member_default_budget:{budget_id}"
+
+    cached_budget = await user_api_key_cache.async_get_cache(key=cache_key)
+    if isinstance(cached_budget, LiteLLM_BudgetTable):
+        return cached_budget
+    if isinstance(cached_budget, dict):
+        return LiteLLM_BudgetTable(**cached_budget)
+
+    try:
+        budget_record = await prisma_client.db.litellm_budgettable.find_unique(
+            where={"budget_id": budget_id}
+        )
+
+        if budget_record is None:
+            verbose_proxy_logger.warning(
+                f"Team-default member budget not found in database: {budget_id}"
+            )
+            return None
+
+        await user_api_key_cache.async_set_cache(
+            key=cache_key,
+            value=budget_record.dict(),
+            ttl=DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL,
+        )
+
+        return LiteLLM_BudgetTable(**budget_record.dict())
+
+    except Exception:
+        verbose_proxy_logger.exception(
+            f"Error fetching team-default member budget {budget_id}"
+        )
+        return None
+
+
 async def _apply_default_budget_to_end_user(
     end_user_obj: LiteLLM_EndUserTable,
     prisma_client: PrismaClient,
@@ -3230,13 +3287,31 @@ async def _check_team_member_budget(
             proxy_logging_obj=proxy_logging_obj,
         )
 
+        # Per-member override wins; otherwise fall back to the team-level
+        # default configured via team.metadata["team_member_budget_id"].
+        team_member_budget: Optional[float] = None
         if (
             team_membership is not None
             and team_membership.litellm_budget_table is not None
-            and team_membership.litellm_budget_table.max_budget is not None
         ):
             team_member_budget = team_membership.litellm_budget_table.max_budget
-            team_member_spend = team_membership.spend or 0.0
+        else:
+            default_budget_id = (team_object.metadata or {}).get(
+                "team_member_budget_id"
+            )
+            if isinstance(default_budget_id, str):
+                default_budget = await get_team_member_default_budget(
+                    budget_id=default_budget_id,
+                    prisma_client=prisma_client,
+                    user_api_key_cache=user_api_key_cache,
+                )
+                if default_budget is not None:
+                    team_member_budget = default_budget.max_budget
+
+        if team_member_budget is not None:
+            team_member_spend = (
+                team_membership.spend if team_membership is not None else 0.0
+            ) or 0.0
 
             # Read from cross-pod counter (Redis-first) if available
             from litellm.proxy.proxy_server import get_current_spend
