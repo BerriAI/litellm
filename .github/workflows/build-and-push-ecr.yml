@@ -26,7 +26,7 @@ jobs:
 
     env:
       AWS_REGION: us-east-1
-      ECR_REGISTRY: 572630832277.dkr.ecr.us-east-1.amazonaws.com
+      ECR_REGISTRY: 246511608293.dkr.ecr.us-east-1.amazonaws.com
       ECR_REPO: force-multiplier/litellm
 
     steps:
@@ -42,7 +42,7 @@ jobs:
         uses: docker/setup-buildx-action@v3
 
       - name: Configure AWS credentials (OIDC federation)
-        # Assumes IAM role github-actions-arcadia-litellm-ecr in account 572630832277.
+        # Assumes IAM role github-actions-arcadia-litellm-ecr in account 246511608293.
         # Role trust is scoped to repo:arcadia/litellm:ref:refs/heads/main;
         # inline policy grants only ECR push on force-multiplier/litellm.
         uses: aws-actions/configure-aws-credentials@v4
