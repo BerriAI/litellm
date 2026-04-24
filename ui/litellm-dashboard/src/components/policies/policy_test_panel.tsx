@@ -1,9 +1,18 @@
-import React, { useCallback, useState, useEffect } from "react";
-import { Form, Select } from "antd";
+import React, { useCallback, useState, useEffect, useMemo } from "react";
+import { Controller, FormProvider, useForm, useFormContext } from "react-hook-form";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { cn } from "@/lib/utils";
-import { AlertCircle, Info } from "lucide-react";
+import { AlertCircle, Info, X } from "lucide-react";
 import {
   resolvePoliciesCall,
   teamListCall,
@@ -27,8 +36,226 @@ interface ResolveResult {
   matched_policies: PolicyMatchDetail[];
 }
 
+interface PolicyTestFormValues {
+  team_alias: string | undefined;
+  key_alias: string | undefined;
+  model: string | undefined;
+  tags: string[];
+}
+
+function ClearableSelect({
+  value,
+  onChange,
+  options,
+  placeholder,
+}: {
+  value: string | undefined;
+  onChange: (v: string | undefined) => void;
+  options: { label: string; value: string }[];
+  placeholder: string;
+}) {
+  return (
+    <div className="flex items-center gap-2">
+      <Select value={value ?? ""} onValueChange={(v) => onChange(v || undefined)}>
+        <SelectTrigger className="flex-1">
+          <SelectValue placeholder={placeholder} />
+        </SelectTrigger>
+        <SelectContent>
+          {options.length === 0 ? (
+            <div className="py-2 px-3 text-sm text-muted-foreground">
+              No options
+            </div>
+          ) : (
+            options.map((opt) => (
+              <SelectItem key={opt.value} value={opt.value}>
+                {opt.label}
+              </SelectItem>
+            ))
+          )}
+        </SelectContent>
+      </Select>
+      {value && (
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          onClick={() => onChange(undefined)}
+        >
+          Clear
+        </Button>
+      )}
+    </div>
+  );
+}
+
+function TagInput({
+  value,
+  onChange,
+  placeholder,
+}: {
+  value: string[];
+  onChange: (next: string[]) => void;
+  placeholder: string;
+}) {
+  const [draft, setDraft] = useState("");
+  const selected = value ?? [];
+
+  const commit = (raw: string) => {
+    const parts = raw
+      .split(/[,\s]/)
+      .map((p) => p.trim())
+      .filter(Boolean);
+    const next = [...selected];
+    for (const p of parts) {
+      if (!next.includes(p)) next.push(p);
+    }
+    onChange(next);
+    setDraft("");
+  };
+
+  return (
+    <div className="space-y-2">
+      <Input
+        value={draft}
+        placeholder={placeholder}
+        onChange={(e) => setDraft(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === ",") {
+            e.preventDefault();
+            if (draft.trim()) commit(draft);
+          } else if (e.key === "Backspace" && !draft && selected.length > 0) {
+            onChange(selected.slice(0, -1));
+          }
+        }}
+        onBlur={() => {
+          if (draft.trim()) commit(draft);
+        }}
+      />
+      {selected.length > 0 && (
+        <div className="flex flex-wrap gap-1">
+          {selected.map((v) => (
+            <Badge
+              key={v}
+              variant="secondary"
+              className="flex items-center gap-1"
+            >
+              {v}
+              <button
+                type="button"
+                onClick={() => onChange(selected.filter((s) => s !== v))}
+                className="inline-flex items-center justify-center rounded-full hover:bg-muted-foreground/20"
+                aria-label={`Remove ${v}`}
+              >
+                <X size={12} />
+              </button>
+            </Badge>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+interface FieldsProps {
+  availableTeams: string[];
+  availableKeys: string[];
+  availableModels: string[];
+}
+
+function PolicyTestFields({
+  availableTeams,
+  availableKeys,
+  availableModels,
+}: FieldsProps) {
+  const { control } = useFormContext<PolicyTestFormValues>();
+
+  const teamOptions = useMemo(
+    () => availableTeams.map((t) => ({ label: t, value: t })),
+    [availableTeams],
+  );
+  const keyOptions = useMemo(
+    () => availableKeys.map((k) => ({ label: k, value: k })),
+    [availableKeys],
+  );
+  const modelOptions = useMemo(
+    () => availableModels.map((m) => ({ label: m, value: m })),
+    [availableModels],
+  );
+
+  return (
+    <div className="grid grid-cols-2 gap-4">
+      <div className="space-y-2">
+        <Label>Team Alias</Label>
+        <Controller
+          control={control}
+          name="team_alias"
+          render={({ field }) => (
+            <ClearableSelect
+              value={field.value}
+              onChange={field.onChange}
+              options={teamOptions}
+              placeholder="Select a team alias"
+            />
+          )}
+        />
+      </div>
+      <div className="space-y-2">
+        <Label>Key Alias</Label>
+        <Controller
+          control={control}
+          name="key_alias"
+          render={({ field }) => (
+            <ClearableSelect
+              value={field.value}
+              onChange={field.onChange}
+              options={keyOptions}
+              placeholder="Select a key alias"
+            />
+          )}
+        />
+      </div>
+      <div className="space-y-2">
+        <Label>Model</Label>
+        <Controller
+          control={control}
+          name="model"
+          render={({ field }) => (
+            <ClearableSelect
+              value={field.value}
+              onChange={field.onChange}
+              options={modelOptions}
+              placeholder="Select a model"
+            />
+          )}
+        />
+      </div>
+      <div className="space-y-2">
+        <Label>Tags</Label>
+        <Controller
+          control={control}
+          name="tags"
+          render={({ field }) => (
+            <TagInput
+              value={field.value ?? []}
+              onChange={field.onChange}
+              placeholder="Type a tag and press Enter"
+            />
+          )}
+        />
+      </div>
+    </div>
+  );
+}
+
 const PolicyTestPanel: React.FC<PolicyTestPanelProps> = ({ accessToken }) => {
-  const [form] = Form.useForm();
+  const form = useForm<PolicyTestFormValues>({
+    defaultValues: {
+      team_alias: undefined,
+      key_alias: undefined,
+      model: undefined,
+      tags: [],
+    },
+  });
   const [isLoading, setIsLoading] = useState(false);
   const [result, setResult] = useState<ResolveResult | null>(null);
   const [hasSearched, setHasSearched] = useState(false);
@@ -103,7 +330,7 @@ const PolicyTestPanel: React.FC<PolicyTestPanelProps> = ({ accessToken }) => {
     setIsLoading(true);
     setHasSearched(true);
     try {
-      const values = form.getFieldsValue(true);
+      const values = form.getValues();
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const context: any = {};
       if (values.team_alias) context.team_alias = values.team_alias;
@@ -122,7 +349,12 @@ const PolicyTestPanel: React.FC<PolicyTestPanelProps> = ({ accessToken }) => {
   };
 
   const handleReset = () => {
-    form.resetFields();
+    form.reset({
+      team_alias: undefined,
+      key_alias: undefined,
+      model: undefined,
+      tags: [],
+    });
     setResult(null);
     setHasSearched(false);
   };
@@ -139,64 +371,35 @@ const PolicyTestPanel: React.FC<PolicyTestPanelProps> = ({ accessToken }) => {
           </p>
         </div>
 
-        <Form form={form} layout="vertical">
-          <div className="grid grid-cols-2 gap-4">
-            <Form.Item name="team_alias" label="Team Alias" className="mb-3">
-              <Select
-                showSearch
-                allowClear
-                placeholder="Select or type a team alias"
-                options={availableTeams.map((t) => ({ label: t, value: t }))}
-                filterOption={(input, option) =>
-                  (option?.label ?? "").toLowerCase().includes(input.toLowerCase())
-                }
-              />
-            </Form.Item>
-            <Form.Item name="key_alias" label="Key Alias" className="mb-3">
-              <Select
-                showSearch
-                allowClear
-                placeholder="Select or type a key alias"
-                options={availableKeys.map((k) => ({ label: k, value: k }))}
-                filterOption={(input, option) =>
-                  (option?.label ?? "").toLowerCase().includes(input.toLowerCase())
-                }
-              />
-            </Form.Item>
-            <Form.Item name="model" label="Model" className="mb-3">
-              <Select
-                showSearch
-                allowClear
-                placeholder="Select or type a model"
-                options={availableModels.map((m) => ({ label: m, value: m }))}
-                filterOption={(input, option) =>
-                  (option?.label ?? "").toLowerCase().includes(input.toLowerCase())
-                }
-              />
-            </Form.Item>
-            <Form.Item name="tags" label="Tags" className="mb-3">
-              <Select
-                mode="tags"
-                placeholder="Type a tag and press Enter"
-                tokenSeparators={[",", " "]}
-                notFoundContent={null}
-                suffixIcon={null}
-                open={false}
-              />
-            </Form.Item>
-          </div>
-          <div className="flex space-x-2">
-            <Button
-              onClick={handleTest}
-              disabled={!accessToken || isLoading}
-            >
-              {isLoading ? "Simulating..." : "Simulate"}
-            </Button>
-            <Button variant="secondary" onClick={handleReset}>
-              Reset
-            </Button>
-          </div>
-        </Form>
+        <FormProvider {...form}>
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              handleTest();
+            }}
+          >
+            <PolicyTestFields
+              availableTeams={availableTeams}
+              availableKeys={availableKeys}
+              availableModels={availableModels}
+            />
+            <div className="flex space-x-2 mt-4">
+              <Button
+                type="submit"
+                disabled={!accessToken || isLoading}
+              >
+                {isLoading ? "Simulating..." : "Simulate"}
+              </Button>
+              <Button
+                type="button"
+                variant="secondary"
+                onClick={handleReset}
+              >
+                Reset
+              </Button>
+            </div>
+          </form>
+        </FormProvider>
       </div>
 
       {!hasSearched && (

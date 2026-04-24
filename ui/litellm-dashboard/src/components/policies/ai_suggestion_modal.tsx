@@ -1,12 +1,58 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { Modal, Spin, Checkbox, Select, Input, Typography, Tooltip } from "antd";
-// eslint-disable-next-line litellm-ui/no-banned-ui-imports
-import { Button, Card } from "@tremor/react";
-import { CheckCircle2 as CheckCircleOutlined, XCircle as CloseCircleOutlined, Info as InfoCircleOutlined, ChevronDown as DownOutlined, ChevronRight as RightOutlined } from "lucide-react";
-import { suggestPolicyTemplates, modelHubCall, testPolicyTemplate, enrichPolicyTemplateStream } from "../networking";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Textarea } from "@/components/ui/textarea";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import {
+  CheckCircle2 as CheckCircleOutlined,
+  XCircle as CloseCircleOutlined,
+  Info as InfoCircleOutlined,
+  ChevronDown as DownOutlined,
+  ChevronRight as RightOutlined,
+  LoaderCircle,
+} from "lucide-react";
+import {
+  suggestPolicyTemplates,
+  modelHubCall,
+  testPolicyTemplate,
+  enrichPolicyTemplateStream,
+} from "../networking";
 
-const { TextArea } = Input;
-const { Text } = Typography;
+const Text = ({
+  className,
+  children,
+}: {
+  className?: string;
+  children?: React.ReactNode;
+}) => <span className={className}>{children}</span>;
+
+const Spin = ({ size }: { size?: "small" | "default" | "large" }) => (
+  <LoaderCircle
+    className={`animate-spin ${
+      size === "small" ? "w-3 h-3" : size === "large" ? "w-6 h-6" : "w-4 h-4"
+    } text-muted-foreground`}
+  />
+);
 
 interface SuggestedTemplate {
   template_id: string;
@@ -437,7 +483,7 @@ const AiSuggestionModal: React.FC<AiSuggestionModalProps> = ({
                 <div className="flex items-start gap-3">
                   <Checkbox
                     checked={isSelected}
-                    onChange={() => toggleTemplate(suggestion.template_id)}
+                    onCheckedChange={() => toggleTemplate(suggestion.template_id)}
                     className="mt-0.5"
                   />
                   <div className="flex-1 min-w-0">
@@ -457,15 +503,20 @@ const AiSuggestionModal: React.FC<AiSuggestionModalProps> = ({
                         </span>
                       )}
                       {template.estimated_latency_ms != null && (
-                        <Tooltip title="Estimated latency overhead added to each request">
-                          <span className={`px-2 py-0.5 rounded-full text-[10px] font-medium border ${
-                            template.estimated_latency_ms <= 1
-                              ? "bg-green-50 text-green-600 border-green-200"
-                              : "bg-amber-50 text-amber-600 border-amber-200"
-                          }`}>
-                            +{template.estimated_latency_ms <= 1 ? "<1" : template.estimated_latency_ms}ms latency
-                          </span>
-                        </Tooltip>
+                        <TooltipProvider>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <span className={`px-2 py-0.5 rounded-full text-[10px] font-medium border ${
+                                template.estimated_latency_ms <= 1
+                                  ? "bg-green-50 text-green-600 border-green-200"
+                                  : "bg-amber-50 text-amber-600 border-amber-200"
+                              }`}>
+                                +{template.estimated_latency_ms <= 1 ? "<1" : template.estimated_latency_ms}ms latency
+                              </span>
+                            </TooltipTrigger>
+                            <TooltipContent>Estimated latency overhead added to each request</TooltipContent>
+                          </Tooltip>
+                        </TooltipProvider>
                       )}
                     </div>
                     <p className="text-xs text-gray-500 leading-relaxed">
@@ -572,20 +623,32 @@ const AiSuggestionModal: React.FC<AiSuggestionModalProps> = ({
 
           <div className="flex gap-2">
             <Input
-              size="small"
               placeholder="e.g. Emirates Airlines"
               value={enrichBrandName}
               onChange={(e) => setEnrichBrandName(e.target.value)}
-              onPressEnter={() => enrichBrandName.trim() && handleEnrichCompetitors()}
-              className="flex-1"
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && enrichBrandName.trim()) {
+                  e.preventDefault();
+                  handleEnrichCompetitors();
+                }
+              }}
+              className="flex-1 h-8"
             />
             <Button
-              size="xs"
+              size="sm"
               onClick={handleEnrichCompetitors}
-              loading={isEnriching}
               disabled={!enrichBrandName.trim() || isEnriching}
             >
-              {isEnriching ? "Discovering..." : hasEnrichedGuardrails ? "Re-discover" : "Discover"}
+              {isEnriching ? (
+                <>
+                  <LoaderCircle className="mr-2 h-3 w-3 animate-spin" />
+                  Discovering...
+                </>
+              ) : hasEnrichedGuardrails ? (
+                "Re-discover"
+              ) : (
+                "Discover"
+              )}
             </Button>
           </div>
 
@@ -633,13 +696,20 @@ const AiSuggestionModal: React.FC<AiSuggestionModalProps> = ({
           <div className="flex justify-between items-center mb-2">
             <div className="flex items-center gap-2">
               <label className="text-sm font-medium text-gray-700">Input Text</label>
-              <Tooltip title="Press Enter to submit. Use Shift+Enter for new line.">
-                <InfoCircleOutlined className="text-gray-400 cursor-help" />
-              </Tooltip>
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <InfoCircleOutlined className="text-gray-400 cursor-help w-3.5 h-3.5" />
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    Press Enter to submit. Use Shift+Enter for new line.
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
             </div>
             <Text className="text-xs text-gray-500">Characters: {testInputText.length}</Text>
           </div>
-          <TextArea
+          <Textarea
             value={testInputText}
             onChange={(e) => setTestInputText(e.target.value)}
             onKeyDown={handleTestKeyDown}
@@ -655,13 +725,17 @@ const AiSuggestionModal: React.FC<AiSuggestionModalProps> = ({
         </div>
         <Button
           onClick={handleRunTest}
-          loading={isTestLoading}
           disabled={!testInputText.trim() || isTestLoading}
           className="w-full"
         >
-          {isTestLoading
-            ? `Testing ${allSelectedGuardrailDefs.length} guardrails...`
-            : `Test ${allSelectedGuardrailDefs.length} guardrails`}
+          {isTestLoading ? (
+            <>
+              <LoaderCircle className="mr-2 h-4 w-4 animate-spin" />
+              Testing {allSelectedGuardrailDefs.length} guardrails...
+            </>
+          ) : (
+            `Test ${allSelectedGuardrailDefs.length} guardrails`
+          )}
         </Button>
       </div>
 
@@ -786,15 +860,17 @@ const AiSuggestionModal: React.FC<AiSuggestionModalProps> = ({
   };
 
   return (
-    <Modal
-      title={null}
+    <Dialog
       open={visible}
-      onCancel={handleCancel}
-      width={showTestPanel ? 1200 : 820}
-      footer={null}
-      styles={{ body: { padding: 0 } }}
+      onOpenChange={(o) => (!o ? handleCancel() : undefined)}
     >
-      {/* Header */}
+      <DialogContent
+        className={`${showTestPanel ? "sm:max-w-[1200px]" : "sm:max-w-[820px]"} p-0 max-h-[90vh] overflow-y-auto`}
+      >
+        <DialogHeader className="sr-only">
+          <DialogTitle>AI Policy Suggestion</DialogTitle>
+        </DialogHeader>
+        {/* Header */}
       <div className="px-8 pt-8 pb-4">
         <h3 className="text-xl font-semibold text-gray-900 mb-1">
           AI Policy Suggestion
@@ -818,18 +894,32 @@ const AiSuggestionModal: React.FC<AiSuggestionModalProps> = ({
               <span className="text-red-500 ml-0.5">*</span>
             </label>
             <Select
-              placeholder="Select a model to analyze your requirements"
-              value={selectedModel}
-              onChange={(value) => setSelectedModel(value)}
-              loading={isLoadingModels}
-              showSearch
-              size="large"
-              className="w-full"
-              options={availableModels.map((m) => ({ label: m, value: m }))}
-              filterOption={(input, option) =>
-                (option?.label ?? "").toLowerCase().includes(input.toLowerCase())
-              }
-            />
+              value={selectedModel ?? ""}
+              onValueChange={(v) => setSelectedModel(v || undefined)}
+            >
+              <SelectTrigger className="w-full">
+                <SelectValue
+                  placeholder={
+                    isLoadingModels
+                      ? "Loading models..."
+                      : "Select a model to analyze your requirements"
+                  }
+                />
+              </SelectTrigger>
+              <SelectContent>
+                {availableModels.length === 0 ? (
+                  <div className="py-2 px-3 text-sm text-muted-foreground">
+                    No models available
+                  </div>
+                ) : (
+                  availableModels.map((m) => (
+                    <SelectItem key={m} value={m}>
+                      {m}
+                    </SelectItem>
+                  ))
+                )}
+              </SelectContent>
+            </Select>
           </div>
 
           {/* Attack examples */}
@@ -931,8 +1021,15 @@ const AiSuggestionModal: React.FC<AiSuggestionModalProps> = ({
           {/* Footer */}
           <div className="flex justify-end gap-3 pt-2">
             <Button variant="secondary" onClick={handleCancel} disabled={isLoading}>Cancel</Button>
-            <Button onClick={handleSuggest} loading={isLoading} disabled={!hasInput || !selectedModel || isLoading}>
-              {isLoading ? "Analyzing..." : "Suggest Policies"}
+            <Button onClick={handleSuggest} disabled={!hasInput || !selectedModel || isLoading}>
+              {isLoading ? (
+                <>
+                  <LoaderCircle className="mr-2 h-4 w-4 animate-spin" />
+                  Analyzing...
+                </>
+              ) : (
+                "Suggest Policies"
+              )}
             </Button>
           </div>
         </div>
@@ -972,7 +1069,8 @@ const AiSuggestionModal: React.FC<AiSuggestionModalProps> = ({
           </div>
         </div>
       )}
-    </Modal>
+      </DialogContent>
+    </Dialog>
   );
 };
 

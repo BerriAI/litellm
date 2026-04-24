@@ -1,9 +1,20 @@
 import React, { useState } from "react";
-import { Select, Typography, Spin } from "antd";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import MessageManager from "@/components/molecules/message_manager";
-// eslint-disable-next-line litellm-ui/no-banned-ui-imports
-import { Button, TextInput } from "@tremor/react";
-import { ArrowLeft as ArrowLeftIcon, Plus as PlusIcon, MoreVertical as DotsVerticalIcon } from "lucide-react";
+import {
+  ArrowLeft as ArrowLeftIcon,
+  Plus as PlusIcon,
+  MoreVertical as DotsVerticalIcon,
+  LoaderCircle,
+} from "lucide-react";
 import { GuardrailPipeline, PipelineStep, PipelineTestResult, PolicyCreateRequest, PolicyUpdateRequest, Policy } from "./types";
 import { Guardrail } from "../guardrails/types";
 import { testPipelineCall, listPolicyVersions, createPolicyVersion, updatePolicyVersionStatus } from "../networking";
@@ -24,7 +35,13 @@ function getPromptsForTestSource(source: string): CompliancePrompt[] {
   return fw ? fw.categories.flatMap((c) => c.prompts) : [];
 }
 
-const { Text } = Typography;
+const Spin = ({ size }: { size?: "small" | "default" | "large" }) => (
+  <LoaderCircle
+    className={`animate-spin ${
+      size === "small" ? "w-3 h-3" : size === "large" ? "w-6 h-6" : "w-4 h-4"
+    } text-muted-foreground`}
+  />
+);
 
 const ACTION_OPTIONS = [
   { label: "Next Step", value: "next" },
@@ -288,16 +305,26 @@ const StepCard: React.FC<StepCardProps> = ({
           Guardrail
         </label>
         <Select
-          showSearch
-          style={{ width: "100%" }}
-          placeholder="Select a guardrail"
-          value={step.guardrail || undefined}
-          onChange={(value) => onChange({ guardrail: value })}
-          options={guardrailOptions}
-          filterOption={(input, option) =>
-            (option?.label ?? "").toString().toLowerCase().includes(input.toLowerCase())
-          }
-        />
+          value={step.guardrail || ""}
+          onValueChange={(value) => onChange({ guardrail: value })}
+        >
+          <SelectTrigger className="w-full">
+            <SelectValue placeholder="Select a guardrail" />
+          </SelectTrigger>
+          <SelectContent>
+            {guardrailOptions.length === 0 ? (
+              <div className="py-2 px-3 text-sm text-muted-foreground">
+                No guardrails available
+              </div>
+            ) : (
+              guardrailOptions.map((opt) => (
+                <SelectItem key={opt.value} value={opt.value}>
+                  {opt.label}
+                </SelectItem>
+              ))
+            )}
+          </SelectContent>
+        </Select>
       </div>
 
       {/* ON PASS section */}
@@ -310,17 +337,26 @@ const StepCard: React.FC<StepCardProps> = ({
           Action
         </label>
         <Select
-          style={{ width: "100%" }}
           value={step.on_pass}
-          onChange={(value) => onChange({ on_pass: value as PipelineStep["on_pass"] })}
-          options={ACTION_OPTIONS}
-        />
+          onValueChange={(value) => onChange({ on_pass: value as PipelineStep["on_pass"] })}
+        >
+          <SelectTrigger className="w-full">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {ACTION_OPTIONS.map((opt) => (
+              <SelectItem key={opt.value} value={opt.value}>
+                {opt.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
         {step.on_pass === "modify_response" && (
           <div style={{ marginTop: 8 }}>
             <label style={{ fontSize: 12, fontWeight: 500, color: "#6b7280", display: "block", marginBottom: 6 }}>
               Custom Response Message
             </label>
-            <TextInput
+            <Input
               placeholder="Enter custom response..."
               value={step.modify_response_message || ""}
               onChange={(e) => onChange({ modify_response_message: e.target.value || null })}
@@ -339,17 +375,26 @@ const StepCard: React.FC<StepCardProps> = ({
           Action
         </label>
         <Select
-          style={{ width: "100%" }}
           value={step.on_fail}
-          onChange={(value) => onChange({ on_fail: value as PipelineStep["on_fail"] })}
-          options={ACTION_OPTIONS}
-        />
+          onValueChange={(value) => onChange({ on_fail: value as PipelineStep["on_fail"] })}
+        >
+          <SelectTrigger className="w-full">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {ACTION_OPTIONS.map((opt) => (
+              <SelectItem key={opt.value} value={opt.value}>
+                {opt.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
         {step.on_fail === "modify_response" && (
           <div style={{ marginTop: 8 }}>
             <label style={{ fontSize: 12, fontWeight: 500, color: "#6b7280", display: "block", marginBottom: 6 }}>
               Custom Response Message
             </label>
-            <TextInput
+            <Input
               placeholder="Enter custom response..."
               value={step.modify_response_message || ""}
               onChange={(e) => onChange({ modify_response_message: e.target.value || null })}
@@ -367,24 +412,43 @@ const StepCard: React.FC<StepCardProps> = ({
         <label style={{ fontSize: 12, fontWeight: 500, color: "#6b7280", display: "block", marginBottom: 6 }}>
           Action
         </label>
-        <Select
-          style={{ width: "100%" }}
-          placeholder="Same as ON FAIL"
-          allowClear
-          value={step.on_error ?? undefined}
-          onChange={(value) =>
-            onChange({
-              on_error: value === undefined || value === null ? undefined : (value as PipelineStep["on_error"]),
-            })
-          }
-          options={ACTION_OPTIONS}
-        />
+        <div className="flex items-center gap-2">
+          <Select
+            value={step.on_error ?? ""}
+            onValueChange={(value) =>
+              onChange({
+                on_error: (value || undefined) as PipelineStep["on_error"],
+              })
+            }
+          >
+            <SelectTrigger className="flex-1">
+              <SelectValue placeholder="Same as ON FAIL" />
+            </SelectTrigger>
+            <SelectContent>
+              {ACTION_OPTIONS.map((opt) => (
+                <SelectItem key={opt.value} value={opt.value}>
+                  {opt.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          {step.on_error && (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() => onChange({ on_error: undefined })}
+            >
+              Clear
+            </Button>
+          )}
+        </div>
         {step.on_error === "modify_response" && step.on_fail !== "modify_response" && (
           <div style={{ marginTop: 8 }}>
             <label style={{ fontSize: 12, fontWeight: 500, color: "#6b7280", display: "block", marginBottom: 6 }}>
               Custom Response Message
             </label>
-            <TextInput
+            <Input
               placeholder="Enter custom response..."
               value={step.modify_response_message || ""}
               onChange={(e) => onChange({ modify_response_message: e.target.value || null })}
@@ -783,13 +847,18 @@ const PipelineTestPanel: React.FC<PipelineTestPanelProps> = ({
         <label style={{ fontSize: 12, fontWeight: 500, color: "#6b7280", display: "block", marginBottom: 6 }}>
           Test with
         </label>
-        <Select
-          value={testSource}
-          onChange={setTestSource}
-          options={testSourceOptions}
-          style={{ width: "100%", marginBottom: 12 }}
-          size="middle"
-        />
+        <Select value={testSource} onValueChange={setTestSource}>
+          <SelectTrigger className="w-full mb-3">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {testSourceOptions.map((opt) => (
+              <SelectItem key={opt.value} value={opt.value}>
+                {opt.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
         {isQuickChat && (
           <>
             <label style={{ fontSize: 12, fontWeight: 500, color: "#6b7280", display: "block", marginBottom: 6 }}>
@@ -830,10 +899,17 @@ const PipelineTestPanel: React.FC<PipelineTestPanelProps> = ({
         )}
         <Button
           onClick={handleRunTest}
-          loading={isRunning}
-          style={{ marginTop: 8, width: "100%" }}
+          disabled={isRunning}
+          className="mt-2 w-full"
         >
-          Run Test
+          {isRunning ? (
+            <>
+              <LoaderCircle className="mr-2 h-4 w-4 animate-spin" />
+              Running...
+            </>
+          ) : (
+            "Run Test"
+          )}
         </Button>
       </div>
 
@@ -1143,10 +1219,16 @@ const PolicyVersionsSidebar: React.FC<PolicyVersionsSidebarProps> = ({
           <Button
             onClick={onNewVersion}
             disabled={!accessToken || isCreatingVersion}
-            loading={isCreatingVersion}
-            style={{ width: "100%", marginBottom: 12 }}
+            className="w-full mb-3"
           >
-            + New Version
+            {isCreatingVersion ? (
+              <>
+                <LoaderCircle className="mr-2 h-4 w-4 animate-spin" />
+                Creating...
+              </>
+            ) : (
+              "+ New Version"
+            )}
           </Button>
           {isLoading ? (
             <div style={{ display: "flex", justifyContent: "center", padding: 16 }}>
@@ -1211,10 +1293,16 @@ const PolicyVersionsSidebar: React.FC<PolicyVersionsSidebarProps> = ({
                     variant="secondary"
                     onClick={onPublish}
                     disabled={!accessToken || isUpdatingStatus}
-                    loading={isUpdatingStatus}
-                    style={{ width: "100%", marginBottom: 8 }}
+                    className="w-full mb-2"
                   >
-                    Publish
+                    {isUpdatingStatus ? (
+                      <>
+                        <LoaderCircle className="mr-2 h-4 w-4 animate-spin" />
+                        Publishing...
+                      </>
+                    ) : (
+                      "Publish"
+                    )}
                   </Button>
                   <span
                     style={{
@@ -1234,10 +1322,16 @@ const PolicyVersionsSidebar: React.FC<PolicyVersionsSidebarProps> = ({
                   <Button
                     onClick={onPromoteToProduction}
                     disabled={!accessToken || isUpdatingStatus}
-                    loading={isUpdatingStatus}
-                    style={{ width: "100%", marginBottom: 8 }}
+                    className="w-full mb-2"
                   >
-                    Promote to production
+                    {isUpdatingStatus ? (
+                      <>
+                        <LoaderCircle className="mr-2 h-4 w-4 animate-spin" />
+                        Promoting...
+                      </>
+                    ) : (
+                      "Promote to production"
+                    )}
                   </Button>
                   <span
                     style={{
@@ -1526,7 +1620,7 @@ export const FlowBuilderPage: React.FC<FlowBuilderPageProps> = ({
           </button>
           <span style={{ fontSize: 14, color: "#6b7280" }}>Policies</span>
           <span style={{ fontSize: 14, color: "#d1d5db" }}>/</span>
-          <TextInput
+          <Input
             placeholder="Policy name..."
             value={policyName}
             onChange={(e) => setPolicyName(e.target.value)}
@@ -1557,8 +1651,17 @@ export const FlowBuilderPage: React.FC<FlowBuilderPageProps> = ({
           >
             {showTestPanel ? "Hide Test" : "Test Pipeline"}
           </Button>
-          <Button onClick={handleSave} loading={isSubmitting}>
-            {isEditing ? "Update Policy" : "Save Policy"}
+          <Button onClick={handleSave} disabled={isSubmitting}>
+            {isSubmitting ? (
+              <>
+                <LoaderCircle className="mr-2 h-4 w-4 animate-spin" />
+                Saving...
+              </>
+            ) : isEditing ? (
+              "Update Policy"
+            ) : (
+              "Save Policy"
+            )}
           </Button>
         </div>
       </div>
@@ -1572,7 +1675,7 @@ export const FlowBuilderPage: React.FC<FlowBuilderPageProps> = ({
           flexShrink: 0,
         }}
       >
-        <TextInput
+        <Input
           placeholder="Add a description (optional)..."
           value={description}
           onChange={(e) => setDescription(e.target.value)}

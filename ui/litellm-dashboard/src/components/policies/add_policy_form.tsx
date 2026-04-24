@@ -1,15 +1,35 @@
-import React, { useState, useEffect } from "react";
-import { Form, Select, Modal, Divider, Typography, Tag, Alert, Radio } from "antd";
-// eslint-disable-next-line litellm-ui/no-banned-ui-imports
-import { Button, TextInput, Textarea } from "@tremor/react";
+import React, { useState, useEffect, useMemo } from "react";
+import { Controller, FormProvider, useForm, useFormContext } from "react-hook-form";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import {
+  RadioGroup,
+  RadioGroupItem,
+} from "@/components/ui/radio-group";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Separator } from "@/components/ui/separator";
+import { Textarea } from "@/components/ui/textarea";
+import { Info, X } from "lucide-react";
 import { Policy, PolicyCreateRequest, PolicyUpdateRequest } from "./types";
 import { Guardrail } from "../guardrails/types";
 import { getResolvedGuardrails, modelAvailableCall } from "../networking";
 import NotificationsManager from "../molecules/notifications_manager";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
-
-const { Text } = Typography;
-const { Option } = Select;
 
 interface AddPolicyFormProps {
   visible: boolean;
@@ -20,111 +40,470 @@ interface AddPolicyFormProps {
   editingPolicy?: Policy | null;
   existingPolicies: Policy[];
   availableGuardrails: Guardrail[];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   createPolicy: (accessToken: string, policyData: any) => Promise<any>;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   updatePolicy: (accessToken: string, policyId: string, policyData: any) => Promise<any>;
+}
+
+interface PolicyFormValues {
+  policy_name: string;
+  description: string;
+  inherit: string | null;
+  guardrails_add: string[];
+  guardrails_remove: string[];
+  model_condition: string | undefined;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MultiSelect (shadcn Select + chip list) — same pattern as AccessGroupBaseForm
+// ─────────────────────────────────────────────────────────────────────────────
+
+function MultiSelect({
+  value,
+  onChange,
+  options,
+  placeholder,
+  emptyText,
+}: {
+  value: string[];
+  onChange: (next: string[]) => void;
+  options: { label: string; value: string }[];
+  placeholder: string;
+  emptyText: string;
+}) {
+  const selected = useMemo(() => value ?? [], [value]);
+  const remaining = useMemo(
+    () => options.filter((o) => !selected.includes(o.value)),
+    [options, selected],
+  );
+
+  return (
+    <div className="space-y-2">
+      <Select
+        value=""
+        onValueChange={(v) => {
+          if (v) onChange([...selected, v]);
+        }}
+      >
+        <SelectTrigger>
+          <SelectValue placeholder={placeholder} />
+        </SelectTrigger>
+        <SelectContent>
+          {remaining.length === 0 ? (
+            <div className="py-2 px-3 text-sm text-muted-foreground">
+              {emptyText}
+            </div>
+          ) : (
+            remaining.map((opt) => (
+              <SelectItem key={opt.value} value={opt.value}>
+                {opt.label}
+              </SelectItem>
+            ))
+          )}
+        </SelectContent>
+      </Select>
+      {selected.length > 0 && (
+        <div className="flex flex-wrap gap-1">
+          {selected.map((v) => {
+            const opt = options.find((o) => o.value === v);
+            return (
+              <Badge
+                key={v}
+                variant="secondary"
+                className="flex items-center gap-1"
+              >
+                {opt?.label ?? v}
+                <button
+                  type="button"
+                  onClick={() => onChange(selected.filter((s) => s !== v))}
+                  className="inline-flex items-center justify-center rounded-full hover:bg-muted-foreground/20"
+                  aria-label={`Remove ${opt?.label ?? v}`}
+                >
+                  <X size={12} />
+                </button>
+              </Badge>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Mode Picker (Step 1) - shown first when creating a new policy
+// The categorical palette (indigo accent) is intentionally kept raw to preserve
+// the existing branded look. See docs/DEVIATIONS.md.
 // ─────────────────────────────────────────────────────────────────────────────
 
-interface ModePicker {
+interface ModePickerProps {
   selected: "simple" | "flow_builder";
   onSelect: (mode: "simple" | "flow_builder") => void;
 }
 
-const ModePicker: React.FC<ModePicker> = ({ selected, onSelect }) => (
-  <div className="flex gap-4" style={{ padding: "8px 0" }}>
+const ModePicker: React.FC<ModePickerProps> = ({ selected, onSelect }) => (
+  <div className="flex gap-4 py-2">
     {/* Simple Mode Card */}
+    {/* eslint-disable-next-line litellm-ui/no-raw-tailwind-colors */}
     <div
       onClick={() => onSelect("simple")}
-      style={{
-        flex: 1,
-        padding: "24px 20px",
-        border: `2px solid ${selected === "simple" ? "#4f46e5" : "#e5e7eb"}`,
-        borderRadius: 12,
-        cursor: "pointer",
-        backgroundColor: selected === "simple" ? "#eef2ff" : "#fff",
-        transition: "all 0.15s ease",
-      }}
+      className={`flex-1 rounded-xl cursor-pointer transition-all p-6 border-2 ${
+        selected === "simple"
+          ? "border-indigo-600 bg-indigo-50"
+          : "border-border bg-background"
+      }`}
     >
+      {/* eslint-disable-next-line litellm-ui/no-raw-tailwind-colors */}
       <div
-        style={{
-          width: 40,
-          height: 40,
-          borderRadius: 10,
-          backgroundColor: selected === "simple" ? "#e0e7ff" : "#f3f4f6",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          marginBottom: 16,
-        }}
+        className={`w-10 h-10 rounded-lg flex items-center justify-center mb-4 ${
+          selected === "simple" ? "bg-indigo-100" : "bg-muted"
+        }`}
       >
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={selected === "simple" ? "#4f46e5" : "#6b7280"} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <svg
+          width="20"
+          height="20"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke={selected === "simple" ? "#4f46e5" : "#6b7280"}
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
           <rect x="3" y="3" width="18" height="18" rx="2" />
           <path d="M8 7h8M8 12h8M8 17h5" />
         </svg>
       </div>
-      <Text strong style={{ fontSize: 15, display: "block", marginBottom: 4 }}>
-        Simple Mode
-      </Text>
-      <Text type="secondary" style={{ fontSize: 13 }}>
+      <div className="text-[15px] font-semibold mb-1">Simple Mode</div>
+      <p className="text-sm text-muted-foreground">
         Pick guardrails from a list. All run in parallel.
-      </Text>
+      </p>
     </div>
 
     {/* Flow Builder Card */}
+    {/* eslint-disable-next-line litellm-ui/no-raw-tailwind-colors */}
     <div
       onClick={() => onSelect("flow_builder")}
-      style={{
-        flex: 1,
-        padding: "24px 20px",
-        border: `2px solid ${selected === "flow_builder" ? "#4f46e5" : "#e5e7eb"}`,
-        borderRadius: 12,
-        cursor: "pointer",
-        backgroundColor: selected === "flow_builder" ? "#eef2ff" : "#fff",
-        transition: "all 0.15s ease",
-        position: "relative",
-      }}
+      className={`flex-1 rounded-xl cursor-pointer transition-all p-6 border-2 relative ${
+        selected === "flow_builder"
+          ? "border-indigo-600 bg-indigo-50"
+          : "border-border bg-background"
+      }`}
     >
-      <Tag
-        color="purple"
-        style={{
-          position: "absolute",
-          top: 12,
-          right: 12,
-          fontSize: 10,
-          fontWeight: 600,
-          margin: 0,
-        }}
+      <Badge
+        variant="secondary"
+        // eslint-disable-next-line litellm-ui/no-raw-tailwind-colors
+        className="absolute top-3 right-3 bg-purple-100 text-purple-700 text-[10px] font-semibold"
       >
         NEW
-      </Tag>
+      </Badge>
+      {/* eslint-disable-next-line litellm-ui/no-raw-tailwind-colors */}
       <div
-        style={{
-          width: 40,
-          height: 40,
-          borderRadius: 10,
-          backgroundColor: selected === "flow_builder" ? "#e0e7ff" : "#f3f4f6",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          marginBottom: 16,
-        }}
+        className={`w-10 h-10 rounded-lg flex items-center justify-center mb-4 ${
+          selected === "flow_builder" ? "bg-indigo-100" : "bg-muted"
+        }`}
       >
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={selected === "flow_builder" ? "#4f46e5" : "#6b7280"} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <svg
+          width="20"
+          height="20"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke={selected === "flow_builder" ? "#4f46e5" : "#6b7280"}
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
           <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
         </svg>
       </div>
-      <Text strong style={{ fontSize: 15, display: "block", marginBottom: 4 }}>
-        Flow Builder
-      </Text>
-      <Text type="secondary" style={{ fontSize: 13 }}>
+      <div className="text-[15px] font-semibold mb-1">Flow Builder</div>
+      <p className="text-sm text-muted-foreground">
         Define steps, conditions, and error responses.
-      </Text>
+      </p>
     </div>
   </div>
 );
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Form fields
+// ─────────────────────────────────────────────────────────────────────────────
+
+interface PolicyFieldsProps {
+  isEditing: boolean;
+  modelConditionType: "model" | "regex";
+  onModelConditionTypeChange: (t: "model" | "regex") => void;
+  policyOptions: { label: string; value: string }[];
+  guardrailOptions: { label: string; value: string }[];
+  availableModels: string[];
+  resolvedGuardrails: string[];
+}
+
+function PolicyFields({
+  isEditing,
+  modelConditionType,
+  onModelConditionTypeChange,
+  policyOptions,
+  guardrailOptions,
+  availableModels,
+  resolvedGuardrails,
+}: PolicyFieldsProps) {
+  const { control, register, formState } = useFormContext<PolicyFormValues>();
+
+  return (
+    <>
+      <div className="space-y-2">
+        <Label htmlFor="policy_name">
+          Policy Name <span className="text-destructive">*</span>
+        </Label>
+        <Input
+          id="policy_name"
+          placeholder="e.g., global-baseline, healthcare-compliance"
+          disabled={isEditing}
+          aria-invalid={!!formState.errors.policy_name}
+          {...register("policy_name", {
+            required: "Please enter a policy name",
+            pattern: {
+              value: /^[a-zA-Z0-9_-]+$/,
+              message:
+                "Policy name can only contain letters, numbers, hyphens, and underscores",
+            },
+          })}
+        />
+        {formState.errors.policy_name && (
+          <p className="text-sm text-destructive">
+            {formState.errors.policy_name.message as string}
+          </p>
+        )}
+      </div>
+
+      <div className="space-y-2 mt-4">
+        <Label htmlFor="policy_description">Description</Label>
+        <Textarea
+          id="policy_description"
+          rows={2}
+          placeholder="Describe what this policy does..."
+          {...register("description")}
+        />
+      </div>
+
+      <div className="mt-6 mb-3 flex items-center gap-3">
+        <span className="text-sm font-semibold">Inheritance</span>
+        <Separator className="flex-1" />
+      </div>
+
+      <div className="space-y-2">
+        <Label>Inherit From</Label>
+        <p className="text-xs text-muted-foreground">
+          Inherit guardrails from another policy. The child policy will include
+          all guardrails from the parent.
+        </p>
+        <Controller
+          control={control}
+          name="inherit"
+          render={({ field }) => (
+            <div className="flex items-center gap-2">
+              <Select
+                value={field.value ?? ""}
+                onValueChange={(v) => field.onChange(v || null)}
+              >
+                <SelectTrigger className="flex-1">
+                  <SelectValue placeholder="Select a parent policy (optional)" />
+                </SelectTrigger>
+                <SelectContent>
+                  {policyOptions.length === 0 ? (
+                    <div className="py-2 px-3 text-sm text-muted-foreground">
+                      No parent policies
+                    </div>
+                  ) : (
+                    policyOptions.map((opt) => (
+                      <SelectItem key={opt.value} value={opt.value}>
+                        {opt.label}
+                      </SelectItem>
+                    ))
+                  )}
+                </SelectContent>
+              </Select>
+              {field.value && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => field.onChange(null)}
+                >
+                  Clear
+                </Button>
+              )}
+            </div>
+          )}
+        />
+      </div>
+
+      <div className="mt-6 mb-3 flex items-center gap-3">
+        <span className="text-sm font-semibold">Guardrails</span>
+        <Separator className="flex-1" />
+      </div>
+
+      <div className="space-y-2">
+        <Label>Guardrails to Add</Label>
+        <p className="text-xs text-muted-foreground">
+          These guardrails will be added to requests matching this policy.
+        </p>
+        <Controller
+          control={control}
+          name="guardrails_add"
+          render={({ field }) => (
+            <MultiSelect
+              value={field.value ?? []}
+              onChange={field.onChange}
+              options={guardrailOptions}
+              placeholder="Select guardrails to add"
+              emptyText="No guardrails available"
+            />
+          )}
+        />
+      </div>
+
+      <div className="space-y-2 mt-4">
+        <Label>Guardrails to Remove</Label>
+        <p className="text-xs text-muted-foreground">
+          These guardrails will be removed from inherited guardrails.
+        </p>
+        <Controller
+          control={control}
+          name="guardrails_remove"
+          render={({ field }) => (
+            <MultiSelect
+              value={field.value ?? []}
+              onChange={field.onChange}
+              options={guardrailOptions}
+              placeholder="Select guardrails to remove (from inherited)"
+              emptyText="No guardrails available"
+            />
+          )}
+        />
+      </div>
+
+      {resolvedGuardrails.length > 0 && (
+        <Alert className="mt-4">
+          <Info className="h-4 w-4" />
+          <AlertTitle>Resolved Guardrails</AlertTitle>
+          <AlertDescription>
+            <p className="text-muted-foreground mb-2">
+              These are the final guardrails that will be applied (including
+              inheritance):
+            </p>
+            <div className="flex flex-wrap gap-1">
+              {resolvedGuardrails.map((g) => (
+                <Badge
+                  key={g}
+                  variant="secondary"
+                  // eslint-disable-next-line litellm-ui/no-raw-tailwind-colors
+                  className="bg-blue-100 text-blue-700"
+                >
+                  {g}
+                </Badge>
+              ))}
+            </div>
+          </AlertDescription>
+        </Alert>
+      )}
+
+      <div className="mt-6 mb-3 flex items-center gap-3">
+        <span className="text-sm font-semibold">Conditions (Optional)</span>
+        <Separator className="flex-1" />
+      </div>
+
+      <Alert className="mb-4">
+        <Info className="h-4 w-4" />
+        <AlertTitle>Model Scope</AlertTitle>
+        <AlertDescription>
+          By default, this policy will run on all models. You can optionally
+          restrict it to specific models below.
+        </AlertDescription>
+      </Alert>
+
+      <div className="space-y-2">
+        <Label>Model Condition Type</Label>
+        <RadioGroup
+          value={modelConditionType}
+          onValueChange={(v) =>
+            onModelConditionTypeChange(v as "model" | "regex")
+          }
+          className="flex gap-4"
+        >
+          <label className="flex items-center gap-2 cursor-pointer">
+            <RadioGroupItem value="model" />
+            Select Model
+          </label>
+          <label className="flex items-center gap-2 cursor-pointer">
+            <RadioGroupItem value="regex" />
+            Custom Regex Pattern
+          </label>
+        </RadioGroup>
+      </div>
+
+      <div className="space-y-2 mt-3">
+        <Label>
+          {modelConditionType === "model"
+            ? "Model (Optional)"
+            : "Regex Pattern (Optional)"}
+        </Label>
+        <p className="text-xs text-muted-foreground">
+          {modelConditionType === "model"
+            ? "Select a specific model to apply this policy to. Leave empty to apply to all models."
+            : "Enter a regex pattern to match models (e.g., gpt-4.* or bedrock/.*). Leave empty to apply to all models."}
+        </p>
+        <Controller
+          control={control}
+          name="model_condition"
+          render={({ field }) =>
+            modelConditionType === "model" ? (
+              <div className="flex items-center gap-2">
+                <Select
+                  value={field.value ?? ""}
+                  onValueChange={(v) => field.onChange(v || undefined)}
+                >
+                  <SelectTrigger className="flex-1">
+                    <SelectValue placeholder="Leave empty to apply to all models" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {availableModels.length === 0 ? (
+                      <div className="py-2 px-3 text-sm text-muted-foreground">
+                        No models available
+                      </div>
+                    ) : (
+                      availableModels.map((m) => (
+                        <SelectItem key={m} value={m}>
+                          {m}
+                        </SelectItem>
+                      ))
+                    )}
+                  </SelectContent>
+                </Select>
+                {field.value && (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => field.onChange(undefined)}
+                  >
+                    Clear
+                  </Button>
+                )}
+              </div>
+            ) : (
+              <Input
+                placeholder="Leave empty to apply to all models (e.g., gpt-4.* or bedrock/claude-.*)"
+                value={field.value ?? ""}
+                onChange={(e) => field.onChange(e.target.value || undefined)}
+              />
+            )
+          }
+        />
+      </div>
+    </>
+  );
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Main Component
@@ -142,29 +521,42 @@ const AddPolicyForm: React.FC<AddPolicyFormProps> = ({
   createPolicy,
   updatePolicy,
 }) => {
-  const [form] = Form.useForm();
+  const form = useForm<PolicyFormValues>({
+    defaultValues: {
+      policy_name: "",
+      description: "",
+      inherit: null,
+      guardrails_add: [],
+      guardrails_remove: [],
+      model_condition: undefined,
+    },
+  });
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [resolvedGuardrails, setResolvedGuardrails] = useState<string[]>([]);
-  const [isLoadingResolved, setIsLoadingResolved] = useState(false);
-  const [modelConditionType, setModelConditionType] = useState<"model" | "regex">("model");
+  const [modelConditionType, setModelConditionType] = useState<
+    "model" | "regex"
+  >("model");
   const [availableModels, setAvailableModels] = useState<string[]>([]);
   const [step, setStep] = useState<"pick_mode" | "simple_form">("pick_mode");
-  const [selectedMode, setSelectedMode] = useState<"simple" | "flow_builder">("simple");
+  const [selectedMode, setSelectedMode] = useState<"simple" | "flow_builder">(
+    "simple",
+  );
   const { userId, userRole } = useAuthorized();
 
-  // Only consider it "editing" if editingPolicy has a policy_id (real existing policy)
   const isEditing = !!editingPolicy?.policy_id;
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (visible && editingPolicy) {
       const modelCondition = editingPolicy.condition?.model;
-      const isRegex = modelCondition && /[.*+?^${}()|[\]\\]/.test(modelCondition);
+      const isRegex =
+        modelCondition && /[.*+?^${}()|[\]\\]/.test(modelCondition);
       setModelConditionType(isRegex ? "regex" : "model");
 
-      form.setFieldsValue({
+      form.reset({
         policy_name: editingPolicy.policy_name,
-        description: editingPolicy.description,
-        inherit: editingPolicy.inherit,
+        description: editingPolicy.description ?? "",
+        inherit: editingPolicy.inherit ?? null,
         guardrails_add: editingPolicy.guardrails_add || [],
         guardrails_remove: editingPolicy.guardrails_remove || [],
         model_condition: modelCondition,
@@ -174,37 +566,53 @@ const AddPolicyForm: React.FC<AddPolicyFormProps> = ({
         loadResolvedGuardrails(editingPolicy.policy_id);
       }
 
-      // If editing a pipeline policy, go directly to flow builder
       if (editingPolicy.pipeline) {
         onClose();
         onOpenFlowBuilder();
         return;
       }
-      // If editing a simple policy, skip mode picker
       setStep("simple_form");
     } else if (visible) {
-      form.resetFields();
+      form.reset({
+        policy_name: "",
+        description: "",
+        inherit: null,
+        guardrails_add: [],
+        guardrails_remove: [],
+        model_condition: undefined,
+      });
       setResolvedGuardrails([]);
       setModelConditionType("model");
       setSelectedMode("simple");
       setStep("pick_mode");
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [visible, editingPolicy, form]);
+  }, [visible, editingPolicy]);
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (visible && accessToken) {
       loadAvailableModels();
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visible, accessToken]);
+
+  // Recompute resolved guardrails on form change
+  useEffect(() => {
+    const subscription = form.watch(() => {
+      setResolvedGuardrails(computeResolvedGuardrails());
+    });
+    return () => subscription.unsubscribe();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [form.watch, existingPolicies]);
 
   const loadAvailableModels = async () => {
     if (!accessToken) return;
     try {
       const response = await modelAvailableCall(accessToken, userId, userRole);
       if (response?.data) {
-        const models = response.data.map((m: any) => m.id || m.model_name).filter(Boolean);
+        const models = response.data
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          .map((m: any) => m.id || m.model_name)
+          .filter(Boolean);
         setAvailableModels(models);
       }
     } catch (error) {
@@ -214,30 +622,29 @@ const AddPolicyForm: React.FC<AddPolicyFormProps> = ({
 
   const loadResolvedGuardrails = async (policyId: string) => {
     if (!accessToken) return;
-    setIsLoadingResolved(true);
     try {
       const data = await getResolvedGuardrails(accessToken, policyId);
       setResolvedGuardrails(data.resolved_guardrails || []);
     } catch (error) {
       console.error("Failed to load resolved guardrails:", error);
-    } finally {
-      setIsLoadingResolved(false);
     }
   };
 
   const computeResolvedGuardrails = (): string[] => {
-    const values = form.getFieldsValue(true);
+    const values = form.getValues();
     const inheritFrom = values.inherit;
     const guardrailsAdd = values.guardrails_add || [];
     const guardrailsRemove = values.guardrails_remove || [];
 
-    let resolved = new Set<string>();
+    const resolved = new Set<string>();
 
     if (inheritFrom) {
-      const parentPolicy = existingPolicies.find(p => p.policy_name === inheritFrom);
+      const parentPolicy = existingPolicies.find(
+        (p) => p.policy_name === inheritFrom,
+      );
       if (parentPolicy) {
         const parentResolved = resolveParentGuardrails(parentPolicy);
-        parentResolved.forEach(g => resolved.add(g));
+        parentResolved.forEach((g) => resolved.add(g));
       }
     }
 
@@ -248,33 +655,27 @@ const AddPolicyForm: React.FC<AddPolicyFormProps> = ({
   };
 
   const resolveParentGuardrails = (policy: Policy): string[] => {
-    let resolved = new Set<string>();
+    const resolved = new Set<string>();
 
     if (policy.inherit) {
-      const grandparent = existingPolicies.find(p => p.policy_name === policy.inherit);
+      const grandparent = existingPolicies.find(
+        (p) => p.policy_name === policy.inherit,
+      );
       if (grandparent) {
-        resolveParentGuardrails(grandparent).forEach(g => resolved.add(g));
+        resolveParentGuardrails(grandparent).forEach((g) => resolved.add(g));
       }
     }
     if (policy.guardrails_add) {
-      policy.guardrails_add.forEach(g => resolved.add(g));
+      policy.guardrails_add.forEach((g) => resolved.add(g));
     }
     if (policy.guardrails_remove) {
-      policy.guardrails_remove.forEach(g => resolved.delete(g));
+      policy.guardrails_remove.forEach((g) => resolved.delete(g));
     }
     return Array.from(resolved);
   };
 
-  const handleFormChange = () => {
-    setResolvedGuardrails(computeResolvedGuardrails());
-  };
-
-  const resetForm = () => {
-    form.resetFields();
-  };
-
   const handleClose = () => {
-    resetForm();
+    form.reset();
     setStep("pick_mode");
     setSelectedMode("simple");
     onClose();
@@ -289,11 +690,9 @@ const AddPolicyForm: React.FC<AddPolicyFormProps> = ({
     }
   };
 
-  const handleSubmit = async () => {
+  const onSubmit = form.handleSubmit(async (values) => {
     try {
       setIsSubmitting(true);
-      await form.validateFields();
-      const values = form.getFieldsValue(true);
 
       if (!accessToken) {
         throw new Error("No access token available");
@@ -311,25 +710,30 @@ const AddPolicyForm: React.FC<AddPolicyFormProps> = ({
       };
 
       if (isEditing && editingPolicy) {
-        await updatePolicy(accessToken, editingPolicy.policy_id, data as PolicyUpdateRequest);
+        await updatePolicy(
+          accessToken,
+          editingPolicy.policy_id,
+          data as PolicyUpdateRequest,
+        );
         NotificationsManager.success("Policy updated successfully");
       } else {
         await createPolicy(accessToken, data as PolicyCreateRequest);
         NotificationsManager.success("Policy created successfully");
       }
 
-      resetForm();
+      form.reset();
       onSuccess();
       onClose();
     } catch (error) {
       console.error("Failed to save policy:", error);
       NotificationsManager.fromBackend(
-        "Failed to save policy: " + (error instanceof Error ? error.message : String(error))
+        "Failed to save policy: " +
+          (error instanceof Error ? error.message : String(error)),
       );
     } finally {
       setIsSubmitting(false);
     }
-  };
+  });
 
   const guardrailOptions = availableGuardrails.map((g) => ({
     label: g.guardrail_name || g.guardrail_id,
@@ -346,224 +750,86 @@ const AddPolicyForm: React.FC<AddPolicyFormProps> = ({
   // ── Mode Picker Step ──────────────────────────────────────────────────────
   if (step === "pick_mode") {
     return (
-      <Modal
-        title="Create New Policy"
+      <Dialog
         open={visible}
-        onCancel={handleClose}
-        footer={null}
-        width={620}
+        onOpenChange={(o) => (!o ? handleClose() : undefined)}
       >
-        <ModePicker selected={selectedMode} onSelect={setSelectedMode} />
+        <DialogContent className="max-w-[620px]">
+          <DialogHeader>
+            <DialogTitle>Create New Policy</DialogTitle>
+          </DialogHeader>
+          <ModePicker selected={selectedMode} onSelect={setSelectedMode} />
 
-        {selectedMode === "flow_builder" && (
-          <Alert
-            message="You'll be redirected to the full-screen Flow Builder to design your policy logic visually."
-            type="info"
-            style={{
-              marginTop: 16,
-              backgroundColor: "#eef2ff",
-              border: "1px solid #c7d2fe",
-            }}
-          />
-        )}
+          {selectedMode === "flow_builder" && (
+            <Alert className="mt-4">
+              <Info className="h-4 w-4" />
+              <AlertDescription>
+                You&apos;ll be redirected to the full-screen Flow Builder to
+                design your policy logic visually.
+              </AlertDescription>
+            </Alert>
+          )}
 
-        <div className="flex justify-end gap-2" style={{ marginTop: 24 }}>
-          <Button variant="secondary" onClick={handleClose}>
-            Cancel
-          </Button>
-          <Button
-            onClick={handleModeConfirm}
-            style={{
-              backgroundColor: "#4f46e5",
-              color: "#fff",
-              border: "none",
-            }}
-          >
-            {selectedMode === "flow_builder" ? "Continue to Builder" : "Create Policy"}
-          </Button>
-        </div>
-      </Modal>
+          <div className="flex justify-end gap-2 mt-6">
+            <Button variant="secondary" onClick={handleClose}>
+              Cancel
+            </Button>
+            <Button onClick={handleModeConfirm}>
+              {selectedMode === "flow_builder"
+                ? "Continue to Builder"
+                : "Create Policy"}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     );
   }
 
   // ── Simple Form Step ──────────────────────────────────────────────────────
   return (
-    <Modal
-      title={isEditing ? "Edit Policy" : "Create New Policy"}
+    <Dialog
       open={visible}
-      onCancel={handleClose}
-      footer={null}
-      width={700}
+      onOpenChange={(o) => (!o ? handleClose() : undefined)}
     >
-      <Form
-        form={form}
-        layout="vertical"
-        initialValues={{
-          guardrails_add: [],
-          guardrails_remove: [],
-        }}
-        onValuesChange={handleFormChange}
-      >
-        <Form.Item
-          name="policy_name"
-          label="Policy Name"
-          rules={[
-            { required: true, message: "Please enter a policy name" },
-            {
-              pattern: /^[a-zA-Z0-9_-]+$/,
-              message:
-                "Policy name can only contain letters, numbers, hyphens, and underscores",
-            },
-          ]}
-        >
-          <TextInput
-            placeholder="e.g., global-baseline, healthcare-compliance"
-            disabled={isEditing}
-          />
-        </Form.Item>
-
-        <Form.Item name="description" label="Description">
-          <Textarea
-            rows={2}
-            placeholder="Describe what this policy does..."
-          />
-        </Form.Item>
-
-        <Divider orientation="left">
-          <Text strong>Inheritance</Text>
-        </Divider>
-
-        <Form.Item
-          name="inherit"
-          label="Inherit From"
-          tooltip="Inherit guardrails from another policy. The child policy will include all guardrails from the parent."
-        >
-          <Select
-            allowClear
-            placeholder="Select a parent policy (optional)"
-            options={policyOptions}
-            style={{ width: "100%" }}
-          />
-        </Form.Item>
-
-        <Divider orientation="left">
-          <Text strong>Guardrails</Text>
-        </Divider>
-
-        <Form.Item
-          name="guardrails_add"
-          label="Guardrails to Add"
-          tooltip="These guardrails will be added to requests matching this policy"
-        >
-          <Select
-            mode="multiple"
-            allowClear
-            placeholder="Select guardrails to add"
-            options={guardrailOptions}
-            style={{ width: "100%" }}
-          />
-        </Form.Item>
-
-        <Form.Item
-          name="guardrails_remove"
-          label="Guardrails to Remove"
-          tooltip="These guardrails will be removed from inherited guardrails"
-        >
-          <Select
-            mode="multiple"
-            allowClear
-            placeholder="Select guardrails to remove (from inherited)"
-            options={guardrailOptions}
-            style={{ width: "100%" }}
-          />
-        </Form.Item>
-
-        {resolvedGuardrails.length > 0 && (
-          <Alert
-            message="Resolved Guardrails"
-            description={
-              <div>
-                <Text type="secondary" style={{ display: "block", marginBottom: 8 }}>
-                  These are the final guardrails that will be applied (including inheritance):
-                </Text>
-                <div className="flex flex-wrap gap-1">
-                  {resolvedGuardrails.map((g) => (
-                    <Tag key={g} color="blue">
-                      {g}
-                    </Tag>
-                  ))}
-                </div>
-              </div>
-            }
-            type="info"
-            showIcon
-            style={{ marginBottom: 16 }}
-          />
-        )}
-
-        <Divider orientation="left">
-          <Text strong>Conditions (Optional)</Text>
-        </Divider>
-
-        <Alert
-          message="Model Scope"
-          description="By default, this policy will run on all models. You can optionally restrict it to specific models below."
-          type="info"
-          showIcon
-          style={{ marginBottom: 16 }}
-        />
-
-        <Form.Item label="Model Condition Type">
-          <Radio.Group
-            value={modelConditionType}
-            onChange={(e) => {
-              setModelConditionType(e.target.value);
-              form.setFieldValue("model_condition", undefined);
-            }}
-          >
-            <Radio value="model">Select Model</Radio>
-            <Radio value="regex">Custom Regex Pattern</Radio>
-          </Radio.Group>
-        </Form.Item>
-
-        <Form.Item
-          name="model_condition"
-          label={modelConditionType === "model" ? "Model (Optional)" : "Regex Pattern (Optional)"}
-          tooltip={
-            modelConditionType === "model"
-              ? "Select a specific model to apply this policy to. Leave empty to apply to all models."
-              : "Enter a regex pattern to match models (e.g., gpt-4.* or bedrock/.*). Leave empty to apply to all models."
-          }
-        >
-          {modelConditionType === "model" ? (
-            <Select
-              showSearch
-              allowClear
-              placeholder="Leave empty to apply to all models"
-              options={availableModels.map((model) => ({
-                label: model,
-                value: model,
-              }))}
-              filterOption={(input, option) =>
-                (option?.label ?? "").toLowerCase().includes(input.toLowerCase())
-              }
-              style={{ width: "100%" }}
+      <DialogContent className="max-w-[700px] max-h-[85vh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle>
+            {isEditing ? "Edit Policy" : "Create New Policy"}
+          </DialogTitle>
+        </DialogHeader>
+        <FormProvider {...form}>
+          <form onSubmit={onSubmit}>
+            <PolicyFields
+              isEditing={isEditing}
+              modelConditionType={modelConditionType}
+              onModelConditionTypeChange={(t) => {
+                setModelConditionType(t);
+                form.setValue("model_condition", undefined);
+              }}
+              policyOptions={policyOptions}
+              guardrailOptions={guardrailOptions}
+              availableModels={availableModels}
+              resolvedGuardrails={resolvedGuardrails}
             />
-          ) : (
-            <TextInput placeholder="Leave empty to apply to all models (e.g., gpt-4.* or bedrock/claude-.*)" />
-          )}
-        </Form.Item>
 
-        <div className="flex justify-end space-x-2 mt-4">
-          <Button variant="secondary" onClick={handleClose}>
-            Cancel
-          </Button>
-          <Button onClick={handleSubmit} loading={isSubmitting}>
-            {isEditing ? "Update Policy" : "Create Policy"}
-          </Button>
-        </div>
-      </Form>
-    </Modal>
+            <div className="flex justify-end space-x-2 mt-4">
+              <Button type="button" variant="secondary" onClick={handleClose}>
+                Cancel
+              </Button>
+              <Button type="submit" disabled={isSubmitting}>
+                {isSubmitting
+                  ? isEditing
+                    ? "Updating..."
+                    : "Creating..."
+                  : isEditing
+                    ? "Update Policy"
+                    : "Create Policy"}
+              </Button>
+            </div>
+          </form>
+        </FormProvider>
+      </DialogContent>
+    </Dialog>
   );
 };
 
