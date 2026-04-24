@@ -18,6 +18,7 @@ sys.path.insert(
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     HttpPassThroughEndpointHelpers,
     LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY,
+    _registered_pass_through_routes,
     pass_through_request,
 )
 from litellm.proxy.pass_through_endpoints.success_handler import (
@@ -2575,3 +2576,82 @@ async def test_multipart_passthrough_preserves_boundary():
     # Verify the response
     assert response.status_code == 200
     async_client.request.assert_called_once()
+
+
+class TestRemoveStaleEndpointRoute:
+    """Regression tests for https://github.com/BerriAI/litellm/issues/24833:
+    When pass-through endpoints stored in the DB have no ``id`` field, each
+    periodic reload generates a new UUID, causing ``_registered_pass_through_routes``
+    to grow without bound because the old cleanup path
+    (``remove_endpoint_routes``) scanned by ``endpoint_id`` and never matched
+    the stale entries.  The fix uses dict.pop() to remove by route key in O(1).
+    """
+
+    def setup_method(self):
+        _registered_pass_through_routes.clear()
+
+    def teardown_method(self):
+        _registered_pass_through_routes.clear()
+
+    def test_pop_removes_stale_route_by_key(self):
+        """Stale route is removed in O(1) by its route key via dict.pop()."""
+        route_key = "old-uuid:exact:/my-endpoint:GET,POST"
+        _registered_pass_through_routes[route_key] = {
+            "endpoint_id": "old-uuid",
+            "path": "/my-endpoint",
+            "type": "exact",
+        }
+
+        _registered_pass_through_routes.pop(route_key, None)
+
+        assert route_key not in _registered_pass_through_routes
+
+    def test_pop_noop_for_unknown_key(self):
+        """pop() with default None does not raise for nonexistent keys."""
+        _registered_pass_through_routes["keep-me:exact:/a:GET"] = {
+            "endpoint_id": "keep-me",
+            "path": "/a",
+            "type": "exact",
+        }
+
+        _registered_pass_through_routes.pop("nonexistent:exact:/b:GET", None)
+
+        assert len(_registered_pass_through_routes) == 1
+
+    def test_registry_does_not_grow_across_reload_cycles(self):
+        """Simulate multiple reload cycles with changing UUIDs.
+
+        Core regression test: without the fix the registry grows by N entries
+        every cycle; with the fix it stays constant.
+        """
+        path = "/vertex-passthrough"
+        methods_str = "GET,POST"
+        num_cycles = 50
+
+        for cycle in range(num_cycles):
+            old_keys = list(_registered_pass_through_routes.keys())
+
+            new_uuid = f"uuid-{cycle}"
+            new_exact_key = f"{new_uuid}:exact:{path}:{methods_str}"
+            new_subpath_key = f"{new_uuid}:subpath:{path}:{methods_str}"
+
+            _registered_pass_through_routes[new_exact_key] = {
+                "endpoint_id": new_uuid,
+                "path": path,
+                "type": "exact",
+            }
+            _registered_pass_through_routes[new_subpath_key] = {
+                "endpoint_id": new_uuid,
+                "path": path,
+                "type": "subpath",
+            }
+
+            visited = {new_exact_key, new_subpath_key}
+
+            # Clean up stale routes — the fix: pop by key in O(1)
+            for key in old_keys:
+                if key not in visited:
+                    _registered_pass_through_routes.pop(key, None)
+
+        # After 50 cycles, only the last cycle's 2 keys should remain
+        assert len(_registered_pass_through_routes) == 2

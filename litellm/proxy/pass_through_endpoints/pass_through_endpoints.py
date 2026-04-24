@@ -2326,7 +2326,11 @@ async def initialize_pass_through_endpoints(
     # remove the ones that are not visited from the list
     for endpoint_key in registered_pass_through_endpoints:
         if endpoint_key not in visited_endpoints:
-            InitPassThroughEndpointHelpers.remove_endpoint_routes(endpoint_key)
+            _registered_pass_through_routes.pop(endpoint_key, None)
+            verbose_proxy_logger.debug(
+                "Removed stale pass-through route from registry: %s",
+                endpoint_key,
+            )
 
 
 def _get_pass_through_endpoints_from_config() -> List[PassThroughGenericEndpoint]:
