@@ -60,7 +60,10 @@ def test_transform_includes_system_prompt_as_list():
     request = {
         "model": "anthropic.claude-3-sonnet-20240229-v1:0",
         "messages": [{"role": "user", "content": "Hello"}],
-        "system": [{"type": "text", "text": "Block 1"}, {"type": "text", "text": "Block 2"}],
+        "system": [
+            {"type": "text", "text": "Block 1"},
+            {"type": "text", "text": "Block 2"},
+        ],
     }
 
     result = config.transform_anthropic_to_bedrock_count_tokens(request)
@@ -109,7 +112,11 @@ def test_transform_includes_system_and_tools_together():
         "messages": [{"role": "user", "content": "Hello"}],
         "system": "Be helpful",
         "tools": [
-            {"name": "my_tool", "description": "A tool", "input_schema": {"type": "object", "properties": {}}},
+            {
+                "name": "my_tool",
+                "description": "A tool",
+                "input_schema": {"type": "object", "properties": {}},
+            },
         ],
     }
 
@@ -145,12 +152,18 @@ def test_tool_name_sanitization():
         "model": "anthropic.claude-3-sonnet-20240229-v1:0",
         "messages": [{"role": "user", "content": "Hello"}],
         "tools": [
-            {"name": "my-tool!", "description": "A tool", "input_schema": {"type": "object", "properties": {}}},
+            {
+                "name": "my-tool!",
+                "description": "A tool",
+                "input_schema": {"type": "object", "properties": {}},
+            },
         ],
     }
 
     result = config.transform_anthropic_to_bedrock_count_tokens(request)
 
-    tool_name = result["input"]["converse"]["toolConfig"]["tools"][0]["toolSpec"]["name"]
+    tool_name = result["input"]["converse"]["toolConfig"]["tools"][0]["toolSpec"][
+        "name"
+    ]
     # Should be sanitized: only [a-zA-Z0-9_]
     assert tool_name == "my_tool_"

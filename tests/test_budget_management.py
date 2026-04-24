@@ -93,9 +93,7 @@ async def test_create_budget_with_duration(budget_setup):
     actual_reset_at = _parse_budget_api_datetime(budget_setup["budget_reset_at"])
 
     tolerance_seconds = 3
-    time_difference = abs(
-        (actual_reset_at - expected_reset_at).total_seconds()
-    )
+    time_difference = abs((actual_reset_at - expected_reset_at).total_seconds())
 
     assert time_difference <= tolerance_seconds, (
         f"Expected budget_reset_at to be within {tolerance_seconds} seconds of {expected_reset_at}, "

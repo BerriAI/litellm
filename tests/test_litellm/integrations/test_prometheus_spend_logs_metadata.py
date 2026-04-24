@@ -4,6 +4,7 @@ Unit tests for spend_logs_metadata inclusion in Prometheus custom labels.
 Verifies that metadata from x-litellm-spend-logs-metadata header is available
 in Prometheus custom labels via combined_metadata.
 """
+
 from litellm.integrations.prometheus import get_custom_labels_from_metadata
 
 

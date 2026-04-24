@@ -2,6 +2,7 @@
 Tests for HuggingFace rerank functionality.
 Based on the test patterns from other rerank providers and the current HuggingFace implementation.
 """
+
 import asyncio
 import json
 from unittest.mock import AsyncMock, MagicMock, patch

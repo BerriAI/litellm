@@ -171,13 +171,13 @@ class AgentRegistry:
             created_agent_dict = created_agent.model_dump()
             if created_agent.object_permission is not None:
                 try:
-                    created_agent_dict[
-                        "object_permission"
-                    ] = created_agent.object_permission.model_dump()
+                    created_agent_dict["object_permission"] = (
+                        created_agent.object_permission.model_dump()
+                    )
                 except Exception:
-                    created_agent_dict[
-                        "object_permission"
-                    ] = created_agent.object_permission.dict()
+                    created_agent_dict["object_permission"] = (
+                        created_agent.object_permission.dict()
+                    )
             return AgentResponse(**created_agent_dict)  # type: ignore
         except Exception as e:
             raise Exception(f"Error adding agent to DB: {str(e)}")
@@ -283,13 +283,13 @@ class AgentRegistry:
             patched_agent_dict = patched_agent.model_dump()
             if patched_agent.object_permission is not None:
                 try:
-                    patched_agent_dict[
-                        "object_permission"
-                    ] = patched_agent.object_permission.model_dump()
+                    patched_agent_dict["object_permission"] = (
+                        patched_agent.object_permission.model_dump()
+                    )
                 except Exception:
-                    patched_agent_dict[
-                        "object_permission"
-                    ] = patched_agent.object_permission.dict()
+                    patched_agent_dict["object_permission"] = (
+                        patched_agent.object_permission.dict()
+                    )
             return AgentResponse(**patched_agent_dict)  # type: ignore
         except Exception as e:
             raise Exception(f"Error patching agent in DB: {str(e)}")
@@ -384,13 +384,13 @@ class AgentRegistry:
             updated_agent_dict = updated_agent.model_dump()
             if updated_agent.object_permission is not None:
                 try:
-                    updated_agent_dict[
-                        "object_permission"
-                    ] = updated_agent.object_permission.model_dump()
+                    updated_agent_dict["object_permission"] = (
+                        updated_agent.object_permission.model_dump()
+                    )
                 except Exception:
-                    updated_agent_dict[
-                        "object_permission"
-                    ] = updated_agent.object_permission.dict()
+                    updated_agent_dict["object_permission"] = (
+                        updated_agent.object_permission.dict()
+                    )
             return AgentResponse(**updated_agent_dict)  # type: ignore
         except Exception as e:
             raise Exception(f"Error updating agent in DB: {str(e)}")
@@ -414,9 +414,9 @@ class AgentRegistry:
                 # object_permission is eagerly loaded via include above
                 if agent.object_permission is not None:
                     try:
-                        agent_dict[
-                            "object_permission"
-                        ] = agent.object_permission.model_dump()
+                        agent_dict["object_permission"] = (
+                            agent.object_permission.model_dump()
+                        )
                     except Exception:
                         agent_dict["object_permission"] = agent.object_permission.dict()
                 agents.append(agent_dict)

@@ -48,6 +48,17 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
     Methods can be overridden to customize behavior for different message formats.
     """
 
+    def get_structured_messages(self, data: dict) -> Optional[List[AllMessageValues]]:
+        """
+        Convert chat completions request data to OpenAI-spec structured messages.
+
+        Messages are already in OpenAI format, so this is a simple extraction.
+        """
+        messages = data.get("messages")
+        if messages is None:
+            return None
+        return cast(List[AllMessageValues], messages)
+
     async def process_input_messages(
         self,
         data: dict,
@@ -68,9 +79,6 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         tool_calls_to_check: List[ChatCompletionToolParam] = []
         text_task_mappings: List[Tuple[int, Optional[int]]] = []
         tool_call_task_mappings: List[Tuple[int, int]] = []
-        # text_task_mappings: Track (message_index, content_index) for each text
-        # content_index is None for string content, int for list content
-        # tool_call_task_mappings: Track (message_index, tool_call_index) for each tool call
 
         # Step 1: Extract all text content, images, and tool calls
         for msg_idx, message in enumerate(messages):
@@ -92,12 +100,12 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                 inputs["images"] = images_to_check
             if tool_calls_to_check:
                 inputs["tool_calls"] = tool_calls_to_check  # type: ignore
-            if messages:
-                msg_list = cast(List[AllMessageValues], messages)
+            structured_messages = self.get_structured_messages(data)
+            if structured_messages:
                 inputs["structured_messages"] = (
-                    openai_messages_without_system(msg_list)
+                    openai_messages_without_system(structured_messages)
                     if skip_system
-                    else msg_list
+                    else structured_messages
                 )
             # Pass tools (function definitions) to the guardrail
             tools = data.get("tools")

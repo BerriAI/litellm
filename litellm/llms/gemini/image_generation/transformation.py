@@ -245,11 +245,11 @@ class GoogleImageGenConfig(BaseImageGenerationConfig):
                                 ImageObject(
                                     b64_json=inline_data["data"],
                                     url=None,
-                                    provider_specific_fields={
-                                        "thought_signature": thought_sig
-                                    }
-                                    if thought_sig
-                                    else None,
+                                    provider_specific_fields=(
+                                        {"thought_signature": thought_sig}
+                                        if thought_sig
+                                        else None
+                                    ),
                                 )
                             )
 

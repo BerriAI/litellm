@@ -321,30 +321,95 @@ def mask_sensitive_info(error_message):
     return error_message
 
 
+def _safe_get_response_text(response: httpx.Response) -> str:
+    """Safely read response text, falling back to empty string on decoding errors."""
+    try:
+        return response.text
+    except Exception:
+        return ""
+
+
+async def _safe_aread_response(response: httpx.Response) -> bytes:
+    """Safely read async response body, falling back to empty bytes on errors."""
+    try:
+        return await response.aread()
+    except Exception:
+        return b""
+
+
+def _safe_read_response(response: httpx.Response) -> bytes:
+    """Safely read sync response body, falling back to empty bytes on errors."""
+    try:
+        return response.read()
+    except Exception:
+        return b""
+
+
+def _raise_masked_sync_error(e: httpx.HTTPStatusError, stream: bool) -> None:
+    """Raise a MaskedHTTPStatusError for sync HTTP handlers."""
+    if stream:
+        _body = mask_sensitive_info(_safe_read_response(e.response))
+        raise MaskedHTTPStatusError(e, message=_body, text=_body) from None
+    _text = mask_sensitive_info(_safe_get_response_text(e.response))
+    raise MaskedHTTPStatusError(e, message=_text, text=_text) from None
+
+
+async def _raise_masked_async_error(e: httpx.HTTPStatusError, stream: bool) -> None:
+    """Raise a MaskedHTTPStatusError for async HTTP handlers."""
+    if stream:
+        _body = mask_sensitive_info(await _safe_aread_response(e.response))
+        raise MaskedHTTPStatusError(e, message=_body, text=_body) from None
+    _text = mask_sensitive_info(_safe_get_response_text(e.response))
+    raise MaskedHTTPStatusError(e, message=_text, text=_text) from None
+
+
 class MaskedHTTPStatusError(httpx.HTTPStatusError):
     def __init__(
         self, original_error, message: Optional[str] = None, text: Optional[str] = None
     ):
         # Create a new error with the masked URL
         masked_url = mask_sensitive_info(str(original_error.request.url))
-        # Create a new error that looks like the original, but with a masked URL
+        # Mask the original exception message too (it contains the full URL)
+        masked_original_message = mask_sensitive_info(str(original_error))
+
+        # Safely access response content — decompression can fail (e.g. zlib error).
+        # `.content` returns already-decoded bytes, so we must strip transport
+        # encoding headers before rebuilding the Response (otherwise httpx will
+        # try to decode the bytes a second time and raise DecodingError).
+        try:
+            response_content = original_error.response.content
+        except Exception:
+            response_content = b""
+
+        response_headers = {
+            k: v
+            for k, v in original_error.response.headers.items()
+            if k.lower() not in ("content-encoding", "content-length")
+        }
+
+        masked_request = httpx.Request(
+            method=original_error.request.method,
+            url=masked_url,
+            headers=original_error.request.headers,
+            content=original_error.request.content,
+        )
 
         super().__init__(
-            message=original_error.message,
-            request=httpx.Request(
-                method=original_error.request.method,
-                url=masked_url,
-                headers=original_error.request.headers,
-                content=original_error.request.content,
-            ),
+            message=masked_original_message,
+            request=masked_request,
+            # Attach the masked request so `response.request` is set — otherwise
+            # downstream code that inspects err.response.request (e.g.
+            # exception_mapping_utils) hits `RuntimeError: .request not set`.
             response=httpx.Response(
                 status_code=original_error.response.status_code,
-                content=original_error.response.content,
-                headers=original_error.response.headers,
+                content=response_content,
+                headers=response_headers,
+                request=masked_request,
             ),
         )
         self.message = message
         self.text = text
+        self.status_code = original_error.response.status_code
 
 
 class AsyncHTTPHandler:
@@ -506,16 +571,7 @@ class AsyncHTTPHandler:
                 headers=headers,
             )
         except httpx.HTTPStatusError as e:
-            if stream is True:
-                setattr(e, "message", await e.response.aread())
-                setattr(e, "text", await e.response.aread())
-            else:
-                setattr(e, "message", mask_sensitive_info(e.response.text))
-                setattr(e, "text", mask_sensitive_info(e.response.text))
-
-            setattr(e, "status_code", e.response.status_code)
-
-            raise e
+            await _raise_masked_async_error(e, stream)
         except Exception as e:
             raise e
 
@@ -576,12 +632,7 @@ class AsyncHTTPHandler:
                 headers=headers,
             )
         except httpx.HTTPStatusError as e:
-            setattr(e, "status_code", e.response.status_code)
-            if stream is True:
-                setattr(e, "message", await e.response.aread())
-            else:
-                setattr(e, "message", e.response.text)
-            raise e
+            await _raise_masked_async_error(e, stream)
         except Exception as e:
             raise e
 
@@ -642,12 +693,7 @@ class AsyncHTTPHandler:
                 headers=headers,
             )
         except httpx.HTTPStatusError as e:
-            setattr(e, "status_code", e.response.status_code)
-            if stream is True:
-                setattr(e, "message", await e.response.aread())
-            else:
-                setattr(e, "message", e.response.text)
-            raise e
+            await _raise_masked_async_error(e, stream)
         except Exception as e:
             raise e
 
@@ -695,12 +741,7 @@ class AsyncHTTPHandler:
             finally:
                 await new_client.aclose()
         except httpx.HTTPStatusError as e:
-            setattr(e, "status_code", e.response.status_code)
-            if stream is True:
-                setattr(e, "message", await e.response.aread())
-            else:
-                setattr(e, "message", e.response.text)
-            raise e
+            await _raise_masked_async_error(e, stream)
         except Exception as e:
             raise e
 
@@ -891,9 +932,9 @@ class AsyncHTTPHandler:
         if AIOHTTP_CONNECTOR_LIMIT > 0:
             transport_connector_kwargs["limit"] = AIOHTTP_CONNECTOR_LIMIT
         if AIOHTTP_CONNECTOR_LIMIT_PER_HOST > 0:
-            transport_connector_kwargs[
-                "limit_per_host"
-            ] = AIOHTTP_CONNECTOR_LIMIT_PER_HOST
+            transport_connector_kwargs["limit_per_host"] = (
+                AIOHTTP_CONNECTOR_LIMIT_PER_HOST
+            )
 
         return LiteLLMAiohttpTransport(
             client=lambda: ClientSession(
@@ -978,6 +1019,7 @@ class HTTPHandler:
             url,
             params=params,
             headers=headers,
+            follow_redirects=_follow_redirects,
         )
 
         return response
@@ -1040,16 +1082,7 @@ class HTTPHandler:
                 llm_provider="litellm-httpx-handler",
             )
         except httpx.HTTPStatusError as e:
-            if stream is True:
-                setattr(e, "message", mask_sensitive_info(e.response.read()))
-                setattr(e, "text", mask_sensitive_info(e.response.read()))
-            else:
-                error_text = mask_sensitive_info(e.response.text)
-                setattr(e, "message", error_text)
-                setattr(e, "text", error_text)
-
-            setattr(e, "status_code", e.response.status_code)
-            raise e
+            _raise_masked_sync_error(e, stream)
         except Exception as e:
             raise e
 
@@ -1088,17 +1121,7 @@ class HTTPHandler:
                 llm_provider="litellm-httpx-handler",
             )
         except httpx.HTTPStatusError as e:
-            if stream is True:
-                setattr(e, "message", mask_sensitive_info(e.response.read()))
-                setattr(e, "text", mask_sensitive_info(e.response.read()))
-            else:
-                error_text = mask_sensitive_info(e.response.text)
-                setattr(e, "message", error_text)
-                setattr(e, "text", error_text)
-
-            setattr(e, "status_code", e.response.status_code)
-
-            raise e
+            _raise_masked_sync_error(e, stream)
         except Exception as e:
             raise e
 
@@ -1135,6 +1158,8 @@ class HTTPHandler:
                 model="default-model-name",
                 llm_provider="litellm-httpx-handler",
             )
+        except httpx.HTTPStatusError as e:
+            _raise_masked_sync_error(e, stream)
         except Exception as e:
             raise e
 
@@ -1173,17 +1198,7 @@ class HTTPHandler:
                 llm_provider="litellm-httpx-handler",
             )
         except httpx.HTTPStatusError as e:
-            if stream is True:
-                setattr(e, "message", mask_sensitive_info(e.response.read()))
-                setattr(e, "text", mask_sensitive_info(e.response.read()))
-            else:
-                error_text = mask_sensitive_info(e.response.text)
-                setattr(e, "message", error_text)
-                setattr(e, "text", error_text)
-
-            setattr(e, "status_code", e.response.status_code)
-
-            raise e
+            _raise_masked_sync_error(e, stream)
         except Exception as e:
             raise e
 

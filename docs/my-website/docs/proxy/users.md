@@ -333,6 +333,67 @@ curl 'http://0.0.0.0:4000/key/generate' \
 }'
 ```
 
+#### **Set multiple budget windows on a key**
+
+Apply multiple concurrent budget limits at different time scales on the same key — for example, cap a key at **$10/day** AND **$100/month**.
+
+**When is this useful?**
+
+A single `budget_duration` window can't prevent a bad day from burning your entire month. Multiple budget windows let you:
+
+- Block a runaway usage spike within the day while still allowing normal monthly spend.
+- Give Claude Code rollouts a daily guardrail (`24h`) and a monthly ceiling (`30d`) so a single heavy session doesn't exhaust the whole month.
+- Layer fine-grained hourly limits for bursty workloads on top of a weekly cap.
+
+:::info
+
+See [User Budget docs](https://docs.litellm.ai/docs/proxy/users) for more on how budgets work across keys, teams, and users.
+
+:::
+
+**Via API**
+
+Pass `budget_limits` as a list of `{budget_duration, max_budget}` objects:
+
+```bash
+curl 'http://0.0.0.0:4000/key/generate' \
+--header 'Authorization: Bearer <your-master-key>' \
+--header 'Content-Type: application/json' \
+--data-raw '{
+  "budget_limits": [
+    {"budget_duration": "24h",  "max_budget": 10},
+    {"budget_duration": "30d",  "max_budget": 100}
+  ]
+}'
+```
+
+Each window is tracked independently and resets on its own schedule:
+
+| `budget_duration` | Resets |
+|---|---|
+| `1h`  | Every hour |
+| `24h` | Daily at midnight UTC |
+| `7d`  | Every Sunday at midnight UTC |
+| `30d` | 1st of every month at midnight UTC |
+
+**Via Dashboard**
+
+Open **Virtual Keys → Create Key → Optional Settings → Budget Windows**.
+
+![Step 1 - open key settings](https://colony-recorder.s3.amazonaws.com/files/2026-04-01/18930ba5-67c0-4031-afc0-57f37b4e59e4/ascreenshot_ef79d8a000bb41cdacf1bd9827732ee8_text_export.jpeg)
+
+Click **+ Add Budget Window** to add a row, choose the period from the dropdown, and enter the spend cap.
+
+![Step 2 - add a window](https://colony-recorder.s3.amazonaws.com/files/2026-04-01/5ae8c0b3-2d03-41ad-a63c-47b20c350dfe/ascreenshot_1a7dc6c7d65544f38fd8a65604674f22_text_export.jpeg)
+
+Add a second row for a different time period (e.g. monthly $100 on top of a daily $10).
+
+![Step 3 - add second window](https://colony-recorder.s3.amazonaws.com/files/2026-04-01/cbded3a7-1086-4e20-8f0f-de154b76146c/ascreenshot_c51c18752c3b4f8b976d28799b2638b6_text_export.jpeg)
+
+Each window shows the reset schedule below the input so it's always clear when spend resets.
+
+![Step 4 - reset hints](https://colony-recorder.s3.amazonaws.com/files/2026-04-01/8754f121-1640-4892-9dd0-fd4a870418bf/ascreenshot_8079eb0df2194e8f99e5258ba4b3c082_text_export.jpeg)
+
 
 ### ✨ Virtual Key (Model Specific)
 

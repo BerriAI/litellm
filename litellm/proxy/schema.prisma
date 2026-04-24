@@ -17,8 +17,9 @@ model LiteLLM_BudgetTable {
   tpm_limit     BigInt?
   rpm_limit     BigInt?
   model_max_budget Json?
-  budget_duration String? 
+  budget_duration String?
   budget_reset_at DateTime?
+  allowed_models String[] @default([]) // per-member model scope; empty = inherit team models
   created_at    DateTime               @default(now()) @map("created_at")
   created_by String
   updated_at    DateTime               @default(now()) @updatedAt @map("updated_at")
@@ -140,6 +141,8 @@ model LiteLLM_TeamTable {
     team_member_permissions String[] @default([])
     access_group_ids String[] @default([])
     policies         String[] @default([])
+    default_team_member_models String[] @default([]) // default allowed_models for newly added team members; empty = no per-member restriction
+    budget_limits Json? // per-model budget limits for the team
     model_id Int? @unique // id for LiteLLM_ModelTable -> stores team-level model aliases
     allow_team_guardrail_config Boolean @default(false) // if true, team admin can configure guardrails for this team
     litellm_organization_table LiteLLM_OrganizationTable?   @relation(fields: [organization_id], references: [organization_id])
@@ -401,6 +404,7 @@ model LiteLLM_VerificationToken {
     rotation_interval String?   // How often to rotate (e.g., "30d", "90d")
     last_rotation_at DateTime?  // When this key was last rotated
     key_rotation_at  DateTime?  // When this key should next be rotated
+    budget_limits Json? // per-model budget limits for the key
     litellm_budget_table LiteLLM_BudgetTable?   @relation(fields: [budget_id], references: [budget_id])
     litellm_organization_table LiteLLM_OrganizationTable?   @relation(fields: [organization_id], references: [organization_id])
     litellm_project_table LiteLLM_ProjectTable?   @relation(fields: [project_id], references: [project_id])
@@ -612,6 +616,7 @@ model LiteLLM_TeamMembership {
   user_id    String
   team_id    String
   spend      Float    @default(0.0)
+  total_spend Float @default(0.0)
   budget_id String?
   litellm_budget_table LiteLLM_BudgetTable?   @relation(fields: [budget_id], references: [budget_id])
   @@id([user_id, team_id])
@@ -1218,4 +1223,47 @@ model LiteLLM_ClaudeCodePluginTable {
   created_by    String?
 
   @@map("LiteLLM_ClaudeCodePluginTable")
+}
+
+// Per-(router, request_type, model) Beta posterior for the adaptive router.
+model LiteLLM_AdaptiveRouterState {
+  router_name     String
+  request_type    String
+  model_name      String
+  alpha           Float
+  beta            Float
+  total_samples   Int      @default(0)
+  last_updated_at DateTime @default(now()) @updatedAt
+
+  @@id([router_name, request_type, model_name])
+}
+
+// Per-(session, router, model) signal counters for the adaptive router.
+model LiteLLM_AdaptiveRouterSession {
+  session_id             String
+  router_name            String
+  model_name             String
+  classified_type        String
+
+  misalignment_count     Int      @default(0)
+  stagnation_count       Int      @default(0)
+  disengagement_count    Int      @default(0)
+  satisfaction_count     Int      @default(0)
+  failure_count          Int      @default(0)
+  loop_count             Int      @default(0)
+  exhaustion_count       Int      @default(0)
+
+  last_user_content      String?
+  last_assistant_content String?
+  tool_call_history      Json     @default("[]")
+  pending_tool_calls     Json     @default("{}")
+
+  turn_count             Int      @default(0)
+  last_processed_turn    Int      @default(-1)
+  clean_credit_awarded   Boolean  @default(false)
+  terminal_status        Int?
+  last_activity_at       DateTime @default(now()) @updatedAt
+
+  @@id([session_id, router_name, model_name])
+  @@index([last_activity_at], map: "idx_adaptive_router_session_activity")
 }

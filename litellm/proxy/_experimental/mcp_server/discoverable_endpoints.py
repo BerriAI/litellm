@@ -251,7 +251,9 @@ async def _store_per_user_token_server_side(
 
     raw_expires = token_response.get("expires_in")
     try:
-        expires_in: Optional[int] = int(raw_expires) if raw_expires is not None else None
+        expires_in: Optional[int] = (
+            int(raw_expires) if raw_expires is not None else None
+        )
     except (TypeError, ValueError):
         expires_in = None
 
@@ -321,6 +323,14 @@ async def authorize_with_server(
         )
 
     parsed = urlparse(redirect_uri)
+    if parsed.scheme not in ("http", "https"):
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "invalid_redirect_uri",
+                "message": "redirect_uri must use http or https scheme",
+            },
+        )
     base_url = urlunparse(parsed._replace(query=""))
     request_base_url = get_request_base_url(request)
     encoded_state = encode_state_with_base_url(
@@ -734,9 +744,9 @@ def _build_oauth_protected_resource_response(
             )
         ],
         "resource": resource_url,
-        "scopes_supported": mcp_server.scopes
-        if mcp_server and mcp_server.scopes
-        else [],
+        "scopes_supported": (
+            mcp_server.scopes if mcp_server and mcp_server.scopes else []
+        ),
     }
 
 
@@ -846,16 +856,18 @@ def _build_oauth_authorization_server_response(
         "authorization_endpoint": authorization_endpoint,
         "token_endpoint": token_endpoint,
         "response_types_supported": ["code"],
-        "scopes_supported": mcp_server.scopes
-        if mcp_server and mcp_server.scopes
-        else [],
+        "scopes_supported": (
+            mcp_server.scopes if mcp_server and mcp_server.scopes else []
+        ),
         "grant_types_supported": ["authorization_code", "refresh_token"],
         "code_challenge_methods_supported": ["S256"],
         "token_endpoint_auth_methods_supported": ["client_secret_post"],
         # Claude expects a registration endpoint, even if we just fake it
-        "registration_endpoint": f"{request_base_url}/{mcp_server_name}/register"
-        if mcp_server_name
-        else f"{request_base_url}/register",
+        "registration_endpoint": (
+            f"{request_base_url}/{mcp_server_name}/register"
+            if mcp_server_name
+            else f"{request_base_url}/register"
+        ),
     }
 
 
