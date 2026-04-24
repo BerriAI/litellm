@@ -479,6 +479,117 @@ class TestMemoryEndpoints:
             resp = client.put("/v1/memory/notes", json={})
         assert resp.status_code == 400
 
+    def test_put_memory_teammate_cannot_overwrite_personal_row(self):
+        """
+        Visibility OR-filter lets a team member SEE a teammate's row, but the
+        write-authorization check must prevent them from overwriting it.
+        Teammate B should get 403, not silently take over user A's entry.
+        """
+        table = self.prisma.db.litellm_memorytable
+        table.rows.append(
+            _make_row(
+                memory_id="m1",
+                key="user_role",
+                value="A's notes",
+                user_id="user-a",
+                team_id="team-shared",
+            )
+        )
+        # User B is on the same team but a different user_id.
+        client = _make_client(_user_auth("user-b", "team-shared"))
+        with _patch_prisma(self.prisma):
+            resp = client.put("/v1/memory/user_role", json={"value": "B overwrite"})
+        assert resp.status_code == 403, resp.text
+        # Row is unchanged.
+        assert table.rows[0].value == "A's notes"
+
+    def test_delete_memory_teammate_cannot_delete_personal_row(self):
+        """Same as above, but for DELETE."""
+        table = self.prisma.db.litellm_memorytable
+        table.rows.append(
+            _make_row(
+                memory_id="m1",
+                key="user_role",
+                value="A's notes",
+                user_id="user-a",
+                team_id="team-shared",
+            )
+        )
+        client = _make_client(_user_auth("user-b", "team-shared"))
+        with _patch_prisma(self.prisma):
+            resp = client.delete("/v1/memory/user_role")
+        assert resp.status_code == 403, resp.text
+        assert len(table.rows) == 1
+
+    def test_put_memory_teammate_can_modify_pure_team_row(self):
+        """
+        A "pure" team row (no user_id stamped, only team_id) is intended to be
+        shared — any team member can modify it.
+        """
+        table = self.prisma.db.litellm_memorytable
+        table.rows.append(
+            _make_row(
+                memory_id="m1",
+                key="team_playbook",
+                value="v1",
+                user_id=None,
+                team_id="team-shared",
+            )
+        )
+        client = _make_client(_user_auth("user-b", "team-shared"))
+        with _patch_prisma(self.prisma):
+            resp = client.put("/v1/memory/team_playbook", json={"value": "v2"})
+        assert resp.status_code == 200, resp.text
+        assert table.rows[0].value == "v2"
+
+    def test_admin_can_modify_any_row(self):
+        """Admin bypasses write-authorization."""
+        table = self.prisma.db.litellm_memorytable
+        table.rows.append(
+            _make_row(
+                memory_id="m1",
+                key="user_role",
+                value="A's notes",
+                user_id="user-a",
+                team_id="team-shared",
+            )
+        )
+        client = _make_client(_admin_auth())
+        with _patch_prisma(self.prisma):
+            resp = client.put("/v1/memory/user_role", json={"value": "admin override"})
+        assert resp.status_code == 200, resp.text
+        assert table.rows[0].value == "admin override"
+
+    def test_internal_error_does_not_leak_db_details(self):
+        """
+        500 responses must not echo Prisma internals (table names, columns,
+        connection strings) back to the caller.
+        """
+        table = self.prisma.db.litellm_memorytable
+
+        async def boom(*_args, **_kwargs):
+            raise Exception(
+                "PrismaClientKnownRequestError: column "
+                '"LiteLLM_MemoryTable.value" does not exist '
+                "on host db.internal:5432"
+            )
+
+        original_create = table.create
+        table.create = boom  # type: ignore[assignment]
+
+        client = _make_client(_user_auth("user-a", "team-a"))
+        with _patch_prisma(self.prisma):
+            resp = client.post("/v1/memory", json={"key": "x", "value": "y"})
+
+        table.create = original_create  # type: ignore[assignment]
+
+        assert resp.status_code == 500
+        body_text = resp.text
+        for leak in ("LiteLLM_MemoryTable", "db.internal", "PrismaClient"):
+            assert (
+                leak not in body_text
+            ), f"Leaked '{leak}' in 500 response: {body_text}"
+
     def test_delete_memory(self):
         table = self.prisma.db.litellm_memorytable
         table.rows.append(

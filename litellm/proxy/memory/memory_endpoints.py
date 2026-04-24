@@ -86,6 +86,53 @@ def _require_prisma():
     return prisma_client
 
 
+def _internal_error(
+    log_message: str, exc: Exception, default_detail: str
+) -> HTTPException:
+    """
+    Build a 500 HTTPException with a generic, caller-safe `detail` while
+    logging the actual exception server-side. Avoids leaking internal Prisma /
+    DB details (table names, columns, connection metadata) to API callers.
+    """
+    verbose_proxy_logger.exception(log_message, exc)
+    return HTTPException(status_code=500, detail=default_detail)
+
+
+def _assert_write_access(row: Any, user_api_key_dict: UserAPIKeyAuth) -> None:
+    """
+    Enforce ownership for mutations (PUT/DELETE).
+
+    The visibility filter uses an OR (`user_id == caller OR team_id == caller`)
+    so team members can READ each other's team-scoped rows. That's intentional
+    for list/get. For writes, broader visibility != broader authority — without
+    this check, any team member could overwrite or delete a teammate's
+    personal row whenever both `user_id` and `team_id` are stamped on it.
+
+    Rule (non-admin): the row must be authored by the caller's user_id, or be
+    a "pure team row" (no user_id stamped) within the caller's team.
+    Admins may modify any row.
+    """
+    if _is_admin(user_api_key_dict):
+        return
+    row_user_id = getattr(row, "user_id", None)
+    row_team_id = getattr(row, "team_id", None)
+
+    # Personal ownership: caller authored this row.
+    if row_user_id and row_user_id == user_api_key_dict.user_id:
+        return
+    # Pure team row (no user_id stamped) inside the caller's team.
+    if (
+        row_user_id is None
+        and row_team_id is not None
+        and row_team_id == user_api_key_dict.team_id
+    ):
+        return
+    raise HTTPException(
+        status_code=403,
+        detail="You do not have permission to modify this memory entry.",
+    )
+
+
 def _is_unique_violation(exc: Exception) -> bool:
     """
     Detect a Prisma unique-constraint violation.
@@ -195,8 +242,11 @@ async def create_memory(
                 status_code=409,
                 detail=f"Memory with key '{body.key}' already exists.",
             )
-        verbose_proxy_logger.exception("Error creating memory: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _internal_error(
+            "Error creating memory: %s",
+            e,
+            "Internal error creating memory entry.",
+        )
 
     return _row_to_model(row)
 
@@ -252,8 +302,9 @@ async def list_memory(
             take=page_size,
         )
     except Exception as e:
-        verbose_proxy_logger.exception("Error listing memory: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _internal_error(
+            "Error listing memory: %s", e, "Internal error listing memory entries."
+        )
 
     return MemoryListResponse(memories=[_row_to_model(r) for r in rows], total=total)
 
@@ -343,6 +394,11 @@ async def upsert_memory(
     try:
         existing = await _find_existing()
         if existing is not None:
+            # Visibility != write authority. Make sure the caller actually
+            # owns this row (their user_id matches, or it's a pure team row in
+            # their team) — otherwise a teammate could overwrite a personal
+            # entry through the OR-based visibility filter.
+            _assert_write_access(existing, user_api_key_dict)
             row = await prisma_client.db.litellm_memorytable.update(
                 where={"memory_id": existing.memory_id},
                 data=data,
@@ -384,11 +440,10 @@ async def upsert_memory(
                     # (owned by someone else). Treat as conflict.
                     raise HTTPException(
                         status_code=409,
-                        detail=(
-                            f"Memory with key '{key}' already exists in a "
-                            "different scope."
-                        ),
+                        detail=f"Memory with key '{key}' already exists.",
                     )
+                # Same write-authorization check as the non-race path.
+                _assert_write_access(existing_after_race, user_api_key_dict)
                 row = await prisma_client.db.litellm_memorytable.update(
                     where={"memory_id": existing_after_race.memory_id},
                     data=data,
@@ -396,8 +451,9 @@ async def upsert_memory(
     except HTTPException:
         raise
     except Exception as e:
-        verbose_proxy_logger.exception("Error upserting memory: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _internal_error(
+            "Error upserting memory: %s", e, "Internal error updating memory entry."
+        )
 
     return _row_to_model(row)
 
@@ -415,12 +471,15 @@ async def delete_memory(
     """Delete a memory entry by key, scoped to the caller."""
     prisma_client = _require_prisma()
     row = await _find_memory_for_caller(prisma_client, key, user_api_key_dict)
+    # Visibility != write authority — see the upsert handler for the rationale.
+    _assert_write_access(row, user_api_key_dict)
     try:
         await prisma_client.db.litellm_memorytable.delete(
             where={"memory_id": row.memory_id}
         )
     except Exception as e:
-        verbose_proxy_logger.exception("Error deleting memory: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _internal_error(
+            "Error deleting memory: %s", e, "Internal error deleting memory entry."
+        )
 
     return MemoryDeleteResponse(key=key, deleted=True)
