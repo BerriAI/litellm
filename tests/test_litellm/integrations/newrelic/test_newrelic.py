@@ -247,6 +247,15 @@ class TestGetTraceContext:
         trace_id, span_id = self.logger._get_trace_context(kwargs)
         assert trace_id == "4bf92f3577b34da6a3ce929d0e0e4736"
 
+    def test_exception_returns_none_none(self):
+        import litellm.integrations.newrelic.newrelic as nr_module
+
+        with patch.object(nr_module, "uuid") as mock_uuid:
+            mock_uuid.uuid4.side_effect = RuntimeError("uuid failure")
+            trace_id, span_id = self.logger._get_trace_context({})
+        assert trace_id is None
+        assert span_id is None
+
 
 # ---------------------------------------------------------------------------
 # _extract_message_content edge cases
@@ -701,6 +710,17 @@ class TestProcessSuccess:
 
         mock_app.assert_not_called()
 
+    def test_skips_recording_when_trace_id_is_none(self):
+        logger = make_logger()
+        mock_app = MagicMock()
+        mock_app.enabled = True
+
+        with patch.object(logger, "_get_trace_context", return_value=(None, None)):
+            with patch("newrelic.agent.application", return_value=mock_app):
+                logger._process_success(make_kwargs(), make_response())
+
+        mock_app.record_custom_event.assert_not_called()
+
 
 # ---------------------------------------------------------------------------
 # _record_error_metric
@@ -739,6 +759,18 @@ class TestRecordErrorMetric:
                 self.logger._record_error_metric()
 
         mock_periodic.assert_called_once()
+
+    def test_skips_when_logger_disabled(self):
+        self.logger.enabled = False
+        with patch("newrelic.agent.application") as mock_app:
+            self.logger._record_error_metric()
+        mock_app.assert_not_called()
+
+    def test_handles_exception(self):
+        with patch(
+            "newrelic.agent.application", side_effect=RuntimeError("agent down")
+        ):
+            self.logger._record_error_metric()  # must not raise
 
 
 # ---------------------------------------------------------------------------
@@ -790,6 +822,12 @@ class TestEmitSupportabilityMetric:
         # Timestamp is updated even when app is None to back off lock contention
         # if the agent never starts or is slow to initialise.
         assert NewRelicLogger._last_metric_emission_time != 0.0
+
+    def test_handles_exception(self):
+        with patch(
+            "newrelic.agent.application", side_effect=RuntimeError("agent down")
+        ):
+            self.logger._emit_supportability_metric()  # must not raise
 
 
 # ---------------------------------------------------------------------------
@@ -847,6 +885,96 @@ class TestCheckAndEmitPeriodicMetric:
 
 
 # ---------------------------------------------------------------------------
+# _get_litellm_version
+# ---------------------------------------------------------------------------
+
+
+class TestGetLitellmVersion:
+    def setup_method(self):
+        self.logger = make_logger()
+
+    def test_returns_unknown_on_exception(self):
+        with patch("importlib.metadata.version", side_effect=Exception("no package")):
+            result = self.logger._get_litellm_version()
+        assert result == "unknown"
+
+
+# ---------------------------------------------------------------------------
+# _record_summary_event — disabled-app and exception paths
+# ---------------------------------------------------------------------------
+
+_USAGE = {"prompt_tokens": 5, "completion_tokens": 10, "total_tokens": 15}
+
+
+class TestRecordSummaryEvent:
+    def setup_method(self):
+        self.logger = make_logger()
+
+    def _call(self, **kwargs):
+        self.logger._record_summary_event(
+            request_id="req-1",
+            trace_id="trace-abc",
+            span_id=None,
+            request_model="gpt-4",
+            response_model="gpt-4",
+            vendor="openai",
+            finish_reason="stop",
+            num_messages=2,
+            usage=_USAGE,
+            **kwargs,
+        )
+
+    def test_skips_when_app_disabled(self):
+        mock_app = MagicMock()
+        mock_app.enabled = False
+        with patch("newrelic.agent.application", return_value=mock_app):
+            self._call()
+        mock_app.record_custom_event.assert_not_called()
+
+    def test_handles_exception(self):
+        with patch(
+            "newrelic.agent.application", side_effect=RuntimeError("agent down")
+        ):
+            self._call()  # must not raise
+
+
+# ---------------------------------------------------------------------------
+# _record_message_events — disabled-app and exception paths
+# ---------------------------------------------------------------------------
+
+_MESSAGES = [
+    {"role": "user", "sequence": 0, "response.model": "gpt-4", "vendor": "openai"}
+]
+
+
+class TestRecordMessageEvents:
+    def setup_method(self):
+        self.logger = make_logger()
+
+    def _call(self):
+        self.logger._record_message_events(
+            request_id="req-1",
+            llm_response_id="resp-1",
+            trace_id="trace-abc",
+            span_id=None,
+            messages=_MESSAGES,
+        )
+
+    def test_skips_when_app_disabled(self):
+        mock_app = MagicMock()
+        mock_app.enabled = False
+        with patch("newrelic.agent.application", return_value=mock_app):
+            self._call()
+        mock_app.record_custom_event.assert_not_called()
+
+    def test_handles_exception(self):
+        with patch(
+            "newrelic.agent.application", side_effect=RuntimeError("agent down")
+        ):
+            self._call()  # must not raise
+
+
+# ---------------------------------------------------------------------------
 # CustomLogger interface entry points
 # ---------------------------------------------------------------------------
 
@@ -858,6 +986,28 @@ class TestLogSuccessEvent:
             logger.log_success_event(make_kwargs(), make_response(), 1.0, 2.0)
         mock_process.assert_called_once()
 
+    def test_exception_is_handled(self):
+        logger = make_logger()
+        with patch.object(logger, "_process_success", side_effect=RuntimeError("boom")):
+            logger.log_success_event(make_kwargs(), make_response(), 1.0, 2.0)
+
+    @pytest.mark.asyncio
+    async def test_async_delegates_to_process_success(self):
+        logger = make_logger()
+        with patch.object(logger, "_process_success") as mock_process:
+            await logger.async_log_success_event(
+                make_kwargs(), make_response(), 1.0, 2.0
+            )
+        mock_process.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_async_exception_is_handled(self):
+        logger = make_logger()
+        with patch.object(logger, "_process_success", side_effect=RuntimeError("boom")):
+            await logger.async_log_success_event(
+                make_kwargs(), make_response(), 1.0, 2.0
+            )
+
 
 class TestLogFailureEvent:
     def test_sync_records_error_metric(self):
@@ -866,12 +1016,27 @@ class TestLogFailureEvent:
             logger.log_failure_event(make_kwargs(), None, 1.0, 2.0)
         mock_metric.assert_called_once()
 
+    def test_sync_exception_is_handled(self):
+        logger = make_logger()
+        with patch.object(
+            logger, "_record_error_metric", side_effect=RuntimeError("boom")
+        ):
+            logger.log_failure_event(make_kwargs(), None, 1.0, 2.0)
+
     @pytest.mark.asyncio
     async def test_async_records_error_metric(self):
         logger = make_logger()
         with patch.object(logger, "_record_error_metric") as mock_metric:
             await logger.async_log_failure_event(make_kwargs(), None, 1.0, 2.0)
         mock_metric.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_async_exception_is_handled(self):
+        logger = make_logger()
+        with patch.object(
+            logger, "_record_error_metric", side_effect=RuntimeError("boom")
+        ):
+            await logger.async_log_failure_event(make_kwargs(), None, 1.0, 2.0)
 
 
 # ---------------------------------------------------------------------------
@@ -907,3 +1072,13 @@ class TestAsyncHealthCheck:
             result = await logger.async_health_check()
         assert result["status"] == "unhealthy"
         assert result["error_message"] is not None
+
+    @pytest.mark.asyncio
+    async def test_exception_returns_unhealthy(self):
+        logger = make_logger()
+        with patch(
+            "newrelic.agent.application", side_effect=RuntimeError("agent down")
+        ):
+            result = await logger.async_health_check()
+        assert result["status"] == "unhealthy"
+        assert "agent down" in result["error_message"]
