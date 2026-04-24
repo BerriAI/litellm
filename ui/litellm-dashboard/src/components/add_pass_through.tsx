@@ -2,8 +2,8 @@
  * Modal to add fallbacks to the proxy router config
  */
 
-// eslint-disable-next-line litellm-ui/no-banned-ui-imports
 import React, { useState } from "react";
+// eslint-disable-next-line litellm-ui/no-banned-ui-imports
 import { Button, TextInput, Switch } from "@tremor/react";
 // eslint-disable-next-line litellm-ui/no-banned-ui-imports
 import {
