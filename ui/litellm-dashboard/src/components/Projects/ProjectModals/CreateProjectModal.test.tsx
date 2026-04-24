@@ -11,6 +11,17 @@ vi.mock("@/app/(dashboard)/hooks/projects/useCreateProject", () => ({
 // Mock the form to keep tests focused on modal behavior
 vi.mock("./ProjectBaseForm", () => ({
   ProjectBaseForm: () => <div data-testid="project-base-form" />,
+  emptyProjectFormValues: {
+    project_alias: "",
+    team_id: "",
+    description: "",
+    models: [],
+    max_budget: undefined,
+    isBlocked: false,
+    guardrails: undefined,
+    modelLimits: undefined,
+    metadata: undefined,
+  },
 }));
 
 describe("CreateProjectModal", () => {

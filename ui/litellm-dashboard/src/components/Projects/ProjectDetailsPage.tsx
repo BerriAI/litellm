@@ -1,30 +1,31 @@
-import { useProjectDetails } from "@/app/(dashboard)/hooks/projects/useProjectDetails";
-import { useTeam } from "@/app/(dashboard)/hooks/teams/useTeams";
+import { useMemo, useState } from "react";
+import { toast } from "sonner";
 import {
-  Button,
-  Card,
-  Col,
-  Descriptions,
-  Empty,
-  Flex,
-  Layout,
-  Progress,
-  Row,
-  Spin,
-  Tag,
-  theme,
-  Typography,
-} from "antd";
-import { Loader2 as LoadingOutlined } from "lucide-react";
+  ArrowLeft,
+  Copy,
+  DollarSign,
+  Edit,
+  Key,
+  Loader2,
+  Users,
+} from "lucide-react";
 // eslint-disable-next-line litellm-ui/no-banned-ui-imports
 import { BarChart } from "@tremor/react";
-import { ArrowLeftIcon, DollarSignIcon, EditIcon, KeyIcon, UsersIcon } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useProjectDetails } from "@/app/(dashboard)/hooks/projects/useProjectDetails";
+import { useTeam } from "@/app/(dashboard)/hooks/teams/useTeams";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { Progress } from "@/components/ui/progress";
+import { Skeleton } from "@/components/ui/skeleton";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import DefaultProxyAdminTag from "../common_components/DefaultProxyAdminTag";
 import { EditProjectModal } from "./ProjectModals/EditProjectModal";
-
-const { Title, Text } = Typography;
-const { Content } = Layout;
 
 interface TeamInfoShape {
   team_id: string;
@@ -41,20 +42,50 @@ interface ProjectDetailProps {
   onBack: () => void;
 }
 
+function EmptyState({ description }: { description: string }) {
+  return (
+    <div className="py-12 flex flex-col items-center justify-center text-muted-foreground">
+      <div className="text-sm">{description}</div>
+    </div>
+  );
+}
+
+function CopyableId({ value }: { value: string }) {
+  return (
+    <TooltipProvider>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <button
+            type="button"
+            onClick={() => {
+              navigator.clipboard?.writeText(value);
+              toast.success("Copied to clipboard");
+            }}
+            className="inline-flex items-center gap-1 text-xs font-mono rounded bg-muted px-1.5 py-0.5 hover:bg-muted/80"
+          >
+            {value}
+            <Copy size={12} />
+          </button>
+        </TooltipTrigger>
+        <TooltipContent>Copy</TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
+  );
+}
+
 export function ProjectDetail({ projectId, onBack }: ProjectDetailProps) {
   const { data: project, isLoading } = useProjectDetails(projectId);
   const { data: teamData } = useTeam(project?.team_id ?? undefined);
   // teamInfoCall returns { team_id, team_info: {...}, keys, team_memberships }
-  const teamInfo: TeamInfoShape | undefined = ((teamData as unknown as { team_info?: TeamInfoShape })?.team_info ??
-    teamData) as TeamInfoShape | undefined;
-  const { token } = theme.useToken();
+  const teamInfo: TeamInfoShape | undefined = ((teamData as unknown as {
+    team_info?: TeamInfoShape;
+  })?.team_info ?? teamData) as TeamInfoShape | undefined;
   const [isEditModalVisible, setIsEditModalVisible] = useState(false);
 
   const spend = project?.spend ?? 0;
   const maxBudget = project?.litellm_budget_table?.max_budget ?? null;
   const hasLimit = maxBudget != null && maxBudget > 0;
   const spendPercent = hasLimit ? Math.min((spend / maxBudget) * 100, 100) : 0;
-  const spendColor = spendPercent >= 90 ? "#f5222d" : spendPercent >= 70 ? "#faad14" : "#52c41a";
 
   const modelSpendData = useMemo(() => {
     const raw = (project?.model_spend ?? {}) as Record<string, number>;
@@ -65,263 +96,257 @@ export function ProjectDetail({ projectId, onBack }: ProjectDetailProps) {
 
   if (isLoading) {
     return (
-      <Content
-        style={{
-          padding: token.paddingLG,
-          paddingInline: token.paddingLG * 2,
-        }}
-      >
-        <Flex justify="center" align="center" style={{ minHeight: 300 }}>
-          <Spin indicator={<LoadingOutlined className="animate-spin" />} size="large" />
-        </Flex>
-      </Content>
+      <div className="p-6 md:px-12">
+        <div className="flex justify-center items-center min-h-[300px]">
+          <Loader2
+            role="img"
+            aria-hidden="true"
+            className="h-10 w-10 animate-spin text-muted-foreground"
+          />
+        </div>
+      </div>
     );
   }
 
   if (!project) {
     return (
-      <Content
-        style={{
-          padding: token.paddingLG,
-          paddingInline: token.paddingLG * 2,
-        }}
-      >
-        <Button icon={<ArrowLeftIcon size={16} />} onClick={onBack} type="text" style={{ marginBottom: 16 }} />
-        <Empty description="Project not found" />
-      </Content>
+      <div className="p-6 md:px-12">
+        <Button variant="ghost" size="sm" onClick={onBack} className="mb-4">
+          <ArrowLeft size={16} />
+        </Button>
+        <EmptyState description="Project not found" />
+      </div>
     );
   }
 
   return (
-    <Content style={{ padding: token.paddingLG, paddingInline: token.paddingLG * 2 }}>
+    <main className="p-6 md:px-12">
       {/* Header */}
-      <div
-        style={{
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "center",
-          marginBottom: 24,
-        }}
-      >
-        <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
-          <Button icon={<ArrowLeftIcon size={16} />} onClick={onBack} type="text" />
+      <div className="flex justify-between items-center mb-6">
+        <div className="flex items-center gap-4">
+          <Button variant="ghost" size="sm" onClick={onBack}>
+            <ArrowLeft size={16} />
+          </Button>
           <div>
-            <Flex align="center" gap={8}>
-              <Title level={2} style={{ margin: 0 }}>
+            <div className="flex items-center gap-2">
+              <h2 className="text-2xl font-semibold m-0">
                 {project.project_alias ?? project.project_id}
-              </Title>
-              <Tag color={project.blocked ? "red" : "green"}>{project.blocked ? "Blocked" : "Active"}</Tag>
-            </Flex>
-            <Text type="secondary">
-              ID: <Text copyable>{project.project_id}</Text>
-            </Text>
+              </h2>
+              <Badge variant={project.blocked ? "destructive" : "secondary"}>
+                {project.blocked ? "Blocked" : "Active"}
+              </Badge>
+            </div>
+            <div className="text-sm text-muted-foreground flex items-center gap-2">
+              ID: <CopyableId value={project.project_id} />
+            </div>
           </div>
         </div>
-        <Button type="primary" icon={<EditIcon size={16} />} onClick={() => setIsEditModalVisible(true)}>
+        <Button onClick={() => setIsEditModalVisible(true)}>
+          <Edit size={16} />
           Edit Project
         </Button>
       </div>
 
       {/* Project Details */}
-      <Row style={{ marginBottom: 24 }}>
-        <Card>
-          <Descriptions title="Project Details" column={1}>
-            <Descriptions.Item label="Description">{project.description || "\u2014"}</Descriptions.Item>
-            <Descriptions.Item label="Created">
+      <Card className="p-6 mb-6">
+        <h3 className="text-lg font-semibold mb-3">Project Details</h3>
+        <dl className="space-y-2 text-sm">
+          <div className="flex gap-2">
+            <dt className="w-36 text-muted-foreground">Description</dt>
+            <dd>{project.description || "\u2014"}</dd>
+          </div>
+          <div className="flex gap-2">
+            <dt className="w-36 text-muted-foreground">Created</dt>
+            <dd>
               {new Date(project.created_at).toLocaleString()}
               {project.created_by && (
-                <Text>
-                  &nbsp;{"by"}&nbsp;
+                <>
+                  &nbsp;by&nbsp;
                   <DefaultProxyAdminTag userId={project.created_by} />
-                </Text>
+                </>
               )}
-            </Descriptions.Item>
-            <Descriptions.Item label="Last Updated">
+            </dd>
+          </div>
+          <div className="flex gap-2">
+            <dt className="w-36 text-muted-foreground">Last Updated</dt>
+            <dd>
               {new Date(project.updated_at).toLocaleString()}
               {project.updated_by && (
-                <Text>
-                  &nbsp;{"by"}&nbsp;
+                <>
+                  &nbsp;by&nbsp;
                   <DefaultProxyAdminTag userId={project.updated_by} />
-                </Text>
+                </>
               )}
-            </Descriptions.Item>
-          </Descriptions>
-        </Card>
-      </Row>
+            </dd>
+          </div>
+        </dl>
+      </Card>
 
       {/* Spend / Budget */}
-      <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>
-        <Col xs={24} lg={8}>
-          <Card
-            title={
-              <Flex align="center" gap={8}>
-                <DollarSignIcon size={16} />
-                Budget
-              </Flex>
-            }
-            style={{ height: "100%" }}
-          >
-            <Flex vertical gap={16}>
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-6">
+        <Card className="p-6 lg:col-span-1">
+          <div className="flex items-center gap-2 mb-4 font-semibold">
+            <DollarSign size={16} />
+            Budget
+          </div>
+          <div className="space-y-4">
+            <div>
+              <span className="text-3xl font-semibold leading-none">
+                ${spend.toFixed(2)}
+              </span>
+              <br />
+              <span className="text-sm text-muted-foreground">
+                {hasLimit
+                  ? `of $${maxBudget.toFixed(2)} budget`
+                  : "No budget limit"}
+              </span>
+            </div>
+            {hasLimit && (
               <div>
-                <Text strong style={{ fontSize: 28, lineHeight: 1 }}>
-                  ${spend.toFixed(2)}
-                </Text>
-                <br />
-                <Text type="secondary">{hasLimit ? `of $${maxBudget.toFixed(2)} budget` : "No budget limit"}</Text>
+                <Progress value={Math.round(spendPercent * 10) / 10} />
+                <span className="text-xs text-muted-foreground">
+                  {(Math.round(spendPercent * 10) / 10).toFixed(1)}% utilized
+                </span>
               </div>
-              {hasLimit && (
-                <div>
-                  <Progress percent={Math.round(spendPercent * 10) / 10} strokeColor={spendColor} showInfo={false} />
-                  <Text type="secondary" style={{ fontSize: 12 }}>
-                    {(Math.round(spendPercent * 10) / 10).toFixed(1)}% utilized
-                  </Text>
-                </div>
-              )}
-            </Flex>
-          </Card>
-        </Col>
-        <Col xs={24} lg={16}>
-          <Card title="Spend by Model" style={{ height: "100%" }}>
-            {modelSpendData.length > 0 ? (
-              <BarChart
-                data={modelSpendData}
-                index="model"
-                categories={["spend"]}
-                colors={["cyan"]}
-                layout="vertical"
-                valueFormatter={(value) => `$${value.toFixed(4)}`}
-                yAxisWidth={140}
-                showLegend={false}
-                style={{ height: Math.max(modelSpendData.length * 40, 120) }}
-              />
-            ) : (
-              <Empty description="No model spend recorded yet" image={Empty.PRESENTED_IMAGE_SIMPLE} />
             )}
-          </Card>
-        </Col>
-      </Row>
+          </div>
+        </Card>
+        <Card className="p-6 lg:col-span-2">
+          <div className="mb-4 font-semibold">Spend by Model</div>
+          {modelSpendData.length > 0 ? (
+            <BarChart
+              data={modelSpendData}
+              index="model"
+              categories={["spend"]}
+              colors={["cyan"]}
+              layout="vertical"
+              valueFormatter={(value) => `$${value.toFixed(4)}`}
+              yAxisWidth={140}
+              showLegend={false}
+              style={{ height: Math.max(modelSpendData.length * 40, 120) }}
+            />
+          ) : (
+            <EmptyState description="No model spend recorded yet" />
+          )}
+        </Card>
+      </div>
 
       {/* Keys & Team */}
-      <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>
-        <Col xs={24} lg={12}>
-          <Card
-            title={
-              <Flex align="center" gap={8}>
-                <KeyIcon size={16} />
-                Keys
-              </Flex>
-            }
-            style={{ height: "100%" }}
-          >
-            <Empty description="No keys to display" image={Empty.PRESENTED_IMAGE_SIMPLE} />
-          </Card>
-        </Col>
-        <Col xs={24} lg={12}>
-          <Card
-            title={
-              <Flex align="center" gap={8}>
-                <UsersIcon size={16} />
-                Team
-              </Flex>
-            }
-            style={{ height: "100%" }}
-          >
-            {teamInfo ? (
-              (() => {
-                const teamBudget = teamInfo.max_budget ?? null;
-                const teamSpend = teamInfo.spend ?? 0;
-                const teamHasLimit = teamBudget != null && teamBudget > 0;
-                const teamPercent = teamHasLimit ? Math.min((teamSpend / teamBudget) * 100, 100) : 0;
-                const teamColor = teamPercent >= 90 ? "#f5222d" : teamPercent >= 70 ? "#faad14" : "#52c41a";
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-6">
+        <Card className="p-6">
+          <div className="flex items-center gap-2 mb-4 font-semibold">
+            <Key size={16} />
+            Keys
+          </div>
+          <EmptyState description="No keys to display" />
+        </Card>
+        <Card className="p-6">
+          <div className="flex items-center gap-2 mb-4 font-semibold">
+            <Users size={16} />
+            Team
+          </div>
+          {teamInfo ? (
+            (() => {
+              const teamBudget = teamInfo.max_budget ?? null;
+              const teamSpend = teamInfo.spend ?? 0;
+              const teamHasLimit = teamBudget != null && teamBudget > 0;
+              const teamPercent = teamHasLimit
+                ? Math.min((teamSpend / teamBudget) * 100, 100)
+                : 0;
 
-                return (
-                  <Flex vertical gap={12}>
-                    {/* Team name + ID */}
-                    <div>
-                      <Text strong style={{ fontSize: 16 }}>
-                        {teamInfo.team_alias || teamInfo.team_id}
-                      </Text>
-                      <br />
-                      <Text type="secondary" style={{ fontSize: 12 }}>
-                        ID:{" "}
-                        <Text copyable style={{ fontSize: 12 }}>
-                          {teamInfo.team_id}
-                        </Text>
-                      </Text>
+              return (
+                <div className="flex flex-col gap-3">
+                  {/* Team name + ID */}
+                  <div>
+                    <div className="font-semibold text-base">
+                      {teamInfo.team_alias || teamInfo.team_id}
                     </div>
-
-                    {/* Models */}
-                    <div>
-                      <Text type="secondary" style={{ fontSize: 12, display: "block", marginBottom: 4 }}>
-                        Models
-                      </Text>
-                      {(teamInfo.models?.length ?? 0) > 0 ? (
-                        <Flex wrap="wrap" gap={4} style={{ maxHeight: 60, overflow: "hidden" }}>
-                          {teamInfo.models?.map((m: string) => (
-                            <Tag key={m} style={{ margin: 0 }}>
-                              {m}
-                            </Tag>
-                          ))}
-                        </Flex>
-                      ) : (
-                        <Text type="secondary">All models</Text>
-                      )}
+                    <div className="text-xs text-muted-foreground flex items-center gap-1">
+                      ID: <CopyableId value={teamInfo.team_id} />
                     </div>
+                  </div>
 
-                    {/* Budget + Spend compact */}
-                    <div>
-                      <Flex justify="space-between" align="center" style={{ marginBottom: 2 }}>
-                        <Text type="secondary" style={{ fontSize: 12 }}>
-                          Spend
-                        </Text>
-                        <Text style={{ fontSize: 12 }}>
-                          ${teamSpend.toFixed(2)}
-                          {teamHasLimit ? (
-                            <Text type="secondary" style={{ fontSize: 12 }}>
-                              {" "}
-                              / ${teamBudget.toFixed(2)}
-                            </Text>
-                          ) : (
-                            <Text type="secondary" style={{ fontSize: 12 }}>
-                              {" "}
-                              (Unlimited)
-                            </Text>
-                          )}
-                        </Text>
-                      </Flex>
-                      {teamHasLimit && (
-                        <Progress
-                          percent={Math.round(teamPercent * 10) / 10}
-                          strokeColor={teamColor}
-                          size="small"
-                          showInfo={false}
-                        />
-                      )}
+                  {/* Models */}
+                  <div>
+                    <div className="text-xs text-muted-foreground mb-1">
+                      Models
                     </div>
+                    {(teamInfo.models?.length ?? 0) > 0 ? (
+                      <div className="flex flex-wrap gap-1 max-h-[60px] overflow-hidden">
+                        {teamInfo.models?.map((m: string) => (
+                          <Badge
+                            key={m}
+                            variant="secondary"
+                            className="font-normal"
+                          >
+                            {m}
+                          </Badge>
+                        ))}
+                      </div>
+                    ) : (
+                      <span className="text-sm text-muted-foreground">
+                        All models
+                      </span>
+                    )}
+                  </div>
 
-                    {/* Members */}
-                    <Flex justify="space-between">
-                      <Text type="secondary" style={{ fontSize: 12 }}>
-                        Members
-                      </Text>
-                      <Text style={{ fontSize: 12 }}>{teamInfo.members_with_roles?.length ?? 0}</Text>
-                    </Flex>
-                  </Flex>
-                );
-              })()
-            ) : project.team_id ? (
-              <Flex justify="center" align="center" style={{ padding: 16 }}>
-                <Spin indicator={<LoadingOutlined className="animate-spin" />} size="small" />
-              </Flex>
-            ) : (
-              <Empty description="No team assigned" image={Empty.PRESENTED_IMAGE_SIMPLE} />
-            )}
-          </Card>
-        </Col>
-      </Row>
+                  {/* Budget + Spend compact */}
+                  <div>
+                    <div className="flex justify-between items-center mb-1">
+                      <span className="text-xs text-muted-foreground">
+                        Spend
+                      </span>
+                      <span className="text-xs">
+                        ${teamSpend.toFixed(2)}
+                        {teamHasLimit ? (
+                          <span className="text-muted-foreground">
+                            {" "}
+                            / ${teamBudget.toFixed(2)}
+                          </span>
+                        ) : (
+                          <span className="text-muted-foreground">
+                            {" "}
+                            (Unlimited)
+                          </span>
+                        )}
+                      </span>
+                    </div>
+                    {teamHasLimit && (
+                      <Progress
+                        value={Math.round(teamPercent * 10) / 10}
+                        className="h-2"
+                      />
+                    )}
+                  </div>
+
+                  {/* Members */}
+                  <div className="flex justify-between">
+                    <span className="text-xs text-muted-foreground">
+                      Members
+                    </span>
+                    <span className="text-xs">
+                      {teamInfo.members_with_roles?.length ?? 0}
+                    </span>
+                  </div>
+                </div>
+              );
+            })()
+          ) : project.team_id ? (
+            <div className="flex justify-center items-center py-4">
+              <Skeleton className="h-6 w-32" />
+            </div>
+          ) : (
+            <EmptyState description="No team assigned" />
+          )}
+        </Card>
+      </div>
 
       {/* Edit Modal */}
-      <EditProjectModal isOpen={isEditModalVisible} project={project} onClose={() => setIsEditModalVisible(false)} />
-    </Content>
+      <EditProjectModal
+        isOpen={isEditModalVisible}
+        project={project}
+        onClose={() => setIsEditModalVisible(false)}
+      />
+    </main>
   );
 }

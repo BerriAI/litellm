@@ -8,13 +8,32 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import {
   Tooltip,
   TooltipContent,
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { Table } from "antd";
-import type { ColumnsType } from "antd/es/table";
+import {
+  SortState,
+  TableHeaderSortDropdown,
+} from "../common_components/TableHeaderSortDropdown/TableHeaderSortDropdown";
+import {
+  ColumnDef,
+  flexRender,
+  getCoreRowModel,
+  getSortedRowModel,
+  SortingState,
+  useReactTable,
+} from "@tanstack/react-table";
+import { cn } from "@/lib/utils";
 import {
   ChevronLeft,
   ChevronRight,
@@ -31,10 +50,13 @@ export function ProjectsPage() {
   const { data: projects, isLoading } = useProjects();
   const { data: teams, isLoading: isTeamsLoading } = useTeams();
 
-  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
+  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(
+    null,
+  );
   const [isCreateModalVisible, setIsCreateModalVisible] = useState(false);
   const [searchText, setSearchText] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
+  const [sorting, setSorting] = useState<SortingState>([]);
   const pageSize = 10;
 
   useEffect(() => {
@@ -50,7 +72,6 @@ export function ProjectsPage() {
     return map;
   }, [teams]);
 
-  // ---------- filtered data ----------
   const filteredProjects = useMemo(() => {
     const list = projects ?? [];
     if (!searchText) return list;
@@ -66,107 +87,143 @@ export function ProjectsPage() {
     });
   }, [projects, searchText, teamAliasMap]);
 
-  // ---------- Ant Design columns ----------
-  const columns: ColumnsType<ProjectResponse> = [
-    {
-      title: "ID",
-      dataIndex: "project_id",
-      key: "project_id",
-      width: 170,
-      render: (id: string) => (
-        <TooltipProvider>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <span
-                onClick={() => setSelectedProjectId(id)}
-                className="text-blue-500 bg-blue-50 hover:bg-blue-100 dark:bg-blue-950/30 dark:hover:bg-blue-950/60 text-sm cursor-pointer px-2 py-0.5 rounded inline-block truncate max-w-[160px]"
-              >
-                {id}
-              </span>
-            </TooltipTrigger>
-            <TooltipContent>{id}</TooltipContent>
-          </Tooltip>
-        </TooltipProvider>
-      ),
-    },
-    {
-      title: "Name",
-      dataIndex: "project_alias",
-      key: "project_alias",
-      sorter: (a, b) => (a.project_alias ?? "").localeCompare(b.project_alias ?? ""),
-      render: (alias: string | null) => alias ?? "—",
-    },
-    {
-      title: "Team",
-      key: "team",
-      sorter: (a, b) => {
-        const aAlias = teamAliasMap.get(a.team_id ?? "") ?? "";
-        const bAlias = teamAliasMap.get(b.team_id ?? "") ?? "";
-        return aAlias.localeCompare(bAlias);
+  const columnDefs = useMemo<ColumnDef<ProjectResponse>[]>(
+    () => [
+      {
+        id: "project_id",
+        accessorKey: "project_id",
+        header: () => <span>ID</span>,
+        enableSorting: false,
+        size: 170,
+        cell: ({ row }) => {
+          const id = row.original.project_id;
+          return (
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedProjectId(id)}
+                    className="text-blue-500 bg-blue-50 hover:bg-blue-100 dark:bg-blue-950/30 dark:hover:bg-blue-950/60 text-sm cursor-pointer px-2 py-0.5 rounded inline-block truncate max-w-[160px]"
+                  >
+                    {id}
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent>{id}</TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+          );
+        },
       },
-      render: (_: unknown, record: ProjectResponse) => {
-        if (!record.team_id) return "—";
-        const alias = teamAliasMap.get(record.team_id);
-        if (alias) return alias;
-        if (isTeamsLoading)
-          return <Loader2 className="h-3.5 w-3.5 animate-spin" />;
-        return record.team_id;
+      {
+        id: "project_alias",
+        accessorKey: "project_alias",
+        header: () => <span>Name</span>,
+        enableSorting: true,
+        sortingFn: (a, b) =>
+          (a.original.project_alias ?? "").localeCompare(
+            b.original.project_alias ?? "",
+          ),
+        cell: ({ getValue }) => (getValue() as string | null) ?? "—",
       },
-    },
-    {
-      title: "Models",
-      key: "models",
-      render: (_: unknown, record: ProjectResponse) => {
-        const models = record.models ?? [];
-        return (
-          <TooltipProvider>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Badge className="bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300 gap-1.5">
-                  <Layers className="h-3.5 w-3.5" />
-                  {models.length}
-                </Badge>
-              </TooltipTrigger>
-              <TooltipContent>
-                {models.length > 0 ? models.join(", ") : "No models"}
-              </TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
-        );
+      {
+        id: "team",
+        header: () => <span>Team</span>,
+        enableSorting: true,
+        sortingFn: (a, b) => {
+          const aAlias = teamAliasMap.get(a.original.team_id ?? "") ?? "";
+          const bAlias = teamAliasMap.get(b.original.team_id ?? "") ?? "";
+          return aAlias.localeCompare(bAlias);
+        },
+        cell: ({ row }) => {
+          const record = row.original;
+          if (!record.team_id) return "—";
+          const alias = teamAliasMap.get(record.team_id);
+          if (alias) return alias;
+          if (isTeamsLoading)
+            return <Loader2 className="h-3.5 w-3.5 animate-spin" />;
+          return record.team_id;
+        },
       },
-    },
-    {
-      title: "Status",
-      dataIndex: "blocked",
-      key: "status",
-      render: (blocked: boolean) => (
-        <Badge
-          className={
-            blocked
-              ? "bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300"
-              : "bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300"
-          }
-        >
-          {blocked ? "Blocked" : "Active"}
-        </Badge>
-      ),
-    },
-    {
-      title: "Created",
-      dataIndex: "created_at",
-      key: "created_at",
-      sorter: (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime(),
-      responsive: ["lg"],
-      render: (date: string) => new Date(date).toLocaleDateString(),
-    },
-    {
-      title: "Updated",
-      dataIndex: "updated_at",
-      key: "updated_at",
-      responsive: ["xl"],
-      render: (date: string) => new Date(date).toLocaleDateString(),
-    },
-  ];
+      {
+        id: "models",
+        header: () => <span>Models</span>,
+        enableSorting: false,
+        cell: ({ row }) => {
+          const models = row.original.models ?? [];
+          return (
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Badge className="bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300 gap-1.5">
+                    <Layers className="h-3.5 w-3.5" />
+                    {models.length}
+                  </Badge>
+                </TooltipTrigger>
+                <TooltipContent>
+                  {models.length > 0 ? models.join(", ") : "No models"}
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+          );
+        },
+      },
+      {
+        id: "status",
+        accessorKey: "blocked",
+        header: () => <span>Status</span>,
+        enableSorting: false,
+        cell: ({ row }) => (
+          <Badge
+            className={
+              row.original.blocked
+                ? "bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300"
+                : "bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300"
+            }
+          >
+            {row.original.blocked ? "Blocked" : "Active"}
+          </Badge>
+        ),
+      },
+      {
+        id: "created_at",
+        accessorKey: "created_at",
+        header: () => <span>Created</span>,
+        enableSorting: true,
+        sortingFn: (a, b) =>
+          new Date(a.original.created_at).getTime() -
+          new Date(b.original.created_at).getTime(),
+        cell: ({ getValue }) =>
+          new Date(getValue() as string).toLocaleDateString(),
+      },
+      {
+        id: "updated_at",
+        accessorKey: "updated_at",
+        header: () => <span>Updated</span>,
+        enableSorting: false,
+        cell: ({ getValue }) =>
+          new Date(getValue() as string).toLocaleDateString(),
+      },
+    ],
+    [teamAliasMap, isTeamsLoading],
+  );
+
+  const table = useReactTable<ProjectResponse>({
+    data: filteredProjects,
+    columns: columnDefs,
+    state: { sorting },
+    onSortingChange: setSorting,
+    getCoreRowModel: getCoreRowModel(),
+    getSortedRowModel: getSortedRowModel(),
+    getRowId: (row) => row.project_id,
+  });
+
+  const sortedRows = table.getRowModel().rows;
+  const paginatedRows = sortedRows.slice(
+    (currentPage - 1) * pageSize,
+    currentPage * pageSize,
+  );
+  const totalPages = Math.max(1, Math.ceil(sortedRows.length / pageSize));
 
   if (selectedProjectId) {
     return (
@@ -176,8 +233,6 @@ export function ProjectsPage() {
       />
     );
   }
-
-  const totalPages = Math.max(1, Math.ceil(filteredProjects.length / pageSize));
 
   return (
     <main className="p-6 md:px-12">
@@ -207,7 +262,7 @@ export function ProjectsPage() {
           </div>
           <div className="flex items-center gap-1 text-sm">
             <span className="text-muted-foreground">
-              {filteredProjects.length} projects
+              {sortedRows.length} projects
             </span>
             <Button
               size="icon"
@@ -227,23 +282,98 @@ export function ProjectsPage() {
               variant="ghost"
               className="h-6 w-6"
               disabled={currentPage >= totalPages}
-              onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+              onClick={() =>
+                setCurrentPage((p) => Math.min(totalPages, p + 1))
+              }
               aria-label="Next page"
             >
               <ChevronRight className="h-4 w-4" />
             </Button>
           </div>
         </div>
-        <Table
-          columns={columns}
-          dataSource={filteredProjects.slice(
-            (currentPage - 1) * pageSize,
-            currentPage * pageSize,
-          )}
-          rowKey="project_id"
-          loading={isLoading}
-          pagination={false}
-        />
+        <Table>
+          <TableHeader>
+            {table.getHeaderGroups().map((headerGroup) => (
+              <TableRow key={headerGroup.id}>
+                {headerGroup.headers.map((header) => {
+                  const canSort = header.column.getCanSort();
+                  const isSorted = header.column.getIsSorted();
+                  return (
+                    <TableHead
+                      key={header.id}
+                      style={{ width: header.column.columnDef.size }}
+                    >
+                      <div className={cn("flex items-center gap-1")}>
+                        {header.isPlaceholder
+                          ? null
+                          : flexRender(
+                              header.column.columnDef.header,
+                              header.getContext(),
+                            )}
+                        {canSort && (
+                          <TableHeaderSortDropdown
+                            sortState={
+                              isSorted === false
+                                ? false
+                                : (isSorted as SortState)
+                            }
+                            onSortChange={(newState) => {
+                              if (newState === false) {
+                                setSorting([]);
+                              } else {
+                                setSorting([
+                                  {
+                                    id: header.column.id,
+                                    desc: newState === "desc",
+                                  },
+                                ]);
+                              }
+                            }}
+                            columnId={header.column.id}
+                          />
+                        )}
+                      </div>
+                    </TableHead>
+                  );
+                })}
+              </TableRow>
+            ))}
+          </TableHeader>
+          <TableBody>
+            {isLoading ? (
+              <TableRow>
+                <TableCell
+                  colSpan={columnDefs.length}
+                  className="text-center text-muted-foreground py-8"
+                >
+                  Loading…
+                </TableCell>
+              </TableRow>
+            ) : paginatedRows.length === 0 ? (
+              <TableRow>
+                <TableCell
+                  colSpan={columnDefs.length}
+                  className="text-center text-muted-foreground py-8"
+                >
+                  No projects found
+                </TableCell>
+              </TableRow>
+            ) : (
+              paginatedRows.map((row) => (
+                <TableRow key={row.id}>
+                  {row.getVisibleCells().map((cell) => (
+                    <TableCell key={cell.id}>
+                      {flexRender(
+                        cell.column.columnDef.cell,
+                        cell.getContext(),
+                      )}
+                    </TableCell>
+                  ))}
+                </TableRow>
+              ))
+            )}
+          </TableBody>
+        </Table>
       </Card>
 
       <CreateProjectModal

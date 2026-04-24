@@ -1,9 +1,13 @@
 import React from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import userEvent from "@testing-library/user-event";
+import { FormProvider, useForm } from "react-hook-form";
 import { renderWithProviders, screen, waitFor } from "../../../../tests/test-utils";
-import { Form } from "antd";
-import { ProjectBaseForm, ProjectFormValues } from "./ProjectBaseForm";
+import {
+  ProjectBaseForm,
+  ProjectFormValues,
+  emptyProjectFormValues,
+} from "./ProjectBaseForm";
 
 const mockUseTeams = vi.fn();
 vi.mock("@/app/(dashboard)/hooks/teams/useTeams", () => ({
@@ -22,9 +26,21 @@ vi.mock("@/components/key_team_helpers/fetch_available_models_team_key", () => (
   getModelDisplayName: (model: string) => model,
 }));
 
-function FormWrapper() {
-  const [form] = Form.useForm<ProjectFormValues>();
-  return <ProjectBaseForm form={form} />;
+function FormWrapper({
+  defaults,
+}: {
+  defaults?: Partial<ProjectFormValues>;
+} = {}) {
+  const form = useForm<ProjectFormValues>({
+    defaultValues: { ...emptyProjectFormValues, ...defaults },
+  });
+  return (
+    <FormProvider {...form}>
+      <form>
+        <ProjectBaseForm />
+      </form>
+    </FormProvider>
+  );
 }
 
 describe("ProjectBaseForm", () => {
@@ -34,7 +50,7 @@ describe("ProjectBaseForm", () => {
 
   it("should render", () => {
     renderWithProviders(<FormWrapper />);
-    expect(screen.getByLabelText("Project Name")).toBeInTheDocument();
+    expect(screen.getByLabelText(/Project Name/)).toBeInTheDocument();
   });
 
   it("should show a 'Basic Information' section heading", () => {
@@ -44,7 +60,9 @@ describe("ProjectBaseForm", () => {
 
   it("should show a Project Name input", () => {
     renderWithProviders(<FormWrapper />);
-    expect(screen.getByPlaceholderText("e.g. Customer Support Bot")).toBeInTheDocument();
+    expect(
+      screen.getByPlaceholderText("e.g. Customer Support Bot"),
+    ).toBeInTheDocument();
   });
 
   it("should show a Team select", () => {
@@ -54,12 +72,13 @@ describe("ProjectBaseForm", () => {
 
   it("should show a Description textarea", () => {
     renderWithProviders(<FormWrapper />);
-    expect(screen.getByPlaceholderText("Describe the purpose of this project")).toBeInTheDocument();
+    expect(
+      screen.getByPlaceholderText("Describe the purpose of this project"),
+    ).toBeInTheDocument();
   });
 
   it("should show the models select as disabled when no team is selected", () => {
     renderWithProviders(<FormWrapper />);
-    // The models select should be disabled — its placeholder indicates no team yet
     expect(screen.getByText("Select a team first")).toBeInTheDocument();
   });
 
@@ -73,8 +92,7 @@ describe("ProjectBaseForm", () => {
       isLoading: false,
     });
     renderWithProviders(<FormWrapper />);
-    // The form label "Team" is associated with the combobox input inside the Select
-    await user.click(screen.getByLabelText("Team"));
+    await user.click(screen.getByLabelText(/Team/));
     await waitFor(() => {
       expect(screen.getByText("Engineering")).toBeInTheDocument();
     });
