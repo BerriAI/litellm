@@ -4965,3 +4965,123 @@ async def test_increment_spend_counters_team_and_member():
     finally:
         ps.user_api_key_cache = original_key_cache
         ps.spend_counter_cache = original_counter_cache
+
+
+@pytest.mark.asyncio
+async def test_init_and_increment_spend_counter_reseeds_from_db_on_counter_miss():
+    """When the Redis counter is missing, the reseed path reads the
+    authoritative spend from the DB (not a stale cache), so the next
+    increment continues from the correct base value."""
+    from litellm.caching.dual_cache import DualCache
+
+    counter_cache = DualCache()
+    recorded_increments: list = []
+
+    async def record_increment(key, value, ttl=None, **kwargs):
+        recorded_increments.append({"key": key, "value": value, "ttl": ttl})
+        return value
+
+    fake_redis = AsyncMock()
+    fake_redis.async_increment = AsyncMock(side_effect=record_increment)
+    fake_redis.async_get_cache = AsyncMock(return_value=None)  # counter missing
+    counter_cache.redis_cache = fake_redis
+
+    # Prisma returns spend=42.0 (authoritative) while the stale cached
+    # value (would be read only if prisma is None) is 10.0. The counter
+    # must seed from 42, not 10.
+    db_row = MagicMock()
+    db_row.spend = 42.0
+    fake_prisma = MagicMock()
+    fake_prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=db_row)
+
+    stale_cache = DualCache()
+    stale_team = MagicMock()
+    stale_team.spend = 10.0
+    stale_cache.in_memory_cache.set_cache(key="team_id:team-9", value=stale_team)
+
+    import litellm.proxy.proxy_server as ps
+    from litellm.proxy.proxy_server import _init_and_increment_spend_counter
+
+    orig_user, orig_counter, orig_prisma = (
+        ps.user_api_key_cache,
+        ps.spend_counter_cache,
+        ps.prisma_client,
+    )
+    ps.user_api_key_cache = stale_cache
+    ps.spend_counter_cache = counter_cache
+    ps.prisma_client = fake_prisma
+    try:
+        await _init_and_increment_spend_counter(
+            counter_key="spend:team:team-9",
+            source_cache_key="team_id:team-9",
+            increment=1.5,
+        )
+
+        fake_prisma.db.litellm_teamtable.find_unique.assert_awaited_once_with(
+            where={"team_id": "team-9"}
+        )
+        # Two increments keyed on the counter: seed ($42) then request ($1.50).
+        writes = [(c["key"], c["value"]) for c in recorded_increments]
+        assert ("spend:team:team-9", 42.0) in writes
+        assert ("spend:team:team-9", 1.5) in writes
+    finally:
+        ps.user_api_key_cache = orig_user
+        ps.spend_counter_cache = orig_counter
+        ps.prisma_client = orig_prisma
+
+
+@pytest.mark.asyncio
+async def test_reseed_spend_from_db_user_and_org_prefixes():
+    """User and org counters must reseed from their own DB tables, not
+    fall through to 0.0 like the other counters do today."""
+    import litellm.proxy.proxy_server as ps
+    from litellm.proxy.proxy_server import _reseed_spend_from_db
+
+    user_row = MagicMock()
+    user_row.spend = 17.0
+    org_row = MagicMock()
+    org_row.spend = 305.0
+
+    fake_prisma = MagicMock()
+    fake_prisma.db.litellm_usertable.find_unique = AsyncMock(return_value=user_row)
+    fake_prisma.db.litellm_organizationtable.find_unique = AsyncMock(
+        return_value=org_row
+    )
+
+    orig_prisma = ps.prisma_client
+    ps.prisma_client = fake_prisma
+    try:
+        assert await _reseed_spend_from_db("spend:user:alice") == 17.0
+        fake_prisma.db.litellm_usertable.find_unique.assert_awaited_once_with(
+            where={"user_id": "alice"}
+        )
+
+        assert await _reseed_spend_from_db("spend:org:acme") == 305.0
+        fake_prisma.db.litellm_organizationtable.find_unique.assert_awaited_once_with(
+            where={"organization_id": "acme"}
+        )
+    finally:
+        ps.prisma_client = orig_prisma
+
+
+@pytest.mark.asyncio
+async def test_reseed_spend_from_db_skips_window_variant_keys():
+    """Window counters (spend:*:window:{duration}) share prefixes with
+    primary counters but don't correspond to a DB row. The guard must
+    short-circuit without querying the DB."""
+    import litellm.proxy.proxy_server as ps
+    from litellm.proxy.proxy_server import _reseed_spend_from_db
+
+    fake_prisma = MagicMock()
+    fake_prisma.db.litellm_verificationtoken.find_unique = AsyncMock()
+    fake_prisma.db.litellm_teamtable.find_unique = AsyncMock()
+
+    orig_prisma = ps.prisma_client
+    ps.prisma_client = fake_prisma
+    try:
+        assert await _reseed_spend_from_db("spend:key:sk-abc:window:1h") == 0.0
+        assert await _reseed_spend_from_db("spend:team:team-1:window:1d") == 0.0
+        fake_prisma.db.litellm_verificationtoken.find_unique.assert_not_awaited()
+        fake_prisma.db.litellm_teamtable.find_unique.assert_not_awaited()
+    finally:
+        ps.prisma_client = orig_prisma

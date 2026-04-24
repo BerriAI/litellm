@@ -2061,7 +2061,7 @@ assert isinstance(
 
 ## Media Resolution Control (Images & Videos)
 
-For Gemini 3+ models, LiteLLM supports per-part media resolution control using OpenAI's `detail` parameter. This allows you to specify different resolution levels for individual images and videos in your request, whether using `image_url` or `file` content types.
+LiteLLM supports per-part media resolution control using OpenAI's `detail` parameter for all Gemini models. This allows you to specify different resolution levels for individual images and videos in your request, whether using `image_url` or `file` content types.
 
 **Supported `detail` values:**
 - `"low"` - Maps to `media_resolution: "low"` (280 tokens for images, 70 tokens per frame for videos)
@@ -2146,12 +2146,12 @@ response = completion(
 </Tabs>
 
 :::info
-**Per-Part Resolution:** Each image or video in your request can have its own `detail` setting, allowing mixed-resolution requests (e.g., a high-res chart alongside a low-res icon). This feature works with both `image_url` and `file` content types, and is only available for Gemini 3+ models.
+**Per-Part Resolution:** Each image or video in your request can have its own `detail` setting, allowing mixed-resolution requests (e.g., a high-res chart alongside a low-res icon). This feature works with both `image_url` and `file` content types across all Gemini models.
 :::
 
 ## Video Metadata Control
 
-For Gemini 3+ models, LiteLLM supports fine-grained video processing control through the `video_metadata` field. This allows you to specify frame extraction rates and time ranges for video analysis.
+LiteLLM supports fine-grained video processing control through the `video_metadata` field for all Gemini models (1.x, 2.x, 3+). This allows you to specify frame extraction rates and time ranges for video analysis.
 
 **Supported `video_metadata` parameters:**
 
@@ -2168,8 +2168,11 @@ For Gemini 3+ models, LiteLLM supports fine-grained video processing control thr
 - `fps` remains unchanged
 :::
 
+:::tip
+Video clipping (`start_offset`/`end_offset`) and frame rate control (`fps`) are supported by all Gemini models, but analysis quality is significantly higher with the **Gemini 2.5 series** (e.g., `gemini-2.5-flash`, `gemini-2.5-pro`).
+:::
+
 :::warning
-- **Gemini 3+ Only:** This feature is only available for Gemini 3.0 and newer models
 - **Video Files Recommended:** While `video_metadata` is designed for video files, error handling for other media types is delegated to the Vertex AI API
 - **File Formats Supported:** Works with `gs://`, `https://`, and base64-encoded video files
 :::
