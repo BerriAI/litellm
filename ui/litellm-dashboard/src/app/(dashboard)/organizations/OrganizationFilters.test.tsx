@@ -119,7 +119,9 @@ describe("OrganizationFilters", () => {
     );
 
     const filtersButton = screen.getByRole("button", { name: /^filters$/i });
-    const badgeWrapper = filtersButton.closest(".ant-badge");
-    expect(badgeWrapper).toBeInTheDocument();
+    const wrapper = filtersButton.parentElement;
+    expect(wrapper).not.toBeNull();
+    const badgeIndicator = wrapper!.querySelector("span.rounded-full");
+    expect(badgeIndicator).toBeInTheDocument();
   });
 });

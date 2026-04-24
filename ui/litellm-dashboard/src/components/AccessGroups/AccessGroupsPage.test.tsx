@@ -237,7 +237,7 @@ describe("AccessGroupsPage", () => {
       name: "Delete access group",
     });
     await user.click(deleteButtons[0]);
-    const dialog = screen.getByRole("dialog", { name: "Delete Access Group" });
+    const dialog = await screen.findByRole("alertdialog", { name: "Delete Access Group" });
     expect(dialog).toBeInTheDocument();
     expect(
       within(dialog).getByText(
@@ -256,9 +256,9 @@ describe("AccessGroupsPage", () => {
       name: "Delete access group",
     });
     await user.click(deleteButtons[0]);
-    const dialog = screen.getByRole("dialog", { name: "Delete Access Group" });
+    const dialog = await screen.findByRole("alertdialog", { name: "Delete Access Group" });
     await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
-    expect(screen.queryByRole("dialog", { name: "Delete Access Group" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("alertdialog", { name: "Delete Access Group" })).not.toBeInTheDocument();
   });
 
   it("should call delete mutation when delete is confirmed", async () => {
@@ -271,7 +271,7 @@ describe("AccessGroupsPage", () => {
       name: "Delete access group",
     });
     await user.click(deleteButtons[0]);
-    const dialog = screen.getByRole("dialog", { name: "Delete Access Group" });
+    const dialog = await screen.findByRole("alertdialog", { name: "Delete Access Group" });
     const deleteConfirmButton = within(dialog).getByRole("button", { name: /delete/i });
     await user.click(deleteConfirmButton);
     expect(mockMutate).toHaveBeenCalledWith("ag-1", expect.any(Object));

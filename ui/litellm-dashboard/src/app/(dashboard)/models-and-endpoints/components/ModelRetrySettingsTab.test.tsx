@@ -63,7 +63,7 @@ describe("ModelRetrySettingsTab", () => {
     // All 6 spinbutton inputs should show the defaultRetry value
     const inputs = screen.getAllByRole("spinbutton");
     inputs.forEach((input) => {
-      expect(input).toHaveValue("3");
+      expect(input).toHaveValue(3);
     });
   });
 
@@ -76,10 +76,10 @@ describe("ModelRetrySettingsTab", () => {
     // The RateLimitError row is the 4th entry in the map
     const inputs = screen.getAllByRole("spinbutton");
     const rateLimitInput = inputs[3]; // 0-indexed: Bad(0), Auth(1), Timeout(2), Rate(3)
-    expect(rateLimitInput).toHaveValue("5");
+    expect(rateLimitInput).toHaveValue(5);
 
     // Unset entries fall back to defaultRetry (0)
-    expect(inputs[0]).toHaveValue("0");
+    expect(inputs[0]).toHaveValue(0);
   });
 
   it("should fall back to globalRetryPolicy when no model-specific value is set (model scope)", () => {
@@ -99,10 +99,10 @@ describe("ModelRetrySettingsTab", () => {
 
     // The TimeoutError row is 3rd (index 2)
     const inputs = screen.getAllByRole("spinbutton");
-    expect(inputs[2]).toHaveValue("7");
+    expect(inputs[2]).toHaveValue(7);
 
     // Rows without a global value fall back to defaultRetry
-    expect(inputs[0]).toHaveValue("1");
+    expect(inputs[0]).toHaveValue(1);
   });
 
   it("should prefer model-specific retry count over the global value (model scope)", () => {
@@ -125,7 +125,7 @@ describe("ModelRetrySettingsTab", () => {
 
     // The model-specific value (9) should win over global (3)
     const inputs = screen.getAllByRole("spinbutton");
-    expect(inputs[3]).toHaveValue("9");
+    expect(inputs[3]).toHaveValue(9);
   });
 
   it("should show the global reference value text for each row in model-specific scope", () => {

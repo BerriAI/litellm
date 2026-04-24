@@ -1,6 +1,6 @@
 import React from "react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { screen, fireEvent } from "@testing-library/react";
+import { screen, fireEvent, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { renderWithProviders } from "../../../../tests/test-utils";
 import MultiExportDropdown from "./multi_export_dropdown";
@@ -91,8 +91,10 @@ describe("MultiExportDropdown", () => {
     await user.click(screen.getByRole("button", { name: /^export$/i }));
     expect(screen.getByText("Export as PDF")).toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: /^export$/i }));
-    expect(screen.queryByText("Export as PDF")).not.toBeInTheDocument();
+    await user.keyboard("{Escape}");
+    await waitFor(() => {
+      expect(screen.queryByText("Export as PDF")).not.toBeInTheDocument();
+    });
   });
 
   it("should call exportMultiToPDF and close the menu when Export as PDF is clicked", async () => {
@@ -140,7 +142,13 @@ describe("MultiExportDropdown", () => {
     await user.click(screen.getByRole("button", { name: /^export$/i }));
     expect(screen.getByText("Export as PDF")).toBeInTheDocument();
 
-    fireEvent.mouseDown(screen.getByTestId("outside"));
-    expect(screen.queryByText("Export as PDF")).not.toBeInTheDocument();
+    fireEvent.pointerDown(screen.getByTestId("outside"), {
+      button: 0,
+      ctrlKey: false,
+      pointerType: "mouse",
+    });
+    await waitFor(() => {
+      expect(screen.queryByText("Export as PDF")).not.toBeInTheDocument();
+    });
   });
 });

@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, fireEvent, render } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import ModelsAndEndpointsView from "./ModelsAndEndpointsView";
 
@@ -24,6 +25,10 @@ Object.defineProperty(window, "localStorage", { value: localStorageMock });
 
 // Minimal stubs to avoid Next.js router and network usage during render
 vi.mock("@/components/networking", () => ({
+  proxyBaseUrl: "",
+  getGlobalLitellmHeaderName: () => "",
+  deriveErrorMessage: () => "",
+  handleError: vi.fn(),
   credentialListCall: vi.fn().mockResolvedValue({ credentials: [] }),
   modelInfoCall: vi.fn().mockResolvedValue({ data: [] }),
   modelCostMap: vi.fn().mockResolvedValue({}),
@@ -239,10 +244,9 @@ describe("ModelsAndEndpointsView", () => {
       </QueryClientProvider>,
     );
 
+    const user = userEvent.setup();
     const healthStatusTab = getByRole("tab", { name: "Health Status" });
-    await act(async () => {
-      healthStatusTab.click();
-    });
+    await user.click(healthStatusTab);
 
     expect(mockHealthCheckComponent).toHaveBeenCalled();
     const healthCheckProps = mockHealthCheckComponent.mock.calls[0][0];
