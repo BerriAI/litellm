@@ -1,3 +1,7 @@
+---
+sidebar_label: Prompt Cache Routing
+---
+
 # Claude Code - Prompt Cache Routing
 
 Claude's [Prompt Caching](https://platform.claude.com/docs/en/build-with-claude/prompt-caching) feature helps to optimize API usage through attempting to cache prompts and re-use cached prompts during subsequent API calls. This feature is used by Claude Code. 

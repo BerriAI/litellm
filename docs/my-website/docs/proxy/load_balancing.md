@@ -134,6 +134,37 @@ router_settings:
 Detailed information about [routing strategies can be found here](../routing)
 :::
 
+## Prompt Caching Based Routing
+
+Route requests to deployments where a prompt cache already exists. When load balancing across multiple deployments of models that support [prompt caching](../completion/prompt_caching.md) (e.g., Anthropic, Bedrock with Claude), this ensures subsequent requests reuse cached prompts on the same deployment — maximizing cache hits and reducing costs.
+
+This is especially useful with tools like **Claude Code** that rely on prompt caching for performance.
+
+```yaml
+model_list:
+  - model_name: claude-sonnet
+    litellm_params:
+      model: anthropic/claude-sonnet-4-20250514
+      api_key: os.environ/ANTHROPIC_API_KEY_1
+  - model_name: claude-sonnet
+    litellm_params:
+      model: anthropic/claude-sonnet-4-20250514
+      api_key: os.environ/ANTHROPIC_API_KEY_2
+
+router_settings:
+  optional_pre_call_checks: ["prompt_caching"]  # 👈 Enable prompt caching routing
+```
+
+**How it works:**
+1. On a successful completion, LiteLLM checks if the prompt is eligible for caching.
+2. If eligible, it stores a mapping of the prompt hash → deployment `model_id`.
+3. On subsequent requests with the same prompt prefix, LiteLLM routes to the same deployment.
+4. If no cached mapping exists, standard routing strategies apply.
+
+:::tip
+For a detailed setup guide with Claude Code, see [Claude Code - Prompt Cache Routing](../tutorials/claude_code_prompt_cache_routing.md). For full documentation on prompt caching routing (including SDK usage), see [Routing - Prompt Caching](../routing#prompt-caching-based-routing).
+:::
+
 #### Step 2: Start Proxy with config
 
 ```shell

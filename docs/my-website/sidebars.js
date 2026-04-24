@@ -1064,6 +1064,7 @@ const sidebars = {
         "scheduler",
         "proxy/auto_routing",
         "proxy/load_balancing",
+        "tutorials/claude_code_prompt_cache_routing",
         "proxy/keys_teams_router_settings",
         "proxy/provider_budget_routing",
         "proxy/reliability",

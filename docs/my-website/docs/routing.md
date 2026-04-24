@@ -830,6 +830,123 @@ asyncio.run(router_acompletion())
 </TabItem>
 </Tabs>
 
+## Prompt Caching Based Routing
+
+Route requests to deployments where a prompt cache already exists. This is useful when using providers that support [prompt caching](./completion/prompt_caching.md) (e.g., Anthropic, Bedrock with Claude), especially with tools like Claude Code that rely on prompt caching for performance.
+
+When enabled, LiteLLM remembers which deployment handled a request that resulted in a prompt cache write. Subsequent requests with the same prompt prefix are routed to that same deployment, maximizing cache hits and reducing costs/latency.
+
+**How it works:**
+1. On a successful completion call, LiteLLM checks if the prompt is eligible for caching (e.g., prompt > 1024 tokens for Anthropic).
+2. If eligible, LiteLLM stores a mapping of the prompt hash → deployment `model_id`.
+3. On subsequent requests, LiteLLM checks if the prompt matches a cached mapping and routes to the same deployment.
+4. If no cached mapping exists, standard routing strategies apply.
+
+<Tabs>
+<TabItem value="proxy" label="Proxy">
+
+**1. Set `optional_pre_call_checks` in config**
+
+```yaml
+model_list:
+  - model_name: claude-sonnet
+    litellm_params:
+      model: anthropic/claude-sonnet-4-20250514
+      api_key: os.environ/ANTHROPIC_API_KEY_1
+  - model_name: claude-sonnet
+    litellm_params:
+      model: anthropic/claude-sonnet-4-20250514
+      api_key: os.environ/ANTHROPIC_API_KEY_2
+
+router_settings:
+  optional_pre_call_checks: ["prompt_caching"]  # 👈 Enable prompt caching routing
+```
+
+**2. Start proxy**
+
+```bash
+litellm --config /path/to/config.yaml
+```
+
+**3. Test it!**
+
+```bash
+curl --location 'http://localhost:4000/v1/chat/completions' \
+--header 'Content-Type: application/json' \
+--header 'Authorization: Bearer sk-1234' \
+--data '{
+    "model": "claude-sonnet",
+    "messages": [{"role": "user", "content": "Hey, how is it going?"}]
+}'
+```
+
+</TabItem>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import Router
+
+model_list = [
+    {
+        "model_name": "claude-sonnet",
+        "litellm_params": {
+            "model": "anthropic/claude-sonnet-4-20250514",
+            "api_key": os.getenv("ANTHROPIC_API_KEY_1"),
+        },
+    },
+    {
+        "model_name": "claude-sonnet",
+        "litellm_params": {
+            "model": "anthropic/claude-sonnet-4-20250514",
+            "api_key": os.getenv("ANTHROPIC_API_KEY_2"),
+        },
+    },
+]
+
+router = Router(
+    model_list=model_list,
+    optional_pre_call_checks=["prompt_caching"],  # 👈 Enable prompt caching routing
+)
+
+response = await router.acompletion(
+    model="claude-sonnet",
+    messages=[{"role": "user", "content": "Hey, how is it going?"}],
+)
+print(response)
+```
+
+</TabItem>
+</Tabs>
+
+### Using with AWS Bedrock (Multiple Accounts)
+
+Prompt caching routing is especially useful with Bedrock when load balancing across multiple AWS accounts:
+
+```yaml
+router_settings:
+  optional_pre_call_checks: ["prompt_caching"]
+
+model_list:
+  - model_name: claude-sonnet
+    litellm_params:
+      model: us.anthropic.claude-sonnet-4-5-20250929-v1:0
+      aws_profile_name: account-1
+      aws_region_name: us-west-2
+    model_info:
+      litellm_provider: bedrock
+  - model_name: claude-sonnet
+    litellm_params:
+      model: us.anthropic.claude-sonnet-4-5-20250929-v1:0
+      aws_profile_name: account-2
+      aws_region_name: us-west-2
+    model_info:
+      litellm_provider: bedrock
+```
+
+:::info
+For a detailed setup guide with Claude Code, see [Claude Code - Prompt Cache Routing](./tutorials/claude_code_prompt_cache_routing.md).
+:::
+
 ## Traffic Mirroring / Silent Experiments
 
 Traffic mirroring allows you to "mimic" production traffic to a secondary (silent) model for evaluation purposes. The silent model's response is gathered in the background and does not affect the latency or result of the primary request.
