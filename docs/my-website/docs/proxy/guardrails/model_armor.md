@@ -27,7 +27,7 @@ guardrails:
   - guardrail_name: model-armor-shield
     litellm_params:
       guardrail: model_armor
-      mode: [pre_call, post_call]  # Run on both input and output
+      mode: [pre_call, during_call, post_call]  # Run on input, parallel, and output
       template_id: "your-template-id"  # Required: Your Model Armor template ID
       project_id: "your-project-id"    # Your GCP project ID
       location: "us-central1"          # GCP location (default: us-central1)
@@ -41,7 +41,8 @@ guardrails:
 #### Supported values for `mode`
 
 - `pre_call` Run **before** LLM call, on **input**
-- `post_call` Run **after** LLM call, on **input & output**
+- `during_call` Run **in parallel** with LLM call, on **input**
+- `post_call` Run **after** LLM call, on **output**
 
 ### 2. Start LiteLLM Gateway 
 
@@ -74,7 +75,7 @@ curl -i http://localhost:4000/v1/chat/completions \
 - `api_key` - str - Google Cloud service account credentials (optional if using ADC)
 - `api_base` - str - Custom Model Armor API endpoint (optional)
 - `default_on` - bool - Whether to run the guardrail by default. Default is `false`.
-- `mode` - Union[str, list[str]] - Mode to run the guardrail. Either `pre_call` or `post_call`. Default is `pre_call`.
+- `mode` - Union[str, list[str]] - Mode to run the guardrail. Supported values: `pre_call`, `during_call`, `post_call`. Default is `pre_call`.
 
 ### Model Armor Specific
 
