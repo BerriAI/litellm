@@ -616,7 +616,11 @@ class BaseLitellmParams(
 
     experimental_guardrail_input_roles: Optional[List[str]] = Field(
         default=None,
-        description='When set, only messages with the specified roles are sent to Bedrock for INPUT validation (e.g. ["user"] to exclude system prompts).',
+        description=(
+            "When set, only messages whose role appears in this list are forwarded "
+            'for INPUT validation (e.g. ["user"] to exclude system prompts). '
+            "Currently wired for Bedrock guardrails; silently ignored by other providers."
+        ),
     )
 
     skip_system_message_in_guardrail: Optional[bool] = Field(
