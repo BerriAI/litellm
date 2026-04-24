@@ -112,10 +112,9 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
             llm_provider=httpxSpecialProvider.LoggingCallback
         )
 
-        # Dedicated client to avoid connection pooling issues with LiteLLM's shared client
-        self.tool_blocking_client = httpx.AsyncClient(
-            timeout=httpx.Timeout(5.0, connect=2.0),
-            limits=httpx.Limits(max_connections=10, max_keepalive_connections=5),
+        self.tool_blocking_client = get_async_httpx_client(
+            llm_provider=httpxSpecialProvider.LoggingCallback,
+            params={"timeout": httpx.Timeout(5.0, connect=2.0)},
         )
 
         self._headers: dict[str, str] = {"Content-Type": "application/json"}
@@ -126,7 +125,7 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
 
     async def aclose(self):
         """Close the dedicated tool blocking HTTP client."""
-        await self.tool_blocking_client.aclose()
+        await self.tool_blocking_client.close()
 
     # -- Guardrail hook --------------------------------------------------------
 
