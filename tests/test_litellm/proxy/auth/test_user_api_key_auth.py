@@ -15,6 +15,8 @@ import litellm.proxy.proxy_server
 from litellm.caching.dual_cache import DualCache
 from litellm.proxy._types import (
     LiteLLM_JWTAuth,
+    LiteLLM_UserTable,
+    LitellmUserRoles,
     ProxyErrorTypes,
     ProxyException,
     UserAPIKeyAuth,
@@ -2047,6 +2049,105 @@ async def test_centralized_common_checks_short_circuits_when_master_key_unset():
                 route="/get/config/callbacks",
             )
             mock_checks.assert_not_awaited()
+    finally:
+        for k, v in originals.items():
+            setattr(_proxy_server_mod, k, v)
+
+
+@pytest.mark.asyncio
+async def test_centralized_common_checks_skips_public_routes():
+    """Regression: public routes (e.g. /health/readiness) are exempted
+    by the builder fast-path. The wrapper must not retroactively run
+    common_checks on top — the synthetic INTERNAL_USER_VIEW_ONLY token
+    has no user_id, so common_checks would reject the request as
+    admin-only. Breaks k8s readiness probes when master_key is set."""
+    import litellm.proxy.proxy_server as _proxy_server_mod
+    from fastapi import Request
+    from starlette.datastructures import URL
+
+    token = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER_VIEW_ONLY)
+    request = Request(scope={"type": "http"})
+    request._url = URL(url="/health/readiness")
+
+    attrs = _proxy_attrs_for_centralized_checks(user_custom_auth=None)
+    originals = {a: getattr(_proxy_server_mod, a, None) for a in attrs}
+    try:
+        for k, v in attrs.items():
+            setattr(_proxy_server_mod, k, v)
+        with patch(
+            "litellm.proxy.auth.user_api_key_auth.common_checks",
+            new_callable=AsyncMock,
+        ) as mock_checks:
+            await _run_centralized_common_checks(
+                user_api_key_auth_obj=token,
+                request=request,
+                request_data={},
+                route="/health/readiness",
+            )
+            mock_checks.assert_not_awaited()
+    finally:
+        for k, v in originals.items():
+            setattr(_proxy_server_mod, k, v)
+
+
+@pytest.mark.asyncio
+async def test_centralized_common_checks_master_key_admin_overrides_db_user_role():
+    """Regression: master_key tokens have user_id=litellm_proxy_admin_name
+    (default 'default_user_id') and user_role=PROXY_ADMIN. If a row with
+    that user_id exists in litellm_usertable with a non-admin user_role
+    (created as a side effect of team membership), get_user_object
+    returns it and the synthesized admin user_object is skipped — so
+    common_checks demotes the master_key request to internal_user and
+    blocks /team/update. The token is the source of truth for admin
+    status; the DB row must not override it."""
+    import litellm.proxy.proxy_server as _proxy_server_mod
+    from fastapi import Request
+    from starlette.datastructures import URL
+
+    token = UserAPIKeyAuth(
+        api_key="sk-master",
+        user_id="default_user_id",
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+    )
+    request = Request(scope={"type": "http"})
+    request._url = URL(url="/team/update")
+
+    # Simulate the DB row that team-creation created: same user_id, but
+    # with user_role=internal_user (the default for new user rows).
+    db_user = LiteLLM_UserTable(
+        user_id="default_user_id",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+        spend=1.5,
+        max_budget=None,
+    )
+
+    attrs = _proxy_attrs_for_centralized_checks(user_custom_auth=None)
+    originals = {a: getattr(_proxy_server_mod, a, None) for a in attrs}
+    try:
+        for k, v in attrs.items():
+            setattr(_proxy_server_mod, k, v)
+        with (
+            patch(
+                "litellm.proxy.auth.user_api_key_auth.get_user_object",
+                new_callable=AsyncMock,
+                return_value=db_user,
+            ),
+            patch(
+                "litellm.proxy.auth.user_api_key_auth.common_checks",
+                new_callable=AsyncMock,
+            ) as mock_checks,
+        ):
+            await _run_centralized_common_checks(
+                user_api_key_auth_obj=token,
+                request=request,
+                request_data={"team_id": "t1", "max_budget": 10},
+                route="/team/update",
+            )
+            mock_checks.assert_awaited_once()
+            forwarded = mock_checks.call_args.kwargs["user_object"]
+            assert forwarded is not None
+            assert forwarded.user_role == LitellmUserRoles.PROXY_ADMIN
+            assert forwarded.user_id == "default_user_id"
     finally:
         for k, v in originals.items():
             setattr(_proxy_server_mod, k, v)
