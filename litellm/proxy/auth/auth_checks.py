@@ -823,7 +823,9 @@ async def get_default_end_user_budget(
     # Check cache first
     cached_budget = await user_api_key_cache.async_get_cache(key=cache_key)
     if cached_budget is not None:
-        return LiteLLM_BudgetTable(**cached_budget)
+        deserialized = CacheCodec.deserialize(cached_budget, LiteLLM_BudgetTable)
+        if deserialized is not None:
+            return deserialized
 
     # Fetch from database
     try:
@@ -837,14 +839,15 @@ async def get_default_end_user_budget(
             )
             return None
 
+        _budget_obj = LiteLLM_BudgetTable(**budget_record.dict())
         # Cache the budget for 60 seconds
         await user_api_key_cache.async_set_cache(
             key=cache_key,
-            value=budget_record.dict(),
+            value=CacheCodec.serialize(_budget_obj, model_type=LiteLLM_BudgetTable),
             ttl=DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL,
         )
 
-        return LiteLLM_BudgetTable(**budget_record.dict())
+        return _budget_obj
 
     except Exception as e:
         verbose_proxy_logger.error(f"Error fetching default end user budget: {str(e)}")
@@ -960,20 +963,20 @@ async def get_end_user_object(
     # Check cache first
     cached_user_obj = await user_api_key_cache.async_get_cache(key=_key)
     if cached_user_obj is not None:
-        return_obj = LiteLLM_EndUserTable(**cached_user_obj)
+        return_obj = CacheCodec.deserialize(cached_user_obj, LiteLLM_EndUserTable)
+        if return_obj is not None:
+            # Apply default budget if needed
+            return_obj = await _apply_default_budget_to_end_user(
+                end_user_obj=return_obj,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                parent_otel_span=parent_otel_span,
+            )
 
-        # Apply default budget if needed
-        return_obj = await _apply_default_budget_to_end_user(
-            end_user_obj=return_obj,
-            prisma_client=prisma_client,
-            user_api_key_cache=user_api_key_cache,
-            parent_otel_span=parent_otel_span,
-        )
+            # Check budget limits
+            _check_end_user_budget(end_user_obj=return_obj, route=route)
 
-        # Check budget limits
-        _check_end_user_budget(end_user_obj=return_obj, route=route)
-
-        return return_obj
+            return return_obj
 
     # Fetch from database
     try:
@@ -996,9 +999,10 @@ async def get_end_user_object(
             parent_otel_span=parent_otel_span,
         )
 
-        # Save to cache (always store as dict for consistency)
+        # Save to cache
         await user_api_key_cache.async_set_cache(
-            key="end_user_id:{}".format(end_user_id), value=_response.dict()
+            key="end_user_id:{}".format(end_user_id),
+            value=CacheCodec.serialize(_response, model_type=LiteLLM_EndUserTable),
         )
 
         # Check budget limits
@@ -1051,10 +1055,11 @@ async def get_tag_objects_batch(
         cache_key = f"tag:{tag_name}"
         cached_tag = await user_api_key_cache.async_get_cache(key=cache_key)
         if cached_tag is not None:
-            if isinstance(cached_tag, dict):
-                tag_objects[tag_name] = LiteLLM_TagTable(**cached_tag)
+            deserialized_tag = CacheCodec.deserialize(cached_tag, LiteLLM_TagTable)
+            if deserialized_tag is not None:
+                tag_objects[tag_name] = deserialized_tag
             else:
-                tag_objects[tag_name] = cached_tag
+                uncached_tags.append(tag_name)
         else:
             uncached_tags.append(tag_name)
 
@@ -1070,11 +1075,12 @@ async def get_tag_objects_batch(
             for db_tag in db_tags:
                 tag_name = db_tag.tag_name
                 cache_key = f"tag:{tag_name}"
-                # Cache with default TTL (same as end_user objects)
+                _tag_obj = LiteLLM_TagTable(**db_tag.dict())
                 await user_api_key_cache.async_set_cache(
-                    key=cache_key, value=db_tag.dict()
+                    key=cache_key,
+                    value=CacheCodec.serialize(_tag_obj, model_type=LiteLLM_TagTable),
                 )
-                tag_objects[tag_name] = LiteLLM_TagTable(**db_tag.dict())
+                tag_objects[tag_name] = _tag_obj
         except Exception as e:
             verbose_proxy_logger.debug(f"Error batch fetching tags from database: {e}")
 
@@ -1146,7 +1152,11 @@ async def get_team_membership(
     # check if in cache
     cached_membership_obj = await user_api_key_cache.async_get_cache(key=_key)
     if cached_membership_obj is not None:
-        return LiteLLM_TeamMembership(**cached_membership_obj)
+        deserialized_membership = CacheCodec.deserialize(
+            cached_membership_obj, LiteLLM_TeamMembership
+        )
+        if deserialized_membership is not None:
+            return deserialized_membership
 
     # else, check db
     try:
@@ -1158,10 +1168,11 @@ async def get_team_membership(
         if response is None:
             return None
 
-        # save the team membership object to cache (store as dict)
-        await user_api_key_cache.async_set_cache(key=_key, value=response.dict())
-
         _response = LiteLLM_TeamMembership(**response.dict())
+        await user_api_key_cache.async_set_cache(
+            key=_key,
+            value=CacheCodec.serialize(_response, model_type=LiteLLM_TeamMembership),
+        )
 
         return _response
     except Exception:
@@ -1350,10 +1361,11 @@ async def get_user_object(
     if not check_db_only:
         cached_user_obj = await user_api_key_cache.async_get_cache(key=user_id)
         if cached_user_obj is not None:
-            if isinstance(cached_user_obj, dict):
-                return LiteLLM_UserTable(**cached_user_obj)
-            elif isinstance(cached_user_obj, LiteLLM_UserTable):
-                return cached_user_obj
+            deserialized_user = CacheCodec.deserialize(
+                cached_user_obj, LiteLLM_UserTable
+            )
+            if deserialized_user is not None:
+                return deserialized_user
     # else, check db
     if prisma_client is None:
         raise Exception("No db connected")
@@ -1415,7 +1427,7 @@ async def get_user_object(
         # save the user object to cache
         await user_api_key_cache.async_set_cache(
             key=user_id,
-            value=response_dict,
+            value=CacheCodec.serialize(_response, model_type=LiteLLM_UserTable),
             ttl=DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL,
         )
 
@@ -1886,16 +1898,19 @@ async def get_team_object_by_alias(
                 )
 
         # Cache the result by both alias and team_id
+        _serialized_team = CacheCodec.serialize(
+            team_obj, model_type=LiteLLM_TeamTableCachedObj
+        )
         await user_api_key_cache.async_set_cache(
             key=cache_key,
-            value=team_obj,
+            value=_serialized_team,
             ttl=DEFAULT_IN_MEMORY_TTL,
         )
         # Also cache by team_id for consistency
         team_id_cache_key = "team_id:{}".format(team_obj.team_id)
         await user_api_key_cache.async_set_cache(
             key=team_id_cache_key,
-            value=team_obj,
+            value=_serialized_team,
             ttl=DEFAULT_IN_MEMORY_TTL,
         )
 
@@ -1946,10 +1961,11 @@ async def get_org_object_by_alias(
     cache_key = "org_alias:{}".format(org_alias)
     cached_org_obj = await user_api_key_cache.async_get_cache(key=cache_key)
     if cached_org_obj is not None:
-        if isinstance(cached_org_obj, dict):
-            return LiteLLM_OrganizationTable(**cached_org_obj)
-        elif isinstance(cached_org_obj, LiteLLM_OrganizationTable):
-            return cached_org_obj
+        deserialized_org = CacheCodec.deserialize(
+            cached_org_obj, LiteLLM_OrganizationTable
+        )
+        if deserialized_org is not None:
+            return deserialized_org
 
     # Query database by organization_alias
     try:
@@ -1976,16 +1992,19 @@ async def get_org_object_by_alias(
         org = orgs[0]
         org_obj = LiteLLM_OrganizationTable(**org.model_dump())
 
+        _serialized_org = CacheCodec.serialize(
+            org_obj, model_type=LiteLLM_OrganizationTable
+        )
         # Cache the result
         await user_api_key_cache.async_set_cache(
             key=cache_key,
-            value=org_obj.model_dump(),
+            value=_serialized_org,
             ttl=DEFAULT_IN_MEMORY_TTL,
         )
         # Also cache by org_id for consistency
         await user_api_key_cache.async_set_cache(
             key="org_id:{}".format(org_obj.organization_id),
-            value=org_obj.model_dump(),
+            value=_serialized_org,
             ttl=DEFAULT_IN_MEMORY_TTL,
         )
 
@@ -2287,10 +2306,11 @@ async def get_object_permission(
     key = "object_permission_id:{}".format(object_permission_id)
     cached_obj_permission = await user_api_key_cache.async_get_cache(key=key)
     if cached_obj_permission is not None:
-        if isinstance(cached_obj_permission, dict):
-            return LiteLLM_ObjectPermissionTable(**cached_obj_permission)
-        elif isinstance(cached_obj_permission, LiteLLM_ObjectPermissionTable):
-            return cached_obj_permission
+        deserialized_perm = CacheCodec.deserialize(
+            cached_obj_permission, LiteLLM_ObjectPermissionTable
+        )
+        if deserialized_perm is not None:
+            return deserialized_perm
 
     # else, check db
     try:
@@ -2301,14 +2321,16 @@ async def get_object_permission(
         if response is None:
             return None
 
-        # save the object permission to cache
+        _perm_obj = LiteLLM_ObjectPermissionTable(**response.dict())
         await user_api_key_cache.async_set_cache(
             key=key,
-            value=response.model_dump(),
+            value=CacheCodec.serialize(
+                _perm_obj, model_type=LiteLLM_ObjectPermissionTable
+            ),
             ttl=DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL,
         )
 
-        return LiteLLM_ObjectPermissionTable(**response.dict())
+        return _perm_obj
     except Exception:
         return None
 
@@ -2339,10 +2361,11 @@ async def get_managed_vector_store_rows_by_uuids(
         key = "managed_vector_store_id:{}".format(uuid)
         cached = await user_api_key_cache.async_get_cache(key=key)
         if cached is not None:
-            if isinstance(cached, dict):
-                result.append(LiteLLM_ManagedVectorStoresTable(**cached))
-            elif isinstance(cached, LiteLLM_ManagedVectorStoresTable):
-                result.append(cached)
+            deserialized_vs = CacheCodec.deserialize(
+                cached, LiteLLM_ManagedVectorStoresTable
+            )
+            if deserialized_vs is not None:
+                result.append(deserialized_vs)
             else:
                 cache_misses.append(uuid)
         else:
@@ -2370,7 +2393,9 @@ async def get_managed_vector_store_rows_by_uuids(
         key = "managed_vector_store_id:{}".format(cached_obj.vector_store_id)
         await user_api_key_cache.async_set_cache(
             key=key,
-            value=row_dict,
+            value=CacheCodec.serialize(
+                cached_obj, model_type=LiteLLM_ManagedVectorStoresTable
+            ),
             ttl=DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL,
         )
         result.append(cached_obj)
@@ -2413,12 +2438,13 @@ async def get_org_object(
         cache_key = "org_id:{}:with_budget".format(org_id)
 
     # check if in cache
-    cached_org_obj = user_api_key_cache.async_get_cache(key=cache_key)
+    cached_org_obj = await user_api_key_cache.async_get_cache(key=cache_key)
     if cached_org_obj is not None:
-        if isinstance(cached_org_obj, dict):
-            return LiteLLM_OrganizationTable(**cached_org_obj)
-        elif isinstance(cached_org_obj, LiteLLM_OrganizationTable):
-            return cached_org_obj
+        deserialized_org = CacheCodec.deserialize(
+            cached_org_obj, LiteLLM_OrganizationTable
+        )
+        if deserialized_org is not None:
+            return deserialized_org
     # else, check db
     try:
         query_kwargs: Dict[str, Any] = {"where": {"organization_id": org_id}}
@@ -2432,16 +2458,15 @@ async def get_org_object(
         if response is None:
             raise Exception
 
+        _org_obj = LiteLLM_OrganizationTable(**response.model_dump())
         # Cache the result
         await user_api_key_cache.async_set_cache(
             key=cache_key,
-            value=(
-                response.model_dump() if hasattr(response, "model_dump") else response
-            ),
+            value=CacheCodec.serialize(_org_obj, model_type=LiteLLM_OrganizationTable),
             ttl=DEFAULT_IN_MEMORY_TTL,
         )
 
-        return response
+        return _org_obj
     except Exception:
         raise Exception(
             f"Organization doesn't exist in db. Organization={org_id}. Create organization via `/organization/new` call."
@@ -3451,10 +3476,11 @@ async def get_project_object(
     cache_key = "project_id:{}".format(project_id)
     cached_obj = await user_api_key_cache.async_get_cache(key=cache_key)
     if cached_obj is not None:
-        if isinstance(cached_obj, dict):
-            return LiteLLM_ProjectTableCachedObj(**cached_obj)
-        elif isinstance(cached_obj, LiteLLM_ProjectTableCachedObj):
-            return cached_obj
+        deserialized_project = CacheCodec.deserialize(
+            cached_obj, LiteLLM_ProjectTableCachedObj
+        )
+        if deserialized_project is not None:
+            return deserialized_project
 
     # Fetch from DB
     project_row = await prisma_client.db.litellm_projecttable.find_unique(

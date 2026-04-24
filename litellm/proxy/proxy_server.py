@@ -78,8 +78,11 @@ from litellm.proxy._types import (
     InvitationNew,
     InvitationUpdate,
     Litellm_EntityType,
+    LiteLLM_EndUserTable,
     LiteLLM_JWTAuth,
+    LiteLLM_TagTable,
     LiteLLM_TeamTable,
+    LiteLLM_TeamTableCachedObj,
     LiteLLM_UserTable,
     LitellmUserRoles,
     PassThroughGenericEndpoint,
@@ -2029,34 +2032,38 @@ async def update_cache(  # noqa: PLR0915
     ### UPDATE USER SPEND ###
     async def _update_user_cache():
         ## UPDATE CACHE FOR USER ID + GLOBAL PROXY
+        if response_cost is None:
+            return
         user_ids = [user_id]
         try:
             for _id in user_ids:
                 # Fetch the existing cost for the given user
                 if _id is None:
                     continue
-                existing_spend_obj = await user_api_key_cache.async_get_cache(key=_id)
-                if existing_spend_obj is None:
+                cached_user = await user_api_key_cache.async_get_cache(key=_id)
+                if cached_user is None:
                     # do nothing if there is no cache value
+                    return
+                existing_spend_obj = CacheCodec.deserialize(cached_user, LiteLLM_UserTable)
+                if existing_spend_obj is None:
                     return
                 verbose_proxy_logger.debug(
                     f"_update_user_db: existing spend: {existing_spend_obj}; response_cost: {response_cost}"
                 )
 
-                if isinstance(existing_spend_obj, dict):
-                    existing_spend = existing_spend_obj["spend"]
-                else:
-                    existing_spend = existing_spend_obj.spend
+                existing_spend = existing_spend_obj.spend or 0.0
                 # Calculate the new cost by adding the existing cost and response_cost
                 new_spend = existing_spend + response_cost
 
-                # Update the cost column for the given user
-                if isinstance(existing_spend_obj, dict):
-                    existing_spend_obj["spend"] = new_spend
-                    values_to_update_in_cache.append((_id, existing_spend_obj))
-                else:
-                    existing_spend_obj.spend = new_spend
-                    values_to_update_in_cache.append((_id, existing_spend_obj.json()))
+                existing_spend_obj.spend = new_spend
+                values_to_update_in_cache.append(
+                    (
+                        _id,
+                        CacheCodec.serialize(
+                            existing_spend_obj, model_type=LiteLLM_UserTable
+                        ),
+                    )
+                )
             ## UPDATE GLOBAL PROXY ##
             global_proxy_spend = await user_api_key_cache.async_get_cache(
                 key="{}:spend".format(litellm_proxy_admin_name)
@@ -2088,31 +2095,33 @@ async def update_cache(  # noqa: PLR0915
         _id = "end_user_id:{}".format(end_user_id)
         try:
             # Fetch the existing cost for the given user
-            existing_spend_obj = await user_api_key_cache.async_get_cache(key=_id)
-            if existing_spend_obj is None:
+            cached_end_user = await user_api_key_cache.async_get_cache(key=_id)
+            if cached_end_user is None:
                 # if user does not exist in LiteLLM_UserTable, create a new user
                 # do nothing if end-user not in api key cache
+                return
+            existing_spend_obj = CacheCodec.deserialize(
+                cached_end_user, LiteLLM_EndUserTable
+            )
+            if existing_spend_obj is None:
                 return
             verbose_proxy_logger.debug(
                 f"_update_end_user_db: existing spend: {existing_spend_obj}; response_cost: {response_cost}"
             )
-            if existing_spend_obj is None:
-                existing_spend = 0
-            else:
-                if isinstance(existing_spend_obj, dict):
-                    existing_spend = existing_spend_obj["spend"]
-                else:
-                    existing_spend = existing_spend_obj.spend
+
+            existing_spend = existing_spend_obj.spend or 0.0
             # Calculate the new cost by adding the existing cost and response_cost
             new_spend = existing_spend + response_cost
 
-            # Update the cost column for the given user
-            if isinstance(existing_spend_obj, dict):
-                existing_spend_obj["spend"] = new_spend
-                values_to_update_in_cache.append((_id, existing_spend_obj))
-            else:
-                existing_spend_obj.spend = new_spend
-                values_to_update_in_cache.append((_id, existing_spend_obj.json()))
+            existing_spend_obj.spend = new_spend
+            values_to_update_in_cache.append(
+                (
+                    _id,
+                    CacheCodec.serialize(
+                        existing_spend_obj, model_type=LiteLLM_EndUserTable
+                    ),
+                )
+            )
         except Exception as e:
             verbose_proxy_logger.warning(
                 "Spend tracking - failed to update end user spend in cache. "
@@ -2131,36 +2140,32 @@ async def update_cache(  # noqa: PLR0915
 
         _id = "team_id:{}".format(team_id)
         try:
-            # Fetch the existing cost for the given user
-            existing_spend_obj: Optional[LiteLLM_TeamTable] = (
-                await user_api_key_cache.async_get_cache(key=_id)
+            cached_team = await user_api_key_cache.async_get_cache(key=_id)
+            if cached_team is None:
+                # do nothing if team not in api key cache
+                return
+            existing_spend_obj: Optional[LiteLLM_TeamTableCachedObj] = (
+                CacheCodec.deserialize(cached_team, LiteLLM_TeamTableCachedObj)
             )
             if existing_spend_obj is None:
-                # do nothing if team not in api key cache
                 return
             verbose_proxy_logger.debug(
                 f"_update_team_db: existing spend: {existing_spend_obj}; response_cost: {response_cost}"
             )
-            if existing_spend_obj is None:
-                existing_spend: Optional[float] = 0.0
-            else:
-                if isinstance(existing_spend_obj, dict):
-                    existing_spend = existing_spend_obj["spend"]
-                else:
-                    existing_spend = existing_spend_obj.spend
 
-            if existing_spend is None:
-                existing_spend = 0.0
+            existing_spend: float = existing_spend_obj.spend or 0.0
             # Calculate the new cost by adding the existing cost and response_cost
             new_spend = existing_spend + response_cost
 
-            # Update the cost column for the given user
-            if isinstance(existing_spend_obj, dict):
-                existing_spend_obj["spend"] = new_spend
-                values_to_update_in_cache.append((_id, existing_spend_obj))
-            else:
-                existing_spend_obj.spend = new_spend
-                values_to_update_in_cache.append((_id, existing_spend_obj))
+            existing_spend_obj.spend = new_spend
+            values_to_update_in_cache.append(
+                (
+                    _id,
+                    CacheCodec.serialize(
+                        existing_spend_obj, model_type=LiteLLM_TeamTableCachedObj
+                    ),
+                )
+            )
         except Exception as e:
             verbose_proxy_logger.warning(
                 "Spend tracking - failed to update team spend in cache. "
@@ -2187,32 +2192,32 @@ async def update_cache(  # noqa: PLR0915
 
                 cache_key = f"tag:{tag_name}"
                 # Fetch the existing tag object from cache
-                existing_tag_obj = await user_api_key_cache.async_get_cache(
-                    key=cache_key
-                )
-                if existing_tag_obj is None:
+                cached_tag = await user_api_key_cache.async_get_cache(key=cache_key)
+                if cached_tag is None:
                     # do nothing if tag not in api key cache
+                    continue
+
+                existing_tag_obj = CacheCodec.deserialize(cached_tag, LiteLLM_TagTable)
+                if existing_tag_obj is None:
                     continue
 
                 verbose_proxy_logger.debug(
                     f"_update_tag_cache: existing spend for tag={tag_name}: {existing_tag_obj}; response_cost: {response_cost}"
                 )
 
-                if isinstance(existing_tag_obj, dict):
-                    existing_spend = existing_tag_obj.get("spend", 0) or 0
-                else:
-                    existing_spend = getattr(existing_tag_obj, "spend", 0) or 0
-
+                existing_spend = existing_tag_obj.spend or 0.0
                 # Calculate the new cost by adding the existing cost and response_cost
                 new_spend = existing_spend + response_cost
 
-                # Update the spend column for the given tag
-                if isinstance(existing_tag_obj, dict):
-                    existing_tag_obj["spend"] = new_spend
-                    values_to_update_in_cache.append((cache_key, existing_tag_obj))
-                else:
-                    existing_tag_obj.spend = new_spend
-                    values_to_update_in_cache.append((cache_key, existing_tag_obj))
+                existing_tag_obj.spend = new_spend
+                values_to_update_in_cache.append(
+                    (
+                        cache_key,
+                        CacheCodec.serialize(
+                            existing_tag_obj, model_type=LiteLLM_TagTable
+                        ),
+                    )
+                )
         except Exception as e:
             verbose_proxy_logger.warning(
                 "Spend tracking - failed to update tag spend in cache. "
@@ -2849,7 +2854,7 @@ class ProxyConfig:
         self,
         cache_params: dict,
     ):
-        global redis_usage_cache, llm_router
+        global redis_usage_cache, llm_router, general_settings
         from litellm import Cache
 
         if "default_in_memory_ttl" in cache_params:
@@ -2871,16 +2876,23 @@ class ProxyConfig:
             )
             # Note: PKCE verifier storage uses redis_usage_cache directly (not
             # user_api_key_cache) to avoid routing all API-key lookups through Redis.
-            # Share the same Redis client for virtual-key lookups (same DualCache as
-            # model_max_budget_limiter). attach_redis_cache is a no-op if Redis is
-            # already set (e.g. config reload).
-            user_api_key_cache.attach_redis_cache(
-                redis_usage_cache,
-                default_redis_ttl=litellm.default_redis_ttl,
-            )
-            verbose_proxy_logger.debug(
-                "Attached redis_usage_cache Redis client to user_api_key_cache"
-            )
+            if general_settings.get("enable_redis_auth_cache") is True:
+                user_api_key_cache.attach_redis_cache(
+                    redis_usage_cache,
+                    default_redis_ttl=litellm.default_redis_ttl,
+                )
+                verbose_proxy_logger.info(
+                    "enable_redis_auth_cache=True: attached Redis to "
+                    "user_api_key_cache — virtual-key lookups are now "
+                    "shared across all proxy workers."
+                )
+            else:
+                verbose_proxy_logger.info(
+                    "enable_redis_auth_cache is not set: user_api_key_cache "
+                    "remains in-memory only (per-worker). Set "
+                    "general_settings.enable_redis_auth_cache: true to share "
+                    "the auth cache across workers and reduce DB load."
+                )
 
     def switch_on_llm_response_caching(self):
         """

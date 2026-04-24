@@ -2358,6 +2358,19 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         None,
         description="List of MCP server fields that must be filled in for a submission to pass standards checks (e.g. ['description', 'source_url', 'alias']).",
     )
+    enable_redis_auth_cache: Optional[bool] = Field(
+        None,
+        description=(
+            "When True, attaches Redis to user_api_key_cache so virtual-key lookups "
+            "are shared across all proxy workers/pods instead of being resolved "
+            "per-process. Requires a Redis cache to be configured under litellm_settings. "
+            "Reduces DB load significantly in multi-worker deployments by eliminating "
+            "redundant combined_view SQL queries caused by per-pod cache misses. "
+            "Off by default for a safe phased rollout — set to True once your Redis "
+            "cluster is healthy and the CacheCodec serialisation has been validated in "
+            "your environment. Will be enabled by default in a future release."
+        ),
+    )
 
 
 class ConfigYAML(LiteLLMPydanticObjectBase):

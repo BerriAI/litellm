@@ -45,6 +45,7 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.auth_checks import can_team_access_model
+from litellm.proxy.common_utils.cache_pydantic_utils import CacheCodec
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 
 from .auth_checks import (
@@ -1376,7 +1377,9 @@ class JWTAuthManager:
             if user_api_key_cache is not None:
                 await user_api_key_cache.async_set_cache(
                     key=user_object.user_id,
-                    value=user_object.model_dump(),
+                    value=CacheCodec.serialize(
+                        user_object, model_type=LiteLLM_UserTable
+                    ),
                     ttl=DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL,
                 )
 
@@ -1399,7 +1402,9 @@ class JWTAuthManager:
             if user_api_key_cache is not None:
                 await user_api_key_cache.async_set_cache(
                     key=user_object.user_id,
-                    value=user_object.model_dump(),
+                    value=CacheCodec.serialize(
+                        user_object, model_type=LiteLLM_UserTable
+                    ),
                     ttl=DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL,
                 )
         return None

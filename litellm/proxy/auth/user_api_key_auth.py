@@ -1297,8 +1297,13 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                 if prisma_client is not None:
                     _cache_key = f"{valid_token.team_id}_{valid_token.user_id}"
 
-                    team_member_info = await user_api_key_cache.async_get_cache(
+                    _cached_member = await user_api_key_cache.async_get_cache(
                         key=_cache_key
+                    )
+                    team_member_info: Optional[LiteLLM_TeamMembership] = (
+                        CacheCodec.deserialize(_cached_member, LiteLLM_TeamMembership)
+                        if _cached_member is not None
+                        else None
                     )
                     if team_member_info is None:
                         # read from DB
@@ -1306,18 +1311,25 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                         _team_id = valid_token.team_id
 
                         if _user_id is not None and _team_id is not None:
-                            team_member_info = await prisma_client.db.litellm_teammembership.find_first(
+                            _db_member = await prisma_client.db.litellm_teammembership.find_first(
                                 where={
                                     "user_id": _user_id,
                                     "team_id": _team_id,
                                 },  # type: ignore
                                 include={"litellm_budget_table": True},
                             )
-                            await user_api_key_cache.async_set_cache(
-                                key=_cache_key,
-                                value=team_member_info,
-                                ttl=5,
-                            )
+                            if _db_member is not None:
+                                team_member_info = LiteLLM_TeamMembership(
+                                    **_db_member.dict()
+                                )
+                                await user_api_key_cache.async_set_cache(
+                                    key=_cache_key,
+                                    value=CacheCodec.serialize(
+                                        team_member_info,
+                                        model_type=LiteLLM_TeamMembership,
+                                    ),
+                                    ttl=5,
+                                )
 
                     if (
                         team_member_info is not None
