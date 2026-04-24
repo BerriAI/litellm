@@ -173,19 +173,21 @@ class AdvisorOrchestrationHandler(MessagesInterceptor):
         try:
             while True:
                 # --- Executor call (always non-streaming) ---
-                executor_response: AnthropicMessagesResponse = await _call_messages_handler(
-                    model=model,
-                    messages=current_messages,
-                    tools=executor_tools,
-                    stream=False,
-                    max_tokens=max_tokens,
-                    custom_llm_provider=custom_llm_provider,
-                    metadata={
-                        **metadata_base,
-                        "advisor_sub_call": False,
-                        "parent_request_id": parent_request_id,
-                    },
-                    **kwargs,
+                executor_response: AnthropicMessagesResponse = (
+                    await _call_messages_handler(
+                        model=model,
+                        messages=current_messages,
+                        tools=executor_tools,
+                        stream=False,
+                        max_tokens=max_tokens,
+                        custom_llm_provider=custom_llm_provider,
+                        metadata={
+                            **metadata_base,
+                            "advisor_sub_call": False,
+                            "parent_request_id": parent_request_id,
+                        },
+                        **kwargs,
+                    )
                 )
 
                 executor_cost = _get_response_cost(executor_response, model=model)
@@ -256,17 +258,19 @@ class AdvisorOrchestrationHandler(MessagesInterceptor):
                 # Use the resolved model so router routing / cost lookup hit the
                 # real underlying deployment; the alias is kept only for the
                 # client-visible iteration entry below.
-                advisor_response: AnthropicMessagesResponse = await _call_advisor_with_router(
-                    model=resolved_advisor_model,
-                    messages=advisor_messages,
-                    max_tokens=max_tokens,
-                    metadata={
-                        **metadata_base,
-                        "advisor_sub_call": True,
-                        "parent_request_id": parent_request_id,
-                    },
-                    api_key=advisor_api_key,
-                    api_base=advisor_api_base,
+                advisor_response: AnthropicMessagesResponse = (
+                    await _call_advisor_with_router(
+                        model=resolved_advisor_model,
+                        messages=advisor_messages,
+                        max_tokens=max_tokens,
+                        metadata={
+                            **metadata_base,
+                            "advisor_sub_call": True,
+                            "parent_request_id": parent_request_id,
+                        },
+                        api_key=advisor_api_key,
+                        api_base=advisor_api_base,
+                    )
                 )
 
                 advisor_call_cost = _get_response_cost(
@@ -284,12 +288,14 @@ class AdvisorOrchestrationHandler(MessagesInterceptor):
                 advisor_text = _extract_response_text(advisor_response)
 
                 # Record the interaction for later injection into the final response.
-                advisor_interactions.append({
-                    "tool_use_id": advisor_use_block.get(
-                        "id", f"srvtoolu_{uuid.uuid4().hex[:24]}"
-                    ),
-                    "advisor_text": advisor_text,
-                })
+                advisor_interactions.append(
+                    {
+                        "tool_use_id": advisor_use_block.get(
+                            "id", f"srvtoolu_{uuid.uuid4().hex[:24]}"
+                        ),
+                        "advisor_text": advisor_text,
+                    }
+                )
 
                 # --- Inject advisor result and continue loop ---
                 current_messages = _inject_advisor_turn(
@@ -498,9 +504,9 @@ def _finalize_orchestrated_response(
             from litellm.types.utils import CallTypes
 
             litellm_logging_obj.call_type = CallTypes.anthropic_messages.value
-            litellm_logging_obj.model_call_details[
-                "call_type"
-            ] = CallTypes.anthropic_messages.value
+            litellm_logging_obj.model_call_details["call_type"] = (
+                CallTypes.anthropic_messages.value
+            )
         except Exception:
             pass
 
@@ -549,7 +555,9 @@ def _fire_async_success_logging(
 
         from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 
-        start_time = getattr(litellm_logging_obj, "start_time", None) or _dt.datetime.now()
+        start_time = (
+            getattr(litellm_logging_obj, "start_time", None) or _dt.datetime.now()
+        )
         end_time = _dt.datetime.now()
         GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
             async_coroutine=litellm_logging_obj.async_success_handler(
@@ -599,7 +607,11 @@ def _openai_response_to_anthropic_dict(response: Any) -> Dict:
         choices = response.choices if hasattr(response, "choices") else []
         content_blocks: List[Dict] = []
         for choice in choices:
-            msg = choice.message if hasattr(choice, "message") else choice.get("message", {})
+            msg = (
+                choice.message
+                if hasattr(choice, "message")
+                else choice.get("message", {})
+            )
             text = msg.content if hasattr(msg, "content") else msg.get("content", "")
             if text:
                 content_blocks.append({"type": "text", "text": text})
@@ -614,7 +626,9 @@ def _openai_response_to_anthropic_dict(response: Any) -> Dict:
         hidden_params = getattr(response, "_hidden_params", None)
         if hidden_params is not None:
             anthropic_dict["_hidden_params"] = (
-                dict(hidden_params) if isinstance(hidden_params, dict) else hidden_params
+                dict(hidden_params)
+                if isinstance(hidden_params, dict)
+                else hidden_params
             )
         return anthropic_dict
     except Exception:
@@ -693,20 +707,24 @@ def _inject_advisor_blocks_into_response(
         # the Anthropic response to OpenAI format). We did not observe a real
         # tool-call payload here — the advisor was invoked via a synthetic
         # tool — so an empty object is the correct stub.
-        content.append({
-            "type": "server_tool_use",
-            "id": tool_use_id,
-            "name": "advisor",
-            "input": {},
-        })
-        content.append({
-            "type": "advisor_tool_result",
-            "tool_use_id": tool_use_id,
-            "content": {
-                "type": "advisor_result",
-                "text": advisor_text,
-            },
-        })
+        content.append(
+            {
+                "type": "server_tool_use",
+                "id": tool_use_id,
+                "name": "advisor",
+                "input": {},
+            }
+        )
+        content.append(
+            {
+                "type": "advisor_tool_result",
+                "tool_use_id": tool_use_id,
+                "content": {
+                    "type": "advisor_result",
+                    "text": advisor_text,
+                },
+            }
+        )
 
 
 def _extract_response_text(response: Any) -> str:

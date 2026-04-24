@@ -185,9 +185,9 @@ class AdvisorInterceptionLogger(CustomLogger):
                 return self._wrap_as_streaming_if_needed(response)
             return None
 
-        custom_llm_provider = request_data.get("custom_llm_provider", "") or request_data.get(
-            "litellm_params", {}
-        ).get("custom_llm_provider", "")
+        custom_llm_provider = request_data.get(
+            "custom_llm_provider", ""
+        ) or request_data.get("litellm_params", {}).get("custom_llm_provider", "")
         if not custom_llm_provider:
             try:
                 _, custom_llm_provider, _, _ = litellm.get_llm_provider(model=model)
@@ -197,14 +197,16 @@ class AdvisorInterceptionLogger(CustomLogger):
         tools = request_data.get("tools")
         stream = bool(request_data.get("stream", False))
 
-        should_run, tools_dict = await self.async_should_run_chat_completion_agentic_loop(
-            response=response,
-            model=model,
-            messages=messages,
-            tools=tools if isinstance(tools, list) else None,
-            stream=stream,
-            custom_llm_provider=custom_llm_provider,
-            kwargs=request_data,
+        should_run, tools_dict = (
+            await self.async_should_run_chat_completion_agentic_loop(
+                response=response,
+                model=model,
+                messages=messages,
+                tools=tools if isinstance(tools, list) else None,
+                stream=stream,
+                custom_llm_provider=custom_llm_provider,
+                kwargs=request_data,
+            )
         )
         if not should_run:
             if isinstance(call_id, str):
@@ -265,8 +267,14 @@ class AdvisorInterceptionLogger(CustomLogger):
         # to the orchestration loop below.
         if custom_llm_provider in ADVISOR_NATIVE_PROVIDERS:
             call_id_check = kwargs.get("litellm_call_id")
-            advisor_cfg = self._advisor_config_by_call_id.get(call_id_check, {}) if isinstance(call_id_check, str) else {}
-            advisor_model_check = advisor_cfg.get("advisor_model") or self.default_advisor_model or ""
+            advisor_cfg = (
+                self._advisor_config_by_call_id.get(call_id_check, {})
+                if isinstance(call_id_check, str)
+                else {}
+            )
+            advisor_model_check = (
+                advisor_cfg.get("advisor_model") or self.default_advisor_model or ""
+            )
             if self._is_native_anthropic_advisor_model(advisor_model_check):
                 return False, {}
 
@@ -323,7 +331,9 @@ class AdvisorInterceptionLogger(CustomLogger):
         """
         advisor_config = tools.get("advisor_config", {}) or {}
         max_uses = int(advisor_config.get("max_uses", ADVISOR_MAX_USES))
-        advisor_model = advisor_config.get("advisor_model") or self.default_advisor_model
+        advisor_model = (
+            advisor_config.get("advisor_model") or self.default_advisor_model
+        )
         if not advisor_model:
             raise ValueError(
                 "No advisor model configured. Either:\n"
@@ -357,7 +367,9 @@ class AdvisorInterceptionLogger(CustomLogger):
                 if not advisor_calls:
                     final_executor_cost = self._safe_get_response_cost(current_response)
                     advisor_first_call_cost = max(
-                        total_response_cost - advisor_subcall_cost - final_executor_cost,
+                        total_response_cost
+                        - advisor_subcall_cost
+                        - final_executor_cost,
                         0.0,
                     )
                     self._set_response_cost_if_possible(
@@ -427,10 +439,12 @@ class AdvisorInterceptionLogger(CustomLogger):
                         )
                     )
                     advisor_text = self._extract_text_content(advisor_response)
-                    advisor_interactions.append({
-                        "tool_use_id": advisor_call["id"],
-                        "advisor_text": advisor_text,
-                    })
+                    advisor_interactions.append(
+                        {
+                            "tool_use_id": advisor_call["id"],
+                            "advisor_text": advisor_text,
+                        }
+                    )
                     tool_messages.append(
                         {
                             "role": "tool",
@@ -439,7 +453,9 @@ class AdvisorInterceptionLogger(CustomLogger):
                         }
                     )
 
-                current_messages = current_messages + [assistant_message] + tool_messages
+                current_messages = (
+                    current_messages + [assistant_message] + tool_messages
+                )
 
                 optional_params_clean = {
                     k: v
@@ -664,10 +680,10 @@ class AdvisorInterceptionLogger(CustomLogger):
         call_id = kwargs.get("litellm_call_id")
         if isinstance(call_id, str):
             self._advisor_config_by_call_id[call_id] = {
-            "advisor_model": advisor_model,
-            "max_uses": int(max_uses),
-            "api_key": api_key,
-            "api_base": api_base,
+                "advisor_model": advisor_model,
+                "max_uses": int(max_uses),
+                "api_key": api_key,
+                "api_base": api_base,
             }
         if kwargs.get("stream"):
             kwargs["stream"] = False
@@ -702,7 +718,9 @@ class AdvisorInterceptionLogger(CustomLogger):
             "api_base": api_base,
         }
 
-    def _extract_advisor_tool_calls(self, response: Any) -> Tuple[List[Dict], List[Dict]]:
+    def _extract_advisor_tool_calls(
+        self, response: Any
+    ) -> Tuple[List[Dict], List[Dict]]:
         message = self._extract_first_choice_message(response)
         if not message:
             return [], []
@@ -793,19 +811,23 @@ class AdvisorInterceptionLogger(CustomLogger):
         for interaction in advisor_interactions:
             tool_use_id = interaction["tool_use_id"]
             advisor_text = interaction["advisor_text"]
-            advisor_results.append({
-                "type": "server_tool_use",
-                "id": tool_use_id,
-                "name": "advisor",
-            })
-            advisor_results.append({
-                "type": "advisor_tool_result",
-                "tool_use_id": tool_use_id,
-                "content": {
-                    "type": "advisor_result",
-                    "text": advisor_text,
-                },
-            })
+            advisor_results.append(
+                {
+                    "type": "server_tool_use",
+                    "id": tool_use_id,
+                    "name": "advisor",
+                }
+            )
+            advisor_results.append(
+                {
+                    "type": "advisor_tool_result",
+                    "tool_use_id": tool_use_id,
+                    "content": {
+                        "type": "advisor_result",
+                        "text": advisor_text,
+                    },
+                }
+            )
 
         message = AdvisorInterceptionLogger._extract_first_choice_message_obj(response)
         if message is None:
@@ -868,10 +890,14 @@ class AdvisorInterceptionLogger(CustomLogger):
                         "id": getattr(tc, "id", None),
                         "type": getattr(tc, "type", None),
                         "function": {
-                            "name": getattr(function, "name", None) if function else None,
-                            "arguments": getattr(function, "arguments", None)
-                            if function
-                            else None,
+                            "name": (
+                                getattr(function, "name", None) if function else None
+                            ),
+                            "arguments": (
+                                getattr(function, "arguments", None)
+                                if function
+                                else None
+                            ),
                         },
                     }
                 )
@@ -956,8 +982,7 @@ class AdvisorInterceptionLogger(CustomLogger):
 
         if usage is not None:
             input_tokens = (
-                AdvisorInterceptionLogger._get_usage_value(usage, "prompt_tokens")
-                or 0
+                AdvisorInterceptionLogger._get_usage_value(usage, "prompt_tokens") or 0
             )
             output_tokens = (
                 AdvisorInterceptionLogger._get_usage_value(usage, "completion_tokens")

@@ -93,10 +93,14 @@ def is_advisor_tool(tool: Any) -> bool:
     """
     Check whether a tool is an advisor tool in any supported format.
     """
-    tool_type = tool.get("type") if isinstance(tool, dict) else getattr(tool, "type", None)
+    tool_type = (
+        tool.get("type") if isinstance(tool, dict) else getattr(tool, "type", None)
+    )
     if tool_type == ANTHROPIC_ADVISOR_TOOL_TYPE:
         return True
     if is_advisor_tool_chat_completion(tool):
         return True
-    tool_name = tool.get("name") if isinstance(tool, dict) else getattr(tool, "name", None)
+    tool_name = (
+        tool.get("name") if isinstance(tool, dict) else getattr(tool, "name", None)
+    )
     return tool_name in _ADVISOR_TOOL_NAMES

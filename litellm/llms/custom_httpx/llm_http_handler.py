@@ -454,9 +454,9 @@ class BaseLLMHTTPHandler:
 
         # Check if stream was converted for Advisor interception
         if litellm_params.get("_advisor_interception_converted_stream", False):
-            logging_obj.model_call_details[
-                "_advisor_interception_converted_stream"
-            ] = True
+            logging_obj.model_call_details["_advisor_interception_converted_stream"] = (
+                True
+            )
 
         if acompletion is True:
             if stream is True:
