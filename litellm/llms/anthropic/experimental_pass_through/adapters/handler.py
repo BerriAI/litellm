@@ -27,6 +27,16 @@ from litellm.utils import get_model_info
 if TYPE_CHECKING:
     pass
 
+
+# Anthropic-only fields that the translator above already maps into the
+# OpenAI-format completion_kwargs (output_config → reasoning_effort /
+# response_format, etc.). They must be filtered out of the raw
+# extra_kwargs re-merge below or non-Anthropic backends reject the call
+# with 400 "Extra inputs are not permitted". Add new entries here when
+# extending AnthropicMessagesRequestOptionalParams with another Anthropic-
+# specific key.
+ANTHROPIC_ONLY_REQUEST_KEYS: frozenset[str] = frozenset({"output_config"})
+
 ########################################################
 # init adapter
 ANTHROPIC_ADAPTER = AnthropicAdapter()
@@ -202,8 +212,12 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             request_data["output_format"] = output_format
 
         # Extract output_config from extra_kwargs so the translator can use it
-        # (e.g. output_config.effort for adaptive thinking → reasoning_effort)
-        extra_kwargs = extra_kwargs or {}
+        # (e.g. output_config.effort for adaptive thinking → reasoning_effort,
+        # output_config.format → response_format for structured outputs).
+        # Use explicit None check rather than `or {}` so an explicit empty dict
+        # caller-passed argument is preserved (matters for tests that drive
+        # the fallback inference path).
+        extra_kwargs = extra_kwargs if extra_kwargs is not None else {}
         if "output_config" in extra_kwargs:
             request_data["output_config"] = extra_kwargs["output_config"]
 
@@ -225,8 +239,22 @@ class LiteLLMMessagesToCompletionTransformationHandler:
                 "include_usage": True,
             }
 
-        excluded_keys = {"anthropic_messages"}
-        extra_kwargs = extra_kwargs or {}
+        # Keys that must NOT be forwarded as raw extras into the OpenAI-format
+        # ``completion_kwargs`` after translation. The translator above has
+        # already consumed the meaningful parts of these inputs (e.g.
+        # ``output_config.format`` → ``response_format``, ``output_config.effort``
+        # → ``reasoning_effort`` for non-Claude targets). Re-adding the raw
+        # Anthropic-shaped key here causes 400 "Extra inputs are not permitted"
+        # on non-Anthropic backends (Azure OpenAI, Fireworks, Bedrock Nova,
+        # etc.) and is silently lossy on Anthropic-family targets, which would
+        # see the translated key ``response_format`` AND a duplicate, conflicting
+        # ``output_config``.
+        #
+        # Maintainability: when adding a new Anthropic-only request param to
+        # ``AnthropicMessagesRequestOptionalParams``, also extend
+        # ``ANTHROPIC_ONLY_REQUEST_KEYS`` here so it doesn't silently leak.
+        excluded_keys = ANTHROPIC_ONLY_REQUEST_KEYS | {"anthropic_messages"}
+        extra_kwargs = extra_kwargs if extra_kwargs is not None else {}
         for key, value in extra_kwargs.items():
             if (
                 key == "litellm_logging_obj"

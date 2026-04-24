@@ -11,6 +11,45 @@ from litellm.types.utils import ModelResponse
 
 from ....anthropic.chat.transformation import AnthropicConfig
 
+# Keys inside ``output_config`` that Vertex AI Claude does not accept.
+# Today only ``effort`` triggers "Extra inputs are not permitted"; add new
+# entries here as Vertex parity drifts. Keep this list narrow — anything
+# Vertex DOES accept (e.g. ``format`` for structured outputs) must be
+# preserved so callers can rely on Anthropic-native features.
+_VERTEX_UNSUPPORTED_OUTPUT_CONFIG_KEYS = frozenset({"effort"})
+
+
+def _sanitize_vertex_anthropic_output_params(data: dict) -> None:
+    """
+    Strip Vertex-unsupported keys from ``output_config`` / ``output_format``
+    in-place; forward whatever remains.
+
+    Behavior:
+      * ``output_config`` containing only unsupported keys (e.g. ``effort``
+        alone) is removed entirely so the request body has no empty dict.
+      * ``output_config`` containing a mix of supported + unsupported keys has
+        the unsupported subset filtered out and the rest forwarded.
+      * ``output_config`` that is supported in full passes through unchanged.
+      * ``output_format`` is forwarded as-is (Vertex AI Claude accepts it).
+      * Non-dict values for ``output_config`` are dropped to avoid sending
+        malformed payloads downstream.
+    """
+    output_config = data.get("output_config")
+    if output_config is None:
+        return
+    if not isinstance(output_config, dict):
+        data.pop("output_config", None)
+        return
+    sanitized = {
+        k: v
+        for k, v in output_config.items()
+        if k not in _VERTEX_UNSUPPORTED_OUTPUT_CONFIG_KEYS
+    }
+    if sanitized:
+        data["output_config"] = sanitized
+    else:
+        data.pop("output_config", None)
+
 
 class VertexAIError(Exception):
     def __init__(self, status_code, message):
@@ -105,11 +144,12 @@ class VertexAIAnthropicConfig(AnthropicConfig):
 
         data.pop("model", None)  # vertex anthropic doesn't accept 'model' parameter
 
-        # VertexAI doesn't support output_format parameter, remove it if present
-        data.pop("output_format", None)
-
-        # VertexAI doesn't support output_config parameter, remove it if present
-        data.pop("output_config", None)
+        # Vertex AI Claude accepts ``output_config.format`` (structured outputs /
+        # JSON Schema) but NOT ``output_config.effort`` — sending ``effort`` to
+        # Vertex returns 400 "Extra inputs are not permitted". Sanitize in place:
+        # forward the structured-output bits, drop the unsupported keys.
+        # Same treatment for the legacy top-level ``output_format`` field.
+        _sanitize_vertex_anthropic_output_params(data)
 
         tools = optional_params.get("tools")
         tool_search_used = self.is_tool_search_used(tools)
