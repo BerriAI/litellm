@@ -629,7 +629,7 @@ class ProxyBaseLLMRequestProcessing:
         logging_obj: LiteLLMLoggingObj,
         version: Optional[str],
         proxy_logging_obj: ProxyLogging,
-    ) -> dict[str, str]:
+    ) -> Dict[str, str]:
         """
         Build LiteLLM proxy response headers for routes that call the LLM directly
         (e.g. Google native :generateContent) instead of base_process_llm_request.
