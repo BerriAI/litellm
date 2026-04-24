@@ -218,7 +218,6 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         params = [
             "stream",
             "stop",
-            "temperature",
             "top_p",
             "max_tokens",
             "max_completion_tokens",
@@ -234,7 +233,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             "cache_control",
         ]
 
-        if (
+        is_reasoning_family = (
             "claude-3-7-sonnet" in model
             or AnthropicConfig._is_claude_4_6_model(model)
             or AnthropicConfig._is_claude_4_7_model(model)
@@ -242,9 +241,13 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 model=model,
                 custom_llm_provider=self.custom_llm_provider,
             )
-        ):
+        )
+
+        if is_reasoning_family:
             params.append("thinking")
             params.append("reasoning_effort")
+        else:
+            params.append("temperature")
 
         return params
 
@@ -1534,12 +1537,16 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 f"Invalid effort value: {effort}. Must be one of: "
                 f"'high', 'medium', 'low', 'xhigh', 'max'"
             )
-        # ``max`` is Claude Opus 4.6 only (not Sonnet 4.6, not Opus 4.5/4.7).
-        # Keep this hardcoded so the error message is specific and stable.
-        if effort == "max" and not self._is_opus_4_6_model(model):
+        # ``max`` is for Opus 4.6+ output effort (not Sonnet 4.6, not Opus 4.5).
+        # Accept known Opus 4.6/4.7 id patterns and/or ``supports_max_reasoning_effort``
+        # in the model map (same pattern as ``xhigh`` below).
+        if effort == "max" and not (
+            self._is_opus_4_6_model(model)
+            or self._is_opus_4_7_model(model)
+            or self._supports_effort_level(model, "max")
+        ):
             raise ValueError(
-                f"effort='max' is only supported by Claude Opus 4.6. "
-                f"Got model: {model}"
+                f"effort='max' is not supported by this model. Got model: {model}"
             )
         # ``xhigh`` is data-driven via ``supports_xhigh_reasoning_effort`` so
         # enabling it for a new model is a pure model-map change.
