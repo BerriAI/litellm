@@ -1,21 +1,42 @@
-import React, { useState } from "react";
+import React, { useMemo, useState } from "react";
+import { X } from "lucide-react";
+
+import { Badge } from "@/components/ui/badge";
+import { Card } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
-  Modal,
-  Typography,
-  Divider,
-  Table,
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Label } from "@/components/ui/label";
+import { Separator } from "@/components/ui/separator";
+import {
   Select,
-  InputNumber,
-  Card,
-  Space,
-  Checkbox,
-} from "antd";
-import { userBulkUpdateUserCall, teamBulkMemberAddCall, Member } from "./networking";
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+
+import MessageManager from "@/components/molecules/message_manager";
+import {
+  userBulkUpdateUserCall,
+  teamBulkMemberAddCall,
+  Member,
+} from "./networking";
 import { UserEditView } from "./user_edit_view";
 import NotificationsManager from "./molecules/notifications_manager";
-import MessageManager from "@/components/molecules/message_manager";
-
-const { Text, Title } = Typography;
+import NumericalInput from "./shared/numerical_input";
 
 interface BulkEditUserModalProps {
   open: boolean;
@@ -28,6 +49,79 @@ interface BulkEditUserModalProps {
   userRole: string | null;
   userModels: string[];
   allowAllUsers?: boolean; // Optional flag to enable "all users" mode
+}
+
+/**
+ * shadcn Select + Badge chip multi-select for teams.
+ */
+function TeamMultiSelect({
+  value,
+  onChange,
+  options,
+  placeholder,
+}: {
+  value: string[];
+  onChange: (next: string[]) => void;
+  options: { label: string; value: string }[];
+  placeholder: string;
+}) {
+  const selected = useMemo(() => value ?? [], [value]);
+  const remaining = useMemo(
+    () => options.filter((o) => !selected.includes(o.value)),
+    [options, selected],
+  );
+
+  return (
+    <div className="space-y-2">
+      <Select
+        value=""
+        onValueChange={(v) => {
+          if (v) onChange([...selected, v]);
+        }}
+      >
+        <SelectTrigger>
+          <SelectValue placeholder={placeholder} />
+        </SelectTrigger>
+        <SelectContent>
+          {remaining.length === 0 ? (
+            <div className="py-2 px-3 text-sm text-muted-foreground">
+              No more teams available
+            </div>
+          ) : (
+            remaining.map((opt) => (
+              <SelectItem key={opt.value} value={opt.value}>
+                {opt.label}
+              </SelectItem>
+            ))
+          )}
+        </SelectContent>
+      </Select>
+      {selected.length > 0 && (
+        <div className="flex flex-wrap gap-1">
+          {selected.map((v) => {
+            const opt = options.find((o) => o.value === v);
+            return (
+              <Badge
+                key={v}
+                variant="secondary"
+                className="flex items-center gap-1"
+              >
+                {opt?.label ?? v}
+                <button
+                  type="button"
+                  onClick={() => onChange(selected.filter((s) => s !== v))}
+                  className="inline-flex items-center justify-center rounded-full hover:bg-muted-foreground/20"
+                  aria-label={`Remove ${opt?.label ?? v}`}
+                >
+                  <X size={12} />
+                </button>
+              </Badge>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
 }
 
 const BulkEditUserModal: React.FC<BulkEditUserModalProps> = ({
@@ -49,7 +143,6 @@ const BulkEditUserModal: React.FC<BulkEditUserModalProps> = ({
   const [updateAllUsers, setUpdateAllUsers] = useState(false);
 
   const handleCancel = () => {
-    // Reset team management state
     setSelectedTeams([]);
     setTeamBudget(null);
     setAddToTeams(false);
@@ -75,6 +168,7 @@ const BulkEditUserModal: React.FC<BulkEditUserModalProps> = ({
       keys: [],
       teams: teams || [],
     }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [teams, open],
   );
 
@@ -89,7 +183,6 @@ const BulkEditUserModal: React.FC<BulkEditUserModalProps> = ({
     try {
       const userIds = selectedUsers.map((user) => user.user_id);
 
-      // Build the update payload - only include fields that have been changed from default/empty values
       const updatePayload: any = {};
 
       if (formValues.user_role && formValues.user_role !== "") {
@@ -108,46 +201,54 @@ const BulkEditUserModal: React.FC<BulkEditUserModalProps> = ({
         updatePayload.budget_duration = formValues.budget_duration;
       }
 
-      if (formValues.metadata && Object.keys(formValues.metadata).length > 0) {
+      if (
+        formValues.metadata &&
+        Object.keys(formValues.metadata).length > 0
+      ) {
         updatePayload.metadata = formValues.metadata;
       }
 
-      // Check if any operations were requested
       const hasUserUpdates = Object.keys(updatePayload).length > 0;
       const hasTeamAdditions = addToTeams && selectedTeams.length > 0;
 
       if (!hasUserUpdates && !hasTeamAdditions) {
-        NotificationsManager.fromBackend("Please modify at least one field or select teams to add users to");
+        NotificationsManager.fromBackend(
+          "Please modify at least one field or select teams to add users to",
+        );
         return;
       }
 
       let successMessages: string[] = [];
 
-      // Handle user property updates
       if (hasUserUpdates) {
         if (updateAllUsers) {
-          const result = await userBulkUpdateUserCall(accessToken, updatePayload, undefined, true);
-          successMessages.push(`Updated all users (${result.total_requested} total)`);
+          const result = await userBulkUpdateUserCall(
+            accessToken,
+            updatePayload,
+            undefined,
+            true,
+          );
+          successMessages.push(
+            `Updated all users (${result.total_requested} total)`,
+          );
         } else {
           await userBulkUpdateUserCall(accessToken, updatePayload, userIds);
           successMessages.push(`Updated ${userIds.length} user(s)`);
         }
       }
 
-      // Handle team additions
       if (hasTeamAdditions) {
         const teamResults: any[] = [];
 
         for (const teamId of selectedTeams) {
           try {
-            // Create member objects for bulk add
             let members: Member[] | null = null;
             if (updateAllUsers) {
               members = null;
             } else {
               members = selectedUsers.map((user) => ({
                 user_id: user.user_id,
-                role: "user" as const, // Default role for bulk add
+                role: "user" as const,
                 user_email: user.user_email || null,
               }));
             }
@@ -178,17 +279,23 @@ const BulkEditUserModal: React.FC<BulkEditUserModalProps> = ({
           }
         }
 
-        // Generate team success message
         const successfulTeams = teamResults.filter((r) => r.success);
         const failedTeams = teamResults.filter((r) => !r.success);
 
         if (successfulTeams.length > 0) {
-          const totalAdditions = successfulTeams.reduce((sum, r) => sum + r.successfulAdditions, 0);
-          successMessages.push(`Added users to ${successfulTeams.length} team(s) (${totalAdditions} total additions)`);
+          const totalAdditions = successfulTeams.reduce(
+            (sum, r) => sum + r.successfulAdditions,
+            0,
+          );
+          successMessages.push(
+            `Added users to ${successfulTeams.length} team(s) (${totalAdditions} total additions)`,
+          );
         }
 
         if (failedTeams.length > 0) {
-          MessageManager.warning(`Failed to add users to ${failedTeams.length} team(s)`);
+          MessageManager.warning(
+            `Failed to add users to ${failedTeams.length} team(s)`,
+          );
         }
       }
 
@@ -196,7 +303,6 @@ const BulkEditUserModal: React.FC<BulkEditUserModalProps> = ({
         NotificationsManager.success(successMessages.join(". "));
       }
 
-      // Reset team management state
       setSelectedTeams([]);
       setTeamBudget(null);
       setAddToTeams(false);
@@ -212,164 +318,176 @@ const BulkEditUserModal: React.FC<BulkEditUserModalProps> = ({
     }
   };
 
+  const teamOptions = (teams || []).map((team: any) => ({
+    label: team.team_alias || team.team_id,
+    value: team.team_id,
+  }));
+
   return (
-    <Modal
+    <Dialog
       open={open}
-      onCancel={handleCancel}
-      footer={null}
-      title={updateAllUsers ? "Bulk Edit All Users" : `Bulk Edit ${selectedUsers.length} User(s)`}
-      width={800}
+      onOpenChange={(o) => (!o ? handleCancel() : undefined)}
     >
-      {allowAllUsers && (
-        <div className="mb-4">
-          <Checkbox checked={updateAllUsers} onChange={(e) => setUpdateAllUsers(e.target.checked)}>
-            <Text strong>Update ALL users in the system</Text>
-          </Checkbox>
-          {updateAllUsers && (
-            <div style={{ marginTop: 8 }}>
-              <Text type="warning" style={{ fontSize: "12px" }}>
-                ⚠️ This will apply changes to ALL users in the system, not just the selected ones.
-              </Text>
+      <DialogContent className="max-w-[800px] max-h-[90vh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle>
+            {updateAllUsers
+              ? "Bulk Edit All Users"
+              : `Bulk Edit ${selectedUsers.length} User(s)`}
+          </DialogTitle>
+        </DialogHeader>
+
+        {allowAllUsers && (
+          <div className="mb-4">
+            <label className="flex items-center gap-2 cursor-pointer">
+              <Checkbox
+                checked={updateAllUsers}
+                onCheckedChange={(c) => setUpdateAllUsers(c === true)}
+              />
+              <span className="font-semibold">
+                Update ALL users in the system
+              </span>
+            </label>
+            {updateAllUsers && (
+              <div className="mt-2">
+                <span className="text-xs text-amber-600 dark:text-amber-400">
+                  ⚠️ This will apply changes to ALL users in the system, not
+                  just the selected ones.
+                </span>
+              </div>
+            )}
+          </div>
+        )}
+
+        {!updateAllUsers && (
+          <div className="mb-4">
+            <h5 className="text-sm font-semibold mb-2">
+              Selected Users ({selectedUsers.length}):
+            </h5>
+            <div className="border border-border rounded-md max-h-[200px] overflow-y-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead className="w-[30%]">User ID</TableHead>
+                    <TableHead className="w-[25%]">Email</TableHead>
+                    <TableHead className="w-[25%]">Current Role</TableHead>
+                    <TableHead className="w-[20%]">Budget</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {selectedUsers.map((user) => (
+                    <TableRow key={user.user_id}>
+                      <TableCell className="text-xs font-semibold">
+                        {user.user_id.length > 20
+                          ? `${user.user_id.slice(0, 20)}...`
+                          : user.user_id}
+                      </TableCell>
+                      <TableCell className="text-xs text-muted-foreground">
+                        {user.user_email || "No email"}
+                      </TableCell>
+                      <TableCell className="text-xs">
+                        {possibleUIRoles?.[user.user_role]?.ui_label ||
+                          user.user_role}
+                      </TableCell>
+                      <TableCell className="text-xs">
+                        {user.max_budget !== null
+                          ? `$${user.max_budget}`
+                          : "Unlimited"}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
             </div>
-          )}
-        </div>
-      )}
+          </div>
+        )}
 
-      {!updateAllUsers && (
+        <Separator />
+
         <div className="mb-4">
-          <Title level={5}>Selected Users ({selectedUsers.length}):</Title>
-          <Table
-            size="small"
-            bordered
-            dataSource={selectedUsers}
-            pagination={false}
-            scroll={{ y: 200 }}
-            rowKey="user_id"
-            columns={[
-              {
-                title: "User ID",
-                dataIndex: "user_id",
-                key: "user_id",
-                width: "30%",
-                render: (text: string) => (
-                  <Text strong style={{ fontSize: "12px" }}>
-                    {text.length > 20 ? `${text.slice(0, 20)}...` : text}
-                  </Text>
-                ),
-              },
-              {
-                title: "Email",
-                dataIndex: "user_email",
-                key: "user_email",
-                width: "25%",
-                render: (text: string) => (
-                  <Text type="secondary" style={{ fontSize: "12px" }}>
-                    {text || "No email"}
-                  </Text>
-                ),
-              },
-              {
-                title: "Current Role",
-                dataIndex: "user_role",
-                key: "user_role",
-                width: "25%",
-                render: (role: string) => (
-                  <Text style={{ fontSize: "12px" }}>{possibleUIRoles?.[role]?.ui_label || role}</Text>
-                ),
-              },
-              {
-                title: "Budget",
-                dataIndex: "max_budget",
-                key: "max_budget",
-                width: "20%",
-                render: (budget: number | null) => (
-                  <Text style={{ fontSize: "12px" }}>{budget !== null ? `$${budget}` : "Unlimited"}</Text>
-                ),
-              },
-            ]}
-          />
+          <p className="text-sm">
+            <strong>Instructions:</strong> Fill in the fields below with the
+            values you want to apply to all selected users. You can bulk edit:
+            role, budget, models, and metadata. You can also add users to
+            teams.
+          </p>
         </div>
-      )}
 
-      <Divider />
+        {/* Team Management Section */}
+        <Card className="p-4 bg-muted/50 mb-4">
+          <h4 className="text-sm font-semibold mb-3">Team Management</h4>
+          <div className="flex flex-col gap-3">
+            <label className="flex items-center gap-2 cursor-pointer">
+              <Checkbox
+                checked={addToTeams}
+                onCheckedChange={(c) => setAddToTeams(c === true)}
+              />
+              <span>Add selected users to teams</span>
+            </label>
 
-      <div className="mb-4">
-        <Text>
-          <strong>Instructions:</strong> Fill in the fields below with the values you want to apply to all selected
-          users. You can bulk edit: role, budget, models, and metadata. You can also add users to teams.
-        </Text>
-      </div>
+            {addToTeams && (
+              <>
+                <div>
+                  <Label className="font-semibold">Select Teams:</Label>
+                  <div className="mt-2">
+                    <TeamMultiSelect
+                      value={selectedTeams}
+                      onChange={setSelectedTeams}
+                      options={teamOptions}
+                      placeholder="Select teams to add users to"
+                    />
+                  </div>
+                </div>
 
-      {/* Team Management Section */}
-      <Card title="Team Management" size="small" className="mb-4" style={{ backgroundColor: "#fafafa" }}>
-        <Space direction="vertical" style={{ width: "100%" }}>
-          <Checkbox checked={addToTeams} onChange={(e) => setAddToTeams(e.target.checked)}>
-            Add selected users to teams
-          </Checkbox>
+                <div>
+                  <Label className="font-semibold">Team Budget (Optional):</Label>
+                  <div className="mt-2">
+                    <NumericalInput
+                      placeholder="Max budget per user in team"
+                      value={teamBudget}
+                      onChange={(v: number | null) => setTeamBudget(v)}
+                      min={0}
+                      step={0.01}
+                      precision={2}
+                    />
+                  </div>
+                  <span className="text-xs text-muted-foreground">
+                    Leave empty for unlimited budget within team limits
+                  </span>
+                </div>
 
-          {addToTeams && (
-            <>
-              <div>
-                <Text strong>Select Teams:</Text>
-                <Select
-                  mode="multiple"
-                  placeholder="Select teams to add users to"
-                  value={selectedTeams}
-                  onChange={setSelectedTeams}
-                  style={{ width: "100%", marginTop: 8 }}
-                  options={
-                    teams?.map((team) => ({
-                      label: team.team_alias || team.team_id,
-                      value: team.team_id,
-                    })) || []
-                  }
-                />
-              </div>
+                <span className="text-xs text-muted-foreground">
+                  Users will be added with &quot;user&quot; role by default.
+                  All users will be added to each selected team.
+                </span>
+              </>
+            )}
+          </div>
+        </Card>
 
-              <div>
-                <Text strong>Team Budget (Optional):</Text>
-                <InputNumber
-                  placeholder="Max budget per user in team"
-                  value={teamBudget}
-                  onChange={(value) => setTeamBudget(value)}
-                  style={{ width: "100%", marginTop: 8 }}
-                  min={0}
-                  step={0.01}
-                  precision={2}
-                />
-                <Text type="secondary" style={{ fontSize: "12px" }}>
-                  Leave empty for unlimited budget within team limits
-                </Text>
-              </div>
+        <UserEditView
+          userData={mockUserData}
+          onCancel={handleCancel}
+          onSubmit={handleSubmit}
+          teams={teams}
+          accessToken={accessToken}
+          userID="bulk_edit"
+          userRole={userRole}
+          userModels={userModels}
+          possibleUIRoles={possibleUIRoles}
+          isBulkEdit={true}
+        />
 
-              <Text type="secondary" style={{ fontSize: "12px" }}>
-                Users will be added with &quot;user&quot; role by default. All users will be added to each selected
-                team.
-              </Text>
-            </>
-          )}
-        </Space>
-      </Card>
-
-      <UserEditView
-        userData={mockUserData}
-        onCancel={handleCancel}
-        onSubmit={handleSubmit}
-        teams={teams}
-        accessToken={accessToken}
-        userID="bulk_edit"
-        userRole={userRole}
-        userModels={userModels}
-        possibleUIRoles={possibleUIRoles}
-        isBulkEdit={true}
-      />
-
-      {loading && (
-        <div style={{ textAlign: "center", marginTop: "10px" }}>
-          <Text>Updating {updateAllUsers ? "all users" : selectedUsers.length} user(s)...</Text>
-        </div>
-      )}
-    </Modal>
+        {loading && (
+          <div className="text-center mt-3">
+            <span className="text-sm">
+              Updating{" "}
+              {updateAllUsers ? "all users" : selectedUsers.length} user(s)...
+            </span>
+          </div>
+        )}
+      </DialogContent>
+    </Dialog>
   );
 };
 

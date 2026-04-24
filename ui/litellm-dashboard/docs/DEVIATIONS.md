@@ -60,6 +60,26 @@ Format per entry:
   policy tokens (`--policy-untrusted`, `--policy-trusted`,
   `--policy-blocked`) backed by CSS variables; out of scope for phase 1.
 
+## Users section — categorical colors (red/green/blue/yellow) in bulk-create + edit status UI
+
+- **Type:** `blueprint deviation`
+- **Blueprint rule deviated from:** §1 "semantic Tailwind tokens only".
+- **What the agent did instead:** `bulk_create_users_button.tsx`,
+  `BulkEditUsers.tsx`, `DefaultUserSettings.tsx`, and
+  `view_users/user_info_view.tsx` keep raw palette classes
+  (`bg-red-50`/`text-red-500`, `bg-green-100`/`text-green-500`,
+  `bg-blue-50`/`text-blue-500`, `bg-yellow-50`/`text-yellow-700`,
+  `bg-blue-100` model chips, `text-amber-600` warning callout, etc.) and
+  are added to the `litellm-ui/no-raw-tailwind-colors` override list in
+  `.eslintrc.json`.
+- **Why:** The CSV import flow uses red = invalid / failed, green =
+  success, blue = info / pending, yellow = structural warning — a
+  categorical, status-driven palette with four distinct hues. Only
+  `destructive` maps cleanly; `primary`/`muted` don't cover "success" or
+  "info/pending" as separate categories. A phase-2 task could introduce
+  semantic status tokens (`--status-success`, `--status-info`,
+  `--status-warning`, `--status-failure`); out of scope for phase 1.
+
 ## Section 1 (Access Groups) — custom MultiSelect shim in lieu of antd Select mode=multiple
 
 - **Type:** `blueprint deviation`

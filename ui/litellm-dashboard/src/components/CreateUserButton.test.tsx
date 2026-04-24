@@ -103,8 +103,8 @@ describe("CreateUserButton", () => {
         <CreateUserButton {...defaultProps} possibleUIRoles={possibleUIRoles} isEmbedded />,
       );
       await userEvent.click(screen.getByRole("combobox", { name: /user role/i }));
-      expect(screen.getByText("Admin")).toBeInTheDocument();
-      expect(screen.getByText("User")).toBeInTheDocument();
+      expect(screen.getByRole("option", { name: /Admin/i })).toBeInTheDocument();
+      expect(screen.getByRole("option", { name: /User/i })).toBeInTheDocument();
     });
 
     it("should close modal when cancel is clicked in standalone mode", async () => {
@@ -139,7 +139,7 @@ describe("CreateUserButton", () => {
 
       await user.type(screen.getByLabelText(/user email/i), "test@example.com");
       await user.click(screen.getByRole("combobox", { name: /user role/i }));
-      await user.click(screen.getByText("User"));
+      await user.click(screen.getByRole("option", { name: /User/i }));
       await user.click(screen.getByRole("button", { name: /create user/i }));
 
       await waitFor(() => {
@@ -161,7 +161,7 @@ describe("CreateUserButton", () => {
 
       await user.type(screen.getByLabelText(/user email/i), "embedded@example.com");
       await user.click(screen.getByRole("combobox", { name: /user role/i }));
-      await user.click(screen.getByText("User"));
+      await user.click(screen.getByRole("option", { name: /User/i }));
       await user.click(screen.getByRole("button", { name: /create user/i }));
 
       await waitFor(() => {
@@ -179,7 +179,7 @@ describe("CreateUserButton", () => {
 
       await user.type(screen.getByLabelText(/user email/i), "duplicate@example.com");
       await user.click(screen.getByRole("combobox", { name: /user role/i }));
-      await user.click(screen.getByText("User"));
+      await user.click(screen.getByRole("option", { name: /User/i }));
       await user.click(screen.getByRole("button", { name: /create user/i }));
 
       await waitFor(() => {
@@ -202,7 +202,7 @@ describe("CreateUserButton", () => {
 
       await user.type(screen.getByLabelText(/user email/i), "info@example.com");
       await user.click(screen.getByRole("combobox", { name: /user role/i }));
-      await user.click(screen.getByText("User"));
+      await user.click(screen.getByRole("option", { name: /User/i }));
       await user.click(screen.getByRole("button", { name: /create user/i }));
 
       await waitFor(() => {
@@ -233,7 +233,7 @@ describe("CreateUserButton", () => {
       const dialog = screen.getByRole("dialog", { name: /invite user/i });
       await user.type(within(dialog).getByLabelText(/user email/i), "standalone@example.com");
       await user.click(within(dialog).getByRole("combobox", { name: /global proxy role/i }));
-      await user.click(screen.getByText("User"));
+      await user.click(screen.getByRole("option", { name: /User/i }));
       await user.click(within(dialog).getByRole("button", { name: /invite user/i }));
 
       await waitFor(() => {
@@ -262,7 +262,7 @@ describe("CreateUserButton", () => {
       const dialog = screen.getByRole("dialog", { name: /invite user/i });
       await user.type(within(dialog).getByLabelText(/user email/i), "sso@example.com");
       await user.click(within(dialog).getByRole("combobox", { name: /global proxy role/i }));
-      await user.click(screen.getByText("User"));
+      await user.click(screen.getByRole("option", { name: /User/i }));
       await user.click(within(dialog).getByRole("button", { name: /invite user/i }));
 
       await waitFor(() => {
@@ -302,12 +302,12 @@ describe("CreateUserButton", () => {
       const dialog = screen.getByRole("dialog", { name: /invite user/i });
       await user.type(within(dialog).getByLabelText(/user email/i), "org@example.com");
       await user.click(within(dialog).getByRole("combobox", { name: /global proxy role/i }));
-      await user.click(screen.getByText("User"));
+      await user.click(screen.getByRole("option", { name: /User/i }));
 
       // Select org from the dropdown
       const orgSelect = within(dialog).getByRole("combobox", { name: /organization/i });
       await user.click(orgSelect);
-      await user.click(screen.getByText("My Org (org-1)"));
+      await user.click(screen.getByRole("option", { name: /My Org \(org-1\)/i }));
 
       await user.click(within(dialog).getByRole("button", { name: /invite user/i }));
 
@@ -345,7 +345,7 @@ describe("CreateUserButton", () => {
       const dialog = screen.getByRole("dialog", { name: /invite user/i });
       await user.type(within(dialog).getByLabelText(/user email/i), "nomemberadd@example.com");
       await user.click(within(dialog).getByRole("combobox", { name: /global proxy role/i }));
-      await user.click(screen.getByText("User"));
+      await user.click(screen.getByRole("option", { name: /User/i }));
       await user.click(within(dialog).getByRole("button", { name: /invite user/i }));
 
       await waitFor(() => {

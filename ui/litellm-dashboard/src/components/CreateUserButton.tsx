@@ -1,10 +1,43 @@
-import { Info as InfoCircleOutlined, UserPlus as UserAddOutlined } from "lucide-react";
-import { useQueryClient } from "@tanstack/react-query";
-// eslint-disable-next-line litellm-ui/no-banned-ui-imports
-import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
-import { Accordion, AccordionBody, AccordionHeader, SelectItem, TextInput } from "@tremor/react";
-import { Alert, Button, Form, Input, Modal, Select, Select as Select2, Space, Tooltip, Typography } from "antd";
 import React, { useEffect, useMemo, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import { Controller, useForm } from "react-hook-form";
+import { Info, UserPlus, X } from "lucide-react";
+
+import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
+import {
+  Accordion,
+  AccordionContent,
+  AccordionItem,
+  AccordionTrigger,
+} from "@/components/ui/accordion";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Textarea } from "@/components/ui/textarea";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+
 import BulkCreateUsers from "./bulk_create_users_button";
 import TeamDropdown from "./common_components/team_dropdown";
 import { getModelDisplayName } from "./key_team_helpers/fetch_available_models_team_key";
@@ -17,8 +50,7 @@ import {
   userCreateCall,
 } from "./networking";
 import OnboardingModal, { InvitationLink } from "./onboarding_link";
-const { Option } = Select;
-const { Text, Link, Title } = Typography;
+
 // Helper function to generate UUID compatible across all environments
 const generateUUID = (): string => {
   if (typeof crypto !== "undefined" && crypto.randomUUID) {
@@ -49,6 +81,102 @@ interface UISettings {
   SSO_ENABLED: boolean;
 }
 
+interface CreateUserFormValues {
+  user_email?: string;
+  user_role: string;
+  team_id?: string;
+  organization_ids?: string[];
+  models?: string[];
+  metadata?: string;
+}
+
+const defaultFormValues: CreateUserFormValues = {
+  user_email: "",
+  user_role: "internal_user_viewer",
+  team_id: undefined,
+  organization_ids: [],
+  models: [],
+  metadata: "",
+};
+
+/**
+ * shadcn Select + badge chip multi-select. Mirrors the pattern from
+ * AccessGroupBaseForm. Used for org IDs and personal model selection.
+ */
+function MultiSelect({
+  value,
+  onChange,
+  options,
+  placeholder,
+  emptyText,
+  ariaLabel,
+}: {
+  value: string[];
+  onChange: (next: string[]) => void;
+  options: { label: string; value: string }[];
+  placeholder: string;
+  emptyText: string;
+  ariaLabel?: string;
+}) {
+  const selected = useMemo(() => value ?? [], [value]);
+  const remaining = useMemo(
+    () => options.filter((o) => !selected.includes(o.value)),
+    [options, selected],
+  );
+
+  return (
+    <div className="space-y-2">
+      <Select
+        value=""
+        onValueChange={(v) => {
+          if (v) onChange([...selected, v]);
+        }}
+      >
+        <SelectTrigger aria-label={ariaLabel ?? placeholder}>
+          <SelectValue placeholder={placeholder} />
+        </SelectTrigger>
+        <SelectContent>
+          {remaining.length === 0 ? (
+            <div className="py-2 px-3 text-sm text-muted-foreground">
+              {emptyText}
+            </div>
+          ) : (
+            remaining.map((opt) => (
+              <SelectItem key={opt.value} value={opt.value}>
+                {opt.label}
+              </SelectItem>
+            ))
+          )}
+        </SelectContent>
+      </Select>
+      {selected.length > 0 && (
+        <div className="flex flex-wrap gap-1">
+          {selected.map((v) => {
+            const opt = options.find((o) => o.value === v);
+            return (
+              <Badge
+                key={v}
+                variant="secondary"
+                className="flex items-center gap-1"
+              >
+                {opt?.label ?? v}
+                <button
+                  type="button"
+                  onClick={() => onChange(selected.filter((s) => s !== v))}
+                  className="inline-flex items-center justify-center rounded-full hover:bg-muted-foreground/20"
+                  aria-label={`Remove ${opt?.label ?? v}`}
+                >
+                  <X size={12} />
+                </button>
+              </Badge>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export const CreateUserButton: React.FC<CreateuserProps> = ({
   userID,
   accessToken,
@@ -59,16 +187,26 @@ export const CreateUserButton: React.FC<CreateuserProps> = ({
 }) => {
   const queryClient = useQueryClient();
   const [uiSettings, setUISettings] = useState<UISettings | null>(null);
-  const [form] = Form.useForm();
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [apiuser, setApiuser] = useState<boolean>(false);
   const [userModels, setUserModels] = useState<string[]>([]);
-  const [isInvitationLinkModalVisible, setIsInvitationLinkModalVisible] = useState(false);
-  const [invitationLinkData, setInvitationLinkData] = useState<InvitationLink | null>(null);
+  const [isInvitationLinkModalVisible, setIsInvitationLinkModalVisible] =
+    useState(false);
+  const [invitationLinkData, setInvitationLinkData] =
+    useState<InvitationLink | null>(null);
   const [baseUrl, setBaseUrl] = useState<string | null>(null);
   const { data: organizations = [] } = useOrganizations();
 
+  const {
+    control,
+    register,
+    handleSubmit,
+    reset,
+    formState: { errors },
+  } = useForm<CreateUserFormValues>({ defaultValues: defaultFormValues });
+
   // Derive teams from the user's organizations, falling back to the teams prop
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const availableTeams = useMemo(() => {
     const orgTeams = organizations.flatMap((org) => org.teams || []);
     if (orgTeams.length > 0) return orgTeams;
@@ -79,7 +217,11 @@ export const CreateUserButton: React.FC<CreateuserProps> = ({
     const fetchData = async () => {
       try {
         const userRole = "any";
-        const modelDataResponse = await modelAvailableCall(accessToken, userID, userRole);
+        const modelDataResponse = await modelAvailableCall(
+          accessToken,
+          userID,
+          userRole,
+        );
         const availableModels = [];
         for (let i = 0; i < modelDataResponse.data.length; i++) {
           const model = modelDataResponse.data[i];
@@ -95,46 +237,47 @@ export const CreateUserButton: React.FC<CreateuserProps> = ({
 
     setBaseUrl(getProxyBaseUrl());
     fetchData();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-
-  const handleOk = () => {
-    setIsModalVisible(false);
-    form.resetFields();
-  };
 
   const handleCancel = () => {
     setIsModalVisible(false);
     setApiuser(false);
-    form.resetFields();
+    reset(defaultFormValues);
   };
 
-  const handleCreate = async (formValues: {
-    user_id: string;
-    models?: string[];
-    user_role: string;
-    organization_ids?: string[];
-    organizations?: string[];
-  }) => {
+  const handleCreate = async (formValues: CreateUserFormValues) => {
     try {
       NotificationsManager.info("Making API Call");
       if (!isEmbedded) {
         setIsModalVisible(true);
       }
-      if ((!formValues.models || formValues.models.length === 0) && formValues.user_role !== "proxy_admin") {
-        formValues.models = ["no-default-models"];
+
+      const payload: Record<string, any> = {
+        user_email: formValues.user_email,
+        user_role: formValues.user_role,
+        team_id: formValues.team_id,
+        models: formValues.models,
+        metadata: formValues.metadata,
+      };
+
+      if (
+        (!payload.models || payload.models.length === 0) &&
+        payload.user_role !== "proxy_admin"
+      ) {
+        payload.models = ["no-default-models"];
       }
-      if (formValues.organization_ids) {
-        formValues.organizations = formValues.organization_ids;
-        delete formValues.organization_ids;
+      if (formValues.organization_ids && formValues.organization_ids.length > 0) {
+        payload.organizations = formValues.organization_ids;
       }
-      const response = await userCreateCall(accessToken, null, formValues);
+      const response = await userCreateCall(accessToken, null, payload);
       await queryClient.invalidateQueries({ queryKey: ["userList"] });
       setApiuser(true);
       const user_id = response.data?.user_id || response.user_id;
 
       if (onUserCreated && isEmbedded) {
         onUserCreated(user_id);
-        form.resetFields();
+        reset(defaultFormValues);
         return;
       }
 
@@ -148,13 +291,13 @@ export const CreateUserButton: React.FC<CreateuserProps> = ({
         // create an InvitationLink Object for this user for the SSO flow
         // for SSO the invite link is the proxy base url since the User just needs to login
         const invitationLink: InvitationLink = {
-          id: generateUUID(), // Generate a unique ID
+          id: generateUUID(),
           user_id: user_id,
           is_accepted: false,
           accepted_at: null,
-          expires_at: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), // Set expiry to 7 days from now
+          expires_at: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
           created_at: new Date(),
-          created_by: userID, // Assuming userID is the current user creating the invitation
+          created_by: userID,
           updated_at: new Date(),
           updated_by: userID,
           has_user_setup_sso: true,
@@ -164,210 +307,322 @@ export const CreateUserButton: React.FC<CreateuserProps> = ({
       }
 
       NotificationsManager.success("API user Created");
-      form.resetFields();
+      reset(defaultFormValues);
       localStorage.removeItem("userData" + userID);
     } catch (error: any) {
-      const errorMessage = error.response?.data?.detail || error?.message || "Error creating the user";
+      const errorMessage =
+        error.response?.data?.detail || error?.message || "Error creating the user";
       NotificationsManager.fromBackend(errorMessage);
       console.error("Error creating the user:", error);
     }
   };
 
+  const orgOptions = organizations.map((org) => ({
+    label: `${org.organization_alias} (${org.organization_id})`,
+    value: org.organization_id,
+  }));
+
+  const modelOptions = useMemo(() => {
+    const base = [
+      { label: "All Proxy Models", value: "all-proxy-models" },
+      { label: "No Default Models", value: "no-default-models" },
+    ];
+    const extras = userModels.map((model) => ({
+      label: getModelDisplayName(model),
+      value: model,
+    }));
+    return [...base, ...extras];
+  }, [userModels]);
+
   // Modify the return statement to handle embedded mode
   if (isEmbedded) {
     return (
-      <Form
-        form={form}
-        onFinish={handleCreate}
-        labelCol={{ span: 8 }}
-        wrapperCol={{ span: 16 }}
-        labelAlign="left"
-        initialValues={{ user_role: "internal_user_viewer" }}
-      >
-        <Alert
-          message="Email invitations"
-          description={
-            <>
-              New users receive an email invite only when an email integration (SMTP, Resend, or SendGrid) is
-              configured.{" "}
-              <Link href="https://docs.litellm.ai/docs/proxy/email" target="_blank">
-                Learn how to set up email notifications
-              </Link>
-            </>
-          }
-          type="info"
-          showIcon
-          className="mb-4"
-        />
-        <Form.Item label="User Email" name="user_email">
-          <TextInput placeholder="" />
-        </Form.Item>
-        <Form.Item label="User Role" name="user_role">
-          <Select2>
-            {possibleUIRoles &&
-              Object.entries(possibleUIRoles).map(([role, { ui_label, description }]) => (
-                <SelectItem key={role} value={role} title={ui_label}>
-                  <div className="flex">
-                    {ui_label}{" "}
-                    <Text className="ml-2" style={{ color: "gray", fontSize: "12px" }}>
-                      {description}
-                    </Text>
-                  </div>
-                </SelectItem>
-              ))}
-          </Select2>
-        </Form.Item>
-        <Form.Item label="Team" name="team_id">
-          <TeamDropdown />
-        </Form.Item>
+      <form onSubmit={handleSubmit(handleCreate)} className="space-y-4">
+        <Alert>
+          <AlertTitle>Email invitations</AlertTitle>
+          <AlertDescription>
+            New users receive an email invite only when an email integration
+            (SMTP, Resend, or SendGrid) is configured.{" "}
+            <a
+              href="https://docs.litellm.ai/docs/proxy/email"
+              target="_blank"
+              rel="noreferrer"
+              className="text-primary underline"
+            >
+              Learn how to set up email notifications
+            </a>
+          </AlertDescription>
+        </Alert>
 
-        <Form.Item label="Metadata" name="metadata">
-          <Input.TextArea rows={4} placeholder="Enter metadata as JSON" />
-        </Form.Item>
-
-        <div style={{ textAlign: "right", marginTop: "10px" }}>
-          <Button htmlType="submit">Create User</Button>
+        <div className="space-y-2">
+          <Label htmlFor="embedded_user_email">User Email</Label>
+          <Input id="embedded_user_email" {...register("user_email")} />
         </div>
-      </Form>
+
+        <div className="space-y-2">
+          <Label htmlFor="embedded_user_role">User Role</Label>
+          <Controller
+            control={control}
+            name="user_role"
+            render={({ field }) => (
+              <Select
+                value={field.value ?? ""}
+                onValueChange={(v) => field.onChange(v)}
+              >
+                <SelectTrigger id="embedded_user_role">
+                  <SelectValue placeholder="Select a role" />
+                </SelectTrigger>
+                <SelectContent>
+                  {possibleUIRoles &&
+                    Object.entries(possibleUIRoles).map(
+                      ([role, { ui_label, description }]) => (
+                        <SelectItem key={role} value={role} title={ui_label}>
+                          <div className="flex">
+                            {ui_label}
+                            <span className="ml-2 text-muted-foreground text-xs">
+                              {description}
+                            </span>
+                          </div>
+                        </SelectItem>
+                      ),
+                    )}
+                </SelectContent>
+              </Select>
+            )}
+          />
+        </div>
+
+        <div className="space-y-2">
+          <Label>Team</Label>
+          <Controller
+            control={control}
+            name="team_id"
+            render={({ field }) => (
+              <TeamDropdown
+                value={field.value ?? ""}
+                onChange={(v) => field.onChange(v)}
+              />
+            )}
+          />
+        </div>
+
+        <div className="space-y-2">
+          <Label htmlFor="embedded_metadata">Metadata</Label>
+          <Textarea
+            id="embedded_metadata"
+            rows={4}
+            placeholder="Enter metadata as JSON"
+            {...register("metadata")}
+          />
+        </div>
+
+        <div className="flex justify-end">
+          <Button type="submit">Create User</Button>
+        </div>
+      </form>
     );
   }
 
   // Original return for standalone mode
   return (
     <div className="flex gap-2">
-      <Button type="primary" className="mb-0" onClick={() => setIsModalVisible(true)}>
-        + Invite User
-      </Button>
-      <BulkCreateUsers accessToken={accessToken} teams={teams} possibleUIRoles={possibleUIRoles} />
-      <Modal
-        title="Invite User"
+      <Button onClick={() => setIsModalVisible(true)}>+ Invite User</Button>
+      <BulkCreateUsers
+        accessToken={accessToken}
+        teams={teams}
+        possibleUIRoles={possibleUIRoles}
+      />
+
+      <Dialog
         open={isModalVisible}
-        width={800}
-        footer={null}
-        onOk={handleOk}
-        onCancel={handleCancel}
+        onOpenChange={(o) => (!o ? handleCancel() : undefined)}
       >
-        <Space direction="vertical" size="middle">
-          <Text className="mb-1">Create a User who can own keys</Text>
-          <Alert
-            message="Email invitations"
-            description={
-              <>
-                New users receive an email invite only when an email integration (SMTP, Resend, or SendGrid) is
-                configured.{" "}
-                <Link href="https://docs.litellm.ai/docs/proxy/email" target="_blank">
-                  Learn how to set up email notifications
-                </Link>
-              </>
-            }
-            type="info"
-            showIcon
-            className="mb-4"
-          />
-        </Space>
-        <Form
-          form={form}
-          onFinish={handleCreate}
-          labelCol={{ span: 8 }}
-          wrapperCol={{ span: 16 }}
-          labelAlign="left"
-          initialValues={{ user_role: "internal_user_viewer" }}
-        >
-          <Form.Item label="User Email" name="user_email">
-            <Input />
-          </Form.Item>
-          <Form.Item
-            label={
-              <span>
-                Global Proxy Role{" "}
-                <Tooltip title="This role is independent of any team/org specific roles. Configure Team / Organization Admins in the Settings">
-                  <InfoCircleOutlined />
-                </Tooltip>
-              </span>
-            }
-            name="user_role"
-          >
-            <Select2>
-              {possibleUIRoles &&
-                Object.entries(possibleUIRoles).map(([role, { ui_label, description }]) => (
-                  <SelectItem key={role} value={role} title={ui_label}>
-                    <Text>{ui_label}</Text>
-                    <Text type="secondary">
-                      {" - "}
-                      {description}
-                    </Text>
-                  </SelectItem>
-                ))}
-            </Select2>
-          </Form.Item>
+        <DialogContent className="max-w-[800px] max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Invite User</DialogTitle>
+            <DialogDescription>Create a User who can own keys</DialogDescription>
+          </DialogHeader>
 
-          <Form.Item
-            label="Team"
-            className="gap-2"
-            name="team_id"
-            help="If selected, user will be added as a 'user' role to the team."
-          >
-            <TeamDropdown />
-          </Form.Item>
-
-          <Form.Item
-            label="Organization"
-            name="organization_ids"
-            help="The user will be added to the selected organization(s)."
-          >
-            <Select mode="multiple" placeholder="Select Organization" style={{ width: "100%" }}>
-              {organizations.map((org) => (
-                <Option key={org.organization_id} value={org.organization_id}>
-                  {org.organization_alias} ({org.organization_id})
-                </Option>
-              ))}
-            </Select>
-          </Form.Item>
-
-          <Form.Item label="Metadata" name="metadata">
-            <Input.TextArea rows={4} placeholder="Enter metadata as JSON" />
-          </Form.Item>
-          <Accordion>
-            <AccordionHeader>
-              <Text strong>Personal Key Creation</Text>
-            </AccordionHeader>
-            <AccordionBody>
-              <Form.Item
-                className="gap-2"
-                label={
-                  <span>
-                    Models{" "}
-                    <Tooltip title="Models user has access to, outside of team scope.">
-                      <InfoCircleOutlined style={{ marginLeft: "4px" }} />
-                    </Tooltip>
-                  </span>
-                }
-                name="models"
-                help="Models user has access to, outside of team scope."
+          <Alert>
+            <AlertTitle>Email invitations</AlertTitle>
+            <AlertDescription>
+              New users receive an email invite only when an email integration
+              (SMTP, Resend, or SendGrid) is configured.{" "}
+              <a
+                href="https://docs.litellm.ai/docs/proxy/email"
+                target="_blank"
+                rel="noreferrer"
+                className="text-primary underline"
               >
-                <Select2 mode="multiple" placeholder="Select models" style={{ width: "100%" }}>
-                  <Select2.Option key="all-proxy-models" value="all-proxy-models">
-                    All Proxy Models
-                  </Select2.Option>
-                  <Select2.Option key="no-default-models" value="no-default-models">
-                    No Default Models
-                  </Select2.Option>
-                  {userModels.map((model) => (
-                    <Select2.Option key={model} value={model}>
-                      {getModelDisplayName(model)}
-                    </Select2.Option>
-                  ))}
-                </Select2>
-              </Form.Item>
-            </AccordionBody>
-          </Accordion>
-          <div style={{ textAlign: "right", marginTop: "10px" }}>
-            <Button type="primary" icon={<UserAddOutlined />} htmlType="submit">
-              Invite User
-            </Button>
-          </div>
-        </Form>
-      </Modal>
+                Learn how to set up email notifications
+              </a>
+            </AlertDescription>
+          </Alert>
+
+          <form
+            onSubmit={handleSubmit(handleCreate)}
+            className="space-y-4 mt-4"
+          >
+            <div className="space-y-2">
+              <Label htmlFor="user_email">User Email</Label>
+              <Input id="user_email" {...register("user_email")} />
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="user_role" className="flex items-center">
+                Global Proxy Role
+                <TooltipProvider>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Info className="ml-1 h-3 w-3 inline text-muted-foreground" />
+                    </TooltipTrigger>
+                    <TooltipContent className="max-w-xs">
+                      This role is independent of any team/org specific roles.
+                      Configure Team / Organization Admins in the Settings
+                    </TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
+              </Label>
+              <Controller
+                control={control}
+                name="user_role"
+                render={({ field }) => (
+                  <Select
+                    value={field.value ?? ""}
+                    onValueChange={(v) => field.onChange(v)}
+                  >
+                    <SelectTrigger id="user_role">
+                      <SelectValue placeholder="Select a role" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {possibleUIRoles &&
+                        Object.entries(possibleUIRoles).map(
+                          ([role, { ui_label, description }]) => (
+                            <SelectItem
+                              key={role}
+                              value={role}
+                              title={ui_label}
+                            >
+                              <span className="font-medium">{ui_label}</span>
+                              <span className="ml-2 text-muted-foreground text-xs">
+                                {" - "}
+                                {description}
+                              </span>
+                            </SelectItem>
+                          ),
+                        )}
+                    </SelectContent>
+                  </Select>
+                )}
+              />
+            </div>
+
+            <div className="space-y-2">
+              <Label>Team</Label>
+              <Controller
+                control={control}
+                name="team_id"
+                render={({ field }) => (
+                  <TeamDropdown
+                    value={field.value ?? ""}
+                    onChange={(v) => field.onChange(v)}
+                  />
+                )}
+              />
+              <p className="text-xs text-muted-foreground">
+                If selected, user will be added as a &apos;user&apos; role to
+                the team.
+              </p>
+            </div>
+
+            <div className="space-y-2">
+              <Label>Organization</Label>
+              <Controller
+                control={control}
+                name="organization_ids"
+                render={({ field }) => (
+                  <MultiSelect
+                    value={field.value ?? []}
+                    onChange={field.onChange}
+                    options={orgOptions}
+                    placeholder="Select Organization"
+                    emptyText="No organizations available"
+                    ariaLabel="Organization"
+                  />
+                )}
+              />
+              <p className="text-xs text-muted-foreground">
+                The user will be added to the selected organization(s).
+              </p>
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="metadata">Metadata</Label>
+              <Textarea
+                id="metadata"
+                rows={4}
+                placeholder="Enter metadata as JSON"
+                {...register("metadata")}
+              />
+            </div>
+
+            <Accordion type="single" collapsible>
+              <AccordionItem value="personal-key-creation">
+                <AccordionTrigger>
+                  <span className="font-medium">Personal Key Creation</span>
+                </AccordionTrigger>
+                <AccordionContent>
+                  <div className="space-y-2">
+                    <Label className="flex items-center">
+                      Models
+                      <TooltipProvider>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Info className="ml-1 h-3 w-3 inline text-muted-foreground" />
+                          </TooltipTrigger>
+                          <TooltipContent className="max-w-xs">
+                            Models user has access to, outside of team scope.
+                          </TooltipContent>
+                        </Tooltip>
+                      </TooltipProvider>
+                    </Label>
+                    <Controller
+                      control={control}
+                      name="models"
+                      render={({ field }) => (
+                        <MultiSelect
+                          value={field.value ?? []}
+                          onChange={field.onChange}
+                          options={modelOptions}
+                          placeholder="Select models"
+                          emptyText="No models available"
+                        />
+                      )}
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Models user has access to, outside of team scope.
+                    </p>
+                  </div>
+                </AccordionContent>
+              </AccordionItem>
+            </Accordion>
+
+            {errors.user_role && (
+              <p className="text-sm text-destructive">
+                {errors.user_role.message as string}
+              </p>
+            )}
+
+            <DialogFooter>
+              <Button type="submit">
+                <UserPlus className="h-4 w-4 mr-1" />
+                Invite User
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
       {apiuser && (
         <OnboardingModal
           isInvitationLinkModalVisible={isInvitationLinkModalVisible}

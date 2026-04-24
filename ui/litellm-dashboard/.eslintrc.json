@@ -146,7 +146,11 @@
         "src/components/price_data_reload.tsx",
         "src/components/mcp_tools/mcp_connect.tsx",
         "src/components/mcp_tools/mcp_tools.tsx",
-        "src/components/mcp_tools/ToolTestPanel.tsx"
+        "src/components/mcp_tools/ToolTestPanel.tsx",
+        "src/components/bulk_create_users_button.tsx",
+        "src/components/BulkEditUsers.tsx",
+        "src/components/DefaultUserSettings.tsx",
+        "src/components/view_users/user_info_view.tsx"
       ],
       "rules": {
         "litellm-ui/no-banned-ui-imports": "off",
