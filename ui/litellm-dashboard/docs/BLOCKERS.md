@@ -69,3 +69,46 @@ stay on antd for phase 1 and will be addressed in a targeted follow-up.
   a dict-field builder with dynamic antd `Select.Option` lists. Same
   dependency on the parent antd Form context as the above. Defer with the
   parent forms.
+- `src/components/mcp_tools/create_mcp_server.tsx` (1060 LoC): end-to-end
+  antd `Form` with deeply nested field paths (`["credentials", "client_id"]`,
+  `static_headers` list with inline validators), `shouldUpdate` driven
+  conditional rendering, `Form.useWatch`-style derived state, antd `Modal`,
+  antd `Collapse` auth panel, antd `Select mode="tags"` for access groups.
+  Existing `create_mcp_server.test.tsx` has ~15 tests keyed to antd class
+  selectors (`.ant-select`, `.ant-select-selector`, `.ant-select-item-option`,
+  `.ant-collapse-item`, `.ant-form-item`) and a full dropdown-click helper
+  (`selectAntOption`) that has no stable shadcn analog in jsdom (Radix
+  `Select` requires hasPointerCapture + scrollIntoView polyfills). Migration
+  requires rewriting every test + migrating all 4 child form sections
+  (`OAuthFormFields`, `StdioConfiguration`, `OpenAPIFormSection`,
+  `MCPPermissionManagement`) in the same commit. Exceeds 2-attempt budget.
+- `src/components/mcp_tools/mcp_server_edit.tsx` (1151 LoC): mirrors
+  create_mcp_server's antd Form structure for the edit flow, plus Tremor
+  `TabGroup`/`TabList`/`TabPanels`. Uses `Form.useWatch` for derived state
+  (authType, transportType, oauth_flow_type) that drives conditional
+  rendering. Shares the same child form components as create; cannot be
+  migrated independently. Existing `mcp_server_edit.test.tsx` has 7 tests
+  keyed to antd form id lookups (`document.getElementById("token_validation_json")`)
+  and `Form.Item`-generated labels. Defer with create_mcp_server.
+- `src/components/mcp_tools/OAuthFormFields.tsx` (327 LoC): renders antd
+  `Form.Item` elements (including `name={["credentials", "client_id"]}`,
+  `Select mode="tags"`, inline `validator` rules for JSON parse, `InputNumber`)
+  keyed to the parent's antd Form context. Cannot be migrated independently
+  of its two callers (`create_mcp_server.tsx`, `mcp_server_edit.tsx`).
+  `OAuthFormFields.test.tsx` has 13 tests directly importing `Form` from
+  antd and asserting on antd-validation error messages. Defer with parents.
+- `src/components/mcp_tools/StdioConfiguration.tsx`: renders a single antd
+  `Form.Item` with `name="stdio_config"` and inline JSON-parse `validator`,
+  registering into the parent antd Form context. Cannot be migrated
+  independently. Defer with parents.
+- `src/components/mcp_tools/OpenAPIFormSection.tsx`: renders an antd
+  `Form.Item` with `name="spec_path"` and takes an antd `FormInstance`
+  prop for `setFieldsValue`/`resetFields`. Tightly coupled to the parent
+  antd Form. Defer with parents.
+- `src/components/mcp_tools/MCPPermissionManagement.tsx`: uses
+  `Form.useFormInstance()` + `Form.List` for dynamic static-headers plus
+  several `Form.Item` fields (`allow_all_keys`, `available_on_public_internet`,
+  `mcp_access_groups`, `extra_headers`). Directly writes to the parent's
+  antd Form via `form.setFieldValue`. `MCPPermissionManagement.test.tsx`
+  wraps it in an antd `<Form form={form}>` harness.  Cannot migrate
+  independently of the parent forms. Defer with parents.

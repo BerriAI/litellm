@@ -1,5 +1,21 @@
-import React, { forwardRef, useImperativeHandle, useMemo } from "react";
-import { Form, Input, InputNumber, Select, Tooltip } from "antd";
+import React, { forwardRef, useEffect, useImperativeHandle, useMemo } from "react";
+import { useForm, Controller } from "react-hook-form";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { Info } from "lucide-react";
 import { MCPTool, InputSchema, InputSchemaProperty } from "./types";
 
@@ -144,10 +160,40 @@ interface MCPToolArgumentsFormProps {
   className?: string;
 }
 
+function validateField(
+  key: string,
+  prop: InputSchemaProperty,
+  required: boolean,
+  value: any,
+): string | true {
+  if (required && (value === undefined || value === null || value === "")) {
+    return `Please enter ${key}`;
+  }
+  if (prop.type === "object" || prop.type === "array") {
+    if ((value === undefined || value === null || value === "") && !required) {
+      return true;
+    }
+    try {
+      const parsed = typeof value === "string" ? JSON.parse(value) : value;
+      const isValidObject =
+        prop.type === "object" &&
+        parsed !== null &&
+        typeof parsed === "object" &&
+        !Array.isArray(parsed);
+      const isValidArray = prop.type === "array" && Array.isArray(parsed);
+      if ((prop.type === "object" && isValidObject) || (prop.type === "array" && isValidArray)) {
+        return true;
+      }
+      return prop.type === "object" ? "Please enter a JSON object" : "Please enter a JSON array";
+    } catch {
+      return "Invalid JSON";
+    }
+  }
+  return true;
+}
+
 const MCPToolArgumentsForm = forwardRef<MCPToolArgumentsFormRef, MCPToolArgumentsFormProps>(
   ({ tool, className }, ref) => {
-    const [form] = Form.useForm();
-
     const schema: InputSchema = useMemo(() => {
       if (typeof tool.inputSchema === "string") {
         return {
@@ -178,164 +224,234 @@ const MCPToolArgumentsForm = forwardRef<MCPToolArgumentsFormRef, MCPToolArgument
       return schema;
     }, [schema]);
 
+    const defaultValues = useMemo(() => {
+      const values: Record<string, any> = {};
+      if (actualSchema.properties) {
+        Object.entries(actualSchema.properties).forEach(([key, prop]) => {
+          values[key] = getInitialValueForField(prop);
+        });
+      }
+      return values;
+    }, [actualSchema]);
+
+    const form = useForm<Record<string, any>>({
+      defaultValues,
+      mode: "onSubmit",
+    });
+    const { control, handleSubmit, reset, trigger, getValues, formState } = form;
+
+    useEffect(() => {
+      reset(defaultValues);
+    }, [defaultValues, reset, tool]);
+
     useImperativeHandle(ref, () => ({
       getSubmitValues: async () => {
-        const values = await form.validateFields();
+        const valid = await trigger();
+        if (!valid) {
+          throw new Error("Validation failed");
+        }
+        const values = getValues();
         return convertFormValues(values, actualSchema, schema);
       },
     }));
 
-    React.useEffect(() => {
-      form.resetFields();
-      if (!actualSchema.properties) return;
-
-      const initialValues: Record<string, any> = {};
-      Object.entries(actualSchema.properties).forEach(([key, prop]) => {
-        initialValues[key] = getInitialValueForField(prop);
-      });
-      form.setFieldsValue(initialValues);
-    }, [form, actualSchema, tool]);
-
     if (typeof tool.inputSchema === "string") {
       return (
-        <Form form={form} layout="vertical" className={className}>
-          <Form.Item
-            label={
-              <span className="text-sm font-medium text-gray-700">
-                Input <span className="text-red-500">*</span>
+        <form className={className} onSubmit={handleSubmit(() => {})}>
+          <div className="space-y-2">
+            <Label htmlFor={`${tool.name}-input`}>
+              <span className="text-sm font-medium text-foreground">
+                Input <span className="text-destructive">*</span>
               </span>
-            }
-            name="input"
-            rules={[{ required: true, message: "Please enter input for this tool" }]}
-          >
-            <Input placeholder="Enter input for this tool" />
-          </Form.Item>
-        </Form>
+            </Label>
+            <Controller
+              control={control}
+              name="input"
+              rules={{ required: "Please enter input for this tool" }}
+              render={({ field, fieldState }) => (
+                <>
+                  <Input
+                    id={`${tool.name}-input`}
+                    placeholder="Enter input for this tool"
+                    {...field}
+                    value={field.value ?? ""}
+                  />
+                  {fieldState.error && (
+                    <p className="text-sm text-destructive">{fieldState.error.message}</p>
+                  )}
+                </>
+              )}
+            />
+          </div>
+        </form>
       );
     }
 
     if (!actualSchema.properties) {
       return (
-        <Form form={form} layout="vertical" className={className}>
-          <div className="py-4 text-center text-sm text-gray-500">
+        <form className={className} onSubmit={handleSubmit(() => {})}>
+          <div className="py-4 text-center text-sm text-muted-foreground">
             No parameters required for this tool.
           </div>
-        </Form>
+        </form>
       );
     }
 
     return (
-      <Form form={form} layout="vertical" className={className}>
+      <form className={className} onSubmit={handleSubmit(() => {})}>
         {Object.entries(actualSchema.properties).map(([key, prop]) => {
-          const initialValue = getInitialValueForField(prop);
+          const required = !!actualSchema.required?.includes(key);
           const fieldKey = `${tool.name}-${key}`;
           return (
-            <Form.Item
-              key={fieldKey}
-              label={
-                <span className="text-sm font-medium text-gray-700 flex items-center">
-                  {key} {actualSchema.required?.includes(key) && <span className="text-red-500">*</span>}
+            <div key={fieldKey} className="space-y-2">
+              <Label htmlFor={fieldKey}>
+                <span className="text-sm font-medium text-foreground flex items-center">
+                  {key} {required && <span className="text-destructive">*</span>}
                   {prop.description && (
-                    <Tooltip title={prop.description}>
-                      <Info className="ml-2 h-3.5 w-3.5 text-muted-foreground hover:text-foreground" />
-                    </Tooltip>
+                    <TooltipProvider>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Info className="ml-2 h-3.5 w-3.5 text-muted-foreground hover:text-foreground" />
+                        </TooltipTrigger>
+                        <TooltipContent className="max-w-xs">{prop.description}</TooltipContent>
+                      </Tooltip>
+                    </TooltipProvider>
                   )}
                 </span>
-              }
-              name={key}
-              initialValue={initialValue}
-              rules={[
-                {
-                  required: actualSchema.required?.includes(key),
-                  message: `Please enter ${key}`,
-                },
-                ...(prop.type === "object" || prop.type === "array"
-                  ? [
-                      {
-                        validator: (_rule: any, value: any) => {
-                          if (
-                            (value === undefined || value === null || value === "") &&
-                            !actualSchema.required?.includes(key)
-                          ) {
-                            return Promise.resolve();
-                          }
-                          try {
-                            const parsed = typeof value === "string" ? JSON.parse(value) : value;
-                            const isValidObject =
-                              prop.type === "object" &&
-                              parsed !== null &&
-                              typeof parsed === "object" &&
-                              !Array.isArray(parsed);
-                            const isValidArray = prop.type === "array" && Array.isArray(parsed);
-                            if (
-                              (prop.type === "object" && isValidObject) ||
-                              (prop.type === "array" && isValidArray)
-                            ) {
-                              return Promise.resolve();
-                            }
-                            return Promise.reject(
-                              new Error(
-                                prop.type === "object" ? "Please enter a JSON object" : "Please enter a JSON array",
-                              ),
-                            );
-                          } catch {
-                            return Promise.reject(new Error("Invalid JSON"));
-                          }
-                        },
-                      },
-                    ]
-                  : []),
-              ]}
-            >
-              {prop.type === "string" && prop.enum ? (
-                <Select
-                  placeholder={`Select ${key}`}
-                  allowClear={!actualSchema.required?.includes(key)}
-                  options={prop.enum.map((v) => ({ value: v, label: v }))}
-                />
-              ) : prop.type === "string" && !prop.enum ? (
-                <Input
-                  placeholder={prop.description || `Enter ${key}`}
-                  allowClear
-                />
-              ) : prop.type === "number" || prop.type === "integer" ? (
-                <InputNumber
-                  step={prop.type === "integer" ? 1 : undefined}
-                  placeholder={prop.description || `Enter ${key}`}
-                  className="w-full"
-                  style={{ width: "100%" }}
-                />
-              ) : prop.type === "boolean" ? (
-                <Select
-                  placeholder={`Select ${key}`}
-                  allowClear={!actualSchema.required?.includes(key)}
-                  options={[
-                    { value: true, label: "True" },
-                    { value: false, label: "False" },
-                  ]}
-                />
-              ) : (prop.type === "object" || prop.type === "array") ? (
-                <Input.TextArea
-                  rows={prop.type === "object" ? 4 : 3}
-                  placeholder={
-                    prop.description ||
-                    (prop.type === "object"
-                      ? `Enter JSON object for ${key}`
-                      : `Enter JSON array for ${key}`)
+              </Label>
+              <Controller
+                control={control}
+                name={key}
+                rules={{
+                  validate: (value) => validateField(key, prop, required, value),
+                }}
+                render={({ field, fieldState }) => {
+                  const errorMessage = fieldState.error?.message;
+                  if (prop.type === "string" && prop.enum) {
+                    return (
+                      <>
+                        <Select
+                          value={field.value ? String(field.value) : ""}
+                          onValueChange={(v) => field.onChange(v)}
+                        >
+                          <SelectTrigger id={fieldKey}>
+                            <SelectValue placeholder={`Select ${key}`} />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {prop.enum!.map((v) => (
+                              <SelectItem key={String(v)} value={String(v)}>
+                                {String(v)}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                        {errorMessage && (
+                          <p className="text-sm text-destructive">{errorMessage}</p>
+                        )}
+                      </>
+                    );
                   }
-                  spellCheck={false}
-                  className="font-mono"
-                />
-              ) : (
-                <Input
-                  placeholder={prop.description || `Enter ${key}`}
-                  allowClear
-                />
-              )}
-            </Form.Item>
+                  if (prop.type === "string") {
+                    return (
+                      <>
+                        <Input
+                          id={fieldKey}
+                          placeholder={prop.description || `Enter ${key}`}
+                          {...field}
+                          value={field.value ?? ""}
+                        />
+                        {errorMessage && (
+                          <p className="text-sm text-destructive">{errorMessage}</p>
+                        )}
+                      </>
+                    );
+                  }
+                  if (prop.type === "number" || prop.type === "integer") {
+                    return (
+                      <>
+                        <Input
+                          id={fieldKey}
+                          type="number"
+                          step={prop.type === "integer" ? 1 : "any"}
+                          placeholder={prop.description || `Enter ${key}`}
+                          value={field.value ?? ""}
+                          onChange={(e) => {
+                            const v = e.target.value;
+                            field.onChange(v === "" ? "" : Number(v));
+                          }}
+                          onBlur={field.onBlur}
+                        />
+                        {errorMessage && (
+                          <p className="text-sm text-destructive">{errorMessage}</p>
+                        )}
+                      </>
+                    );
+                  }
+                  if (prop.type === "boolean") {
+                    const valueStr =
+                      field.value === true ? "true" : field.value === false ? "false" : "";
+                    return (
+                      <>
+                        <Select
+                          value={valueStr}
+                          onValueChange={(v) => field.onChange(v === "true")}
+                        >
+                          <SelectTrigger id={fieldKey}>
+                            <SelectValue placeholder={`Select ${key}`} />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="true">True</SelectItem>
+                            <SelectItem value="false">False</SelectItem>
+                          </SelectContent>
+                        </Select>
+                        {errorMessage && (
+                          <p className="text-sm text-destructive">{errorMessage}</p>
+                        )}
+                      </>
+                    );
+                  }
+                  if (prop.type === "object" || prop.type === "array") {
+                    return (
+                      <>
+                        <Textarea
+                          id={fieldKey}
+                          rows={prop.type === "object" ? 4 : 3}
+                          placeholder={
+                            prop.description ||
+                            (prop.type === "object"
+                              ? `Enter JSON object for ${key}`
+                              : `Enter JSON array for ${key}`)
+                          }
+                          spellCheck={false}
+                          className="font-mono"
+                          {...field}
+                          value={field.value ?? ""}
+                        />
+                        {errorMessage && (
+                          <p className="text-sm text-destructive">{errorMessage}</p>
+                        )}
+                      </>
+                    );
+                  }
+                  return (
+                    <>
+                      <Input
+                        id={fieldKey}
+                        placeholder={prop.description || `Enter ${key}`}
+                        {...field}
+                        value={field.value ?? ""}
+                      />
+                      {errorMessage && (
+                        <p className="text-sm text-destructive">{errorMessage}</p>
+                      )}
+                    </>
+                  );
+                }}
+              />
+            </div>
           );
         })}
-      </Form>
+      </form>
     );
   },
 );
