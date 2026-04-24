@@ -174,7 +174,14 @@
         "src/components/UsagePage/components/UsageAIChatPanel.tsx",
         "src/components/UsagePage/components/UsagePageView.tsx",
         "src/components/prompts/prompt_info.tsx",
-        "src/components/SearchTools/SearchToolTester.tsx"
+        "src/components/SearchTools/SearchToolTester.tsx",
+        "src/components/Projects/ProjectDetailsPage.tsx",
+        "src/components/GuardrailsMonitor/GuardrailsMonitorView.tsx",
+        "src/components/EntityUsageExport/utils.ts",
+        "src/components/EntityUsageExport/types.ts",
+        "src/components/EntityUsageExport/UsageExportHeader.tsx",
+        "src/components/EntityUsageExport/ExportSummary.tsx",
+        "src/components/UsagePage/components/EntityUsage/TopModelView.tsx"
       ],
       "rules": {
         "litellm-ui/no-banned-ui-imports": "off",
