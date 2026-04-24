@@ -844,3 +844,66 @@ class TestCheckAndEmitPeriodicMetric:
             ):
                 self.logger._check_and_emit_periodic_metric()
         mock_emit.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# CustomLogger interface entry points
+# ---------------------------------------------------------------------------
+
+
+class TestLogSuccessEvent:
+    def test_delegates_to_process_success(self):
+        logger = make_logger()
+        with patch.object(logger, "_process_success") as mock_process:
+            logger.log_success_event(make_kwargs(), make_response(), 1.0, 2.0)
+        mock_process.assert_called_once()
+
+
+class TestLogFailureEvent:
+    def test_sync_records_error_metric(self):
+        logger = make_logger()
+        with patch.object(logger, "_record_error_metric") as mock_metric:
+            logger.log_failure_event(make_kwargs(), None, 1.0, 2.0)
+        mock_metric.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_async_records_error_metric(self):
+        logger = make_logger()
+        with patch.object(logger, "_record_error_metric") as mock_metric:
+            await logger.async_log_failure_event(make_kwargs(), None, 1.0, 2.0)
+        mock_metric.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# async_health_check
+# ---------------------------------------------------------------------------
+
+
+class TestAsyncHealthCheck:
+    @pytest.mark.asyncio
+    async def test_unhealthy_when_disabled(self):
+        logger = make_logger()
+        logger.enabled = False
+        result = await logger.async_health_check()
+        assert result["status"] == "unhealthy"
+        assert result["error_message"] is not None
+
+    @pytest.mark.asyncio
+    async def test_healthy_when_app_enabled(self):
+        logger = make_logger()
+        mock_app = MagicMock()
+        mock_app.enabled = True
+        with patch("newrelic.agent.application", return_value=mock_app):
+            result = await logger.async_health_check()
+        assert result["status"] == "healthy"
+        assert result["error_message"] is None
+
+    @pytest.mark.asyncio
+    async def test_unhealthy_when_app_disabled(self):
+        logger = make_logger()
+        mock_app = MagicMock()
+        mock_app.enabled = False
+        with patch("newrelic.agent.application", return_value=mock_app):
+            result = await logger.async_health_check()
+        assert result["status"] == "unhealthy"
+        assert result["error_message"] is not None
