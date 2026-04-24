@@ -249,3 +249,72 @@ def test_get_complete_model_list_byok_wildcard_expansion():
     assert len(result) > 0
     assert all(m.startswith("openai/") for m in result)
     assert "openai/*" not in result
+
+
+# ─── get_user_models tests ────────────────────────────────────────────────────
+
+def test_get_user_models_empty_means_unrestricted():
+    """models=[] → unrestricted, returns []"""
+    from litellm.proxy.auth.model_checks import get_user_models
+
+    result = get_user_models(
+        user_models=[],
+        proxy_model_list=["gpt-4", "claude-opus"],
+        model_access_groups={},
+    )
+    assert result == []
+
+
+def test_get_user_models_expands_access_group():
+    """models=["common-models"] → expands to the group's model names"""
+    from litellm.proxy.auth.model_checks import get_user_models
+
+    model_access_groups = {"common-models": ["gpt-4", "claude-haiku"]}
+    result = get_user_models(
+        user_models=["common-models"],
+        proxy_model_list=["gpt-4", "claude-haiku", "claude-opus"],
+        model_access_groups=model_access_groups,
+    )
+    assert set(result) == {"gpt-4", "claude-haiku"}
+    assert "claude-opus" not in result
+
+
+def test_get_user_models_no_default_models_returns_sentinel():
+    """models=["no-default-models"] stays as-is (sentinel), never matches real models"""
+    from litellm.proxy.auth.model_checks import get_user_models
+
+    result = get_user_models(
+        user_models=["no-default-models"],
+        proxy_model_list=["gpt-4", "claude-opus"],
+        model_access_groups={},
+    )
+    # Sentinel stays in list; intersection with real model names yields []
+    assert "gpt-4" not in result
+    assert "claude-opus" not in result
+    assert "no-default-models" in result
+
+
+def test_get_user_models_all_proxy_models():
+    """models=["all-proxy-models"] → returns full proxy list"""
+    from litellm.proxy.auth.model_checks import get_user_models
+
+    proxy_list = ["gpt-4", "claude-opus", "gemini-pro"]
+    result = get_user_models(
+        user_models=["all-proxy-models"],
+        proxy_model_list=proxy_list,
+        model_access_groups={},
+    )
+    assert set(result) == set(proxy_list)
+
+
+def test_get_user_models_deduplicates():
+    """Duplicate model names in result are removed"""
+    from litellm.proxy.auth.model_checks import get_user_models
+
+    model_access_groups = {"group-a": ["gpt-4", "claude-opus"]}
+    result = get_user_models(
+        user_models=["gpt-4", "group-a"],
+        proxy_model_list=["gpt-4", "claude-opus"],
+        model_access_groups=model_access_groups,
+    )
+    assert result.count("gpt-4") == 1

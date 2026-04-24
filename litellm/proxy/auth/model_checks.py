@@ -167,6 +167,34 @@ def get_team_models(
     return all_models
 
 
+def get_user_models(
+    user_models: List[str],
+    proxy_model_list: List[str],
+    model_access_groups: Dict[str, List[str]],
+) -> List[str]:
+    """
+    Returns expanded model list from user.models after resolving access groups.
+    Empty input list means the user is unrestricted — caller should skip filtering.
+    Special value 'no-default-models' stays in the list; since it is never a real
+    model name, the subsequent intersection with all_models naturally yields [].
+    """
+    if not user_models:
+        return []
+
+    all_models: List[str] = list(user_models)
+
+    if SpecialModelNames.all_proxy_models.value in all_models:
+        return list(proxy_model_list)
+
+    all_models = _get_models_from_access_groups(
+        model_access_groups=model_access_groups,
+        all_models=all_models,
+        include_model_access_groups=False,
+    )
+
+    return list(dict.fromkeys(all_models))
+
+
 def get_complete_model_list(
     key_models: List[str],
     team_models: List[str],

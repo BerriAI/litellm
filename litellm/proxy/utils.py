@@ -5682,6 +5682,30 @@ async def get_available_models_for_user(
         only_model_access_groups=only_model_access_groups,
     )
 
+    # Apply user-level model restriction (additional filter on top of key/team/proxy)
+    if (
+        user_api_key_dict.user_id
+        and prisma_client is not None
+        and user_api_key_cache is not None
+    ):
+        from litellm.proxy.auth.auth_checks import get_user_object
+        from litellm.proxy.auth.model_checks import get_user_models
+
+        user_object = await get_user_object(
+            user_id=user_api_key_dict.user_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            user_id_upsert=False,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+        if user_object and user_object.models:
+            expanded_user_models = get_user_models(
+                user_models=user_object.models,
+                proxy_model_list=proxy_model_list,
+                model_access_groups=model_access_groups,
+            )
+            all_models = [m for m in all_models if m in set(expanded_user_models)]
+
     return all_models
 
 
