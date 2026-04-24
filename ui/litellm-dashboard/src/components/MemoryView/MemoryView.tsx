@@ -210,7 +210,10 @@ export const MemoryView: React.FC<MemoryViewProps> = ({ accessToken }) => {
       key: "key",
       width: 200,
       render: (k: string) => <Text code>{k}</Text>,
-      sorter: (a, b) => a.key.localeCompare(b.key),
+      // No client-side sorter: pagination is server-side, so a client sort
+      // would only reorder the current page and mislead users into thinking
+      // the whole list is sorted. Backend returns rows ordered by
+      // `updated_at DESC`; use the prefix filter for discovery by name.
     },
     {
       title: "Preview",
@@ -241,13 +244,10 @@ export const MemoryView: React.FC<MemoryViewProps> = ({ accessToken }) => {
       dataIndex: "updated_at",
       key: "updated_at",
       width: 180,
-      render: (ts?: string) => (
-        <Text type="secondary">{formatTimestamp(ts)}</Text>
-      ),
-      sorter: (a, b) =>
-        new Date(a.updated_at ?? 0).getTime() -
-        new Date(b.updated_at ?? 0).getTime(),
-      defaultSortOrder: "descend",
+      render: (ts?: string) => <Text type="secondary">{formatTimestamp(ts)}</Text>,
+      // No sorter — backend already returns rows in `updated_at DESC` order,
+      // and a client-side sorter on a paginated view would only affect the
+      // current page.
     },
     {
       title: "",
