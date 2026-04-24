@@ -1220,7 +1220,10 @@ class AmazonConverseConfig(BaseConfig):
         parallel_tool_use_config = additional_request_params.pop(
             "_parallel_tool_use_config", None
         )
-        if parallel_tool_use_config is not None and is_claude_4_5_on_bedrock(model):
+        # Only apply parallel_tool_use_config when tools are present — Bedrock rejects
+        # tool_choice in additionalModelRequestFields when there is no toolConfig.
+        has_tools = bool(inference_params.get("tools"))
+        if parallel_tool_use_config is not None and is_claude_4_5_on_bedrock(model) and has_tools:
             for key, value in parallel_tool_use_config.items():
                 if (
                     key in additional_request_params
@@ -1452,11 +1455,12 @@ class AmazonConverseConfig(BaseConfig):
                     bedrock_tools.append({"cachePoint": {"type": "default"}})
                     break
 
+        # Always pop tool_choice — Bedrock Converse rejects it when toolConfig is absent.
+        tool_choice_values: ToolChoiceValuesBlock = inference_params.pop(
+            "tool_choice", None
+        )
         bedrock_tool_config: Optional[ToolConfigBlock] = None
         if len(bedrock_tools) > 0:
-            tool_choice_values: ToolChoiceValuesBlock = inference_params.pop(
-                "tool_choice", None
-            )
             bedrock_tool_config = ToolConfigBlock(
                 tools=bedrock_tools,
             )
