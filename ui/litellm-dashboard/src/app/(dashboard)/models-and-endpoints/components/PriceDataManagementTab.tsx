@@ -1,5 +1,3 @@
-// eslint-disable-next-line litellm-ui/no-banned-ui-imports
-import { TabPanel } from "@tremor/react";
 import PriceDataReload from "@/components/price_data_reload";
 import React from "react";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
@@ -10,7 +8,7 @@ const PriceDataManagementTab = () => {
   const { refetch: refetchModelCostMap } = useModelCostMap();
 
   return (
-    <TabPanel>
+    <>
       <div className="p-6">
         <div className="mb-6">
           <h2 className="text-lg font-semibold text-foreground">
@@ -31,7 +29,7 @@ const PriceDataManagementTab = () => {
           className="w-full"
         />
       </div>
-    </TabPanel>
+    </>
   );
 };
 

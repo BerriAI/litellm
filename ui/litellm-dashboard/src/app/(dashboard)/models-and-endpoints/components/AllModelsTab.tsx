@@ -11,8 +11,6 @@ import { modelDeleteCall } from "@/components/networking";
 import { Info, Settings, Filter, RefreshCw, Search } from "lucide-react";
 import { PaginationState, SortingState } from "@tanstack/react-table";
 import { useQueryClient } from "@tanstack/react-query";
-// eslint-disable-next-line litellm-ui/no-banned-ui-imports
-import { TabPanel } from "@tremor/react";
 import { Button } from "@/components/ui/button";
 import {
   Select,
@@ -239,7 +237,7 @@ const AllModelsTab = ({
   };
 
   return (
-    <TabPanel>
+    <>
       <div>
         <div className="flex flex-col space-y-4">
           <div className="bg-background rounded-lg shadow">
@@ -563,7 +561,7 @@ const AllModelsTab = ({
         onCancel={() => setIsModelSettingsModalVisible(false)}
         onSuccess={() => setIsModelSettingsModalVisible(false)}
       />
-    </TabPanel>
+    </>
   );
 };
 

@@ -19,8 +19,12 @@ import { transformModelData } from "./utils/modelDataTransformer";
 import { all_admin_roles, internalUserRoles, isProxyAdminRole, isUserTeamAdminForAnyTeam } from "@/utils/roles";
 import { RefreshCcw } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
-// eslint-disable-next-line litellm-ui/no-banned-ui-imports
-import { Tab, TabGroup, TabList, TabPanel, TabPanels } from "@tremor/react";
+import {
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
+} from "@/components/ui/tabs";
 import { useForm } from "react-hook-form";
 import { PlusCircle as PlusCircleOutlined } from "lucide-react";
 import React, { useEffect, useMemo, useState } from "react";
@@ -69,7 +73,7 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({ premiumUser, te
   const [showAdvancedSettings, setShowAdvancedSettings] = useState<boolean>(false);
   const [selectedModelId, setSelectedModelId] = useState<string | null>(null);
   const [selectedTeamId, setSelectedTeamId] = useState<string | null>(null);
-  const [selectedTabIndex, setSelectedTabIndex] = useState(0);
+  const [selectedTab, setSelectedTab] = useState<string>("all-models");
   const [showMissingProviderBanner, setShowMissingProviderBanner] = useState(() => {
     if (typeof window !== "undefined") {
       return localStorage.getItem("hideMissingProviderBanner") !== "true";
@@ -365,17 +369,39 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({ premiumUser, te
               modelAccessGroups={availableModelAccessGroups}
             />
           ) : (
-            <TabGroup index={selectedTabIndex} onIndexChange={setSelectedTabIndex} className="gap-2 h-[75vh] w-full ">
-              <TabList className="flex justify-between mt-2 w-full items-center">
+            <Tabs
+              value={selectedTab}
+              onValueChange={setSelectedTab}
+              className="gap-2 h-[75vh] w-full"
+            >
+              <TabsList className="flex justify-between mt-2 w-full items-center bg-transparent p-0 h-auto">
                 <div className="flex">
-                  {all_admin_roles.includes(userRole) ? <Tab>All Models</Tab> : <Tab>Your Models</Tab>}
-                  {!shouldHideAddModelTab && <Tab>Add Model</Tab>}
-                  {all_admin_roles.includes(userRole) && <Tab>LLM Credentials</Tab>}
-                  {all_admin_roles.includes(userRole) && <Tab>Pass-Through Endpoints</Tab>}
-                  {all_admin_roles.includes(userRole) && <Tab>Health Status</Tab>}
-                  {all_admin_roles.includes(userRole) && <Tab>Model Retry Settings</Tab>}
-                  {all_admin_roles.includes(userRole) && <Tab>Model Group Alias</Tab>}
-                  {all_admin_roles.includes(userRole) && <Tab>Price Data Reload</Tab>}
+                  {all_admin_roles.includes(userRole) ? (
+                    <TabsTrigger value="all-models">All Models</TabsTrigger>
+                  ) : (
+                    <TabsTrigger value="all-models">Your Models</TabsTrigger>
+                  )}
+                  {!shouldHideAddModelTab && (
+                    <TabsTrigger value="add-model">Add Model</TabsTrigger>
+                  )}
+                  {all_admin_roles.includes(userRole) && (
+                    <TabsTrigger value="llm-credentials">LLM Credentials</TabsTrigger>
+                  )}
+                  {all_admin_roles.includes(userRole) && (
+                    <TabsTrigger value="pass-through">Pass-Through Endpoints</TabsTrigger>
+                  )}
+                  {all_admin_roles.includes(userRole) && (
+                    <TabsTrigger value="health">Health Status</TabsTrigger>
+                  )}
+                  {all_admin_roles.includes(userRole) && (
+                    <TabsTrigger value="retry">Model Retry Settings</TabsTrigger>
+                  )}
+                  {all_admin_roles.includes(userRole) && (
+                    <TabsTrigger value="alias">Model Group Alias</TabsTrigger>
+                  )}
+                  {all_admin_roles.includes(userRole) && (
+                    <TabsTrigger value="price-data">Price Data Reload</TabsTrigger>
+                  )}
                 </div>
 
                 <div className="flex items-center space-x-2 self-center">
@@ -393,8 +419,8 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({ premiumUser, te
                     <RefreshCcw className="h-3.5 w-3.5" />
                   </button>
                 </div>
-              </TabList>
-              <TabPanels>
+              </TabsList>
+              <TabsContent value="all-models">
                 <AllModelsTab
                   selectedModelGroup={selectedModelGroup}
                   setSelectedModelGroup={setSelectedModelGroup}
@@ -403,48 +429,50 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({ premiumUser, te
                   setSelectedModelId={setSelectedModelId}
                   setSelectedTeamId={setSelectedTeamId}
                 />
-                {!shouldHideAddModelTab && (
-                  <TabPanel className="h-full">
-                    <AddModelTab
-                      form={addModelForm}
-                      handleOk={handleOk}
-                      selectedProvider={selectedProvider}
-                      setSelectedProvider={setSelectedProvider}
-                      providerModels={providerModels}
-                      setProviderModelsFn={setProviderModelsFn}
-                      getPlaceholder={getPlaceholder}
-                      uploadProps={uploadProps}
-                      showAdvancedSettings={showAdvancedSettings}
-                      setShowAdvancedSettings={setShowAdvancedSettings}
-                      teams={teams}
-                      credentials={credentialsList}
-                      accessToken={accessToken}
-                      userRole={userRole}
-                    />
-                  </TabPanel>
-                )}
-                <TabPanel>
-                  <CredentialsPanel uploadProps={uploadProps} />
-                </TabPanel>
-                <TabPanel>
-                  <PassThroughSettings
+              </TabsContent>
+              {!shouldHideAddModelTab && (
+                <TabsContent value="add-model" className="h-full">
+                  <AddModelTab
+                    form={addModelForm}
+                    handleOk={handleOk}
+                    selectedProvider={selectedProvider}
+                    setSelectedProvider={setSelectedProvider}
+                    providerModels={providerModels}
+                    setProviderModelsFn={setProviderModelsFn}
+                    getPlaceholder={getPlaceholder}
+                    uploadProps={uploadProps}
+                    showAdvancedSettings={showAdvancedSettings}
+                    setShowAdvancedSettings={setShowAdvancedSettings}
+                    teams={teams}
+                    credentials={credentialsList}
                     accessToken={accessToken}
                     userRole={userRole}
-                    userID={userID}
-                    modelData={processedModelData}
-                    premiumUser={premiumUser}
                   />
-                </TabPanel>
-                <TabPanel>
-                  <HealthCheckComponent
-                    accessToken={accessToken}
-                    modelData={processedModelData}
-                    all_models_on_proxy={allModelIdsOnProxy}
-                    getDisplayModelName={getDisplayModelName}
-                    setSelectedModelId={setSelectedModelId}
-                    teams={teams}
-                  />
-                </TabPanel>
+                </TabsContent>
+              )}
+              <TabsContent value="llm-credentials">
+                <CredentialsPanel uploadProps={uploadProps} />
+              </TabsContent>
+              <TabsContent value="pass-through">
+                <PassThroughSettings
+                  accessToken={accessToken}
+                  userRole={userRole}
+                  userID={userID}
+                  modelData={processedModelData}
+                  premiumUser={premiumUser}
+                />
+              </TabsContent>
+              <TabsContent value="health">
+                <HealthCheckComponent
+                  accessToken={accessToken}
+                  modelData={processedModelData}
+                  all_models_on_proxy={allModelIdsOnProxy}
+                  getDisplayModelName={getDisplayModelName}
+                  setSelectedModelId={setSelectedModelId}
+                  teams={teams}
+                />
+              </TabsContent>
+              <TabsContent value="retry">
                 <ModelRetrySettingsTab
                   selectedModelGroup={selectedModelGroup}
                   setSelectedModelGroup={setSelectedModelGroup}
@@ -456,16 +484,18 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({ premiumUser, te
                   setModelGroupRetryPolicy={setModelGroupRetryPolicy}
                   handleSaveRetrySettings={handleSaveRetrySettings}
                 />
-                <TabPanel>
-                  <ModelGroupAliasSettings
-                    accessToken={accessToken}
-                    initialModelGroupAlias={modelGroupAlias}
-                    onAliasUpdate={setModelGroupAlias}
-                  />
-                </TabPanel>
+              </TabsContent>
+              <TabsContent value="alias">
+                <ModelGroupAliasSettings
+                  accessToken={accessToken}
+                  initialModelGroupAlias={modelGroupAlias}
+                  onAliasUpdate={setModelGroupAlias}
+                />
+              </TabsContent>
+              <TabsContent value="price-data">
                 <PriceDataManagementTab />
-              </TabPanels>
-            </TabGroup>
+              </TabsContent>
+            </Tabs>
           )}
         </div>
       </div>

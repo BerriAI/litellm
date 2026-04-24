@@ -7,8 +7,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-// eslint-disable-next-line litellm-ui/no-banned-ui-imports
-import { TabPanel } from "@tremor/react";
 import React from "react";
 
 interface GlobalRetryPolicyObject {
@@ -56,7 +54,7 @@ const ModelRetrySettingsTab = ({
   handleSaveRetrySettings,
 }: ModelRetrySettingsTabProps) => {
   return (
-    <TabPanel>
+    <>
       <div className="flex items-center gap-4 mb-6">
         <div className="flex items-center">
           <span>Retry Policy Scope:</span>
@@ -184,7 +182,7 @@ const ModelRetrySettingsTab = ({
       <Button className="mt-6 mr-8" onClick={handleSaveRetrySettings}>
         Save
       </Button>
-    </TabPanel>
+    </>
   );
 };
 
