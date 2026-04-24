@@ -99,26 +99,10 @@ vi.mock("./ContentFilterDisplay", () => ({
   ),
 }));
 
-vi.mock("antd", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("antd")>();
-  return {
-    ...actual,
-    Divider: ({ children }: { children: React.ReactNode }) => (
-      <div data-testid="divider">{children}</div>
-    ),
-    Alert: ({
-      message,
-      type,
-    }: {
-      message: React.ReactNode;
-      type: string;
-    }) => (
-      <div data-testid="unsaved-alert" data-type={type}>
-        {message}
-      </div>
-    ),
-  };
-});
+// Note: ContentFilterManager was migrated off antd Divider/Alert to a plain
+// inline <hr> section divider and a lucide AlertTriangle banner. The tests
+// below therefore assert against the semantic text of those elements rather
+// than the legacy `data-testid="divider"` / `"unsaved-alert"` hooks.
 
 describe("ContentFilterManager", () => {
   beforeEach(() => {
@@ -139,9 +123,7 @@ describe("ContentFilterManager", () => {
       expect(screen.getByTestId("content-filter-config")).toBeInTheDocument();
     });
 
-    expect(screen.getByTestId("divider")).toHaveTextContent(
-      "Content Filter Configuration"
-    );
+    expect(screen.getByText("Content Filter Configuration")).toBeInTheDocument();
   });
 
   it("should return null when guardrail is not litellm_content_filter", () => {
@@ -299,16 +281,20 @@ describe("ContentFilterManager", () => {
       expect(screen.getByTestId("content-filter-config")).toBeInTheDocument();
     });
 
-    expect(screen.queryByTestId("unsaved-alert")).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(/You have unsaved changes/i),
+    ).not.toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: /add pattern/i }));
 
     await waitFor(() => {
-      expect(screen.getByTestId("unsaved-alert")).toBeInTheDocument();
+      expect(
+        screen.getByText(/You have unsaved changes/i),
+      ).toBeInTheDocument();
     });
 
-    expect(screen.getByTestId("unsaved-alert")).toHaveTextContent(
-      /unsaved changes.*Save Changes/i
+    expect(screen.getByText(/You have unsaved changes/i)).toHaveTextContent(
+      /unsaved changes.*Save Changes/i,
     );
   });
 
@@ -399,7 +385,9 @@ describe("ContentFilterManager", () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByTestId("divider")).toBeInTheDocument();
+      expect(
+        screen.getByText("Content Filter Configuration"),
+      ).toBeInTheDocument();
     });
 
     expect(screen.queryByTestId("content-filter-config")).not.toBeInTheDocument();

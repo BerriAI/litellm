@@ -1,8 +1,29 @@
 import React from "react";
-// eslint-disable-next-line litellm-ui/no-banned-ui-imports
-import { Card, Text } from "@tremor/react";
-import { Button, Divider, Empty, Input, Select, Space, Tooltip } from "antd";
-import { Info as InfoCircleOutlined, Plus as PlusOutlined, Trash2 as DeleteOutlined } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Separator } from "@/components/ui/separator";
+import { Textarea } from "@/components/ui/textarea";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import {
+  Info as InfoCircleOutlined,
+  Plus as PlusOutlined,
+  Trash2 as DeleteOutlined,
+} from "lucide-react";
+
 export type ToolPermissionDecision = "allow" | "deny";
 export type ToolPermissionDefaultAction = "allow" | "deny";
 export type ToolPermissionOnDisallowedAction = "block" | "rewrite";
@@ -56,7 +77,10 @@ const ToolPermissionRulesEditor: React.FC<ToolPermissionRulesEditorProps> = ({
     onChange?.(nextConfig);
   };
 
-  const updateRule = (ruleIndex: number, updates: Partial<ToolPermissionRuleConfig>) => {
+  const updateRule = (
+    ruleIndex: number,
+    updates: Partial<ToolPermissionRuleConfig>,
+  ) => {
     const nextRules = config.rules.map((rule, index) =>
       index === ruleIndex ? { ...rule, ...updates } : rule,
     );
@@ -91,8 +115,8 @@ const ToolPermissionRulesEditor: React.FC<ToolPermissionRulesEditorProps> = ({
     const entries = Object.entries(targetRule.allowed_param_patterns || {});
     mutate(entries);
     const updatedObject: Record<string, string> = {};
-    entries.forEach(([key, value]) => {
-      updatedObject[key] = value;
+    entries.forEach(([key, v]) => {
+      updatedObject[key] = v;
     });
     updateRule(ruleIndex, {
       allowed_param_patterns:
@@ -109,8 +133,8 @@ const ToolPermissionRulesEditor: React.FC<ToolPermissionRulesEditorProps> = ({
       if (!entries[entryIndex]) {
         return;
       }
-      const [, value] = entries[entryIndex];
-      entries[entryIndex] = [nextPath, value];
+      const [, v] = entries[entryIndex];
+      entries[entryIndex] = [nextPath, v];
     });
   };
 
@@ -128,14 +152,20 @@ const ToolPermissionRulesEditor: React.FC<ToolPermissionRulesEditorProps> = ({
     });
   };
 
-  const renderAllowedParamPatterns = (rule: ToolPermissionRuleConfig, index: number) => {
+  const renderAllowedParamPatterns = (
+    rule: ToolPermissionRuleConfig,
+    index: number,
+  ) => {
     const entries = Object.entries(rule.allowed_param_patterns || {});
     if (entries.length === 0) {
       return (
         <Button
+          variant="outline"
+          size="sm"
           disabled={disabled}
-          size="small"
-          onClick={() => updateRule(index, { allowed_param_patterns: { "": "" } })}
+          onClick={() =>
+            updateRule(index, { allowed_param_patterns: { "": "" } })
+          }
         >
           + Restrict tool arguments (optional)
         </Button>
@@ -144,36 +174,49 @@ const ToolPermissionRulesEditor: React.FC<ToolPermissionRulesEditorProps> = ({
 
     return (
       <div className="space-y-2">
-        <Text className="text-sm text-gray-600">Argument constraints (dot or array paths)</Text>
+        <span className="text-sm text-muted-foreground">
+          Argument constraints (dot or array paths)
+        </span>
         {entries.map(([path, pattern], patternIndex) => (
-          <Space key={`${rule.id || index}-${patternIndex}`} align="start">
+          <div
+            key={`${rule.id || index}-${patternIndex}`}
+            className="flex items-start gap-2"
+          >
             <Input
               disabled={disabled}
               placeholder="messages[0].content"
               value={path}
-              onChange={(e) => updateAllowedParamPath(index, patternIndex, e.target.value)}
+              onChange={(e) =>
+                updateAllowedParamPath(index, patternIndex, e.target.value)
+              }
             />
             <Input
               disabled={disabled}
               placeholder="^email@.*$"
               value={pattern}
-              onChange={(e) => updateAllowedParamPattern(index, patternIndex, e.target.value)}
+              onChange={(e) =>
+                updateAllowedParamPattern(index, patternIndex, e.target.value)
+              }
             />
             <Button
+              variant="destructive"
+              size="icon"
               disabled={disabled}
-              icon={<DeleteOutlined />}
-              danger
               onClick={() =>
                 updateAllowedParamEntries(index, (entries) => {
                   entries.splice(patternIndex, 1);
                 })
               }
-            />
-          </Space>
+              aria-label="Remove constraint"
+            >
+              <DeleteOutlined className="h-4 w-4" />
+            </Button>
+          </div>
         ))}
         <Button
+          variant="outline"
+          size="sm"
           disabled={disabled}
-          size="small"
           onClick={() =>
             updateRule(index, {
               allowed_param_patterns: {
@@ -190,66 +233,74 @@ const ToolPermissionRulesEditor: React.FC<ToolPermissionRulesEditorProps> = ({
   };
 
   return (
-    <Card>
+    <Card className="p-6">
       <div className="flex items-center justify-between">
         <div>
-          <Text className="text-lg font-semibold">LiteLLM Tool Permission Guardrail</Text>
-          <Text className="text-sm text-gray-500">
-            Provide regex patterns (e.g., ^mcp__github_.*$) for tool names or types and optionally
-            constrain payload fields.
-          </Text>
+          <span className="text-lg font-semibold">
+            LiteLLM Tool Permission Guardrail
+          </span>
+          <p className="text-sm text-muted-foreground m-0">
+            Provide regex patterns (e.g., ^mcp__github_.*$) for tool names or
+            types and optionally constrain payload fields.
+          </p>
         </div>
         {!disabled && (
-          <Button
-            icon={<PlusOutlined />}
-            type="primary"
-            onClick={addRule}
-            className="!bg-blue-600 !text-white hover:!bg-blue-500"
-          >
+          <Button onClick={addRule}>
+            <PlusOutlined className="h-4 w-4 mr-1" />
             Add Rule
           </Button>
         )}
       </div>
 
-      <Divider />
+      <Separator className="my-4" />
 
       {config.rules.length === 0 ? (
-        <Empty description="No tool rules added yet" />
+        <div className="py-10 text-center text-muted-foreground">
+          No tool rules added yet
+        </div>
       ) : (
         <div className="space-y-4">
           {config.rules.map((rule, index) => (
-            <Card key={rule.id || index} className="bg-gray-50">
+            <Card key={rule.id || index} className="bg-muted p-4">
               <div className="flex items-center justify-between mb-3">
-                <Text className="font-semibold">Rule {index + 1}</Text>
+                <span className="font-semibold">Rule {index + 1}</span>
                 <Button
-                  icon={<DeleteOutlined />}
-                  danger
-                  type="text"
+                  variant="ghost"
+                  size="sm"
                   disabled={disabled}
                   onClick={() => removeRule(index)}
+                  className="text-destructive hover:text-destructive"
                 >
+                  <DeleteOutlined className="h-4 w-4 mr-1" />
                   Remove
                 </Button>
               </div>
               <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-                <div>
-                  <Text className="text-sm font-medium">Rule ID</Text>
+                <div className="space-y-2">
+                  <Label className="text-sm font-medium">Rule ID</Label>
                   <Input
                     disabled={disabled}
                     placeholder="unique_rule_id"
                     value={rule.id}
-                    onChange={(e) => updateRule(index, { id: e.target.value })}
+                    onChange={(e) =>
+                      updateRule(index, { id: e.target.value })
+                    }
                   />
                 </div>
-                <div>
-                  <Text className="text-sm font-medium">Tool Name (optional)</Text>
+                <div className="space-y-2">
+                  <Label className="text-sm font-medium">
+                    Tool Name (optional)
+                  </Label>
                   <Input
                     disabled={disabled}
                     placeholder="^mcp__github_.*$"
                     value={rule.tool_name ?? ""}
                     onChange={(e) =>
                       updateRule(index, {
-                        tool_name: e.target.value.trim() === "" ? undefined : e.target.value,
+                        tool_name:
+                          e.target.value.trim() === ""
+                            ? undefined
+                            : e.target.value,
                       })
                     }
                   />
@@ -257,15 +308,20 @@ const ToolPermissionRulesEditor: React.FC<ToolPermissionRulesEditorProps> = ({
               </div>
 
               <div className="grid grid-cols-1 gap-4 md:grid-cols-2 mt-4">
-                <div>
-                  <Text className="text-sm font-medium">Tool Type (optional)</Text>
+                <div className="space-y-2">
+                  <Label className="text-sm font-medium">
+                    Tool Type (optional)
+                  </Label>
                   <Input
                     disabled={disabled}
                     placeholder="^function$"
                     value={rule.tool_type ?? ""}
                     onChange={(e) =>
                       updateRule(index, {
-                        tool_type: e.target.value.trim() === "" ? undefined : e.target.value,
+                        tool_type:
+                          e.target.value.trim() === ""
+                            ? undefined
+                            : e.target.value,
                       })
                     }
                   />
@@ -273,66 +329,108 @@ const ToolPermissionRulesEditor: React.FC<ToolPermissionRulesEditorProps> = ({
               </div>
 
               <div className="mt-4 flex flex-col gap-2">
-                <Text className="text-sm font-medium">Decision</Text>
+                <Label className="text-sm font-medium">Decision</Label>
                 <Select
-                  disabled={disabled}
                   value={rule.decision}
-                  style={{ width: 200 }}
-                  onChange={(value) => updateRule(index, { decision: value as ToolPermissionDecision })}
+                  disabled={disabled}
+                  onValueChange={(value) =>
+                    updateRule(index, {
+                      decision: value as ToolPermissionDecision,
+                    })
+                  }
                 >
-                  <Select.Option value="allow">Allow</Select.Option>
-                  <Select.Option value="deny">Deny</Select.Option>
+                  <SelectTrigger className="w-[200px]">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="allow">Allow</SelectItem>
+                    <SelectItem value="deny">Deny</SelectItem>
+                  </SelectContent>
                 </Select>
               </div>
 
-              <div className="mt-4">{renderAllowedParamPatterns(rule, index)}</div>
+              <div className="mt-4">
+                {renderAllowedParamPatterns(rule, index)}
+              </div>
             </Card>
           ))}
         </div>
       )}
 
-      <Divider />
+      <Separator className="my-4" />
 
       <div className="grid gap-4 md:grid-cols-2">
-        <div>
-          <Text className="text-sm font-medium">Default action</Text>
+        <div className="space-y-2">
+          <Label className="text-sm font-medium">Default action</Label>
           <Select
-            disabled={disabled}
             value={config.default_action}
-            onChange={(value) => updateConfig({ default_action: value as ToolPermissionDefaultAction })}
-          >
-            <Select.Option value="allow">Allow</Select.Option>
-            <Select.Option value="deny">Deny</Select.Option>
-          </Select>
-        </div>
-        <div>
-          <Text className="text-sm font-medium flex items-center gap-1">
-            On disallowed action
-            <Tooltip title="Block returns an error when a forbidden tool is invoked. Rewrite strips the tool call but lets the rest of the response continue.">
-              <InfoCircleOutlined />
-            </Tooltip>
-          </Text>
-          <Select
             disabled={disabled}
-            value={config.on_disallowed_action}
-            onChange={(value) =>
-              updateConfig({ on_disallowed_action: value as ToolPermissionOnDisallowedAction })
+            onValueChange={(value) =>
+              updateConfig({
+                default_action: value as ToolPermissionDefaultAction,
+              })
             }
           >
-            <Select.Option value="block">Block</Select.Option>
-            <Select.Option value="rewrite">Rewrite</Select.Option>
+            <SelectTrigger>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="allow">Allow</SelectItem>
+              <SelectItem value="deny">Deny</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="space-y-2">
+          <Label className="text-sm font-medium flex items-center gap-1">
+            On disallowed action
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span>
+                    <InfoCircleOutlined className="h-3.5 w-3.5 text-muted-foreground" />
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent>
+                  Block returns an error when a forbidden tool is invoked.
+                  Rewrite strips the tool call but lets the rest of the
+                  response continue.
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+          </Label>
+          <Select
+            value={config.on_disallowed_action}
+            disabled={disabled}
+            onValueChange={(value) =>
+              updateConfig({
+                on_disallowed_action:
+                  value as ToolPermissionOnDisallowedAction,
+              })
+            }
+          >
+            <SelectTrigger>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="block">Block</SelectItem>
+              <SelectItem value="rewrite">Rewrite</SelectItem>
+            </SelectContent>
           </Select>
         </div>
       </div>
 
-      <div className="mt-4">
-        <Text className="text-sm font-medium">Violation message (optional)</Text>
-        <Input.TextArea
+      <div className="mt-4 space-y-2">
+        <Label className="text-sm font-medium">
+          Violation message (optional)
+        </Label>
+        <Textarea
           disabled={disabled}
           rows={3}
           placeholder="This violates our org policy..."
           value={config.violation_message_template}
-          onChange={(e) => updateConfig({ violation_message_template: e.target.value })}
+          onChange={(e) =>
+            updateConfig({ violation_message_template: e.target.value })
+          }
         />
       </div>
     </Card>

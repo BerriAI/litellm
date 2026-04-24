@@ -16,11 +16,8 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
-import { Ban, Eye, EyeOff, Filter, Info, X } from "lucide-react";
-import { Select as AntSelect } from "antd";
+import { Ban, EyeOff, Filter, Info, X } from "lucide-react";
 import { PiiEntityCategory } from "./types";
-
-const { Option } = AntSelect;
 
 export const formatEntityName = (name: string) => {
   return name.replace(/_/g, " ");
@@ -49,31 +46,65 @@ export const CategoryFilter: React.FC<CategoryFilterProps> = ({
   selectedCategories,
   onChange,
 }) => {
+  const available = categories.filter(
+    (cat) => !selectedCategories.includes(cat.category),
+  );
   return (
-    <div>
+    <div className="mb-4">
       <div className="flex items-center mb-2">
         <Filter className="h-3.5 w-3.5 text-muted-foreground mr-1" />
         <span className="text-muted-foreground font-medium">
           Filter by category
         </span>
       </div>
-      <AntSelect
-        mode="multiple"
-        placeholder="Select categories to filter by"
-        style={{ width: "100%" }}
-        onChange={onChange}
-        value={selectedCategories}
-        allowClear
-        showSearch
-        optionFilterProp="children"
-        className="mb-4"
-      >
-        {categories.map((cat) => (
-          <Option key={cat.category} value={cat.category}>
-            {cat.category}
-          </Option>
-        ))}
-      </AntSelect>
+      <div className="space-y-2">
+        <Select
+          value=""
+          onValueChange={(v) => {
+            if (v) onChange([...selectedCategories, v]);
+          }}
+        >
+          <SelectTrigger>
+            <SelectValue placeholder="Select categories to filter by" />
+          </SelectTrigger>
+          <SelectContent>
+            {available.length === 0 ? (
+              <div className="py-2 px-3 text-sm text-muted-foreground">
+                No more categories
+              </div>
+            ) : (
+              available.map((cat) => (
+                <SelectItem key={cat.category} value={cat.category}>
+                  {cat.category}
+                </SelectItem>
+              ))
+            )}
+          </SelectContent>
+        </Select>
+        {selectedCategories.length > 0 && (
+          <div className="flex flex-wrap gap-1">
+            {selectedCategories.map((cat) => (
+              <Badge
+                key={cat}
+                variant="secondary"
+                className="flex items-center gap-1"
+              >
+                {cat}
+                <button
+                  type="button"
+                  onClick={() =>
+                    onChange(selectedCategories.filter((c) => c !== cat))
+                  }
+                  className="inline-flex items-center justify-center rounded-full hover:bg-muted-foreground/20"
+                  aria-label={`Remove ${cat}`}
+                >
+                  <X size={12} />
+                </button>
+              </Badge>
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   );
 };

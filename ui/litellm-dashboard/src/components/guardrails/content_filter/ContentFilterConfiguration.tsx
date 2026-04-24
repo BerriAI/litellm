@@ -1,5 +1,6 @@
-import React, { useState } from "react";
-import { Typography, Space, Upload, Card, Button } from "antd";
+import React, { useRef, useState } from "react";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
 import { Plus as PlusOutlined, Upload as UploadOutlined } from "lucide-react";
 import { validateBlockedWordsFile } from "../../networking";
 import NotificationsManager from "../../molecules/notifications_manager";
@@ -12,8 +13,6 @@ import ContentCategoryConfiguration from "./ContentCategoryConfiguration";
 import CompetitorIntentConfiguration, {
   CompetitorIntentConfig,
 } from "./CompetitorIntentConfiguration";
-
-const { Title, Text } = Typography;
 
 interface PrebuiltPattern {
   name: string;
@@ -78,7 +77,7 @@ interface ContentFilterConfigurationProps {
   competitorIntentConfig?: CompetitorIntentConfig | null;
   onCompetitorIntentChange?: (
     enabled: boolean,
-    config: CompetitorIntentConfig | null
+    config: CompetitorIntentConfig | null,
   ) => void;
 }
 
@@ -109,17 +108,24 @@ const ContentFilterConfiguration: React.FC<ContentFilterConfigurationProps> = ({
 }) => {
   const [patternModalVisible, setPatternModalVisible] = useState(false);
   const [keywordModalVisible, setKeywordModalVisible] = useState(false);
-  const [customPatternModalVisible, setCustomPatternModalVisible] = useState(false);
+  const [customPatternModalVisible, setCustomPatternModalVisible] =
+    useState(false);
 
   const [selectedPatternName, setSelectedPatternName] = useState<string>("");
   const [patternAction, setPatternAction] = useState<"BLOCK" | "MASK">("BLOCK");
   const [customPatternName, setCustomPatternName] = useState<string>("");
   const [customPatternRegex, setCustomPatternRegex] = useState<string>("");
-  const [customPatternAction, setCustomPatternAction] = useState<"BLOCK" | "MASK">("BLOCK");
+  const [customPatternAction, setCustomPatternAction] = useState<
+    "BLOCK" | "MASK"
+  >("BLOCK");
   const [newKeyword, setNewKeyword] = useState<string>("");
-  const [newKeywordAction, setNewKeywordAction] = useState<"BLOCK" | "MASK">("BLOCK");
-  const [newKeywordDescription, setNewKeywordDescription] = useState<string>("");
+  const [newKeywordAction, setNewKeywordAction] = useState<"BLOCK" | "MASK">(
+    "BLOCK",
+  );
+  const [newKeywordDescription, setNewKeywordDescription] =
+    useState<string>("");
   const [uploadValidating, setUploadValidating] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const handleAddPrebuiltPattern = () => {
     if (!selectedPatternName) {
@@ -127,7 +133,9 @@ const ContentFilterConfiguration: React.FC<ContentFilterConfigurationProps> = ({
       return;
     }
 
-    const selectedPattern = prebuiltPatterns.find((p) => p.name === selectedPatternName);
+    const selectedPattern = prebuiltPatterns.find(
+      (p) => p.name === selectedPatternName,
+    );
 
     onPatternAdd({
       id: `pattern-${Date.now()}`,
@@ -185,16 +193,21 @@ const ContentFilterConfiguration: React.FC<ContentFilterConfigurationProps> = ({
     setUploadValidating(true);
     try {
       const content = await file.text();
-      
+
       if (accessToken) {
         const result = await validateBlockedWordsFile(accessToken, content);
         if (result.valid) {
           if (onFileUpload) {
             onFileUpload(content);
           }
-          NotificationsManager.success(result.message || "File uploaded successfully");
+          NotificationsManager.success(
+            result.message || "File uploaded successfully",
+          );
         } else {
-          const errorMessage = result.error || (result.errors && result.errors.join(", ")) || "Invalid file";
+          const errorMessage =
+            result.error ||
+            (result.errors && result.errors.join(", ")) ||
+            "Invalid file";
           NotificationsManager.error(`Validation failed: ${errorMessage}`);
         }
       }
@@ -203,48 +216,48 @@ const ContentFilterConfiguration: React.FC<ContentFilterConfigurationProps> = ({
     } finally {
       setUploadValidating(false);
     }
-    return false;
   };
 
   const showPatterns = !showStep || showStep === "patterns";
   const showKeywords = !showStep || showStep === "keywords";
   const showCategories = !showStep || showStep === "categories";
   const showCompetitorIntent =
-    !showStep || showStep === "competitor_intent" || showStep === "categories";
+    !showStep ||
+    showStep === "competitor_intent" ||
+    showStep === "categories";
 
   return (
     <div className="space-y-6">
       {!showStep && (
         <div>
-          <Text type="secondary">
-            Configure patterns, keywords, and content categories to detect and filter sensitive information in requests and responses.
-          </Text>
+          <p className="text-sm text-muted-foreground m-0">
+            Configure patterns, keywords, and content categories to detect and
+            filter sensitive information in requests and responses.
+          </p>
         </div>
       )}
 
       {showPatterns && (
-        <Card
-          title={
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <Title level={5} style={{ margin: 0 }}>
-                Pattern Detection
-              </Title>
-              <Text type="secondary" style={{ fontSize: 14, fontWeight: 400 }}>
-                Detect sensitive information using regex patterns (SSN, credit cards, API keys, etc.)
-              </Text>
-            </div>
-          }
-          size="small"
-        >
-          <div style={{ marginBottom: 16 }}>
-            <Space>
-              <Button type="primary" onClick={() => setPatternModalVisible(true)} icon={<PlusOutlined />}>
-                Add prebuilt pattern
-              </Button>
-              <Button onClick={() => setCustomPatternModalVisible(true)} icon={<PlusOutlined />}>
-                Add custom regex
-              </Button>
-            </Space>
+        <Card className="p-4 space-y-4">
+          <div className="flex justify-between items-center">
+            <h5 className="text-base font-semibold m-0">Pattern Detection</h5>
+            <span className="text-sm text-muted-foreground font-normal">
+              Detect sensitive information using regex patterns (SSN, credit
+              cards, API keys, etc.)
+            </span>
+          </div>
+          <div className="flex gap-2">
+            <Button onClick={() => setPatternModalVisible(true)}>
+              <PlusOutlined className="h-4 w-4 mr-1" />
+              Add prebuilt pattern
+            </Button>
+            <Button
+              variant="outline"
+              onClick={() => setCustomPatternModalVisible(true)}
+            >
+              <PlusOutlined className="h-4 w-4 mr-1" />
+              Add custom regex
+            </Button>
           </div>
           <PatternTable
             patterns={selectedPatterns}
@@ -255,30 +268,41 @@ const ContentFilterConfiguration: React.FC<ContentFilterConfigurationProps> = ({
       )}
 
       {showKeywords && (
-        <Card
-          title={
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <Title level={5} style={{ margin: 0 }}>
-                Blocked Keywords
-              </Title>
-              <Text type="secondary" style={{ fontSize: 14, fontWeight: 400 }}>
-                Block or mask specific sensitive terms and phrases
-              </Text>
-            </div>
-          }
-          size="small"
-        >
-          <div style={{ marginBottom: 16 }}>
-            <Space>
-              <Button type="primary" onClick={() => setKeywordModalVisible(true)} icon={<PlusOutlined />}>
-                Add keyword
-              </Button>
-              <Upload beforeUpload={handleFileUpload} accept=".yaml,.yml" showUploadList={false}>
-                <Button icon={<UploadOutlined />} loading={uploadValidating}>
-                  Upload YAML file
-                </Button>
-              </Upload>
-            </Space>
+        <Card className="p-4 space-y-4">
+          <div className="flex justify-between items-center">
+            <h5 className="text-base font-semibold m-0">Blocked Keywords</h5>
+            <span className="text-sm text-muted-foreground font-normal">
+              Block or mask specific sensitive terms and phrases
+            </span>
+          </div>
+          <div className="flex gap-2">
+            <Button onClick={() => setKeywordModalVisible(true)}>
+              <PlusOutlined className="h-4 w-4 mr-1" />
+              Add keyword
+            </Button>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".yaml,.yml"
+              className="hidden"
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (file) {
+                  void handleFileUpload(file);
+                }
+                if (e.target) {
+                  e.target.value = "";
+                }
+              }}
+            />
+            <Button
+              variant="outline"
+              disabled={uploadValidating}
+              onClick={() => fileInputRef.current?.click()}
+            >
+              <UploadOutlined className="h-4 w-4 mr-1" />
+              {uploadValidating ? "Uploading..." : "Upload YAML file"}
+            </Button>
           </div>
           <KeywordTable
             keywords={blockedWords}
@@ -288,28 +312,31 @@ const ContentFilterConfiguration: React.FC<ContentFilterConfigurationProps> = ({
         </Card>
       )}
 
-      {showCompetitorIntent &&
-        onCompetitorIntentChange && (
-          <CompetitorIntentConfiguration
-            enabled={competitorIntentEnabled}
-            config={competitorIntentConfig}
-            onChange={onCompetitorIntentChange}
-            accessToken={accessToken}
-          />
-        )}
-
-      {showCategories && contentCategories.length > 0 && onContentCategoryAdd && onContentCategoryRemove && onContentCategoryUpdate && (
-        <ContentCategoryConfiguration
-          availableCategories={contentCategories}
-          selectedCategories={selectedContentCategories}
-          onCategoryAdd={onContentCategoryAdd}
-          onCategoryRemove={onContentCategoryRemove}
-          onCategoryUpdate={onContentCategoryUpdate}
+      {showCompetitorIntent && onCompetitorIntentChange && (
+        <CompetitorIntentConfiguration
+          enabled={competitorIntentEnabled}
+          config={competitorIntentConfig}
+          onChange={onCompetitorIntentChange}
           accessToken={accessToken}
-          pendingSelection={pendingCategorySelection}
-          onPendingSelectionChange={onPendingCategorySelectionChange}
         />
       )}
+
+      {showCategories &&
+        contentCategories.length > 0 &&
+        onContentCategoryAdd &&
+        onContentCategoryRemove &&
+        onContentCategoryUpdate && (
+          <ContentCategoryConfiguration
+            availableCategories={contentCategories}
+            selectedCategories={selectedContentCategories}
+            onCategoryAdd={onContentCategoryAdd}
+            onCategoryRemove={onContentCategoryRemove}
+            onCategoryUpdate={onContentCategoryUpdate}
+            accessToken={accessToken}
+            pendingSelection={pendingCategorySelection}
+            onPendingSelectionChange={onPendingCategorySelectionChange}
+          />
+        )}
 
       <PatternModal
         visible={patternModalVisible}
@@ -334,7 +361,9 @@ const ContentFilterConfiguration: React.FC<ContentFilterConfigurationProps> = ({
         patternAction={customPatternAction}
         onNameChange={setCustomPatternName}
         onRegexChange={setCustomPatternRegex}
-        onActionChange={(value) => setCustomPatternAction(value as "BLOCK" | "MASK")}
+        onActionChange={(value) =>
+          setCustomPatternAction(value as "BLOCK" | "MASK")
+        }
         onAdd={handleAddCustomPattern}
         onCancel={() => {
           setCustomPatternModalVisible(false);
@@ -350,7 +379,9 @@ const ContentFilterConfiguration: React.FC<ContentFilterConfigurationProps> = ({
         action={newKeywordAction}
         description={newKeywordDescription}
         onKeywordChange={setNewKeyword}
-        onActionChange={(value) => setNewKeywordAction(value as "BLOCK" | "MASK")}
+        onActionChange={(value) =>
+          setNewKeywordAction(value as "BLOCK" | "MASK")
+        }
         onDescriptionChange={setNewKeywordDescription}
         onAdd={handleAddKeyword}
         onCancel={() => {

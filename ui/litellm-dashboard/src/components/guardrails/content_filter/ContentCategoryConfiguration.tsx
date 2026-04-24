@@ -1,10 +1,34 @@
 import React from "react";
-import { Card, Typography, Select, Table, Tag, Collapse, Button } from "antd";
-import { Trash2 as DeleteOutlined, Plus as PlusOutlined, FileText as FileTextOutlined } from "lucide-react";
+import {
+  Accordion,
+  AccordionContent,
+  AccordionItem,
+  AccordionTrigger,
+} from "@/components/ui/accordion";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import {
+  FileText as FileTextOutlined,
+  Plus as PlusOutlined,
+  Trash2 as DeleteOutlined,
+} from "lucide-react";
 import { getCategoryYaml } from "../../networking";
-
-const { Title, Text } = Typography;
-const { Option } = Select;
 
 interface ContentCategory {
   name: string;
@@ -42,28 +66,40 @@ const ContentCategoryConfiguration: React.FC<ContentCategoryConfigurationProps> 
   pendingSelection,
   onPendingSelectionChange,
 }) => {
-  // Use controlled state if parent provides it, otherwise use local state
-  const [localSelectedCategoryName, setLocalSelectedCategoryName] = React.useState<string>("");
-  const selectedCategoryName = pendingSelection !== undefined ? pendingSelection : localSelectedCategoryName;
-  const setSelectedCategoryName = onPendingSelectionChange || setLocalSelectedCategoryName;
-  const [categoryYaml, setCategoryYaml] = React.useState<{ [key: string]: string }>({});
-  const [categoryFileTypes, setCategoryFileTypes] = React.useState<{ [key: string]: string }>({});
-  const [loadingYaml, setLoadingYaml] = React.useState<{ [key: string]: boolean }>({});
-  const [expandedYamlCategories, setExpandedYamlCategories] = React.useState<string[]>([]);
+  const [localSelectedCategoryName, setLocalSelectedCategoryName] =
+    React.useState<string>("");
+  const selectedCategoryName =
+    pendingSelection !== undefined ? pendingSelection : localSelectedCategoryName;
+  const setSelectedCategoryName =
+    onPendingSelectionChange || setLocalSelectedCategoryName;
+  const [categoryYaml, setCategoryYaml] = React.useState<{
+    [key: string]: string;
+  }>({});
+  const [categoryFileTypes, setCategoryFileTypes] = React.useState<{
+    [key: string]: string;
+  }>({});
+  const [loadingYaml, setLoadingYaml] = React.useState<{
+    [key: string]: boolean;
+  }>({});
+  const [expandedYamlCategories, setExpandedYamlCategories] = React.useState<
+    string[]
+  >([]);
   const [previewYaml, setPreviewYaml] = React.useState<string>("");
-  const [loadingPreviewYaml, setLoadingPreviewYaml] = React.useState<boolean>(false);
+  const [loadingPreviewYaml, setLoadingPreviewYaml] =
+    React.useState<boolean>(false);
 
   const handleAddCategory = () => {
     if (!selectedCategoryName) {
       return;
     }
 
-    const category = availableCategories.find((c) => c.name === selectedCategoryName);
+    const category = availableCategories.find(
+      (c) => c.name === selectedCategoryName,
+    );
     if (!category) {
       return;
     }
 
-    // Check if already added
     if (selectedCategories.some((c) => c.category === selectedCategoryName)) {
       return;
     }
@@ -77,15 +113,14 @@ const ContentCategoryConfiguration: React.FC<ContentCategoryConfigurationProps> 
     });
 
     setSelectedCategoryName("");
-    setPreviewYaml(""); // Clear preview when category is added
+    setPreviewYaml("");
   };
 
   const fetchCategoryYaml = async (categoryName: string) => {
     if (!accessToken) {
-      return; // No access token
+      return;
     }
 
-    // Check if already loaded
     if (categoryYaml[categoryName]) {
       return;
     }
@@ -94,62 +129,71 @@ const ContentCategoryConfiguration: React.FC<ContentCategoryConfigurationProps> 
     try {
       const data = await getCategoryYaml(accessToken, categoryName);
       let content = data.yaml_content;
-      
-      // Format JSON content for better readability
-      if (data.file_type === 'json') {
+
+      if (data.file_type === "json") {
         try {
           const parsed = JSON.parse(content);
           content = JSON.stringify(parsed, null, 2);
         } catch (e) {
-          // If parsing fails, use original content
           console.warn(`Failed to format JSON for ${categoryName}:`, e);
         }
       }
-      
+
       setCategoryYaml((prev) => ({ ...prev, [categoryName]: content }));
-      setCategoryFileTypes((prev) => ({ ...prev, [categoryName]: data.file_type || 'yaml' }));
+      setCategoryFileTypes((prev) => ({
+        ...prev,
+        [categoryName]: data.file_type || "yaml",
+      }));
     } catch (error) {
-      console.error(`Failed to fetch content for category ${categoryName}:`, error);
+      console.error(
+        `Failed to fetch content for category ${categoryName}:`,
+        error,
+      );
     } finally {
       setLoadingYaml((prev) => ({ ...prev, [categoryName]: false }));
     }
   };
 
-  // Fetch preview YAML/JSON when a category is selected in dropdown
   React.useEffect(() => {
     if (selectedCategoryName && accessToken) {
-      // Check if we already have this content cached
       const cachedContent = categoryYaml[selectedCategoryName];
       if (cachedContent) {
         setPreviewYaml(cachedContent);
         return;
       }
 
-      // Fetch the content for preview
       setLoadingPreviewYaml(true);
-      console.log(`Fetching content for category: ${selectedCategoryName}`, { accessToken: accessToken ? "present" : "missing" });
       getCategoryYaml(accessToken, selectedCategoryName)
         .then((data) => {
-          console.log(`Successfully fetched content for ${selectedCategoryName}:`, data);
           let content = data.yaml_content;
-          
-          // Format JSON content for better readability
-          if (data.file_type === 'json') {
+
+          if (data.file_type === "json") {
             try {
               const parsed = JSON.parse(content);
               content = JSON.stringify(parsed, null, 2);
             } catch (e) {
-              console.warn(`Failed to format JSON for ${selectedCategoryName}:`, e);
+              console.warn(
+                `Failed to format JSON for ${selectedCategoryName}:`,
+                e,
+              );
             }
           }
-          
+
           setPreviewYaml(content);
-          // Also cache it for later use
-          setCategoryYaml((prev) => ({ ...prev, [selectedCategoryName]: content }));
-          setCategoryFileTypes((prev) => ({ ...prev, [selectedCategoryName]: data.file_type || 'yaml' }));
+          setCategoryYaml((prev) => ({
+            ...prev,
+            [selectedCategoryName]: content,
+          }));
+          setCategoryFileTypes((prev) => ({
+            ...prev,
+            [selectedCategoryName]: data.file_type || "yaml",
+          }));
         })
         .catch((error) => {
-          console.error(`Failed to fetch preview content for category ${selectedCategoryName}:`, error);
+          console.error(
+            `Failed to fetch preview content for category ${selectedCategoryName}:`,
+            error,
+          );
           setPreviewYaml("");
         })
         .finally(() => {
@@ -162,173 +206,81 @@ const ContentCategoryConfiguration: React.FC<ContentCategoryConfigurationProps> 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedCategoryName, accessToken]);
 
-  const columns = [
-    {
-      title: "Category",
-      dataIndex: "display_name",
-      key: "display_name",
-      render: (text: string, record: SelectedCategory) => {
-        const category = availableCategories.find((c) => c.name === record.category);
-        return (
-          <div>
-            <div style={{ fontWeight: 500 }}>{text}</div>
-            {category?.description && (
-              <div style={{ fontSize: "12px", color: "#888", marginTop: "4px" }}>
-                {category.description}
-              </div>
-            )}
-          </div>
-        );
-      },
-    },
-    {
-      title: "Action",
-      dataIndex: "action",
-      key: "action",
-      width: 150,
-      render: (action: string, record: SelectedCategory) => (
-        <Select
-          value={action}
-          onChange={(value) => onCategoryUpdate(record.id, "action", value)}
-          style={{ width: "100%" }}
-        >
-          <Option value="BLOCK">
-            <Tag color="red">BLOCK</Tag>
-          </Option>
-          <Option value="MASK">
-            <Tag color="orange">MASK</Tag>
-          </Option>
-        </Select>
-      ),
-    },
-    {
-      title: "Severity Threshold",
-      dataIndex: "severity_threshold",
-      key: "severity_threshold",
-      width: 180,
-      render: (threshold: string, record: SelectedCategory) => (
-        <Select
-          value={threshold}
-          onChange={(value) => onCategoryUpdate(record.id, "severity_threshold", value)}
-          style={{ width: "100%" }}
-        >
-          <Option value="low">Low</Option>
-          <Option value="medium">Medium</Option>
-          <Option value="high">High</Option>
-        </Select>
-      ),
-    },
-    {
-      title: "",
-      key: "actions",
-      width: 80,
-      render: (_: any, record: SelectedCategory) => (
-        <Button
-          icon={<DeleteOutlined />}
-          onClick={() => onCategoryRemove(record.id)}
-          size="small"
-        >
-          Remove
-        </Button>
-      ),
-    },
-  ];
-
   const unselectedCategories = availableCategories.filter(
-    (cat) => !selectedCategories.some((sel) => sel.category === cat.name)
+    (cat) => !selectedCategories.some((sel) => sel.category === cat.name),
   );
 
   return (
-    <Card
-      title={
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
-          <Title level={5} style={{ margin: 0 }}>
-            Blocked topics
-          </Title>
-          <Text type="secondary" style={{ fontSize: 12, fontWeight: 400 }}>
-            Select topics to block using keyword and semantic analysis
-          </Text>
-        </div>
-      }
-      size="small"
-    >
-      <div style={{ marginBottom: 16, display: "flex", gap: 8 }}>
-        <Select
-          placeholder="Select a content category"
-          value={selectedCategoryName || undefined}
-          onChange={setSelectedCategoryName}
-          style={{ flex: 1 }}
-          showSearch
-          optionLabelProp="label"
-          filterOption={(input, option) =>
-            (option?.label?.toString().toLowerCase() ?? "").includes(input.toLowerCase())
-          }
-        >
-          {unselectedCategories.map((cat) => (
-            <Option key={cat.name} value={cat.name} label={cat.display_name}>
-              <div>
-                <div style={{ fontWeight: 500 }}>{cat.display_name}</div>
-                <div style={{ fontSize: "12px", color: "#666", marginTop: "2px" }}>
-                  {cat.description}
+    <Card className="p-4 space-y-4">
+      <div className="flex justify-between items-center flex-wrap gap-2">
+        <h5 className="text-base font-semibold m-0">Blocked topics</h5>
+        <span className="text-xs text-muted-foreground font-normal">
+          Select topics to block using keyword and semantic analysis
+        </span>
+      </div>
+
+      <div className="flex gap-2">
+        <div className="flex-1">
+          <Select
+            value={selectedCategoryName || ""}
+            onValueChange={(v) => setSelectedCategoryName(v)}
+          >
+            <SelectTrigger>
+              <SelectValue placeholder="Select a content category" />
+            </SelectTrigger>
+            <SelectContent>
+              {unselectedCategories.length === 0 ? (
+                <div className="py-2 px-3 text-sm text-muted-foreground">
+                  No categories available
                 </div>
-              </div>
-            </Option>
-          ))}
-        </Select>
+              ) : (
+                unselectedCategories.map((cat) => (
+                  <SelectItem key={cat.name} value={cat.name}>
+                    <div>
+                      <div className="font-medium">{cat.display_name}</div>
+                      <div className="text-xs text-muted-foreground mt-0.5">
+                        {cat.description}
+                      </div>
+                    </div>
+                  </SelectItem>
+                ))
+              )}
+            </SelectContent>
+          </Select>
+        </div>
         <Button
-          type="primary"
           onClick={handleAddCategory}
           disabled={!selectedCategoryName}
-          icon={<PlusOutlined />}
         >
+          <PlusOutlined className="h-4 w-4 mr-1" />
           Add
         </Button>
       </div>
 
-      {/* Preview box - shown when category is selected but not yet added */}
       {selectedCategoryName && (
-        <div
-          style={{
-            marginBottom: 16,
-            padding: "12px",
-            background: "#f9f9f9",
-            border: "1px solid #e0e0e0",
-            borderRadius: "4px",
-          }}
-        >
-          <div style={{ marginBottom: 8, fontWeight: 500, fontSize: "14px" }}>
-            Preview: {availableCategories.find((c) => c.name === selectedCategoryName)?.display_name}
+        <div className="p-3 bg-muted border border-border rounded">
+          <div className="mb-2 text-sm font-medium">
+            Preview:{" "}
+            {
+              availableCategories.find((c) => c.name === selectedCategoryName)
+                ?.display_name
+            }
             {categoryFileTypes[selectedCategoryName] && (
-              <span style={{ marginLeft: 8, fontSize: "12px", color: "#888", fontWeight: 400 }}>
+              <span className="ml-2 text-xs text-muted-foreground font-normal">
                 ({categoryFileTypes[selectedCategoryName]?.toUpperCase()})
               </span>
             )}
           </div>
           {loadingPreviewYaml ? (
-            <div style={{ padding: "16px", textAlign: "center", color: "#888" }}>
+            <div className="p-4 text-center text-muted-foreground">
               Loading content...
             </div>
           ) : previewYaml ? (
-            <pre
-              style={{
-                background: "#fff",
-                padding: "12px",
-                borderRadius: "4px",
-                overflow: "auto",
-                maxHeight: "300px",
-                maxWidth: "100%",
-                fontSize: "12px",
-                lineHeight: "1.5",
-                margin: 0,
-                border: "1px solid #e0e0e0",
-                whiteSpace: "pre-wrap",
-                wordBreak: "break-word",
-              }}
-            >
+            <pre className="bg-background p-3 rounded overflow-auto max-h-[300px] max-w-full text-xs leading-relaxed m-0 border border-border whitespace-pre-wrap break-words">
               <code>{previewYaml}</code>
             </pre>
           ) : (
-            <div style={{ padding: "8px", textAlign: "center", color: "#888", fontSize: "12px" }}>
+            <div className="p-2 text-center text-muted-foreground text-xs">
               Unable to load category content
             </div>
           )}
@@ -337,83 +289,147 @@ const ContentCategoryConfiguration: React.FC<ContentCategoryConfigurationProps> 
 
       {selectedCategories.length > 0 ? (
         <>
-        <Table
-          dataSource={selectedCategories}
-          columns={columns}
-          pagination={false}
-          size="small"
-          rowKey="id"
-        />
-          <div style={{ marginTop: 16 }}>
-            <Collapse
-              activeKey={expandedYamlCategories}
-              onChange={(keys) => {
-                const keyArray = Array.isArray(keys) ? keys : keys ? [keys] : [];
-                const oldExpanded = new Set(expandedYamlCategories);
-                
-                // Find newly expanded categories and fetch their YAML
-                keyArray.forEach((key) => {
-                  const categoryName = key as string;
-                  if (!oldExpanded.has(categoryName) && !categoryYaml[categoryName]) {
-                    fetchCategoryYaml(categoryName);
-                  }
-                });
-                
-                setExpandedYamlCategories(keyArray as string[]);
-              }}
-              ghost
-              items={selectedCategories.map((category) => {
-                const fileType = categoryFileTypes[category.category] || 'yaml';
-                const fileTypeLabel = fileType.toUpperCase();
-                
-                return {
-                  key: category.category,
-                  label: (
-                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                      <FileTextOutlined />
-                      <span>View {fileTypeLabel} for {category.display_name}</span>
-                    </div>
-                  ),
-                  children: loadingYaml[category.category] ? (
-                    <div style={{ padding: "16px", textAlign: "center", color: "#888" }}>
-                      Loading content...
-                    </div>
-                  ) : categoryYaml[category.category] ? (
-                    <pre
-                      style={{
-                        background: "#f5f5f5",
-                        padding: "16px",
-                        borderRadius: "4px",
-                        overflow: "auto",
-                        maxHeight: "400px",
-                        fontSize: "12px",
-                        lineHeight: "1.5",
-                        margin: 0,
-                      }}
-                    >
-                      <code>{categoryYaml[category.category]}</code>
-                    </pre>
-                  ) : (
-                    <div style={{ padding: "16px", textAlign: "center", color: "#888" }}>
-                      Content will load when expanded
-                    </div>
-                  ),
-                };
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Category</TableHead>
+                <TableHead className="w-[150px]">Action</TableHead>
+                <TableHead className="w-[180px]">Severity Threshold</TableHead>
+                <TableHead className="w-[120px]" />
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {selectedCategories.map((record) => {
+                const category = availableCategories.find(
+                  (c) => c.name === record.category,
+                );
+                return (
+                  <TableRow key={record.id}>
+                    <TableCell>
+                      <div>
+                        <div className="font-medium">{record.display_name}</div>
+                        {category?.description && (
+                          <div className="text-xs text-muted-foreground mt-1">
+                            {category.description}
+                          </div>
+                        )}
+                      </div>
+                    </TableCell>
+                    <TableCell>
+                      <Select
+                        value={record.action}
+                        onValueChange={(value) =>
+                          onCategoryUpdate(record.id, "action", value)
+                        }
+                      >
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="BLOCK">
+                            <Badge variant="destructive">BLOCK</Badge>
+                          </SelectItem>
+                          <SelectItem value="MASK">
+                            <Badge
+                              variant="secondary"
+                              className="bg-orange-100 text-orange-700 dark:bg-orange-950 dark:text-orange-300"
+                            >
+                              MASK
+                            </Badge>
+                          </SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </TableCell>
+                    <TableCell>
+                      <Select
+                        value={record.severity_threshold}
+                        onValueChange={(value) =>
+                          onCategoryUpdate(
+                            record.id,
+                            "severity_threshold",
+                            value,
+                          )
+                        }
+                      >
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="low">Low</SelectItem>
+                          <SelectItem value="medium">Medium</SelectItem>
+                          <SelectItem value="high">High</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </TableCell>
+                    <TableCell>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => onCategoryRemove(record.id)}
+                      >
+                        <DeleteOutlined className="h-4 w-4 mr-1" />
+                        Remove
+                      </Button>
+                    </TableCell>
+                  </TableRow>
+                );
               })}
-            />
-          </div>
+            </TableBody>
+          </Table>
+
+          <Accordion
+            type="multiple"
+            value={expandedYamlCategories}
+            onValueChange={(values) => {
+              const oldExpanded = new Set(expandedYamlCategories);
+              values.forEach((key) => {
+                if (!oldExpanded.has(key) && !categoryYaml[key]) {
+                  fetchCategoryYaml(key);
+                }
+              });
+              setExpandedYamlCategories(values);
+            }}
+          >
+            {selectedCategories.map((category) => {
+              const fileType = categoryFileTypes[category.category] || "yaml";
+              const fileTypeLabel = fileType.toUpperCase();
+              return (
+                <AccordionItem
+                  key={category.category}
+                  value={category.category}
+                >
+                  <AccordionTrigger>
+                    <div className="flex items-center gap-2">
+                      <FileTextOutlined className="h-4 w-4" />
+                      <span>
+                        View {fileTypeLabel} for {category.display_name}
+                      </span>
+                    </div>
+                  </AccordionTrigger>
+                  <AccordionContent>
+                    {loadingYaml[category.category] ? (
+                      <div className="p-4 text-center text-muted-foreground">
+                        Loading content...
+                      </div>
+                    ) : categoryYaml[category.category] ? (
+                      <pre className="bg-muted p-4 rounded overflow-auto max-h-[400px] text-xs leading-relaxed m-0">
+                        <code>{categoryYaml[category.category]}</code>
+                      </pre>
+                    ) : (
+                      <div className="p-4 text-center text-muted-foreground">
+                        Content will load when expanded
+                      </div>
+                    )}
+                  </AccordionContent>
+                </AccordionItem>
+              );
+            })}
+          </Accordion>
         </>
       ) : (
-        <div
-          style={{
-            textAlign: "center",
-            padding: "24px",
-            color: "#888",
-            border: "1px dashed #d9d9d9",
-            borderRadius: "4px",
-          }}
-        >
-          No blocked topics selected. Add topics to detect and block harmful content.
+        <div className="text-center py-6 text-muted-foreground border border-dashed border-border rounded">
+          No blocked topics selected. Add topics to detect and block harmful
+          content.
         </div>
       )}
     </Card>
@@ -421,4 +437,3 @@ const ContentCategoryConfiguration: React.FC<ContentCategoryConfigurationProps> 
 };
 
 export default ContentCategoryConfiguration;
-
