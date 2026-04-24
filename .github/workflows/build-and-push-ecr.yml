@@ -14,6 +14,7 @@ on:
 
 permissions:
   contents: read
+  id-token: write  # OIDC federation to AWS for ECR push
 
 jobs:
   build:
@@ -40,11 +41,13 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Configure AWS credentials
+      - name: Configure AWS credentials (OIDC federation)
+        # Assumes IAM role github-actions-arcadia-litellm-ecr in account 572630832277.
+        # Role trust is scoped to repo:arcadia/litellm:ref:refs/heads/main;
+        # inline policy grants only ECR push on force-multiplier/litellm.
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          aws-access-key-id: ${{ secrets.ARC_PRD_SVC_AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.ARC_PRD_SVC_AWS_ACCESS_KEY_SECRET }}
+          role-to-assume: ${{ secrets.AWS_ECR_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Login to Amazon ECR
