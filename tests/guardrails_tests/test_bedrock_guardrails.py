@@ -1107,7 +1107,12 @@ async def test_convert_to_bedrock_format_post_call_streaming_hook():
 
     # Mock the make_bedrock_api_request method to track calls
     async def mock_make_bedrock_api_request(
-        source, messages=None, response=None, request_data=None
+        source,
+        messages=None,
+        response=None,
+        request_data=None,
+        logging_event_type=None,
+        **kwargs,
     ):
         bedrock_calls.append(
             {
@@ -1115,6 +1120,7 @@ async def test_convert_to_bedrock_format_post_call_streaming_hook():
                 "messages": messages,
                 "response": response,
                 "request_data": request_data,
+                "logging_event_type": logging_event_type,
             }
         )
         # Return the mock bedrock response
