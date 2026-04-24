@@ -54,12 +54,12 @@ describe("OrganizationDropdown", () => {
     await user.click(screen.getByRole("combobox"));
     await user.click(await screen.findByText("Engineering"));
 
-    expect(onChange).toHaveBeenCalledWith("org-1", expect.anything());
+    expect(onChange).toHaveBeenCalledWith("org-1");
   });
 
-  it("should add ant-select-disabled class when disabled prop is true", () => {
-    const { container } = render(<OrganizationDropdown organizations={MOCK_ORGS} disabled={true} />);
-    expect(container.querySelector(".ant-select-disabled")).toBeTruthy();
+  it("should be disabled when disabled prop is true", () => {
+    render(<OrganizationDropdown organizations={MOCK_ORGS} disabled={true} />);
+    expect(screen.getByRole("combobox")).toBeDisabled();
   });
 
   it("should render with empty organizations list", () => {

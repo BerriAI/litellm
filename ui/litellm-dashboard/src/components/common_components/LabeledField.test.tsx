@@ -36,22 +36,25 @@ describe("LabeledField", () => {
   });
 
   it("should not be copyable when value is empty", () => {
-    const { container } = render(<LabeledField label="User ID" value="" copyable />);
-    // antd adds a .ant-typography-copy element when copyable; should not be present
-    expect(container.querySelector(".ant-typography-copy")).not.toBeInTheDocument();
+    render(<LabeledField label="User ID" value="" copyable />);
+    expect(
+      screen.queryByRole("button", { name: /copy user id/i }),
+    ).not.toBeInTheDocument();
   });
 
   it("should not be copyable when value is default_user_id and defaultUserIdCheck is true", () => {
-    const { container } = render(
+    render(
       <LabeledField label="User ID" value="default_user_id" copyable defaultUserIdCheck />,
     );
-    expect(container.querySelector(".ant-typography-copy")).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /copy user id/i }),
+    ).not.toBeInTheDocument();
   });
 
   it("should be copyable when copyable is true and value is present", () => {
-    const { container } = render(
-      <LabeledField label="User ID" value="user-123" copyable />,
-    );
-    expect(container.querySelector(".ant-typography-copy")).toBeInTheDocument();
+    render(<LabeledField label="User ID" value="user-123" copyable />);
+    expect(
+      screen.getByRole("button", { name: /copy user id/i }),
+    ).toBeInTheDocument();
   });
 });

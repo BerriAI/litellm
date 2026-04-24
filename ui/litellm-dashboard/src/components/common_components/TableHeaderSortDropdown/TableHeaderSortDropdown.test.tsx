@@ -15,13 +15,12 @@ describe("TableHeaderSortDropdown", () => {
     const onSortChange = vi.fn();
     render(<TableHeaderSortDropdown sortState={false} onSortChange={onSortChange} />);
 
-    const button = screen.getByRole("button");
-    await user.click(button);
+    await user.click(screen.getByRole("button"));
 
     await waitFor(() => {
-      expect(screen.getByText("Ascending")).toBeInTheDocument();
-      expect(screen.getByText("Descending")).toBeInTheDocument();
-      expect(screen.getByText("Reset")).toBeInTheDocument();
+      expect(screen.getByRole("menuitem", { name: /ascending/i })).toBeInTheDocument();
+      expect(screen.getByRole("menuitem", { name: /descending/i })).toBeInTheDocument();
+      expect(screen.getByRole("menuitem", { name: /reset/i })).toBeInTheDocument();
     });
   });
 
@@ -30,15 +29,8 @@ describe("TableHeaderSortDropdown", () => {
     const onSortChange = vi.fn();
     render(<TableHeaderSortDropdown sortState={false} onSortChange={onSortChange} />);
 
-    const button = screen.getByRole("button");
-    await user.click(button);
-
-    await waitFor(() => {
-      expect(screen.getByText("Ascending")).toBeInTheDocument();
-    });
-
-    const ascendingOption = screen.getByText("Ascending");
-    await user.click(ascendingOption);
+    await user.click(screen.getByRole("button"));
+    await user.click(await screen.findByRole("menuitem", { name: /ascending/i }));
 
     expect(onSortChange).toHaveBeenCalledTimes(1);
     expect(onSortChange).toHaveBeenCalledWith("asc");
@@ -49,15 +41,8 @@ describe("TableHeaderSortDropdown", () => {
     const onSortChange = vi.fn();
     render(<TableHeaderSortDropdown sortState={false} onSortChange={onSortChange} />);
 
-    const button = screen.getByRole("button");
-    await user.click(button);
-
-    await waitFor(() => {
-      expect(screen.getByText("Descending")).toBeInTheDocument();
-    });
-
-    const descendingOption = screen.getByText("Descending");
-    await user.click(descendingOption);
+    await user.click(screen.getByRole("button"));
+    await user.click(await screen.findByRole("menuitem", { name: /descending/i }));
 
     expect(onSortChange).toHaveBeenCalledTimes(1);
     expect(onSortChange).toHaveBeenCalledWith("desc");
@@ -68,65 +53,43 @@ describe("TableHeaderSortDropdown", () => {
     const onSortChange = vi.fn();
     render(<TableHeaderSortDropdown sortState="asc" onSortChange={onSortChange} />);
 
-    const button = screen.getByRole("button");
-    await user.click(button);
-
-    await waitFor(() => {
-      expect(screen.getByText("Reset")).toBeInTheDocument();
-    });
-
-    const resetOption = screen.getByText("Reset");
-    await user.click(resetOption);
+    await user.click(screen.getByRole("button"));
+    await user.click(await screen.findByRole("menuitem", { name: /reset/i }));
 
     expect(onSortChange).toHaveBeenCalledTimes(1);
     expect(onSortChange).toHaveBeenCalledWith(false);
   });
 
-  it("should highlight ascending option when sort state is asc", async () => {
-    const user = userEvent.setup();
+  it("should visually indicate ascending sort on the trigger when sort state is asc", () => {
     const onSortChange = vi.fn();
-    render(<TableHeaderSortDropdown sortState="asc" onSortChange={onSortChange} />);
-
+    const { container } = render(
+      <TableHeaderSortDropdown sortState="asc" onSortChange={onSortChange} />,
+    );
+    // The trigger is colored text-primary when sorted, not text-muted-foreground
     const button = screen.getByRole("button");
-    await user.click(button);
-
-    await waitFor(() => {
-      const ascendingOption = screen.getByText("Ascending");
-      const menuItem = ascendingOption.closest(".ant-dropdown-menu-item");
-      expect(menuItem).toHaveClass("ant-dropdown-menu-item-selected");
-    });
+    expect(button.className).toMatch(/text-primary/);
+    // And the chevron-up icon is rendered
+    expect(container.querySelector("svg.lucide-chevron-up")).toBeInTheDocument();
   });
 
-  it("should highlight descending option when sort state is desc", async () => {
-    const user = userEvent.setup();
+  it("should visually indicate descending sort on the trigger when sort state is desc", () => {
     const onSortChange = vi.fn();
-    render(<TableHeaderSortDropdown sortState="desc" onSortChange={onSortChange} />);
-
+    const { container } = render(
+      <TableHeaderSortDropdown sortState="desc" onSortChange={onSortChange} />,
+    );
     const button = screen.getByRole("button");
-    await user.click(button);
-
-    await waitFor(() => {
-      const descendingOption = screen.getByText("Descending");
-      const menuItem = descendingOption.closest(".ant-dropdown-menu-item");
-      expect(menuItem).toHaveClass("ant-dropdown-menu-item-selected");
-    });
+    expect(button.className).toMatch(/text-primary/);
+    expect(container.querySelector("svg.lucide-chevron-down")).toBeInTheDocument();
   });
 
-  it("should not highlight any option when sort state is false", async () => {
-    const user = userEvent.setup();
+  it("should not visually indicate sort on the trigger when sort state is false", () => {
     const onSortChange = vi.fn();
-    render(<TableHeaderSortDropdown sortState={false} onSortChange={onSortChange} />);
-
+    const { container } = render(
+      <TableHeaderSortDropdown sortState={false} onSortChange={onSortChange} />,
+    );
     const button = screen.getByRole("button");
-    await user.click(button);
-
-    await waitFor(() => {
-      expect(screen.getByText("Ascending")).toBeInTheDocument();
-    });
-
-    const ascendingOption = screen.getByText("Ascending");
-    const menuItem = ascendingOption.closest(".ant-dropdown-menu-item");
-    expect(menuItem).not.toHaveClass("ant-dropdown-menu-item-selected");
+    expect(button.className).toMatch(/text-muted-foreground/);
+    expect(container.querySelector("svg.lucide-arrow-up-down")).toBeInTheDocument();
   });
 
   it("should stop event propagation when button is clicked", async () => {
@@ -140,8 +103,7 @@ describe("TableHeaderSortDropdown", () => {
       </div>,
     );
 
-    const button = screen.getByRole("button");
-    await user.click(button);
+    await user.click(screen.getByRole("button"));
 
     expect(onParentClick).not.toHaveBeenCalled();
   });

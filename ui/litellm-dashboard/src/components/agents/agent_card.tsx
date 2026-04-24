@@ -85,6 +85,7 @@ const AgentCard: React.FC<AgentCardProps> = ({
                 <Button
                   variant="ghost"
                   size="icon"
+                  aria-label="Delete agent"
                   className="shrink-0 -mr-1 text-destructive hover:text-destructive hover:bg-destructive/10 h-7 w-7"
                   onClick={(e) => {
                     e.stopPropagation();

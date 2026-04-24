@@ -38,7 +38,7 @@ describe("DurationSelect", () => {
     const dailyOption = screen.getByText("Daily");
     await user.click(dailyOption);
 
-    expect(onChange).toHaveBeenCalledWith("24h", expect.any(Object));
+    expect(onChange).toHaveBeenCalledWith("24h");
   });
 
   it("should accept and pass value prop to Select", () => {
