@@ -9991,6 +9991,22 @@ export const listMCPUserCredentials = async (
 // Memory management (/v1/memory)
 // ============================================================
 
+/**
+ * Encode a memory key for use in a URL path segment.
+ *
+ * The backend route is declared as `/v1/memory/{key:path}`, which supports
+ * slashes in the key (e.g. `user/123/notes`). Plain `encodeURIComponent`
+ * encodes `/` as `%2F`, and some proxies/middlewares (nginx default,
+ * CloudFlare, AWS ALB) either reject or silently re-decode `%2F`, which
+ * can break the request before FastAPI ever sees it.
+ *
+ * We keep slashes literal as path delimiters while still encoding every
+ * other potentially-unsafe character (spaces, `?`, `#`, `%`, etc.) per
+ * path segment.
+ */
+const encodeMemoryKeyForPath = (key: string): string =>
+  key.split("/").map(encodeURIComponent).join("/");
+
 export interface MemoryRow {
   memory_id: string;
   key: string;
@@ -10075,7 +10091,7 @@ export const updateMemory = async (
   key: string,
   payload: { value?: string; metadata?: unknown },
 ): Promise<MemoryRow> => {
-  const encoded = encodeURIComponent(key);
+  const encoded = encodeMemoryKeyForPath(key);
   const url = proxyBaseUrl
     ? `${proxyBaseUrl}/v1/memory/${encoded}`
     : `/v1/memory/${encoded}`;
@@ -10098,7 +10114,7 @@ export const deleteMemory = async (
   accessToken: string,
   key: string,
 ): Promise<void> => {
-  const encoded = encodeURIComponent(key);
+  const encoded = encodeMemoryKeyForPath(key);
   const url = proxyBaseUrl
     ? `${proxyBaseUrl}/v1/memory/${encoded}`
     : `/v1/memory/${encoded}`;
