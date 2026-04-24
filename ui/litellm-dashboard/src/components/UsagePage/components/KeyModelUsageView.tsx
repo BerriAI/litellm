@@ -1,6 +1,6 @@
 import { formatNumberWithCommas } from "@/utils/dataUtils";
-// eslint-disable-next-line litellm-ui/no-banned-ui-imports
-import { BarChart, Card, Title } from "@tremor/react";
+import { BarChart } from "@tremor/react";
+import { Card } from "@/components/ui/card";
 import {
   Table,
   TableBody,
@@ -28,9 +28,9 @@ const KeyModelUsageView: React.FC<KeyModelUsageViewProps> = ({ topModels }) => {
   }
 
   return (
-    <Card className="mt-4">
+    <Card className="mt-4 p-6">
       <div className="flex justify-between items-center mb-3">
-        <Title>Model Usage</Title>
+        <h3 className="text-lg font-semibold">Model Usage</h3>
         <div className="flex space-x-2">
           <button
             type="button"
