@@ -53,7 +53,9 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
 
         account_id = self.authenticator.get_account_id()
         session_id = ensure_chatgpt_session_id(litellm_params)
-        default_headers = get_chatgpt_default_headers(access_token, account_id, session_id)
+        default_headers = get_chatgpt_default_headers(
+            access_token, account_id, session_id
+        )
         return {**default_headers, **headers}
 
     def transform_responses_api_request(
@@ -75,7 +77,9 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
         existing_instructions = request.get("instructions")
         if existing_instructions:
             if base_instructions not in existing_instructions:
-                request["instructions"] = f"{base_instructions}\n\n{existing_instructions}"
+                request["instructions"] = (
+                    f"{base_instructions}\n\n{existing_instructions}"
+                )
         else:
             request["instructions"] = base_instructions
         request["store"] = False
@@ -108,7 +112,9 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
         logging_obj: Any,
     ):
         body_text = raw_response.text or ""
-        if not self._should_parse_as_sse(raw_response=raw_response, body_text=body_text):
+        if not self._should_parse_as_sse(
+            raw_response=raw_response, body_text=body_text
+        ):
             return super().transform_response_api_response(
                 model=model,
                 raw_response=raw_response,
@@ -120,14 +126,18 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
             additional_args={"complete_input_dict": {}},
         )
 
-        completed_response, error_message = self._extract_completed_response_from_sse(body_text=body_text)
+        completed_response, error_message = self._extract_completed_response_from_sse(
+            body_text=body_text
+        )
         if completed_response is None:
             raise OpenAIError(
                 message=error_message or raw_response.text,
                 status_code=raw_response.status_code,
             )
 
-        self._attach_response_headers(completed_response=completed_response, raw_response=raw_response)
+        self._attach_response_headers(
+            completed_response=completed_response, raw_response=raw_response
+        )
         return completed_response
 
     def _should_parse_as_sse(self, raw_response: Any, body_text: str) -> bool:
@@ -157,12 +167,16 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
 
             event_type = parsed_chunk.get("type")
             if event_type == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE:
-                self._record_output_item_chunk(parsed_chunk=parsed_chunk, streamed_output_items=streamed_output_items)
+                self._record_output_item_chunk(
+                    parsed_chunk=parsed_chunk,
+                    streamed_output_items=streamed_output_items,
+                )
                 continue
 
             if event_type == ResponsesAPIStreamEvents.RESPONSE_COMPLETED:
                 completed_response = self._build_completed_response_from_chunk(
-                    parsed_chunk=parsed_chunk, streamed_output_items=streamed_output_items
+                    parsed_chunk=parsed_chunk,
+                    streamed_output_items=streamed_output_items,
                 )
                 break
 
@@ -191,7 +205,9 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
             return None
         return parsed_chunk
 
-    def _record_output_item_chunk(self, parsed_chunk: Dict[str, Any], streamed_output_items: Dict[int, dict]) -> None:
+    def _record_output_item_chunk(
+        self, parsed_chunk: Dict[str, Any], streamed_output_items: Dict[int, dict]
+    ) -> None:
         item = parsed_chunk.get("item")
         output_index = parsed_chunk.get("output_index")
         if not isinstance(item, dict):
@@ -210,16 +226,22 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
             return None
         response_payload = dict(response_payload)
         if not response_payload.get("output") and streamed_output_items:
-            response_payload["output"] = [item for _, item in sorted(streamed_output_items.items())]
+            response_payload["output"] = [
+                item for _, item in sorted(streamed_output_items.items())
+            ]
         if "created_at" in response_payload:
-            response_payload["created_at"] = _safe_convert_created_field(response_payload["created_at"])
+            response_payload["created_at"] = _safe_convert_created_field(
+                response_payload["created_at"]
+            )
         try:
             return ResponsesAPIResponse(**response_payload)
         except Exception:
             return ResponsesAPIResponse.model_construct(**response_payload)
 
     def _extract_error_message(self, parsed_chunk: Dict[str, Any]) -> Optional[str]:
-        error_obj = parsed_chunk.get("error") or (parsed_chunk.get("response") or {}).get("error")
+        error_obj = parsed_chunk.get("error") or (
+            parsed_chunk.get("response") or {}
+        ).get("error")
         if error_obj is None:
             return None
         if isinstance(error_obj, dict):
