@@ -624,8 +624,11 @@ describe("KeyEditView", () => {
       });
 
       const orgFormItem = screen.getByText("Organization").closest(".ant-form-item");
-      const disabledSelect = orgFormItem?.querySelector(".ant-select-disabled");
-      expect(disabledSelect).toBeTruthy();
+      // OrganizationDropdown now renders a shadcn Select trigger
+      // (role="combobox") that gets the disabled attribute from Radix.
+      const orgCombobox = orgFormItem?.querySelector('[role="combobox"]') as HTMLButtonElement | null;
+      expect(orgCombobox).toBeTruthy();
+      expect(orgCombobox).toBeDisabled();
     });
 
     it("should not disable the organization dropdown for admin users", async () => {

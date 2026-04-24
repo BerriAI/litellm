@@ -214,7 +214,7 @@ describe("FallbackSelectionForm", () => {
     );
     expect(screen.getByRole("tab", { name: "gpt-4" })).toBeInTheDocument();
     expect(screen.getAllByText("gpt-4").length).toBeGreaterThan(0);
-    expect(screen.getByText("gpt-3.5-turbo")).toBeInTheDocument();
+    expect(screen.getAllByText("gpt-3.5-turbo").length).toBeGreaterThan(0);
   });
 
   it("should not add group when add button clicked at maxGroups", () => {

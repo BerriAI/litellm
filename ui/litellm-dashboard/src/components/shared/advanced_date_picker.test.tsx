@@ -29,8 +29,8 @@ describe("AdvancedDatePicker", () => {
   });
 
   const openDropdown = (container: HTMLElement) => {
-    // Find the clickable div that contains the clock icon
-    const trigger = container.querySelector('[role="img"][aria-label="clock-circle"]')?.closest("div.cursor-pointer");
+    // Find the clickable div that contains the lucide Clock icon.
+    const trigger = container.querySelector(".lucide-clock")?.closest("div.cursor-pointer");
     if (trigger) {
       fireEvent.click(trigger);
     }
@@ -47,10 +47,10 @@ describe("AdvancedDatePicker", () => {
   });
 
   it("should display formatted date range", () => {
-    render(<AdvancedDatePicker value={defaultValue} onValueChange={mockOnValueChange} />);
+    const { container } = render(<AdvancedDatePicker value={defaultValue} onValueChange={mockOnValueChange} />);
     // The component displays date range in the format "D MMM, HH:mm - D MMM, HH:mm"
-    // Just check that the clock icon is present
-    expect(screen.getByLabelText("clock-circle")).toBeInTheDocument();
+    // Just check that the (lucide) clock icon is present in the trigger.
+    expect(container.querySelector(".lucide-clock")).toBeInTheDocument();
   });
 
   it("should open dropdown when clicked", () => {

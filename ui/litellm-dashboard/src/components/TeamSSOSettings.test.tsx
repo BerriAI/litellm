@@ -171,7 +171,8 @@ describe("TeamSSOSettings", () => {
 
     renderWithProviders(<TeamSSOSettings {...defaultProps} />);
 
-    expect(screen.getByTestId("spinner")).toBeInTheDocument();
+    // Loading state renders a shadcn Skeleton (div with animate-pulse).
+    expect(document.querySelector(".animate-pulse")).toBeInTheDocument();
   });
 
   it("should display error message when fetch fails", async () => {
@@ -377,8 +378,9 @@ describe("TeamSSOSettings", () => {
     await userEvent.click(screen.getByRole("button", { name: /Edit Settings/i }));
 
     await waitFor(() => {
-      const numberInputs = screen.getAllByLabelText("number input");
-      // max_budget, tpm_limit, rpm_limit
+      // Edit mode renders 3 number <input type="number"> fields for
+      // max_budget, tpm_limit, rpm_limit (rendered as shadcn Inputs).
+      const numberInputs = document.querySelectorAll('input[type="number"]');
       expect(numberInputs.length).toBe(3);
     });
   });
