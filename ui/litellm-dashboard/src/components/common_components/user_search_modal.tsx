@@ -1,4 +1,7 @@
-import { useState, useCallback } from "react";
+import { useCallback, useState } from "react";
+import { Controller, FormProvider, useForm } from "react-hook-form";
+import debounce from "lodash/debounce";
+import { UserPlus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -6,16 +9,29 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import {
   Tooltip,
   TooltipContent,
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { Form, Select } from "antd";
-import { UserPlus } from "lucide-react";
-import debounce from "lodash/debounce";
+import { cn } from "@/lib/utils";
 import { userFilterUICall } from "@/components/networking";
+
 interface User {
   user_id: string;
   user_email: string;
@@ -51,6 +67,108 @@ interface UserSearchModalProps {
   teamId?: string;
 }
 
+// Async searchable combobox that lets the user type a query and pick from
+// server-fetched results. Internally a Popover wrapping an Input + list.
+interface UserComboboxProps {
+  placeholder: string;
+  value: string;
+  loading: boolean;
+  options: UserOption[];
+  dataTestId?: string;
+  onSearch: (text: string) => void;
+  onSelect: (value: string, option: UserOption) => void;
+  onClear: () => void;
+}
+
+function UserCombobox({
+  placeholder,
+  value,
+  loading,
+  options,
+  dataTestId,
+  onSearch,
+  onSelect,
+  onClear,
+}: UserComboboxProps) {
+  const [open, setOpen] = useState(false);
+  const [text, setText] = useState("");
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          role="combobox"
+          data-testid={dataTestId}
+          aria-expanded={open}
+          className={cn(
+            "flex h-10 w-full items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50",
+          )}
+        >
+          <span className={cn(!value && "text-muted-foreground", "truncate")}>
+            {value || placeholder}
+          </span>
+          {value && (
+            <span
+              role="button"
+              tabIndex={0}
+              aria-label="Clear"
+              onClick={(e) => {
+                e.stopPropagation();
+                onClear();
+              }}
+              className="text-muted-foreground"
+            >
+              ×
+            </span>
+          )}
+        </button>
+      </PopoverTrigger>
+      <PopoverContent className="p-0 w-[--radix-popover-trigger-width] max-w-none">
+        <div className="flex items-center border-b border-border p-2">
+          <Input
+            value={text}
+            placeholder={placeholder}
+            onChange={(e) => {
+              setText(e.target.value);
+              onSearch(e.target.value);
+            }}
+            className="h-8 border-0 shadow-none focus-visible:ring-0 focus-visible:ring-offset-0"
+          />
+        </div>
+        <div className="max-h-60 overflow-y-auto">
+          {loading ? (
+            <div className="p-3 text-sm text-muted-foreground text-center">
+              Loading...
+            </div>
+          ) : options.length === 0 ? (
+            <div className="p-3 text-sm text-muted-foreground text-center">
+              No results
+            </div>
+          ) : (
+            options.map((opt) => (
+              <button
+                key={opt.value}
+                type="button"
+                className={cn(
+                  "block w-full text-left text-sm px-3 py-2 hover:bg-muted",
+                  opt.value === value && "bg-muted font-medium",
+                )}
+                onClick={() => {
+                  onSelect(opt.value, opt);
+                  setText("");
+                  setOpen(false);
+                }}
+              >
+                {opt.label}
+              </button>
+            ))
+          )}
+        </div>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
 const UserSearchModal: React.FC<UserSearchModalProps> = ({
   isVisible,
   onCancel,
@@ -61,41 +179,55 @@ const UserSearchModal: React.FC<UserSearchModalProps> = ({
     {
       label: "admin",
       value: "admin",
-      description: "Admin role. Can create team keys, add members, and manage settings.",
+      description:
+        "Admin role. Can create team keys, add members, and manage settings.",
     },
-    { label: "user", value: "user", description: "User role. Can view team info, but not manage it." },
+    {
+      label: "user",
+      value: "user",
+      description: "User role. Can view team info, but not manage it.",
+    },
   ],
   defaultRole = "user",
   teamId,
 }) => {
-  const [form] = Form.useForm<FormValues>();
+  const methods = useForm<FormValues>({
+    defaultValues: {
+      user_email: "",
+      user_id: "",
+      role: defaultRole,
+    },
+  });
+  const { control, handleSubmit, reset, setValue } = methods;
+
   const [userOptions, setUserOptions] = useState<UserOption[]>([]);
   const [loading, setLoading] = useState<boolean>(false);
-  const [selectedField, setSelectedField] = useState<"user_email" | "user_id">("user_email");
+  const [selectedField, setSelectedField] = useState<"user_email" | "user_id">(
+    "user_email",
+  );
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  const fetchUsers = async (searchText: string, fieldName: "user_email" | "user_id"): Promise<void> => {
+  const fetchUsers = async (
+    searchText: string,
+    fieldName: "user_email" | "user_id",
+  ): Promise<void> => {
     if (!searchText) {
       setUserOptions([]);
       return;
     }
-
     setLoading(true);
     try {
       const params = new URLSearchParams();
       params.append(fieldName, searchText);
-      if (teamId) {
-        params.append("team_id", teamId);
-      }
-      if (accessToken == null) {
-        return;
-      }
+      if (teamId) params.append("team_id", teamId);
+      if (accessToken == null) return;
       const response = await userFilterUICall(accessToken, params);
-
       const data: User[] = response;
       const options: UserOption[] = data.map((user) => ({
-        label: fieldName === "user_email" ? `${user.user_email}` : `${user.user_id}`,
-        value: fieldName === "user_email" ? user.user_email : user.user_id,
+        label:
+          fieldName === "user_email" ? `${user.user_email}` : `${user.user_id}`,
+        value:
+          fieldName === "user_email" ? user.user_email : user.user_id,
         user,
       }));
       setUserOptions(options);
@@ -116,31 +248,31 @@ const UserSearchModal: React.FC<UserSearchModalProps> = ({
     [],
   );
 
-  const handleSearch = (value: string, fieldName: "user_email" | "user_id"): void => {
+  const handleSearch = (
+    value: string,
+    fieldName: "user_email" | "user_id",
+  ): void => {
     setSelectedField(fieldName);
     debouncedSearch(value, fieldName);
   };
 
   const handleSelect = (_value: string, option: UserOption): void => {
-    const selectedUser = option.user;
-    form.setFieldsValue({
-      user_email: selectedUser.user_email,
-      user_id: selectedUser.user_id,
-      role: form.getFieldValue("role"), // Preserve current role selection
-    });
+    const user = option.user;
+    setValue("user_email", user.user_email);
+    setValue("user_id", user.user_id);
   };
 
-  const handleSubmit = async (values: FormValues): Promise<void> => {
+  const submit = handleSubmit(async (values) => {
     setIsSubmitting(true);
     try {
       await onSubmit(values);
     } finally {
       setIsSubmitting(false);
     }
-  };
+  });
 
   const handleClose = (): void => {
-    form.resetFields();
+    reset({ user_email: "", user_id: "", role: defaultRole });
     setUserOptions([]);
     onCancel();
   };
@@ -154,80 +286,114 @@ const UserSearchModal: React.FC<UserSearchModalProps> = ({
         <DialogHeader>
           <DialogTitle>{title}</DialogTitle>
         </DialogHeader>
-        <Form<FormValues>
-          form={form}
-          onFinish={handleSubmit}
-          labelCol={{ span: 8 }}
-          wrapperCol={{ span: 16 }}
-          labelAlign="left"
-          initialValues={{
-            role: defaultRole,
-          }}
-        >
-          <Form.Item label="Email" name="user_email" className="mb-4">
-            <Select
-              showSearch
-              className="w-full"
-              placeholder="Search by email"
-              filterOption={false}
-              onSearch={(value) => handleSearch(value, "user_email")}
-              onSelect={(value, option) =>
-                handleSelect(value, option as UserOption)
-              }
-              options={selectedField === "user_email" ? userOptions : []}
-              loading={loading}
-              allowClear
-              data-testid="member-email-search"
-            />
-          </Form.Item>
+        <FormProvider {...methods}>
+          <form onSubmit={submit} className="space-y-4">
+            <div className="grid grid-cols-[120px_1fr] gap-3 items-center">
+              <Label htmlFor="user_email" className="text-left">
+                Email
+              </Label>
+              <Controller
+                control={control}
+                name="user_email"
+                render={({ field }) => (
+                  <UserCombobox
+                    placeholder="Search by email"
+                    value={field.value}
+                    loading={loading && selectedField === "user_email"}
+                    options={
+                      selectedField === "user_email" ? userOptions : []
+                    }
+                    dataTestId="member-email-search"
+                    onSearch={(t) => handleSearch(t, "user_email")}
+                    onSelect={handleSelect}
+                    onClear={() => {
+                      setValue("user_email", "");
+                      setValue("user_id", "");
+                    }}
+                  />
+                )}
+              />
+            </div>
 
-          <div className="text-center mb-4">OR</div>
+            <div className="text-center">OR</div>
 
-          <Form.Item label="User ID" name="user_id" className="mb-4">
-            <Select
-              showSearch
-              className="w-full"
-              placeholder="Search by user ID"
-              filterOption={false}
-              onSearch={(value) => handleSearch(value, "user_id")}
-              onSelect={(value, option) =>
-                handleSelect(value, option as UserOption)
-              }
-              options={selectedField === "user_id" ? userOptions : []}
-              loading={loading}
-              allowClear
-            />
-          </Form.Item>
+            <div className="grid grid-cols-[120px_1fr] gap-3 items-center">
+              <Label htmlFor="user_id" className="text-left">
+                User ID
+              </Label>
+              <Controller
+                control={control}
+                name="user_id"
+                render={({ field }) => (
+                  <UserCombobox
+                    placeholder="Search by user ID"
+                    value={field.value}
+                    loading={loading && selectedField === "user_id"}
+                    options={
+                      selectedField === "user_id" ? userOptions : []
+                    }
+                    onSearch={(t) => handleSearch(t, "user_id")}
+                    onSelect={handleSelect}
+                    onClear={() => {
+                      setValue("user_email", "");
+                      setValue("user_id", "");
+                    }}
+                  />
+                )}
+              />
+            </div>
 
-          <Form.Item label="Member Role" name="role" className="mb-4">
-            <Select defaultValue={defaultRole}>
-              {roles.map((role) => (
-                <Select.Option key={role.value} value={role.value}>
-                  <TooltipProvider>
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <span>
-                          <span className="font-medium">{role.label}</span>
-                          <span className="ml-2 text-muted-foreground text-sm">
-                            - {role.description}
-                          </span>
-                        </span>
-                      </TooltipTrigger>
-                      <TooltipContent>{role.description}</TooltipContent>
-                    </Tooltip>
-                  </TooltipProvider>
-                </Select.Option>
-              ))}
-            </Select>
-          </Form.Item>
+            <div className="grid grid-cols-[120px_1fr] gap-3 items-center">
+              <Label htmlFor="role" className="text-left">
+                Member Role
+              </Label>
+              <Controller
+                control={control}
+                name="role"
+                render={({ field }) => (
+                  <Select
+                    value={field.value}
+                    onValueChange={field.onChange}
+                  >
+                    <SelectTrigger id="role" className="w-full">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {roles.map((role) => (
+                        <SelectItem key={role.value} value={role.value}>
+                          <TooltipProvider>
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <span>
+                                  <span className="font-medium">
+                                    {role.label}
+                                  </span>
+                                  <span className="ml-2 text-muted-foreground text-sm">
+                                    - {role.description}
+                                  </span>
+                                </span>
+                              </TooltipTrigger>
+                              <TooltipContent>
+                                {role.description}
+                              </TooltipContent>
+                            </Tooltip>
+                          </TooltipProvider>
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                )}
+              />
+            </div>
 
-          <div className="text-right mt-4">
-            <Button type="submit" disabled={isSubmitting}>
-              <UserPlus className="h-4 w-4" />
-              {isSubmitting ? "Adding..." : "Add Member"}
-            </Button>
-          </div>
-        </Form>
+            <div className="text-right mt-4">
+              <Button type="submit" disabled={isSubmitting}>
+                <UserPlus className="h-4 w-4" />
+                {isSubmitting ? "Adding..." : "Add Member"}
+              </Button>
+            </div>
+          </form>
+        </FormProvider>
       </DialogContent>
     </Dialog>
   );
