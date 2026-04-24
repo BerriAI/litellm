@@ -5,7 +5,7 @@ Pre-call hook that filters MCP tools semantically before LLM inference.
 Reduces context window size and improves tool selection accuracy.
 """
 
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
@@ -136,6 +136,29 @@ class SemanticToolFilterHook(CustomLogger):
             return "litellm_metadata"
         return "metadata"
 
+    def _partition_mcp_tools(self, tools: List[Any]) -> Tuple[List[Any], List[Any]]:
+        """
+        Split tools into (mcp_tools, non_mcp_tools) using the live MCP server
+        registry. Building the known-prefix set from the registry prevents
+        hyphenated non-MCP tool names (e.g. "text-to-speech") from being
+        misclassified as MCP.
+        """
+        known_prefixes = {
+            normalize_server_name(get_server_prefix(s))
+            for s in global_mcp_server_manager.get_registry().values()
+            if get_server_prefix(s)
+        }
+
+        mcp_tools: List[Any] = []
+        non_mcp_tools: List[Any] = []
+        for t in tools:
+            name = t.get("name", "") if isinstance(t, dict) else getattr(t, "name", "")
+            if is_tool_name_prefixed(name, known_server_prefixes=known_prefixes):
+                mcp_tools.append(t)
+            else:
+                non_mcp_tools.append(t)
+        return mcp_tools, non_mcp_tools
+
     async def async_pre_call_hook(
         self,
         user_api_key_dict: "UserAPIKeyAuth",
@@ -231,30 +254,8 @@ class SemanticToolFilterHook(CustomLogger):
                 f"with query: '{user_query[:50]}...'"
             )
 
-            # Separate MCP tools (prefixed) from non-MCP tools — only filter
-            # MCP tools, always pass non-MCP tools through untouched. Build the
-            # known-prefix set from the live registry so hyphenated non-MCP
-            # tool names (e.g. "text-to-speech") aren't misclassified as MCP.
-            known_prefixes = {
-                normalize_server_name(get_server_prefix(s))
-                for s in global_mcp_server_manager.get_registry().values()
-                if get_server_prefix(s)
-            }
-
-            def _tool_name(t):
-                return (
-                    t.get("name", "") if isinstance(t, dict) else getattr(t, "name", "")
-                )
-
-            mcp_tools: List[Any] = []
-            non_mcp_tools: List[Any] = []
-            for t in tools:
-                if is_tool_name_prefixed(
-                    _tool_name(t), known_server_prefixes=known_prefixes
-                ):
-                    mcp_tools.append(t)
-                else:
-                    non_mcp_tools.append(t)
+            # Only filter MCP tools; pass non-MCP tools through untouched.
+            mcp_tools, non_mcp_tools = self._partition_mcp_tools(tools)
 
             if not mcp_tools:
                 return None
