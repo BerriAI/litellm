@@ -131,11 +131,12 @@ def build_pages_from_reducto(result: Dict[str, Any]) -> List["OCRPage"]:
             block.get("content", "") for block in blocks if block.get("content")
         )
         page_index = max(page_no - 1, 0)
-        pages.append(
-            OCRPage(
-                index=page_index,
-                markdown=markdown,
-                blocks=blocks,
-            )
+        page = OCRPage(
+            index=page_index,
+            markdown=markdown,
         )
+        # OCRPage accepts extra keys at runtime; assign blocks after construction
+        # so static typing does not reject provider-specific metadata.
+        setattr(page, "blocks", blocks)
+        pages.append(page)
     return pages
