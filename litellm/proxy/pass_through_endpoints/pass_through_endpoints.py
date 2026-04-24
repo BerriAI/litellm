@@ -320,7 +320,20 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         litellm_call_id: Optional[str] = None,
         custom_headers: Optional[dict] = None,
     ) -> dict:
-        excluded_headers = {"transfer-encoding", "content-encoding"}
+        # Exclude headers that uvicorn writes itself (server, date) and
+        # encoding/length headers that don't survive re-serialization.
+        # If we forward the upstream's Server header, uvicorn adds its
+        # own and strict HTTP parsers (e.g. aiohttp) reject the
+        # response with "Duplicate 'Server' header found".
+        excluded_headers = {
+            "transfer-encoding",
+            "content-encoding",
+            "content-length",
+            "server",
+            "date",
+            "connection",
+            "keep-alive",
+        }
 
         return_headers = {
             key: value
