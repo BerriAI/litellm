@@ -28123,6 +28123,20 @@
         "supports_tool_choice": true,
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
+    "reducto/parse-legacy": {
+        "litellm_provider": "reducto",
+        "mode": "ocr",
+        "supported_endpoints": [
+            "/v1/ocr"
+        ]
+    },
+    "reducto/parse-v3": {
+        "litellm_provider": "reducto",
+        "mode": "ocr",
+        "supported_endpoints": [
+            "/v1/ocr"
+        ]
+    },
     "recraft/recraftv2": {
         "litellm_provider": "recraft",
         "mode": "image_generation",
