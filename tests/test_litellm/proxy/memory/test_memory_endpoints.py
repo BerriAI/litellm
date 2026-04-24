@@ -427,6 +427,48 @@ class TestMemoryEndpoints:
         assert resp.json()["value"] == "new"
         assert len(table.rows) == 1
 
+    def test_put_memory_explicit_null_metadata_clears_field(self):
+        """PUT with `metadata: null` should clear the metadata column (not silently drop the field)."""
+        table = self.prisma.db.litellm_memorytable
+        table.rows.append(
+            _make_row(
+                memory_id="m1",
+                key="notes",
+                value="v",
+                user_id="user-a",
+                team_id="team-a",
+                metadata={"tag": "old"},
+            )
+        )
+        client = _make_client(_user_auth("user-a", "team-a"))
+        with _patch_prisma(self.prisma):
+            resp = client.put("/v1/memory/notes", json={"metadata": None})
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["metadata"] is None
+        assert table.rows[0].metadata is None
+
+    def test_put_memory_omitted_metadata_preserves_field(self):
+        """PUT without a metadata field should NOT touch the stored metadata."""
+        table = self.prisma.db.litellm_memorytable
+        table.rows.append(
+            _make_row(
+                memory_id="m1",
+                key="notes",
+                value="old",
+                user_id="user-a",
+                team_id="team-a",
+                metadata={"tag": "keep"},
+            )
+        )
+        client = _make_client(_user_auth("user-a", "team-a"))
+        with _patch_prisma(self.prisma):
+            resp = client.put("/v1/memory/notes", json={"value": "new"})
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["value"] == "new"
+        assert body["metadata"] == {"tag": "keep"}
+
     def test_put_memory_empty_body_returns_400(self):
         client = _make_client(_user_auth("user-a", "team-a"))
         with _patch_prisma(self.prisma):

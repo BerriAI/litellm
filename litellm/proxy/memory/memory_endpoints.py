@@ -87,9 +87,20 @@ def _require_prisma():
 
 
 def _is_unique_violation(exc: Exception) -> bool:
-    """Best-effort detection of a Prisma unique-constraint violation."""
+    """
+    Detect a Prisma unique-constraint violation.
+
+    Prefer the typed error code `P2002` from `PrismaClientKnownRequestError`;
+    fall back to string matching so we stay robust across Prisma versions
+    where the typed class may be unavailable or differently named.
+    """
+    code = getattr(exc, "code", None)
+    if code == "P2002":
+        return True
     msg = str(exc)
-    return "Unique" in msg or "unique" in msg or "UniqueViolation" in msg
+    return (
+        "P2002" in msg or "Unique" in msg or "unique" in msg or "UniqueViolation" in msg
+    )
 
 
 def _resolve_scope(
@@ -292,10 +303,19 @@ async def upsert_memory(
     """
     prisma_client = _require_prisma()
 
+    # Distinguish "metadata omitted from request" from "metadata: null".
+    # Omitted → don't touch the existing field. Explicit null → clear to SQL NULL.
+    # `model_fields_set` (Pydantic v2) only contains field names the caller
+    # actually sent in the payload.
+    fields_sent = body.model_fields_set
+    metadata_explicit = "metadata" in fields_sent
+
     data: dict = {}
     if body.value is not None:
         data["value"] = body.value
-    if body.metadata is not None:
+    if metadata_explicit:
+        # body.metadata may be None here — Prisma update accepts None on a
+        # nullable Json? field and sets the column to SQL NULL.
         data["metadata"] = body.metadata
     if not data:
         raise HTTPException(
