@@ -3231,6 +3231,7 @@ class LlmProviders(str, Enum):
     DASHSCOPE = "dashscope"
     MOONSHOT = "moonshot"
     PUBLICAI = "publicai"
+    SALAD_CLOUD = "salad_cloud"
     V0 = "v0"
     MORPH = "morph"
     LAMBDA_AI = "lambda_ai"

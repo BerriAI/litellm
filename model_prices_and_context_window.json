@@ -38779,5 +38779,41 @@
         "tool_use_system_prompt_tokens": 346,
         "supports_native_structured_output": true,
         "supports_pdf_input": true
+    },
+    "salad_cloud/qwen3.5-35b-a3b": {
+        "litellm_provider": "salad_cloud",
+        "mode": "chat",
+        "max_tokens": 131072,
+        "max_input_tokens": 131072,
+        "max_output_tokens": 131072,
+        "input_cost_per_token": 0.0,
+        "output_cost_per_token": 0.0,
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "source": "https://docs.salad.com/ai-gateway/explanation/overview"
+    },
+    "salad_cloud/qwen3.5-27b": {
+        "litellm_provider": "salad_cloud",
+        "mode": "chat",
+        "max_tokens": 131072,
+        "max_input_tokens": 131072,
+        "max_output_tokens": 131072,
+        "input_cost_per_token": 0.0,
+        "output_cost_per_token": 0.0,
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "source": "https://docs.salad.com/ai-gateway/explanation/overview"
+    },
+    "salad_cloud/qwen3.5-9b": {
+        "litellm_provider": "salad_cloud",
+        "mode": "chat",
+        "max_tokens": 131072,
+        "max_input_tokens": 131072,
+        "max_output_tokens": 131072,
+        "input_cost_per_token": 0.0,
+        "output_cost_per_token": 0.0,
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "source": "https://docs.salad.com/ai-gateway/explanation/overview"
     }
 }
