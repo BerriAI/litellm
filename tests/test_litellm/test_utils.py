@@ -813,6 +813,10 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                     },
                     "additionalProperties": False,
                 },
+                "web_search_billing_unit": {
+                    "type": "string",
+                    "enum": ["per_prompt", "per_query"],
+                },
                 "citation_cost_per_token": {"type": "number"},
                 "supported_modalities": {
                     "type": "array",
