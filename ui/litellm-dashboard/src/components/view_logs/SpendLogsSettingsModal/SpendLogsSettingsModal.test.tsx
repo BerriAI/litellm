@@ -281,7 +281,7 @@ describe("SpendLogsSettingsModal", () => {
 
     const saveButton = screen.getByRole("button", { name: /Saving/i });
     expect(saveButton).toBeInTheDocument();
-    expect(saveButton.className).toContain("ant-btn-loading");
+    expect(saveButton).toHaveAttribute("data-loading", "true");
   });
 
   it("should show loading state on save button when deleting field", () => {
@@ -294,7 +294,7 @@ describe("SpendLogsSettingsModal", () => {
 
     const saveButton = screen.getByRole("button", { name: /Saving/i });
     expect(saveButton).toBeInTheDocument();
-    expect(saveButton.className).toContain("ant-btn-loading");
+    expect(saveButton).toHaveAttribute("data-loading", "true");
   });
 
   it("should call onCancel when cancel button is clicked after modifying form", async () => {
@@ -422,8 +422,8 @@ describe("SpendLogsSettingsModal", () => {
     expect(screen.queryByRole("switch")).not.toBeInTheDocument();
     expect(screen.queryByPlaceholderText("e.g., 7d, 30d")).not.toBeInTheDocument();
 
-    // Check for skeleton elements (Ant Design Skeleton.Input renders with ant-skeleton class)
-    const skeletons = document.querySelectorAll(".ant-skeleton");
+    // Check for shadcn Skeleton elements — they apply "animate-pulse" as part of the base class.
+    const skeletons = document.querySelectorAll(".animate-pulse");
     expect(skeletons.length).toBeGreaterThan(0);
   });
 

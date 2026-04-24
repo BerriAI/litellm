@@ -1,15 +1,24 @@
 import { useState } from "react";
 import { useQuery, keepPreviousData } from "@tanstack/react-query";
-import { Table, Tag, Input, Select, Button, Pagination, Spin } from "antd";
-import { RefreshCcw as ReloadOutlined, Loader2 as LoadingOutlined } from "lucide-react";
-import type { ColumnsType } from "antd/es/table";
+import type { ColumnDef } from "@tanstack/react-table";
 import moment from "moment";
+import { RefreshCcw as ReloadOutlined, LoaderCircle, Search as SearchIcon } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Badge } from "@/components/ui/badge";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Skeleton } from "@/components/ui/skeleton";
 import { uiAuditLogsCall } from "../networking";
 import { AuditLogEntry } from "./columns";
 import { AuditLogDrawer } from "./AuditLogDrawer/AuditLogDrawer";
 import DefaultProxyAdminTag from "../common_components/DefaultProxyAdminTag";
-
-const { Search } = Input;
+import { DataTable } from "./table";
 
 interface AuditLogsProps {
   accessToken: string | null;
@@ -31,14 +40,77 @@ const TABLE_NAME_DISPLAY: Record<string, string> = {
   LiteLLM_ProxyModelTable: "Models",
 };
 
-const ACTION_COLOR: Record<string, string> = {
-  created: "green",
-  updated: "blue",
-  deleted: "red",
-  rotated: "orange",
+/** Per-action palette — categorical; kept raw via eslint override. */
+const ACTION_BADGE_CLASS: Record<string, string> = {
+  created: "bg-green-100 text-green-700 hover:bg-green-100",
+  updated: "bg-blue-100 text-blue-700 hover:bg-blue-100",
+  deleted: "bg-red-100 text-red-700 hover:bg-red-100",
+  rotated: "bg-orange-100 text-orange-700 hover:bg-orange-100",
 };
 
 const PAGE_SIZE = 50;
+
+const ACTION_OPTIONS = [
+  { label: "All Actions", value: "__all__" },
+  { label: "Created", value: "created" },
+  { label: "Updated", value: "updated" },
+  { label: "Deleted", value: "deleted" },
+  { label: "Rotated", value: "rotated" },
+];
+
+const TABLE_OPTIONS = [
+  { label: "All Tables", value: "__all__" },
+  { label: "Keys", value: "LiteLLM_VerificationToken" },
+  { label: "Teams", value: "LiteLLM_TeamTable" },
+  { label: "Users", value: "LiteLLM_UserTable" },
+  { label: "Organizations", value: "LiteLLM_OrganizationTable" },
+  { label: "Models", value: "LiteLLM_ProxyModelTable" },
+];
+
+/** Small debounced-on-enter/clear text input used for filter fields. */
+function FilterSearchInput({
+  placeholder,
+  width,
+  onSubmit,
+  onClear,
+}: {
+  placeholder: string;
+  width: number;
+  onSubmit: (val: string) => void;
+  onClear: () => void;
+}) {
+  const [value, setValue] = useState("");
+  return (
+    <div className="relative" style={{ width }}>
+      <SearchIcon className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
+      <Input
+        value={value}
+        onChange={(e) => {
+          setValue(e.target.value);
+          if (!e.target.value) onClear();
+        }}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") onSubmit(value);
+        }}
+        placeholder={placeholder}
+        className="pl-8 pr-8 h-9 text-sm"
+      />
+      {value && (
+        <button
+          type="button"
+          onClick={() => {
+            setValue("");
+            onClear();
+          }}
+          className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground text-sm"
+          aria-label="Clear"
+        >
+          ×
+        </button>
+      )}
+    </div>
+  );
+}
 
 export default function AuditLogs({
   userID,
@@ -105,85 +177,75 @@ export default function AuditLogs({
     setDrawerOpen(true);
   };
 
-  const columns: ColumnsType<AuditLogEntry> = [
+  const columns: ColumnDef<AuditLogEntry>[] = [
     {
-      title: "Timestamp",
-      dataIndex: "updated_at",
-      key: "updated_at",
-      width: 200,
-      render: (val: string) => (
+      header: "Timestamp",
+      accessorKey: "updated_at",
+      cell: (info) => (
         <span className="font-mono text-xs whitespace-nowrap">
-          {moment.utc(val).local().format("MMM D, YYYY HH:mm:ss")}
+          {moment.utc(info.getValue() as string).local().format("MMM D, YYYY HH:mm:ss")}
         </span>
       ),
     },
     {
-      title: "Action",
-      dataIndex: "action",
-      key: "action",
-      width: 100,
-      render: (val: string) => (
-        <Tag color={ACTION_COLOR[val] ?? "default"} className="capitalize">
-          {val}
-        </Tag>
-      ),
+      header: "Action",
+      accessorKey: "action",
+      cell: (info) => {
+        const val = info.getValue() as string;
+        return (
+          <Badge className={`capitalize ${ACTION_BADGE_CLASS[val] ?? "bg-muted text-foreground hover:bg-muted"}`}>
+            {val}
+          </Badge>
+        );
+      },
     },
     {
-      title: "Table",
-      dataIndex: "table_name",
-      key: "table_name",
-      width: 130,
-      render: (val: string) => TABLE_NAME_DISPLAY[val] ?? val,
+      header: "Table",
+      accessorKey: "table_name",
+      cell: (info) => {
+        const val = info.getValue() as string;
+        return <span>{TABLE_NAME_DISPLAY[val] ?? val}</span>;
+      },
     },
     {
-      title: "Object ID",
-      dataIndex: "object_id",
-      key: "object_id",
-      render: (val: string) => (
-        <span className="font-mono text-xs">{val}</span>
-      ),
+      header: "Object ID",
+      accessorKey: "object_id",
+      cell: (info) => <span className="font-mono text-xs">{info.getValue() as string}</span>,
     },
     {
-      title: "Changed By",
-      dataIndex: "changed_by",
-      key: "changed_by",
-      width: 200,
-      render: (val: string) => <DefaultProxyAdminTag userId={val} />,
+      header: "Changed By",
+      accessorKey: "changed_by",
+      cell: (info) => <DefaultProxyAdminTag userId={info.getValue() as string} />,
     },
     {
-      title: "API Key (Hash)",
-      dataIndex: "changed_by_api_key",
-      key: "changed_by_api_key",
-      width: 140,
-      render: (val: string) =>
-        val ? (
+      header: "API Key (Hash)",
+      accessorKey: "changed_by_api_key",
+      cell: (info) => {
+        const val = info.getValue() as string;
+        return val ? (
           <span className="font-mono text-xs">{val.slice(0, 12)}…</span>
         ) : (
-          "—"
-        ),
+          <span>—</span>
+        );
+      },
     },
   ];
 
   if (!premiumUser) {
     return (
-      <div style={{ textAlign: "center", marginTop: "20px" }}>
-        <h1 style={{ display: "block", marginBottom: "10px" }}>✨ Enterprise Feature.</h1>
-        <p style={{ display: "block", marginBottom: "10px" }}>
+      <div className="text-center mt-5">
+        <h1 className="block mb-2.5 text-xl font-semibold">✨ Enterprise Feature.</h1>
+        <p className="block mb-2.5">
           This is a LiteLLM Enterprise feature, and requires a valid key to use.
         </p>
-        <p style={{ display: "block", marginBottom: "20px", fontStyle: "italic" }}>
+        <p className="block mb-5 italic text-muted-foreground">
           Here&apos;s a preview of what Audit Logs offer:
         </p>
+        {/* eslint-disable-next-line @next/next/no-img-element */}
         <img
           src={auditLogsPreviewImg}
           alt="Audit Logs Preview"
-          style={{
-            maxWidth: "100%",
-            maxHeight: "700px",
-            borderRadius: "8px",
-            boxShadow: "0 4px 8px rgba(0,0,0,0.1)",
-            margin: "0 auto",
-          }}
+          className="max-w-full max-h-[700px] rounded-lg shadow-md mx-auto"
           onError={(e) => {
             (e.target as HTMLImageElement).style.display = "none";
           }}
@@ -194,10 +256,11 @@ export default function AuditLogs({
 
   const auditLogs: AuditLogEntry[] = query.data?.audit_logs ?? [];
   const total: number = query.data?.total ?? 0;
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
   return (
     <>
-      <div className="bg-white rounded-lg shadow">
+      <div className="bg-background rounded-lg shadow">
         {/* Header */}
         <div className="border-b px-6 py-4">
           <div className="flex items-center justify-between mb-4">
@@ -206,96 +269,125 @@ export default function AuditLogs({
 
           {/* Filters + pagination on same row */}
           <div className="flex flex-wrap items-center gap-3">
-            <Search
+            <FilterSearchInput
               placeholder="Object ID"
-              allowClear
-              style={{ width: 200 }}
-              onSearch={(val) => { setObjectId(val); resetPage(); }}
-              onChange={(e) => { if (!e.target.value) { setObjectId(""); resetPage(); } }}
+              width={200}
+              onSubmit={(val) => { setObjectId(val); resetPage(); }}
+              onClear={() => { setObjectId(""); resetPage(); }}
             />
-            <Search
+            <FilterSearchInput
               placeholder="Changed By"
-              allowClear
-              style={{ width: 180 }}
-              onSearch={(val) => { setChangedBy(val); resetPage(); }}
-              onChange={(e) => { if (!e.target.value) { setChangedBy(""); resetPage(); } }}
+              width={180}
+              onSubmit={(val) => { setChangedBy(val); resetPage(); }}
+              onClear={() => { setChangedBy(""); resetPage(); }}
             />
-            <Search
+            <FilterSearchInput
               placeholder="Team ID"
-              allowClear
-              style={{ width: 180 }}
-              onSearch={(val) => { setTeamId(val); resetPage(); }}
-              onChange={(e) => { if (!e.target.value) { setTeamId(""); resetPage(); } }}
+              width={180}
+              onSubmit={(val) => { setTeamId(val); resetPage(); }}
+              onClear={() => { setTeamId(""); resetPage(); }}
             />
-            <Search
+            <FilterSearchInput
               placeholder="Key Hash"
-              allowClear
-              style={{ width: 180 }}
-              onSearch={(val) => { setKeyHash(val); resetPage(); }}
-              onChange={(e) => { if (!e.target.value) { setKeyHash(""); resetPage(); } }}
+              width={180}
+              onSubmit={(val) => { setKeyHash(val); resetPage(); }}
+              onClear={() => { setKeyHash(""); resetPage(); }}
             />
             <Select
-              placeholder="All Actions"
-              allowClear
-              style={{ width: 140 }}
-              options={[
-                { label: "Created", value: "created" },
-                { label: "Updated", value: "updated" },
-                { label: "Deleted", value: "deleted" },
-                { label: "Rotated", value: "rotated" },
-              ]}
-              onChange={(val) => { setAction(val); resetPage(); }}
-            />
+              value={action ?? "__all__"}
+              onValueChange={(val) => {
+                setAction(val === "__all__" ? undefined : val);
+                resetPage();
+              }}
+            >
+              <SelectTrigger className="h-9 w-[140px] text-sm">
+                <SelectValue placeholder="All Actions" />
+              </SelectTrigger>
+              <SelectContent>
+                {ACTION_OPTIONS.map((opt) => (
+                  <SelectItem key={opt.value} value={opt.value}>
+                    {opt.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
             <Select
-              placeholder="All Tables"
-              allowClear
-              style={{ width: 150 }}
-              options={[
-                { label: "Keys", value: "LiteLLM_VerificationToken" },
-                { label: "Teams", value: "LiteLLM_TeamTable" },
-                { label: "Users", value: "LiteLLM_UserTable" },
-                { label: "Organizations", value: "LiteLLM_OrganizationTable" },
-                { label: "Models", value: "LiteLLM_ProxyModelTable" },
-              ]}
-              onChange={(val) => { setTableName(val); resetPage(); }}
-            />
+              value={tableName ?? "__all__"}
+              onValueChange={(val) => {
+                setTableName(val === "__all__" ? undefined : val);
+                resetPage();
+              }}
+            >
+              <SelectTrigger className="h-9 w-[150px] text-sm">
+                <SelectValue placeholder="All Tables" />
+              </SelectTrigger>
+              <SelectContent>
+                {TABLE_OPTIONS.map((opt) => (
+                  <SelectItem key={opt.value} value={opt.value}>
+                    {opt.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
 
             {/* Pagination + refresh pushed to the right */}
             <div className="ml-auto flex items-center gap-2">
               <Button
-                icon={<ReloadOutlined className="animate-spin" />}
+                variant="outline"
+                size="icon"
                 onClick={() => query.refetch()}
                 disabled={query.isFetching}
-              />
-              <Pagination
-                current={page}
-                pageSize={PAGE_SIZE}
-                total={total}
-                showTotal={(t) => `${t} total`}
-                showSizeChanger={false}
-                size="small"
-                onChange={(p) => setPage(p)}
-              />
+                aria-label="Refresh"
+                className="h-9 w-9"
+              >
+                <ReloadOutlined className={`h-4 w-4 ${query.isFetching ? "animate-spin" : ""}`} />
+              </Button>
+              <div className="flex items-center gap-1 text-sm">
+                <span className="text-muted-foreground whitespace-nowrap">{total} total</span>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setPage((p) => Math.max(1, p - 1))}
+                  disabled={page === 1}
+                  className="h-8"
+                >
+                  Prev
+                </Button>
+                <span className="whitespace-nowrap">
+                  Page {page} / {totalPages}
+                </span>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                  disabled={page >= totalPages}
+                  className="h-8"
+                >
+                  Next
+                </Button>
+              </div>
             </div>
           </div>
         </div>
 
         {/* Table — pagination handled in header */}
-        <Table<AuditLogEntry>
-          columns={columns}
-          dataSource={auditLogs}
-          rowKey="id"
-          loading={{
-            spinning: query.isLoading,
-            indicator: <Spin indicator={<LoadingOutlined className="animate-spin" />} size="small" />,
-          }}
-          size="small"
-          pagination={false}
-          onRow={(record) => ({
-            onClick: () => handleRowClick(record),
-            style: { cursor: "pointer" },
-          })}
-        />
+        {query.isLoading ? (
+          <div className="p-6 space-y-2">
+            <Skeleton className="h-9 w-full" />
+            <Skeleton className="h-9 w-full" />
+            <Skeleton className="h-9 w-full" />
+            <div className="flex items-center justify-center pt-2 text-muted-foreground gap-2">
+              <LoaderCircle className="h-4 w-4 animate-spin" />
+              <span className="text-sm">Loading audit logs…</span>
+            </div>
+          </div>
+        ) : (
+          <DataTable<AuditLogEntry, unknown>
+            columns={columns}
+            data={auditLogs}
+            onRowClick={handleRowClick}
+          />
+        )}
       </div>
 
       <AuditLogDrawer

@@ -100,6 +100,8 @@
         "src/components/view_logs/LogDetailsDrawer/RealtimePrettyView.tsx",
         "src/components/view_logs/LogDetailsDrawer/LogDetailContent.tsx",
         "src/components/view_logs/LogDetailsDrawer/LogDetailsDrawer.tsx",
+        "src/components/view_logs/index.tsx",
+        "src/components/view_logs/audit_logs.tsx",
         "src/components/Settings/RouterSettings/Fallbacks/FallbackGroupConfig.tsx",
         "src/components/permissions/VectorStorePermissions.tsx",
         "src/components/permissions/AgentPermissions.tsx",

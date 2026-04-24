@@ -6,9 +6,16 @@ import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { truncateString } from "@/utils/textUtils";
 import { Settings as SettingOutlined, RefreshCcw as SyncOutlined } from "lucide-react";
 import { Row } from "@tanstack/react-table";
-// eslint-disable-next-line litellm-ui/no-banned-ui-imports
-import { Switch, Tab, TabGroup, TabList, TabPanel, TabPanels } from "@tremor/react";
-import { Button, Tag, Tooltip } from "antd";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Switch } from "@/components/ui/switch";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { internalUserRoles } from "../../utils/roles";
 import DeletedKeysPage from "../DeletedKeysPage/DeletedKeysPage";
 import DeletedTeamsPage from "../DeletedTeamsPage/DeletedTeamsPage";
@@ -156,8 +163,8 @@ export default function SpendLogsTable({
   const LiveTailControls = () => {
     return (
       <div className="flex items-center gap-2">
-        <span className="text-sm font-medium text-gray-900">Live Tail</span>
-        <Switch color="green" checked={isLiveTail} defaultChecked={true} onChange={setIsLiveTail} />
+        <span className="text-sm font-medium text-foreground">Live Tail</span>
+        <Switch checked={isLiveTail} onCheckedChange={setIsLiveTail} />
       </div>
     );
   };
@@ -472,22 +479,27 @@ export default function SpendLogsTable({
 
   return (
     <div className="w-full max-w-screen p-6 overflow-x-hidden box-border">
-      <TabGroup defaultIndex={0} onIndexChange={(index) => setActiveTab(index === 0 ? "request logs" : "audit logs")}>
-        <TabList>
-          <Tab>Request Logs</Tab>
-          <Tab>Audit Logs</Tab>
-          <Tab>Deleted Keys</Tab>
-          <Tab>Deleted Teams</Tab>
-        </TabList>
-        <TabPanels>
-          <TabPanel>
+      <Tabs
+        defaultValue="request-logs"
+        onValueChange={(val) => setActiveTab(val === "request-logs" ? "request logs" : val === "audit-logs" ? "audit logs" : val)}
+      >
+        <TabsList>
+          <TabsTrigger value="request-logs">Request Logs</TabsTrigger>
+          <TabsTrigger value="audit-logs">Audit Logs</TabsTrigger>
+          <TabsTrigger value="deleted-keys">Deleted Keys</TabsTrigger>
+          <TabsTrigger value="deleted-teams">Deleted Teams</TabsTrigger>
+        </TabsList>
+        <TabsContent value="request-logs">
             <div className="flex items-center justify-between mb-4">
               <h1 className="text-xl font-semibold">Request Logs</h1>
               <Button
-                icon={<SettingOutlined />}
+                variant="outline"
+                size="icon"
                 onClick={() => setIsSpendLogsSettingsModalVisible(true)}
                 title="Spend Logs Settings"
-              />
+              >
+                <SettingOutlined className="h-4 w-4" />
+              </Button>
             </div>
             {selectedKeyInfo && selectedKeyIdInfoView && selectedKeyInfo.api_key === selectedKeyIdInfoView ? (
               <KeyInfoView
@@ -522,7 +534,7 @@ export default function SpendLogsTable({
                             onChange={(e) => setSearchTerm(e.target.value)}
                           />
                           <svg
-                            className="absolute left-2.5 top-2.5 h-4 w-4 text-gray-500"
+                            className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground"
                             fill="none"
                             stroke="currentColor"
                             viewBox="0 0 24 24"
@@ -593,12 +605,13 @@ export default function SpendLogsTable({
                           <LiveTailControls />
 
                           <Button
-                            type="default"
-                            icon={<SyncOutlined className={isButtonLoading ? "animate-spin" : undefined} />}
+                            variant="outline"
                             onClick={handleRefresh}
                             disabled={isButtonLoading}
                             title="Fetch data"
+                            className="h-9"
                           >
+                            <SyncOutlined className={`mr-2 h-4 w-4 ${isButtonLoading ? "animate-spin" : ""}`} />
                             {isButtonLoading ? "Fetching" : "Fetch"}
                           </Button>
                         </div>
@@ -616,7 +629,7 @@ export default function SpendLogsTable({
                                 className="px-3 py-2 border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                               />
                             </div>
-                            <span className="text-gray-500">to</span>
+                            <span className="text-muted-foreground">to</span>
                             <div>
                               <input
                                 type="datetime-local"
@@ -633,7 +646,7 @@ export default function SpendLogsTable({
                       </div>
 
                       <div className="flex items-center space-x-4">
-                        <span className="text-sm text-gray-700 whitespace-nowrap">
+                        <span className="text-sm text-muted-foreground whitespace-nowrap">
                           Showing {logs.isLoading ? "..." : filteredLogs ? (currentPage - 1) * pageSize + 1 : 0} -{" "}
                           {logs.isLoading
                             ? "..."
@@ -643,7 +656,7 @@ export default function SpendLogsTable({
                           of {logs.isLoading ? "..." : filteredLogs ? filteredLogs.total : 0} results
                         </span>
                         <div className="flex items-center space-x-2">
-                          <span className="text-sm text-gray-700 min-w-[90px]">
+                          <span className="text-sm text-muted-foreground min-w-[90px]">
                             Page {logs.isLoading ? "..." : currentPage} of{" "}
                             {logs.isLoading ? "..." : filteredLogs ? filteredLogs.total_pages : 1}
                           </span>
@@ -695,21 +708,20 @@ export default function SpendLogsTable({
                 </div>
               </>
             )}
-          </TabPanel>
-          <TabPanel>
-            <AuditLogs
-              userID={userID}
-              userRole={userRole}
-              token={token}
-              accessToken={accessToken}
-              isActive={activeTab === "audit logs"}
-              premiumUser={premiumUser}
-            />
-          </TabPanel>
-          <TabPanel><DeletedKeysPage /></TabPanel>
-          <TabPanel><DeletedTeamsPage /></TabPanel>
-        </TabPanels>
-      </TabGroup>
+        </TabsContent>
+        <TabsContent value="audit-logs">
+          <AuditLogs
+            userID={userID}
+            userRole={userRole}
+            token={token}
+            accessToken={accessToken}
+            isActive={activeTab === "audit logs"}
+            premiumUser={premiumUser}
+          />
+        </TabsContent>
+        <TabsContent value="deleted-keys"><DeletedKeysPage /></TabsContent>
+        <TabsContent value="deleted-teams"><DeletedTeamsPage /></TabsContent>
+      </Tabs>
 
       {/* Log Details Drawer */}
       <LogDetailsDrawer
@@ -823,9 +835,14 @@ export function RequestViewer({ row, onOpenSettings }: { row: Row<LogEntry>; onO
             <div className="flex">
               <span className="font-medium w-1/3">Request ID:</span>
               {row.original.request_id.length > 64 ? (
-                <Tooltip title={row.original.request_id}>
-                  <span className="font-mono text-sm">{truncatedRequestId}</span>
-                </Tooltip>
+                <TooltipProvider>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <span className="font-mono text-sm">{truncatedRequestId}</span>
+                    </TooltipTrigger>
+                    <TooltipContent>{row.original.request_id}</TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
               ) : (
                 <span className="font-mono text-sm">{row.original.request_id}</span>
               )}
@@ -848,9 +865,14 @@ export function RequestViewer({ row, onOpenSettings }: { row: Row<LogEntry>; onO
             </div>
             <div className="flex">
               <span className="font-medium w-1/3">API Base:</span>
-              <Tooltip title={row.original.api_base || "-"}>
-                <span className="max-w-[15ch] truncate block">{row.original.api_base || "-"}</span>
-              </Tooltip>
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <span className="max-w-[15ch] truncate block">{row.original.api_base || "-"}</span>
+                  </TooltipTrigger>
+                  <TooltipContent>{row.original.api_base || "-"}</TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
             </div>
             {row?.original?.requester_ip_address && (
               <div className="flex">
@@ -936,7 +958,7 @@ export function RequestViewer({ row, onOpenSettings }: { row: Row<LogEntry>; onO
                 {row.original.metadata?.attempted_retries !== undefined && row.original.metadata?.attempted_retries !== null
                   ? row.original.metadata.attempted_retries > 0
                     ? `${row.original.metadata.attempted_retries}${row.original.metadata.max_retries !== undefined && row.original.metadata.max_retries !== null ? ` / ${row.original.metadata.max_retries}` : ''}`
-                    : <Tag color="green">None</Tag>
+                    : <Badge className="bg-green-100 text-green-700 hover:bg-green-100">None</Badge>
                   : '-'}
               </span>
             </div>
