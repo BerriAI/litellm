@@ -1,13 +1,12 @@
 import React from "react";
-// eslint-disable-next-line litellm-ui/no-banned-ui-imports
 import {
   Table,
-  TableHead,
-  TableRow,
-  TableHeaderCell,
   TableBody,
   TableCell,
-} from "@tremor/react";
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 
 export interface SimpleTableColumn<T> {
   header: string;
@@ -27,9 +26,8 @@ interface SimpleTableProps<T> {
 
 /**
  * Simple table component for forms and settings pages.
- * The underlying primitives are still Tremor's Table family (whitelisted
- * by the banned-imports rule); only the Text wrapper was swapped for a
- * semantic <span>.
+ * Uses shadcn's Table primitives. The Tremor `Text` wrapper was previously
+ * swapped for a semantic <span>.
  */
 export function SimpleTable<T>({
   data,
@@ -41,15 +39,15 @@ export function SimpleTable<T>({
 }: SimpleTableProps<T>) {
   return (
     <Table>
-      <TableHead>
+      <TableHeader>
         <TableRow>
           {columns.map((column, index) => (
-            <TableHeaderCell key={index} style={{ width: column.width }}>
+            <TableHead key={index} style={{ width: column.width }}>
               {column.header}
-            </TableHeaderCell>
+            </TableHead>
           ))}
         </TableRow>
-      </TableHead>
+      </TableHeader>
       <TableBody>
         {isLoading ? (
           <TableRow>
