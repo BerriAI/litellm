@@ -585,6 +585,109 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         return choices
 
     @classmethod
+    def _parse_raw_sse_chunk(cls, chunk: str) -> Optional[Dict[str, Any]]:
+        stripped_chunk = (
+            CustomStreamWrapper._strip_sse_data_from_chunk(chunk.strip()) or ""
+        ).strip()
+        if (
+            not stripped_chunk
+            or stripped_chunk == "[DONE]"
+            or stripped_chunk.startswith("event:")
+        ):
+            return None
+        try:
+            parsed_chunk = json.loads(stripped_chunk)
+        except json.JSONDecodeError:
+            return None
+        if not isinstance(parsed_chunk, dict):
+            return None
+        return parsed_chunk
+
+    @classmethod
+    def _extract_output_from_completed_event(
+        cls, parsed_chunk: Dict[str, Any]
+    ) -> Optional[List[Dict[str, Any]]]:
+        response_payload = parsed_chunk.get("response")
+        if not isinstance(response_payload, dict):
+            return None
+        response_output = response_payload.get("output")
+        if not isinstance(response_output, list) or len(response_output) == 0:
+            return None
+        return cast(List[Dict[str, Any]], response_output)
+
+    @classmethod
+    def _update_recovered_output_items(
+        cls, parsed_chunk: Dict[str, Any], recovered_output_items: Dict[int, Dict[str, Any]]
+    ) -> None:
+        item = parsed_chunk.get("item")
+        if not isinstance(item, dict):
+            return
+        try:
+            output_index = int(parsed_chunk.get("output_index"))
+        except (TypeError, ValueError):
+            output_index = len(recovered_output_items)
+        recovered_output_items[output_index] = item
+
+    @classmethod
+    def _update_recovered_text_only_items(
+        cls,
+        parsed_chunk: Dict[str, Any],
+        recovered_output_items: Dict[int, Dict[str, Any]],
+        recovered_text_only_items: Dict[int, Dict[str, Any]],
+    ) -> None:
+        text = parsed_chunk.get("text")
+        if not isinstance(text, str):
+            return
+
+        try:
+            output_index = int(parsed_chunk.get("output_index"))
+        except (TypeError, ValueError):
+            output_index = len(recovered_text_only_items)
+
+        item = recovered_output_items.get(output_index) or recovered_text_only_items.get(
+            output_index
+        )
+        if item is None:
+            item = {
+                "type": "message",
+                "id": parsed_chunk.get("item_id") or f"msg_{output_index}",
+                "role": "assistant",
+                "status": "completed",
+                "content": [],
+            }
+            recovered_text_only_items[output_index] = item
+
+        content = item.setdefault("content", [])
+        if not isinstance(content, list):
+            return
+
+        try:
+            content_index = int(parsed_chunk.get("content_index"))
+        except (TypeError, ValueError):
+            content_index = len(content)
+
+        while len(content) <= content_index:
+            content.append(
+                {
+                    "type": "output_text",
+                    "text": "",
+                    "annotations": [],
+                }
+            )
+
+        content_item = content[content_index]
+        if not isinstance(content_item, dict):
+            content_item = {}
+            content[content_index] = content_item
+
+        content_item["type"] = "output_text"
+        content_item["text"] = text
+        if parsed_chunk.get("annotations") is not None:
+            content_item["annotations"] = parsed_chunk["annotations"]
+        else:
+            content_item.setdefault("annotations", [])
+
+    @classmethod
     def _recover_output_items_from_raw_sse(
         cls, raw_sse: Optional[str]
     ) -> List[Dict[str, Any]]:
@@ -595,97 +698,28 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         recovered_text_only_items: Dict[int, Dict[str, Any]] = {}
 
         for chunk in raw_sse.splitlines():
-            stripped_chunk = (
-                CustomStreamWrapper._strip_sse_data_from_chunk(chunk.strip()) or ""
-            ).strip()
-            if (
-                not stripped_chunk
-                or stripped_chunk == "[DONE]"
-                or stripped_chunk.startswith("event:")
-            ):
-                continue
-
-            try:
-                parsed_chunk = json.loads(stripped_chunk)
-            except json.JSONDecodeError:
-                continue
-
-            if not isinstance(parsed_chunk, dict):
+            parsed_chunk = cls._parse_raw_sse_chunk(chunk)
+            if parsed_chunk is None:
                 continue
 
             event_type = parsed_chunk.get("type")
 
             if event_type == ResponsesAPIStreamEvents.RESPONSE_COMPLETED:
-                response_payload = parsed_chunk.get("response")
-                if isinstance(response_payload, dict):
-                    response_output = response_payload.get("output")
-                    if isinstance(response_output, list) and len(response_output) > 0:
-                        return cast(List[Dict[str, Any]], response_output)
+                recovered_output = cls._extract_output_from_completed_event(parsed_chunk)
+                if recovered_output is not None:
+                    return recovered_output
                 continue
 
             if event_type == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE:
-                item = parsed_chunk.get("item")
-                if not isinstance(item, dict):
-                    continue
-                try:
-                    output_index = int(parsed_chunk.get("output_index"))
-                except (TypeError, ValueError):
-                    output_index = len(recovered_output_items)
-                recovered_output_items[output_index] = item
+                cls._update_recovered_output_items(parsed_chunk, recovered_output_items)
                 continue
 
             if event_type == ResponsesAPIStreamEvents.OUTPUT_TEXT_DONE:
-                text = parsed_chunk.get("text")
-                if not isinstance(text, str):
-                    continue
-
-                try:
-                    output_index = int(parsed_chunk.get("output_index"))
-                except (TypeError, ValueError):
-                    output_index = len(recovered_text_only_items)
-
-                item = recovered_output_items.get(
-                    output_index
-                ) or recovered_text_only_items.get(output_index)
-                if item is None:
-                    item = {
-                        "type": "message",
-                        "id": parsed_chunk.get("item_id") or f"msg_{output_index}",
-                        "role": "assistant",
-                        "status": "completed",
-                        "content": [],
-                    }
-                    recovered_text_only_items[output_index] = item
-
-                content = item.setdefault("content", [])
-                if not isinstance(content, list):
-                    continue
-
-                try:
-                    content_index = int(parsed_chunk.get("content_index"))
-                except (TypeError, ValueError):
-                    content_index = len(content)
-
-                while len(content) <= content_index:
-                    content.append(
-                        {
-                            "type": "output_text",
-                            "text": "",
-                            "annotations": [],
-                        }
-                    )
-
-                content_item = content[content_index]
-                if not isinstance(content_item, dict):
-                    content_item = {}
-                    content[content_index] = content_item
-
-                content_item["type"] = "output_text"
-                content_item["text"] = text
-                if parsed_chunk.get("annotations") is not None:
-                    content_item["annotations"] = parsed_chunk["annotations"]
-                else:
-                    content_item.setdefault("annotations", [])
+                cls._update_recovered_text_only_items(
+                    parsed_chunk=parsed_chunk,
+                    recovered_output_items=recovered_output_items,
+                    recovered_text_only_items=recovered_text_only_items,
+                )
 
         if recovered_output_items:
             return [item for _, item in sorted(recovered_output_items.items())]

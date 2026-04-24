@@ -111,101 +111,150 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
         raw_response: Any,
         logging_obj: Any,
     ):
-        content_type = (raw_response.headers or {}).get("content-type", "")
         body_text = raw_response.text or ""
-        if "text/event-stream" not in content_type.lower():
-            trimmed_body = body_text.lstrip()
-            if not (
-                trimmed_body.startswith("event:")
-                or trimmed_body.startswith("data:")
-                or "\nevent:" in body_text
-                or "\ndata:" in body_text
-            ):
-                return super().transform_response_api_response(
-                    model=model,
-                    raw_response=raw_response,
-                    logging_obj=logging_obj,
-                )
+        if not self._should_parse_as_sse(raw_response=raw_response, body_text=body_text):
+            return super().transform_response_api_response(
+                model=model,
+                raw_response=raw_response,
+                logging_obj=logging_obj,
+            )
 
         logging_obj.post_call(
             original_response=raw_response.text,
             additional_args={"complete_input_dict": {}},
         )
 
-        completed_response = None
-        error_message = None
-        streamed_output_items: Dict[int, dict] = {}
-        for chunk in body_text.splitlines():
-            stripped_chunk = CustomStreamWrapper._strip_sse_data_from_chunk(chunk)
-            if not stripped_chunk:
-                continue
-            stripped_chunk = stripped_chunk.strip()
-            if not stripped_chunk:
-                continue
-            if stripped_chunk == STREAM_SSE_DONE_STRING:
-                break
-            try:
-                parsed_chunk = json.loads(stripped_chunk)
-            except json.JSONDecodeError:
-                continue
-            if not isinstance(parsed_chunk, dict):
-                continue
-            event_type = parsed_chunk.get("type")
-            if event_type == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE:
-                item = parsed_chunk.get("item")
-                output_index = parsed_chunk.get("output_index")
-                if isinstance(item, dict):
-                    try:
-                        index = int(output_index)
-                    except (TypeError, ValueError):
-                        index = len(streamed_output_items)
-                    streamed_output_items[index] = item
-                continue
-            if event_type == ResponsesAPIStreamEvents.RESPONSE_COMPLETED:
-                response_payload = parsed_chunk.get("response")
-                if isinstance(response_payload, dict):
-                    response_payload = dict(response_payload)
-                    if not response_payload.get("output") and streamed_output_items:
-                        response_payload["output"] = [
-                            item for _, item in sorted(streamed_output_items.items())
-                        ]
-                    if "created_at" in response_payload:
-                        response_payload["created_at"] = _safe_convert_created_field(
-                            response_payload["created_at"]
-                        )
-                    try:
-                        completed_response = ResponsesAPIResponse(**response_payload)
-                    except Exception:
-                        completed_response = ResponsesAPIResponse.model_construct(
-                            **response_payload
-                        )
-                break
-            if event_type in (
-                ResponsesAPIStreamEvents.RESPONSE_FAILED,
-                ResponsesAPIStreamEvents.ERROR,
-            ):
-                error_obj = parsed_chunk.get("error") or (
-                    parsed_chunk.get("response") or {}
-                ).get("error")
-                if error_obj is not None:
-                    if isinstance(error_obj, dict):
-                        error_message = error_obj.get("message") or str(error_obj)
-                    else:
-                        error_message = str(error_obj)
-
+        completed_response, error_message = self._extract_completed_response_from_sse(
+            body_text=body_text
+        )
         if completed_response is None:
             raise OpenAIError(
                 message=error_message or raw_response.text,
                 status_code=raw_response.status_code,
             )
 
+        self._attach_response_headers(
+            completed_response=completed_response, raw_response=raw_response
+        )
+        return completed_response
+
+    def _should_parse_as_sse(self, raw_response: Any, body_text: str) -> bool:
+        content_type = (raw_response.headers or {}).get("content-type", "")
+        if "text/event-stream" in content_type.lower():
+            return True
+        trimmed_body = body_text.lstrip()
+        return bool(
+            trimmed_body.startswith("event:")
+            or trimmed_body.startswith("data:")
+            or "\nevent:" in body_text
+            or "\ndata:" in body_text
+        )
+
+    def _extract_completed_response_from_sse(
+        self, body_text: str
+    ) -> tuple[Optional[ResponsesAPIResponse], Optional[str]]:
+        completed_response = None
+        error_message = None
+        streamed_output_items: Dict[int, dict] = {}
+        for chunk in body_text.splitlines():
+            parsed_chunk = self._parse_sse_json_chunk(chunk)
+            if parsed_chunk is None:
+                continue
+            if parsed_chunk == STREAM_SSE_DONE_STRING:
+                break
+
+            event_type = parsed_chunk.get("type")
+            if event_type == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE:
+                self._record_output_item_chunk(
+                    parsed_chunk=parsed_chunk, streamed_output_items=streamed_output_items
+                )
+                continue
+
+            if event_type == ResponsesAPIStreamEvents.RESPONSE_COMPLETED:
+                completed_response = self._build_completed_response_from_chunk(
+                    parsed_chunk=parsed_chunk, streamed_output_items=streamed_output_items
+                )
+                break
+
+            if event_type in (
+                ResponsesAPIStreamEvents.RESPONSE_FAILED,
+                ResponsesAPIStreamEvents.ERROR,
+            ):
+                error_message = self._extract_error_message(parsed_chunk)
+
+        return completed_response, error_message
+
+    def _parse_sse_json_chunk(self, chunk: str) -> Optional[Any]:
+        stripped_chunk = CustomStreamWrapper._strip_sse_data_from_chunk(chunk)
+        if not stripped_chunk:
+            return None
+        stripped_chunk = stripped_chunk.strip()
+        if not stripped_chunk:
+            return None
+        if stripped_chunk == STREAM_SSE_DONE_STRING:
+            return STREAM_SSE_DONE_STRING
+        try:
+            parsed_chunk = json.loads(stripped_chunk)
+        except json.JSONDecodeError:
+            return None
+        if not isinstance(parsed_chunk, dict):
+            return None
+        return parsed_chunk
+
+    def _record_output_item_chunk(
+        self, parsed_chunk: Dict[str, Any], streamed_output_items: Dict[int, dict]
+    ) -> None:
+        item = parsed_chunk.get("item")
+        output_index = parsed_chunk.get("output_index")
+        if not isinstance(item, dict):
+            return
+        try:
+            index = int(output_index)
+        except (TypeError, ValueError):
+            index = len(streamed_output_items)
+        streamed_output_items[index] = item
+
+    def _build_completed_response_from_chunk(
+        self, parsed_chunk: Dict[str, Any], streamed_output_items: Dict[int, dict]
+    ) -> Optional[ResponsesAPIResponse]:
+        response_payload = parsed_chunk.get("response")
+        if not isinstance(response_payload, dict):
+            return None
+        response_payload = dict(response_payload)
+        if not response_payload.get("output") and streamed_output_items:
+            response_payload["output"] = [
+                item for _, item in sorted(streamed_output_items.items())
+            ]
+        if "created_at" in response_payload:
+            response_payload["created_at"] = _safe_convert_created_field(
+                response_payload["created_at"]
+            )
+        try:
+            return ResponsesAPIResponse(**response_payload)
+        except Exception:
+            return ResponsesAPIResponse.model_construct(**response_payload)
+
+    def _extract_error_message(self, parsed_chunk: Dict[str, Any]) -> Optional[str]:
+        error_obj = parsed_chunk.get("error") or (parsed_chunk.get("response") or {}).get(
+            "error"
+        )
+        if error_obj is None:
+            return None
+        if isinstance(error_obj, dict):
+            return error_obj.get("message") or str(error_obj)
+        return str(error_obj)
+
+    def _attach_response_headers(
+        self,
+        completed_response: ResponsesAPIResponse,
+        raw_response: Any,
+    ) -> None:
         raw_headers = dict(raw_response.headers)
         processed_headers = process_response_headers(raw_headers)
         if not hasattr(completed_response, "_hidden_params"):
             setattr(completed_response, "_hidden_params", {})
         completed_response._hidden_params["additional_headers"] = processed_headers
         completed_response._hidden_params["headers"] = raw_headers
-        return completed_response
 
     def get_complete_url(
         self,
