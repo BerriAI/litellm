@@ -394,9 +394,6 @@ def test_qdrant_semantic_cache_set_list_response():
         patch(
             "litellm.llms.custom_httpx.http_handler._get_httpx_client"
         ) as mock_sync_client,
-        patch(
-            "litellm.llms.custom_httpx.http_handler.get_async_httpx_client"
-        ) as mock_async_client,
     ):
         mock_response = MagicMock()
         mock_response.status_code = 200
@@ -440,9 +437,6 @@ def test_qdrant_semantic_cache_get_list_response_hit():
         patch(
             "litellm.llms.custom_httpx.http_handler._get_httpx_client"
         ) as mock_sync_client,
-        patch(
-            "litellm.llms.custom_httpx.http_handler.get_async_httpx_client"
-        ) as mock_async_client,
     ):
         mock_response = MagicMock()
         mock_response.status_code = 200
