@@ -2814,10 +2814,15 @@ def test_gemini_embedding_2_ga_in_cost_map():
         ), f"{key} missing from model_prices_and_context_window.json"
         assert info["litellm_provider"] == provider
         assert info.get("mode") == "embedding"
+        assert info.get("supports_multimodal") is True
         assert info.get("input_cost_per_token") == 2e-07
         assert info.get("input_cost_per_image") == 0.00012
         assert info.get("input_cost_per_audio_per_second") == 0.00016
         assert info.get("input_cost_per_video_per_second") == 0.00079
+        if provider in ("vertex_ai-embedding-models", "vertex_ai"):
+            assert info.get("uses_embed_content") is True, (
+                f"{key} must have uses_embed_content=true for correct Vertex AI routing"
+            )
 
 
 def test_gemini_lyria_3_preview_models_in_cost_map():

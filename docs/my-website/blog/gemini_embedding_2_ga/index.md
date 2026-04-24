@@ -14,10 +14,10 @@ import TabItem from '@theme/TabItem';
 
 # Gemini Embedding 2 (GA): Multimodal Embeddings
 
-Google has moved **Gemini Embedding 2** to general availability as **`gemini-embedding-2`**. LiteLLM supports the same **multimodal embedding** flows as **`gemini-embedding-2-preview`**: one vector from mixed text, images, audio, video, and PDF input over the **Gemini API** (API key) and **Vertex AI** (GCP credentials). If you already integrated preview, swap the model string to the GA id.
+Litellm now fully supports Gemini Embedding 2 GA.
 
 :::info
-For end-to-end behavior, input shapes, and MIME types, see the [Gemini Embedding 2 Preview walkthrough](/blog/gemini_embedding_2_multimodal). This post focuses on **GA naming**, **cost map** coverage, and **curl** recipes for quick verification.
+For end-to-end behavior, input shapes, and MIME types, see the [Gemini Embedding 2 Preview walkthrough](/blog/gemini_embedding_2_multimodal). This post focuses on **GA naming**, **cost map** coverage.
 :::
 
 {/* truncate */}
