@@ -1,5 +1,9 @@
 import React, { useState } from "react";
-import { Tabs } from "antd";
+import {
+  Tabs,
+  TabsList,
+  TabsTrigger,
+} from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -270,15 +274,13 @@ main();`;
             </Button>
           </div>
 
-          <Tabs
-            activeKey={selectedTab}
-            onChange={setSelectedTab}
-            items={[
-              { label: "Basic", key: "basic" },
-              { label: "With Messages", key: "messages" },
-              { label: "With Version", key: "version" },
-            ]}
-          />
+          <Tabs value={selectedTab} onValueChange={setSelectedTab}>
+            <TabsList>
+              <TabsTrigger value="basic">Basic</TabsTrigger>
+              <TabsTrigger value="messages">With Messages</TabsTrigger>
+              <TabsTrigger value="version">With Version</TabsTrigger>
+            </TabsList>
+          </Tabs>
 
           <SyntaxHighlighter
             language={

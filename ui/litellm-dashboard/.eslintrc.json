@@ -160,7 +160,8 @@
         "src/components/view_users/user_info_view.tsx",
         "src/components/UsagePage/components/EntityUsage/EntityUsage.tsx",
         "src/components/UsagePage/components/UsageAIChatPanel.tsx",
-        "src/components/UsagePage/components/UsagePageView.tsx"
+        "src/components/UsagePage/components/UsagePageView.tsx",
+        "src/components/prompts/prompt_info.tsx"
       ],
       "rules": {
         "litellm-ui/no-banned-ui-imports": "off",

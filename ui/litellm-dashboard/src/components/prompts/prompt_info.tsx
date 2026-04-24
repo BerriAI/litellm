@@ -1,36 +1,50 @@
 import React, { useState, useEffect, useRef } from "react";
-// eslint-disable-next-line litellm-ui/no-banned-ui-imports
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
 import {
-  Card,
-  Title,
-  Text,
-  Grid,
-  Badge,
-  Button as TremorButton,
-  Tab,
-  TabGroup,
-  TabList,
-  TabPanel,
-  TabPanels,
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
+} from "@/components/ui/tabs";
+import {
   Table,
   TableBody,
   TableCell,
   TableHead,
-  TableHeaderCell,
+  TableHeader,
   TableRow,
-} from "@tremor/react";
-import { Button, Modal } from "antd";
-import { ArrowLeft as ArrowLeftIcon, Trash2 as TrashIcon, Pencil as PencilIcon } from "lucide-react";
-import { getPromptInfo, getPromptVersions, PromptSpec, PromptTemplateBase, deletePromptCall } from "@/components/networking";
+} from "@/components/ui/table";
+import {
+  ArrowLeft as ArrowLeftIcon,
+  Trash2 as TrashIcon,
+  Pencil as PencilIcon,
+  Check as CheckIcon,
+  Copy as CopyIcon,
+} from "lucide-react";
+import {
+  getPromptInfo,
+  getPromptVersions,
+  PromptSpec,
+  PromptTemplateBase,
+  deletePromptCall,
+} from "@/components/networking";
 import { copyToClipboard as utilCopyToClipboard } from "@/utils/dataUtils";
-import { CheckIcon, CopyIcon } from "lucide-react";
 import NotificationsManager from "../molecules/notifications_manager";
 import PromptCodeSnippets from "./prompt_editor_view/PromptCodeSnippets";
 import {
   extractModel,
   extractTemplateVariables,
   getBasePromptId,
-  getCurrentVersion
+  getCurrentVersion,
 } from "./prompt_utils";
 
 export interface PromptInfoProps {
@@ -68,7 +82,6 @@ const PromptInfoView: React.FC<PromptInfoProps> = ({ promptId, onClose, accessTo
       setPromptTemplate(response.raw_prompt_template);
       setRawApiResponse(response);
 
-      // Set environments from response
       if (response.environments && response.environments.length > 0) {
         setEnvironments(response.environments);
         if (!selectedEnv) {
@@ -84,7 +97,6 @@ const PromptInfoView: React.FC<PromptInfoProps> = ({ promptId, onClose, accessTo
     }
   };
 
-  // Fetch version history for selected environment
   const fetchVersionHistory = async (env: string) => {
     if (!accessToken) return;
     setLoadingVersions(true);
@@ -107,11 +119,9 @@ const PromptInfoView: React.FC<PromptInfoProps> = ({ promptId, onClose, accessTo
     fetchPromptInfo();
   }, [promptId, accessToken]);
 
-  // When environment changes (user clicks tab), re-fetch — skip initial mount
   useEffect(() => {
     if (isInitialMount.current) {
       isInitialMount.current = false;
-      // Still fetch version history on initial mount once selectedEnv is set
       if (selectedEnv && accessToken) {
         fetchVersionHistory(selectedEnv);
       }
@@ -174,7 +184,6 @@ const PromptInfoView: React.FC<PromptInfoProps> = ({ promptId, onClose, accessTo
 
   const handleVersionClick = async (version: PromptSpec) => {
     if (!accessToken || !selectedEnv) return;
-    // Fetch specific version's info
     const versionNum = version.version || 1;
     setSelectedVersion(versionNum);
     try {
@@ -191,31 +200,34 @@ const PromptInfoView: React.FC<PromptInfoProps> = ({ promptId, onClose, accessTo
   const promptModel = promptData ? extractModel(promptData) || "gpt-4o" : "gpt-4o";
   const basePromptId = getBasePromptId(promptData);
   const currentVersion = getCurrentVersion(promptData);
-  const latestVersion = versionHistory.length > 0 ? Math.max(...versionHistory.map(v => v.version || 1)) : null;
+  const latestVersion = versionHistory.length > 0 ? Math.max(...versionHistory.map((v) => v.version || 1)) : null;
   const isViewingOldVersion = latestVersion !== null && selectedVersion !== null && selectedVersion < latestVersion;
 
   return (
     <div className="p-4">
       <div>
-        <TremorButton icon={ArrowLeftIcon} variant="light" onClick={onClose} className="mb-4">
+        <Button variant="ghost" onClick={onClose} className="mb-4">
+          <ArrowLeftIcon className="h-4 w-4" />
           Back to Prompts
-        </TremorButton>
+        </Button>
         <div className="flex justify-between items-start mb-4">
           <div>
-            <Title>Prompt Details</Title>
+            <h2 className="text-2xl font-semibold m-0">Prompt Details</h2>
             <div className="flex items-center cursor-pointer">
-              <Text className="text-gray-500 font-mono">{basePromptId}</Text>
+              <span className="text-muted-foreground font-mono">{basePromptId}</span>
               <Button
-                type="text"
-                size="small"
-                icon={copiedStates["prompt-id"] ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
+                variant="ghost"
+                size="sm"
                 onClick={() => copyToClipboard(basePromptId, "prompt-id")}
                 className={`left-2 z-10 transition-all duration-200 ${
                   copiedStates["prompt-id"]
                     ? "text-green-600 bg-green-50 border-green-200"
-                    : "text-gray-500 hover:text-gray-700 hover:bg-gray-100"
+                    : "text-muted-foreground hover:text-foreground"
                 }`}
-              />
+                aria-label="Copy prompt ID"
+              >
+                {copiedStates["prompt-id"] ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
+              </Button>
             </div>
           </div>
           <div className="flex gap-2">
@@ -226,24 +238,16 @@ const PromptInfoView: React.FC<PromptInfoProps> = ({ promptId, onClose, accessTo
               accessToken={accessToken}
               version={currentVersion}
             />
-            <TremorButton
-              icon={PencilIcon}
-              variant="primary"
-              onClick={() => onEdit?.(rawApiResponse)}
-              className="flex items-center"
-            >
+            <Button onClick={() => onEdit?.(rawApiResponse)} className="flex items-center">
+              <PencilIcon className="h-4 w-4" />
               Prompt Studio
-            </TremorButton>
-          {isAdmin && (
-            <TremorButton
-              icon={TrashIcon}
-              variant="secondary"
-              onClick={handleDeleteClick}
-              className="flex items-center"
-            >
-              Delete Prompt
-            </TremorButton>
-          )}
+            </Button>
+            {isAdmin && (
+              <Button variant="secondary" onClick={handleDeleteClick} className="flex items-center">
+                <TrashIcon className="h-4 w-4" />
+                Delete Prompt
+              </Button>
+            )}
           </div>
         </div>
       </div>
@@ -251,267 +255,274 @@ const PromptInfoView: React.FC<PromptInfoProps> = ({ promptId, onClose, accessTo
       {/* Environment Tabs */}
       {environments.length > 0 && (
         <div className="flex gap-2 mb-4">
-          {[...environments].sort((a, b) => {
-            const order: Record<string, number> = { development: 0, staging: 1, production: 2 };
-            return (order[a] ?? 99) - (order[b] ?? 99);
-          }).map((env) => (
-            <button
-              key={env}
-              onClick={() => {
-                setSelectedEnv(env);
-                setSelectedVersion(null);
-              }}
-              className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${
-                selectedEnv === env
-                  ? env === "production"
-                    ? "bg-red-100 text-red-800 border-2 border-red-300"
-                    : env === "staging"
-                    ? "bg-yellow-100 text-yellow-800 border-2 border-yellow-300"
-                    : "bg-green-100 text-green-800 border-2 border-green-300"
-                  : "bg-gray-100 text-gray-600 border-2 border-transparent hover:bg-gray-200"
-              }`}
-            >
-              {env}
-              {versionHistory.length > 0 && selectedEnv === env && (
-                <span className="ml-1 text-xs opacity-75">
-                  (v{latestVersion})
-                </span>
-              )}
-            </button>
-          ))}
+          {[...environments]
+            .sort((a, b) => {
+              const order: Record<string, number> = { development: 0, staging: 1, production: 2 };
+              return (order[a] ?? 99) - (order[b] ?? 99);
+            })
+            .map((env) => (
+              <button
+                key={env}
+                onClick={() => {
+                  setSelectedEnv(env);
+                  setSelectedVersion(null);
+                }}
+                className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${
+                  selectedEnv === env
+                    ? env === "production"
+                      ? "bg-red-100 text-red-800 border-2 border-red-300 dark:bg-red-950 dark:text-red-300"
+                      : env === "staging"
+                        ? "bg-yellow-100 text-yellow-800 border-2 border-yellow-300 dark:bg-yellow-950 dark:text-yellow-300"
+                        : "bg-green-100 text-green-800 border-2 border-green-300 dark:bg-green-950 dark:text-green-300"
+                    : "bg-muted text-muted-foreground border-2 border-transparent hover:bg-muted/80"
+                }`}
+              >
+                {env}
+                {versionHistory.length > 0 && selectedEnv === env && (
+                  <span className="ml-1 text-xs opacity-75">(v{latestVersion})</span>
+                )}
+              </button>
+            ))}
         </div>
       )}
 
       {/* Old version banner */}
       {isViewingOldVersion && (
-        <div className="mb-4 p-3 bg-amber-50 border border-amber-200 rounded-lg flex items-center justify-between">
-          <Text className="text-amber-800">
+        <div className="mb-4 p-3 bg-amber-50 border border-amber-200 rounded-lg flex items-center justify-between dark:bg-amber-950 dark:border-amber-900">
+          <span className="text-amber-800 dark:text-amber-200">
             Viewing v{selectedVersion} — not the latest version (v{latestVersion})
-          </Text>
-          <TremorButton
-            variant="light"
-            size="xs"
+          </span>
+          <Button
+            variant="ghost"
+            size="sm"
             onClick={() => {
-              const latest = versionHistory.find(v => v.version === latestVersion);
+              const latest = versionHistory.find((v) => v.version === latestVersion);
               if (latest) handleVersionClick(latest);
             }}
           >
             Go to latest
-          </TremorButton>
+          </Button>
         </div>
       )}
 
-      <TabGroup>
-        <TabList className="mb-4">
-          <Tab key="overview">Overview</Tab>
-          {promptTemplate ? <Tab key="prompt-template">Prompt Template</Tab> : <></>}
-          <Tab key="raw-json">Raw JSON</Tab>
-        </TabList>
+      <Tabs defaultValue="overview" className="mt-1">
+        <TabsList className="mb-4">
+          <TabsTrigger value="overview">Overview</TabsTrigger>
+          {promptTemplate && <TabsTrigger value="prompt-template">Prompt Template</TabsTrigger>}
+          <TabsTrigger value="raw-json">Raw JSON</TabsTrigger>
+        </TabsList>
 
-        <TabPanels>
-          {/* Overview Panel */}
-          <TabPanel>
-            <Grid numItems={1} numItemsSm={2} numItemsLg={4} className="gap-4">
-              <Card>
-                <Text>Version</Text>
-                <div className="mt-2">
-                  <Title>{currentVersion}</Title>
-                  <Badge color="blue" className="mt-1">v{currentVersion}</Badge>
-                </div>
-              </Card>
-
-              <Card>
-                <Text>Prompt Type</Text>
-                <div className="mt-2">
-                  <Title>{promptData.prompt_info?.prompt_type || "-"}</Title>
-                </div>
-              </Card>
-
-              <Card>
-                <Text>Created By</Text>
-                <div className="mt-2">
-                  <Title className="text-sm">{promptData.created_by || "-"}</Title>
-                </div>
-              </Card>
-
-              <Card>
-                <Text>Created At</Text>
-                <div className="mt-2">
-                  <Title className="text-sm">{formatDate(promptData.created_at)}</Title>
-                  <Text className="text-xs">Updated: {formatDate(promptData.updated_at)}</Text>
-                </div>
-              </Card>
-            </Grid>
-
-            {/* Version History Table */}
-            <Card className="mt-6">
-              <Title className="mb-3">Version History — {selectedEnv}</Title>
-              {loadingVersions ? (
-                <Text>Loading versions...</Text>
-              ) : versionHistory.length > 0 ? (
-                <Table>
-                  <TableHead>
-                    <TableRow>
-                      <TableHeaderCell>Version</TableHeaderCell>
-                      <TableHeaderCell>Created By</TableHeaderCell>
-                      <TableHeaderCell>Date</TableHeaderCell>
-                      <TableHeaderCell>Actions</TableHeaderCell>
-                    </TableRow>
-                  </TableHead>
-                  <TableBody>
-                    {versionHistory.map((v) => {
-                      const vNum = v.version || 1;
-                      const isSelected = vNum === selectedVersion;
-                      const isLatest = vNum === latestVersion;
-                      return (
-                        <TableRow
-                          key={vNum}
-                          className={`cursor-pointer hover:bg-blue-50 transition-colors ${
-                            isSelected ? "bg-blue-50" : ""
-                          }`}
-                          onClick={() => handleVersionClick(v)}
-                        >
-                          <TableCell>
-                            <span className={isSelected ? "font-bold" : ""}>
-                              v{vNum}
-                            </span>
-                            {isLatest && (
-                              <Badge color="blue" className="ml-2" size="xs">latest</Badge>
-                            )}
-                          </TableCell>
-                          <TableCell>
-                            <span className="text-sm">{v.created_by || "-"}</span>
-                          </TableCell>
-                          <TableCell>
-                            <span className="text-sm">{formatDate(v.created_at)}</span>
-                          </TableCell>
-                          <TableCell>
-                            <TremorButton
-                              icon={PencilIcon}
-                              variant="light"
-                              size="xs"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                // Build a response-like object for the editor
-                                const editData = {
-                                  prompt_spec: {
-                                    ...v,
-                                    prompt_id: basePromptId,
-                                    environment: selectedEnv,
-                                  },
-                                  raw_prompt_template: isSelected ? promptTemplate : null,
-                                };
-                                onEdit?.(editData);
-                              }}
-                            >
-                              Edit
-                            </TremorButton>
-                          </TableCell>
-                        </TableRow>
-                      );
-                    })}
-                  </TableBody>
-                </Table>
-              ) : (
-                <Text className="text-gray-400">No versions found in {selectedEnv}</Text>
-              )}
+        {/* Overview Panel */}
+        <TabsContent value="overview">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            <Card className="p-6">
+              <p className="text-sm text-muted-foreground">Version</p>
+              <div className="mt-2">
+                <h3 className="text-lg font-semibold">{currentVersion}</h3>
+                <Badge variant="secondary" className="mt-1">
+                  v{currentVersion}
+                </Badge>
+              </div>
             </Card>
-          </TabPanel>
 
-          {/* Prompt Template Panel */}
-          {promptTemplate && (
-            <TabPanel>
-              <Card>
-                <div className="flex justify-between items-center mb-4">
-                  <Title>Prompt Template</Title>
-                  <Button
-                    type="text"
-                    size="small"
-                    icon={copiedStates["prompt-content"] ? <CheckIcon size={16} /> : <CopyIcon size={16} />}
-                    onClick={() => copyToClipboard(promptTemplate.content, "prompt-content")}
-                    className={`transition-all duration-200 ${
-                      copiedStates["prompt-content"]
-                        ? "text-green-600 bg-green-50 border-green-200"
-                        : "text-gray-500 hover:text-gray-700 hover:bg-gray-100"
-                    }`}
-                  >
-                    {copiedStates["prompt-content"] ? "Copied!" : "Copy Content"}
-                  </Button>
-                </div>
+            <Card className="p-6">
+              <p className="text-sm text-muted-foreground">Prompt Type</p>
+              <div className="mt-2">
+                <h3 className="text-lg font-semibold">{promptData.prompt_info?.prompt_type || "-"}</h3>
+              </div>
+            </Card>
 
-                <div className="space-y-4">
-                  <div>
-                    <Text className="font-medium">Template ID</Text>
-                    <div className="font-mono text-sm bg-gray-50 p-2 rounded">{promptTemplate.litellm_prompt_id}</div>
-                  </div>
+            <Card className="p-6">
+              <p className="text-sm text-muted-foreground">Created By</p>
+              <div className="mt-2">
+                <h3 className="text-sm font-semibold">{promptData.created_by || "-"}</h3>
+              </div>
+            </Card>
 
-                  <div>
-                    <Text className="font-medium">Content</Text>
-                    <div className="mt-2 p-4 bg-gray-50 rounded-md border overflow-auto max-h-96">
-                      <pre className="text-sm text-gray-800 whitespace-pre-wrap">{promptTemplate.content}</pre>
-                    </div>
-                  </div>
+            <Card className="p-6">
+              <p className="text-sm text-muted-foreground">Created At</p>
+              <div className="mt-2">
+                <h3 className="text-sm font-semibold">{formatDate(promptData.created_at)}</h3>
+                <p className="text-xs text-muted-foreground">Updated: {formatDate(promptData.updated_at)}</p>
+              </div>
+            </Card>
+          </div>
 
-                  {promptTemplate.metadata && Object.keys(promptTemplate.metadata).length > 0 && (
-                    <div>
-                      <Text className="font-medium">Template Metadata</Text>
-                      <div className="mt-2 p-3 bg-gray-50 rounded-md border">
-                        <pre className="text-xs text-gray-800 whitespace-pre-wrap overflow-auto max-h-64">
-                          {JSON.stringify(promptTemplate.metadata, null, 2)}
-                        </pre>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              </Card>
-            </TabPanel>
-          )}
+          {/* Version History Table */}
+          <Card className="mt-6 p-6">
+            <h3 className="text-lg font-semibold mb-3">Version History — {selectedEnv}</h3>
+            {loadingVersions ? (
+              <p className="text-sm text-muted-foreground">Loading versions...</p>
+            ) : versionHistory.length > 0 ? (
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Version</TableHead>
+                    <TableHead>Created By</TableHead>
+                    <TableHead>Date</TableHead>
+                    <TableHead>Actions</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {versionHistory.map((v) => {
+                    const vNum = v.version || 1;
+                    const isSelected = vNum === selectedVersion;
+                    const isLatest = vNum === latestVersion;
+                    return (
+                      <TableRow
+                        key={vNum}
+                        className={`cursor-pointer hover:bg-muted transition-colors ${
+                          isSelected ? "bg-muted" : ""
+                        }`}
+                        onClick={() => handleVersionClick(v)}
+                      >
+                        <TableCell>
+                          <span className={isSelected ? "font-bold" : ""}>v{vNum}</span>
+                          {isLatest && (
+                            <Badge variant="secondary" className="ml-2 text-xs">
+                              latest
+                            </Badge>
+                          )}
+                        </TableCell>
+                        <TableCell>
+                          <span className="text-sm">{v.created_by || "-"}</span>
+                        </TableCell>
+                        <TableCell>
+                          <span className="text-sm">{formatDate(v.created_at)}</span>
+                        </TableCell>
+                        <TableCell>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              const editData = {
+                                prompt_spec: {
+                                  ...v,
+                                  prompt_id: basePromptId,
+                                  environment: selectedEnv,
+                                },
+                                raw_prompt_template: isSelected ? promptTemplate : null,
+                              };
+                              onEdit?.(editData);
+                            }}
+                          >
+                            <PencilIcon className="h-4 w-4" />
+                            Edit
+                          </Button>
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
+                </TableBody>
+              </Table>
+            ) : (
+              <p className="text-muted-foreground">No versions found in {selectedEnv}</p>
+            )}
+          </Card>
+        </TabsContent>
 
-          {/* Raw JSON Panel */}
-          <TabPanel>
-            <Card>
+        {/* Prompt Template Panel */}
+        {promptTemplate && (
+          <TabsContent value="prompt-template">
+            <Card className="p-6">
               <div className="flex justify-between items-center mb-4">
-                <Title>Raw API Response</Title>
+                <h3 className="text-lg font-semibold">Prompt Template</h3>
                 <Button
-                  type="text"
-                  size="small"
-                  icon={copiedStates["raw-json"] ? <CheckIcon size={16} /> : <CopyIcon size={16} />}
-                  onClick={() => copyToClipboard(JSON.stringify(rawApiResponse, null, 2), "raw-json")}
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => copyToClipboard(promptTemplate.content, "prompt-content")}
                   className={`transition-all duration-200 ${
-                    copiedStates["raw-json"]
+                    copiedStates["prompt-content"]
                       ? "text-green-600 bg-green-50 border-green-200"
-                      : "text-gray-500 hover:text-gray-700 hover:bg-gray-100"
+                      : "text-muted-foreground hover:text-foreground"
                   }`}
                 >
-                  {copiedStates["raw-json"] ? "Copied!" : "Copy JSON"}
+                  {copiedStates["prompt-content"] ? <CheckIcon size={16} /> : <CopyIcon size={16} />}
+                  {copiedStates["prompt-content"] ? "Copied!" : "Copy Content"}
                 </Button>
               </div>
 
-              <div className="p-4 bg-gray-50 rounded-md border overflow-auto">
-                <pre className="text-xs text-gray-800 whitespace-pre-wrap">
-                  {JSON.stringify(rawApiResponse, null, 2)}
-                </pre>
+              <div className="space-y-4">
+                <div>
+                  <p className="font-medium">Template ID</p>
+                  <div className="font-mono text-sm bg-muted p-2 rounded">{promptTemplate.litellm_prompt_id}</div>
+                </div>
+
+                <div>
+                  <p className="font-medium">Content</p>
+                  <div className="mt-2 p-4 bg-muted rounded-md border border-border overflow-auto max-h-96">
+                    <pre className="text-sm text-foreground whitespace-pre-wrap">{promptTemplate.content}</pre>
+                  </div>
+                </div>
+
+                {promptTemplate.metadata && Object.keys(promptTemplate.metadata).length > 0 && (
+                  <div>
+                    <p className="font-medium">Template Metadata</p>
+                    <div className="mt-2 p-3 bg-muted rounded-md border border-border">
+                      <pre className="text-xs text-foreground whitespace-pre-wrap overflow-auto max-h-64">
+                        {JSON.stringify(promptTemplate.metadata, null, 2)}
+                      </pre>
+                    </div>
+                  </div>
+                )}
               </div>
             </Card>
-          </TabPanel>
-        </TabPanels>
-      </TabGroup>
+          </TabsContent>
+        )}
+
+        {/* Raw JSON Panel */}
+        <TabsContent value="raw-json">
+          <Card className="p-6">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-lg font-semibold">Raw API Response</h3>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => copyToClipboard(JSON.stringify(rawApiResponse, null, 2), "raw-json")}
+                className={`transition-all duration-200 ${
+                  copiedStates["raw-json"]
+                    ? "text-green-600 bg-green-50 border-green-200"
+                    : "text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                {copiedStates["raw-json"] ? <CheckIcon size={16} /> : <CopyIcon size={16} />}
+                {copiedStates["raw-json"] ? "Copied!" : "Copy JSON"}
+              </Button>
+            </div>
+
+            <div className="p-4 bg-muted rounded-md border border-border overflow-auto">
+              <pre className="text-xs text-foreground whitespace-pre-wrap">
+                {JSON.stringify(rawApiResponse, null, 2)}
+              </pre>
+            </div>
+          </Card>
+        </TabsContent>
+      </Tabs>
 
       {/* Delete Confirmation Modal */}
-      <Modal
-        title="Delete Prompt"
+      <Dialog
         open={showDeleteConfirm}
-        onOk={handleDeleteConfirm}
-        onCancel={handleDeleteCancel}
-        confirmLoading={isDeleting}
-        okText="Delete"
-        okButtonProps={{ danger: true }}
+        onOpenChange={(o) => (!o ? handleDeleteCancel() : undefined)}
       >
-        <p>
-          Are you sure you want to delete prompt: <strong>{basePromptId}</strong>?
-        </p>
-        <p>This action cannot be undone.</p>
-      </Modal>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete Prompt</DialogTitle>
+          </DialogHeader>
+          <p>
+            Are you sure you want to delete prompt: <strong>{basePromptId}</strong>?
+          </p>
+          <p>This action cannot be undone.</p>
+          <DialogFooter>
+            <Button variant="outline" onClick={handleDeleteCancel} disabled={isDeleting}>
+              Cancel
+            </Button>
+            <Button variant="destructive" onClick={handleDeleteConfirm} disabled={isDeleting}>
+              {isDeleting ? "Deleting…" : "Delete"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 };
