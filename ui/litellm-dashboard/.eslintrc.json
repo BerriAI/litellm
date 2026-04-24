@@ -135,7 +135,8 @@
         "src/components/DeletedKeysPage/DeletedKeysPage.tsx",
         "src/components/DeletedTeamsPage/DeletedTeamsPage.tsx",
         "src/components/molecules/models/columns.tsx",
-        "src/components/common_components/MemberTable.tsx"
+        "src/components/common_components/MemberTable.tsx",
+        "src/components/price_data_reload.tsx"
       ],
       "rules": {
         "litellm-ui/no-banned-ui-imports": "off",
