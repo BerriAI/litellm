@@ -1431,8 +1431,7 @@ def validate_team_org_change(
         not_in_org = [
             m
             for m in team_members
-            if m not in org_members
-            and m != SpecialProxyStrings.default_user_id.value
+            if m not in org_members and m != SpecialProxyStrings.default_user_id.value
         ]
         if len(not_in_org) > 0:
             raise HTTPException(
