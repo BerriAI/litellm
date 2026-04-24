@@ -1,5 +1,5 @@
 import React from "react";
-import { Form } from "antd";
+import { Label } from "@/components/ui/label";
 import {
   Select,
   SelectContent,
@@ -26,11 +26,15 @@ interface RateLimitTypeFormItemProps {
   className?: string;
   /** Initial value for the field */
   initialValue?: string | null;
-  /** Form instance for setting field values */
+  /** Antd form instance (optional; for setFieldValue compatibility with
+   *  call sites that still use antd forms). */
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   form?: any;
   /** Custom onChange handler */
   onChange?: (value: string) => void;
+  /** Controlled value (optional). When used with react-hook-form, pass
+   *  `value` and `onChange` via a Controller render prop. */
+  value?: string;
 }
 
 export const RateLimitTypeFormItem: React.FC<RateLimitTypeFormItemProps> = ({
@@ -41,47 +45,48 @@ export const RateLimitTypeFormItem: React.FC<RateLimitTypeFormItemProps> = ({
   initialValue = null,
   form,
   onChange,
+  value,
 }) => {
   const limitTypeUpper = type.toUpperCase();
   const limitTypeLower = type.toLowerCase();
 
-  const handleChange = (value: string) => {
-    if (form) {
-      form.setFieldValue(name, value);
+  const [internalValue, setInternalValue] = React.useState<string | undefined>(
+    value ?? initialValue ?? undefined,
+  );
+
+  React.useEffect(() => {
+    if (value !== undefined) {
+      setInternalValue(value);
+    }
+  }, [value]);
+
+  const handleChange = (next: string) => {
+    setInternalValue(next);
+    if (form && typeof form.setFieldValue === "function") {
+      form.setFieldValue(name, next);
     }
     if (onChange) {
-      onChange(value);
+      onChange(next);
     }
   };
 
   const tooltipTitle = `Select 'guaranteed_throughput' to prevent overallocating ${limitTypeUpper} limit when the key belongs to a Team with specific ${limitTypeUpper} limits.`;
 
   return (
-    <Form.Item
-      label={
-        <span>
-          {limitTypeUpper} Rate Limit Type{" "}
-          <TooltipProvider>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Info className="ml-1 h-3 w-3 inline" />
-              </TooltipTrigger>
-              <TooltipContent className="max-w-xs">
-                {tooltipTitle}
-              </TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
-        </span>
-      }
-      name={name}
-      initialValue={initialValue}
-      className={className}
-    >
-      <Select
-        defaultValue={showDetailedDescriptions ? "default" : undefined}
-        onValueChange={handleChange}
-      >
-        <SelectTrigger className="w-full">
+    <div className={className}>
+      <Label htmlFor={name} className="flex items-center gap-1 mb-2">
+        {limitTypeUpper} Rate Limit Type
+        <TooltipProvider>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Info className="ml-1 h-3 w-3 inline" />
+            </TooltipTrigger>
+            <TooltipContent className="max-w-xs">{tooltipTitle}</TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
+      </Label>
+      <Select value={internalValue} onValueChange={handleChange}>
+        <SelectTrigger id={name} className="w-full">
           <SelectValue placeholder="Select rate limit type" />
         </SelectTrigger>
         <SelectContent>
@@ -132,7 +137,7 @@ export const RateLimitTypeFormItem: React.FC<RateLimitTypeFormItemProps> = ({
           )}
         </SelectContent>
       </Select>
-    </Form.Item>
+    </div>
   );
 };
 

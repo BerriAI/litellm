@@ -65,9 +65,8 @@ type OrgEditValues = {
   mcp_servers_and_groups: { servers: string[]; accessGroups: string[] };
 };
 
-// Member-table extra columns rendered as plain JSX (MemberTable receives them
-// as antd ColumnsType under the hood, but the cell renderer is just JSX so
-// shadcn-friendly).
+// Member-table extra columns rendered as plain JSX. MemberTable's
+// MemberTableExtraColumn type matches this shape structurally.
 type MemberExtraColumn = {
   title: string;
   key: string;

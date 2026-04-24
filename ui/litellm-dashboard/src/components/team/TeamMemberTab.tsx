@@ -11,8 +11,9 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { Info } from "lucide-react";
-import type { ColumnsType } from "antd/es/table";
-import MemberTable from "@/components/common_components/MemberTable";
+import MemberTable, {
+  MemberTableExtraColumn,
+} from "@/components/common_components/MemberTable";
 import { TeamData } from "./TeamInfo";
 
 const InfoTip: React.FC<{ children: React.ReactNode }> = ({ children }) => (
@@ -106,7 +107,7 @@ export default function TeamMemberTab({
     return models && models.length > 0 ? models : null;
   };
 
-  const extraColumns: ColumnsType<Member> = [
+  const extraColumns: MemberTableExtraColumn[] = [
     {
       title: (
         <span className="inline-flex items-center gap-2">
