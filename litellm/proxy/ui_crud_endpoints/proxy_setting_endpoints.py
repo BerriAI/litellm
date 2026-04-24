@@ -235,6 +235,7 @@ def _get_effective_ui_settings_class() -> Type[UISettings]:
     _EFFECTIVE_UI_SETTINGS_CLASS = create_model(  # type: ignore[call-overload]
         "EffectiveUISettings",
         __base__=UISettings,
+        __doc__=UISettings.__doc__,
         **_EXTRA_UI_SETTINGS_FIELDS,
     )
     return _EFFECTIVE_UI_SETTINGS_CLASS
