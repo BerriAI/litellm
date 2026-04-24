@@ -1,7 +1,6 @@
 """Rubrik LiteLLM Plugin for tool blocking and batch logging."""
 
 import asyncio
-import copy
 import os
 import random
 import time
@@ -17,6 +16,7 @@ from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     ModifyResponseException,
 )
+from litellm.litellm_core_utils.core_helpers import safe_deep_copy
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
@@ -293,7 +293,7 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
             return None
 
         # Deep-copy so mutations don't affect other callbacks sharing this object
-        standard_logging_payload: StandardLoggingPayload = copy.deepcopy(
+        standard_logging_payload: StandardLoggingPayload = safe_deep_copy(
             kwargs["standard_logging_object"]
         )
 
