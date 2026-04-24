@@ -887,6 +887,8 @@ class ApplyGuardrailRequest(BaseModel):
     text: str
     language: Optional[str] = None
     entities: Optional[List[PiiEntityType]] = None
+    input_type: str = "request"
+    messages: Optional[List[Dict[str, Any]]] = None
 
 
 class ApplyGuardrailResponse(BaseModel):
