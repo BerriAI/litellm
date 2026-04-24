@@ -111,11 +111,14 @@ LiteLLM is a unified interface for 100+ LLM providers with two main components:
 
 ### UI
 
-The UI lives at `ui/litellm-dashboard/`. Phase-1 of the shadcn migration is
-in-flight; new files must follow the post-migration stack. Translation
-rules and pattern library are in
+The UI lives at `ui/litellm-dashboard/`. Phase-1 of the shadcn migration
+is **complete** (with 25 antd-`Form`-coupled files explicitly deferred
+to phase 2 — see `ui/litellm-dashboard/docs/BLOCKERS.md`). New files
+must follow the post-migration stack. Translation rules and pattern
+library are in
 [`ui/litellm-dashboard/docs/BLUEPRINT.md`](ui/litellm-dashboard/docs/BLUEPRINT.md)
-(locked at end of Section 1, Access Groups).
+(locked at end of Section 1, Access Groups). Final state in
+[`ui/litellm-dashboard/docs/MIGRATION_REPORT.md`](ui/litellm-dashboard/docs/MIGRATION_REPORT.md).
 
 **Stack**
 - Primitives: shadcn/ui in `src/components/ui/`. No new `antd` imports.
@@ -152,16 +155,19 @@ rules and pattern library are in
 - Run lint with `npm run lint` (direct eslint, since `next lint` was
   removed in Next 16).
 
-**During migration**
-Until all 33 sections listed in
-[`ui/litellm-dashboard/docs/MIGRATION_REPORT.md`](ui/litellm-dashboard/docs/MIGRATION_REPORT.md)
-are migrated, un-migrated sections still import antd and are reported as
-lint violations. These are expected; do not silence them. Each section's
-migration is a self-contained commit that removes all banned imports
-within its scope.
+**Still on antd (phase-2 follow-up)**
+25 files still import `antd` — all are deeply-coupled antd-`Form`
+surfaces (multi-step wizards, nested `Form.Item` trees with cross-field
+validation, `Form.List` children registering into a parent
+`FormInstance`, or `Select.OptGroup` + `tagRender` +
+`maxTagCount="responsive"` patterns without a direct shadcn analog).
+They are documented one-liner-per-file in
+[`ui/litellm-dashboard/docs/BLOCKERS.md`](ui/litellm-dashboard/docs/BLOCKERS.md).
+Migrating them requires extracting a shared searchable multi-select
+primitive first (phase 2).
 
 **Phase 2 (future work, not started)**
-The phase-1 migration deliberately left the following for phase 2:
+Phase 1 deliberately left the following for phase 2:
 - React Query adoption for all fetches (library installed, not adopted)
 - File-layout restructure to route-colocated `_lib` / `_components` with
   `src/features/` promotion
@@ -169,6 +175,8 @@ The phase-1 migration deliberately left the following for phase 2:
 - URL-state convention via `useSearchParams`
 - `date-fns` consolidation (currently `moment` + `dayjs` still present)
 - ESLint flat config migration
+- Final antd removal (blocker-listed Form surfaces above)
+- Extraction of a shared searchable-multi-select shadcn primitive
 
 Until phase 2 ships, existing fetch patterns, file layout, routes, and
 date libraries are preserved as-is.
