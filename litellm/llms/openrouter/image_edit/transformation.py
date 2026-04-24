@@ -97,9 +97,9 @@ class OpenRouterImageEditConfig(BaseImageEditConfig):
                 if key == "size":
                     if "image_config" not in mapped_params:
                         mapped_params["image_config"] = {}
-                    mapped_params["image_config"][
-                        "aspect_ratio"
-                    ] = self._map_size_to_aspect_ratio(cast(str, value))
+                    mapped_params["image_config"]["aspect_ratio"] = (
+                        self._map_size_to_aspect_ratio(cast(str, value))
+                    )
                 elif key == "quality":
                     image_size = self._map_quality_to_image_size(cast(str, value))
                     if image_size:

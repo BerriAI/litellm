@@ -777,7 +777,7 @@ class TestVectorStoreManagementEndpointsExist:
     def test_vector_store_management_endpoints_exist_on_proxy_startup(self):
         """
         Test that all vector store management endpoints are registered on proxy app startup.
-        
+
         Verifies the following endpoints exist in the proxy_server app:
         - POST /vector_store/new
         - GET /vector_store/list
@@ -795,7 +795,7 @@ class TestVectorStoreManagementEndpointsExist:
             ("POST", "/vector_store/info"),
             ("POST", "/vector_store/update"),
         ]
-        
+
         # Get all routes from the app
         app_routes = []
         for route in app.routes:
@@ -804,7 +804,7 @@ class TestVectorStoreManagementEndpointsExist:
             if methods is not None and path is not None:
                 for method in methods:
                     app_routes.append((method, path))
-        
+
         # Verify each expected endpoint exists
         for method, path in expected_endpoints:
             assert (method, path) in app_routes, (
@@ -817,7 +817,7 @@ class TestVectorStoreManagementEndpointsExist:
 async def test_vector_store_synchronization_across_instances():
     """
     Test that vector stores are properly synchronized across multiple instances.
-    
+
     This test simulates the scenario where:
     1. Instance 1 creates a vector store (writes to DB, updates its own cache)
     2. Instance 2 should be able to find it (via database fallback)
@@ -836,10 +836,10 @@ async def test_vector_store_synchronization_across_instances():
     # Simulate two instances with separate in-memory registries
     instance_1_registry = VectorStoreRegistry(vector_stores=[])
     instance_2_registry = VectorStoreRegistry(vector_stores=[])
-    
+
     # Mock database that both instances share
     mock_db_vector_stores = []
-    
+
     async def mock_find_unique(where):
         """Mock find_unique for checking if vector store exists"""
         vector_store_id = where.get("vector_store_id")
@@ -851,12 +851,13 @@ async def test_vector_store_synchronization_across_instances():
                         for key, value in data.items():
                             setattr(self, key, value)
                         self._data = data
-                    
+
                     def __iter__(self):
                         return iter(self._data.items())
+
                 return MockVectorStore(vs)
         return None
-    
+
     async def mock_find_many(order=None):
         """Mock find_many for listing vector stores"""
         # Return objects that can be converted to dict using dict()
@@ -869,12 +870,13 @@ async def test_vector_store_synchronization_across_instances():
                     for key, value in data.items():
                         setattr(self, key, value)
                     self._data = data
-                
+
                 def __iter__(self):
                     return iter(self._data.items())
+
             result.append(MockVectorStore(vs))
         return result
-    
+
     async def mock_create(data):
         """Mock create for adding vector store to DB"""
         vector_store = data.copy()
@@ -884,16 +886,17 @@ async def test_vector_store_synchronization_across_instances():
         for key, value in vector_store.items():
             setattr(mock_obj, key, value)
         return mock_obj
-    
+
     async def mock_delete(where):
         """Mock delete for removing vector store from DB"""
         vector_store_id = where.get("vector_store_id")
         mock_db_vector_stores[:] = [
-            vs for vs in mock_db_vector_stores 
+            vs
+            for vs in mock_db_vector_stores
             if vs.get("vector_store_id") != vector_store_id
         ]
         return None
-    
+
     # Create mock prisma client
     mock_prisma_client = MagicMock()
     mock_prisma_client.db.litellm_managedvectorstorestable.find_unique = AsyncMock(
@@ -908,7 +911,7 @@ async def test_vector_store_synchronization_across_instances():
     mock_prisma_client.db.litellm_managedvectorstorestable.delete = AsyncMock(
         side_effect=mock_delete
     )
-    
+
     # Test vector store data
     test_vector_store_id = "test-sync-store-001"
     test_vector_store: LiteLLM_ManagedVectorStore = {
@@ -919,76 +922,86 @@ async def test_vector_store_synchronization_across_instances():
         "litellm_params": {
             "vector_store_id": test_vector_store_id,
             "custom_llm_provider": "bedrock",
-            "region_name": "us-east-1"
+            "region_name": "us-east-1",
         },
         "created_at": datetime.now(timezone.utc),
         "updated_at": datetime.now(timezone.utc),
     }
-    
+
     # Step 1: Create vector store on Instance 1
     # (Simulate what happens in new_vector_store endpoint)
     await mock_prisma_client.db.litellm_managedvectorstorestable.create(
         data=test_vector_store
     )
     instance_1_registry.add_vector_store_to_registry(vector_store=test_vector_store)
-    
+
     # Verify it's in Instance 1's memory
-    assert instance_1_registry.get_litellm_managed_vector_store_from_registry(
-        test_vector_store_id
-    ) is not None, "Vector store should be in Instance 1's memory"
-    
+    assert (
+        instance_1_registry.get_litellm_managed_vector_store_from_registry(
+            test_vector_store_id
+        )
+        is not None
+    ), "Vector store should be in Instance 1's memory"
+
     # Verify it's in the database
     db_store = await mock_prisma_client.db.litellm_managedvectorstorestable.find_unique(
         where={"vector_store_id": test_vector_store_id}
     )
     assert db_store is not None, "Vector store should be in database"
-    
+
     # Step 2: Instance 2 should be able to find it via database fallback
     # (Simulate what happens in pop_vector_stores_to_run_with_db_fallback)
-    found_store = await instance_2_registry.get_litellm_managed_vector_store_from_registry_or_db(
-        vector_store_id=test_vector_store_id,
-        prisma_client=mock_prisma_client
+    found_store = (
+        await instance_2_registry.get_litellm_managed_vector_store_from_registry_or_db(
+            vector_store_id=test_vector_store_id, prisma_client=mock_prisma_client
+        )
     )
     assert found_store is not None, "Instance 2 should find vector store from database"
     assert found_store.get("vector_store_id") == test_vector_store_id
-    
+
     # Verify it's now cached in Instance 2's memory
-    assert instance_2_registry.get_litellm_managed_vector_store_from_registry(
-        test_vector_store_id
-    ) is not None, "Vector store should now be cached in Instance 2's memory"
-    
+    assert (
+        instance_2_registry.get_litellm_managed_vector_store_from_registry(
+            test_vector_store_id
+        )
+        is not None
+    ), "Vector store should now be cached in Instance 2's memory"
+
     # Step 3: Test that Instance 2 can list vector stores from database
     # (Simulate what happens in list_vector_stores endpoint - using DB as source of truth)
     vector_stores_from_db = await VectorStoreRegistry._get_vector_stores_from_db(
         prisma_client=mock_prisma_client
     )
-    
+
     # Verify vector store appears in the database list
     vector_store_ids = [vs.get("vector_store_id") for vs in vector_stores_from_db]
-    assert test_vector_store_id in vector_store_ids, (
-        "Instance 2 should see vector store from database"
-    )
-    
+    assert (
+        test_vector_store_id in vector_store_ids
+    ), "Instance 2 should see vector store from database"
+
     # Verify the list endpoint logic: only show DB stores (filter out stale cache)
     # This simulates what list_vector_stores does
     db_vector_store_ids = {
-        vs.get("vector_store_id") 
-        for vs in vector_stores_from_db 
+        vs.get("vector_store_id")
+        for vs in vector_stores_from_db
         if vs.get("vector_store_id")
     }
-    
+
     # Instance 2's in-memory cache should only contain stores that exist in DB
     # (This is what the list endpoint cleanup does)
     for vs in list(instance_2_registry.vector_stores):
         vs_id = vs.get("vector_store_id")
         if vs_id and vs_id not in db_vector_store_ids:
             instance_2_registry.delete_vector_store_from_registry(vector_store_id=vs_id)
-    
+
     # After cleanup, instance 2 should still have the vector store (it's in DB)
-    assert instance_2_registry.get_litellm_managed_vector_store_from_registry(
-        test_vector_store_id
-    ) is not None, "Instance 2 should still have vector store (it exists in DB)"
-    
+    assert (
+        instance_2_registry.get_litellm_managed_vector_store_from_registry(
+            test_vector_store_id
+        )
+        is not None
+    ), "Instance 2 should still have vector store (it exists in DB)"
+
     # Step 4: Delete vector store on Instance 1
     # (Simulate what happens in delete_vector_store endpoint)
     await mock_prisma_client.db.litellm_managedvectorstorestable.delete(
@@ -997,75 +1010,87 @@ async def test_vector_store_synchronization_across_instances():
     instance_1_registry.delete_vector_store_from_registry(
         vector_store_id=test_vector_store_id
     )
-    
+
     # Verify it's removed from Instance 1's memory
-    assert instance_1_registry.get_litellm_managed_vector_store_from_registry(
-        test_vector_store_id
-    ) is None, "Vector store should be removed from Instance 1's memory"
-    
+    assert (
+        instance_1_registry.get_litellm_managed_vector_store_from_registry(
+            test_vector_store_id
+        )
+        is None
+    ), "Vector store should be removed from Instance 1's memory"
+
     # Verify it's removed from database
-    db_store_after_delete = await mock_prisma_client.db.litellm_managedvectorstorestable.find_unique(
-        where={"vector_store_id": test_vector_store_id}
+    db_store_after_delete = (
+        await mock_prisma_client.db.litellm_managedvectorstorestable.find_unique(
+            where={"vector_store_id": test_vector_store_id}
+        )
     )
     assert db_store_after_delete is None, "Vector store should be removed from database"
-    
+
     # Step 5: Instance 2 should NOT show it in the list (database is source of truth)
     # The list endpoint logic should clean up stale cache entries
-    vector_stores_from_db_after_delete = await VectorStoreRegistry._get_vector_stores_from_db(
-        prisma_client=mock_prisma_client
+    vector_stores_from_db_after_delete = (
+        await VectorStoreRegistry._get_vector_stores_from_db(
+            prisma_client=mock_prisma_client
+        )
     )
-    
+
     # Verify vector store does NOT appear in the database list
-    vector_store_ids_after_delete = [vs.get("vector_store_id") for vs in vector_stores_from_db_after_delete]
-    assert test_vector_store_id not in vector_store_ids_after_delete, (
-        "Deleted vector store should not be in database"
-    )
-    
+    vector_store_ids_after_delete = [
+        vs.get("vector_store_id") for vs in vector_stores_from_db_after_delete
+    ]
+    assert (
+        test_vector_store_id not in vector_store_ids_after_delete
+    ), "Deleted vector store should not be in database"
+
     # Simulate list endpoint cleanup logic
     db_vector_store_ids_after_delete = {
-        vs.get("vector_store_id") 
-        for vs in vector_stores_from_db_after_delete 
+        vs.get("vector_store_id")
+        for vs in vector_stores_from_db_after_delete
         if vs.get("vector_store_id")
     }
-    
+
     # Remove any in-memory vector stores that no longer exist in database
     for vs in list(instance_2_registry.vector_stores):
         vs_id = vs.get("vector_store_id")
         if vs_id and vs_id not in db_vector_store_ids_after_delete:
             instance_2_registry.delete_vector_store_from_registry(vector_store_id=vs_id)
-    
+
     # Verify it was removed from Instance 2's cache
-    assert instance_2_registry.get_litellm_managed_vector_store_from_registry(
-        test_vector_store_id
-    ) is None, (
-        "Deleted vector store should be removed from Instance 2's cache"
-    )
-    
+    assert (
+        instance_2_registry.get_litellm_managed_vector_store_from_registry(
+            test_vector_store_id
+        )
+        is None
+    ), "Deleted vector store should be removed from Instance 2's cache"
+
     # Step 6: Test that using a deleted vector store fails gracefully
     # (Simulate what happens in pop_vector_stores_to_run_with_db_fallback)
     non_default_params = {"vector_store_ids": [test_vector_store_id]}
-    vector_stores_to_run = await instance_2_registry.pop_vector_stores_to_run_with_db_fallback(
-        non_default_params=non_default_params,
-        tools=None,
-        prisma_client=mock_prisma_client
+    vector_stores_to_run = (
+        await instance_2_registry.pop_vector_stores_to_run_with_db_fallback(
+            non_default_params=non_default_params,
+            tools=None,
+            prisma_client=mock_prisma_client,
+        )
     )
-    
-    assert len(vector_stores_to_run) == 0, (
-        "Deleted vector store should not be returned when trying to use it"
-    )
+
+    assert (
+        len(vector_stores_to_run) == 0
+    ), "Deleted vector store should not be returned when trying to use it"
 
 
 @pytest.mark.asyncio
 async def test_vector_store_update_and_list_synchronization():
     """
     Test that vector store updates are properly synchronized across multiple instances.
-    
+
     This test simulates the scenario where:
     1. Instance 1 creates a vector store
     2. Instance 2 caches it in memory
     3. Instance 1 updates the vector store in the database
     4. Instance 2 should see the updated data when listing (database is source of truth)
-    
+
     This is a regression test to prevent the bug where Instance 2 would show
     stale cached data instead of the updated database version.
     """
@@ -1078,25 +1103,27 @@ async def test_vector_store_update_and_list_synchronization():
     # Simulate two instances with separate in-memory registries
     instance_1_registry = VectorStoreRegistry(vector_stores=[])
     instance_2_registry = VectorStoreRegistry(vector_stores=[])
-    
+
     # Mock database that both instances share
     mock_db_vector_stores = []
-    
+
     async def mock_find_many(order=None):
         """Mock find_many for listing vector stores"""
         result = []
         for vs in mock_db_vector_stores:
+
             class MockVectorStore:
                 def __init__(self, data):
                     for key, value in data.items():
                         setattr(self, key, value)
                     self._data = data
-                
+
                 def __iter__(self):
                     return iter(self._data.items())
+
             result.append(MockVectorStore(vs))
         return result
-    
+
     async def mock_create(data):
         """Mock create for adding vector store to DB"""
         vector_store = data.copy()
@@ -1104,7 +1131,7 @@ async def test_vector_store_update_and_list_synchronization():
         mock_obj = MagicMock()
         mock_obj.model_dump.return_value = vector_store
         return mock_obj
-    
+
     async def mock_update(where, data):
         """Mock update for modifying vector store in DB"""
         vector_store_id = where.get("vector_store_id")
@@ -1116,7 +1143,7 @@ async def test_vector_store_update_and_list_synchronization():
                 mock_obj.model_dump.return_value = mock_db_vector_stores[i]
                 return mock_obj
         raise Exception(f"Vector store {vector_store_id} not found")
-    
+
     # Create mock prisma client
     mock_prisma_client = MagicMock()
     mock_prisma_client.db.litellm_managedvectorstorestable.find_many = AsyncMock(
@@ -1128,12 +1155,12 @@ async def test_vector_store_update_and_list_synchronization():
     mock_prisma_client.db.litellm_managedvectorstorestable.update = AsyncMock(
         side_effect=mock_update
     )
-    
+
     # Test vector store data
     test_vector_store_id = "test-update-store-001"
     original_name = "Original Name"
     updated_name = "Updated Name"
-    
+
     test_vector_store: LiteLLM_ManagedVectorStore = {
         "vector_store_id": test_vector_store_id,
         "custom_llm_provider": "bedrock",
@@ -1142,18 +1169,18 @@ async def test_vector_store_update_and_list_synchronization():
         "litellm_params": {
             "vector_store_id": test_vector_store_id,
             "custom_llm_provider": "bedrock",
-            "region_name": "us-east-1"
+            "region_name": "us-east-1",
         },
         "created_at": datetime.now(timezone.utc),
         "updated_at": datetime.now(timezone.utc),
     }
-    
+
     # Step 1: Create vector store on Instance 1
     await mock_prisma_client.db.litellm_managedvectorstorestable.create(
         data=test_vector_store
     )
     instance_1_registry.add_vector_store_to_registry(vector_store=test_vector_store)
-    
+
     # Step 2: Instance 2 fetches and caches the vector store
     vector_stores_from_db = await VectorStoreRegistry._get_vector_stores_from_db(
         prisma_client=mock_prisma_client
@@ -1161,7 +1188,7 @@ async def test_vector_store_update_and_list_synchronization():
     for vs in vector_stores_from_db:
         if vs.get("vector_store_id") == test_vector_store_id:
             instance_2_registry.add_vector_store_to_registry(vector_store=vs)
-    
+
     # Verify both instances have the original data
     instance_1_vs = instance_1_registry.get_litellm_managed_vector_store_from_registry(
         test_vector_store_id
@@ -1171,99 +1198,103 @@ async def test_vector_store_update_and_list_synchronization():
     )
     assert instance_1_vs.get("vector_store_name") == original_name
     assert instance_2_vs.get("vector_store_name") == original_name
-    
+
     # Step 3: Instance 1 updates the vector store in the database
     # (Simulating what happens in update_vector_store endpoint)
     update_data = {"vector_store_name": updated_name}
     await mock_prisma_client.db.litellm_managedvectorstorestable.update(
-        where={"vector_store_id": test_vector_store_id},
-        data=update_data
+        where={"vector_store_id": test_vector_store_id}, data=update_data
     )
-    
+
     # Instance 1 updates its own cache
     updated_vs_instance_1 = test_vector_store.copy()
     updated_vs_instance_1["vector_store_name"] = updated_name
     instance_1_registry.update_vector_store_in_registry(
-        vector_store_id=test_vector_store_id,
-        updated_data=updated_vs_instance_1
+        vector_store_id=test_vector_store_id, updated_data=updated_vs_instance_1
     )
-    
+
     # Verify Instance 1 has the updated data
-    instance_1_vs_after_update = instance_1_registry.get_litellm_managed_vector_store_from_registry(
-        test_vector_store_id
+    instance_1_vs_after_update = (
+        instance_1_registry.get_litellm_managed_vector_store_from_registry(
+            test_vector_store_id
+        )
     )
     assert instance_1_vs_after_update.get("vector_store_name") == updated_name
-    
+
     # Verify Instance 2 still has stale data in cache
-    instance_2_vs_before_list = instance_2_registry.get_litellm_managed_vector_store_from_registry(
-        test_vector_store_id
+    instance_2_vs_before_list = (
+        instance_2_registry.get_litellm_managed_vector_store_from_registry(
+            test_vector_store_id
+        )
     )
-    assert instance_2_vs_before_list.get("vector_store_name") == original_name, (
-        "Instance 2 should still have stale cached data before list operation"
-    )
-    
+    assert (
+        instance_2_vs_before_list.get("vector_store_name") == original_name
+    ), "Instance 2 should still have stale cached data before list operation"
+
     # Step 4: Instance 2 calls list endpoint (which should sync with database)
     # This simulates what list_vector_stores endpoint does
-    vector_stores_from_db_after_update = await VectorStoreRegistry._get_vector_stores_from_db(
-        prisma_client=mock_prisma_client
+    vector_stores_from_db_after_update = (
+        await VectorStoreRegistry._get_vector_stores_from_db(
+            prisma_client=mock_prisma_client
+        )
     )
-    
+
     # Build map from database vector stores (database is source of truth)
     vector_store_map = {}
     for vector_store in vector_stores_from_db_after_update:
         vector_store_id = vector_store.get("vector_store_id")
         if vector_store_id:
             vector_store_map[vector_store_id] = vector_store
-            
+
             # Update in-memory registry with database versions (this is the key fix)
             instance_2_registry.update_vector_store_in_registry(
-                vector_store_id=vector_store_id,
-                updated_data=vector_store
+                vector_store_id=vector_store_id, updated_data=vector_store
             )
-    
+
     # Step 5: Verify Instance 2 now has the updated data
-    instance_2_vs_after_list = instance_2_registry.get_litellm_managed_vector_store_from_registry(
-        test_vector_store_id
+    instance_2_vs_after_list = (
+        instance_2_registry.get_litellm_managed_vector_store_from_registry(
+            test_vector_store_id
+        )
     )
-    assert instance_2_vs_after_list.get("vector_store_name") == updated_name, (
-        "Instance 2 should have updated data after list operation syncs with database"
-    )
-    
+    assert (
+        instance_2_vs_after_list.get("vector_store_name") == updated_name
+    ), "Instance 2 should have updated data after list operation syncs with database"
+
     # Verify the list returned the correct data
     combined_vector_stores = list(vector_store_map.values())
     assert len(combined_vector_stores) == 1
     assert combined_vector_stores[0].get("vector_store_id") == test_vector_store_id
-    assert combined_vector_stores[0].get("vector_store_name") == updated_name, (
-        "List should return updated data from database"
-    )
+    assert (
+        combined_vector_stores[0].get("vector_store_name") == updated_name
+    ), "List should return updated data from database"
 
 
 @pytest.mark.asyncio
 async def test_resolve_embedding_config_from_db():
     """Test that _resolve_embedding_config_from_db correctly resolves embedding config from database."""
     mock_prisma_client = MagicMock()
-    
+
     # Mock database model with litellm_params
     mock_db_model = MagicMock()
     mock_db_model.litellm_params = {
         "api_key": "test-api-key",
         "api_base": "https://api.openai.com",
-        "api_version": "2024-01-01"
+        "api_version": "2024-01-01",
     }
-    
+
     mock_prisma_client.db.litellm_proxymodeltable.find_first = AsyncMock(
         return_value=mock_db_model
     )
-    
+
     with patch(
         "litellm.proxy.vector_store_endpoints.management_endpoints.decrypt_value_helper",
-        side_effect=lambda value, key, return_original_value: value
+        side_effect=lambda value, key, return_original_value: value,
     ):
         result = await _resolve_embedding_config_from_db(
-            embedding_model="text-embedding-ada-002",
-            prisma_client=mock_prisma_client
+            embedding_model="text-embedding-ada-002", prisma_client=mock_prisma_client
         )
-    
+
     assert result is not None
     assert result["api_key"] == "test-api-key"
     assert result["api_base"] == "https://api.openai.com"
@@ -1271,21 +1302,19 @@ async def test_resolve_embedding_config_from_db():
     mock_prisma_client.db.litellm_proxymodeltable.find_first.assert_called_once_with(
         where={"model_name": "text-embedding-ada-002"}
     )
-    
+
     # Test with empty embedding_model
     result_empty = await _resolve_embedding_config_from_db(
-        embedding_model="",
-        prisma_client=mock_prisma_client
+        embedding_model="", prisma_client=mock_prisma_client
     )
     assert result_empty is None
-    
+
     # Test with model not found
     mock_prisma_client.db.litellm_proxymodeltable.find_first = AsyncMock(
         return_value=None
     )
     result_not_found = await _resolve_embedding_config_from_db(
-        embedding_model="non-existent-model",
-        prisma_client=mock_prisma_client
+        embedding_model="non-existent-model", prisma_client=mock_prisma_client
     )
     assert result_not_found is None
 
@@ -1296,9 +1325,9 @@ async def test_new_vector_store_auto_resolves_embedding_config():
     import json
 
     from litellm.types.vector_stores import LiteLLM_ManagedVectorStore
-    
+
     mock_prisma_client = MagicMock()
-    
+
     # Mock vector store request with embedding_model but no embedding_config
     vector_store_data: LiteLLM_ManagedVectorStore = {
         "vector_store_id": "test-store-001",
@@ -1306,23 +1335,23 @@ async def test_new_vector_store_auto_resolves_embedding_config():
         "litellm_params": {
             "litellm_embedding_model": "text-embedding-ada-002",
             # Note: litellm_embedding_config is not provided
-        }
+        },
     }
-    
+
     # Mock database model lookup for embedding config resolution
     mock_db_model = MagicMock()
     mock_db_model.litellm_params = {
         "api_key": "resolved-api-key",
         "api_base": "https://api.openai.com",
-        "api_version": "2024-01-01"
+        "api_version": "2024-01-01",
     }
-    
+
     # Mock user API key
     mock_user_api_key = MagicMock(spec=UserAPIKeyAuth)
     mock_user_api_key.user_role = None
     mock_user_api_key.team_id = None
     mock_user_api_key.user_id = None
-    
+
     # Mock database operations
     mock_prisma_client.db.litellm_managedvectorstorestable.find_unique = AsyncMock(
         return_value=None  # Vector store doesn't exist yet
@@ -1330,88 +1359,90 @@ async def test_new_vector_store_auto_resolves_embedding_config():
     mock_prisma_client.db.litellm_proxymodeltable.find_first = AsyncMock(
         return_value=mock_db_model
     )
-    
+
     # Track what was passed to create
     captured_create_data = {}
-    
+
     async def mock_create(*args, **kwargs):
         captured_create_data.update(kwargs.get("data", {}))
         mock_created_vector_store = MagicMock()
         mock_created_vector_store.model_dump.return_value = {
             "vector_store_id": "test-store-001",
             "custom_llm_provider": "openai",
-            "litellm_params": kwargs.get("data", {}).get("litellm_params")
+            "litellm_params": kwargs.get("data", {}).get("litellm_params"),
         }
         return mock_created_vector_store
-    
+
     mock_prisma_client.db.litellm_managedvectorstorestable.create = AsyncMock(
         side_effect=mock_create
     )
-    
+
     mock_registry = MagicMock()
     mock_registry.add_vector_store_to_registry = MagicMock()
-    
+
     # Mock router to return None (so it falls back to DB resolution)
     mock_router = MagicMock()
     mock_router.get_deployment_by_model_group_name.return_value = None
-    
-    with patch(
-        "litellm.proxy.proxy_server.prisma_client",
-        mock_prisma_client
-    ), patch(
-        "litellm.proxy.proxy_server.llm_router",
-        mock_router
-    ), patch(
-        "litellm.proxy.vector_store_endpoints.management_endpoints.decrypt_value_helper",
-        side_effect=lambda value, key, return_original_value: value
-    ), patch.object(
-        litellm, "vector_store_registry", mock_registry
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client),
+        patch("litellm.proxy.proxy_server.llm_router", mock_router),
+        patch(
+            "litellm.proxy.vector_store_endpoints.management_endpoints.decrypt_value_helper",
+            side_effect=lambda value, key, return_original_value: value,
+        ),
+        patch.object(litellm, "vector_store_registry", mock_registry),
     ):
         result = await new_vector_store(
-            vector_store=vector_store_data,
-            user_api_key_dict=mock_user_api_key
+            vector_store=vector_store_data, user_api_key_dict=mock_user_api_key
         )
-    
+
     assert result["status"] == "success"
     # Verify that embedding config was resolved and included in the create call
     litellm_params_json = captured_create_data.get("litellm_params")
     assert litellm_params_json is not None
     litellm_params_dict = json.loads(litellm_params_json)
     assert "litellm_embedding_config" in litellm_params_dict
-    assert litellm_params_dict["litellm_embedding_config"]["api_key"] == "resolved-api-key"
-    assert litellm_params_dict["litellm_embedding_config"]["api_base"] == "https://api.openai.com"
-    assert litellm_params_dict["litellm_embedding_config"]["api_version"] == "2024-01-01"
+    assert (
+        litellm_params_dict["litellm_embedding_config"]["api_key"] == "resolved-api-key"
+    )
+    assert (
+        litellm_params_dict["litellm_embedding_config"]["api_base"]
+        == "https://api.openai.com"
+    )
+    assert (
+        litellm_params_dict["litellm_embedding_config"]["api_version"] == "2024-01-01"
+    )
 
 
 def test_resolve_embedding_config_from_router():
     """Test that _resolve_embedding_config_from_router correctly extracts credentials from config-defined models."""
     from litellm.types.router import Deployment, LiteLLM_Params
-    
+
     # Create a mock router with a model
     mock_router = MagicMock()
-    
+
     # Create a mock deployment with litellm_params
     mock_litellm_params = MagicMock(spec=LiteLLM_Params)
     mock_litellm_params.api_key = "config-api-key"
     mock_litellm_params.api_base = "https://config-api-base.com"
     mock_litellm_params.api_version = "2024-02-01"
-    
+
     mock_deployment = MagicMock(spec=Deployment)
     mock_deployment.litellm_params = mock_litellm_params
-    
+
     mock_router.get_deployment_by_model_group_name.return_value = mock_deployment
-    
+
     # Test resolution
     result = _resolve_embedding_config_from_router(
-        embedding_model="text-embedding-ada-002",
-        llm_router=mock_router
+        embedding_model="text-embedding-ada-002", llm_router=mock_router
     )
-    
+
     assert result is not None
     assert result["api_key"] == "config-api-key"
     assert result["api_base"] == "https://config-api-base.com"
     assert result["api_version"] == "2024-02-01"
-    
+
     mock_router.get_deployment_by_model_group_name.assert_called_once_with(
         model_group_name="text-embedding-ada-002"
     )
@@ -1420,32 +1451,31 @@ def test_resolve_embedding_config_from_router():
 def test_resolve_embedding_config_from_router_with_provider_prefix():
     """Test that _resolve_embedding_config_from_router handles provider prefixes like 'azure/model-name'."""
     from litellm.types.router import Deployment, LiteLLM_Params
-    
+
     # Create a mock router
     mock_router = MagicMock()
-    
+
     # Create a mock deployment
     mock_litellm_params = MagicMock(spec=LiteLLM_Params)
     mock_litellm_params.api_key = "azure-api-key"
     mock_litellm_params.api_base = "https://azure-endpoint.openai.azure.com"
     mock_litellm_params.api_version = "2024-02-15"
-    
+
     mock_deployment = MagicMock(spec=Deployment)
     mock_deployment.litellm_params = mock_litellm_params
-    
+
     # First call with full name returns None, second call with stripped name returns deployment
     mock_router.get_deployment_by_model_group_name.side_effect = [None, mock_deployment]
-    
+
     result = _resolve_embedding_config_from_router(
-        embedding_model="azure/text-embedding-3-large",
-        llm_router=mock_router
+        embedding_model="azure/text-embedding-3-large", llm_router=mock_router
     )
-    
+
     assert result is not None
     assert result["api_key"] == "azure-api-key"
     assert result["api_base"] == "https://azure-endpoint.openai.azure.com"
     assert result["api_version"] == "2024-02-15"
-    
+
     # Should have tried both the full name and stripped name
     assert mock_router.get_deployment_by_model_group_name.call_count == 2
 
@@ -1454,45 +1484,43 @@ def test_resolve_embedding_config_from_router_returns_none_when_not_found():
     """Test that _resolve_embedding_config_from_router returns None when model is not in router."""
     mock_router = MagicMock()
     mock_router.get_deployment_by_model_group_name.return_value = None
-    
+
     result = _resolve_embedding_config_from_router(
-        embedding_model="nonexistent-model",
-        llm_router=mock_router
+        embedding_model="nonexistent-model", llm_router=mock_router
     )
-    
+
     assert result is None
 
 
 def test_resolve_embedding_config_from_router_handles_os_environ():
     """Test that _resolve_embedding_config_from_router handles os.environ/ prefixed values."""
     from litellm.types.router import Deployment, LiteLLM_Params
-    
+
     mock_router = MagicMock()
-    
+
     mock_litellm_params = MagicMock(spec=LiteLLM_Params)
     mock_litellm_params.api_key = "os.environ/OPENAI_API_KEY"
     mock_litellm_params.api_base = "https://direct-url.com"
     mock_litellm_params.api_version = None
-    
+
     mock_deployment = MagicMock(spec=Deployment)
     mock_deployment.litellm_params = mock_litellm_params
-    
+
     mock_router.get_deployment_by_model_group_name.return_value = mock_deployment
-    
+
     with patch(
         "litellm.proxy.vector_store_endpoints.management_endpoints.get_secret",
-        return_value="resolved-from-env"
+        return_value="resolved-from-env",
     ) as mock_get_secret:
         result = _resolve_embedding_config_from_router(
-            embedding_model="text-embedding-ada-002",
-            llm_router=mock_router
+            embedding_model="text-embedding-ada-002", llm_router=mock_router
         )
-    
+
     assert result is not None
     assert result["api_key"] == "resolved-from-env"
     assert result["api_base"] == "https://direct-url.com"
     assert "api_version" not in result
-    
+
     mock_get_secret.assert_called_once_with("os.environ/OPENAI_API_KEY")
 
 
@@ -1500,33 +1528,33 @@ def test_resolve_embedding_config_from_router_handles_os_environ():
 async def test_resolve_embedding_config_tries_router_then_db():
     """Test that _resolve_embedding_config tries router first, then falls back to DB."""
     from litellm.types.router import Deployment, LiteLLM_Params
-    
+
     mock_prisma_client = MagicMock()
     mock_router = MagicMock()
-    
+
     # Router has the model
     mock_litellm_params = MagicMock(spec=LiteLLM_Params)
     mock_litellm_params.api_key = "router-api-key"
     mock_litellm_params.api_base = "https://router-api-base.com"
     mock_litellm_params.api_version = None
-    
+
     mock_deployment = MagicMock(spec=Deployment)
     mock_deployment.litellm_params = mock_litellm_params
-    
+
     mock_router.get_deployment_by_model_group_name.return_value = mock_deployment
-    
+
     # DB should NOT be called since router has the model
     mock_prisma_client.db.litellm_proxymodeltable.find_first = AsyncMock()
-    
+
     result = await _resolve_embedding_config(
         embedding_model="text-embedding-ada-002",
         prisma_client=mock_prisma_client,
-        llm_router=mock_router
+        llm_router=mock_router,
     )
-    
+
     assert result is not None
     assert result["api_key"] == "router-api-key"
-    
+
     # DB should NOT have been called since router found the model
     mock_prisma_client.db.litellm_proxymodeltable.find_first.assert_not_called()
 
@@ -1536,10 +1564,10 @@ async def test_resolve_embedding_config_falls_back_to_db():
     """Test that _resolve_embedding_config falls back to DB when router doesn't have the model."""
     mock_prisma_client = MagicMock()
     mock_router = MagicMock()
-    
+
     # Router doesn't have the model
     mock_router.get_deployment_by_model_group_name.return_value = None
-    
+
     # DB has the model
     mock_db_model = MagicMock()
     mock_db_model.litellm_params = {
@@ -1549,20 +1577,20 @@ async def test_resolve_embedding_config_falls_back_to_db():
     mock_prisma_client.db.litellm_proxymodeltable.find_first = AsyncMock(
         return_value=mock_db_model
     )
-    
+
     with patch(
         "litellm.proxy.vector_store_endpoints.management_endpoints.decrypt_value_helper",
-        side_effect=lambda value, key, return_original_value: value
+        side_effect=lambda value, key, return_original_value: value,
     ):
         result = await _resolve_embedding_config(
             embedding_model="text-embedding-ada-002",
             prisma_client=mock_prisma_client,
-            llm_router=mock_router
+            llm_router=mock_router,
         )
-    
+
     assert result is not None
     assert result["api_key"] == "db-api-key"
-    
+
     # DB should have been called since router didn't find the model
     mock_prisma_client.db.litellm_proxymodeltable.find_first.assert_called()
 
@@ -1574,9 +1602,9 @@ async def test_new_vector_store_auto_resolves_from_router():
 
     from litellm.types.router import Deployment, LiteLLM_Params
     from litellm.types.vector_stores import LiteLLM_ManagedVectorStore
-    
+
     mock_prisma_client = MagicMock()
-    
+
     # Mock vector store request with embedding_model but no embedding_config
     vector_store_data: LiteLLM_ManagedVectorStore = {
         "vector_store_id": "test-store-router-001",
@@ -1584,75 +1612,78 @@ async def test_new_vector_store_auto_resolves_from_router():
         "litellm_params": {
             "litellm_embedding_model": "config-embedding-model",
             # Note: litellm_embedding_config is not provided
-        }
+        },
     }
-    
+
     # Mock router with the model
     mock_router = MagicMock()
     mock_litellm_params = MagicMock(spec=LiteLLM_Params)
     mock_litellm_params.api_key = "router-resolved-api-key"
     mock_litellm_params.api_base = "https://router-resolved-base.com"
     mock_litellm_params.api_version = "2024-03-01"
-    
+
     mock_deployment = MagicMock(spec=Deployment)
     mock_deployment.litellm_params = mock_litellm_params
-    
+
     mock_router.get_deployment_by_model_group_name.return_value = mock_deployment
-    
+
     # Mock user API key
     mock_user_api_key = MagicMock(spec=UserAPIKeyAuth)
     mock_user_api_key.user_role = None
     mock_user_api_key.team_id = None
     mock_user_api_key.user_id = None
-    
+
     # Mock database operations
     mock_prisma_client.db.litellm_managedvectorstorestable.find_unique = AsyncMock(
         return_value=None  # Vector store doesn't exist yet
     )
-    
+
     # Track what was passed to create
     captured_create_data = {}
-    
+
     async def mock_create(*args, **kwargs):
         captured_create_data.update(kwargs.get("data", {}))
         mock_created_vector_store = MagicMock()
         mock_created_vector_store.model_dump.return_value = {
             "vector_store_id": "test-store-router-001",
             "custom_llm_provider": "openai",
-            "litellm_params": kwargs.get("data", {}).get("litellm_params")
+            "litellm_params": kwargs.get("data", {}).get("litellm_params"),
         }
         return mock_created_vector_store
-    
+
     mock_prisma_client.db.litellm_managedvectorstorestable.create = AsyncMock(
         side_effect=mock_create
     )
-    
+
     mock_registry = MagicMock()
     mock_registry.add_vector_store_to_registry = MagicMock()
-    
-    with patch(
-        "litellm.proxy.proxy_server.prisma_client",
-        mock_prisma_client
-    ), patch(
-        "litellm.proxy.proxy_server.llm_router",
-        mock_router
-    ), patch.object(
-        litellm, "vector_store_registry", mock_registry
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client),
+        patch("litellm.proxy.proxy_server.llm_router", mock_router),
+        patch.object(litellm, "vector_store_registry", mock_registry),
     ):
         result = await new_vector_store(
-            vector_store=vector_store_data,
-            user_api_key_dict=mock_user_api_key
+            vector_store=vector_store_data, user_api_key_dict=mock_user_api_key
         )
-    
+
     assert result["status"] == "success"
     # Verify that embedding config was resolved from router and included in the create call
     litellm_params_json = captured_create_data.get("litellm_params")
     assert litellm_params_json is not None
     litellm_params_dict = json.loads(litellm_params_json)
     assert "litellm_embedding_config" in litellm_params_dict
-    assert litellm_params_dict["litellm_embedding_config"]["api_key"] == "router-resolved-api-key"
-    assert litellm_params_dict["litellm_embedding_config"]["api_base"] == "https://router-resolved-base.com"
-    assert litellm_params_dict["litellm_embedding_config"]["api_version"] == "2024-03-01"
+    assert (
+        litellm_params_dict["litellm_embedding_config"]["api_key"]
+        == "router-resolved-api-key"
+    )
+    assert (
+        litellm_params_dict["litellm_embedding_config"]["api_base"]
+        == "https://router-resolved-base.com"
+    )
+    assert (
+        litellm_params_dict["litellm_embedding_config"]["api_version"] == "2024-03-01"
+    )
 
 
 class TestCheckVectorStoreAccess:
@@ -1665,10 +1696,10 @@ class TestCheckVectorStoreAccess:
             "custom_llm_provider": "openai",
             # No team_id field
         }
-        
+
         mock_user_api_key = MagicMock(spec=UserAPIKeyAuth)
         mock_user_api_key.team_id = "team-123"
-        
+
         result = _check_vector_store_access(vector_store, mock_user_api_key)
         assert result is True
 
@@ -1679,10 +1710,10 @@ class TestCheckVectorStoreAccess:
             "custom_llm_provider": "openai",
             "team_id": "team-123",
         }
-        
+
         mock_user_api_key = MagicMock(spec=UserAPIKeyAuth)
         mock_user_api_key.team_id = "team-123"
-        
+
         result = _check_vector_store_access(vector_store, mock_user_api_key)
         assert result is True
 
@@ -1693,10 +1724,10 @@ class TestCheckVectorStoreAccess:
             "custom_llm_provider": "openai",
             "team_id": "team-123",
         }
-        
+
         mock_user_api_key = MagicMock(spec=UserAPIKeyAuth)
         mock_user_api_key.team_id = "team-456"
-        
+
         result = _check_vector_store_access(vector_store, mock_user_api_key)
         assert result is False
 
@@ -1707,10 +1738,10 @@ class TestCheckVectorStoreAccess:
             "custom_llm_provider": "openai",
             "team_id": "team-123",
         }
-        
+
         mock_user_api_key = MagicMock(spec=UserAPIKeyAuth)
         mock_user_api_key.team_id = None
-        
+
         result = _check_vector_store_access(vector_store, mock_user_api_key)
         assert result is False
 
@@ -1719,9 +1750,9 @@ class TestCheckVectorStoreAccess:
 async def test_create_vector_store_in_db():
     """Test that create_vector_store_in_db correctly creates a vector store in the database."""
     from datetime import datetime, timezone
-    
+
     mock_prisma_client = MagicMock()
-    
+
     # Mock vector store data
     vector_store_id = "test-create-store-001"
     custom_llm_provider = "openai"
@@ -1731,12 +1762,12 @@ async def test_create_vector_store_in_db():
     litellm_params = {"api_key": "test-key"}
     team_id = "team-123"
     user_id = "user-456"
-    
+
     # Mock database operations
     mock_prisma_client.db.litellm_managedvectorstorestable.find_unique = AsyncMock(
         return_value=None  # Vector store doesn't exist yet
     )
-    
+
     created_vector_store_data = {
         "vector_store_id": vector_store_id,
         "custom_llm_provider": custom_llm_provider,
@@ -1749,17 +1780,17 @@ async def test_create_vector_store_in_db():
         "created_at": datetime.now(timezone.utc),
         "updated_at": datetime.now(timezone.utc),
     }
-    
+
     mock_created_vector_store = MagicMock()
     mock_created_vector_store.model_dump.return_value = created_vector_store_data
-    
+
     mock_prisma_client.db.litellm_managedvectorstorestable.create = AsyncMock(
         return_value=mock_created_vector_store
     )
-    
+
     mock_registry = MagicMock()
     mock_registry.add_vector_store_to_registry = MagicMock()
-    
+
     with patch.object(litellm, "vector_store_registry", mock_registry):
         result = await create_vector_store_in_db(
             vector_store_id=vector_store_id,
@@ -1772,23 +1803,25 @@ async def test_create_vector_store_in_db():
             team_id=team_id,
             user_id=user_id,
         )
-    
+
     # Verify the result
     assert result is not None
     assert result["vector_store_id"] == vector_store_id
     assert result["custom_llm_provider"] == custom_llm_provider
-    
+
     # Verify database was called correctly
     mock_prisma_client.db.litellm_managedvectorstorestable.find_unique.assert_called_once_with(
         where={"vector_store_id": vector_store_id}
     )
     mock_prisma_client.db.litellm_managedvectorstorestable.create.assert_called_once()
-    
+
     # Verify registry was updated
     mock_registry.add_vector_store_to_registry.assert_called_once()
-    
+
     # Verify that create was called with correct data structure
-    create_call_args = mock_prisma_client.db.litellm_managedvectorstorestable.create.call_args
+    create_call_args = (
+        mock_prisma_client.db.litellm_managedvectorstorestable.create.call_args
+    )
     create_data = create_call_args.kwargs.get("data", {})
     assert create_data["vector_store_id"] == vector_store_id
     assert create_data["custom_llm_provider"] == custom_llm_provider
@@ -1802,25 +1835,25 @@ async def test_create_vector_store_in_db():
 async def test_create_vector_store_in_db_raises_when_exists():
     """Test that create_vector_store_in_db raises HTTPException when vector store already exists."""
     mock_prisma_client = MagicMock()
-    
+
     vector_store_id = "existing-store"
-    
+
     # Mock that vector store already exists
     existing_vector_store = MagicMock()
     mock_prisma_client.db.litellm_managedvectorstorestable.find_unique = AsyncMock(
         return_value=existing_vector_store
     )
-    
+
     with pytest.raises(HTTPException) as exc_info:
         await create_vector_store_in_db(
             vector_store_id=vector_store_id,
             custom_llm_provider="openai",
             prisma_client=mock_prisma_client,
         )
-    
+
     assert exc_info.value.status_code == 400
     assert "already exists" in exc_info.value.detail.lower()
-    
+
     # Verify create was not called
     mock_prisma_client.db.litellm_managedvectorstorestable.create.assert_not_called()
 
@@ -1834,6 +1867,6 @@ async def test_create_vector_store_in_db_raises_when_no_db():
             custom_llm_provider="openai",
             prisma_client=None,
         )
-    
+
     assert exc_info.value.status_code == 500
     assert "database not connected" in exc_info.value.detail.lower()

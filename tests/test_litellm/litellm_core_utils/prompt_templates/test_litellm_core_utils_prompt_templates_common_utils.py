@@ -246,7 +246,7 @@ def test_split_concatenated_json_empty_string():
 
 def test_split_concatenated_json_non_dict_value():
     """Non-dict JSON values (e.g. arrays, strings) are replaced with {}."""
-    result = split_concatenated_json_objects('[1, 2, 3]')
+    result = split_concatenated_json_objects("[1, 2, 3]")
     assert result == [{}]
 
 

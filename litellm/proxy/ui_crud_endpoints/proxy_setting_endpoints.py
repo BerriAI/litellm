@@ -97,7 +97,24 @@ class UISettings(BaseModel):
 
     forward_client_headers_to_llm_api: bool = Field(
         default=False,
-        description="If enabled, forwards client headers (e.g. Authorization) to the LLM API. Required for Claude Code with Max subscription.",
+        description=(
+            "Forwards client headers (Authorization, anthropic-beta, and x-* "
+            "custom headers) to the upstream LLM. Enable for Claude Code with a "
+            "Max subscription (forwards the OAuth token) or to pass custom/tracing "
+            "headers through to the provider. Independent of the BYOK toggle — "
+            "enable only the one(s) you need."
+        ),
+    )
+
+    forward_llm_provider_auth_headers: bool = Field(
+        default=False,
+        description=(
+            "Forwards provider auth headers (x-api-key, x-goog-api-key, api-key, "
+            "ocp-apim-subscription-key) to the upstream LLM, overriding any "
+            "deployment-configured key for that request. Enable for Claude Code "
+            "BYOK (clients bring their own API key). Independent of the "
+            "client-headers toggle — enable only the one(s) you need."
+        ),
     )
 
     enable_projects_ui: bool = Field(
@@ -149,6 +166,7 @@ ALLOWED_UI_SETTINGS_FIELDS = {
     "enabled_ui_pages_internal_users",
     "require_auth_for_public_ai_hub",
     "forward_client_headers_to_llm_api",
+    "forward_llm_provider_auth_headers",
     "enable_projects_ui",
     "disable_agents_for_internal_users",
     "allow_agents_for_team_admins",
@@ -162,6 +180,7 @@ ALLOWED_UI_SETTINGS_FIELDS = {
 # general_settings at runtime (on both read and write).
 _RUNTIME_GENERAL_SETTINGS_FLAGS = [
     "forward_client_headers_to_llm_api",
+    "forward_llm_provider_auth_headers",
     "disable_agents_for_internal_users",
     "allow_agents_for_team_admins",
     "disable_vector_stores_for_internal_users",

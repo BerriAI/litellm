@@ -111,7 +111,9 @@ async def poll_key_spend_until_nonzero(
         key_info = await get_spend_info(session, "key", key)
         spend = key_info["info"]["spend"]
         if spend > 0:
-            print(f"Key spend became non-zero ({spend}) after {time.time() - start:.1f}s")
+            print(
+                f"Key spend became non-zero ({spend}) after {time.time() - start:.1f}s"
+            )
             return spend
         print(f"Key spend still 0.0, waiting... ({time.time() - start:.1f}s elapsed)")
         await asyncio.sleep(interval)
@@ -201,7 +203,9 @@ async def test_basic_spend_accuracy():
             key_info = await get_spend_info(session, "key", key)
             current_spend = key_info["info"]["spend"]
             if abs(current_spend - expected_spend) < TOLERANCE:
-                print(f"Key spend reached expected {expected_spend} after {time.time() - start:.1f}s")
+                print(
+                    f"Key spend reached expected {expected_spend} after {time.time() - start:.1f}s"
+                )
                 break
             print(f"Key spend {current_spend}, expected {expected_spend}, waiting...")
             await asyncio.sleep(10)
@@ -293,7 +297,9 @@ async def test_long_term_spend_accuracy_with_bursts():
             key_info_check = await get_spend_info(session, "key", key)
             current_spend = key_info_check["info"]["spend"]
             if abs(current_spend - burst_1_expected) < TOLERANCE:
-                print(f"Burst 1 spend reached expected {burst_1_expected} after {time.time() - start:.1f}s")
+                print(
+                    f"Burst 1 spend reached expected {burst_1_expected} after {time.time() - start:.1f}s"
+                )
                 break
             print(f"Key spend {current_spend}, expected {burst_1_expected}, waiting...")
             await asyncio.sleep(10)
@@ -318,9 +324,7 @@ async def test_long_term_spend_accuracy_with_bursts():
                     f"Total spend reached expected {expected_spend} after {time.time() - start:.1f}s"
                 )
                 break
-            print(
-                f"Key spend {current_spend}, expected {expected_spend}, waiting..."
-            )
+            print(f"Key spend {current_spend}, expected {expected_spend}, waiting...")
             await asyncio.sleep(10)
 
         # Allow extra time for all entity spend aggregations

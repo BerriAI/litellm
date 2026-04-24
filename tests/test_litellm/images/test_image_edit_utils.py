@@ -22,9 +22,7 @@ class MockImageEditConfig(BaseImageEditConfig):
     ) -> Dict[str, Any]:
         return dict(image_edit_optional_params)
 
-    def get_complete_url(
-        self, model: str, api_base: str, litellm_params: dict
-    ) -> str:
+    def get_complete_url(self, model: str, api_base: str, litellm_params: dict) -> str:
         return "https://example.com/api"
 
     def validate_environment(
@@ -213,21 +211,24 @@ class TestImageEditCustomPricing:
 
         mock_logging_obj.update_from_kwargs = capturing_update
 
-        with patch(
-            "litellm.images.main.get_llm_provider",
-            return_value=("test-model", "openai", None, None),
-        ), patch(
-            "litellm.images.main.ProviderConfigManager.get_provider_image_edit_config",
-            return_value=MagicMock(),
-        ), patch(
-            "litellm.images.main._get_ImageEditRequestUtils",
-            return_value=MagicMock(
-                get_requested_image_edit_optional_param=MagicMock(return_value={}),
-                get_optional_params_image_edit=MagicMock(return_value={}),
+        with (
+            patch(
+                "litellm.images.main.get_llm_provider",
+                return_value=("test-model", "openai", None, None),
             ),
-        ), patch(
-            "litellm.images.main.base_llm_http_handler"
-        ) as mock_handler:
+            patch(
+                "litellm.images.main.ProviderConfigManager.get_provider_image_edit_config",
+                return_value=MagicMock(),
+            ),
+            patch(
+                "litellm.images.main._get_ImageEditRequestUtils",
+                return_value=MagicMock(
+                    get_requested_image_edit_optional_param=MagicMock(return_value={}),
+                    get_optional_params_image_edit=MagicMock(return_value={}),
+                ),
+            ),
+            patch("litellm.images.main.base_llm_http_handler") as mock_handler,
+        ):
             mock_handler.image_edit_handler.return_value = MagicMock()
 
             try:

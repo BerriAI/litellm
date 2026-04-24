@@ -47,7 +47,9 @@ class TestChatGPTToolCallNormalizer:
     def test_single_tool_call_index_preserved(self):
         """A single tool call should get index=0."""
         chunks = [
-            _make_chunk(tool_calls=[_make_tc(index=0, id="call_1", name="get_weather")]),
+            _make_chunk(
+                tool_calls=[_make_tc(index=0, id="call_1", name="get_weather")]
+            ),
             _make_chunk(tool_calls=[_make_tc(index=0, arguments='{"loc')]),
             _make_chunk(tool_calls=[_make_tc(index=0, arguments='ation": "NYC"}')]),
         ]
@@ -67,11 +69,17 @@ class TestChatGPTToolCallNormalizer:
         """
         chunks = [
             # First tool call: intro chunk with id + name
-            _make_chunk(tool_calls=[_make_tc(index=0, id="call_aaa", name="get_weather")]),
+            _make_chunk(
+                tool_calls=[_make_tc(index=0, id="call_aaa", name="get_weather")]
+            ),
             # First tool call: arguments streaming
-            _make_chunk(tool_calls=[_make_tc(index=0, arguments='{"location": "NYC"}')]),
+            _make_chunk(
+                tool_calls=[_make_tc(index=0, arguments='{"location": "NYC"}')]
+            ),
             # First tool call: duplicate closing chunk (id repeated) — should be skipped
-            _make_chunk(tool_calls=[_make_tc(index=0, id="call_aaa", name="get_weather")]),
+            _make_chunk(
+                tool_calls=[_make_tc(index=0, id="call_aaa", name="get_weather")]
+            ),
             # Second tool call: intro chunk with id + name (index=0 from ChatGPT)
             _make_chunk(tool_calls=[_make_tc(index=0, id="call_bbb", name="get_time")]),
             # Second tool call: arguments streaming

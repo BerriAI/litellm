@@ -21,6 +21,7 @@ from litellm.proxy._types import InvitationClaim
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _make_invite(*, is_accepted: bool, expired: bool = False) -> MagicMock:
     now = litellm.utils.get_utc_datetime()
     invite = MagicMock()
@@ -66,8 +67,10 @@ async def test_get_token_rejects_already_used_link():
     prisma = _make_prisma(invite)
     request = MagicMock()
 
-    with patch("litellm.proxy.proxy_server.prisma_client", prisma), \
-         patch("litellm.proxy.proxy_server.master_key", "sk-test"):
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", prisma),
+        patch("litellm.proxy.proxy_server.master_key", "sk-test"),
+    ):
         with pytest.raises(HTTPException) as exc_info:
             await onboarding(invite_link="invite-abc", request=request)
 
@@ -86,8 +89,10 @@ async def test_get_token_rejects_expired_link():
     prisma = _make_prisma(invite)
     request = MagicMock()
 
-    with patch("litellm.proxy.proxy_server.prisma_client", prisma), \
-         patch("litellm.proxy.proxy_server.master_key", "sk-test"):
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", prisma),
+        patch("litellm.proxy.proxy_server.master_key", "sk-test"),
+    ):
         with pytest.raises(HTTPException) as exc_info:
             await onboarding(invite_link="invite-abc", request=request)
 
@@ -103,8 +108,10 @@ async def test_get_token_rejects_missing_link():
     prisma = _make_prisma(invite=None)  # type: ignore[arg-type]
     request = MagicMock()
 
-    with patch("litellm.proxy.proxy_server.prisma_client", prisma), \
-         patch("litellm.proxy.proxy_server.master_key", "sk-test"):
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", prisma),
+        patch("litellm.proxy.proxy_server.master_key", "sk-test"),
+    ):
         with pytest.raises(HTTPException) as exc_info:
             await onboarding(invite_link="nonexistent", request=request)
 
@@ -128,18 +135,26 @@ async def test_get_token_does_not_set_is_accepted():
 
     mock_token_response = {"token": "sk-generated-key", "user_id": "user-123"}
 
-    with patch("litellm.proxy.proxy_server.prisma_client", prisma), \
-         patch("litellm.proxy.proxy_server.master_key", "sk-test"), \
-         patch("litellm.proxy.proxy_server.general_settings", {}), \
-         patch("litellm.proxy.proxy_server.premium_user", False), \
-         patch(
-             "litellm.proxy.proxy_server.generate_key_helper_fn",
-             new_callable=AsyncMock,
-             return_value=mock_token_response,
-         ), \
-         patch("litellm.proxy.proxy_server.get_custom_url", return_value="http://localhost:4000/"), \
-         patch("litellm.proxy.proxy_server.get_disabled_non_admin_personal_key_creation", return_value=False), \
-         patch("litellm.proxy.proxy_server.get_server_root_path", return_value=""):
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", prisma),
+        patch("litellm.proxy.proxy_server.master_key", "sk-test"),
+        patch("litellm.proxy.proxy_server.general_settings", {}),
+        patch("litellm.proxy.proxy_server.premium_user", False),
+        patch(
+            "litellm.proxy.proxy_server.generate_key_helper_fn",
+            new_callable=AsyncMock,
+            return_value=mock_token_response,
+        ),
+        patch(
+            "litellm.proxy.proxy_server.get_custom_url",
+            return_value="http://localhost:4000/",
+        ),
+        patch(
+            "litellm.proxy.proxy_server.get_disabled_non_admin_personal_key_creation",
+            return_value=False,
+        ),
+        patch("litellm.proxy.proxy_server.get_server_root_path", return_value=""),
+    ):
         result = await onboarding(invite_link="invite-abc", request=request)
 
     # Endpoint succeeded

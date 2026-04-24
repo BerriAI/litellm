@@ -79,11 +79,13 @@ def test_decode_realtime_token_payload_valid():
 
 
 def test_decode_realtime_token_payload_invalid_version():
-    payload = json.dumps({
-        "v": "realtime_v2",
-        "ephemeral_key": "epk",
-        "model_id": "gpt-4o",
-    })
+    payload = json.dumps(
+        {
+            "v": "realtime_v2",
+            "ephemeral_key": "epk",
+            "model_id": "gpt-4o",
+        }
+    )
     assert _decode_realtime_token_payload(payload) is None
 
 
@@ -97,11 +99,13 @@ def test_decode_realtime_token_payload_missing_ephemeral_key():
 
 
 def test_decode_realtime_token_payload_ephemeral_key_not_string():
-    payload = json.dumps({
-        "v": "realtime_v1",
-        "ephemeral_key": 123,
-        "model_id": "gpt-4o",
-    })
+    payload = json.dumps(
+        {
+            "v": "realtime_v1",
+            "ephemeral_key": 123,
+            "model_id": "gpt-4o",
+        }
+    )
     assert _decode_realtime_token_payload(payload) is None
 
 
@@ -122,7 +126,9 @@ def mock_route_request_client_secrets():
     future_expires_at = int(time.time()) + 3600
     mock_resp = MagicMock(spec=httpx.Response)
     mock_resp.status_code = 200
-    mock_resp.text = f'{{"value":"upstream_ephemeral_key","expires_at":{future_expires_at}}}'
+    mock_resp.text = (
+        f'{{"value":"upstream_ephemeral_key","expires_at":{future_expires_at}}}'
+    )
     mock_resp.content = f'{{"value":"upstream_ephemeral_key","expires_at":{future_expires_at}}}'.encode()
     mock_resp.headers = {}
     mock_resp.json.return_value = {
@@ -213,9 +219,7 @@ async def test_client_secrets_success_with_mock(
                 "litellm.proxy.proxy_server.add_litellm_data_to_request",
                 side_effect=mock_add_litellm_data,
             ),
-            patch(
-                "litellm.proxy.proxy_server.proxy_logging_obj"
-            ) as mock_logging,
+            patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_logging,
         ):
             mock_logging.pre_call_hook = AsyncMock(side_effect=mock_pre_call_hook)
             mock_logging.post_call_failure_hook = AsyncMock()
@@ -297,9 +301,7 @@ async def test_realtime_calls_success_with_valid_encrypted_token(
             "litellm.proxy.proxy_server.add_litellm_data_to_request",
             side_effect=mock_add_litellm_data,
         ),
-        patch(
-            "litellm.proxy.proxy_server.proxy_logging_obj"
-        ) as mock_logging,
+        patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_logging,
     ):
         mock_logging.pre_call_hook = AsyncMock(side_effect=mock_pre_call_hook)
         mock_logging.post_call_failure_hook = AsyncMock()

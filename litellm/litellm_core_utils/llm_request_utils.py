@@ -56,8 +56,9 @@ def pick_cheapest_chat_models_from_llm_provider(custom_llm_provider: str, n=1):
             continue
         if model_info.get("mode") != "chat":
             continue
-        _cost = (model_info.get("input_cost_per_token") or 0.0) + (model_info.get(
-            "output_cost_per_token") or 0.0)
+        _cost = (model_info.get("input_cost_per_token") or 0.0) + (
+            model_info.get("output_cost_per_token") or 0.0
+        )
         model_costs.append((model, _cost))
 
     # Sort by cost (ascending)

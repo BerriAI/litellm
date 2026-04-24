@@ -112,11 +112,16 @@ async def test_non_retryable_error_in_retry_loop_raises_immediately():
         else:
             raise context_window_error
 
-    with patch.object(router, "make_call", side_effect=mock_make_call), \
-         patch.object(router, "_async_get_healthy_deployments",
-                      return_value=(["d1", "d2"], ["d1", "d2"])), \
-         patch.object(router, "_time_to_sleep_before_retry", return_value=0), \
-         patch.object(router, "log_retry", side_effect=lambda kwargs, e: kwargs):
+    with (
+        patch.object(router, "make_call", side_effect=mock_make_call),
+        patch.object(
+            router,
+            "_async_get_healthy_deployments",
+            return_value=(["d1", "d2"], ["d1", "d2"]),
+        ),
+        patch.object(router, "_time_to_sleep_before_retry", return_value=0),
+        patch.object(router, "log_retry", side_effect=lambda kwargs, e: kwargs),
+    ):
         with pytest.raises(litellm.ContextWindowExceededError):
             await router.async_function_with_retries(
                 num_retries=2,
@@ -145,11 +150,16 @@ async def test_bad_request_error_in_retry_loop_raises_immediately():
         else:
             raise bad_request_error
 
-    with patch.object(router, "make_call", side_effect=mock_make_call), \
-         patch.object(router, "_async_get_healthy_deployments",
-                      return_value=(["d1", "d2"], ["d1", "d2"])), \
-         patch.object(router, "_time_to_sleep_before_retry", return_value=0), \
-         patch.object(router, "log_retry", side_effect=lambda kwargs, e: kwargs):
+    with (
+        patch.object(router, "make_call", side_effect=mock_make_call),
+        patch.object(
+            router,
+            "_async_get_healthy_deployments",
+            return_value=(["d1", "d2"], ["d1", "d2"]),
+        ),
+        patch.object(router, "_time_to_sleep_before_retry", return_value=0),
+        patch.object(router, "log_retry", side_effect=lambda kwargs, e: kwargs),
+    ):
         with pytest.raises(litellm.BadRequestError):
             await router.async_function_with_retries(
                 num_retries=2,
@@ -172,11 +182,16 @@ async def test_original_exception_updated_to_latest_error():
         call_count += 1
         raise _make_rate_limit_error(f"Rate limit attempt {call_count}")
 
-    with patch.object(router, "make_call", side_effect=mock_make_call), \
-         patch.object(router, "_async_get_healthy_deployments",
-                      return_value=(["d1", "d2"], ["d1", "d2"])), \
-         patch.object(router, "_time_to_sleep_before_retry", return_value=0), \
-         patch.object(router, "log_retry", side_effect=lambda kwargs, e: kwargs):
+    with (
+        patch.object(router, "make_call", side_effect=mock_make_call),
+        patch.object(
+            router,
+            "_async_get_healthy_deployments",
+            return_value=(["d1", "d2"], ["d1", "d2"]),
+        ),
+        patch.object(router, "_time_to_sleep_before_retry", return_value=0),
+        patch.object(router, "log_retry", side_effect=lambda kwargs, e: kwargs),
+    ):
         with pytest.raises(litellm.RateLimitError) as exc_info:
             await router.async_function_with_retries(
                 num_retries=2,
@@ -201,11 +216,16 @@ async def test_retryable_errors_still_retry_normally():
         call_count += 1
         raise _make_rate_limit_error(f"Rate limit attempt {call_count}")
 
-    with patch.object(router, "make_call", side_effect=mock_make_call), \
-         patch.object(router, "_async_get_healthy_deployments",
-                      return_value=(["d1", "d2"], ["d1", "d2"])), \
-         patch.object(router, "_time_to_sleep_before_retry", return_value=0), \
-         patch.object(router, "log_retry", side_effect=lambda kwargs, e: kwargs):
+    with (
+        patch.object(router, "make_call", side_effect=mock_make_call),
+        patch.object(
+            router,
+            "_async_get_healthy_deployments",
+            return_value=(["d1", "d2"], ["d1", "d2"]),
+        ),
+        patch.object(router, "_time_to_sleep_before_retry", return_value=0),
+        patch.object(router, "log_retry", side_effect=lambda kwargs, e: kwargs),
+    ):
         with pytest.raises(litellm.RateLimitError):
             await router.async_function_with_retries(
                 num_retries=3,
@@ -236,11 +256,16 @@ async def test_not_found_error_in_retry_loop_raises_immediately():
         else:
             raise not_found_error
 
-    with patch.object(router, "make_call", side_effect=mock_make_call), \
-         patch.object(router, "_async_get_healthy_deployments",
-                      return_value=(["d1", "d2"], ["d1", "d2"])), \
-         patch.object(router, "_time_to_sleep_before_retry", return_value=0), \
-         patch.object(router, "log_retry", side_effect=lambda kwargs, e: kwargs):
+    with (
+        patch.object(router, "make_call", side_effect=mock_make_call),
+        patch.object(
+            router,
+            "_async_get_healthy_deployments",
+            return_value=(["d1", "d2"], ["d1", "d2"]),
+        ),
+        patch.object(router, "_time_to_sleep_before_retry", return_value=0),
+        patch.object(router, "log_retry", side_effect=lambda kwargs, e: kwargs),
+    ):
         with pytest.raises(litellm.NotFoundError):
             await router.async_function_with_retries(
                 num_retries=2,

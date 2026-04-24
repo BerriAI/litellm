@@ -9,6 +9,10 @@ import TabItem from '@theme/TabItem';
 import NavigationCards from '@site/src/components/NavigationCards';
 import Image from '@theme/IdealImage';
 
+:::note Security Update
+The Trivy supply-chain compromise has been contained :tada: . All affected packages have been deleted and current releases are free of the compromised code/component. Please refer to our [Security Townhall](/blog/security-townhall-updates) for a deeper understanding of the problem, and [CI/CD v2](/blog/ci-cd-v2-improvements) for how we're improving moving forward.
+:::
+
 <Image style={{padding: '10px', margin: '0 0 2.5rem'}} img={require('../img/hero.png')} />
 
 **LiteLLM** is an open-source library that gives you a single, unified interface to call 100+ LLMs — OpenAI, Anthropic, Vertex AI, Bedrock, and more — using the OpenAI format.

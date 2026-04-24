@@ -149,49 +149,60 @@ async def test_auth_builder_proxy_admin_user_role():
     jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth()
 
     # Mock all the dependencies and method calls
-    with patch.object(
-        jwt_handler, "auth_jwt", new_callable=AsyncMock
-    ) as mock_auth_jwt, patch.object(
-        JWTAuthManager, "check_rbac_role", new_callable=AsyncMock
-    ) as mock_check_rbac, patch.object(
-        jwt_handler, "get_rbac_role", return_value=None
-    ) as mock_get_rbac, patch.object(
-        jwt_handler, "get_scopes", return_value=[]
-    ) as mock_get_scopes, patch.object(
-        jwt_handler, "get_object_id", return_value=None
-    ) as mock_get_object_id, patch.object(
-        JWTAuthManager,
-        "get_user_info",
-        new_callable=AsyncMock,
-        return_value=("test_user_1", "test@example.com", True),
-    ) as mock_get_user_info, patch.object(
-        jwt_handler, "get_org_id", return_value=None
-    ) as mock_get_org_id, patch.object(
-        jwt_handler, "get_end_user_id", return_value=None
-    ) as mock_get_end_user_id, patch.object(
-        JWTAuthManager, "check_admin_access", new_callable=AsyncMock, return_value=None
-    ) as mock_check_admin, patch.object(
-        JWTAuthManager,
-        "find_and_validate_specific_team_id",
-        new_callable=AsyncMock,
-        return_value=(None, None),
-    ) as mock_find_team, patch.object(
-        JWTAuthManager, "get_all_team_ids", return_value=set()
-    ) as mock_get_all_team_ids, patch.object(
-        JWTAuthManager,
-        "find_team_with_model_access",
-        new_callable=AsyncMock,
-        return_value=(None, None),
-    ) as mock_find_team_access, patch.object(
-        JWTAuthManager,
-        "get_objects",
-        new_callable=AsyncMock,
-        return_value=(user_object, None, None, None),
-    ) as mock_get_objects, patch.object(
-        JWTAuthManager, "map_user_to_teams", new_callable=AsyncMock
-    ) as mock_map_user, patch.object(
-        JWTAuthManager, "validate_object_id", return_value=True
-    ) as mock_validate_object:
+    with (
+        patch.object(jwt_handler, "auth_jwt", new_callable=AsyncMock) as mock_auth_jwt,
+        patch.object(
+            JWTAuthManager, "check_rbac_role", new_callable=AsyncMock
+        ) as mock_check_rbac,
+        patch.object(jwt_handler, "get_rbac_role", return_value=None) as mock_get_rbac,
+        patch.object(jwt_handler, "get_scopes", return_value=[]) as mock_get_scopes,
+        patch.object(
+            jwt_handler, "get_object_id", return_value=None
+        ) as mock_get_object_id,
+        patch.object(
+            JWTAuthManager,
+            "get_user_info",
+            new_callable=AsyncMock,
+            return_value=("test_user_1", "test@example.com", True),
+        ) as mock_get_user_info,
+        patch.object(jwt_handler, "get_org_id", return_value=None) as mock_get_org_id,
+        patch.object(
+            jwt_handler, "get_end_user_id", return_value=None
+        ) as mock_get_end_user_id,
+        patch.object(
+            JWTAuthManager,
+            "check_admin_access",
+            new_callable=AsyncMock,
+            return_value=None,
+        ) as mock_check_admin,
+        patch.object(
+            JWTAuthManager,
+            "find_and_validate_specific_team_id",
+            new_callable=AsyncMock,
+            return_value=(None, None),
+        ) as mock_find_team,
+        patch.object(
+            JWTAuthManager, "get_all_team_ids", return_value=set()
+        ) as mock_get_all_team_ids,
+        patch.object(
+            JWTAuthManager,
+            "find_team_with_model_access",
+            new_callable=AsyncMock,
+            return_value=(None, None),
+        ) as mock_find_team_access,
+        patch.object(
+            JWTAuthManager,
+            "get_objects",
+            new_callable=AsyncMock,
+            return_value=(user_object, None, None, None),
+        ) as mock_get_objects,
+        patch.object(
+            JWTAuthManager, "map_user_to_teams", new_callable=AsyncMock
+        ) as mock_map_user,
+        patch.object(
+            JWTAuthManager, "validate_object_id", return_value=True
+        ) as mock_validate_object,
+    ):
         # Set up the mock return values
         mock_auth_jwt.return_value = {"sub": "test_user_1", "scope": ""}
 
@@ -233,49 +244,60 @@ async def test_auth_builder_non_proxy_admin_user_role():
     jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth()
 
     # Mock all the dependencies and method calls
-    with patch.object(
-        jwt_handler, "auth_jwt", new_callable=AsyncMock
-    ) as mock_auth_jwt, patch.object(
-        JWTAuthManager, "check_rbac_role", new_callable=AsyncMock
-    ) as mock_check_rbac, patch.object(
-        jwt_handler, "get_rbac_role", return_value=None
-    ) as mock_get_rbac, patch.object(
-        jwt_handler, "get_scopes", return_value=[]
-    ) as mock_get_scopes, patch.object(
-        jwt_handler, "get_object_id", return_value=None
-    ) as mock_get_object_id, patch.object(
-        JWTAuthManager,
-        "get_user_info",
-        new_callable=AsyncMock,
-        return_value=("test_user_1", "test@example.com", True),
-    ) as mock_get_user_info, patch.object(
-        jwt_handler, "get_org_id", return_value=None
-    ) as mock_get_org_id, patch.object(
-        jwt_handler, "get_end_user_id", return_value=None
-    ) as mock_get_end_user_id, patch.object(
-        JWTAuthManager, "check_admin_access", new_callable=AsyncMock, return_value=None
-    ) as mock_check_admin, patch.object(
-        JWTAuthManager,
-        "find_and_validate_specific_team_id",
-        new_callable=AsyncMock,
-        return_value=(None, None),
-    ) as mock_find_team, patch.object(
-        JWTAuthManager, "get_all_team_ids", return_value=set()
-    ) as mock_get_all_team_ids, patch.object(
-        JWTAuthManager,
-        "find_team_with_model_access",
-        new_callable=AsyncMock,
-        return_value=(None, None),
-    ) as mock_find_team_access, patch.object(
-        JWTAuthManager,
-        "get_objects",
-        new_callable=AsyncMock,
-        return_value=(user_object, None, None, None),
-    ) as mock_get_objects, patch.object(
-        JWTAuthManager, "map_user_to_teams", new_callable=AsyncMock
-    ) as mock_map_user, patch.object(
-        JWTAuthManager, "validate_object_id", return_value=True
-    ) as mock_validate_object:
+    with (
+        patch.object(jwt_handler, "auth_jwt", new_callable=AsyncMock) as mock_auth_jwt,
+        patch.object(
+            JWTAuthManager, "check_rbac_role", new_callable=AsyncMock
+        ) as mock_check_rbac,
+        patch.object(jwt_handler, "get_rbac_role", return_value=None) as mock_get_rbac,
+        patch.object(jwt_handler, "get_scopes", return_value=[]) as mock_get_scopes,
+        patch.object(
+            jwt_handler, "get_object_id", return_value=None
+        ) as mock_get_object_id,
+        patch.object(
+            JWTAuthManager,
+            "get_user_info",
+            new_callable=AsyncMock,
+            return_value=("test_user_1", "test@example.com", True),
+        ) as mock_get_user_info,
+        patch.object(jwt_handler, "get_org_id", return_value=None) as mock_get_org_id,
+        patch.object(
+            jwt_handler, "get_end_user_id", return_value=None
+        ) as mock_get_end_user_id,
+        patch.object(
+            JWTAuthManager,
+            "check_admin_access",
+            new_callable=AsyncMock,
+            return_value=None,
+        ) as mock_check_admin,
+        patch.object(
+            JWTAuthManager,
+            "find_and_validate_specific_team_id",
+            new_callable=AsyncMock,
+            return_value=(None, None),
+        ) as mock_find_team,
+        patch.object(
+            JWTAuthManager, "get_all_team_ids", return_value=set()
+        ) as mock_get_all_team_ids,
+        patch.object(
+            JWTAuthManager,
+            "find_team_with_model_access",
+            new_callable=AsyncMock,
+            return_value=(None, None),
+        ) as mock_find_team_access,
+        patch.object(
+            JWTAuthManager,
+            "get_objects",
+            new_callable=AsyncMock,
+            return_value=(user_object, None, None, None),
+        ) as mock_get_objects,
+        patch.object(
+            JWTAuthManager, "map_user_to_teams", new_callable=AsyncMock
+        ) as mock_map_user,
+        patch.object(
+            JWTAuthManager, "validate_object_id", return_value=True
+        ) as mock_validate_object,
+    ):
         # Set up the mock return values
         mock_auth_jwt.return_value = {"sub": "test_user_1", "scope": ""}
 
@@ -736,7 +758,7 @@ async def test_nested_jwt_field_missing_paths():
         "resource_access": {
             "other-client": {"roles": ["viewer"]}
             # missing "my-client"
-        }
+        },
         # missing "organization", "profile", "customer", "tenant", "groups"
     }
 
@@ -925,51 +947,63 @@ async def test_auth_builder_returns_team_membership_object():
     jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth()
 
     # Mock all the dependencies and method calls
-    with patch.object(
-        jwt_handler, "auth_jwt", new_callable=AsyncMock
-    ) as mock_auth_jwt, patch.object(
-        JWTAuthManager, "check_rbac_role", new_callable=AsyncMock
-    ) as mock_check_rbac, patch.object(
-        jwt_handler, "get_rbac_role", return_value=None
-    ) as mock_get_rbac, patch.object(
-        jwt_handler, "get_scopes", return_value=[]
-    ) as mock_get_scopes, patch.object(
-        jwt_handler, "get_object_id", return_value=None
-    ) as mock_get_object_id, patch.object(
-        JWTAuthManager,
-        "get_user_info",
-        new_callable=AsyncMock,
-        return_value=(_user_id, "test@example.com", True),
-    ) as mock_get_user_info, patch.object(
-        jwt_handler, "get_org_id", return_value=None
-    ) as mock_get_org_id, patch.object(
-        jwt_handler, "get_end_user_id", return_value=None
-    ) as mock_get_end_user_id, patch.object(
-        JWTAuthManager, "check_admin_access", new_callable=AsyncMock, return_value=None
-    ) as mock_check_admin, patch.object(
-        JWTAuthManager,
-        "find_and_validate_specific_team_id",
-        new_callable=AsyncMock,
-        return_value=(_team_id, team_object),
-    ) as mock_find_team, patch.object(
-        JWTAuthManager, "get_all_team_ids", return_value=set()
-    ) as mock_get_all_team_ids, patch.object(
-        JWTAuthManager,
-        "find_team_with_model_access",
-        new_callable=AsyncMock,
-        return_value=(None, None),
-    ) as mock_find_team_access, patch.object(
-        JWTAuthManager,
-        "get_objects",
-        new_callable=AsyncMock,
-        return_value=(user_object, None, None, mock_team_membership),
-    ) as mock_get_objects, patch.object(
-        JWTAuthManager, "map_user_to_teams", new_callable=AsyncMock
-    ) as mock_map_user, patch.object(
-        JWTAuthManager, "validate_object_id", return_value=True
-    ) as mock_validate_object, patch.object(
-        JWTAuthManager, "sync_user_role_and_teams", new_callable=AsyncMock
-    ) as mock_sync_user:
+    with (
+        patch.object(jwt_handler, "auth_jwt", new_callable=AsyncMock) as mock_auth_jwt,
+        patch.object(
+            JWTAuthManager, "check_rbac_role", new_callable=AsyncMock
+        ) as mock_check_rbac,
+        patch.object(jwt_handler, "get_rbac_role", return_value=None) as mock_get_rbac,
+        patch.object(jwt_handler, "get_scopes", return_value=[]) as mock_get_scopes,
+        patch.object(
+            jwt_handler, "get_object_id", return_value=None
+        ) as mock_get_object_id,
+        patch.object(
+            JWTAuthManager,
+            "get_user_info",
+            new_callable=AsyncMock,
+            return_value=(_user_id, "test@example.com", True),
+        ) as mock_get_user_info,
+        patch.object(jwt_handler, "get_org_id", return_value=None) as mock_get_org_id,
+        patch.object(
+            jwt_handler, "get_end_user_id", return_value=None
+        ) as mock_get_end_user_id,
+        patch.object(
+            JWTAuthManager,
+            "check_admin_access",
+            new_callable=AsyncMock,
+            return_value=None,
+        ) as mock_check_admin,
+        patch.object(
+            JWTAuthManager,
+            "find_and_validate_specific_team_id",
+            new_callable=AsyncMock,
+            return_value=(_team_id, team_object),
+        ) as mock_find_team,
+        patch.object(
+            JWTAuthManager, "get_all_team_ids", return_value=set()
+        ) as mock_get_all_team_ids,
+        patch.object(
+            JWTAuthManager,
+            "find_team_with_model_access",
+            new_callable=AsyncMock,
+            return_value=(None, None),
+        ) as mock_find_team_access,
+        patch.object(
+            JWTAuthManager,
+            "get_objects",
+            new_callable=AsyncMock,
+            return_value=(user_object, None, None, mock_team_membership),
+        ) as mock_get_objects,
+        patch.object(
+            JWTAuthManager, "map_user_to_teams", new_callable=AsyncMock
+        ) as mock_map_user,
+        patch.object(
+            JWTAuthManager, "validate_object_id", return_value=True
+        ) as mock_validate_object,
+        patch.object(
+            JWTAuthManager, "sync_user_role_and_teams", new_callable=AsyncMock
+        ) as mock_sync_user,
+    ):
         # Set up the mock return values
         mock_auth_jwt.return_value = {"sub": _user_id, "scope": ""}
 
@@ -1049,53 +1083,66 @@ async def test_auth_builder_with_oidc_userinfo_enabled():
     }
 
     # Mock all the dependencies
-    with patch.object(
-        jwt_handler, "get_oidc_userinfo", new_callable=AsyncMock
-    ) as mock_get_userinfo, patch.object(
-        jwt_handler, "auth_jwt", new_callable=AsyncMock
-    ) as mock_auth_jwt, patch.object(
-        JWTAuthManager, "check_rbac_role", new_callable=AsyncMock
-    ) as mock_check_rbac, patch.object(
-        jwt_handler, "get_rbac_role", return_value=None
-    ) as mock_get_rbac, patch.object(
-        jwt_handler, "get_scopes", return_value=[]
-    ) as mock_get_scopes, patch.object(
-        jwt_handler, "get_object_id", return_value=None
-    ) as mock_get_object_id, patch.object(
-        JWTAuthManager,
-        "get_user_info",
-        new_callable=AsyncMock,
-        return_value=("test_user_1", "test@example.com", True),
-    ) as mock_get_user_info, patch.object(
-        jwt_handler, "get_org_id", return_value=None
-    ) as mock_get_org_id, patch.object(
-        jwt_handler, "get_end_user_id", return_value=None
-    ) as mock_get_end_user_id, patch.object(
-        JWTAuthManager, "check_admin_access", new_callable=AsyncMock, return_value=None
-    ) as mock_check_admin, patch.object(
-        JWTAuthManager,
-        "find_and_validate_specific_team_id",
-        new_callable=AsyncMock,
-        return_value=(None, None),
-    ) as mock_find_team, patch.object(
-        JWTAuthManager, "get_all_team_ids", return_value=set()
-    ) as mock_get_all_team_ids, patch.object(
-        JWTAuthManager,
-        "find_team_with_model_access",
-        new_callable=AsyncMock,
-        return_value=(None, None),
-    ) as mock_find_team_access, patch.object(
-        JWTAuthManager,
-        "get_objects",
-        new_callable=AsyncMock,
-        return_value=(user_object, None, None, None),
-    ) as mock_get_objects, patch.object(
-        JWTAuthManager, "map_user_to_teams", new_callable=AsyncMock
-    ) as mock_map_user, patch.object(
-        JWTAuthManager, "validate_object_id", return_value=True
-    ) as mock_validate_object, patch.object(
-        JWTAuthManager, "sync_user_role_and_teams", new_callable=AsyncMock
-    ) as mock_sync_user:
+    with (
+        patch.object(
+            jwt_handler, "get_oidc_userinfo", new_callable=AsyncMock
+        ) as mock_get_userinfo,
+        patch.object(jwt_handler, "auth_jwt", new_callable=AsyncMock) as mock_auth_jwt,
+        patch.object(
+            JWTAuthManager, "check_rbac_role", new_callable=AsyncMock
+        ) as mock_check_rbac,
+        patch.object(jwt_handler, "get_rbac_role", return_value=None) as mock_get_rbac,
+        patch.object(jwt_handler, "get_scopes", return_value=[]) as mock_get_scopes,
+        patch.object(
+            jwt_handler, "get_object_id", return_value=None
+        ) as mock_get_object_id,
+        patch.object(
+            JWTAuthManager,
+            "get_user_info",
+            new_callable=AsyncMock,
+            return_value=("test_user_1", "test@example.com", True),
+        ) as mock_get_user_info,
+        patch.object(jwt_handler, "get_org_id", return_value=None) as mock_get_org_id,
+        patch.object(
+            jwt_handler, "get_end_user_id", return_value=None
+        ) as mock_get_end_user_id,
+        patch.object(
+            JWTAuthManager,
+            "check_admin_access",
+            new_callable=AsyncMock,
+            return_value=None,
+        ) as mock_check_admin,
+        patch.object(
+            JWTAuthManager,
+            "find_and_validate_specific_team_id",
+            new_callable=AsyncMock,
+            return_value=(None, None),
+        ) as mock_find_team,
+        patch.object(
+            JWTAuthManager, "get_all_team_ids", return_value=set()
+        ) as mock_get_all_team_ids,
+        patch.object(
+            JWTAuthManager,
+            "find_team_with_model_access",
+            new_callable=AsyncMock,
+            return_value=(None, None),
+        ) as mock_find_team_access,
+        patch.object(
+            JWTAuthManager,
+            "get_objects",
+            new_callable=AsyncMock,
+            return_value=(user_object, None, None, None),
+        ) as mock_get_objects,
+        patch.object(
+            JWTAuthManager, "map_user_to_teams", new_callable=AsyncMock
+        ) as mock_map_user,
+        patch.object(
+            JWTAuthManager, "validate_object_id", return_value=True
+        ) as mock_validate_object,
+        patch.object(
+            JWTAuthManager, "sync_user_role_and_teams", new_callable=AsyncMock
+        ) as mock_sync_user,
+    ):
         # Set up mock return values
         mock_get_userinfo.return_value = userinfo_response
 
@@ -1160,53 +1207,66 @@ async def test_auth_builder_with_oidc_userinfo_disabled():
     }
 
     # Mock all the dependencies
-    with patch.object(
-        jwt_handler, "get_oidc_userinfo", new_callable=AsyncMock
-    ) as mock_get_userinfo, patch.object(
-        jwt_handler, "auth_jwt", new_callable=AsyncMock
-    ) as mock_auth_jwt, patch.object(
-        JWTAuthManager, "check_rbac_role", new_callable=AsyncMock
-    ) as mock_check_rbac, patch.object(
-        jwt_handler, "get_rbac_role", return_value=None
-    ) as mock_get_rbac, patch.object(
-        jwt_handler, "get_scopes", return_value=[]
-    ) as mock_get_scopes, patch.object(
-        jwt_handler, "get_object_id", return_value=None
-    ) as mock_get_object_id, patch.object(
-        JWTAuthManager,
-        "get_user_info",
-        new_callable=AsyncMock,
-        return_value=("test_user_1", None, None),
-    ) as mock_get_user_info, patch.object(
-        jwt_handler, "get_org_id", return_value=None
-    ) as mock_get_org_id, patch.object(
-        jwt_handler, "get_end_user_id", return_value=None
-    ) as mock_get_end_user_id, patch.object(
-        JWTAuthManager, "check_admin_access", new_callable=AsyncMock, return_value=None
-    ) as mock_check_admin, patch.object(
-        JWTAuthManager,
-        "find_and_validate_specific_team_id",
-        new_callable=AsyncMock,
-        return_value=(None, None),
-    ) as mock_find_team, patch.object(
-        JWTAuthManager, "get_all_team_ids", return_value=set()
-    ) as mock_get_all_team_ids, patch.object(
-        JWTAuthManager,
-        "find_team_with_model_access",
-        new_callable=AsyncMock,
-        return_value=(None, None),
-    ) as mock_find_team_access, patch.object(
-        JWTAuthManager,
-        "get_objects",
-        new_callable=AsyncMock,
-        return_value=(user_object, None, None, None),
-    ) as mock_get_objects, patch.object(
-        JWTAuthManager, "map_user_to_teams", new_callable=AsyncMock
-    ) as mock_map_user, patch.object(
-        JWTAuthManager, "validate_object_id", return_value=True
-    ) as mock_validate_object, patch.object(
-        JWTAuthManager, "sync_user_role_and_teams", new_callable=AsyncMock
-    ) as mock_sync_user:
+    with (
+        patch.object(
+            jwt_handler, "get_oidc_userinfo", new_callable=AsyncMock
+        ) as mock_get_userinfo,
+        patch.object(jwt_handler, "auth_jwt", new_callable=AsyncMock) as mock_auth_jwt,
+        patch.object(
+            JWTAuthManager, "check_rbac_role", new_callable=AsyncMock
+        ) as mock_check_rbac,
+        patch.object(jwt_handler, "get_rbac_role", return_value=None) as mock_get_rbac,
+        patch.object(jwt_handler, "get_scopes", return_value=[]) as mock_get_scopes,
+        patch.object(
+            jwt_handler, "get_object_id", return_value=None
+        ) as mock_get_object_id,
+        patch.object(
+            JWTAuthManager,
+            "get_user_info",
+            new_callable=AsyncMock,
+            return_value=("test_user_1", None, None),
+        ) as mock_get_user_info,
+        patch.object(jwt_handler, "get_org_id", return_value=None) as mock_get_org_id,
+        patch.object(
+            jwt_handler, "get_end_user_id", return_value=None
+        ) as mock_get_end_user_id,
+        patch.object(
+            JWTAuthManager,
+            "check_admin_access",
+            new_callable=AsyncMock,
+            return_value=None,
+        ) as mock_check_admin,
+        patch.object(
+            JWTAuthManager,
+            "find_and_validate_specific_team_id",
+            new_callable=AsyncMock,
+            return_value=(None, None),
+        ) as mock_find_team,
+        patch.object(
+            JWTAuthManager, "get_all_team_ids", return_value=set()
+        ) as mock_get_all_team_ids,
+        patch.object(
+            JWTAuthManager,
+            "find_team_with_model_access",
+            new_callable=AsyncMock,
+            return_value=(None, None),
+        ) as mock_find_team_access,
+        patch.object(
+            JWTAuthManager,
+            "get_objects",
+            new_callable=AsyncMock,
+            return_value=(user_object, None, None, None),
+        ) as mock_get_objects,
+        patch.object(
+            JWTAuthManager, "map_user_to_teams", new_callable=AsyncMock
+        ) as mock_map_user,
+        patch.object(
+            JWTAuthManager, "validate_object_id", return_value=True
+        ) as mock_validate_object,
+        patch.object(
+            JWTAuthManager, "sync_user_role_and_teams", new_callable=AsyncMock
+        ) as mock_sync_user,
+    ):
         # Set up mock return values
         mock_auth_jwt.return_value = jwt_response
 
@@ -1271,52 +1331,53 @@ async def test_auth_builder_oidc_enabled_falls_back_to_jwt_auth_for_jwt_tokens()
 
     jwt_response = {"sub": "test_user_1", "scope": ""}
 
-    with patch.object(
-        jwt_handler, "get_oidc_userinfo", new_callable=AsyncMock
-    ) as mock_get_userinfo, patch.object(
-        jwt_handler, "auth_jwt", new_callable=AsyncMock
-    ) as mock_auth_jwt, patch.object(
-        JWTAuthManager, "check_rbac_role", new_callable=AsyncMock
-    ), patch.object(
-        jwt_handler, "get_rbac_role", return_value=None
-    ), patch.object(
-        jwt_handler, "get_scopes", return_value=[]
-    ), patch.object(
-        jwt_handler, "get_object_id", return_value=None
-    ), patch.object(
-        JWTAuthManager,
-        "get_user_info",
-        new_callable=AsyncMock,
-        return_value=("test_user_1", None, None),
-    ), patch.object(
-        jwt_handler, "get_org_id", return_value=None
-    ), patch.object(
-        jwt_handler, "get_end_user_id", return_value=None
-    ), patch.object(
-        JWTAuthManager, "check_admin_access", new_callable=AsyncMock, return_value=None
-    ), patch.object(
-        JWTAuthManager,
-        "find_and_validate_specific_team_id",
-        new_callable=AsyncMock,
-        return_value=(None, None),
-    ), patch.object(
-        JWTAuthManager, "get_all_team_ids", return_value=set()
-    ), patch.object(
-        JWTAuthManager,
-        "find_team_with_model_access",
-        new_callable=AsyncMock,
-        return_value=(None, None),
-    ), patch.object(
-        JWTAuthManager,
-        "get_objects",
-        new_callable=AsyncMock,
-        return_value=(user_object, None, None, None),
-    ), patch.object(
-        JWTAuthManager, "map_user_to_teams", new_callable=AsyncMock
-    ), patch.object(
-        JWTAuthManager, "validate_object_id", return_value=True
-    ), patch.object(
-        JWTAuthManager, "sync_user_role_and_teams", new_callable=AsyncMock
+    with (
+        patch.object(
+            jwt_handler, "get_oidc_userinfo", new_callable=AsyncMock
+        ) as mock_get_userinfo,
+        patch.object(jwt_handler, "auth_jwt", new_callable=AsyncMock) as mock_auth_jwt,
+        patch.object(JWTAuthManager, "check_rbac_role", new_callable=AsyncMock),
+        patch.object(jwt_handler, "get_rbac_role", return_value=None),
+        patch.object(jwt_handler, "get_scopes", return_value=[]),
+        patch.object(jwt_handler, "get_object_id", return_value=None),
+        patch.object(
+            JWTAuthManager,
+            "get_user_info",
+            new_callable=AsyncMock,
+            return_value=("test_user_1", None, None),
+        ),
+        patch.object(jwt_handler, "get_org_id", return_value=None),
+        patch.object(jwt_handler, "get_end_user_id", return_value=None),
+        patch.object(
+            JWTAuthManager,
+            "check_admin_access",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
+        patch.object(
+            JWTAuthManager,
+            "find_and_validate_specific_team_id",
+            new_callable=AsyncMock,
+            return_value=(None, None),
+        ),
+        patch.object(JWTAuthManager, "get_all_team_ids", return_value=set()),
+        patch.object(
+            JWTAuthManager,
+            "find_team_with_model_access",
+            new_callable=AsyncMock,
+            return_value=(None, None),
+        ),
+        patch.object(
+            JWTAuthManager,
+            "get_objects",
+            new_callable=AsyncMock,
+            return_value=(user_object, None, None, None),
+        ),
+        patch.object(JWTAuthManager, "map_user_to_teams", new_callable=AsyncMock),
+        patch.object(JWTAuthManager, "validate_object_id", return_value=True),
+        patch.object(
+            JWTAuthManager, "sync_user_role_and_teams", new_callable=AsyncMock
+        ),
     ):
         mock_auth_jwt.return_value = jwt_response
 
@@ -1390,23 +1451,28 @@ async def test_auth_builder_uses_team_from_header_e2e():
         user_id="user-1", user_role=LitellmUserRoles.INTERNAL_USER
     )
 
-    with patch.object(
-        jwt_handler, "auth_jwt", new_callable=AsyncMock
-    ) as mock_auth_jwt, patch.object(
-        JWTAuthManager, "check_rbac_role", new_callable=AsyncMock
-    ), patch.object(
-        JWTAuthManager, "check_admin_access", new_callable=AsyncMock, return_value=None
-    ), patch(
-        "litellm.proxy.auth.handle_jwt.get_team_object", new_callable=AsyncMock
-    ) as mock_get_team, patch.object(
-        JWTAuthManager,
-        "get_objects",
-        new_callable=AsyncMock,
-        return_value=(user_object, None, None, None),
-    ), patch.object(
-        JWTAuthManager, "map_user_to_teams", new_callable=AsyncMock
-    ), patch.object(
-        JWTAuthManager, "sync_user_role_and_teams", new_callable=AsyncMock
+    with (
+        patch.object(jwt_handler, "auth_jwt", new_callable=AsyncMock) as mock_auth_jwt,
+        patch.object(JWTAuthManager, "check_rbac_role", new_callable=AsyncMock),
+        patch.object(
+            JWTAuthManager,
+            "check_admin_access",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
+        patch(
+            "litellm.proxy.auth.handle_jwt.get_team_object", new_callable=AsyncMock
+        ) as mock_get_team,
+        patch.object(
+            JWTAuthManager,
+            "get_objects",
+            new_callable=AsyncMock,
+            return_value=(user_object, None, None, None),
+        ),
+        patch.object(JWTAuthManager, "map_user_to_teams", new_callable=AsyncMock),
+        patch.object(
+            JWTAuthManager, "sync_user_role_and_teams", new_callable=AsyncMock
+        ),
     ):
         mock_auth_jwt.return_value = {
             "sub": "user-1",
@@ -1582,11 +1648,15 @@ async def test_find_and_validate_team_id_takes_precedence_over_name():
     # Mock team object returned by get_team_object (by ID)
     team_object = LiteLLM_TeamTable(team_id="direct-team-id")
 
-    with patch(
-        "litellm.proxy.auth.handle_jwt.get_team_object", new_callable=AsyncMock
-    ) as mock_get_by_id, patch(
-        "litellm.proxy.auth.handle_jwt.get_team_object_by_alias", new_callable=AsyncMock
-    ) as mock_get_by_alias:
+    with (
+        patch(
+            "litellm.proxy.auth.handle_jwt.get_team_object", new_callable=AsyncMock
+        ) as mock_get_by_id,
+        patch(
+            "litellm.proxy.auth.handle_jwt.get_team_object_by_alias",
+            new_callable=AsyncMock,
+        ) as mock_get_by_alias,
+    ):
         mock_get_by_id.return_value = team_object
 
         team_id, result_team = await JWTAuthManager.find_and_validate_specific_team_id(
