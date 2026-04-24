@@ -8,10 +8,7 @@ import litellm
 from fastapi import HTTPException
 
 from litellm._logging import verbose_logger
-from litellm.integrations.custom_guardrail import (
-    CustomGuardrail,
-    log_guardrail_information,
-)
+from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import GenericGuardrailAPIInputs, GuardrailStatus
 
@@ -151,7 +148,6 @@ class LLMAsAJudgeGuardrail(CustomGuardrail):
         raw = response.choices[0].message.content or "{}"  # type: ignore[union-attr]
         return json.loads(raw)
 
-    @log_guardrail_information
     async def apply_guardrail(
         self,
         inputs: GenericGuardrailAPIInputs,
