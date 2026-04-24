@@ -3,8 +3,8 @@ import json
 from typing import Any, Dict, List, Optional, Set, Tuple, Union
 from urllib.parse import urlparse
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
-from pydantic import ConfigDict, create_model
+from fastapi import APIRouter, Body, Depends, File, HTTPException, UploadFile
+from pydantic import ConfigDict, ValidationError, create_model
 from pydantic.fields import FieldInfo
 
 import litellm
@@ -1218,7 +1218,8 @@ async def get_ui_settings():
     dependencies=[Depends(user_api_key_auth)],
 )
 async def update_ui_settings(
-    settings: UISettings, user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth)
+    settings_body: Dict[str, Any] = Body(...),
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
     Update UI-specific configuration flags.
@@ -1244,6 +1245,14 @@ async def update_ui_settings(
                 "error": "Set `'STORE_MODEL_IN_DB='True'` in your env to enable this feature."
             },
         )
+
+    # Validate against the same effective class GET advertises, so
+    # enterprise-registered fields are typed consistently on both sides.
+    effective_cls = _get_effective_ui_settings_class()
+    try:
+        settings = effective_cls.model_validate(settings_body)
+    except ValidationError as e:
+        raise HTTPException(status_code=422, detail=e.errors())
 
     # Only include fields the caller actually sent (not Pydantic defaults).
     settings_dict = settings.model_dump(exclude_unset=True)
