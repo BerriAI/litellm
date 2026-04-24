@@ -29,9 +29,7 @@ class TestAnthropicTokenCounter(BaseTokenCounterTest):
         return "claude-sonnet-4-20250514"
 
     def get_test_messages(self) -> List[Dict[str, Any]]:
-        return [
-            {"role": "user", "content": "Hello, how are you today?"}
-        ]
+        return [{"role": "user", "content": "Hello, how are you today?"}]
 
     def get_deployment_config(self) -> Dict[str, Any]:
         api_key = os.getenv("ANTHROPIC_API_KEY")

@@ -8,6 +8,7 @@ Use litellm with Anthropic SDK, Vertex AI SDK, Cohere SDK, etc.
 
 import json
 import os
+import re
 from typing import Any, Optional, Tuple, Union, cast
 
 import httpx
@@ -1496,10 +1497,18 @@ class VertexAIPassThroughHandler(BaseVertexAIPassThroughHandler):
 
 def get_vertex_base_url(vertex_location: Optional[str]) -> str:
     """
-    Returns the base URL for Vertex AI based on the provided location.
+    Base URL for Vertex AI pass-through (trailing slash for URL joining).
+
+    Keep location rules aligned with ``litellm.llms.vertex_ai.common_utils.get_vertex_base_url``.
     """
     if vertex_location == "global":
         return "https://aiplatform.googleapis.com/"
+    if vertex_location is None:
+        raise ValueError("vertex_location is required")
+    if not re.match(r"^[a-z][a-z0-9-]*$", vertex_location):
+        raise ValueError("Invalid vertex_location format")
+    if "-" not in vertex_location:
+        return f"https://aiplatform.{vertex_location}.rep.googleapis.com/"
     return f"https://{vertex_location}-aiplatform.googleapis.com/"
 
 
@@ -1703,7 +1712,8 @@ async def _base_vertex_proxy_route(
     Base function for Vertex AI passthrough routes.
     Handles common logic for all Vertex AI services.
 
-    Default base_target_url is `https://{vertex_location}-aiplatform.googleapis.com/`
+    Default base_target_url is derived from ``get_vertex_base_url`` in this module
+    (regional, ``global``, or multi-region ``.rep.`` hosts), with a trailing slash.
 
     Args:
         endpoint: The endpoint path
@@ -2275,11 +2285,7 @@ async def vertex_ai_live_websocket_passthrough(
         return
 
     host_location = resolved_location or vertex_llm_base.get_default_vertex_location()
-    host = (
-        "aiplatform.googleapis.com"
-        if host_location == "global"
-        else f"{host_location}-aiplatform.googleapis.com"
-    )
+    host = get_vertex_base_url(host_location).removeprefix("https://").rstrip("/")
     service_url = (
         f"wss://{host}/ws/google.cloud.aiplatform.v1.LlmBidiService/BidiGenerateContent"
     )

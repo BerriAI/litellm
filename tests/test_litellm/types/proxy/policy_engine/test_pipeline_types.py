@@ -34,7 +34,9 @@ def test_pipeline_step_valid_actions():
 
 def test_pipeline_step_all_action_types():
     for action in ("allow", "block", "next", "modify_response"):
-        step = PipelineStep(guardrail="g", on_fail=action, on_pass=action, on_error=action)
+        step = PipelineStep(
+            guardrail="g", on_fail=action, on_pass=action, on_error=action
+        )
         assert step.on_fail == action
         assert step.on_pass == action
         assert step.on_error == action
@@ -51,7 +53,9 @@ def test_pipeline_step_invalid_on_pass_rejected():
 
 
 def test_pipeline_step_on_error_valid():
-    step = PipelineStep(guardrail="g", on_error="next", on_fail="block", on_pass="allow")
+    step = PipelineStep(
+        guardrail="g", on_error="next", on_fail="block", on_pass="allow"
+    )
     assert step.on_error == "next"
 
 
