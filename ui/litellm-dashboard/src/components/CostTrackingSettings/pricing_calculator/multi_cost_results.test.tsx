@@ -13,9 +13,7 @@ vi.mock("./multi_export_utils", () => ({
 }));
 
 vi.mock("@/utils/dataUtils", () => ({
-  formatNumberWithCommas: vi.fn((v: number, d: number = 0) =>
-    Number.isFinite(v) ? v.toFixed(d) : "-"
-  ),
+  formatNumberWithCommas: vi.fn((v: number, d: number = 0) => (Number.isFinite(v) ? v.toFixed(d) : "-")),
 }));
 
 function makeCostResponse(overrides: Partial<CostEstimateResponse> = {}): CostEstimateResponse {
@@ -94,9 +92,7 @@ describe("MultiCostResults", () => {
 
   describe("when no model has been selected", () => {
     it("should show a prompt to select models", () => {
-      renderWithProviders(
-        <MultiCostResults multiResult={emptyMultiResult()} timePeriod="month" />
-      );
+      renderWithProviders(<MultiCostResults multiResult={emptyMultiResult()} timePeriod="month" />);
       expect(screen.getByText(/select models above to see cost estimates/i)).toBeInTheDocument();
     });
   });
@@ -156,23 +152,17 @@ describe("MultiCostResults", () => {
 
   describe("when valid results are available", () => {
     it("should show the Cost Estimates heading", () => {
-      renderWithProviders(
-        <MultiCostResults multiResult={makeMultiResult()} timePeriod="day" />
-      );
+      renderWithProviders(<MultiCostResults multiResult={makeMultiResult()} timePeriod="day" />);
       expect(screen.getByText("Cost Estimates")).toBeInTheDocument();
     });
 
     it("should display the Total Per Request statistic", () => {
-      renderWithProviders(
-        <MultiCostResults multiResult={makeMultiResult()} timePeriod="day" />
-      );
+      renderWithProviders(<MultiCostResults multiResult={makeMultiResult()} timePeriod="day" />);
       expect(screen.getByText("Total Per Request")).toBeInTheDocument();
     });
 
     it("should display Total Daily statistic when timePeriod is day", () => {
-      renderWithProviders(
-        <MultiCostResults multiResult={makeMultiResult()} timePeriod="day" />
-      );
+      renderWithProviders(<MultiCostResults multiResult={makeMultiResult()} timePeriod="day" />);
       expect(screen.getByText("Total Daily")).toBeInTheDocument();
     });
 
@@ -180,47 +170,44 @@ describe("MultiCostResults", () => {
       renderWithProviders(
         <MultiCostResults
           multiResult={makeMultiResult({
-            totals: { cost_per_request: 0.05, daily_cost: null, monthly_cost: 150.0, margin_per_request: 0, daily_margin: null, monthly_margin: null },
+            totals: {
+              cost_per_request: 0.05,
+              daily_cost: null,
+              monthly_cost: 150.0,
+              margin_per_request: 0,
+              daily_margin: null,
+              monthly_margin: null,
+            },
           })}
           timePeriod="month"
-        />
+        />,
       );
       expect(screen.getByText("Total Monthly")).toBeInTheDocument();
     });
 
     it("should show the model name in the summary table", () => {
-      renderWithProviders(
-        <MultiCostResults multiResult={makeMultiResult()} timePeriod="day" />
-      );
+      renderWithProviders(<MultiCostResults multiResult={makeMultiResult()} timePeriod="day" />);
       expect(screen.getByText("gpt-4")).toBeInTheDocument();
     });
 
     it("should show the provider tag next to the model name", () => {
-      renderWithProviders(
-        <MultiCostResults multiResult={makeMultiResult()} timePeriod="day" />
-      );
+      renderWithProviders(<MultiCostResults multiResult={makeMultiResult()} timePeriod="day" />);
       expect(screen.getByText("openai")).toBeInTheDocument();
     });
 
     it("should show the Export button when results are available", () => {
-      renderWithProviders(
-        <MultiCostResults multiResult={makeMultiResult()} timePeriod="day" />
-      );
+      renderWithProviders(<MultiCostResults multiResult={makeMultiResult()} timePeriod="day" />);
       expect(screen.getByRole("button", { name: /export/i })).toBeInTheDocument();
     });
 
     it("should expand the model breakdown row when the expand button is clicked", async () => {
       const user = userEvent.setup();
-      renderWithProviders(
-        <MultiCostResults multiResult={makeMultiResult()} timePeriod="day" />
-      );
+      renderWithProviders(<MultiCostResults multiResult={makeMultiResult()} timePeriod="day" />);
 
       // The expand column renders a button (RightOutlined icon) for rows without errors
       const expandButtons = screen.getAllByRole("button");
       // Find the small expand button (not the Export button)
-      const expandButton = expandButtons.find(
-        (btn) => !btn.textContent?.toLowerCase().includes("export")
-      );
+      const expandButton = expandButtons.find((btn) => !btn.textContent?.toLowerCase().includes("export"));
       expect(expandButton).toBeDefined();
 
       await user.click(expandButton!);
@@ -231,9 +218,7 @@ describe("MultiCostResults", () => {
 
     it("should show the collapse icon after expanding a row", async () => {
       const user = userEvent.setup();
-      renderWithProviders(
-        <MultiCostResults multiResult={makeMultiResult()} timePeriod="day" />
-      );
+      renderWithProviders(<MultiCostResults multiResult={makeMultiResult()} timePeriod="day" />);
 
       const getExpandButton = () => {
         const allButtons = screen.getAllByRole("button");
@@ -245,10 +230,9 @@ describe("MultiCostResults", () => {
       await user.click(getExpandButton()!);
       expect(screen.getByText("Total/Request")).toBeInTheDocument();
 
-      // After a second click, the row collapses — content may be hidden or removed
+      // After a second click, the row collapses — expanded content is unmounted
       await user.click(getExpandButton()!);
-      // The expanded content should no longer be visible
-      expect(screen.queryByText("Total/Request")).not.toBeVisible();
+      expect(screen.queryByText("Total/Request")).not.toBeInTheDocument();
     });
   });
 
@@ -278,9 +262,7 @@ describe("MultiCostResults", () => {
     });
 
     it("should not show margin fee details when margin per request is zero", () => {
-      renderWithProviders(
-        <MultiCostResults multiResult={makeMultiResult()} timePeriod="day" />
-      );
+      renderWithProviders(<MultiCostResults multiResult={makeMultiResult()} timePeriod="day" />);
       expect(screen.queryByText("Margin Fee/Request")).not.toBeInTheDocument();
     });
   });

@@ -1,6 +1,8 @@
 import React, { useState, useCallback } from "react";
-import { Table, Select, InputNumber } from "antd";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
 import { Plus, Trash2 } from "lucide-react";
 import { PricingCalculatorProps, ModelEntry } from "./types";
@@ -20,21 +22,66 @@ const createDefaultEntry = (): ModelEntry => ({
   num_requests_per_month: undefined,
 });
 
-const PricingCalculator: React.FC<PricingCalculatorProps> = ({
-  accessToken,
-  models,
-}) => {
+const formatIntegerWithCommas = (value: number | undefined): string => {
+  if (value === undefined || value === null || Number.isNaN(value)) return "";
+  return `${value}`.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+};
+
+const parseIntegerInput = (raw: string): number | undefined => {
+  const digits = raw.replace(/[^0-9]/g, "");
+  if (digits === "") return undefined;
+  const parsed = parseInt(digits, 10);
+  return Number.isNaN(parsed) ? undefined : parsed;
+};
+
+interface NumericCellProps {
+  value: number | undefined;
+  min?: number;
+  placeholder?: string;
+  onChange: (value: number | undefined) => void;
+  ariaLabel: string;
+}
+
+const NumericCell: React.FC<NumericCellProps> = ({ value, min = 0, placeholder, onChange, ariaLabel }) => {
+  const [draft, setDraft] = useState<string>(formatIntegerWithCommas(value));
+
+  React.useEffect(() => {
+    setDraft(formatIntegerWithCommas(value));
+  }, [value]);
+
+  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const raw = e.target.value;
+    const parsed = parseIntegerInput(raw);
+    if (parsed !== undefined && parsed < min) {
+      setDraft(formatIntegerWithCommas(min));
+      onChange(min);
+      return;
+    }
+    setDraft(parsed === undefined ? "" : formatIntegerWithCommas(parsed));
+    onChange(parsed);
+  };
+
+  return (
+    <Input
+      aria-label={ariaLabel}
+      value={draft}
+      placeholder={placeholder}
+      inputMode="numeric"
+      onChange={handleChange}
+      className="h-8 text-sm"
+    />
+  );
+};
+
+const PricingCalculator: React.FC<PricingCalculatorProps> = ({ accessToken, models }) => {
   const [entries, setEntries] = useState<ModelEntry[]>([createDefaultEntry()]);
   const [timePeriod, setTimePeriod] = useState<TimePeriod>("month");
-  const { debouncedFetchForEntry, removeEntry, getMultiModelResult } =
-    useMultiCostEstimate(accessToken);
+  const { debouncedFetchForEntry, removeEntry, getMultiModelResult } = useMultiCostEstimate(accessToken);
 
   const handleEntryChange = useCallback(
     (id: string, field: keyof ModelEntry, value: string | number | undefined) => {
       setEntries((prev) => {
-        const updated = prev.map((entry) =>
-          entry.id === id ? { ...entry, [field]: value } : entry
-        );
+        const updated = prev.map((entry) => (entry.id === id ? { ...entry, [field]: value } : entry));
         const changedEntry = updated.find((e) => e.id === id);
         if (changedEntry && changedEntry.model) {
           debouncedFetchForEntry(changedEntry);
@@ -42,18 +89,17 @@ const PricingCalculator: React.FC<PricingCalculatorProps> = ({
         return updated;
       });
     },
-    [debouncedFetchForEntry]
+    [debouncedFetchForEntry],
   );
 
   const handleTimePeriodChange = useCallback((period: TimePeriod) => {
     setTimePeriod(period);
-    // Clear the opposite field for all entries when switching
     setEntries((prev) =>
       prev.map((entry) => ({
         ...entry,
         num_requests_per_day: period === "day" ? entry.num_requests_per_day : undefined,
         num_requests_per_month: period === "month" ? entry.num_requests_per_month : undefined,
-      }))
+      })),
     );
   }, []);
 
@@ -66,109 +112,11 @@ const PricingCalculator: React.FC<PricingCalculatorProps> = ({
       setEntries((prev) => prev.filter((entry) => entry.id !== id));
       removeEntry(id);
     },
-    [removeEntry]
+    [removeEntry],
   );
 
   const multiModelResult = getMultiModelResult(entries);
-
-  const columns = [
-    {
-      title: "Model",
-      dataIndex: "model",
-      key: "model",
-      width: "35%",
-      render: (_: string, record: ModelEntry) => (
-        <Select
-          showSearch
-          placeholder="Select a model"
-          value={record.model || undefined}
-          onChange={(value) => handleEntryChange(record.id, "model", value)}
-          optionFilterProp="label"
-          filterOption={(input, option) =>
-            String(option?.label ?? "").toLowerCase().includes(input.toLowerCase())
-          }
-          options={models.map((model) => ({
-            value: model,
-            label: model,
-          }))}
-          style={{ width: "100%" }}
-          size="small"
-        />
-      ),
-    },
-    {
-      title: "Input Tokens",
-      dataIndex: "input_tokens",
-      key: "input_tokens",
-      width: "18%",
-      render: (_: number, record: ModelEntry) => (
-        <InputNumber
-          min={0}
-          value={record.input_tokens}
-          onChange={(value) => handleEntryChange(record.id, "input_tokens", value ?? 0)}
-          style={{ width: "100%" }}
-          size="small"
-          formatter={(value) => `${value}`.replace(/\B(?=(\d{3})+(?!\d))/g, ",")}
-        />
-      ),
-    },
-    {
-      title: "Output Tokens",
-      dataIndex: "output_tokens",
-      key: "output_tokens",
-      width: "18%",
-      render: (_: number, record: ModelEntry) => (
-        <InputNumber
-          min={0}
-          value={record.output_tokens}
-          onChange={(value) => handleEntryChange(record.id, "output_tokens", value ?? 0)}
-          style={{ width: "100%" }}
-          size="small"
-          formatter={(value) => `${value}`.replace(/\B(?=(\d{3})+(?!\d))/g, ",")}
-        />
-      ),
-    },
-    {
-      title: `Requests/${timePeriod === "day" ? "Day" : "Month"}`,
-      dataIndex: timePeriod === "day" ? "num_requests_per_day" : "num_requests_per_month",
-      key: "num_requests",
-      width: "20%",
-      render: (_: number | undefined, record: ModelEntry) => (
-        <InputNumber
-          min={0}
-          value={timePeriod === "day" ? record.num_requests_per_day : record.num_requests_per_month}
-          onChange={(value) =>
-            handleEntryChange(
-              record.id,
-              timePeriod === "day" ? "num_requests_per_day" : "num_requests_per_month",
-              value ?? undefined
-            )
-          }
-          style={{ width: "100%" }}
-          size="small"
-          placeholder="-"
-          formatter={(value) => (value ? `${value}`.replace(/\B(?=(\d{3})+(?!\d))/g, ",") : "")}
-        />
-      ),
-    },
-    {
-      title: "",
-      key: "actions",
-      width: 50,
-      render: (_: unknown, record: ModelEntry) => (
-        <Button
-          variant="ghost"
-          size="icon"
-          className="h-7 w-7 text-destructive hover:text-destructive"
-          onClick={() => handleRemoveEntry(record.id)}
-          disabled={entries.length === 1}
-          aria-label="Remove"
-        >
-          <Trash2 className="h-3.5 w-3.5" />
-        </Button>
-      ),
-    },
-  ];
+  const requestsHeader = `Requests/${timePeriod === "day" ? "Day" : "Month"}`;
 
   return (
     <div className="space-y-4">
@@ -201,23 +149,86 @@ const PricingCalculator: React.FC<PricingCalculatorProps> = ({
         </div>
       </div>
 
-      <Table
-        columns={columns}
-        dataSource={entries}
-        rowKey="id"
-        pagination={false}
-        size="small"
-        footer={() => (
-          <Button
-            variant="outline"
-            onClick={handleAddEntry}
-            className="w-full border-dashed"
-          >
+      <div className="rounded-md border border-border">
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead className="w-[35%] h-10">Model</TableHead>
+              <TableHead className="w-[18%] h-10">Input Tokens</TableHead>
+              <TableHead className="w-[18%] h-10">Output Tokens</TableHead>
+              <TableHead className="w-[20%] h-10">{requestsHeader}</TableHead>
+              <TableHead className="w-[50px] h-10" />
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {entries.map((entry) => {
+              const requestsValue = timePeriod === "day" ? entry.num_requests_per_day : entry.num_requests_per_month;
+              const requestsField = timePeriod === "day" ? "num_requests_per_day" : "num_requests_per_month";
+              return (
+                <TableRow key={entry.id}>
+                  <TableCell className="py-2 align-middle">
+                    <Select
+                      value={entry.model || undefined}
+                      onValueChange={(value) => handleEntryChange(entry.id, "model", value)}
+                    >
+                      <SelectTrigger className="h-8 text-sm">
+                        <SelectValue placeholder="Select a model" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {models.map((model) => (
+                          <SelectItem key={model} value={model}>
+                            {model}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </TableCell>
+                  <TableCell className="py-2 align-middle">
+                    <NumericCell
+                      value={entry.input_tokens}
+                      onChange={(value) => handleEntryChange(entry.id, "input_tokens", value ?? 0)}
+                      ariaLabel="Input Tokens"
+                    />
+                  </TableCell>
+                  <TableCell className="py-2 align-middle">
+                    <NumericCell
+                      value={entry.output_tokens}
+                      onChange={(value) => handleEntryChange(entry.id, "output_tokens", value ?? 0)}
+                      ariaLabel="Output Tokens"
+                    />
+                  </TableCell>
+                  <TableCell className="py-2 align-middle">
+                    <NumericCell
+                      value={requestsValue}
+                      placeholder="-"
+                      onChange={(value) => handleEntryChange(entry.id, requestsField, value)}
+                      ariaLabel={requestsHeader}
+                    />
+                  </TableCell>
+                  <TableCell className="py-2 align-middle">
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-7 w-7 text-destructive hover:text-destructive"
+                      onClick={() => handleRemoveEntry(entry.id)}
+                      disabled={entries.length === 1}
+                      aria-label="Remove"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </Button>
+                  </TableCell>
+                </TableRow>
+              );
+            })}
+          </TableBody>
+        </Table>
+        <div className="border-t border-border p-2">
+          <Button variant="outline" onClick={handleAddEntry} className="w-full border-dashed">
             <Plus className="h-4 w-4" />
             Add Another Model
           </Button>
-        )}
-      />
+        </div>
+      </div>
 
       <MultiCostResults multiResult={multiModelResult} timePeriod={timePeriod} />
     </div>

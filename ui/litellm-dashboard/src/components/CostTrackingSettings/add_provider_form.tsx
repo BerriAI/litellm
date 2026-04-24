@@ -1,19 +1,11 @@
 import React from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
-import { Select as AntdSelect, Form } from "antd";
+import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Info } from "lucide-react";
-import {
-  Providers,
-  provider_map,
-  providerLogoMap,
-} from "../provider_info_helpers";
+import { Providers, provider_map, providerLogoMap } from "../provider_info_helpers";
 import { DiscountConfig } from "./types";
 import { handleImageError } from "./provider_display_helpers";
 
@@ -34,90 +26,65 @@ const AddProviderForm: React.FC<AddProviderFormProps> = ({
   onDiscountChange,
   onAddProvider,
 }) => {
+  const availableProviders = Object.entries(Providers).filter(([providerEnum]) => {
+    const providerValue = provider_map[providerEnum as keyof typeof provider_map];
+    return !(providerValue && discountConfig[providerValue]);
+  });
+
   return (
     <div className="space-y-6">
-      <Form.Item
-        label={
-          <span className="text-sm font-medium text-foreground flex items-center">
-            Provider
-            <TooltipProvider>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Info className="ml-2 h-3 w-3 text-primary cursor-help" />
-                </TooltipTrigger>
-                <TooltipContent className="max-w-xs">
-                  Select the LLM provider you want to configure a discount for
-                </TooltipContent>
-              </Tooltip>
-            </TooltipProvider>
-          </span>
-        }
-        rules={[{ required: true, message: "Please select a provider" }]}
-      >
-        <AntdSelect
-          showSearch
-          placeholder="Select provider"
-          value={selectedProvider}
-          onChange={onProviderChange}
-          style={{ width: "100%" }}
-          size="large"
-          optionFilterProp="children"
-          filterOption={(input, option) =>
-            String(option?.label ?? "")
-              .toLowerCase()
-              .includes(input.toLowerCase())
-          }
-        >
-          {Object.entries(Providers).map(
-            ([providerEnum, providerDisplayName]) => {
-              const providerValue =
-                provider_map[providerEnum as keyof typeof provider_map];
-              if (providerValue && discountConfig[providerValue]) {
-                return null;
-              }
-              return (
-                <AntdSelect.Option
-                  key={providerEnum}
-                  value={providerEnum}
-                  label={providerDisplayName}
-                >
-                  <div className="flex items-center space-x-2">
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img
-                      src={providerLogoMap[providerDisplayName]}
-                      alt={`${providerEnum} logo`}
-                      className="w-5 h-5"
-                      onError={(e) => handleImageError(e, providerDisplayName)}
-                    />
-                    <span>{providerDisplayName}</span>
-                  </div>
-                </AntdSelect.Option>
-              );
-            },
-          )}
-        </AntdSelect>
-      </Form.Item>
+      <div className="space-y-2">
+        <Label htmlFor="discount-provider" className="flex items-center text-sm font-medium text-foreground">
+          Provider
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Info className="ml-2 h-3 w-3 text-primary cursor-help" />
+              </TooltipTrigger>
+              <TooltipContent className="max-w-xs">
+                Select the LLM provider you want to configure a discount for
+              </TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
+        </Label>
+        <Select value={selectedProvider} onValueChange={(value) => onProviderChange(value || undefined)}>
+          <SelectTrigger id="discount-provider" className="w-full">
+            <SelectValue placeholder="Select provider" />
+          </SelectTrigger>
+          <SelectContent>
+            {availableProviders.map(([providerEnum, providerDisplayName]) => (
+              <SelectItem key={providerEnum} value={providerEnum}>
+                <div className="flex items-center space-x-2">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={providerLogoMap[providerDisplayName]}
+                    alt={`${providerEnum} logo`}
+                    className="w-5 h-5"
+                    onError={(e) => handleImageError(e, providerDisplayName)}
+                  />
+                  <span>{providerDisplayName}</span>
+                </div>
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
 
-      <Form.Item
-        label={
-          <span className="text-sm font-medium text-foreground flex items-center">
-            Discount Percentage
-            <TooltipProvider>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Info className="ml-2 h-3 w-3 text-primary cursor-help" />
-                </TooltipTrigger>
-                <TooltipContent className="max-w-xs">
-                  Enter a percentage value (e.g., 5 for 5% discount)
-                </TooltipContent>
-              </Tooltip>
-            </TooltipProvider>
-          </span>
-        }
-        rules={[{ required: true, message: "Please enter a discount percentage" }]}
-      >
+      <div className="space-y-2">
+        <Label htmlFor="discount-percentage" className="flex items-center text-sm font-medium text-foreground">
+          Discount Percentage
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Info className="ml-2 h-3 w-3 text-primary cursor-help" />
+              </TooltipTrigger>
+              <TooltipContent className="max-w-xs">Enter a percentage value (e.g., 5 for 5% discount)</TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
+        </Label>
         <div className="flex items-center gap-2">
           <Input
+            id="discount-percentage"
             placeholder="5"
             value={newDiscount}
             onChange={(e) => onDiscountChange(e.target.value)}
@@ -125,13 +92,10 @@ const AddProviderForm: React.FC<AddProviderFormProps> = ({
           />
           <span className="text-muted-foreground">%</span>
         </div>
-      </Form.Item>
+      </div>
 
       <div className="flex items-center justify-end space-x-3 pt-6 border-t border-border">
-        <Button
-          onClick={onAddProvider}
-          disabled={!selectedProvider || !newDiscount}
-        >
+        <Button onClick={onAddProvider} disabled={!selectedProvider || !newDiscount}>
           Add Provider Discount
         </Button>
       </div>

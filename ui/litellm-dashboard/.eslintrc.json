@@ -124,6 +124,7 @@
         "src/components/team/member_permissions.tsx",
         "src/components/agent_management/AgentSelector.tsx",
         "src/components/CostTrackingSettings/how_it_works.tsx",
+        "src/components/CostTrackingSettings/pricing_calculator/multi_cost_results.tsx",
         "src/components/Settings/AdminSettings/UISettings/PageVisibilitySettings.tsx",
         "src/components/AIHub/marketplace_table_columns.tsx",
         "src/components/AIHub/AgentHubTableColumns.tsx",
