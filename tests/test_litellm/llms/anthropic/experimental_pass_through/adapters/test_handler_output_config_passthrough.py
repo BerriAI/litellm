@@ -46,9 +46,12 @@ from litellm.llms.anthropic.experimental_pass_through.adapters.handler import (
 MESSAGES = [{"role": "user", "content": "hello"}]
 
 
-def _call_prepare(extra_kwargs, model="gpt-4o", **overrides):
+def _call_prepare(extra_kwargs, model="gpt-4o", output_format=None, **overrides):
     """
     Drive ``_prepare_completion_kwargs`` with the minimum scaffolding needed.
+
+    ``output_format`` is a top-level parameter on the function, so callers
+    pass it explicitly here rather than tucking it into ``extra_kwargs``.
 
     Uses an explicit-None check on ``extra_kwargs`` so callers can test the
     falsy-empty-dict path. The fallback ``or {}`` pattern PR #22727 used here
@@ -68,7 +71,7 @@ def _call_prepare(extra_kwargs, model="gpt-4o", **overrides):
         tools=None,
         top_k=None,
         top_p=None,
-        output_format=None,
+        output_format=output_format,
         extra_kwargs=extra_kwargs,
     )
 
@@ -107,22 +110,84 @@ class TestOutputConfigStrippedFromCompletionKwargs:
             "reject it with 400 'Extra inputs are not permitted'"
         )
 
-    def test_output_config_with_format_is_stripped_format_already_translated(self):
-        """Even when ``output_config`` carries useful structured-output info,
-        the raw key must be excluded — the translator above has already mapped
-        ``output_config.format`` to ``response_format`` (the OpenAI-shaped key
-        the downstream backend understands)."""
+    def test_output_config_format_translated_to_response_format(self):
+        """When ``output_config`` carries structured-output ``format``, the
+        translator now maps it to OpenAI's ``response_format`` so non-Anthropic
+        backends see the schema in their native shape. The raw
+        ``output_config`` key is still stripped from ``completion_kwargs`` —
+        only the translated ``response_format`` survives.
+
+        Before this PR, only the legacy top-level ``output_format`` was
+        translated; ``output_config.format`` was silently dropped on the
+        adapter path even when the schema was correctly supplied (issue
+        flagged by Greptile review of the initial fix).
+        """
+        schema = {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {"name": {"type": "string"}},
+        }
         extra_kwargs = {
             "custom_llm_provider": "azure",
-            "output_config": {
-                "format": {"type": "json_schema", "schema": {"type": "object"}}
-            },
+            "output_config": {"format": {"type": "json_schema", "schema": schema}},
         }
 
         result = _call_prepare(extra_kwargs=extra_kwargs)
         completion_kwargs = result[0] if isinstance(result, tuple) else result
 
+        # Raw Anthropic-shaped key is gone (would 400 on non-Anthropic backends).
         assert "output_config" not in completion_kwargs
+        # Translated OpenAI-shaped key is present so the schema actually
+        # reaches the downstream backend.
+        assert "response_format" in completion_kwargs, (
+            "output_config.format must be translated to response_format — "
+            "without this, structured-output schemas are silently dropped on "
+            "the adapter path"
+        )
+
+    def test_output_format_top_level_still_translates(self):
+        """Regression guard: the legacy top-level ``output_format`` field must
+        continue to translate to ``response_format``. The new
+        ``output_config.format`` path must not break this existing behavior."""
+        schema = {"type": "object", "properties": {"name": {"type": "string"}}}
+        result = _call_prepare(
+            extra_kwargs={"custom_llm_provider": "azure"},
+            output_format={"type": "json_schema", "schema": schema},
+        )
+        completion_kwargs = result[0] if isinstance(result, tuple) else result
+
+        assert "response_format" in completion_kwargs
+
+    def test_output_format_takes_precedence_over_output_config_format(self):
+        """When both top-level ``output_format`` and ``output_config.format``
+        are present, the legacy top-level ``output_format`` wins. Documents
+        which one the translator picks rather than leaving it implementation-
+        defined."""
+        winning_schema = {
+            "type": "object",
+            "properties": {"top_level": {"type": "string"}},
+        }
+        losing_schema = {
+            "type": "object",
+            "properties": {"nested": {"type": "string"}},
+        }
+        result = _call_prepare(
+            extra_kwargs={
+                "custom_llm_provider": "azure",
+                "output_config": {
+                    "format": {"type": "json_schema", "schema": losing_schema}
+                },
+            },
+            output_format={"type": "json_schema", "schema": winning_schema},
+        )
+        completion_kwargs = result[0] if isinstance(result, tuple) else result
+
+        assert "response_format" in completion_kwargs
+        # Verify the winning_schema (top-level output_format) was used,
+        # not the losing one nested under output_config.
+        rendered = str(completion_kwargs["response_format"])
+        assert "top_level" in rendered
+        assert "nested" not in rendered
 
     def test_other_extra_kwargs_still_passed_through(self):
         """Regression guard: the strip must be narrow. Unrelated fields like

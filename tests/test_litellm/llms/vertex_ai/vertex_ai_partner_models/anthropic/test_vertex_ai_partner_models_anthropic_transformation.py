@@ -693,32 +693,32 @@ def test_sanitize_vertex_anthropic_output_params_unit():
     """Direct unit coverage for the helper itself (used by both Vertex
     Anthropic transformation paths). Mirrors the integration assertions
     above without going through the full ``transform_request`` stack."""
-    from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation import (
-        _sanitize_vertex_anthropic_output_params,
+    from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.output_params_utils import (
+        sanitize_vertex_anthropic_output_params,
     )
 
     # No-op when output_config absent.
     data: dict = {"max_tokens": 8}
-    _sanitize_vertex_anthropic_output_params(data)
+    sanitize_vertex_anthropic_output_params(data)
     assert data == {"max_tokens": 8}
 
     # Effort-only → dropped entirely.
     data = {"output_config": {"effort": "high"}}
-    _sanitize_vertex_anthropic_output_params(data)
+    sanitize_vertex_anthropic_output_params(data)
     assert "output_config" not in data
 
     # Format-only → preserved unchanged.
     fmt = {"format": {"type": "json_schema", "schema": {"type": "object"}}}
     data = {"output_config": dict(fmt)}
-    _sanitize_vertex_anthropic_output_params(data)
+    sanitize_vertex_anthropic_output_params(data)
     assert data["output_config"] == fmt
 
     # Mixed → effort filtered, format kept.
     data = {"output_config": {"format": fmt["format"], "effort": "high"}}
-    _sanitize_vertex_anthropic_output_params(data)
+    sanitize_vertex_anthropic_output_params(data)
     assert data["output_config"] == fmt
 
     # Non-dict → dropped defensively.
     data = {"output_config": "garbage"}
-    _sanitize_vertex_anthropic_output_params(data)
+    sanitize_vertex_anthropic_output_params(data)
     assert "output_config" not in data
