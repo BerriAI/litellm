@@ -895,6 +895,52 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                             valid_token.project_metadata = _jwt_project_obj.metadata
                             valid_token.project_alias = _jwt_project_obj.project_alias
 
+                    # Apply end-user budget limits so downstream checks work.
+                    # auth_builder already fetched end_user_object (with its
+                    # litellm_budget_table) so we reuse that here rather than
+                    # re-fetching.  When end_user_object is None (user not in
+                    # DB) we still apply the global default budget if one is
+                    # configured — mirroring the key auth path at line ~1032.
+                    if (
+                        end_user_object is not None
+                        and end_user_object.litellm_budget_table is not None
+                    ):
+                        _eu_params: dict = {"end_user_id": end_user_id}
+                        _apply_budget_limits_to_end_user_params(
+                            end_user_params=_eu_params,
+                            budget_info=end_user_object.litellm_budget_table,
+                            end_user_id=end_user_id or "",
+                        )
+                        valid_token = update_valid_token_with_end_user_params(
+                            valid_token=valid_token,
+                            end_user_params=_eu_params,
+                        )
+                    elif (
+                        end_user_object is None
+                        and end_user_id is not None
+                        and litellm.max_end_user_budget_id is not None
+                    ):
+                        from litellm.proxy.auth.auth_checks import (
+                            get_default_end_user_budget,
+                        )
+
+                        _default_budget = await get_default_end_user_budget(
+                            prisma_client=prisma_client,
+                            user_api_key_cache=user_api_key_cache,
+                            parent_otel_span=parent_otel_span,
+                        )
+                        if _default_budget is not None:
+                            _eu_params = {"end_user_id": end_user_id}
+                            _apply_budget_limits_to_end_user_params(
+                                end_user_params=_eu_params,
+                                budget_info=_default_budget,
+                                end_user_id=end_user_id,
+                            )
+                            valid_token = update_valid_token_with_end_user_params(
+                                valid_token=valid_token,
+                                end_user_params=_eu_params,
+                            )
+
                     # run through common checks
                     _ = await common_checks(
                         request=request,
@@ -911,6 +957,26 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                         skip_budget_checks=skip_budget_checks,
                         project_object=_jwt_project_obj,
                     )
+
+                    # Check end-user per-model budget (JWT auth path).
+                    # The key auth path handles this in the budget_checks block
+                    # further down the function; we need an explicit check here
+                    # because the JWT path returns before reaching that block.
+                    if not skip_budget_checks and model_max_budget_limiter is not None:
+                        _jwt_current_model = request_data.get("model", None)
+                        _jwt_end_user_mmb = valid_token.end_user_model_max_budget
+                        if (
+                            _jwt_end_user_mmb is not None
+                            and isinstance(_jwt_end_user_mmb, dict)
+                            and len(_jwt_end_user_mmb) > 0
+                            and _jwt_current_model is not None
+                            and valid_token.end_user_id is not None
+                        ):
+                            await model_max_budget_limiter.is_end_user_within_model_budget(
+                                end_user_id=valid_token.end_user_id,
+                                end_user_model_max_budget=_jwt_end_user_mmb,
+                                model=_jwt_current_model,
+                            )
 
                     # return UserAPIKeyAuth object
                     return cast(UserAPIKeyAuth, valid_token)

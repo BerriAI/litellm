@@ -584,6 +584,8 @@ model LiteLLM_SpendLogs {
   @@index([startTime])
   @@index([startTime, request_id])
   @@index([end_user])
+  @@index([end_user, startTime])
+  @@index([api_key, startTime])
   @@index([session_id])
 }
 
