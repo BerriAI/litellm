@@ -2170,8 +2170,20 @@ async def apply_guardrail(
         request_data: dict = {}
         if request.messages:
             request_data["messages"] = request.messages
+
+        # Auto-detect input_type: if the caller didn't specify "response" but the
+        # guardrail only runs post_call (e.g. LLM-as-a-judge), use "response" so
+        # the test actually exercises the guardrail logic.
+        from litellm.types.guardrails import GuardrailEventHooks
+
+        resolved_input_type = request.input_type
+        if resolved_input_type == "request":
+            hook = getattr(active_guardrail, "event_hook", None)
+            if hook == GuardrailEventHooks.post_call or hook == "post_call":
+                resolved_input_type = "response"
+
         _input_type: Literal["request", "response"] = (
-            "response" if request.input_type == "response" else "request"
+            "response" if resolved_input_type == "response" else "request"
         )
         guardrailed_inputs = await active_guardrail.apply_guardrail(
             inputs={"texts": [request.text]},
