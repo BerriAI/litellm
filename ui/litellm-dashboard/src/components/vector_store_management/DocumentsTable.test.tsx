@@ -3,16 +3,14 @@ import { describe, it, expect, vi } from "vitest";
 import DocumentsTable from "./DocumentsTable";
 import { DocumentUpload } from "./types";
 
-// Mock antd message
-vi.mock("antd", async () => {
-  const actual = await vi.importActual("antd");
-  return {
-    ...actual,
-    message: {
-      success: vi.fn(),
-    },
-  };
-});
+vi.mock("@/components/molecules/message_manager", () => ({
+  default: {
+    success: vi.fn(),
+    error: vi.fn(),
+    warning: vi.fn(),
+    info: vi.fn(),
+  },
+}));
 
 describe("DocumentsTable", () => {
   const mockDocuments: DocumentUpload[] = [
@@ -91,7 +89,7 @@ describe("DocumentsTable", () => {
     render(<DocumentsTable documents={mockDocuments} onRemove={onRemove} />);
 
     // Each document should have 3 action buttons (view, copy, delete)
-    const viewButtons = screen.getAllByLabelText(/eye/i);
+    const viewButtons = screen.getAllByLabelText(/view/i);
     const copyButtons = screen.getAllByLabelText(/copy/i);
     const deleteButtons = screen.getAllByLabelText(/delete/i);
 

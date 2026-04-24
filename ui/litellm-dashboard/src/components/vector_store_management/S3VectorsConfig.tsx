@@ -1,13 +1,19 @@
-import React, { useState, useEffect } from "react";
-import { Form, Select } from "antd";
+import React, { useState, useEffect, useMemo } from "react";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 import {
   Tooltip,
   TooltipContent,
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { Info } from "lucide-react";
+import { cn } from "@/lib/utils";
+import { ChevronDown, Info, Search } from "lucide-react";
 import {
   fetchAvailableModels,
   ModelGroup,
@@ -19,6 +25,119 @@ interface S3VectorsConfigProps {
   providerParams: Record<string, any>;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   onParamsChange: (params: Record<string, any>) => void;
+}
+
+interface FieldShellProps {
+  label: string;
+  required?: boolean;
+  tooltip: string;
+  htmlFor: string;
+  error?: string;
+  children: React.ReactNode;
+}
+
+function FieldShell({ label, required, tooltip, htmlFor, error, children }: FieldShellProps) {
+  return (
+    <div className="mb-4 space-y-1">
+      <Label htmlFor={htmlFor} className="flex items-center gap-1">
+        <span>
+          {label}
+          {required && <span className="text-destructive"> *</span>}
+        </span>
+        <TooltipProvider>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Info className="h-3 w-3 text-muted-foreground" />
+            </TooltipTrigger>
+            <TooltipContent className="max-w-xs">{tooltip}</TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
+      </Label>
+      {children}
+      {error && <p className="text-xs text-destructive">{error}</p>}
+    </div>
+  );
+}
+
+interface EmbeddingSelectProps {
+  value: string | undefined;
+  onChange: (value: string) => void;
+  options: { label: string; value: string }[];
+  loading: boolean;
+  id: string;
+}
+
+function EmbeddingSelect({ value, onChange, options, loading, id }: EmbeddingSelectProps) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+
+  const filtered = useMemo(
+    () =>
+      options.filter((o) =>
+        query ? o.label.toLowerCase().includes(query.toLowerCase()) : true,
+      ),
+    [options, query],
+  );
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button
+          id={id}
+          type="button"
+          role="combobox"
+          aria-expanded={open}
+          aria-controls={`${id}-listbox`}
+          className={cn(
+            "h-9 w-full flex items-center justify-between rounded-md border border-input bg-background px-3 py-1 text-sm text-left",
+          )}
+        >
+          <span className={value ? "" : "text-muted-foreground"}>
+            {value || (loading ? "Loading models…" : "Select an embedding model")}
+          </span>
+          <ChevronDown className="h-4 w-4 text-muted-foreground" />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent
+        align="start"
+        id={`${id}-listbox`}
+        className="w-[var(--radix-popover-trigger-width)] p-2"
+      >
+        <div className="relative mb-2">
+          <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+          <Input
+            autoFocus
+            placeholder="Search models…"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            className="h-8 pl-8"
+          />
+        </div>
+        <div className="max-h-60 overflow-y-auto">
+          {filtered.length === 0 ? (
+            <div className="py-2 px-3 text-sm text-muted-foreground">
+              {loading ? "Loading models…" : "No matches"}
+            </div>
+          ) : (
+            filtered.map((opt) => (
+              <button
+                key={opt.value}
+                type="button"
+                className="w-full text-left px-2 py-1.5 text-sm rounded hover:bg-accent"
+                onClick={() => {
+                  onChange(opt.value);
+                  setOpen(false);
+                  setQuery("");
+                }}
+              >
+                {opt.label}
+              </button>
+            ))
+          )}
+        </div>
+      </PopoverContent>
+    </Popover>
+  );
 }
 
 const S3VectorsConfig: React.FC<S3VectorsConfigProps> = ({
@@ -36,7 +155,6 @@ const S3VectorsConfig: React.FC<S3VectorsConfigProps> = ({
       setIsLoadingModels(true);
       try {
         const models = await fetchAvailableModels(accessToken);
-        // Filter for embedding models only
         const embeddingOnly = models.filter((model) => model.mode === "embedding");
         setEmbeddingModels(embeddingOnly);
       } catch (error) {
@@ -55,6 +173,17 @@ const S3VectorsConfig: React.FC<S3VectorsConfigProps> = ({
       [fieldName]: value,
     });
   };
+
+  const bucketError =
+    providerParams.vector_bucket_name && providerParams.vector_bucket_name.length < 3
+      ? "Bucket name must be at least 3 characters"
+      : undefined;
+  const indexError =
+    providerParams.index_name &&
+    providerParams.index_name.length > 0 &&
+    providerParams.index_name.length < 3
+      ? "Index name must be at least 3 characters if provided"
+      : undefined;
 
   return (
     <>
@@ -94,146 +223,69 @@ const S3VectorsConfig: React.FC<S3VectorsConfigProps> = ({
         </div>
       </div>
 
-      {/* Vector Bucket Name */}
-      <Form.Item
-        label={
-          <span>
-            Vector Bucket Name{" "}
-            <TooltipProvider>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Info className="ml-1 h-3 w-3 inline text-muted-foreground" />
-                </TooltipTrigger>
-                <TooltipContent className="max-w-xs">
-                  S3 bucket name for vector storage (must be at least 3
-                  characters, lowercase letters, numbers, hyphens, and
-                  periods only)
-                </TooltipContent>
-              </Tooltip>
-            </TooltipProvider>
-          </span>
-        }
+      <FieldShell
+        label="Vector Bucket Name"
         required
-        validateStatus={
-          providerParams.vector_bucket_name && providerParams.vector_bucket_name.length < 3
-            ? "error"
-            : undefined
-        }
-        help={
-          providerParams.vector_bucket_name && providerParams.vector_bucket_name.length < 3
-            ? "Bucket name must be at least 3 characters"
-            : undefined
-        }
+        htmlFor="s3-vector-bucket-name"
+        tooltip="S3 bucket name for vector storage (must be at least 3 characters, lowercase letters, numbers, hyphens, and periods only)"
+        error={bucketError}
       >
         <Input
+          id="s3-vector-bucket-name"
           value={providerParams.vector_bucket_name || ""}
           onChange={(e) => handleFieldChange("vector_bucket_name", e.target.value)}
           placeholder="my-vector-bucket (min 3 chars)"
           className="rounded-md"
         />
-      </Form.Item>
+      </FieldShell>
 
-      {/* Index Name (Optional) */}
-      <Form.Item
-        label={
-          <span>
-            Index Name{" "}
-            <TooltipProvider>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Info className="ml-1 h-3 w-3 inline text-muted-foreground" />
-                </TooltipTrigger>
-                <TooltipContent className="max-w-xs">
-                  Name for the vector index (optional, will be auto-generated
-                  if not provided). If provided, must be at least 3
-                  characters.
-                </TooltipContent>
-              </Tooltip>
-            </TooltipProvider>
-          </span>
-        }
-        validateStatus={
-          providerParams.index_name && providerParams.index_name.length > 0 && providerParams.index_name.length < 3
-            ? "error"
-            : undefined
-        }
-        help={
-          providerParams.index_name && providerParams.index_name.length > 0 && providerParams.index_name.length < 3
-            ? "Index name must be at least 3 characters if provided"
-            : undefined
-        }
+      <FieldShell
+        label="Index Name"
+        htmlFor="s3-index-name"
+        tooltip="Name for the vector index (optional, will be auto-generated if not provided). If provided, must be at least 3 characters."
+        error={indexError}
       >
         <Input
+          id="s3-index-name"
           value={providerParams.index_name || ""}
           onChange={(e) => handleFieldChange("index_name", e.target.value)}
           placeholder="my-vector-index (optional, min 3 chars)"
           className="rounded-md"
         />
-      </Form.Item>
+      </FieldShell>
 
-      {/* AWS Region */}
-      <Form.Item
-        label={
-          <span>
-            AWS Region{" "}
-            <TooltipProvider>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Info className="ml-1 h-3 w-3 inline text-muted-foreground" />
-                </TooltipTrigger>
-                <TooltipContent className="max-w-xs">
-                  AWS region where the S3 bucket is located (e.g., us-west-2)
-                </TooltipContent>
-              </Tooltip>
-            </TooltipProvider>
-          </span>
-        }
+      <FieldShell
+        label="AWS Region"
         required
+        htmlFor="s3-aws-region"
+        tooltip="AWS region where the S3 bucket is located (e.g., us-west-2)"
       >
         <Input
+          id="s3-aws-region"
           value={providerParams.aws_region_name || ""}
           onChange={(e) => handleFieldChange("aws_region_name", e.target.value)}
           placeholder="us-west-2"
           className="rounded-md"
         />
-      </Form.Item>
+      </FieldShell>
 
-      {/* Embedding Model */}
-      <Form.Item
-        label={
-          <span>
-            Embedding Model{" "}
-            <TooltipProvider>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Info className="ml-1 h-3 w-3 inline text-muted-foreground" />
-                </TooltipTrigger>
-                <TooltipContent className="max-w-xs">
-                  Select the embedding model to use for vector generation
-                </TooltipContent>
-              </Tooltip>
-            </TooltipProvider>
-          </span>
-        }
+      <FieldShell
+        label="Embedding Model"
         required
+        htmlFor="s3-embedding-model"
+        tooltip="Select the embedding model to use for vector generation"
       >
-        <Select
+        <EmbeddingSelect
+          id="s3-embedding-model"
           value={providerParams.embedding_model || undefined}
-          onChange={(value) => handleFieldChange("embedding_model", value)}
-          placeholder="Select an embedding model"
-          size="large"
-          showSearch
+          onChange={(v) => handleFieldChange("embedding_model", v)}
           loading={isLoadingModels}
-          filterOption={(input, option) =>
-            (option?.label ?? "").toLowerCase().includes(input.toLowerCase())
-          }
-          options={embeddingModels.map((model) => ({
-            value: model.model_group,
-            label: model.model_group,
+          options={embeddingModels.map((m) => ({
+            label: m.model_group,
+            value: m.model_group,
           }))}
-          style={{ width: "100%" }}
         />
-      </Form.Item>
+      </FieldShell>
     </>
   );
 };

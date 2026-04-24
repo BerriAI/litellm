@@ -1,6 +1,12 @@
 import React, { useState } from "react";
-import { Select } from "antd";
 import { Card } from "@/components/ui/card";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { VectorStoreTester } from "./VectorStoreTester";
 import { VectorStore } from "./types";
 
@@ -52,30 +58,30 @@ const TestVectorStoreTab: React.FC<TestVectorStoreTabProps> = ({
 
           <Select
             value={selectedVectorStoreId}
-            onChange={setSelectedVectorStoreId}
-            placeholder="Select a vector store"
-            size="large"
-            style={{ width: "100%" }}
-            showSearch
-            optionFilterProp="children"
+            onValueChange={setSelectedVectorStoreId}
           >
-            {vectorStores.map((vs) => (
-              <Select.Option
-                key={vs.vector_store_id}
-                value={vs.vector_store_id}
-              >
-                <div className="flex flex-col">
-                  <span className="font-medium">
-                    {vs.vector_store_name || vs.vector_store_id}
-                  </span>
-                  {vs.vector_store_name && (
-                    <span className="text-xs text-muted-foreground font-mono">
-                      {vs.vector_store_id}
+            <SelectTrigger className="w-full">
+              <SelectValue placeholder="Select a vector store" />
+            </SelectTrigger>
+            <SelectContent>
+              {vectorStores.map((vs) => (
+                <SelectItem
+                  key={vs.vector_store_id}
+                  value={vs.vector_store_id}
+                >
+                  <div className="flex flex-col">
+                    <span className="font-medium">
+                      {vs.vector_store_name || vs.vector_store_id}
                     </span>
-                  )}
-                </div>
-              </Select.Option>
-            ))}
+                    {vs.vector_store_name && (
+                      <span className="text-xs text-muted-foreground font-mono">
+                        {vs.vector_store_id}
+                      </span>
+                    )}
+                  </div>
+                </SelectItem>
+              ))}
+            </SelectContent>
           </Select>
         </div>
       </Card>

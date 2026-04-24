@@ -1,4 +1,5 @@
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, act } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { describe, it, expect, vi } from "vitest";
 import TestVectorStoreTab from "./TestVectorStoreTab";
 import { VectorStore } from "./types";
@@ -60,31 +61,38 @@ describe("TestVectorStoreTab", () => {
     expect(screen.getByTestId("tester-access-token")).toHaveTextContent("test-token");
   });
 
-  it("should update VectorStoreTester when selecting different vector store", () => {
+  it("should update VectorStoreTester when selecting different vector store", async () => {
+    const user = userEvent.setup();
     render(<TestVectorStoreTab accessToken="test-token" vectorStores={mockVectorStores} />);
 
-    // Find the select component
     const selectElement = screen.getByRole("combobox");
+    await act(async () => {
+      await user.click(selectElement);
+    });
 
-    // Change selection
-    fireEvent.mouseDown(selectElement);
+    // Wait for options to be rendered
+    await screen.findByRole("option", { name: /Test Store 2/ });
 
-    // Wait for options to appear and click the second one
-    const option2 = screen.getByText("Test Store 2");
-    fireEvent.click(option2);
+    // Radix Select reliably responds to keyboard navigation in jsdom
+    await act(async () => {
+      await user.keyboard("{ArrowDown}{Enter}");
+    });
 
-    // Verify the tester component updated
-    expect(screen.getByTestId("tester-vector-store-id")).toHaveTextContent("vs_456");
+    await vi.waitFor(() => {
+      expect(screen.getByTestId("tester-vector-store-id")).toHaveTextContent("vs_456");
+    });
   });
 
-  it("should display vector store names in select options", () => {
+  it("should display vector store names in select options", async () => {
+    const user = userEvent.setup();
     render(<TestVectorStoreTab accessToken="test-token" vectorStores={mockVectorStores} />);
 
     const selectElement = screen.getByRole("combobox");
-    fireEvent.mouseDown(selectElement);
+    await act(async () => {
+      await user.click(selectElement);
+    });
 
-    // Use getAllByText since the selected value also shows the name
     expect(screen.getAllByText("Test Store 1").length).toBeGreaterThan(0);
-    expect(screen.getByText("Test Store 2")).toBeInTheDocument();
+    expect(await screen.findByText("Test Store 2")).toBeInTheDocument();
   });
 });

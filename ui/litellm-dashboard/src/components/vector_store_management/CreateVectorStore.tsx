@@ -1,10 +1,26 @@
-import React, { useState } from "react";
-// eslint-disable-next-line litellm-ui/no-banned-ui-imports
-import { Card, Title, Text } from "@tremor/react";
-import { Upload, Button, Select, Form, Alert, Tooltip, Input } from "antd";
+import React, { useRef, useState } from "react";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Textarea } from "@/components/ui/textarea";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import MessageManager from "@/components/molecules/message_manager";
-import { Inbox as InboxOutlined, Info as InfoCircleOutlined } from "lucide-react";
-import type { UploadProps } from "antd";
+import { cn } from "@/lib/utils";
+import { Inbox, Info } from "lucide-react";
 import { ragIngestCall } from "../networking";
 import { DocumentUpload, RAGIngestResponse } from "./types";
 import DocumentsTable from "./DocumentsTable";
@@ -18,15 +34,49 @@ import {
 import NotificationsManager from "../molecules/notifications_manager";
 import S3VectorsConfig from "./S3VectorsConfig";
 
-const { Dragger } = Upload;
-
 interface CreateVectorStoreProps {
   accessToken: string | null;
   onSuccess?: (vectorStoreId: string) => void;
 }
 
+const ACCEPTED_TYPES = [
+  "application/pdf",
+  "text/plain",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  "application/msword",
+  "text/markdown",
+];
+
+function FieldLabel({
+  children,
+  tooltip,
+  htmlFor,
+  required,
+}: {
+  children: React.ReactNode;
+  tooltip: string;
+  htmlFor?: string;
+  required?: boolean;
+}) {
+  return (
+    <Label htmlFor={htmlFor} className="flex items-center gap-1">
+      <span>
+        {children}
+        {required && <span className="text-destructive"> *</span>}
+      </span>
+      <TooltipProvider>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Info className="h-3 w-3 text-muted-foreground" />
+          </TooltipTrigger>
+          <TooltipContent className="max-w-xs">{tooltip}</TooltipContent>
+        </Tooltip>
+      </TooltipProvider>
+    </Label>
+  );
+}
+
 const CreateVectorStore: React.FC<CreateVectorStoreProps> = ({ accessToken, onSuccess }) => {
-  const [form] = Form.useForm();
   const [documents, setDocuments] = useState<DocumentUpload[]>([]);
   const [isCreating, setIsCreating] = useState(false);
   const [selectedProvider, setSelectedProvider] = useState<string>("bedrock");
@@ -34,53 +84,35 @@ const CreateVectorStore: React.FC<CreateVectorStoreProps> = ({ accessToken, onSu
   const [vectorStoreDescription, setVectorStoreDescription] = useState<string>("");
   const [ingestResults, setIngestResults] = useState<RAGIngestResponse[]>([]);
   const [providerParams, setProviderParams] = useState<Record<string, any>>({});
+  const [isDragActive, setIsDragActive] = useState(false);
+  const [showSuccessAlert, setShowSuccessAlert] = useState(true);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const uploadProps: UploadProps = {
-    name: "file",
-    multiple: true,
-    accept: ".pdf,.txt,.docx,.md,.doc",
-    beforeUpload: (file) => {
-      const isValidType = [
-        "application/pdf",
-        "text/plain",
-        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        "application/msword",
-        "text/markdown",
-      ].includes(file.type);
-
-      if (!isValidType) {
-        MessageManager.error(`${file.name} is not a supported file type. Please upload PDF, TXT, DOCX, or MD files.`);
-        return Upload.LIST_IGNORE;
+  const acceptFiles = (files: FileList | File[]) => {
+    const accepted: DocumentUpload[] = [];
+    for (const file of Array.from(files)) {
+      if (!ACCEPTED_TYPES.includes(file.type)) {
+        MessageManager.error(
+          `${file.name} is not a supported file type. Please upload PDF, TXT, DOCX, or MD files.`,
+        );
+        continue;
       }
-
-      const isLt50M = file.size / 1024 / 1024 < 50;
-      if (!isLt50M) {
+      if (file.size / 1024 / 1024 >= 50) {
         MessageManager.error(`${file.name} must be smaller than 50MB!`);
-        return Upload.LIST_IGNORE;
+        continue;
       }
-
-      const newDoc: DocumentUpload = {
-        uid: file.uid,
+      accepted.push({
+        uid: `${file.name}-${file.size}-${file.lastModified}-${Math.random()}`,
         name: file.name,
         status: "done",
         size: file.size,
         type: file.type,
         originFileObj: file,
-      };
-
-      setDocuments((prev) => [...prev, newDoc]);
-      return false; // Prevent auto upload
-    },
-    onRemove: (file) => {
-      setDocuments((prev) => prev.filter((doc) => doc.uid !== file.uid));
-    },
-    fileList: documents.map((doc) => ({
-      uid: doc.uid,
-      name: doc.name,
-      status: doc.status,
-      size: doc.size,
-    })),
-    showUploadList: false, // We'll use our custom table
+      });
+    }
+    if (accepted.length > 0) {
+      setDocuments((prev) => [...prev, ...accepted]);
+    }
   };
 
   const handleRemoveDocument = (uid: string) => {
@@ -98,7 +130,6 @@ const CreateVectorStore: React.FC<CreateVectorStoreProps> = ({ accessToken, onSu
       return;
     }
 
-    // Validate provider-specific required fields
     const requiredFields = getProviderSpecificFields(selectedProvider).filter((field) => field.required);
     for (const field of requiredFields) {
       if (!providerParams[field.name]) {
@@ -107,7 +138,6 @@ const CreateVectorStore: React.FC<CreateVectorStoreProps> = ({ accessToken, onSu
       }
     }
 
-    // S3 Vectors specific validation
     if (selectedProvider === "s3_vectors") {
       if (providerParams.vector_bucket_name && providerParams.vector_bucket_name.length < 3) {
         MessageManager.warning("Vector bucket name must be at least 3 characters");
@@ -129,13 +159,11 @@ const CreateVectorStore: React.FC<CreateVectorStoreProps> = ({ accessToken, onSu
     let vectorStoreId: string | undefined;
 
     try {
-      // Ingest each document
       for (const doc of documents) {
         if (!doc.originFileObj) continue;
 
-        // Update document status to uploading
         setDocuments((prev) =>
-          prev.map((d) => (d.uid === doc.uid ? { ...d, status: "uploading" as const } : d))
+          prev.map((d) => (d.uid === doc.uid ? { ...d, status: "uploading" as const } : d)),
         );
 
         try {
@@ -143,43 +171,40 @@ const CreateVectorStore: React.FC<CreateVectorStoreProps> = ({ accessToken, onSu
             accessToken,
             doc.originFileObj,
             selectedProvider,
-            vectorStoreId, // Use the same vector store ID for subsequent uploads
+            vectorStoreId,
             vectorStoreName || undefined,
             vectorStoreDescription || undefined,
-            providerParams
+            providerParams,
           );
 
-          // Store the vector store ID from the first successful ingest
           if (!vectorStoreId && result.vector_store_id) {
             vectorStoreId = result.vector_store_id;
           }
 
           results.push(result);
 
-          // Update document status to done
           setDocuments((prev) =>
-            prev.map((d) => (d.uid === doc.uid ? { ...d, status: "done" as const } : d))
+            prev.map((d) => (d.uid === doc.uid ? { ...d, status: "done" as const } : d)),
           );
         } catch (error) {
           console.error(`Error ingesting ${doc.name}:`, error);
-          // Update document status to error
           setDocuments((prev) =>
-            prev.map((d) => (d.uid === doc.uid ? { ...d, status: "error" as const } : d))
+            prev.map((d) => (d.uid === doc.uid ? { ...d, status: "error" as const } : d)),
           );
-          throw error; // Stop processing on first error
+          throw error;
         }
       }
 
       setIngestResults(results);
+      setShowSuccessAlert(true);
       NotificationsManager.success(
-        `Successfully created vector store with ${results.length} document(s). Vector Store ID: ${vectorStoreId}`
+        `Successfully created vector store with ${results.length} document(s). Vector Store ID: ${vectorStoreId}`,
       );
 
       if (onSuccess && vectorStoreId) {
         onSuccess(vectorStoreId);
       }
 
-      // Clear documents after successful creation
       setTimeout(() => {
         setDocuments([]);
         setIngestResults([]);
@@ -192,142 +217,208 @@ const CreateVectorStore: React.FC<CreateVectorStoreProps> = ({ accessToken, onSu
     }
   };
 
+  const handleDrop = (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragActive(false);
+    if (e.dataTransfer?.files?.length) {
+      acceptFiles(e.dataTransfer.files);
+    }
+  };
+
+  const renderProviderField = (field: VectorStoreFieldConfig) => {
+    const fieldId = `provider-field-${field.name}`;
+    if (field.type === "select") {
+      return (
+        <div key={field.name} className="mb-4 space-y-1">
+          <FieldLabel htmlFor={fieldId} tooltip={field.tooltip} required={field.required}>
+            {field.label}
+          </FieldLabel>
+          <Input
+            id={fieldId}
+            value={providerParams[field.name] || ""}
+            onChange={(e) =>
+              setProviderParams((prev) => ({ ...prev, [field.name]: e.target.value }))
+            }
+            placeholder={field.placeholder}
+            className="rounded-md"
+          />
+        </div>
+      );
+    }
+
+    return (
+      <div key={field.name} className="mb-4 space-y-1">
+        <FieldLabel htmlFor={fieldId} tooltip={field.tooltip} required={field.required}>
+          {field.label}
+        </FieldLabel>
+        <Input
+          id={fieldId}
+          type={field.type === "password" ? "password" : "text"}
+          value={providerParams[field.name] || ""}
+          onChange={(e) =>
+            setProviderParams((prev) => ({ ...prev, [field.name]: e.target.value }))
+          }
+          placeholder={field.placeholder}
+          className="rounded-md"
+        />
+      </div>
+    );
+  };
+
   return (
     <div className="space-y-6">
       <div>
-        <Title>Create Vector Store</Title>
-        <Text className="text-gray-500">
+        <h2 className="text-2xl font-semibold m-0">Create Vector Store</h2>
+        <p className="text-muted-foreground text-sm m-0">
           Upload documents and select a provider to create a new vector store with embedded content.
-        </Text>
+        </p>
       </div>
 
-      {/* Upload Area */}
-      <Card>
+      <Card className="p-6">
         <div className="mb-4">
-          <Text className="font-medium">Step 1: Upload Documents</Text>
-          <Text className="text-sm text-gray-500 block mt-1">
+          <p className="font-medium">Step 1: Upload Documents</p>
+          <p className="text-sm text-muted-foreground mt-1">
             Upload one or more documents (PDF, TXT, DOCX, MD). Maximum file size: 50MB per file.
-          </Text>
-        </div>
-        <Dragger {...uploadProps}>
-          <p className="ant-upload-drag-icon">
-            <InboxOutlined style={{ fontSize: "48px", color: "#1890ff" }} />
           </p>
-          <p className="ant-upload-text">Click or drag files to this area to upload</p>
-          <p className="ant-upload-hint">
+        </div>
+        <div
+          role="button"
+          tabIndex={0}
+          onClick={() => fileInputRef.current?.click()}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === " ") fileInputRef.current?.click();
+          }}
+          onDragOver={(e) => {
+            e.preventDefault();
+            setIsDragActive(true);
+          }}
+          onDragLeave={() => setIsDragActive(false)}
+          onDrop={handleDrop}
+          className={cn(
+            "flex flex-col items-center justify-center gap-2 border-2 border-dashed rounded-md p-8 cursor-pointer transition-colors",
+            isDragActive
+              ? "border-primary bg-accent/50"
+              : "border-border hover:border-primary",
+          )}
+        >
+          <Inbox className="h-12 w-12 text-primary" />
+          <p className="text-sm font-medium">Click or drag files to this area to upload</p>
+          <p className="text-xs text-muted-foreground">
             Support for single or bulk upload. Supported formats: PDF, TXT, DOCX, MD
           </p>
-        </Dragger>
+          <input
+            ref={fileInputRef}
+            type="file"
+            multiple
+            accept=".pdf,.txt,.docx,.md,.doc"
+            className="hidden"
+            onChange={(e) => {
+              if (e.target.files?.length) acceptFiles(e.target.files);
+              if (fileInputRef.current) fileInputRef.current.value = "";
+            }}
+          />
+        </div>
       </Card>
 
-      {/* Documents Table */}
       {documents.length > 0 && (
-        <Card>
+        <Card className="p-6">
           <div className="mb-4">
-            <Text className="font-medium">Uploaded Documents ({documents.length})</Text>
+            <p className="font-medium">Uploaded Documents ({documents.length})</p>
           </div>
           <DocumentsTable documents={documents} onRemove={handleRemoveDocument} />
         </Card>
       )}
 
-      {/* Provider Selection and Vector Store Details */}
-      <Card>
+      <Card className="p-6">
         <div className="space-y-4">
           <div>
-            <Text className="font-medium">Step 2: Configure Vector Store</Text>
-            <Text className="text-sm text-gray-500 block mt-1">
+            <p className="font-medium">Step 2: Configure Vector Store</p>
+            <p className="text-sm text-muted-foreground mt-1">
               Choose the provider and optionally provide a name and description for your vector store.
-            </Text>
+            </p>
           </div>
 
-          <Form form={form} layout="vertical">
-            <Form.Item
-              label={
-                <span>
-                  Vector Store Name{" "}
-                  <Tooltip title="Optional: Give your vector store a meaningful name">
-                    <InfoCircleOutlined style={{ marginLeft: "4px" }} />
-                  </Tooltip>
-                </span>
-              }
-            >
+          <div className="space-y-4">
+            <div className="space-y-1">
+              <FieldLabel
+                htmlFor="vector-store-name"
+                tooltip="Optional: Give your vector store a meaningful name"
+              >
+                Vector Store Name
+              </FieldLabel>
               <Input
+                id="vector-store-name"
                 value={vectorStoreName}
                 onChange={(e) => setVectorStoreName(e.target.value)}
                 placeholder="e.g., Product Documentation, Customer Support KB"
-                size="large"
                 className="rounded-md"
               />
-            </Form.Item>
+            </div>
 
-            <Form.Item
-              label={
-                <span>
-                  Description{" "}
-                  <Tooltip title="Optional: Describe what this vector store contains">
-                    <InfoCircleOutlined style={{ marginLeft: "4px" }} />
-                  </Tooltip>
-                </span>
-              }
-            >
-              <Input.TextArea
+            <div className="space-y-1">
+              <FieldLabel
+                htmlFor="vector-store-description"
+                tooltip="Optional: Describe what this vector store contains"
+              >
+                Description
+              </FieldLabel>
+              <Textarea
+                id="vector-store-description"
                 value={vectorStoreDescription}
                 onChange={(e) => setVectorStoreDescription(e.target.value)}
                 placeholder="e.g., Contains all product documentation and user guides"
                 rows={2}
-                size="large"
                 className="rounded-md"
               />
-            </Form.Item>
+            </div>
 
-            <Form.Item
-              label={
-                <span>
-                  Provider{" "}
-                  <Tooltip title="Select the provider for embedding and vector store operations">
-                    <InfoCircleOutlined style={{ marginLeft: "4px" }} />
-                  </Tooltip>
-                </span>
-              }
-              required
-            >
-              <Select
-                value={selectedProvider}
-                onChange={setSelectedProvider}
-                placeholder="Select a provider"
-                size="large"
-                style={{ width: "100%" }}
+            <div className="space-y-1">
+              <FieldLabel
+                htmlFor="vector-store-provider"
+                tooltip="Select the provider for embedding and vector store operations"
+                required
               >
-                {Object.entries(VectorStoreProviders).map(([providerEnum, providerDisplayName]) => {
-                  return (
-                    <Select.Option key={providerEnum} value={vectorStoreProviderMap[providerEnum]}>
-                      <div className="flex items-center space-x-2">
-                        <img
-                          src={vectorStoreProviderLogoMap[providerDisplayName]}
-                          alt={`${providerEnum} logo`}
-                          className="w-5 h-5"
-                          onError={(e) => {
-                            // Create a div with provider initial as fallback
-                            const target = e.target as HTMLImageElement;
-                            const parent = target.parentElement;
-                            if (parent) {
-                              const fallbackDiv = document.createElement("div");
-                              fallbackDiv.className =
-                                "w-5 h-5 rounded-full bg-gray-200 flex items-center justify-center text-xs";
-                              fallbackDiv.textContent = providerDisplayName.charAt(0);
-                              parent.replaceChild(fallbackDiv, target);
-                            }
-                          }}
-                        />
-                        <span>{providerDisplayName}</span>
-                      </div>
-                    </Select.Option>
-                  );
-                })}
+                Provider
+              </FieldLabel>
+              <Select value={selectedProvider} onValueChange={setSelectedProvider}>
+                <SelectTrigger id="vector-store-provider" className="w-full">
+                  <SelectValue placeholder="Select a provider" />
+                </SelectTrigger>
+                <SelectContent>
+                  {Object.entries(VectorStoreProviders).map(
+                    ([providerEnum, providerDisplayName]) => (
+                      <SelectItem
+                        key={providerEnum}
+                        value={vectorStoreProviderMap[providerEnum]}
+                      >
+                        <div className="flex items-center space-x-2">
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img
+                            src={vectorStoreProviderLogoMap[providerDisplayName]}
+                            alt={`${providerEnum} logo`}
+                            className="w-5 h-5"
+                            onError={(e) => {
+                              const target = e.target as HTMLImageElement;
+                              const parent = target.parentElement;
+                              if (parent) {
+                                const fallbackDiv = document.createElement("div");
+                                fallbackDiv.className =
+                                  "w-5 h-5 rounded-full bg-muted flex items-center justify-center text-xs";
+                                fallbackDiv.textContent = providerDisplayName.charAt(0);
+                                parent.replaceChild(fallbackDiv, target);
+                              }
+                            }}
+                          />
+                          <span>{providerDisplayName}</span>
+                        </div>
+                      </SelectItem>
+                    ),
+                  )}
+                </SelectContent>
               </Select>
-            </Form.Item>
+            </div>
 
-            {/* S3 Vectors Configuration */}
             {selectedProvider === "s3_vectors" && (
               <S3VectorsConfig
                 accessToken={accessToken}
@@ -336,73 +427,14 @@ const CreateVectorStore: React.FC<CreateVectorStoreProps> = ({ accessToken, onSu
               />
             )}
 
-            {/* Other Provider-specific fields */}
             {selectedProvider !== "s3_vectors" &&
-              getProviderSpecificFields(selectedProvider).map((field: VectorStoreFieldConfig) => {
-                if (field.type === "select") {
-                  // For embedding model selection, we'd need to fetch available models
-                  // For now, provide a text input as fallback
-                  return (
-                    <Form.Item
-                      key={field.name}
-                      label={
-                        <span>
-                          {field.label}{" "}
-                          <Tooltip title={field.tooltip}>
-                            <InfoCircleOutlined style={{ marginLeft: "4px" }} />
-                          </Tooltip>
-                        </span>
-                      }
-                      required={field.required}
-                    >
-                      <Input
-                        value={providerParams[field.name] || ""}
-                        onChange={(e) =>
-                          setProviderParams((prev) => ({ ...prev, [field.name]: e.target.value }))
-                        }
-                        placeholder={field.placeholder}
-                        size="large"
-                        className="rounded-md"
-                      />
-                    </Form.Item>
-                  );
-                }
-
-                return (
-                  <Form.Item
-                    key={field.name}
-                    label={
-                      <span>
-                        {field.label}{" "}
-                        <Tooltip title={field.tooltip}>
-                          <InfoCircleOutlined style={{ marginLeft: "4px" }} />
-                        </Tooltip>
-                      </span>
-                    }
-                    required={field.required}
-                  >
-                    <Input
-                      type={field.type === "password" ? "password" : "text"}
-                      value={providerParams[field.name] || ""}
-                      onChange={(e) =>
-                        setProviderParams((prev) => ({ ...prev, [field.name]: e.target.value }))
-                      }
-                      placeholder={field.placeholder}
-                      size="large"
-                      className="rounded-md"
-                    />
-                  </Form.Item>
-                );
-              })}
-          </Form>
+              getProviderSpecificFields(selectedProvider).map(renderProviderField)}
+          </div>
 
           <div className="flex justify-end">
             <Button
-              type="primary"
-              size="large"
               onClick={handleCreateVectorStore}
-              loading={isCreating}
-              disabled={documents.length === 0 || !selectedProvider}
+              disabled={isCreating || documents.length === 0 || !selectedProvider}
             >
               {isCreating ? "Creating Vector Store..." : "Create Vector Store"}
             </Button>
@@ -410,11 +442,20 @@ const CreateVectorStore: React.FC<CreateVectorStoreProps> = ({ accessToken, onSu
         </div>
       </Card>
 
-      {/* Success Message */}
-      {ingestResults.length > 0 && (
-        <Alert
-          message="Vector Store Created Successfully"
-          description={
+      {ingestResults.length > 0 && showSuccessAlert && (
+        <Alert>
+          <AlertTitle className="flex items-center justify-between">
+            <span>Vector Store Created Successfully</span>
+            <button
+              type="button"
+              onClick={() => setShowSuccessAlert(false)}
+              className="text-muted-foreground hover:text-foreground"
+              aria-label="Dismiss"
+            >
+              ×
+            </button>
+          </AlertTitle>
+          <AlertDescription>
             <div>
               <p>
                 <strong>Vector Store ID:</strong> {ingestResults[0]?.vector_store_id}
@@ -423,11 +464,8 @@ const CreateVectorStore: React.FC<CreateVectorStoreProps> = ({ accessToken, onSu
                 <strong>Documents Ingested:</strong> {ingestResults.length}
               </p>
             </div>
-          }
-          type="success"
-          showIcon
-          closable
-        />
+          </AlertDescription>
+        </Alert>
       )}
     </div>
   );

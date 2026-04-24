@@ -38,21 +38,28 @@ vi.mock("@tremor/react", () => ({
   TableCell: ({ children, ...props }: any) => <td {...props}>{children}</td>,
 }));
 
-// Mock antd Tooltip
-vi.mock("antd", () => ({
-  Tooltip: ({ children, title }: any) => (
-    <div data-testid="tooltip" data-title={title}>
+// Mock shadcn Tooltip to a deterministic wrapper we can query
+vi.mock("@/components/ui/tooltip", () => ({
+  TooltipProvider: ({ children }: any) => <>{children}</>,
+  Tooltip: ({ children }: any) => <div data-testid="tooltip-wrapper">{children}</div>,
+  TooltipTrigger: ({ children }: any) => <>{children}</>,
+  TooltipContent: ({ children }: any) => (
+    <span data-testid="tooltip" data-title={typeof children === "string" ? children : ""}>
       {children}
-    </div>
+    </span>
   ),
 }));
 
-// Mock Heroicons
-vi.mock("@heroicons/react/outline", () => ({
-  ChevronDownIcon: (props: any) => <div data-testid="chevron-down" {...props} />,
-  ChevronUpIcon: (props: any) => <div data-testid="chevron-up" {...props} />,
-  SwitchVerticalIcon: (props: any) => <div data-testid="switch-vertical" {...props} />,
-}));
+// Mock lucide sort icons to stable testids
+vi.mock("lucide-react", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("lucide-react")>();
+  return {
+    ...actual,
+    ChevronDown: (props: any) => <div data-testid="chevron-down" {...props} />,
+    ChevronUp: (props: any) => <div data-testid="chevron-up" {...props} />,
+    ArrowUpDown: (props: any) => <div data-testid="switch-vertical" {...props} />,
+  };
+});
 
 // Test data
 const mockVectorStores: VectorStore[] = [
@@ -177,7 +184,7 @@ describe("VectorStoreTable", () => {
   describe("Name Column", () => {
     it("should render vector store name", () => {
       renderComponent();
-      expect(screen.getByText("My OpenAI Store")).toBeInTheDocument();
+      expect(screen.getAllByText("My OpenAI Store").length).toBeGreaterThan(0);
     });
 
     it("should render fallback for missing name", () => {
@@ -197,7 +204,7 @@ describe("VectorStoreTable", () => {
   describe("Description Column", () => {
     it("should render vector store description", () => {
       renderComponent();
-      expect(screen.getByText("A store for OpenAI vectors")).toBeInTheDocument();
+      expect(screen.getAllByText("A store for OpenAI vectors").length).toBeGreaterThan(0);
     });
 
     it("should render fallback for missing description", () => {
@@ -343,7 +350,7 @@ describe("VectorStoreTable", () => {
       renderComponent();
       const headerCells = screen.getAllByRole("columnheader");
       const actionsHeader = headerCells[headerCells.length - 1];
-      expect(actionsHeader).toHaveClass("sticky", "right-0", "bg-white");
+      expect(actionsHeader).toHaveClass("sticky", "right-0", "bg-background");
     });
 
     it("should apply sticky styling to action cells", () => {
@@ -352,7 +359,7 @@ describe("VectorStoreTable", () => {
       rows.forEach((row) => {
         const cells = row.querySelectorAll("td");
         const lastCell = cells[cells.length - 1];
-        expect(lastCell).toHaveClass("sticky", "right-0", "bg-white");
+        expect(lastCell).toHaveClass("sticky", "right-0", "bg-background");
       });
     });
   });

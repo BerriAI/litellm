@@ -1,5 +1,12 @@
 import React from "react";
-import { Table } from "antd";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import {
   Tooltip,
@@ -63,97 +70,90 @@ const DocumentsTable: React.FC<DocumentsTableProps> = ({
     return `${(kb / 1024).toFixed(2)} MB`;
   };
 
-  const columns = [
-    {
-      title: "Name",
-      dataIndex: "name",
-      key: "name",
-      render: (name: string, record: DocumentUpload) => (
-        <div className="flex items-center space-x-2">
-          <span className="text-sm">{name}</span>
-          {record.size && (
-            <span className="text-xs text-muted-foreground">
-              ({formatFileSize(record.size)})
-            </span>
-          )}
-        </div>
-      ),
-    },
-    {
-      title: "Status",
-      dataIndex: "status",
-      key: "status",
-      width: 150,
-      render: (status: DocumentUpload["status"]) => getStatusBadge(status),
-    },
-    {
-      title: "Actions",
-      key: "actions",
-      width: 120,
-      render: (_: unknown, record: DocumentUpload) => (
-        <div className="flex items-center space-x-2">
-          <TooltipProvider>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <button
-                  type="button"
-                  onClick={() => console.log("View", record)}
-                  className="cursor-pointer text-muted-foreground hover:text-primary"
-                  aria-label="View details"
-                >
-                  <Eye className="h-4 w-4" />
-                </button>
-              </TooltipTrigger>
-              <TooltipContent>View details</TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
-          <TooltipProvider>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <button
-                  type="button"
-                  onClick={() => handleCopyId(record.uid)}
-                  className="cursor-pointer text-muted-foreground hover:text-primary"
-                  aria-label="Copy ID"
-                >
-                  <Copy className="h-4 w-4" />
-                </button>
-              </TooltipTrigger>
-              <TooltipContent>Copy ID</TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
-          <TooltipProvider>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <button
-                  type="button"
-                  onClick={() => onRemove(record.uid)}
-                  className="cursor-pointer text-muted-foreground hover:text-destructive"
-                  aria-label="Remove"
-                >
-                  <Trash2 className="h-4 w-4" />
-                </button>
-              </TooltipTrigger>
-              <TooltipContent>Remove</TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
-        </div>
-      ),
-    },
-  ];
+  if (documents.length === 0) {
+    return (
+      <div className="py-6 text-center text-sm text-muted-foreground">
+        No documents uploaded yet. Upload documents above to get started.
+      </div>
+    );
+  }
 
   return (
-    <Table
-      dataSource={documents}
-      columns={columns}
-      rowKey="uid"
-      pagination={false}
-      locale={{
-        emptyText:
-          "No documents uploaded yet. Upload documents above to get started.",
-      }}
-      size="small"
-    />
+    <Table>
+      <TableHeader>
+        <TableRow>
+          <TableHead>Name</TableHead>
+          <TableHead className="w-[150px]">Status</TableHead>
+          <TableHead className="w-[120px]">Actions</TableHead>
+        </TableRow>
+      </TableHeader>
+      <TableBody>
+        {documents.map((doc) => (
+          <TableRow key={doc.uid}>
+            <TableCell>
+              <div className="flex items-center space-x-2">
+                <span className="text-sm">{doc.name}</span>
+                {doc.size && (
+                  <span className="text-xs text-muted-foreground">
+                    ({formatFileSize(doc.size)})
+                  </span>
+                )}
+              </div>
+            </TableCell>
+            <TableCell>{getStatusBadge(doc.status)}</TableCell>
+            <TableCell>
+              <div className="flex items-center space-x-2">
+                <TooltipProvider>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <button
+                        type="button"
+                        onClick={() => console.log("View", doc)}
+                        className="cursor-pointer text-muted-foreground hover:text-primary"
+                        aria-label="View details"
+                      >
+                        <Eye className="h-4 w-4" />
+                      </button>
+                    </TooltipTrigger>
+                    <TooltipContent>View details</TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
+                <TooltipProvider>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <button
+                        type="button"
+                        onClick={() => handleCopyId(doc.uid)}
+                        className="cursor-pointer text-muted-foreground hover:text-primary"
+                        aria-label="Copy ID"
+                      >
+                        <Copy className="h-4 w-4" />
+                      </button>
+                    </TooltipTrigger>
+                    <TooltipContent>Copy ID</TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
+                <TooltipProvider>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <button
+                        type="button"
+                        onClick={() => onRemove(doc.uid)}
+                        className="cursor-pointer text-muted-foreground hover:text-destructive"
+                        aria-label="Delete document"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </button>
+                    </TooltipTrigger>
+                    <TooltipContent>Delete</TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
+              </div>
+            </TableCell>
+          </TableRow>
+        ))}
+      </TableBody>
+    </Table>
   );
 };
 

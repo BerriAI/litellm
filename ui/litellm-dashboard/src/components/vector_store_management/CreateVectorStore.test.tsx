@@ -1,4 +1,5 @@
 import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import CreateVectorStore from "./CreateVectorStore";
 import * as networking from "../networking";
@@ -206,25 +207,37 @@ describe("CreateVectorStore", () => {
     });
   });
 
+  const selectProvider = async (user: ReturnType<typeof userEvent.setup>, providerLabel: RegExp) => {
+    const providerSelect = screen.getByRole("combobox");
+    await act(async () => {
+      await user.click(providerSelect);
+    });
+    await screen.findByRole("option", { name: providerLabel });
+    // Walk the option list with keyboard — Radix Select closes reliably on Enter
+    // whereas user.click on an option inside a portal does not always close in jsdom.
+    const options = screen.getAllByRole("option");
+    const index = options.findIndex((o) => providerLabel.test(o.textContent ?? ""));
+    for (let i = 0; i <= index; i += 1) {
+      await act(async () => {
+        await user.keyboard("{ArrowDown}");
+      });
+    }
+    // Select highlighted option
+    await act(async () => {
+      await user.keyboard("{Enter}");
+    });
+    // Wait for portal to tear down
+    await waitFor(() => {
+      expect(document.body.getAttribute("data-scroll-locked")).toBeNull();
+    });
+  };
+
   it("should display S3 Vectors provider-specific fields when selected", async () => {
+    const user = userEvent.setup();
     render(<CreateVectorStore accessToken="test-token" />);
 
-    // Find and click the provider dropdown
-    const providerSelect = screen.getByRole("combobox");
+    await selectProvider(user, /AWS S3 Vectors/);
 
-    await act(async () => {
-      fireEvent.mouseDown(providerSelect);
-    });
-
-    // Wait for dropdown options to appear
-    await waitFor(() => {
-      const s3Option = screen.queryByText("AWS S3 Vectors");
-      if (s3Option) {
-        fireEvent.click(s3Option);
-      }
-    });
-
-    // Check if S3-specific fields are displayed
     await waitFor(() => {
       expect(screen.queryByText("Vector Bucket Name")).toBeInTheDocument();
       expect(screen.queryByText("AWS Region")).toBeInTheDocument();
@@ -233,9 +246,9 @@ describe("CreateVectorStore", () => {
   });
 
   it("should validate S3 Vectors required fields before submission", async () => {
+    const user = userEvent.setup();
     render(<CreateVectorStore accessToken="test-token" />);
 
-    // Upload a file first
     const file = new File(["test content"], "test.pdf", { type: "application/pdf" });
     const uploadInput = document.querySelector('input[type="file"]') as HTMLInputElement;
 
@@ -249,28 +262,15 @@ describe("CreateVectorStore", () => {
       expect(screen.getByText("Uploaded Documents (1)")).toBeInTheDocument();
     });
 
-    // Select S3 Vectors provider
-    const providerSelect = screen.getByRole("combobox");
+    await selectProvider(user, /AWS S3 Vectors/);
 
-    await act(async () => {
-      fireEvent.mouseDown(providerSelect);
-    });
-
-    await waitFor(() => {
-      const s3Option = screen.queryByText("AWS S3 Vectors");
-      if (s3Option) {
-        fireEvent.click(s3Option);
-      }
-    });
-
-    // Try to create without filling required fields
     const createButton = screen.getByRole("button", { name: /Create Vector Store/i });
 
     await act(async () => {
       fireEvent.click(createButton);
     });
 
-    // Should show validation warning (mocked message.warning would be called)
-    // The actual validation happens in the component
+    // validation runs in the component; just confirm no crash
+    expect(screen.getByText("Uploaded Documents (1)")).toBeInTheDocument();
   });
 });

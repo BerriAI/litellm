@@ -1,80 +1,14 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { VectorStore } from "./types";
 import VectorStoreSelector from "./VectorStoreSelector";
 
-// Mock dependencies
 const mockVectorStoreListCall = vi.fn();
 
 vi.mock("../networking", () => ({
   vectorStoreListCall: (...args: any[]) => mockVectorStoreListCall(...args),
 }));
 
-// Mock antd Select component
-vi.mock("antd", () => ({
-  Select: vi.fn(),
-}));
-
-// Import the mocked Select
-import { Select as MockedSelect } from "antd";
-
-// Configure the mock to render a simple div with data attributes
-(MockedSelect as any).mockImplementation((props: any) => {
-  const {
-    onChange,
-    value,
-    placeholder,
-    loading,
-    className,
-    disabled,
-    options,
-    mode,
-    showSearch,
-    optionFilterProp,
-    style,
-  } = props;
-
-  return (
-    <div
-      data-testid="vector-store-select"
-      data-loading={loading}
-      data-disabled={disabled}
-      data-mode={mode}
-      data-show-search={showSearch}
-      data-option-filter-prop={optionFilterProp}
-      data-placeholder={placeholder}
-      data-value={value !== undefined ? JSON.stringify(value) : undefined}
-      data-options={JSON.stringify(options)}
-      className={className}
-      style={style}
-      onClick={(e: any) => {
-        // For testing purposes, allow simulating different selection behaviors
-        // The test can control this by setting data attributes on the element
-        const testSelection = e.target.getAttribute("data-test-selection");
-        if (testSelection && onChange) {
-          onChange(JSON.parse(testSelection));
-        } else if (onChange && options?.length > 0) {
-          // Default behavior: select first option
-          onChange([options[0].value]);
-        }
-      }}
-    >
-      {options?.map((opt: any) => (
-        <div
-          key={opt.value}
-          data-option-value={opt.value}
-          data-option-label={opt.label}
-          data-option-title={opt.title}
-          data-testid={`option-${opt.value}`}
-        >
-          {opt.label}
-        </div>
-      ))}
-    </div>
-  );
-});
-
-// Test helpers
 const mockOnChange = vi.fn();
 const mockAccessToken = "test-token";
 
@@ -98,7 +32,6 @@ const mockVectorStores: VectorStore[] = [
   {
     vector_store_id: "store-3",
     custom_llm_provider: "pg_vector",
-    // No vector_store_name to test fallback to vector_store_id
     vector_store_description: "Store without name",
     created_at: "2024-01-03T00:00:00Z",
     updated_at: "2024-01-03T00:00:00Z",
@@ -110,8 +43,7 @@ const defaultProps = {
   accessToken: mockAccessToken,
 };
 
-// Helper functions
-const renderComponent = (props = {}) => {
+const renderComponent = (props: Partial<React.ComponentProps<typeof VectorStoreSelector>> = {}) => {
   return render(<VectorStoreSelector {...defaultProps} {...props} />);
 };
 
@@ -121,10 +53,14 @@ const waitForDataFetch = async () => {
   });
 };
 
-const getSelectElement = () => screen.getByTestId("vector-store-select");
-
-const getOptionElements = () =>
-  screen.getAllByTestId(/^vector-store-select/).filter((el) => el.hasAttribute("data-option-value"));
+const openPopover = async () => {
+  // The trigger is the first button rendered — chip Remove buttons come after it.
+  const trigger = screen.getAllByRole("button")[0];
+  await act(async () => {
+    fireEvent.click(trigger);
+  });
+  return trigger;
+};
 
 describe("VectorStoreSelector", () => {
   beforeEach(() => {
@@ -135,63 +71,39 @@ describe("VectorStoreSelector", () => {
   });
 
   describe("Rendering", () => {
-    it("should render the select component", () => {
+    it("should render the trigger button", () => {
       renderComponent();
-      expect(getSelectElement()).toBeInTheDocument();
+      expect(screen.getByRole("button")).toBeInTheDocument();
     });
 
-    it("should render with default placeholder", () => {
+    it("should render with default placeholder", async () => {
       renderComponent();
-      const select = getSelectElement();
-      expect(select).toHaveAttribute("data-placeholder", "Select vector stores");
+      await waitForDataFetch();
+      expect(screen.getByText("Select vector stores")).toBeInTheDocument();
     });
 
-    it("should render with custom placeholder", () => {
+    it("should render with custom placeholder", async () => {
       renderComponent({ placeholder: "Choose stores" });
-      const select = getSelectElement();
-      expect(select).toHaveAttribute("data-placeholder", "Choose stores");
+      await waitForDataFetch();
+      expect(screen.getByText("Choose stores")).toBeInTheDocument();
     });
 
     it("should apply custom className", () => {
       renderComponent({ className: "custom-class" });
-      const select = getSelectElement();
-      expect(select).toHaveClass("custom-class");
+      const trigger = screen.getByRole("button");
+      expect(trigger).toHaveClass("custom-class");
     });
 
-    it("should render with disabled state", () => {
+    it("should render as disabled when disabled prop set", () => {
       renderComponent({ disabled: true });
-      const select = getSelectElement();
-      expect(select).toHaveAttribute("data-disabled", "true");
+      const trigger = screen.getByRole("button");
+      expect(trigger).toBeDisabled();
     });
 
-    it("should render with enabled state by default", () => {
+    it("should render as enabled by default", () => {
       renderComponent();
-      const select = getSelectElement();
-      expect(select).toHaveAttribute("data-disabled", "false");
-    });
-
-    it("should render with multiple mode", () => {
-      renderComponent();
-      const select = getSelectElement();
-      expect(select).toHaveAttribute("data-mode", "multiple");
-    });
-
-    it("should render with showSearch enabled", () => {
-      renderComponent();
-      const select = getSelectElement();
-      expect(select).toHaveAttribute("data-show-search", "true");
-    });
-
-    it("should render with optionFilterProp set to label", () => {
-      renderComponent();
-      const select = getSelectElement();
-      expect(select).toHaveAttribute("data-option-filter-prop", "label");
-    });
-
-    it("should render with full width style", () => {
-      renderComponent();
-      const select = getSelectElement();
-      expect(select).toHaveStyle({ width: "100%" });
+      const trigger = screen.getByRole("button");
+      expect(trigger).not.toBeDisabled();
     });
   });
 
@@ -227,7 +139,7 @@ describe("VectorStoreSelector", () => {
       });
     });
 
-    it("should set loading state while fetching", async () => {
+    it("should show loading placeholder while fetching", async () => {
       let resolvePromise: (value: any) => void;
       const promise = new Promise((resolve) => {
         resolvePromise = resolve;
@@ -235,20 +147,13 @@ describe("VectorStoreSelector", () => {
       mockVectorStoreListCall.mockReturnValue(promise);
 
       renderComponent();
-      const select = getSelectElement();
-      expect(select).toHaveAttribute("data-loading", "true");
+      expect(screen.getByText(/loading/i)).toBeInTheDocument();
 
       resolvePromise!({ data: mockVectorStores });
-      await waitFor(() => {
-        expect(select).toHaveAttribute("data-loading", "false");
-      });
-    });
-
-    it("should clear loading state after successful fetch", async () => {
-      renderComponent();
       await waitForDataFetch();
-      const select = getSelectElement();
-      expect(select).toHaveAttribute("data-loading", "false");
+      await waitFor(() => {
+        expect(screen.getByText("Select vector stores")).toBeInTheDocument();
+      });
     });
 
     it("should clear loading state after failed fetch", async () => {
@@ -258,51 +163,43 @@ describe("VectorStoreSelector", () => {
       renderComponent();
       await waitForDataFetch();
 
-      const select = getSelectElement();
-      expect(select).toHaveAttribute("data-loading", "false");
+      await waitFor(() => {
+        expect(screen.getByText("Select vector stores")).toBeInTheDocument();
+      });
       consoleErrorSpy.mockRestore();
     });
   });
 
   describe("Options rendering", () => {
-    it("should render vector store options after successful fetch", async () => {
+    it("should render vector store options when opened", async () => {
       renderComponent();
       await waitForDataFetch();
+      await openPopover();
 
       expect(screen.getByText("My Store (store-1)")).toBeInTheDocument();
       expect(screen.getByText("Another Store (store-2)")).toBeInTheDocument();
       expect(screen.getByText("store-3 (store-3)")).toBeInTheDocument();
     });
 
-    it("should use vector_store_name when available for label", async () => {
+    it("should fall back to vector_store_id for label when name is missing", async () => {
       renderComponent();
       await waitForDataFetch();
+      await openPopover();
+
+      expect(screen.getByText("store-3 (store-3)")).toBeInTheDocument();
+    });
+
+    it("should use description as title attribute when available", async () => {
+      renderComponent();
+      await waitForDataFetch();
+      await openPopover();
 
       const option1 = screen.getByText("My Store (store-1)");
-      expect(option1).toBeInTheDocument();
-      expect(option1).toHaveAttribute("data-option-title", "A test store");
+      expect(option1).toHaveAttribute("title", "A test store");
     });
 
-    it("should fallback to vector_store_id when vector_store_name is missing", async () => {
-      renderComponent();
-      await waitForDataFetch();
-
-      const option3 = screen.getByText("store-3 (store-3)");
-      expect(option3).toBeInTheDocument();
-      // When vector_store_name is missing, title uses vector_store_description if available, otherwise vector_store_id
-      expect(option3).toHaveAttribute("data-option-title", "Store without name");
-    });
-
-    it("should use vector_store_description as title when available", async () => {
-      renderComponent();
-      await waitForDataFetch();
-
-      const option1 = screen.getByText("My Store (store-1)");
-      expect(option1).toHaveAttribute("data-option-title", "A test store");
-    });
-
-    it("should fallback to vector_store_id as title when vector_store_description is missing", async () => {
-      const storesWithoutDescription: VectorStore[] = [
+    it("should fall back to vector_store_id as title when description is missing", async () => {
+      const stores: VectorStore[] = [
         {
           vector_store_id: "store-no-desc",
           custom_llm_provider: "openai",
@@ -310,35 +207,24 @@ describe("VectorStoreSelector", () => {
           updated_at: "2024-01-01T00:00:00Z",
         },
       ];
-      mockVectorStoreListCall.mockResolvedValueOnce({
-        data: storesWithoutDescription,
-      });
+      mockVectorStoreListCall.mockResolvedValueOnce({ data: stores });
 
       renderComponent();
       await waitForDataFetch();
+      await openPopover();
 
       const option = screen.getByText("store-no-desc (store-no-desc)");
-      expect(option).toHaveAttribute("data-option-title", "store-no-desc");
+      expect(option).toHaveAttribute("title", "store-no-desc");
     });
 
-    it("should use vector_store_id as option value", async () => {
-      renderComponent();
-      await waitForDataFetch();
-
-      const option1 = screen.getByText("My Store (store-1)");
-      expect(option1).toHaveAttribute("data-option-value", "store-1");
-    });
-
-    it("should handle empty vector stores array", async () => {
-      mockVectorStoreListCall.mockResolvedValueOnce({
-        data: [],
-      });
+    it("should show 'No matches' when no options remain", async () => {
+      mockVectorStoreListCall.mockResolvedValueOnce({ data: [] });
 
       renderComponent();
       await waitForDataFetch();
+      await openPopover();
 
-      const options = getOptionElements();
-      expect(options.length).toBe(0);
+      expect(screen.getByText("No matches")).toBeInTheDocument();
     });
 
     it("should handle response without data property", async () => {
@@ -346,76 +232,98 @@ describe("VectorStoreSelector", () => {
 
       renderComponent();
       await waitForDataFetch();
+      await openPopover();
 
-      const options = getOptionElements();
-      expect(options.length).toBe(0);
+      expect(screen.getByText("No matches")).toBeInTheDocument();
     });
   });
 
   describe("Value prop", () => {
-    it("should set initial value when value prop is provided", async () => {
+    it("should render selected values as chips", async () => {
       renderComponent({ value: ["store-1", "store-2"] });
       await waitForDataFetch();
 
-      const select = getSelectElement();
-      const dataValue = select.getAttribute("data-value");
-      expect(dataValue).toBe(JSON.stringify(["store-1", "store-2"]));
+      await waitFor(() => {
+        expect(screen.getByText("My Store")).toBeInTheDocument();
+        expect(screen.getByText("Another Store")).toBeInTheDocument();
+      });
     });
 
-    it("should handle empty value array", async () => {
+    it("should render placeholder when value is empty", async () => {
       renderComponent({ value: [] });
       await waitForDataFetch();
-
-      const select = getSelectElement();
-      const dataValue = select.getAttribute("data-value");
-      expect(dataValue).toBe(JSON.stringify([]));
+      expect(screen.getByText("Select vector stores")).toBeInTheDocument();
     });
 
-    it("should handle undefined value", async () => {
+    it("should render placeholder when value is undefined", async () => {
       renderComponent({ value: undefined });
       await waitForDataFetch();
+      expect(screen.getByText("Select vector stores")).toBeInTheDocument();
+    });
 
-      const select = getSelectElement();
-      const dataValue = select.getAttribute("data-value");
-      expect(dataValue).toBeNull(); // undefined value results in no data-value attribute
+    it("should exclude selected stores from the option list", async () => {
+      renderComponent({ value: ["store-1"] });
+      await waitForDataFetch();
+      await openPopover();
+
+      expect(screen.queryByText("My Store (store-1)")).not.toBeInTheDocument();
+      expect(screen.getByText("Another Store (store-2)")).toBeInTheDocument();
     });
   });
 
   describe("onChange callback", () => {
-    it("should call onChange when selection changes", async () => {
+    it("should call onChange when an option is selected", async () => {
       renderComponent();
       await waitForDataFetch();
+      await openPopover();
 
-      const select = getSelectElement();
-      // Simulate selecting store-1 by setting test data attribute
-      select.setAttribute("data-test-selection", '["store-1"]');
-      fireEvent.click(select);
+      const option = screen.getByText("My Store (store-1)");
+      await act(async () => {
+        fireEvent.click(option);
+      });
 
       expect(mockOnChange).toHaveBeenCalledWith(["store-1"]);
     });
 
-    it("should call onChange with multiple selected values", async () => {
-      renderComponent();
+    it("should append to existing selection on subsequent select", async () => {
+      renderComponent({ value: ["store-1"] });
       await waitForDataFetch();
+      await openPopover();
 
-      const select = getSelectElement();
-      // Simulate selecting multiple values
-      select.setAttribute("data-test-selection", '["store-1", "store-2"]');
-      fireEvent.click(select);
+      const option = screen.getByText("Another Store (store-2)");
+      await act(async () => {
+        fireEvent.click(option);
+      });
 
       expect(mockOnChange).toHaveBeenCalledWith(["store-1", "store-2"]);
     });
 
-    it("should call onChange when deselecting options", async () => {
+    it("should call onChange when removing a selected chip", async () => {
       renderComponent({ value: ["store-1", "store-2"] });
       await waitForDataFetch();
 
-      const select = getSelectElement();
-      // Simulate deselecting store-1
-      select.setAttribute("data-test-selection", '["store-2"]');
-      fireEvent.click(select);
+      const removeBtn = screen.getByLabelText("Remove My Store");
+      await act(async () => {
+        fireEvent.click(removeBtn);
+      });
 
       expect(mockOnChange).toHaveBeenCalledWith(["store-2"]);
+    });
+  });
+
+  describe("Filtering", () => {
+    it("should filter options by search query", async () => {
+      renderComponent();
+      await waitForDataFetch();
+      await openPopover();
+
+      const search = screen.getByPlaceholderText(/search vector stores/i);
+      await act(async () => {
+        fireEvent.change(search, { target: { value: "Another" } });
+      });
+
+      expect(screen.queryByText("My Store (store-1)")).not.toBeInTheDocument();
+      expect(screen.getByText("Another Store (store-2)")).toBeInTheDocument();
     });
   });
 
@@ -443,21 +351,20 @@ describe("VectorStoreSelector", () => {
       consoleErrorSpy.mockRestore();
     });
 
-    it("should continue to work after error", async () => {
+    it("should continue to render after error", async () => {
       const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
       mockVectorStoreListCall.mockRejectedValueOnce(new Error("Network error"));
 
       renderComponent();
       await waitForDataFetch();
 
-      // Component should still render
-      expect(getSelectElement()).toBeInTheDocument();
+      expect(screen.getByRole("button")).toBeInTheDocument();
       consoleErrorSpy.mockRestore();
     });
   });
 
   describe("Edge cases", () => {
-    it("should handle vector stores with all optional fields missing", async () => {
+    it("should render minimal vector stores with only id", async () => {
       const minimalStores: VectorStore[] = [
         {
           vector_store_id: "minimal-store",
@@ -466,40 +373,36 @@ describe("VectorStoreSelector", () => {
           updated_at: "2024-01-01T00:00:00Z",
         },
       ];
-      mockVectorStoreListCall.mockResolvedValueOnce({
-        data: minimalStores,
-      });
+      mockVectorStoreListCall.mockResolvedValueOnce({ data: minimalStores });
 
       renderComponent();
       await waitForDataFetch();
+      await openPopover();
 
       expect(screen.getByText("minimal-store (minimal-store)")).toBeInTheDocument();
-      const option = screen.getByText("minimal-store (minimal-store)");
-      expect(option).toHaveAttribute("data-option-title", "minimal-store");
     });
 
-    it("should handle very long vector store names", async () => {
+    it("should render very long vector store names", async () => {
+      const longName = "A".repeat(200);
       const longNameStores: VectorStore[] = [
         {
           vector_store_id: "store-long",
           custom_llm_provider: "openai",
-          vector_store_name: "A".repeat(200),
+          vector_store_name: longName,
           created_at: "2024-01-01T00:00:00Z",
           updated_at: "2024-01-01T00:00:00Z",
         },
       ];
-      mockVectorStoreListCall.mockResolvedValueOnce({
-        data: longNameStores,
-      });
+      mockVectorStoreListCall.mockResolvedValueOnce({ data: longNameStores });
 
       renderComponent();
       await waitForDataFetch();
+      await openPopover();
 
-      const expectedLabel = `${"A".repeat(200)} (store-long)`;
-      expect(screen.getByText(expectedLabel)).toBeInTheDocument();
+      expect(screen.getByText(`${longName} (store-long)`)).toBeInTheDocument();
     });
 
-    it("should handle special characters in vector store names", async () => {
+    it("should render special characters in names", async () => {
       const specialCharStores: VectorStore[] = [
         {
           vector_store_id: "store-special",
@@ -509,12 +412,11 @@ describe("VectorStoreSelector", () => {
           updated_at: "2024-01-01T00:00:00Z",
         },
       ];
-      mockVectorStoreListCall.mockResolvedValueOnce({
-        data: specialCharStores,
-      });
+      mockVectorStoreListCall.mockResolvedValueOnce({ data: specialCharStores });
 
       renderComponent();
       await waitForDataFetch();
+      await openPopover();
 
       expect(screen.getByText(/Store & Co\. <Test> "Quotes"/)).toBeInTheDocument();
     });
