@@ -21,7 +21,7 @@ class TestNullTextHandling:
     def test_output_text_with_none_text_dict_access(self):
         """
         Test that output_text property handles None text values correctly when using dict access.
-        
+
         This simulates the scenario where a self-hosted model returns a response with
         text: null in the content block.
         """
@@ -41,22 +41,22 @@ class TestNullTextHandling:
                         {
                             "type": "output_text",
                             "text": None,  # This is the problematic case
-                            "annotations": []
+                            "annotations": [],
                         }
-                    ]
+                    ],
                 }
-            ]
+            ],
         }
-        
+
         response = ResponsesAPIResponse(**response_data)
-        
+
         # Should not raise TypeError and should return empty string
         assert response.output_text == ""
-        
+
     def test_output_text_with_none_text_object_access(self):
         """
         Test that output_text property handles None text values correctly.
-        
+
         This test verifies the object access path (getattr) in the output_text property.
         """
         response_data = {
@@ -74,18 +74,18 @@ class TestNullTextHandling:
                         {
                             "type": "output_text",
                             "text": None,  # This is the problematic case
-                            "annotations": []
+                            "annotations": [],
                         }
-                    ]
+                    ],
                 }
-            ]
+            ],
         }
-        
+
         response = ResponsesAPIResponse(**response_data)
-        
+
         # Should not raise TypeError and should return empty string
         assert response.output_text == ""
-    
+
     def test_output_text_with_mixed_none_and_valid_text(self):
         """
         Test that output_text properly concatenates when some text values are None.
@@ -102,31 +102,23 @@ class TestNullTextHandling:
                     "status": "completed",
                     "role": "assistant",
                     "content": [
-                        {
-                            "type": "output_text",
-                            "text": "Hello ",
-                            "annotations": []
-                        },
+                        {"type": "output_text", "text": "Hello ", "annotations": []},
                         {
                             "type": "output_text",
                             "text": None,  # Should be treated as empty string
-                            "annotations": []
+                            "annotations": [],
                         },
-                        {
-                            "type": "output_text",
-                            "text": "world!",
-                            "annotations": []
-                        }
-                    ]
+                        {"type": "output_text", "text": "world!", "annotations": []},
+                    ],
                 }
-            ]
+            ],
         }
-        
+
         response = ResponsesAPIResponse(**response_data)
-        
+
         # Should concatenate non-None values, treating None as empty string
         assert response.output_text == "Hello world!"
-    
+
     def test_output_text_with_empty_string(self):
         """
         Test that empty strings are handled correctly (baseline test).
@@ -142,22 +134,16 @@ class TestNullTextHandling:
                     "id": "msg_test_empty",
                     "status": "completed",
                     "role": "assistant",
-                    "content": [
-                        {
-                            "type": "output_text",
-                            "text": "",
-                            "annotations": []
-                        }
-                    ]
+                    "content": [{"type": "output_text", "text": "", "annotations": []}],
                 }
-            ]
+            ],
         }
-        
+
         response = ResponsesAPIResponse(**response_data)
-        
+
         # Should return empty string
         assert response.output_text == ""
-    
+
     def test_output_text_with_valid_text(self):
         """
         Test that valid text values work correctly (baseline test).
@@ -177,18 +163,18 @@ class TestNullTextHandling:
                         {
                             "type": "output_text",
                             "text": "This is a valid response",
-                            "annotations": []
+                            "annotations": [],
                         }
-                    ]
+                    ],
                 }
-            ]
+            ],
         }
-        
+
         response = ResponsesAPIResponse(**response_data)
-        
+
         # Should return the text as-is
         assert response.output_text == "This is a valid response"
-    
+
     def test_output_text_no_output_text_content(self):
         """
         Test that responses without output_text content return empty string.
@@ -204,20 +190,20 @@ class TestNullTextHandling:
                     "id": "msg_test_no_content",
                     "status": "completed",
                     "role": "assistant",
-                    "content": []
+                    "content": [],
                 }
-            ]
+            ],
         }
-        
+
         response = ResponsesAPIResponse(**response_data)
-        
+
         # Should return empty string when no output_text content exists
         assert response.output_text == ""
 
 
 class TestStreamingIteratorTextHandling:
     """Test suite for streaming iterator text handling."""
-    
+
     def test_content_part_added_event_has_empty_string_text(self):
         """
         Test that ContentPartAddedEvent is created with empty string, not None.
@@ -235,22 +221,26 @@ class TestStreamingIteratorTextHandling:
         # Create a mock stream wrapper
         mock_wrapper = Mock()
         mock_wrapper.logging_obj = Mock()
-        
+
         iterator = LiteLLMCompletionStreamingIterator(
             model="gpt-oss-120b",
             litellm_custom_stream_wrapper=mock_wrapper,
             request_input="test input",
             responses_api_request={},
         )
-        
+
         event = iterator.create_content_part_added_event()
-        
+
         # Verify that the part has text field set to empty string, not None
-        part_dict = event.part.model_dump() if hasattr(event.part, 'model_dump') else dict(event.part)
+        part_dict = (
+            event.part.model_dump()
+            if hasattr(event.part, "model_dump")
+            else dict(event.part)
+        )
         assert "text" in part_dict
         assert part_dict["text"] == ""
         assert part_dict["text"] is not None
-    
+
     def test_delta_string_from_none_content(self):
         """
         Test that _get_delta_string_from_streaming_choices returns empty string for None content.
@@ -265,23 +255,21 @@ class TestStreamingIteratorTextHandling:
         # Create a mock stream wrapper
         mock_wrapper = Mock()
         mock_wrapper.logging_obj = Mock()
-        
+
         iterator = LiteLLMCompletionStreamingIterator(
             model="gpt-oss-120b",
             litellm_custom_stream_wrapper=mock_wrapper,
             request_input="test input",
             responses_api_request={},
         )
-        
+
         # Create a choice with None content
         choice = StreamingChoices(
-            index=0,
-            delta=Delta(content=None, role="assistant"),
-            finish_reason=None
+            index=0, delta=Delta(content=None, role="assistant"), finish_reason=None
         )
-        
+
         result = iterator._get_delta_string_from_streaming_choices([choice])
-        
+
         # Should return empty string, not None
         assert result == ""
         assert result is not None

@@ -2,7 +2,11 @@ name: "Unit Tests: Documentation Validation"
 
 on:
   pull_request:
-    branches: [main]
+    branches:
+      - main
+      - litellm_internal_staging
+      - litellm_oss_branch
+      - "litellm_**"
 
 permissions:
   contents: read
@@ -19,6 +23,13 @@ jobs:
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
         with:
+          persist-credentials: false
+
+      - name: Checkout litellm-docs into docs/my-website (for documentation_tests)
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          repository: BerriAI/litellm-docs
+          path: docs/my-website
           persist-credentials: false
 
       - name: Set up Python

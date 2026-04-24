@@ -3,6 +3,7 @@ Calls Google Programmable Search Engine (PSE) API to search the web.
 
 Google PSE API Reference: https://developers.google.com/custom-search/v1/reference/rest/v1/cse/list
 """
+
 from typing import Dict, List, Literal, Optional, TypedDict, Union
 
 import httpx
@@ -42,10 +43,14 @@ class GooglePSESearchRequest(_GooglePSESearchRequestRequired, total=False):
     hq: str  # Optional - append query terms to query
     imgSize: str  # Optional - returns images of specified size
     imgType: str  # Optional - returns images of specified type
-    linkSite: str  # Optional - specifies all search results should contain a link to a URL
+    linkSite: (
+        str  # Optional - specifies all search results should contain a link to a URL
+    )
     lr: str  # Optional - language restrict (e.g., 'lang_en', 'lang_es')
     orTerms: str  # Optional - provides additional search terms
-    relatedSite: str  # Optional - specifies all search results should be pages related to URL
+    relatedSite: (
+        str  # Optional - specifies all search results should be pages related to URL
+    )
     rights: str  # Optional - filters based on licensing
     safe: str  # Optional - search safety level ('active', 'off')
     searchType: str  # Optional - specifies search type ('image')

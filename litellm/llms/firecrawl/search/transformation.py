@@ -3,6 +3,7 @@ Calls Firecrawl's /search endpoint to search the web.
 
 Firecrawl API Reference: https://docs.firecrawl.dev/api-reference/endpoint/search
 """
+
 from typing import Dict, List, Optional, TypedDict, Union
 
 import httpx
@@ -184,9 +185,7 @@ class FirecrawlSearchConfig(BaseSearchConfig):
         if isinstance(data, list):
             # Self-hosted Firecrawl (v1) format: data is a flat list of results
             for result in data:
-                snippet = (
-                    result.get("markdown") or result.get("description", "")
-                )
+                snippet = result.get("markdown") or result.get("description", "")
                 search_result = SearchResult(
                     title=result.get("title", ""),
                     url=result.get("url", ""),

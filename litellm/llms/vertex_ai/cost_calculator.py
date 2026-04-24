@@ -215,7 +215,9 @@ def _handle_128k_pricing(
     ):
         completion_cost = completion_tokens * output_cost_per_token_above_128k_tokens
     else:
-        completion_cost = completion_tokens * (model_info["output_cost_per_token"] or 0.0)
+        completion_cost = completion_tokens * (
+            model_info["output_cost_per_token"] or 0.0
+        )
 
     return prompt_cost, completion_cost
 
