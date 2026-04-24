@@ -302,14 +302,15 @@ class TeamMemberBudgetHandler:
         prisma_client: PrismaClient,
     ) -> None:
         """
-        Create team_memberships entries for existing members that don't have one.
+        Ensure every team member has a TeamMembership row linked to the
+        team_member_budget.
 
-        Called after team_member_budget is set/updated on a team to ensure
-        members who joined before the budget was configured also get budget
-        enforcement.
-
-        Only creates missing entries — does not touch existing memberships
-        (which may carry individual per-member budgets).
+        Called after team_member_budget is set/updated on a team. Creates
+        rows for members who don't have one, and populates budget_id on
+        existing rows where it is NULL. Rows with a non-NULL budget_id
+        are left untouched, which preserves per-member overrides but also
+        means rows pointing to a prior team-default budget_id are not
+        migrated to the new one.
         """
         if not members_with_roles:
             return
@@ -343,6 +344,21 @@ class TeamMemberBudgetHandler:
             verbose_proxy_logger.info(
                 "Backfilled %d team_memberships for team %s with budget %s",
                 len(missing),
+                _sanitize_for_log(team_id),
+                _sanitize_for_log(team_member_budget_id),
+            )
+
+        # Heal existing membership rows that predate the team_member_budget
+        # configuration: populate budget_id where it is currently NULL.
+        # Rows with an explicit budget_id (per-member override) are left alone.
+        updated = await prisma_client.db.litellm_teammembership.update_many(
+            where={"team_id": team_id, "budget_id": None},
+            data={"budget_id": team_member_budget_id},
+        )
+        if updated:
+            verbose_proxy_logger.info(
+                "Populated budget_id on %d existing team_memberships for team %s with budget %s",
+                updated,
                 _sanitize_for_log(team_id),
                 _sanitize_for_log(team_member_budget_id),
             )
@@ -1570,8 +1586,7 @@ async def update_team(  # noqa: PLR0915
             current_org_id = getattr(existing_team_row, "organization_id", None)
             if (
                 data.organization_id != current_org_id
-                and user_api_key_dict.user_role
-                != LitellmUserRoles.PROXY_ADMIN.value
+                and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value
             ):
                 # Is the caller org_admin of the destination org?
                 caller_memberships = (
@@ -2609,6 +2624,15 @@ async def team_member_update(
             identified_budget_id = tm.budget_id
             break
 
+    # If this membership still points at the team's shared default member
+    # budget, _upsert_budget_and_membership will clone-on-write so that the
+    # update only touches this user (not every member sharing the default).
+    team_default_budget_id: Optional[str] = None
+    if team_table.metadata is not None:
+        raw_default_budget_id = team_table.metadata.get("team_member_budget_id")
+        if isinstance(raw_default_budget_id, str):
+            team_default_budget_id = raw_default_budget_id
+
     ### upsert new budget
     async with prisma_client.db.tx() as tx:
         await _upsert_budget_and_membership(
@@ -2621,6 +2645,7 @@ async def team_member_update(
             tpm_limit=data.tpm_limit,
             rpm_limit=data.rpm_limit,
             allowed_models=data.allowed_models,
+            team_default_budget_id=team_default_budget_id,
         )
 
     ### update team member role
