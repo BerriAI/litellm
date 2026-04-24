@@ -14,6 +14,7 @@ import pytest
 
 from litellm.integrations.custom_guardrail import ModifyResponseException
 from litellm.integrations.rubrik import RubrikLogger
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 
 from tests.test_litellm.integrations.rubrik_test_helpers import (
     make_inputs_with_tools,
@@ -54,7 +55,7 @@ class TestInitialization:
             )
             assert handler.logging_endpoint == "http://localhost:8080/v1/litellm/batch"
             assert handler.key == "test-api-key"
-            assert isinstance(handler.tool_blocking_client, httpx.AsyncClient)
+            assert isinstance(handler.tool_blocking_client, AsyncHTTPHandler)
 
     def test_init_with_constructor_params(self):
         with patch("asyncio.create_task", Mock()):
