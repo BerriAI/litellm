@@ -1,4 +1,5 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import * as networking from "../../../networking";
 import EntityUsage from "./EntityUsage";
@@ -458,6 +459,7 @@ describe("EntityUsage", () => {
   });
 
   it("should switch between tabs", async () => {
+    const user = userEvent.setup();
     render(<EntityUsage {...defaultProps} />);
 
     await waitFor(() => {
@@ -466,19 +468,19 @@ describe("EntityUsage", () => {
 
     expect(screen.getByText("Tag Spend Overview")).toBeInTheDocument();
 
-    const modelActivityTab = screen.getByText("Model Activity");
-    act(() => {
-      fireEvent.click(modelActivityTab);
+    const modelActivityTab = screen.getByRole("tab", { name: "Model Activity" });
+    await user.click(modelActivityTab);
+
+    await waitFor(() => {
+      expect(screen.getAllByText("Activity Metrics").length).toBeGreaterThan(0);
     });
 
-    expect(screen.getAllByText("Activity Metrics")[0]).toBeInTheDocument();
+    const keyActivityTab = screen.getByRole("tab", { name: "Key Activity" });
+    await user.click(keyActivityTab);
 
-    const keyActivityTab = screen.getByText("Key Activity");
-    act(() => {
-      fireEvent.click(keyActivityTab);
+    await waitFor(() => {
+      expect(screen.getAllByText("Activity Metrics").length).toBeGreaterThan(0);
     });
-
-    expect(screen.getAllByText("Activity Metrics")[1]).toBeInTheDocument();
   });
 
   it("should handle empty data gracefully", async () => {
@@ -662,10 +664,9 @@ describe("EntityUsage", () => {
       expect(mockTeamDailyActivityCall).toHaveBeenCalled();
     });
 
-    const agentActivityTab = screen.getByText("Agent Activity");
-    act(() => {
-      fireEvent.click(agentActivityTab);
-    });
+    const user = userEvent.setup();
+    const agentActivityTab = screen.getByRole("tab", { name: "Agent Activity" });
+    await user.click(agentActivityTab);
 
     await waitFor(() => {
       expect(screen.getAllByText("Activity Metrics").length).toBeGreaterThan(0);

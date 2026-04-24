@@ -157,7 +157,10 @@
         "src/components/bulk_create_users_button.tsx",
         "src/components/BulkEditUsers.tsx",
         "src/components/DefaultUserSettings.tsx",
-        "src/components/view_users/user_info_view.tsx"
+        "src/components/view_users/user_info_view.tsx",
+        "src/components/UsagePage/components/EntityUsage/EntityUsage.tsx",
+        "src/components/UsagePage/components/UsageAIChatPanel.tsx",
+        "src/components/UsagePage/components/UsagePageView.tsx"
       ],
       "rules": {
         "litellm-ui/no-banned-ui-imports": "off",

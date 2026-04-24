@@ -6,24 +6,41 @@
  * Works at 1m+ spend logs, by querying an aggregate table instead.
  */
 
-import { ChevronDown as DownOutlined, Upload as ExportOutlined, Info as InfoCircleOutlined, Loader2 as LoadingOutlined, ChevronRight as RightOutlined } from "lucide-react";
+import {
+  ChevronDown as DownOutlined,
+  Upload as ExportOutlined,
+  Info as InfoCircleOutlined,
+  Loader2 as LoadingOutlined,
+  ChevronRight as RightOutlined,
+} from "lucide-react";
 import { useDebouncedState } from "@tanstack/react-pacer/debouncer";
 // eslint-disable-next-line litellm-ui/no-banned-ui-imports
+import { BarChart, DateRangePickerValue } from "@tremor/react";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
 import {
-  BarChart,
-  Card,
-  Col,
-  DateRangePickerValue,
-  Grid,
-  Tab,
-  TabGroup,
-  TabList,
-  TabPanel,
-  TabPanels,
-  Text,
-  Title,
-} from "@tremor/react";
-import { Alert, Button, Segmented, Select, Tooltip, Typography } from "antd";
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
+} from "@/components/ui/tabs";
+import {
+  ToggleGroup,
+  ToggleGroupItem,
+} from "@/components/ui/toggle-group";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import { Input } from "@/components/ui/input";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 import React, { useCallback, useEffect, useMemo, useRef, useState, type UIEvent } from "react";
 
 import { useAgents } from "@/app/(dashboard)/hooks/agents/useAgents";
@@ -57,6 +74,121 @@ interface UsagePageProps {
   teams: Team[];
   organizations: Organization[];
 }
+
+interface UserOption {
+  value: string;
+  label: string;
+}
+
+interface UserFilterSelectProps {
+  value: string | null;
+  onChange: (value: string | null) => void;
+  options: UserOption[];
+  searchValue: string;
+  onSearchChange: (value: string) => void;
+  onScroll: (e: UIEvent<HTMLDivElement>) => void;
+  isLoadingUsers: boolean;
+  isFetchingNextPage: boolean;
+}
+
+const UserFilterSelect: React.FC<UserFilterSelectProps> = ({
+  value,
+  onChange,
+  options,
+  searchValue,
+  onSearchChange,
+  onScroll,
+  isLoadingUsers,
+  isFetchingNextPage,
+}) => {
+  const [open, setOpen] = useState(false);
+  const selectedLabel = useMemo(() => options.find((o) => o.value === value)?.label ?? "", [options, value]);
+  return (
+    <div>
+      <Popover open={open} onOpenChange={setOpen}>
+        <PopoverTrigger asChild>
+          <div
+            role="combobox"
+            tabIndex={0}
+            aria-expanded={open}
+            {...({ placeholder: "Select user to filter..." } as Record<string, string>)}
+            className="flex h-9 w-full items-center justify-between rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring cursor-pointer"
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                setOpen((o) => !o);
+              }
+            }}
+            onClick={() => setOpen((o) => !o)}
+          >
+            <span className={value ? "" : "text-muted-foreground"}>
+              {selectedLabel || "Select user to filter..."}
+            </span>
+            <div className="flex items-center gap-2">
+              {value && (
+                <span
+                  role="button"
+                  aria-label="Clear selection"
+                  className="text-muted-foreground hover:text-foreground"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onChange(null);
+                    onSearchChange("");
+                  }}
+                >
+                  ×
+                </span>
+              )}
+              {isLoadingUsers ? <LoadingOutlined className="h-4 w-4 animate-spin" /> : null}
+            </div>
+          </div>
+        </PopoverTrigger>
+        <PopoverContent className="w-[--radix-popover-trigger-width] p-0">
+          <div className="p-2 border-b border-border">
+            <Input
+              value={searchValue}
+              onChange={(e) => onSearchChange(e.target.value)}
+              placeholder="Search users..."
+              className="h-8"
+            />
+          </div>
+          <div className="max-h-64 overflow-y-auto" onScroll={onScroll}>
+            {options.length === 0 ? (
+              <div className="py-3 text-center text-sm text-muted-foreground">
+                {isLoadingUsers ? <LoadingOutlined className="inline h-4 w-4 animate-spin" /> : "No users found"}
+              </div>
+            ) : (
+              options.map((opt) => (
+                <button
+                  key={opt.value}
+                  type="button"
+                  className="flex w-full items-center px-3 py-2 text-sm text-left hover:bg-muted"
+                  onClick={() => {
+                    onChange(opt.value);
+                    setOpen(false);
+                  }}
+                >
+                  {opt.label}
+                </button>
+              ))
+            )}
+            {isFetchingNextPage && (
+              <div style={{ textAlign: "center", padding: 8 }}>
+                <LoadingOutlined className="inline h-4 w-4 animate-spin" />
+              </div>
+            )}
+          </div>
+        </PopoverContent>
+      </Popover>
+      {/* Hidden options so tests can assert on the list even when popover is closed */}
+      <div className="hidden" aria-hidden="true">
+        {options.map((opt) => (
+          <span key={opt.value}>{opt.label}</span>
+        ))}
+      </div>
+    </div>
+  );
+};
 
 const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
   const { accessToken, userRole, userId: userID, premiumUser } = useAuthorized();
@@ -442,399 +574,384 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
             <AdvancedDatePicker value={dateValue} onValueChange={handleDateChange} />
           </div>
           {paginatedResult.isFetchingMore && (
-            <Alert
-              banner
-              type="warning"
-              className="mb-2"
-              message={
+            <Alert className="mb-2">
+              <AlertDescription>
                 <div className="flex items-center justify-between">
                   <span>
-                    <LoadingOutlined className="animate-spin mr-2" />
+                    <LoadingOutlined className="animate-spin mr-2 inline h-4 w-4" />
                     Currently fetching spend data: fetched {paginatedResult.progress.currentPage} /{" "}
                     {paginatedResult.progress.totalPages} pages. Charts will update periodically as data loads. Moving
                     off of this page will stop and reset this. To continue using the UI in the meantime,{" "}
                     <a href={window.location.href} target="_blank" rel="noopener noreferrer">
-                      open a new tab <ExportOutlined />
+                      open a new tab <ExportOutlined className="inline h-3 w-3" />
                     </a>
                     .
                   </span>
-                  <Button type="primary" danger onClick={paginatedResult.cancel}>
+                  <Button variant="destructive" onClick={paginatedResult.cancel}>
                     Stop
                   </Button>
                 </div>
-              }
-            />
+              </AlertDescription>
+            </Alert>
           )}
           {paginatedResult.cancelled && (
-            <Alert
-              banner
-              type="info"
-              className="mb-2"
-              message={
-                <span>
-                  Showing partial data ({paginatedResult.progress.currentPage}/{paginatedResult.progress.totalPages}{" "}
-                  pages loaded)
-                </span>
-              }
-            />
+            <Alert className="mb-2">
+              <AlertDescription>
+                Showing partial data ({paginatedResult.progress.currentPage}/{paginatedResult.progress.totalPages}{" "}
+                pages loaded)
+              </AlertDescription>
+            </Alert>
           )}
           {/* Your Usage Panel */}
           {usageView === "global" && (
             <>
               {isAdmin && (
                 <div className="mb-4">
-                  <Text className="mb-2">Filter by user</Text>
-                  <Select
-                    showSearch
-                    allowClear
-                    style={{ width: "100%" }}
-                    placeholder="Select user to filter..."
+                  <p className="mb-2 text-sm">Filter by user</p>
+                  <UserFilterSelect
                     value={selectedUserId}
-                    onChange={(value) => setSelectedUserId(value ?? null)}
-                    filterOption={false}
-                    onSearch={handleUserSearchChange}
-                    searchValue={userSearchInput}
-                    onPopupScroll={handleUserPopupScroll}
-                    loading={isLoadingUsers}
-                    notFoundContent={isLoadingUsers ? <LoadingOutlined className="animate-spin" /> : "No users found"}
+                    onChange={setSelectedUserId}
                     options={userOptions}
-                    popupRender={(menu) => (
-                      <>
-                        {menu}
-                        {isFetchingNextUsersPage && (
-                          <div style={{ textAlign: "center", padding: 8 }}>
-                            <LoadingOutlined className="animate-spin" />
-                          </div>
-                        )}
-                      </>
-                    )}
+                    searchValue={userSearchInput}
+                    onSearchChange={handleUserSearchChange}
+                    onScroll={handleUserPopupScroll}
+                    isLoadingUsers={isLoadingUsers}
+                    isFetchingNextPage={isFetchingNextUsersPage}
                   />
                 </div>
               )}
-              <TabGroup>
+              <Tabs defaultValue="cost" className="mt-1">
                 <div className="flex justify-between items-center">
-                  <TabList variant="solid" className="mt-1">
-                    <Tab>Cost</Tab>
-                    <Tab>Model Activity</Tab>
-                    <Tab>Key Activity</Tab>
-                    <Tab>MCP Server Activity</Tab>
-                    <Tab>Endpoint Activity</Tab>
-                  </TabList>
+                  <TabsList>
+                    <TabsTrigger value="cost">Cost</TabsTrigger>
+                    <TabsTrigger value="model">Model Activity</TabsTrigger>
+                    <TabsTrigger value="key">Key Activity</TabsTrigger>
+                    <TabsTrigger value="mcp">MCP Server Activity</TabsTrigger>
+                    <TabsTrigger value="endpoint">Endpoint Activity</TabsTrigger>
+                  </TabsList>
                   <div className="flex items-center gap-2">
-                    <Button
-                      onClick={() => setIsAiChatOpen(true)}
-                      icon={
-                        <svg className="w-4 h-4" viewBox="0 0 16 16" fill="currentColor">
-                          <path d="M8 1l1.5 3.5L13 6l-3.5 1.5L8 11 6.5 7.5 3 6l3.5-1.5L8 1zm4 7l.75 1.75L14.5 10.5l-1.75.75L12 13l-.75-1.75L9.5 10.5l1.75-.75L12 8zM4 9l.75 1.75L6.5 11.5l-1.75.75L4 14l-.75-1.75L1.5 11.5l1.75-.75L4 9z" />
-                        </svg>
-                      }
-                    >
+                    <Button variant="outline" onClick={() => setIsAiChatOpen(true)}>
+                      <svg className="w-4 h-4 mr-2" viewBox="0 0 16 16" fill="currentColor">
+                        <path d="M8 1l1.5 3.5L13 6l-3.5 1.5L8 11 6.5 7.5 3 6l3.5-1.5L8 1zm4 7l.75 1.75L14.5 10.5l-1.75.75L12 13l-.75-1.75L9.5 10.5l1.75-.75L12 8zM4 9l.75 1.75L6.5 11.5l-1.75.75L4 14l-.75-1.75L1.5 11.5l1.75-.75L4 9z" />
+                      </svg>
                       Ask AI
                     </Button>
-                    <Button
-                      onClick={() => setIsGlobalExportModalOpen(true)}
-                      icon={
-                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                            strokeWidth={2}
-                            d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"
-                          />
-                        </svg>
-                      }
-                    >
+                    <Button variant="outline" onClick={() => setIsGlobalExportModalOpen(true)}>
+                      <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          strokeWidth={2}
+                          d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"
+                        />
+                      </svg>
                       Export Data
                     </Button>
                   </div>
                 </div>
-                <TabPanels>
-                  {/* Cost Panel */}
-                  <TabPanel>
-                    <Grid numItems={2} className="gap-2 w-full">
-                      {/* Total Spend Card */}
-                      <Col numColSpan={2}>
-                        <div className="flex items-center gap-4 mt-2 mb-2">
-                          <Text className="text-tremor-default text-tremor-content dark:text-dark-tremor-content text-lg">
-                            Project Spend{" "}
-                            {dateValue.from && dateValue.to && (
-                              <>
-                                {dateValue.from.toLocaleDateString("en-US", {
-                                  month: "short",
-                                  day: "numeric",
-                                  year:
-                                    dateValue.from.getFullYear() !== dateValue.to.getFullYear() ? "numeric" : undefined,
-                                })}
-                                {" - "}
-                                {dateValue.to.toLocaleDateString("en-US", {
-                                  month: "short",
-                                  day: "numeric",
-                                  year: "numeric",
-                                })}
-                              </>
-                            )}
-                          </Text>
-                        </div>
+                {/* Cost Panel */}
+                <TabsContent value="cost">
+                  <div className="grid grid-cols-2 gap-2 w-full">
+                    {/* Total Spend Card */}
+                    <div className="col-span-2">
+                      <div className="flex items-center gap-4 mt-2 mb-2">
+                        <p className="text-foreground text-lg">
+                          Project Spend{" "}
+                          {dateValue.from && dateValue.to && (
+                            <>
+                              {dateValue.from.toLocaleDateString("en-US", {
+                                month: "short",
+                                day: "numeric",
+                                year:
+                                  dateValue.from.getFullYear() !== dateValue.to.getFullYear() ? "numeric" : undefined,
+                              })}
+                              {" - "}
+                              {dateValue.to.toLocaleDateString("en-US", {
+                                month: "short",
+                                day: "numeric",
+                                year: "numeric",
+                              })}
+                            </>
+                          )}
+                        </p>
+                      </div>
 
-                        <ViewUserSpend
-                          userSpend={totalSpend}
-                          selectedTeam={null}
-                          userMaxBudget={currentUser?.max_budget || null}
-                        />
-                      </Col>
+                      <ViewUserSpend
+                        userSpend={totalSpend}
+                        selectedTeam={null}
+                        userMaxBudget={currentUser?.max_budget || null}
+                      />
+                    </div>
 
-                      <Col numColSpan={2}>
-                        <Card>
-                          <Title>Usage Metrics</Title>
-                          <Grid numItems={5} className="gap-4 mt-4">
-                            <Card>
-                              <Title>Total Requests</Title>
-                              <Text className="text-2xl font-bold mt-2">
-                                {userSpendData.metadata?.total_api_requests?.toLocaleString() || 0}
-                              </Text>
-                            </Card>
-                            <Card>
-                              <Title>Successful Requests</Title>
-                              <Text className="text-2xl font-bold mt-2 text-green-600">
-                                {userSpendData.metadata?.total_successful_requests?.toLocaleString() || 0}
-                              </Text>
-                            </Card>
-                            <Card>
-                              <div className="flex items-center gap-2">
-                                <Title>Failed Requests</Title>
-                                <Tooltip title="Includes requests that failed to route to a provider, tool usage failures, and other request errors where the provider cannot be determined.">
-                                  <InfoCircleOutlined className="text-gray-400 hover:text-gray-600" />
+                    <div className="col-span-2">
+                      <Card className="p-6">
+                        <h3 className="text-lg font-semibold">Usage Metrics</h3>
+                        <div className="grid grid-cols-5 gap-4 mt-4">
+                          <Card className="p-6">
+                            <h3 className="text-lg font-semibold">Total Requests</h3>
+                            <p className="text-2xl font-bold mt-2">
+                              {userSpendData.metadata?.total_api_requests?.toLocaleString() || 0}
+                            </p>
+                          </Card>
+                          <Card className="p-6">
+                            <h3 className="text-lg font-semibold">Successful Requests</h3>
+                            <p className="text-2xl font-bold mt-2 text-green-600">
+                              {userSpendData.metadata?.total_successful_requests?.toLocaleString() || 0}
+                            </p>
+                          </Card>
+                          <Card className="p-6">
+                            <div className="flex items-center gap-2">
+                              <h3 className="text-lg font-semibold">Failed Requests</h3>
+                              <TooltipProvider>
+                                <Tooltip>
+                                  <TooltipTrigger asChild>
+                                    <InfoCircleOutlined className="h-4 w-4 text-muted-foreground hover:text-foreground" />
+                                  </TooltipTrigger>
+                                  <TooltipContent>
+                                    Includes requests that failed to route to a provider, tool usage failures, and other
+                                    request errors where the provider cannot be determined.
+                                  </TooltipContent>
                                 </Tooltip>
-                              </div>
-                              <Text className="text-2xl font-bold mt-2 text-red-600">
-                                {userSpendData.metadata?.total_failed_requests?.toLocaleString() || 0}
-                              </Text>
-                            </Card>
-                            <Card>
-                              <Title>Average Cost per Request</Title>
-                              <Text className="text-2xl font-bold mt-2">
-                                $
-                                {formatNumberWithCommas(
-                                  (totalSpend || 0) / (userSpendData.metadata?.total_api_requests || 1),
-                                  4,
-                                )}
-                              </Text>
-                            </Card>
-                            <Card
-                              className="cursor-pointer hover:bg-gray-50 transition-colors"
-                              onClick={() => setShowTokenBreakdown(!showTokenBreakdown)}
-                            >
-                              <div className="flex items-center gap-2">
-                                <Title>Total Tokens</Title>
-                                {showTokenBreakdown ? (
-                                  <DownOutlined className="text-gray-400 text-xs" />
-                                ) : (
-                                  <RightOutlined className="text-gray-400 text-xs" />
-                                )}
-                              </div>
-                              <Text className="text-2xl font-bold mt-2">
-                                {userSpendData.metadata?.total_tokens?.toLocaleString() || 0}
-                              </Text>
-                            </Card>
-                          </Grid>
-                          {showTokenBreakdown && (
-                            <Grid numItems={4} className="gap-4 mt-4">
-                              <Card>
-                                <Title>Input Tokens</Title>
-                                <Text className="text-2xl font-bold mt-2 text-blue-600">
-                                  {Math.max(
-                                    0,
-                                    (userSpendData.metadata?.total_prompt_tokens || 0) -
-                                      (userSpendData.metadata?.total_cache_read_input_tokens || 0) -
-                                      (userSpendData.metadata?.total_cache_creation_input_tokens || 0)
-                                  ).toLocaleString()}
-                                </Text>
-                              </Card>
-                              <Card>
-                                <Title>Output Tokens</Title>
-                                <Text className="text-2xl font-bold mt-2 text-cyan-600">
-                                  {userSpendData.metadata?.total_completion_tokens?.toLocaleString() || 0}
-                                </Text>
-                              </Card>
-                              <Card>
-                                <Title>Cache Read Tokens</Title>
-                                <Text className="text-2xl font-bold mt-2 text-green-600">
-                                  {userSpendData.metadata?.total_cache_read_input_tokens?.toLocaleString() || 0}
-                                </Text>
-                              </Card>
-                              <Card>
-                                <Title>Cache Write Tokens</Title>
-                                <Text className="text-2xl font-bold mt-2 text-purple-600">
-                                  {userSpendData.metadata?.total_cache_creation_input_tokens?.toLocaleString() || 0}
-                                </Text>
-                              </Card>
-                            </Grid>
-                          )}
-                        </Card>
-                      </Col>
-
-                      {/* Daily Spend Chart */}
-                      <Col numColSpan={2}>
-                        <Card>
-                          <Title>Daily Spend</Title>
-                          {loading ? (
-                            <ChartLoader isDateChanging={isDateChanging} />
-                          ) : (
-                            <BarChart
-                              data={sortedDailyResults}
-                              index="date"
-                              categories={["metrics.spend"]}
-                              colors={["cyan"]}
-                              valueFormatter={valueFormatterSpend}
-                              yAxisWidth={100}
-                              showLegend={false}
-                              customTooltip={({ payload, active }) => {
-                                if (!active || !payload?.[0]) return null;
-                                const data = payload[0].payload;
-                                return (
-                                  <div className="bg-white p-4 shadow-lg rounded-lg border">
-                                    <p className="font-bold">{data.date}</p>
-                                    <p className="text-cyan-500">
-                                      Spend: ${formatNumberWithCommas(data.metrics.spend, 2)}
-                                    </p>
-                                    <p className="text-gray-600">Requests: {data.metrics.api_requests}</p>
-                                    <p className="text-gray-600">Successful: {data.metrics.successful_requests}</p>
-                                    <p className="text-gray-600">Failed: {data.metrics.failed_requests}</p>
-                                    <p className="text-gray-600">Tokens: {data.metrics.total_tokens}</p>
-                                  </div>
-                                );
-                              }}
-                            />
-                          )}
-                        </Card>
-                      </Col>
-                      {/* Top API Keys */}
-                      <Col numColSpan={1}>
-                        <Card className="h-full">
-                          <Title>Top Virtual Keys</Title>
-                          <TopKeyView
-                            topKeys={topKeys}
-                            teams={null}
-                            topKeysLimit={topKeysLimit}
-                            setTopKeysLimit={setTopKeysLimit}
-                          />
-                        </Card>
-                      </Col>
-
-                      {/* Top Models */}
-                      <Col numColSpan={1}>
-                        <Card className="h-full">
-                          <Title>{modelViewType === "groups" ? "Top Public Model Names" : "Top Litellm Models"}</Title>
-                          <div className="flex justify-between items-center mb-4">
-                            <Segmented
-                              options={[
-                                { label: "5", value: 5 },
-                                { label: "10", value: 10 },
-                                { label: "25", value: 25 },
-                                { label: "50", value: 50 },
-                              ]}
-                              value={topModelsLimit}
-                              onChange={(value) => setTopModelsLimit(value as number)}
-                            />
-                            <div className="flex bg-gray-100 rounded-lg p-1">
-                              <button
-                                className={`px-3 py-1 text-sm rounded-md transition-colors ${
-                                  modelViewType === "groups"
-                                    ? "bg-white shadow-sm text-gray-900"
-                                    : "text-gray-600 hover:text-gray-900"
-                                }`}
-                                onClick={() => setModelViewType("groups")}
-                              >
-                                Public Model Name
-                              </button>
-                              <button
-                                className={`px-3 py-1 text-sm rounded-md transition-colors ${
-                                  modelViewType === "individual"
-                                    ? "bg-white shadow-sm text-gray-900"
-                                    : "text-gray-600 hover:text-gray-900"
-                                }`}
-                                onClick={() => setModelViewType("individual")}
-                              >
-                                Litellm Model Name
-                              </button>
+                              </TooltipProvider>
                             </div>
+                            <p className="text-2xl font-bold mt-2 text-red-600">
+                              {userSpendData.metadata?.total_failed_requests?.toLocaleString() || 0}
+                            </p>
+                          </Card>
+                          <Card className="p-6">
+                            <h3 className="text-lg font-semibold">Average Cost per Request</h3>
+                            <p className="text-2xl font-bold mt-2">
+                              $
+                              {formatNumberWithCommas(
+                                (totalSpend || 0) / (userSpendData.metadata?.total_api_requests || 1),
+                                4,
+                              )}
+                            </p>
+                          </Card>
+                          <Card
+                            className="p-6 cursor-pointer hover:bg-muted transition-colors"
+                            onClick={() => setShowTokenBreakdown(!showTokenBreakdown)}
+                          >
+                            <div className="flex items-center gap-2">
+                              <h3 className="text-lg font-semibold">Total Tokens</h3>
+                              {showTokenBreakdown ? (
+                                <DownOutlined className="h-3 w-3 text-muted-foreground" />
+                              ) : (
+                                <RightOutlined className="h-3 w-3 text-muted-foreground" />
+                              )}
+                            </div>
+                            <p className="text-2xl font-bold mt-2">
+                              {userSpendData.metadata?.total_tokens?.toLocaleString() || 0}
+                            </p>
+                          </Card>
+                        </div>
+                        {showTokenBreakdown && (
+                          <div className="grid grid-cols-4 gap-4 mt-4">
+                            <Card className="p-6">
+                              <h3 className="text-lg font-semibold">Input Tokens</h3>
+                              <p className="text-2xl font-bold mt-2 text-blue-600">
+                                {Math.max(
+                                  0,
+                                  (userSpendData.metadata?.total_prompt_tokens || 0) -
+                                    (userSpendData.metadata?.total_cache_read_input_tokens || 0) -
+                                    (userSpendData.metadata?.total_cache_creation_input_tokens || 0),
+                                ).toLocaleString()}
+                              </p>
+                            </Card>
+                            <Card className="p-6">
+                              <h3 className="text-lg font-semibold">Output Tokens</h3>
+                              <p className="text-2xl font-bold mt-2 text-cyan-600">
+                                {userSpendData.metadata?.total_completion_tokens?.toLocaleString() || 0}
+                              </p>
+                            </Card>
+                            <Card className="p-6">
+                              <h3 className="text-lg font-semibold">Cache Read Tokens</h3>
+                              <p className="text-2xl font-bold mt-2 text-green-600">
+                                {userSpendData.metadata?.total_cache_read_input_tokens?.toLocaleString() || 0}
+                              </p>
+                            </Card>
+                            <Card className="p-6">
+                              <h3 className="text-lg font-semibold">Cache Write Tokens</h3>
+                              <p className="text-2xl font-bold mt-2 text-purple-600">
+                                {userSpendData.metadata?.total_cache_creation_input_tokens?.toLocaleString() || 0}
+                              </p>
+                            </Card>
                           </div>
-                          {loading ? (
-                            <ChartLoader isDateChanging={isDateChanging} />
-                          ) : (
-                            <div className="relative max-h-[600px] overflow-y-auto">
-                              {(() => {
-                                const modelData = modelViewType === "groups" ? topModelGroups : topModels;
-                                return (
-                                  <BarChart
-                                    className="mt-4"
-                                    style={{ height: Math.min(modelData.length, topModelsLimit) * 52 }}
-                                    data={modelData}
-                                    index="key"
-                                    categories={["spend"]}
-                                    colors={["cyan"]}
-                                    valueFormatter={valueFormatterSpend}
-                                    layout="vertical"
-                                    yAxisWidth={200}
-                                    showLegend={false}
-                                    customTooltip={({ payload, active }) => {
-                                      if (!active || !payload?.[0]) return null;
-                                      const data = payload[0].payload;
-                                      return (
-                                        <div className="bg-white p-4 shadow-lg rounded-lg border">
-                                          <p className="font-bold">{data.key}</p>
-                                          <p className="text-cyan-500">
-                                            Spend: ${formatNumberWithCommas(data.spend, 2)}
-                                          </p>
-                                          <p className="text-gray-600">
-                                            Total Requests: {data.requests.toLocaleString()}
-                                          </p>
-                                          <p className="text-green-600">
-                                            Successful: {data.successful_requests.toLocaleString()}
-                                          </p>
-                                          <p className="text-red-600">
-                                            Failed: {data.failed_requests.toLocaleString()}
-                                          </p>
-                                          <p className="text-gray-600">Tokens: {data.tokens.toLocaleString()}</p>
-                                        </div>
-                                      );
-                                    }}
-                                  />
-                                );
-                              })()}
-                            </div>
-                          )}
-                        </Card>
-                      </Col>
+                        )}
+                      </Card>
+                    </div>
 
-                      {/* Spend by Provider */}
-                      <Col numColSpan={2}>
-                        <SpendByProvider
-                          loading={loading}
-                          isDateChanging={isDateChanging}
-                          providerSpend={providerSpend}
+                    {/* Daily Spend Chart */}
+                    <div className="col-span-2">
+                      <Card className="p-6">
+                        <h3 className="text-lg font-semibold">Daily Spend</h3>
+                        {loading ? (
+                          <ChartLoader isDateChanging={isDateChanging} />
+                        ) : (
+                          <BarChart
+                            data={sortedDailyResults}
+                            index="date"
+                            categories={["metrics.spend"]}
+                            colors={["cyan"]}
+                            valueFormatter={valueFormatterSpend}
+                            yAxisWidth={100}
+                            showLegend={false}
+                            customTooltip={({ payload, active }) => {
+                              if (!active || !payload?.[0]) return null;
+                              const data = payload[0].payload;
+                              return (
+                                <div className="bg-background p-4 shadow-lg rounded-lg border border-border">
+                                  <p className="font-bold">{data.date}</p>
+                                  <p className="text-cyan-500">
+                                    Spend: ${formatNumberWithCommas(data.metrics.spend, 2)}
+                                  </p>
+                                  <p className="text-muted-foreground">Requests: {data.metrics.api_requests}</p>
+                                  <p className="text-muted-foreground">
+                                    Successful: {data.metrics.successful_requests}
+                                  </p>
+                                  <p className="text-muted-foreground">Failed: {data.metrics.failed_requests}</p>
+                                  <p className="text-muted-foreground">Tokens: {data.metrics.total_tokens}</p>
+                                </div>
+                              );
+                            }}
+                          />
+                        )}
+                      </Card>
+                    </div>
+                    {/* Top API Keys */}
+                    <div>
+                      <Card className="p-6 h-full">
+                        <h3 className="text-lg font-semibold">Top Virtual Keys</h3>
+                        <TopKeyView
+                          topKeys={topKeys}
+                          teams={null}
+                          topKeysLimit={topKeysLimit}
+                          setTopKeysLimit={setTopKeysLimit}
                         />
-                      </Col>
+                      </Card>
+                    </div>
 
-                      {/* Usage Metrics */}
-                    </Grid>
-                  </TabPanel>
+                    {/* Top Models */}
+                    <div>
+                      <Card className="p-6 h-full">
+                        <h3 className="text-lg font-semibold">
+                          {modelViewType === "groups" ? "Top Public Model Names" : "Top Litellm Models"}
+                        </h3>
+                        <div className="flex justify-between items-center mb-4">
+                          <ToggleGroup
+                            type="single"
+                            value={String(topModelsLimit)}
+                            onValueChange={(v) => {
+                              if (!v) return;
+                              setTopModelsLimit(parseInt(v));
+                            }}
+                          >
+                            {[5, 10, 25, 50].map((n) => (
+                              <ToggleGroupItem key={n} value={String(n)}>
+                                {n}
+                              </ToggleGroupItem>
+                            ))}
+                          </ToggleGroup>
+                          <div className="flex bg-muted rounded-lg p-1">
+                            <button
+                              className={`px-3 py-1 text-sm rounded-md transition-colors ${
+                                modelViewType === "groups"
+                                  ? "bg-background shadow-sm text-foreground"
+                                  : "text-muted-foreground hover:text-foreground"
+                              }`}
+                              onClick={() => setModelViewType("groups")}
+                            >
+                              Public Model Name
+                            </button>
+                            <button
+                              className={`px-3 py-1 text-sm rounded-md transition-colors ${
+                                modelViewType === "individual"
+                                  ? "bg-background shadow-sm text-foreground"
+                                  : "text-muted-foreground hover:text-foreground"
+                              }`}
+                              onClick={() => setModelViewType("individual")}
+                            >
+                              Litellm Model Name
+                            </button>
+                          </div>
+                        </div>
+                        {loading ? (
+                          <ChartLoader isDateChanging={isDateChanging} />
+                        ) : (
+                          <div className="relative max-h-[600px] overflow-y-auto">
+                            {(() => {
+                              const modelData = modelViewType === "groups" ? topModelGroups : topModels;
+                              return (
+                                <BarChart
+                                  className="mt-4"
+                                  style={{ height: Math.min(modelData.length, topModelsLimit) * 52 }}
+                                  data={modelData}
+                                  index="key"
+                                  categories={["spend"]}
+                                  colors={["cyan"]}
+                                  valueFormatter={valueFormatterSpend}
+                                  layout="vertical"
+                                  yAxisWidth={200}
+                                  showLegend={false}
+                                  customTooltip={({ payload, active }) => {
+                                    if (!active || !payload?.[0]) return null;
+                                    const data = payload[0].payload;
+                                    return (
+                                      <div className="bg-background p-4 shadow-lg rounded-lg border border-border">
+                                        <p className="font-bold">{data.key}</p>
+                                        <p className="text-cyan-500">
+                                          Spend: ${formatNumberWithCommas(data.spend, 2)}
+                                        </p>
+                                        <p className="text-muted-foreground">
+                                          Total Requests: {data.requests.toLocaleString()}
+                                        </p>
+                                        <p className="text-green-600">
+                                          Successful: {data.successful_requests.toLocaleString()}
+                                        </p>
+                                        <p className="text-red-600">
+                                          Failed: {data.failed_requests.toLocaleString()}
+                                        </p>
+                                        <p className="text-muted-foreground">
+                                          Tokens: {data.tokens.toLocaleString()}
+                                        </p>
+                                      </div>
+                                    );
+                                  }}
+                                />
+                              );
+                            })()}
+                          </div>
+                        )}
+                      </Card>
+                    </div>
 
-                  {/* Activity Panel */}
-                  <TabPanel>
-                    <ActivityMetrics modelMetrics={modelMetrics} />
-                  </TabPanel>
-                  <TabPanel>
-                    <ActivityMetrics modelMetrics={keyMetrics} />
-                  </TabPanel>
-                  <TabPanel>
-                    <ActivityMetrics modelMetrics={mcpServerMetrics} />
-                  </TabPanel>
-                  <TabPanel>
-                    <EndpointUsage userSpendData={userSpendData} />
-                  </TabPanel>
-                </TabPanels>
-              </TabGroup>
+                    {/* Spend by Provider */}
+                    <div className="col-span-2">
+                      <SpendByProvider
+                        loading={loading}
+                        isDateChanging={isDateChanging}
+                        providerSpend={providerSpend}
+                      />
+                    </div>
+
+                    {/* Usage Metrics */}
+                  </div>
+                </TabsContent>
+
+                {/* Activity Panel */}
+                <TabsContent value="model">
+                  <ActivityMetrics modelMetrics={modelMetrics} />
+                </TabsContent>
+                <TabsContent value="key">
+                  <ActivityMetrics modelMetrics={keyMetrics} />
+                </TabsContent>
+                <TabsContent value="mcp">
+                  <ActivityMetrics modelMetrics={mcpServerMetrics} />
+                </TabsContent>
+                <TabsContent value="endpoint">
+                  <EndpointUsage userSpendData={userSpendData} />
+                </TabsContent>
+              </Tabs>
             </>
           )}
           {/* Organization Usage Panel */}
@@ -895,21 +1012,28 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
           {usageView === "tag" && (
             <>
               {showCredentialBanner && (
-                <Alert
-                  banner
-                  type="info"
-                  message="Reusable credentials are automatically tracked as tags"
-                  description={
-                    <Typography.Text>
-                      When a reusable credential is used, it will appear as a tag prefixed with{" "}
-                      <Typography.Text code>Credential: </Typography.Text>
-                      in this view.
-                    </Typography.Text>
-                  }
-                  closable
-                  onClose={() => setShowCredentialBanner(false)}
-                  className="mb-5"
-                />
+                <Alert className="mb-5">
+                  <AlertDescription>
+                    <div className="flex items-start justify-between gap-4">
+                      <div>
+                        <div className="font-medium mb-1">Reusable credentials are automatically tracked as tags</div>
+                        <div>
+                          When a reusable credential is used, it will appear as a tag prefixed with{" "}
+                          <code className="px-1 py-0.5 rounded bg-muted text-xs font-mono">Credential: </code>
+                          in this view.
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setShowCredentialBanner(false)}
+                        aria-label="Close"
+                        className="text-muted-foreground hover:text-foreground"
+                      >
+                        ×
+                      </button>
+                    </div>
+                  </AlertDescription>
+                </Alert>
               )}
               <EntityUsage
                 accessToken={accessToken}

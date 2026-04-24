@@ -1,30 +1,25 @@
 import useTeams from "@/app/(dashboard)/hooks/useTeams";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 // eslint-disable-next-line litellm-ui/no-banned-ui-imports
+import { BarChart, DateRangePickerValue, DonutChart } from "@tremor/react";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
 import {
-  BarChart,
-  Card,
-  Col,
-  DateRangePickerValue,
-  DonutChart,
-  Grid,
-  Subtitle,
-  Tab,
-  TabGroup,
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
+} from "@/components/ui/tabs";
+import {
   Table,
   TableBody,
   TableCell,
   TableHead,
-  TableHeaderCell,
+  TableHeader,
   TableRow,
-  TabList,
-  TabPanel,
-  TabPanels,
-  Text,
-  Title,
-} from "@tremor/react";
-import { Upload as ExportOutlined, Loader2 as LoadingOutlined } from "lucide-react";
-import { Alert, Button } from "antd";
+} from "@/components/ui/table";
+import { Loader2 } from "lucide-react";
 import React, { useMemo, useState } from "react";
 import TeamMultiSelect from "../../../common_components/team_multi_select";
 import { ActivityMetrics, processActivityData } from "../../../activity_metrics";
@@ -399,84 +394,65 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
   return (
     <div style={{ width: "100%" }} className="relative">
       {isFetchingMore && (
-        <Alert
-          banner
-          type="warning"
-          className="mb-2"
-          message={
+        <Alert className="mb-2">
+          <AlertDescription>
             <div className="flex items-center justify-between">
               <span>
-                <LoadingOutlined className="animate-spin mr-2" />
+                <Loader2 className="animate-spin mr-2 inline h-4 w-4" />
                 Currently fetching spend data: fetched {progress.currentPage} / {progress.totalPages} pages. Charts will
                 update periodically as data loads. Moving off of this page will stop and reset this. To continue using
                 the UI in the meantime,{" "}
                 <a href={window.location.href} target="_blank" rel="noopener noreferrer">
-                  open a new tab <ExportOutlined />
+                  open a new tab
                 </a>
                 .
               </span>
-              <Button type="primary" danger onClick={cancel}>
+              <Button variant="destructive" onClick={cancel}>
                 Stop
               </Button>
             </div>
-          }
-        />
+          </AlertDescription>
+        </Alert>
       )}
       {cancelled && (
-        <Alert
-          banner
-          type="info"
-          className="mb-2"
-          message={
-            <span>
-              Showing partial data ({progress.currentPage}/{progress.totalPages} pages loaded)
-            </span>
-          }
-        />
+        <Alert className="mb-2">
+          <AlertDescription>
+            Showing partial data ({progress.currentPage}/{progress.totalPages} pages loaded)
+          </AlertDescription>
+        </Alert>
       )}
       {agentIsFetchingMore && entityType === "team" && (
-        <Alert
-          banner
-          type="warning"
-          className="mb-2"
-          message={
+        <Alert className="mb-2">
+          <AlertDescription>
             <div className="flex items-center justify-between">
               <span>
-                <LoadingOutlined className="animate-spin mr-2" />
+                <Loader2 className="animate-spin mr-2 inline h-4 w-4" />
                 Currently fetching agent data: fetched {agentProgress.currentPage} / {agentProgress.totalPages} pages.
                 Charts will update periodically as data loads. Moving off of this page will stop and reset this. To
                 continue using the UI in the meantime,{" "}
                 <a href={window.location.href} target="_blank" rel="noopener noreferrer">
-                  open a new tab <ExportOutlined />
+                  open a new tab
                 </a>
                 .
               </span>
-              <Button type="primary" danger onClick={agentCancel}>
+              <Button variant="destructive" onClick={agentCancel}>
                 Stop
               </Button>
             </div>
-          }
-        />
+          </AlertDescription>
+        </Alert>
       )}
       {agentCancelled && entityType === "team" && (
-        <Alert
-          banner
-          type="info"
-          className="mb-2"
-          message={
-            <span>
-              Showing partial agent data ({agentProgress.currentPage}/{agentProgress.totalPages} pages loaded)
-            </span>
-          }
-        />
+        <Alert className="mb-2">
+          <AlertDescription>
+            Showing partial agent data ({agentProgress.currentPage}/{agentProgress.totalPages} pages loaded)
+          </AlertDescription>
+        </Alert>
       )}
       {entityType === "team" && (
         <div className="mb-4">
-          <Text className="mb-2">Filter by team</Text>
-          <TeamMultiSelect
-            value={selectedTags}
-            onChange={setSelectedTags}
-          />
+          <p className="mb-2 text-sm">Filter by team</p>
+          <TeamMultiSelect value={selectedTags} onChange={setSelectedTags} />
         </div>
       )}
       <UsageExportHeader
@@ -492,328 +468,329 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
         filterMode={entityType === "user" ? "single" : "multiple"}
         teams={teams || []}
       />
-      <TabGroup>
-        <TabList variant="solid" className="mt-1">
-          <Tab>Cost</Tab>
-          <Tab>{entityType === "agent" ? "Request / Token Consumption" : "Model Activity"}</Tab>
-          {entityType === "team" ? <Tab>Agent Activity</Tab> : <></>}
-          <Tab>Key Activity</Tab>
-          <Tab>Endpoint Activity</Tab>
-        </TabList>
-        <TabPanels>
-          <TabPanel>
-            <Grid numItems={2} className="gap-2 w-full">
-              {/* Total Spend Card */}
-              <Col numColSpan={2}>
-                <Card>
-                  <Title>{capitalizedEntityLabel} Spend Overview</Title>
-                  <Grid numItems={5} className="gap-4 mt-4">
-                    <Card>
-                      <Title>Total Spend</Title>
-                      <Text className="text-2xl font-bold mt-2">
-                        ${formatNumberWithCommas(spendData.metadata.total_spend, 2)}
-                      </Text>
-                    </Card>
-                    <Card>
-                      <Title>Total Requests</Title>
-                      <Text className="text-2xl font-bold mt-2">
-                        {spendData.metadata.total_api_requests.toLocaleString()}
-                      </Text>
-                    </Card>
-                    <Card>
-                      <Title>Successful Requests</Title>
-                      <Text className="text-2xl font-bold mt-2 text-green-600">
-                        {spendData.metadata.total_successful_requests.toLocaleString()}
-                      </Text>
-                    </Card>
-                    <Card>
-                      <Title>Failed Requests</Title>
-                      <Text className="text-2xl font-bold mt-2 text-red-600">
-                        {spendData.metadata.total_failed_requests.toLocaleString()}
-                      </Text>
-                    </Card>
-                    <Card>
-                      <Title>Total Tokens</Title>
-                      <Text className="text-2xl font-bold mt-2">
-                        {spendData.metadata.total_tokens.toLocaleString()}
-                      </Text>
-                    </Card>
-                  </Grid>
-                </Card>
-              </Col>
-
-              {/* Daily Spend Chart */}
-              <Col numColSpan={2}>
-                <Card>
-                  <Title>Daily Spend</Title>
-                  <BarChart
-                    data={[...spendData.results].sort(
-                      (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime(),
-                    )}
-                    index="date"
-                    categories={["metrics.spend"]}
-                    colors={["cyan"]}
-                    valueFormatter={valueFormatterSpend}
-                    yAxisWidth={100}
-                    showLegend={false}
-                    customTooltip={({ payload, active }) => {
-                      if (!active || !payload?.[0]) return null;
-                      const data = payload[0].payload;
-                      const entityCount = Object.keys(data.breakdown.entities || {}).length;
-                      return (
-                        <div className="bg-white p-4 shadow-lg rounded-lg border">
-                          <p className="font-bold">{data.date}</p>
-                          <p className="text-cyan-500">Total Spend: ${formatNumberWithCommas(data.metrics.spend, 2)}</p>
-                          <p className="text-gray-600">Total Requests: {data.metrics.api_requests}</p>
-                          <p className="text-gray-600">Successful: {data.metrics.successful_requests}</p>
-                          <p className="text-gray-600">Failed: {data.metrics.failed_requests}</p>
-                          <p className="text-gray-600">Total Tokens: {data.metrics.total_tokens}</p>
-                          <p className="text-gray-600">
-                            Total {capitalizedEntityLabel}s: {entityCount}
-                          </p>
-                          <div className="mt-2 border-t pt-2">
-                            <p className="font-semibold">Spend by {capitalizedEntityLabel}:</p>
-                            {Object.entries(data.breakdown.entities || {})
-                              .sort(([, a], [, b]) => {
-                                const spendA = (a as EntityMetrics).metrics.spend;
-                                const spendB = (b as EntityMetrics).metrics.spend;
-                                return spendB - spendA;
-                              })
-                              .slice(0, 5)
-                              .map(([entity, entityData]) => {
-                                const metrics = entityData as EntityMetrics;
-                                return (
-                                  <p key={entity} className="text-sm text-gray-600">
-                                    {getEntityLabel(entity, metrics.metadata)}: $
-                                    {formatNumberWithCommas(metrics.metrics.spend, 2)}
-                                  </p>
-                                );
-                              })}
-                            {entityCount > 5 && (
-                              <p className="text-sm text-gray-500 italic">...and {entityCount - 5} more</p>
-                            )}
-                          </div>
-                        </div>
-                      );
-                    }}
-                  />
-                </Card>
-              </Col>
-
-              {/* Entity Breakdown Section */}
-              <Col numColSpan={2}>
-                <Card>
-                  <div className="flex flex-col space-y-4">
-                    <div className="flex flex-col space-y-2">
-                      <Title>Spend Per {capitalizedEntityLabel}</Title>
-                      <Subtitle className="text-xs">Showing Top 5 by Spend</Subtitle>
-                      <div className="flex items-center text-sm text-gray-500">
-                        <span>Get Started by Tracking cost per {capitalizedEntityLabel} </span>
-                        <a
-                          href="https://docs.litellm.ai/docs/proxy/enterprise#spend-tracking"
-                          className="text-blue-500 hover:text-blue-700 ml-1"
-                        >
-                          here
-                        </a>
-                      </div>
-                    </div>
-                    <Grid numItems={2} className="gap-6">
-                      <Col numColSpan={1}>
-                        <BarChart
-                          className="mt-4 h-52"
-                          data={getProcessedEntityBreakdownForChart()}
-                          index="metadata.alias_display"
-                          categories={["metrics.spend"]}
-                          colors={["cyan"]}
-                          valueFormatter={valueFormatterSpend}
-                          layout="vertical"
-                          showLegend={false}
-                          yAxisWidth={150}
-                          customTooltip={({ payload, active }) => {
-                            if (!active || !payload?.[0]) return null;
-                            const data = payload[0].payload;
-                            return (
-                              <div className="bg-white p-4 shadow-lg rounded-lg border">
-                                <p className="font-bold">{data.metadata.alias}</p>
-                                <p className="text-cyan-500">Spend: ${formatNumberWithCommas(data.metrics.spend, 4)}</p>
-                                <p className="text-gray-600">Requests: {data.metrics.api_requests.toLocaleString()}</p>
-                                <p className="text-green-600">
-                                  Successful: {data.metrics.successful_requests.toLocaleString()}
-                                </p>
-                                <p className="text-red-600">Failed: {data.metrics.failed_requests.toLocaleString()}</p>
-                                <p className="text-gray-600">Tokens: {data.metrics.total_tokens.toLocaleString()}</p>
-                              </div>
-                            );
-                          }}
-                        />
-                      </Col>
-                      <Col numColSpan={1}>
-                        <div className="h-52 overflow-y-auto">
-                          <Table>
-                            <TableHead>
-                              <TableRow>
-                                <TableHeaderCell>{capitalizedEntityLabel}</TableHeaderCell>
-                                <TableHeaderCell>Spend</TableHeaderCell>
-                                <TableHeaderCell className="text-green-600">Successful</TableHeaderCell>
-                                <TableHeaderCell className="text-red-600">Failed</TableHeaderCell>
-                                <TableHeaderCell>Tokens</TableHeaderCell>
-                              </TableRow>
-                            </TableHead>
-                            <TableBody>
-                              {getEntityBreakdown()
-                                .filter((entity) => entity.metrics.spend > 0)
-                                .map((entity) => (
-                                  <TableRow key={entity.metadata.id}>
-                                    <TableCell>{entity.metadata.alias}</TableCell>
-                                    <TableCell>${formatNumberWithCommas(entity.metrics.spend, 4)}</TableCell>
-                                    <TableCell className="text-green-600">
-                                      {entity.metrics.successful_requests.toLocaleString()}
-                                    </TableCell>
-                                    <TableCell className="text-red-600">
-                                      {entity.metrics.failed_requests.toLocaleString()}
-                                    </TableCell>
-                                    <TableCell>{entity.metrics.total_tokens.toLocaleString()}</TableCell>
-                                  </TableRow>
-                                ))}
-                            </TableBody>
-                          </Table>
-                        </div>
-                      </Col>
-                    </Grid>
-                  </div>
-                </Card>
-              </Col>
-
-              {/* Top API Keys */}
-              <Col numColSpan={1}>
-                <Card>
-                  <Title>Top Virtual Keys</Title>
-                  <TopKeyView
-                    topKeys={getTopAPIKeys()}
-                    teams={null}
-                    showTags={entityType === "tag"}
-                    topKeysLimit={topKeysLimit}
-                    setTopKeysLimit={setTopKeysLimit}
-                  />
-                </Card>
-              </Col>
-
-              {/* Top Models */}
-              <Col numColSpan={1}>
-                <Card>
-                  <Title>{entityType === "agent" ? "Top Agents" : "Top Models"}</Title>
-                  <TopModelView
-                    topModels={getTopModels()}
-                    topModelsLimit={topModelsLimit}
-                    setTopModelsLimit={setTopModelsLimit}
-                  />
-                </Card>
-              </Col>
-
-              {/* Top Agents - only for team entity type */}
-              {entityType === "team" && (
-                <Col numColSpan={2}>
-                  <Card>
-                    <Title>Top Agents Driving Spend</Title>
-                    <TopModelView
-                      topModels={getTopAgents()}
-                      topModelsLimit={topAgentsLimit}
-                      setTopModelsLimit={setTopAgentsLimit}
-                    />
+      <Tabs defaultValue="cost" className="mt-1">
+        <TabsList>
+          <TabsTrigger value="cost">Cost</TabsTrigger>
+          <TabsTrigger value="model">
+            {entityType === "agent" ? "Request / Token Consumption" : "Model Activity"}
+          </TabsTrigger>
+          {entityType === "team" && <TabsTrigger value="agent">Agent Activity</TabsTrigger>}
+          <TabsTrigger value="key">Key Activity</TabsTrigger>
+          <TabsTrigger value="endpoint">Endpoint Activity</TabsTrigger>
+        </TabsList>
+        <TabsContent value="cost">
+          <div className="grid grid-cols-2 gap-2 w-full">
+            <div className="col-span-2">
+              <Card className="p-6">
+                <h3 className="text-lg font-semibold">{capitalizedEntityLabel} Spend Overview</h3>
+                <div className="grid grid-cols-5 gap-4 mt-4">
+                  <Card className="p-6">
+                    <h3 className="text-lg font-semibold">Total Spend</h3>
+                    <p className="text-2xl font-bold mt-2">
+                      ${formatNumberWithCommas(spendData.metadata.total_spend, 2)}
+                    </p>
                   </Card>
-                </Col>
-              )}
+                  <Card className="p-6">
+                    <h3 className="text-lg font-semibold">Total Requests</h3>
+                    <p className="text-2xl font-bold mt-2">
+                      {spendData.metadata.total_api_requests.toLocaleString()}
+                    </p>
+                  </Card>
+                  <Card className="p-6">
+                    <h3 className="text-lg font-semibold">Successful Requests</h3>
+                    <p className="text-2xl font-bold mt-2 text-green-600">
+                      {spendData.metadata.total_successful_requests.toLocaleString()}
+                    </p>
+                  </Card>
+                  <Card className="p-6">
+                    <h3 className="text-lg font-semibold">Failed Requests</h3>
+                    <p className="text-2xl font-bold mt-2 text-red-600">
+                      {spendData.metadata.total_failed_requests.toLocaleString()}
+                    </p>
+                  </Card>
+                  <Card className="p-6">
+                    <h3 className="text-lg font-semibold">Total Tokens</h3>
+                    <p className="text-2xl font-bold mt-2">
+                      {spendData.metadata.total_tokens.toLocaleString()}
+                    </p>
+                  </Card>
+                </div>
+              </Card>
+            </div>
 
-              {/* Spend by Provider */}
-              <Col numColSpan={2}>
-                <Card>
-                  <div className="flex flex-col space-y-4">
-                    <Title>Provider Usage</Title>
-                    <Grid numItems={2}>
-                      <Col numColSpan={1}>
-                        <DonutChart
-                          className="mt-4 h-40"
-                          data={getProviderSpend()}
-                          index="provider"
-                          category="spend"
-                          valueFormatter={(value) => `$${formatNumberWithCommas(value, 2)}`}
-                          colors={["cyan", "blue", "indigo", "violet", "purple"]}
-                        />
-                      </Col>
-                      <Col numColSpan={1}>
+            {/* Daily Spend Chart */}
+            <div className="col-span-2">
+              <Card className="p-6">
+                <h3 className="text-lg font-semibold">Daily Spend</h3>
+                <BarChart
+                  data={[...spendData.results].sort(
+                    (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime(),
+                  )}
+                  index="date"
+                  categories={["metrics.spend"]}
+                  colors={["cyan"]}
+                  valueFormatter={valueFormatterSpend}
+                  yAxisWidth={100}
+                  showLegend={false}
+                  customTooltip={({ payload, active }) => {
+                    if (!active || !payload?.[0]) return null;
+                    const data = payload[0].payload;
+                    const entityCount = Object.keys(data.breakdown.entities || {}).length;
+                    return (
+                      <div className="bg-background p-4 shadow-lg rounded-lg border border-border">
+                        <p className="font-bold">{data.date}</p>
+                        <p className="text-cyan-500">Total Spend: ${formatNumberWithCommas(data.metrics.spend, 2)}</p>
+                        <p className="text-muted-foreground">Total Requests: {data.metrics.api_requests}</p>
+                        <p className="text-muted-foreground">Successful: {data.metrics.successful_requests}</p>
+                        <p className="text-muted-foreground">Failed: {data.metrics.failed_requests}</p>
+                        <p className="text-muted-foreground">Total Tokens: {data.metrics.total_tokens}</p>
+                        <p className="text-muted-foreground">
+                          Total {capitalizedEntityLabel}s: {entityCount}
+                        </p>
+                        <div className="mt-2 border-t border-border pt-2">
+                          <p className="font-semibold">Spend by {capitalizedEntityLabel}:</p>
+                          {Object.entries(data.breakdown.entities || {})
+                            .sort(([, a], [, b]) => {
+                              const spendA = (a as EntityMetrics).metrics.spend;
+                              const spendB = (b as EntityMetrics).metrics.spend;
+                              return spendB - spendA;
+                            })
+                            .slice(0, 5)
+                            .map(([entity, entityData]) => {
+                              const metrics = entityData as EntityMetrics;
+                              return (
+                                <p key={entity} className="text-sm text-muted-foreground">
+                                  {getEntityLabel(entity, metrics.metadata)}: $
+                                  {formatNumberWithCommas(metrics.metrics.spend, 2)}
+                                </p>
+                              );
+                            })}
+                          {entityCount > 5 && (
+                            <p className="text-sm text-muted-foreground italic">...and {entityCount - 5} more</p>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  }}
+                />
+              </Card>
+            </div>
+
+            {/* Entity Breakdown Section */}
+            <div className="col-span-2">
+              <Card className="p-6">
+                <div className="flex flex-col space-y-4">
+                  <div className="flex flex-col space-y-2">
+                    <h3 className="text-lg font-semibold">Spend Per {capitalizedEntityLabel}</h3>
+                    <p className="text-xs text-muted-foreground">Showing Top 5 by Spend</p>
+                    <div className="flex items-center text-sm text-muted-foreground">
+                      <span>Get Started by Tracking cost per {capitalizedEntityLabel} </span>
+                      <a
+                        href="https://docs.litellm.ai/docs/proxy/enterprise#spend-tracking"
+                        className="text-primary hover:underline ml-1"
+                      >
+                        here
+                      </a>
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-2 gap-6">
+                    <div>
+                      <BarChart
+                        className="mt-4 h-52"
+                        data={getProcessedEntityBreakdownForChart()}
+                        index="metadata.alias_display"
+                        categories={["metrics.spend"]}
+                        colors={["cyan"]}
+                        valueFormatter={valueFormatterSpend}
+                        layout="vertical"
+                        showLegend={false}
+                        yAxisWidth={150}
+                        customTooltip={({ payload, active }) => {
+                          if (!active || !payload?.[0]) return null;
+                          const data = payload[0].payload;
+                          return (
+                            <div className="bg-background p-4 shadow-lg rounded-lg border border-border">
+                              <p className="font-bold">{data.metadata.alias}</p>
+                              <p className="text-cyan-500">Spend: ${formatNumberWithCommas(data.metrics.spend, 4)}</p>
+                              <p className="text-muted-foreground">
+                                Requests: {data.metrics.api_requests.toLocaleString()}
+                              </p>
+                              <p className="text-green-600">
+                                Successful: {data.metrics.successful_requests.toLocaleString()}
+                              </p>
+                              <p className="text-red-600">Failed: {data.metrics.failed_requests.toLocaleString()}</p>
+                              <p className="text-muted-foreground">
+                                Tokens: {data.metrics.total_tokens.toLocaleString()}
+                              </p>
+                            </div>
+                          );
+                        }}
+                      />
+                    </div>
+                    <div>
+                      <div className="h-52 overflow-y-auto">
                         <Table>
-                          <TableHead>
+                          <TableHeader>
                             <TableRow>
-                              <TableHeaderCell>Provider</TableHeaderCell>
-                              <TableHeaderCell>Spend</TableHeaderCell>
-                              <TableHeaderCell className="text-green-600">Successful</TableHeaderCell>
-                              <TableHeaderCell className="text-red-600">Failed</TableHeaderCell>
-                              <TableHeaderCell>Tokens</TableHeaderCell>
+                              <TableHead>{capitalizedEntityLabel}</TableHead>
+                              <TableHead>Spend</TableHead>
+                              <TableHead className="text-green-600">Successful</TableHead>
+                              <TableHead className="text-red-600">Failed</TableHead>
+                              <TableHead>Tokens</TableHead>
                             </TableRow>
-                          </TableHead>
+                          </TableHeader>
                           <TableBody>
-                            {getProviderSpend().map((provider) => (
-                              <TableRow key={provider.provider}>
-                                <TableCell>
-                                  <div className="flex items-center space-x-2">
-                                    {provider.provider && (
-                                      <img
-                                        src={getProviderLogoAndName(provider.provider).logo}
-                                        alt={`${provider.provider} logo`}
-                                        className="w-4 h-4"
-                                        onError={(e) => {
-                                          const target = e.target as HTMLImageElement;
-                                          const parent = target.parentElement;
-                                          if (parent) {
-                                            const fallbackDiv = document.createElement("div");
-                                            fallbackDiv.className =
-                                              "w-4 h-4 rounded-full bg-gray-200 flex items-center justify-center text-xs";
-                                            fallbackDiv.textContent = provider.provider?.charAt(0) || "-";
-                                            parent.replaceChild(fallbackDiv, target);
-                                          }
-                                        }}
-                                      />
-                                    )}
-                                    <span>{provider.provider}</span>
-                                  </div>
-                                </TableCell>
-                                <TableCell>${formatNumberWithCommas(provider.spend, 2)}</TableCell>
-                                <TableCell className="text-green-600">
-                                  {provider.successful_requests.toLocaleString()}
-                                </TableCell>
-                                <TableCell className="text-red-600">
-                                  {provider.failed_requests.toLocaleString()}
-                                </TableCell>
-                                <TableCell>{provider.tokens.toLocaleString()}</TableCell>
-                              </TableRow>
-                            ))}
+                            {getEntityBreakdown()
+                              .filter((entity) => entity.metrics.spend > 0)
+                              .map((entity) => (
+                                <TableRow key={entity.metadata.id}>
+                                  <TableCell>{entity.metadata.alias}</TableCell>
+                                  <TableCell>${formatNumberWithCommas(entity.metrics.spend, 4)}</TableCell>
+                                  <TableCell className="text-green-600">
+                                    {entity.metrics.successful_requests.toLocaleString()}
+                                  </TableCell>
+                                  <TableCell className="text-red-600">
+                                    {entity.metrics.failed_requests.toLocaleString()}
+                                  </TableCell>
+                                  <TableCell>{entity.metrics.total_tokens.toLocaleString()}</TableCell>
+                                </TableRow>
+                              ))}
                           </TableBody>
                         </Table>
-                      </Col>
-                    </Grid>
+                      </div>
+                    </div>
                   </div>
+                </div>
+              </Card>
+            </div>
+
+            {/* Top API Keys */}
+            <div>
+              <Card className="p-6">
+                <h3 className="text-lg font-semibold">Top Virtual Keys</h3>
+                <TopKeyView
+                  topKeys={getTopAPIKeys()}
+                  teams={null}
+                  showTags={entityType === "tag"}
+                  topKeysLimit={topKeysLimit}
+                  setTopKeysLimit={setTopKeysLimit}
+                />
+              </Card>
+            </div>
+
+            {/* Top Models */}
+            <div>
+              <Card className="p-6">
+                <h3 className="text-lg font-semibold">{entityType === "agent" ? "Top Agents" : "Top Models"}</h3>
+                <TopModelView
+                  topModels={getTopModels()}
+                  topModelsLimit={topModelsLimit}
+                  setTopModelsLimit={setTopModelsLimit}
+                />
+              </Card>
+            </div>
+
+            {/* Top Agents - only for team entity type */}
+            {entityType === "team" && (
+              <div className="col-span-2">
+                <Card className="p-6">
+                  <h3 className="text-lg font-semibold">Top Agents Driving Spend</h3>
+                  <TopModelView
+                    topModels={getTopAgents()}
+                    topModelsLimit={topAgentsLimit}
+                    setTopModelsLimit={setTopAgentsLimit}
+                  />
                 </Card>
-              </Col>
-            </Grid>
-          </TabPanel>
-          <TabPanel>
-            <ActivityMetrics modelMetrics={modelMetrics} hidePromptCachingMetrics={entityType === "agent"} />
-          </TabPanel>
-          {entityType === "team" ? (
-            <TabPanel>
-              <ActivityMetrics modelMetrics={agentMetrics} />
-            </TabPanel>
-          ) : (
-            <></>
-          )}
-          <TabPanel>
-            <ActivityMetrics modelMetrics={keyMetrics} hidePromptCachingMetrics={entityType === "agent"} />
-          </TabPanel>
-          <TabPanel>
-            <EndpointUsage userSpendData={spendData} />
-          </TabPanel>
-        </TabPanels>
-      </TabGroup>
+              </div>
+            )}
+
+            {/* Spend by Provider */}
+            <div className="col-span-2">
+              <Card className="p-6">
+                <div className="flex flex-col space-y-4">
+                  <h3 className="text-lg font-semibold">Provider Usage</h3>
+                  <div className="grid grid-cols-2">
+                    <div>
+                      <DonutChart
+                        className="mt-4 h-40"
+                        data={getProviderSpend()}
+                        index="provider"
+                        category="spend"
+                        valueFormatter={(value) => `$${formatNumberWithCommas(value, 2)}`}
+                        colors={["cyan", "blue", "indigo", "violet", "purple"]}
+                      />
+                    </div>
+                    <div>
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead>Provider</TableHead>
+                            <TableHead>Spend</TableHead>
+                            <TableHead className="text-green-600">Successful</TableHead>
+                            <TableHead className="text-red-600">Failed</TableHead>
+                            <TableHead>Tokens</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {getProviderSpend().map((provider) => (
+                            <TableRow key={provider.provider}>
+                              <TableCell>
+                                <div className="flex items-center space-x-2">
+                                  {provider.provider && (
+                                    <img
+                                      src={getProviderLogoAndName(provider.provider).logo}
+                                      alt={`${provider.provider} logo`}
+                                      className="w-4 h-4"
+                                      onError={(e) => {
+                                        const target = e.target as HTMLImageElement;
+                                        const parent = target.parentElement;
+                                        if (parent) {
+                                          const fallbackDiv = document.createElement("div");
+                                          fallbackDiv.className =
+                                            "w-4 h-4 rounded-full bg-muted flex items-center justify-center text-xs";
+                                          fallbackDiv.textContent = provider.provider?.charAt(0) || "-";
+                                          parent.replaceChild(fallbackDiv, target);
+                                        }
+                                      }}
+                                    />
+                                  )}
+                                  <span>{provider.provider}</span>
+                                </div>
+                              </TableCell>
+                              <TableCell>${formatNumberWithCommas(provider.spend, 2)}</TableCell>
+                              <TableCell className="text-green-600">
+                                {provider.successful_requests.toLocaleString()}
+                              </TableCell>
+                              <TableCell className="text-red-600">
+                                {provider.failed_requests.toLocaleString()}
+                              </TableCell>
+                              <TableCell>{provider.tokens.toLocaleString()}</TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </div>
+                  </div>
+                </div>
+              </Card>
+            </div>
+          </div>
+        </TabsContent>
+        <TabsContent value="model">
+          <ActivityMetrics modelMetrics={modelMetrics} hidePromptCachingMetrics={entityType === "agent"} />
+        </TabsContent>
+        {entityType === "team" && (
+          <TabsContent value="agent">
+            <ActivityMetrics modelMetrics={agentMetrics} />
+          </TabsContent>
+        )}
+        <TabsContent value="key">
+          <ActivityMetrics modelMetrics={keyMetrics} hidePromptCachingMetrics={entityType === "agent"} />
+        </TabsContent>
+        <TabsContent value="endpoint">
+          <EndpointUsage userSpendData={spendData} />
+        </TabsContent>
+      </Tabs>
     </div>
   );
 };

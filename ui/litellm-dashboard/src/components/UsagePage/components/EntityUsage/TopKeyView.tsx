@@ -2,7 +2,10 @@ import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { ChevronDown, ChevronUp, X } from "lucide-react";
 // eslint-disable-next-line litellm-ui/no-banned-ui-imports
 import { BarChart } from "@tremor/react";
-import { Segmented } from "antd";
+import {
+  ToggleGroup,
+  ToggleGroupItem,
+} from "@/components/ui/toggle-group";
 import {
   Tooltip,
   TooltipContent,
@@ -214,16 +217,20 @@ const TopKeyView: React.FC<TopKeyViewProps> = ({ topKeys, teams, showTags = fals
   return (
     <>
       <div className="mb-4 flex justify-between items-center">
-        <Segmented
-          options={[
-            { label: "5", value: 5 },
-            { label: "10", value: 10 },
-            { label: "25", value: 25 },
-            { label: "50", value: 50 },
-          ]}
-          value={topKeysLimit}
-          onChange={(value) => setTopKeysLimit(value as number)}
-        />
+        <ToggleGroup
+          type="single"
+          value={String(topKeysLimit)}
+          onValueChange={(v) => {
+            if (!v) return;
+            setTopKeysLimit(parseInt(v));
+          }}
+        >
+          {[5, 10, 25, 50].map((n) => (
+            <ToggleGroupItem key={n} value={String(n)}>
+              {n}
+            </ToggleGroupItem>
+          ))}
+        </ToggleGroup>
         <div className="flex space-x-2">
           <button
             type="button"

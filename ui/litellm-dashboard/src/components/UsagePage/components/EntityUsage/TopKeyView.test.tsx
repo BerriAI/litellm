@@ -35,6 +35,8 @@ describe("TopKeyView", () => {
   const mockTransformKeyInfo = vi.mocked(transformKeyInfo.transformKeyInfo);
 
   const mockAuth = {
+    isLoading: false,
+    isAuthorized: true,
     token: "mock-token",
     accessToken: "test-token",
     userId: "user-1",
@@ -43,7 +45,7 @@ describe("TopKeyView", () => {
     premiumUser: true,
     disabledPersonalKeyCreation: false,
     showSSOBanner: false,
-  };
+  } as any;
 
   const mockSetTopKeysLimit = vi.fn();
 
@@ -141,19 +143,12 @@ describe("TopKeyView", () => {
     expect(tableViewButton).toHaveClass("bg-blue-100");
   });
 
-  it("should call setTopKeysLimit when limit is changed via Segmented control", async () => {
+  it("should call setTopKeysLimit when limit is changed via ToggleGroup control", async () => {
     const user = userEvent.setup();
     render(<TopKeyView {...baseProps} />);
 
     const limit10Radio = screen.getByRole("radio", { name: "10" });
-    const limit10Label = limit10Radio.closest("label");
-    if (limit10Label) {
-      await user.click(limit10Label);
-    } else {
-      // Fallback: click the div with title="10"
-      const limit10Div = screen.getByTitle("10");
-      await user.click(limit10Div);
-    }
+    await user.click(limit10Radio);
 
     expect(mockSetTopKeysLimit).toHaveBeenCalledWith(10);
   });
