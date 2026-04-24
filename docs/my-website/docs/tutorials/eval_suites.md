@@ -274,7 +274,7 @@ Score(
     name='Factuality', 
     score=0, 
     metadata=
-        {'rationale': "The expert answer is 'India'.\nThe submitted answer is 'As of 2021, China has the highest population in the world with an estimated 1.4 billion people.'\nThe submitted answer mentions China as the country with the highest population, while the expert answer mentions India.\nThere is a disagreement between the submitted answer and the expert answer.", 
+        {'rationale': "The expected answer is 'India'.\nThe submitted answer is 'As of 2021, China has the highest population in the world with an estimated 1.4 billion people.'\nThe submitted answer mentions China as the country with the highest population, while the expected answer mentions India.\nThere is a disagreement between the submitted answer and the expected answer.", 
         'choice': 'D'
         }, 
     error=None
