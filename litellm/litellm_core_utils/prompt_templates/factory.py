@@ -15,6 +15,7 @@ import litellm.types
 import litellm.types.llms
 from litellm import verbose_logger
 from litellm._uuid import uuid
+from litellm.litellm_core_utils.url_utils import async_safe_get, safe_get
 from litellm.llms.custom_httpx.http_handler import HTTPHandler, get_async_httpx_client
 from litellm.types.files import get_file_extension_from_mime_type
 from litellm.types.llms.anthropic import *
@@ -1393,10 +1394,10 @@ def convert_to_gemini_tool_call_invoke(
         if tool_calls is not None:
             for idx, tool in enumerate(tool_calls):
                 if "function" in tool:
-                    gemini_function_call: Optional[
-                        VertexFunctionCall
-                    ] = _gemini_tool_call_invoke_helper(
-                        function_call_params=tool["function"]
+                    gemini_function_call: Optional[VertexFunctionCall] = (
+                        _gemini_tool_call_invoke_helper(
+                            function_call_params=tool["function"]
+                        )
                     )
                     if gemini_function_call is not None:
                         part_dict: VertexPartType = {
@@ -1574,9 +1575,7 @@ def convert_to_gemini_tool_call_result(  # noqa: PLR0915
                         file_data = (
                             file_content.get("file_data", "")
                             if isinstance(file_content, dict)
-                            else file_content
-                            if isinstance(file_content, str)
-                            else ""
+                            else file_content if isinstance(file_content, str) else ""
                         )
 
                     if file_data:
@@ -2081,9 +2080,9 @@ def _sanitize_empty_text_content(
         if isinstance(content, str):
             if not content or not content.strip():
                 message = cast(AllMessageValues, dict(message))  # Make a copy
-                message[
-                    "content"
-                ] = "[System: Empty message content sanitised to satisfy protocol]"
+                message["content"] = (
+                    "[System: Empty message content sanitised to satisfy protocol]"
+                )
                 verbose_logger.debug(
                     f"_sanitize_empty_text_content: Replaced empty text content in {message.get('role')} message"
                 )
@@ -2423,9 +2422,9 @@ def anthropic_messages_pt(  # noqa: PLR0915
                             # Convert ChatCompletionImageUrlObject to dict if needed
                             image_url_value = m["image_url"]
                             if isinstance(image_url_value, str):
-                                image_url_input: Union[
-                                    str, dict[str, Any]
-                                ] = image_url_value
+                                image_url_input: Union[str, dict[str, Any]] = (
+                                    image_url_value
+                                )
                             else:
                                 # ChatCompletionImageUrlObject or dict case - convert to dict
                                 image_url_input = {
@@ -2452,9 +2451,9 @@ def anthropic_messages_pt(  # noqa: PLR0915
                             )
 
                             if "cache_control" in _content_element:
-                                _anthropic_content_element[
-                                    "cache_control"
-                                ] = _content_element["cache_control"]
+                                _anthropic_content_element["cache_control"] = (
+                                    _content_element["cache_control"]
+                                )
                             user_content.append(_anthropic_content_element)
                         elif m.get("type", "") == "text":
                             m = cast(ChatCompletionTextObject, m)
@@ -2514,9 +2513,9 @@ def anthropic_messages_pt(  # noqa: PLR0915
                     )
 
                     if "cache_control" in _content_element:
-                        _anthropic_content_text_element[
-                            "cache_control"
-                        ] = _content_element["cache_control"]
+                        _anthropic_content_text_element["cache_control"] = (
+                            _content_element["cache_control"]
+                        )
 
                     user_content.append(_anthropic_content_text_element)
 
@@ -2649,9 +2648,9 @@ def anthropic_messages_pt(  # noqa: PLR0915
                         original_content_element=dict(assistant_content_block),
                     )
                     if "cache_control" in _content_element:
-                        _anthropic_text_content_element[
-                            "cache_control"
-                        ] = _content_element["cache_control"]
+                        _anthropic_text_content_element["cache_control"] = (
+                            _content_element["cache_control"]
+                        )
                     text_element = _anthropic_text_content_element
 
                 # Interleave: each thinking block precedes its server tool group.
@@ -2811,9 +2810,9 @@ def anthropic_messages_pt(  # noqa: PLR0915
                     )
 
                     if "cache_control" in _content_element:
-                        _anthropic_text_content_element[
-                            "cache_control"
-                        ] = _content_element["cache_control"]
+                        _anthropic_text_content_element["cache_control"] = (
+                            _content_element["cache_control"]
+                        )
 
                     assistant_content.append(_anthropic_text_content_element)
 
@@ -3326,7 +3325,7 @@ def _load_image_from_url(image_url):
     try:
         # Send a GET request to the image URL
         client = HTTPHandler(concurrent_limit=1)
-        response = client.get(image_url)
+        response = safe_get(client, image_url)
         response.raise_for_status()  # Raise an exception for HTTP errors
 
         # Check the response's content type to ensure it is an image
@@ -3564,7 +3563,7 @@ class BedrockImageProcessor:
                 params={"concurrent_limit": 1},
             )
             # Send a GET request to the image URL
-            response = await client.get(image_url, follow_redirects=True)
+            response = await async_safe_get(client, image_url)
             response.raise_for_status()  # Raise an exception for HTTP errors
 
             return BedrockImageProcessor._post_call_image_processing(
@@ -3579,7 +3578,7 @@ class BedrockImageProcessor:
         try:
             client = HTTPHandler(concurrent_limit=1)
             # Send a GET request to the image URL
-            response = client.get(image_url, follow_redirects=True)
+            response = safe_get(client, image_url)
             response.raise_for_status()  # Raise an exception for HTTP errors
 
             return BedrockImageProcessor._post_call_image_processing(

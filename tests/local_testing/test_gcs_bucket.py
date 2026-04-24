@@ -55,22 +55,25 @@ async def test_aaabasic_gcs_logger():
         )
         return {"kind": "storage#object", "name": object_name}
 
-    with patch(
-        "litellm.proxy.proxy_server.premium_user", True
-    ), patch.object(
-        GCSBucketLogger,
-        "construct_request_headers",
-        new_callable=AsyncMock,
-        return_value={"Authorization": "Bearer mock_token"},
-    ), patch.object(
-        GCSBucketLogger,
-        "get_gcs_logging_config",
-        new_callable=AsyncMock,
-        return_value=_make_mock_gcs_logging_config(),
-    ), patch.object(
-        GCSBucketLogger,
-        "_log_json_data_on_gcs",
-        mock_log_json_data_on_gcs,
+    with (
+        patch("litellm.proxy.proxy_server.premium_user", True),
+        patch.object(
+            GCSBucketLogger,
+            "construct_request_headers",
+            new_callable=AsyncMock,
+            return_value={"Authorization": "Bearer mock_token"},
+        ),
+        patch.object(
+            GCSBucketLogger,
+            "get_gcs_logging_config",
+            new_callable=AsyncMock,
+            return_value=_make_mock_gcs_logging_config(),
+        ),
+        patch.object(
+            GCSBucketLogger,
+            "_log_json_data_on_gcs",
+            mock_log_json_data_on_gcs,
+        ),
     ):
         gcs_logger = GCSBucketLogger()
 
@@ -123,9 +126,9 @@ async def test_aaabasic_gcs_logger():
 
         await asyncio.sleep(3)
 
-        assert len(captured_payloads) == 1, (
-            f"Expected 1 GCS upload, got {len(captured_payloads)}"
-        )
+        assert (
+            len(captured_payloads) == 1
+        ), f"Expected 1 GCS upload, got {len(captured_payloads)}"
 
         gcs_payload = captured_payloads[0]["logging_payload"]
 
@@ -173,22 +176,25 @@ async def test_basic_gcs_logger_failure():
 
     gcs_log_id = f"failure-test-{uuid.uuid4().hex}"
 
-    with patch(
-        "litellm.proxy.proxy_server.premium_user", True
-    ), patch.object(
-        GCSBucketLogger,
-        "construct_request_headers",
-        new_callable=AsyncMock,
-        return_value={"Authorization": "Bearer mock_token"},
-    ), patch.object(
-        GCSBucketLogger,
-        "get_gcs_logging_config",
-        new_callable=AsyncMock,
-        return_value=_make_mock_gcs_logging_config(),
-    ), patch.object(
-        GCSBucketLogger,
-        "_log_json_data_on_gcs",
-        mock_log_json_data_on_gcs,
+    with (
+        patch("litellm.proxy.proxy_server.premium_user", True),
+        patch.object(
+            GCSBucketLogger,
+            "construct_request_headers",
+            new_callable=AsyncMock,
+            return_value={"Authorization": "Bearer mock_token"},
+        ),
+        patch.object(
+            GCSBucketLogger,
+            "get_gcs_logging_config",
+            new_callable=AsyncMock,
+            return_value=_make_mock_gcs_logging_config(),
+        ),
+        patch.object(
+            GCSBucketLogger,
+            "_log_json_data_on_gcs",
+            mock_log_json_data_on_gcs,
+        ),
     ):
         gcs_logger = GCSBucketLogger()
 
@@ -247,9 +253,9 @@ async def test_basic_gcs_logger_failure():
 
         await asyncio.sleep(3)
 
-        assert len(captured_payloads) == 1, (
-            f"Expected 1 GCS upload, got {len(captured_payloads)}"
-        )
+        assert (
+            len(captured_payloads) == 1
+        ), f"Expected 1 GCS upload, got {len(captured_payloads)}"
 
         gcs_payload = captured_payloads[0]["logging_payload"]
 

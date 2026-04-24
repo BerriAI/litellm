@@ -164,6 +164,7 @@ MCP_STDIO_ALLOWED_COMMANDS: frozenset = frozenset(
 LITELLM_UI_ALLOW_HEADERS = [
     "x-litellm-semantic-filter",
     "x-litellm-semantic-filter-tools",
+    "x-litellm-adaptive-router-model",
 ]
 
 # Gemini model-specific minimal thinking budget constants
@@ -1360,6 +1361,25 @@ try:
     )
 except (ValueError, TypeError):
     BACKGROUND_HEALTH_CHECK_MAX_TOKENS = None
+
+
+_background_health_check_max_tokens_reasoning_env = os.getenv(
+    "BACKGROUND_HEALTH_CHECK_MAX_TOKENS_REASONING"
+)
+try:
+    _raw_background_health_check_max_tokens_reasoning = (
+        _background_health_check_max_tokens_reasoning_env.strip()
+        if _background_health_check_max_tokens_reasoning_env is not None
+        else ""
+    )
+    BACKGROUND_HEALTH_CHECK_MAX_TOKENS_REASONING: Optional[int] = (
+        int(_raw_background_health_check_max_tokens_reasoning)
+        if _raw_background_health_check_max_tokens_reasoning
+        else None
+    )
+except (ValueError, TypeError):
+    BACKGROUND_HEALTH_CHECK_MAX_TOKENS_REASONING = None
+
 LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME = "litellm-internal-health-check"
 LITTELM_CLI_SERVICE_ACCOUNT_NAME = "litellm-cli"
 LITELLM_INTERNAL_JOBS_SERVICE_ACCOUNT_NAME = "litellm_internal_jobs"
