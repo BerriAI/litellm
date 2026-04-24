@@ -22,7 +22,9 @@ class TestNonStreaming:
         request = httpx.Request(
             method="POST",
             url="https://api.openai.com/v1/chat/completions",
-            content=json.dumps({"model": "gpt-4o", "messages": [{"role": "user", "content": "hi"}]}),
+            content=json.dumps(
+                {"model": "gpt-4o", "messages": [{"role": "user", "content": "hi"}]}
+            ),
         )
         response = transport.handle_request(request)
         assert response.status_code == 200
@@ -40,7 +42,12 @@ class TestNonStreaming:
         request = httpx.Request(
             method="POST",
             url="https://api.openai.com/v1/chat/completions",
-            content=json.dumps({"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hi"}]}),
+            content=json.dumps(
+                {
+                    "model": "gpt-4o-mini",
+                    "messages": [{"role": "user", "content": "hi"}],
+                }
+            ),
         )
         response = await transport.handle_async_request(request)
         assert response.status_code == 200

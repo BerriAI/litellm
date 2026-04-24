@@ -479,8 +479,8 @@ For Gemini 3 Pro Preview, LiteLLM automatically maps `reasoning_effort` to the n
 | `"none"` | `"low"` | Gemini 3 cannot fully disable thinking |
 
 #### Default Behavior
+LiteLLM **does not** set `thinking_level` when you omit `reasoning_effort`. The Gemini API applies its **native defaults**, matching a direct call to Google.
 
-If you don't specify `reasoning_effort`, LiteLLM automatically sets `thinking_level="low"` for Gemini 3 models, to avoid high costs. 
 
 ### Example Usage
 
@@ -542,7 +542,7 @@ curl http://localhost:4000/v1/chat/completions \
    - Degraded reasoning performance
    - Failure on complex tasks
 
-3. **Automatic Defaults**: If you don't specify `reasoning_effort`, LiteLLM automatically sets `thinking_level="low"` for optimal performance.
+3. **Thinking defaults come from the API**: If you omit `reasoning_effort`, LiteLLM does **not** override `thinking_level`. Set `reasoning_effort` or native thinking parameters when you want a predictable cost or latency profile (for example `reasoning_effort="low"` for lighter reasoning).
 
 ## Cost Tracking: Prompt Caching & Context Window
 
