@@ -1584,9 +1584,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         extra_content: Optional[str] = (
             json_msg.content if json_msg is not None else None
         )
-        filtered_tools = [
-            t for i, t in enumerate(tool_calls) if i not in json_indices
-        ]
+        filtered_tools = [t for i, t in enumerate(tool_calls) if i not in json_indices]
         return None, filtered_tools, extra_content
 
     def _transform_response_for_json_mode(
