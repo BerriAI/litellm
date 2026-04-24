@@ -86,10 +86,10 @@ describe("ComparisonPanel", () => {
   it("should call onRemove when remove button is clicked", async () => {
     const user = userEvent.setup();
     const onRemove = vi.fn();
-    const { container } = render(<ComparisonPanel {...mockProps} onRemove={onRemove} />);
-    const removeButton = container.querySelector('button[class*="text-red-600"]');
+    const { getByRole } = render(<ComparisonPanel {...mockProps} onRemove={onRemove} />);
+    const removeButton = getByRole("button", { name: /remove/i });
     expect(removeButton).toBeInTheDocument();
-    await user.click(removeButton!);
+    await user.click(removeButton);
     expect(onRemove).toHaveBeenCalledTimes(1);
   });
 });
