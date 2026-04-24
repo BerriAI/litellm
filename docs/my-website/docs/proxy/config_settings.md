@@ -607,6 +607,11 @@ router_settings:
 | MCP_OAUTH2_TOKEN_EXPIRY_BUFFER_SECONDS | Seconds to subtract from token expiry when computing cache TTL. Default is 60
 | MCP_PER_USER_TOKEN_DEFAULT_TTL | Default TTL in seconds for per-user MCP OAuth tokens stored in Redis. Default is 43200 (12 hours)
 | MCP_PER_USER_TOKEN_EXPIRY_BUFFER_SECONDS | Seconds to subtract from per-user MCP OAuth token expiry when computing Redis TTL. Default is 60
+| MAVVRIK_API_KEY | API key for Mavvrik cost analytics integration
+| MAVVRIK_API_ENDPOINT | Base URL for Mavvrik API endpoint
+| MAVVRIK_CONNECTION_ID | Connection ID for Mavvrik data submission
+| MAVVRIK_EXPORT_INTERVAL_MINUTES | Interval in minutes between Mavvrik cost data exports. Default is 60
+| MAVVRIK_MAX_FETCHED_DATA_RECORDS | Maximum number of spend records to fetch per Mavvrik export cycle. Default is 50000
 | DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT | Default token count for mock response completions. Default is 20
 | DEFAULT_MOCK_RESPONSE_PROMPT_TOKEN_COUNT | Default token count for mock response prompts. Default is 10
 | DEFAULT_MODEL_CREATED_AT_TIME | Default creation timestamp for models. Default is 1677610602
