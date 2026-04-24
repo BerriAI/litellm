@@ -5847,10 +5847,15 @@ async def initialize(  # noqa: PLR0915
             if litellm_log_setting.upper() == "INFO":
                 import logging
 
-                from litellm._logging import verbose_proxy_logger, verbose_router_logger
+                from litellm._logging import (
+                    verbose_logger,
+                    verbose_proxy_logger,
+                    verbose_router_logger,
+                )
 
                 # this must ALWAYS remain logging.INFO, DO NOT MODIFY THIS
 
+                verbose_logger.setLevel(level=logging.INFO)  # set package log to info
                 verbose_router_logger.setLevel(
                     level=logging.INFO
                 )  # set router logs to info
