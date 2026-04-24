@@ -8,6 +8,7 @@ The fix ensures that router.embedding() calls _update_kwargs_before_fallbacks()
 just like router.completion() does, which properly sets up metadata and allows
 default_litellm_params (including headers) to be propagated.
 """
+
 import os
 import sys
 from unittest.mock import MagicMock, patch, AsyncMock

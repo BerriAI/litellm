@@ -5,6 +5,7 @@ This tests the fix for https://github.com/BerriAI/litellm/issues/19478
 where images from models like gemini-2.5-flash-image were lost when
 rebuilding the response from streaming chunks.
 """
+
 import pytest
 import litellm
 from litellm import stream_chunk_builder
@@ -41,10 +42,10 @@ def test_stream_chunk_builder_preserves_images():
                             {
                                 "image_url": {
                                     "url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
-                                    "detail": "auto"
+                                    "detail": "auto",
                                 },
                                 "index": 0,
-                                "type": "image_url"
+                                "type": "image_url",
                             }
                         ],
                     },
@@ -77,7 +78,9 @@ def test_stream_chunk_builder_preserves_images():
     response = stream_chunk_builder(chunks=chunks)
 
     # Verify that images are preserved in the rebuilt response
-    assert response.choices[0].message.images is not None, "Images should be preserved in stream_chunk_builder"
+    assert (
+        response.choices[0].message.images is not None
+    ), "Images should be preserved in stream_chunk_builder"
     assert len(response.choices[0].message.images) == 1, "Should have exactly 1 image"
     assert response.choices[0].message.images[0]["type"] == "image_url"
     assert "base64" in response.choices[0].message.images[0]["image_url"]["url"]
@@ -112,9 +115,12 @@ def test_stream_chunk_builder_preserves_multiple_images():
                     "delta": {
                         "images": [
                             {
-                                "image_url": {"url": "data:image/png;base64,image1data", "detail": "auto"},
+                                "image_url": {
+                                    "url": "data:image/png;base64,image1data",
+                                    "detail": "auto",
+                                },
                                 "index": 0,
-                                "type": "image_url"
+                                "type": "image_url",
                             }
                         ],
                     },
@@ -133,9 +139,12 @@ def test_stream_chunk_builder_preserves_multiple_images():
                     "delta": {
                         "images": [
                             {
-                                "image_url": {"url": "data:image/png;base64,image2data", "detail": "auto"},
+                                "image_url": {
+                                    "url": "data:image/png;base64,image2data",
+                                    "detail": "auto",
+                                },
                                 "index": 1,
-                                "type": "image_url"
+                                "type": "image_url",
                             }
                         ],
                     },
@@ -238,5 +247,5 @@ def test_stream_chunk_builder_no_images():
     assert response.choices[0].message.content == "Hello, world!"
 
     # Verify images attribute doesn't exist or is None (no images in this stream)
-    images = getattr(response.choices[0].message, 'images', None)
+    images = getattr(response.choices[0].message, "images", None)
     assert images is None, "Should not have images when none were in the stream"

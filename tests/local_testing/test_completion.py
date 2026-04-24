@@ -2366,7 +2366,6 @@ def test_azure_openai_ad_token():
 # test_azure_openai_ad_token()
 
 
-
 def test_completion_azure2():
     # test if we can pass api_base, api_version and api_key in compleition()
     try:
@@ -2486,8 +2485,6 @@ def test_completion_azure_with_litellm_key():
 
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-
-
 
 
 import asyncio
@@ -3261,9 +3258,7 @@ def test_completion_deep_infra(drop_params):
             Choice(
                 finish_reason="stop",
                 index=0,
-                message=ChatCompletionMessage(
-                    content="It's sunny.", role="assistant"
-                ),
+                message=ChatCompletionMessage(content="It's sunny.", role="assistant"),
             )
         ],
         created=1234567890,
@@ -3345,9 +3340,7 @@ def test_completion_deep_infra_mistral():
             Choice(
                 finish_reason="stop",
                 index=0,
-                message=ChatCompletionMessage(
-                    content="Hello!", role="assistant"
-                ),
+                message=ChatCompletionMessage(content="Hello!", role="assistant"),
             )
         ],
         created=1234567890,

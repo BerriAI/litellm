@@ -160,9 +160,10 @@ def test_get_redis_async_client_with_connection_pool():
     mock_pool = MagicMock(spec=async_redis.BlockingConnectionPool)
 
     # Mock the Redis client creation
-    with patch("litellm._redis.async_redis.Redis") as mock_redis, patch(
-        "litellm._redis._get_redis_client_logic"
-    ) as mock_logic:
+    with (
+        patch("litellm._redis.async_redis.Redis") as mock_redis,
+        patch("litellm._redis._get_redis_client_logic") as mock_logic,
+    ):
 
         # Configure mock to return basic redis kwargs
         mock_logic.return_value = {"host": "localhost", "port": 6379, "db": 0}
@@ -182,9 +183,10 @@ def test_get_redis_async_client_with_connection_pool():
 
 def test_get_redis_async_client_without_connection_pool():
     """Test that Redis client works without connection_pool parameter"""
-    with patch("litellm._redis.async_redis.Redis") as mock_redis, patch(
-        "litellm._redis._get_redis_client_logic"
-    ) as mock_logic:
+    with (
+        patch("litellm._redis.async_redis.Redis") as mock_redis,
+        patch("litellm._redis._get_redis_client_logic") as mock_logic,
+    ):
 
         # Configure mock to return basic redis kwargs
         mock_logic.return_value = {"host": "localhost", "port": 6379, "db": 0}
@@ -248,8 +250,9 @@ def test_get_redis_async_client_gcp_cluster_uses_credential_provider():
         "redis_connect_func": mock_connect_func,
     }
 
-    with patch("litellm._redis.async_redis.RedisCluster") as mock_cluster, patch(
-        "litellm._redis._get_redis_client_logic", return_value=redis_kwargs
+    with (
+        patch("litellm._redis.async_redis.RedisCluster") as mock_cluster,
+        patch("litellm._redis._get_redis_client_logic", return_value=redis_kwargs),
     ):
         get_redis_async_client()
 

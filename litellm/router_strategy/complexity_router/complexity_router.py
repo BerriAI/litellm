@@ -8,6 +8,7 @@ No external API calls - all scoring is local and <1ms.
 
 Inspired by ClawRouter: https://github.com/BlockRunAI/ClawRouter
 """
+
 import re
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
@@ -331,45 +332,68 @@ class ComplexityRouter(CustomLogger):
             f"No model configured for tier {tier_key} and no default_model set"
         )
 
-    async def async_pre_routing_hook(
+    def _resolve_messages(
         self,
-        model: str,
+        messages: Optional[List[Dict[str, Any]]],
         request_kwargs: Dict,
-        messages: Optional[List[Dict[str, Any]]] = None,
-        input: Optional[Union[str, List]] = None,
-        specific_deployment: Optional[bool] = False,
-    ) -> Optional["PreRoutingHookResponse"]:
+    ) -> Optional[List[Dict[str, Any]]]:
         """
-        Pre-routing hook called before the routing decision.
+        Resolve messages from the request, converting from other formats if needed.
 
-        Classifies the request by complexity and returns the appropriate model.
-
-        Args:
-            model: The original model name requested.
-            request_kwargs: The request kwargs.
-            messages: The messages in the request.
-            input: Optional input for embeddings.
-            specific_deployment: Whether a specific deployment was requested.
-
-        Returns:
-            PreRoutingHookResponse with the routed model, or None if no routing needed.
+        Uses the guardrail translation handler dispatch to convert Responses API
+        ``input`` (or other non-chat-completions formats) into OpenAI-spec messages.
         """
-        from litellm.types.router import PreRoutingHookResponse
+        if messages:
+            return messages
 
-        if messages is None or len(messages) == 0:
-            verbose_router_logger.debug(
-                "ComplexityRouter: No messages provided, skipping routing"
-            )
-            return None
+        from litellm.litellm_core_utils.api_route_to_call_types import (
+            get_call_types_for_route,
+        )
+        from litellm.llms import load_guardrail_translation_mappings
+        from litellm.types.utils import CallTypes
 
-        # Extract the last user message and the last system prompt
+        mappings = load_guardrail_translation_mappings()
+        call_type: Optional[CallTypes] = None
+
+        # 1. Try route-based inference from proxy metadata
+        route = request_kwargs.get("litellm_metadata", {}).get(
+            "user_api_key_request_route"
+        )
+        if route:
+            call_types_list = get_call_types_for_route(route)
+            if call_types_list:
+                for ct in call_types_list:
+                    if ct in mappings:
+                        call_type = ct
+                        break
+
+        # 2. Fallback: try each mapped handler until one produces messages
+        handlers_to_try: List[Any] = []
+        if call_type is not None and call_type in mappings:
+            handlers_to_try.append(mappings[call_type]())
+        else:
+            handlers_to_try.extend(handler_cls() for handler_cls in mappings.values())
+
+        for handler in handlers_to_try:
+            structured = handler.get_structured_messages(request_kwargs)
+            if structured:
+                return [
+                    msg if isinstance(msg, dict) else msg.model_dump()  # type: ignore
+                    for msg in structured
+                ]
+        return None
+
+    @staticmethod
+    def _extract_user_message_and_system_prompt(
+        messages: List[Dict[str, Any]],
+    ) -> Tuple[Optional[str], Optional[str]]:
+        """Extract the last user message text and last system prompt from messages."""
         user_message: Optional[str] = None
         system_prompt: Optional[str] = None
 
         for msg in reversed(messages):
             role = msg.get("role", "")
             content = msg.get("content") or ""
-            # content may be a list of content parts (e.g. [{"type": "text", "text": "..."}])
             if isinstance(content, list):
                 text_parts = [
                     part.get("text", "")
@@ -382,6 +406,52 @@ class ComplexityRouter(CustomLogger):
                     user_message = content
                 elif role == "system" and system_prompt is None:
                     system_prompt = content
+            if user_message is not None and system_prompt is not None:
+                break
+
+        return user_message, system_prompt
+
+    async def async_pre_routing_hook(
+        self,
+        model: str,
+        request_kwargs: Dict,
+        messages: Optional[List[Dict[str, Any]]] = None,
+        input: Optional[Union[str, List]] = None,
+        specific_deployment: Optional[bool] = False,
+    ) -> Optional["PreRoutingHookResponse"]:
+        """
+        Pre-routing hook called before the routing decision.
+
+        Classifies the request by complexity and returns the appropriate model.
+        Supports chat completions (messages), Responses API (input), and other
+        formats via the guardrail translation handler dispatch.
+
+        Args:
+            model: The original model name requested.
+            request_kwargs: The request kwargs.
+            messages: The messages in the request.
+            input: Optional input for Responses API or embeddings.
+            specific_deployment: Whether a specific deployment was requested.
+
+        Returns:
+            PreRoutingHookResponse with the routed model, or None if no routing needed.
+        """
+        from litellm.types.router import PreRoutingHookResponse
+
+        resolved_messages = self._resolve_messages(messages, request_kwargs)
+
+        if not resolved_messages:
+            verbose_router_logger.debug(
+                "ComplexityRouter: No messages could be resolved, skipping routing"
+            )
+            return None
+
+        # Determine whether the original request used messages directly
+        has_original_messages = messages is not None and len(messages) > 0
+
+        user_message, system_prompt = self._extract_user_message_and_system_prompt(
+            resolved_messages
+        )
 
         if user_message is None:
             verbose_router_logger.debug(
@@ -390,13 +460,10 @@ class ComplexityRouter(CustomLogger):
             return PreRoutingHookResponse(
                 model=self.config.default_model
                 or self.get_model_for_tier(ComplexityTier.MEDIUM),
-                messages=messages,
+                messages=messages if has_original_messages else None,
             )
 
-        # Classify the request
         tier, score, signals = self.classify(user_message, system_prompt)
-
-        # Get the model for this tier
         routed_model = self.get_model_for_tier(tier)
 
         verbose_router_logger.info(
@@ -406,5 +473,5 @@ class ComplexityRouter(CustomLogger):
 
         return PreRoutingHookResponse(
             model=routed_model,
-            messages=messages,
+            messages=messages if has_original_messages else None,
         )

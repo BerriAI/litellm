@@ -8,7 +8,10 @@ import pytest
 
 from starlette.exceptions import HTTPException
 from litellm.types.utils import GenericGuardrailAPIInputs
-from litellm.proxy.guardrails.guardrail_registry import guardrail_initializer_registry, guardrail_class_registry
+from litellm.proxy.guardrails.guardrail_registry import (
+    guardrail_initializer_registry,
+    guardrail_class_registry,
+)
 from litellm.proxy.guardrails.guardrail_hooks.akto.akto import AktoGuardrail
 
 
@@ -83,14 +86,18 @@ def sample_request_data() -> dict:
 def _mock_allowed_response():
     mock = MagicMock(spec=httpx.Response)
     mock.status_code = 200
-    mock.json.return_value = {"data": {"guardrailsResult": {"Allowed": True, "Reason": ""}}}
+    mock.json.return_value = {
+        "data": {"guardrailsResult": {"Allowed": True, "Reason": ""}}
+    }
     return mock
 
 
 def _mock_blocked_response(reason="Prompt injection detected"):
     mock = MagicMock(spec=httpx.Response)
     mock.status_code = 200
-    mock.json.return_value = {"data": {"guardrailsResult": {"Allowed": False, "Reason": reason}}}
+    mock.json.return_value = {
+        "data": {"guardrailsResult": {"Allowed": False, "Reason": reason}}
+    }
     return mock
 
 
@@ -174,7 +181,9 @@ def test_background_tasks_per_instance():
 
 
 def test_build_akto_payload_format(akto_validate, sample_inputs, sample_request_data):
-    payload = akto_validate.build_akto_payload(sample_inputs, sample_request_data, include_response=False)
+    payload = akto_validate.build_akto_payload(
+        sample_inputs, sample_request_data, include_response=False
+    )
 
     assert payload["path"] == "/v1/chat/completions"
     assert payload["method"] == "POST"
@@ -202,8 +211,12 @@ def test_build_akto_payload_format(akto_validate, sample_inputs, sample_request_
     assert len(payload["time"]) >= 13
 
 
-def test_build_akto_payload_with_response(akto_validate, sample_inputs, sample_request_data):
-    payload = akto_validate.build_akto_payload(sample_inputs, sample_request_data, include_response=True)
+def test_build_akto_payload_with_response(
+    akto_validate, sample_inputs, sample_request_data
+):
+    payload = akto_validate.build_akto_payload(
+        sample_inputs, sample_request_data, include_response=True
+    )
     resp_wrapper = json.loads(payload["responsePayload"])
     resp_body = json.loads(resp_wrapper["body"])
     assert "choices" in resp_body
@@ -218,7 +231,9 @@ def test_build_akto_payload_custom_account_ids(sample_inputs, sample_request_dat
         guardrail_name="custom-ids-test",
         event_hook="pre_call",
     )
-    payload = g.build_akto_payload(sample_inputs, sample_request_data, include_response=False)
+    payload = g.build_akto_payload(
+        sample_inputs, sample_request_data, include_response=False
+    )
     assert payload["akto_account_id"] == "9999"
     assert payload["akto_vxlan_id"] == "7"
 
@@ -246,7 +261,9 @@ def test_build_query_params():
 def test_handle_guardrail_response_allowed():
     mock_resp = MagicMock(spec=httpx.Response)
     mock_resp.status_code = 200
-    mock_resp.json.return_value = {"data": {"guardrailsResult": {"Allowed": True, "Reason": ""}}}
+    mock_resp.json.return_value = {
+        "data": {"guardrailsResult": {"Allowed": True, "Reason": ""}}
+    }
     allowed, reason = AktoGuardrail.handle_guardrail_response(mock_resp)
     assert allowed is True
     assert reason == ""
@@ -255,7 +272,9 @@ def test_handle_guardrail_response_allowed():
 def test_handle_guardrail_response_blocked():
     mock_resp = MagicMock(spec=httpx.Response)
     mock_resp.status_code = 200
-    mock_resp.json.return_value = {"data": {"guardrailsResult": {"Allowed": False, "Reason": "PII detected"}}}
+    mock_resp.json.return_value = {
+        "data": {"guardrailsResult": {"Allowed": False, "Reason": "PII detected"}}
+    }
     allowed, reason = AktoGuardrail.handle_guardrail_response(mock_resp)
     assert allowed is False
     assert reason == "PII detected"
@@ -364,13 +383,19 @@ async def test_pre_call_blocked(akto_validate, sample_inputs, sample_request_dat
 
     assert akto_validate.async_handler.post.call_count == 2
 
-    first_call_params = akto_validate.async_handler.post.call_args_list[0].kwargs["params"]
+    first_call_params = akto_validate.async_handler.post.call_args_list[0].kwargs[
+        "params"
+    ]
     assert first_call_params.get("guardrails") == "true"
 
-    second_call_params = akto_validate.async_handler.post.call_args_list[1].kwargs["params"]
+    second_call_params = akto_validate.async_handler.post.call_args_list[1].kwargs[
+        "params"
+    ]
     assert second_call_params.get("ingest_data") == "true"
     assert "guardrails" not in second_call_params
-    second_payload = json.loads(akto_validate.async_handler.post.call_args_list[1].kwargs["data"])
+    second_payload = json.loads(
+        akto_validate.async_handler.post.call_args_list[1].kwargs["data"]
+    )
     assert second_payload["statusCode"] == "403"
     resp_body = json.loads(second_payload["responsePayload"])
     inner = json.loads(resp_body["body"])
@@ -384,7 +409,9 @@ async def test_pre_call_blocked(akto_validate, sample_inputs, sample_request_dat
 
 
 @pytest.mark.asyncio
-async def test_validate_response_noop(akto_validate, sample_inputs, sample_request_data):
+async def test_validate_response_noop(
+    akto_validate, sample_inputs, sample_request_data
+):
     akto_validate.async_handler.post = AsyncMock()
 
     result = await akto_validate.apply_guardrail(
@@ -455,10 +482,14 @@ async def test_fail_open_on_unreachable():
         guardrail_name="fail-open-test",
         event_hook="pre_call",
     )
-    g.async_handler.post = AsyncMock(side_effect=httpx.ConnectError("Connection refused"))
+    g.async_handler.post = AsyncMock(
+        side_effect=httpx.ConnectError("Connection refused")
+    )
 
     inputs = GenericGuardrailAPIInputs(texts=["test"], model="gpt-4")
-    result = await g.apply_guardrail(inputs=inputs, request_data={}, input_type="request")
+    result = await g.apply_guardrail(
+        inputs=inputs, request_data={}, input_type="request"
+    )
 
     assert result.get("texts") == ["test"]
 
@@ -472,7 +503,9 @@ async def test_fail_closed_on_unreachable():
         guardrail_name="fail-closed-test",
         event_hook="pre_call",
     )
-    g.async_handler.post = AsyncMock(side_effect=httpx.ConnectError("Connection refused"))
+    g.async_handler.post = AsyncMock(
+        side_effect=httpx.ConnectError("Connection refused")
+    )
 
     inputs = GenericGuardrailAPIInputs(texts=["test"], model="gpt-4")
     with pytest.raises(HTTPException) as exc_info:
@@ -503,7 +536,9 @@ def test_fail_closed_generic_message():
 
 
 def test_extract_request_path_from_metadata():
-    path = AktoGuardrail.extract_request_path({"metadata": {"user_api_key_request_route": "/v1/embeddings"}})
+    path = AktoGuardrail.extract_request_path(
+        {"metadata": {"user_api_key_request_route": "/v1/embeddings"}}
+    )
     assert path == "/v1/embeddings"
 
 
@@ -519,7 +554,9 @@ def test_extract_request_path_non_dict_metadata():
 
 def test_resolve_metadata_value():
     assert (
-        AktoGuardrail.resolve_metadata_value({"metadata": {"user_api_key_user_id": "u1"}}, "user_api_key_user_id")
+        AktoGuardrail.resolve_metadata_value(
+            {"metadata": {"user_api_key_user_id": "u1"}}, "user_api_key_user_id"
+        )
         == "u1"
     )
     assert (

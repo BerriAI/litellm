@@ -10,6 +10,7 @@ Supported Providers:
 - Vertex AI (`vertex_ai/`, `vertex_ai_beta/`)
 - Bedrock (`bedrock/`, `bedrock/invoke/`, `bedrock/converse`) ([All models bedrock supports prompt caching on](https://docs.aws.amazon.com/bedrock/latest/userguide/prompt-caching.html))
 - Deepseek API (`deepseek/`)
+- xAI (`xai/`)
 
 For the supported providers, LiteLLM follows the OpenAI prompt caching usage object format:
 
