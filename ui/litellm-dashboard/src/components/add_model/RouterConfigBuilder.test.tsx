@@ -103,7 +103,7 @@ describe("RouterConfigBuilder", () => {
       expect(screen.getByText("Route 1: gpt-4")).toBeInTheDocument();
     });
 
-    const deleteButton = screen.getByRole("button", { name: "delete" });
+    const deleteButton = screen.getByRole("button", { name: /remove route/i });
     await user.click(deleteButton);
 
     await waitFor(() => {
@@ -131,7 +131,7 @@ describe("RouterConfigBuilder", () => {
       expect(screen.getByText("Route 1: gpt-4")).toBeInTheDocument();
     });
 
-    const deleteButton = screen.getByRole("button", { name: "delete" });
+    const deleteButton = screen.getByRole("button", { name: /remove route/i });
     await user.click(deleteButton);
 
     await waitFor(() => {

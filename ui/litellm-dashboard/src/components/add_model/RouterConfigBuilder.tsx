@@ -1,7 +1,21 @@
-import { Info, Plus, Trash2 } from "lucide-react";
-import { Select as AntdSelect, Collapse, Empty, InputNumber } from "antd";
+import { Info, Plus, Trash2, X } from "lucide-react";
+import {
+  Accordion,
+  AccordionContent,
+  AccordionItem,
+  AccordionTrigger,
+} from "@/components/ui/accordion";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import {
   Tooltip,
@@ -50,12 +64,77 @@ interface RouterConfigBuilderProps {
   onChange?: (config: any) => void;
 }
 
+function UtterancesInput({
+  value,
+  onChange,
+}: {
+  value: string[];
+  onChange: (next: string[]) => void;
+}) {
+  const [draft, setDraft] = useState("");
+
+  const addValues = (input: string) => {
+    const parts = input
+      .split(/[\n]/)
+      .map((part) => part.trim())
+      .filter((part) => part.length > 0);
+    if (parts.length === 0) return;
+    const next = [...value];
+    for (const part of parts) {
+      if (!next.includes(part)) {
+        next.push(part);
+      }
+    }
+    onChange(next);
+  };
+
+  return (
+    <div className="space-y-2">
+      <Input
+        value={draft}
+        placeholder="Type an utterance and press Enter..."
+        onChange={(e) => setDraft(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            addValues(draft);
+            setDraft("");
+          }
+        }}
+        onPaste={(e) => {
+          const text = e.clipboardData.getData("text");
+          if (text.includes("\n")) {
+            e.preventDefault();
+            addValues(text);
+            setDraft("");
+          }
+        }}
+      />
+      {value.length > 0 && (
+        <div className="flex flex-wrap gap-1">
+          {value.map((u) => (
+            <Badge key={u} variant="secondary" className="gap-1">
+              <span>{u}</span>
+              <button
+                type="button"
+                aria-label={`Remove ${u}`}
+                onClick={() => onChange(value.filter((x) => x !== u))}
+              >
+                <X className="h-3 w-3" />
+              </button>
+            </Badge>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 const RouterConfigBuilder: React.FC<RouterConfigBuilderProps> = ({ modelInfo, value, onChange }) => {
   const [routes, setRoutes] = useState<Route[]>([]);
   const [showJsonPreview, setShowJsonPreview] = useState<boolean>(false);
   const [expandedRoutes, setExpandedRoutes] = useState<string[]>([]);
 
-  // Initialize routes from value prop - preserve existing route IDs to avoid focus loss when parent re-renders
   useEffect(() => {
     const routesFromValue = value?.routes;
     if (routesFromValue) {
@@ -67,7 +146,7 @@ const RouterConfigBuilder: React.FC<RouterConfigBuilderProps> = ({ modelInfo, va
           routeIds.push(id);
           return {
             id,
-            model: route.name || route.model || "", // handle both 'name' and 'model' fields
+            model: route.name || route.model || "",
             utterances: route.utterances || [],
             description: route.description || "",
             score_threshold: route.score_threshold ?? 0.5,
@@ -82,7 +161,6 @@ const RouterConfigBuilder: React.FC<RouterConfigBuilderProps> = ({ modelInfo, va
     }
   }, [value]);
 
-  // Handle adding a new route
   const addRoute = () => {
     const newRouteId = `route-${Date.now()}`;
     const newRoute: Route = {
@@ -95,27 +173,22 @@ const RouterConfigBuilder: React.FC<RouterConfigBuilderProps> = ({ modelInfo, va
     const updatedRoutes = [...routes, newRoute];
     setRoutes(updatedRoutes);
     updateConfig(updatedRoutes);
-    // Automatically expand the new route
     setExpandedRoutes((prev) => [...prev, newRouteId]);
   };
 
-  // Handle removing a route
   const removeRoute = (routeId: string) => {
     const updatedRoutes = routes.filter((route) => route.id !== routeId);
     setRoutes(updatedRoutes);
     updateConfig(updatedRoutes);
-    // Remove from expanded routes as well
     setExpandedRoutes((prev) => prev.filter((id) => id !== routeId));
   };
 
-  // Handle updating a route
   const updateRoute = (routeId: string, field: keyof Route, value: any) => {
     const updatedRoutes = routes.map((route) => (route.id === routeId ? { ...route, [field]: value } : route));
     setRoutes(updatedRoutes);
     updateConfig(updatedRoutes);
   };
 
-  // Update the overall configuration
   const updateConfig = (updatedRoutes: Route[]) => {
     const config = {
       routes: updatedRoutes.map((route) => ({
@@ -127,21 +200,6 @@ const RouterConfigBuilder: React.FC<RouterConfigBuilderProps> = ({ modelInfo, va
     };
     onChange?.(config);
   };
-
-  // Handle utterances change (convert textarea string to array)
-  const handleUtterancesChange = (routeId: string, utterancesText: string) => {
-    const utterancesArray = utterancesText
-      .split("\n")
-      .map((line) => line.trim()) // Only trims leading/trailing whitespace, preserves internal spaces
-      .filter((line) => line.length > 0);
-    updateRoute(routeId, "utterances", utterancesArray);
-  };
-
-  // Prepare model options for dropdowns
-  const modelOptions = modelInfo.map((model) => ({
-    value: model.model_group,
-    label: model.model_group,
-  }));
 
   const generateConfig = () => {
     return {
@@ -173,133 +231,122 @@ const RouterConfigBuilder: React.FC<RouterConfigBuilderProps> = ({ modelInfo, va
       {/* Routes */}
       {routes.length === 0 ? (
         <Card className="p-6">
-          <Empty description='No routes configured. Click "Add Route" to get started.' />
+          <div className="py-8 flex flex-col items-center justify-center text-muted-foreground">
+            <div className="text-sm">
+              No routes configured. Click &quot;Add Route&quot; to get started.
+            </div>
+          </div>
         </Card>
       ) : (
-        <Collapse
-          activeKey={expandedRoutes}
-          onChange={(keys) =>
-            setExpandedRoutes(
-              Array.isArray(keys) ? keys : [keys].filter(Boolean),
-            )
-          }
-          style={{ width: "100%" }}
-          items={routes.map((route, index) => ({
-            key: route.id,
-            label: (
-              <span className="text-base">
-                Route {index + 1}: {route.model || "Unnamed"}
-              </span>
-            ),
-            extra: (
-              <Button
-                type="button"
-                size="icon"
-                variant="ghost"
-                className="h-7 w-7 text-destructive"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  removeRoute(route.id);
-                }}
-                aria-label="Remove route"
-              >
-                <Trash2 className="h-4 w-4" />
-              </Button>
-            ),
-            children: (
-              <Card key={route.id} className="p-4">
-                {/* Model Selection */}
-                <div className="mb-4 w-full">
-                  <span className="text-sm font-medium mb-2 block">
-                    Model
+        <Accordion
+          type="multiple"
+          value={expandedRoutes}
+          onValueChange={(next) => setExpandedRoutes(next)}
+          className="w-full"
+        >
+          {routes.map((route, index) => (
+            <AccordionItem key={route.id} value={route.id}>
+              <div className="flex items-center gap-2">
+                <AccordionTrigger className="flex-1">
+                  <span className="text-base">
+                    Route {index + 1}: {route.model || "Unnamed"}
                   </span>
-                  <AntdSelect
-                    value={route.model}
-                    onChange={(value) =>
-                      updateRoute(route.id, "model", value)
-                    }
-                    placeholder="Select model"
-                    showSearch
-                    style={{ width: "100%" }}
-                    options={modelOptions}
-                  />
-                </div>
-
-                {/* Description */}
-                <div className="mb-4 w-full">
-                  <span className="text-sm font-medium mb-2 block">
-                    Description
-                  </span>
-                  <Textarea
-                    value={route.description}
-                    onChange={(e) =>
-                      updateRoute(
-                        route.id,
-                        "description",
-                        e.target.value,
-                      )
-                    }
-                    placeholder="Describe when this route should be used..."
-                    rows={2}
-                    className="w-full"
-                  />
-                </div>
-
-                {/* Score Threshold */}
-                <div className="mb-4 w-full">
-                  <div className="flex items-center gap-2 mb-2">
-                    <span className="text-sm font-medium">
-                      Score Threshold
-                    </span>
-                    <InfoTip>
-                      Minimum similarity score to route to this model (0-1)
-                    </InfoTip>
+                </AccordionTrigger>
+                <Button
+                  type="button"
+                  size="icon"
+                  variant="ghost"
+                  className="h-7 w-7 text-destructive"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    removeRoute(route.id);
+                  }}
+                  aria-label="Remove route"
+                >
+                  <Trash2 className="h-4 w-4" />
+                </Button>
+              </div>
+              <AccordionContent>
+                <Card key={route.id} className="p-4">
+                  <div className="mb-4 w-full">
+                    <span className="text-sm font-medium mb-2 block">Model</span>
+                    <Select
+                      value={route.model || undefined}
+                      onValueChange={(value) => updateRoute(route.id, "model", value)}
+                    >
+                      <SelectTrigger className="w-full">
+                        <SelectValue placeholder="Select model" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {modelInfo.map((model) => (
+                          <SelectItem key={model.model_group} value={model.model_group}>
+                            {model.model_group}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
                   </div>
-                  <InputNumber
-                    value={route.score_threshold}
-                    onChange={(value) =>
-                      updateRoute(route.id, "score_threshold", value || 0)
-                    }
-                    min={0}
-                    max={1}
-                    step={0.1}
-                    style={{ width: "100%" }}
-                    placeholder="0.5"
-                  />
-                </div>
 
-                {/* Example Utterances */}
-                <div className="w-full">
-                  <div className="flex items-center gap-2 mb-2">
-                    <span className="text-sm font-medium">
-                      Example Utterances
-                    </span>
-                    <InfoTip>
-                      Training examples for this route. Type an utterance
-                      and press Enter to add it.
-                    </InfoTip>
+                  <div className="mb-4 w-full">
+                    <span className="text-sm font-medium mb-2 block">Description</span>
+                    <Textarea
+                      value={route.description}
+                      onChange={(e) => updateRoute(route.id, "description", e.target.value)}
+                      placeholder="Describe when this route should be used..."
+                      rows={2}
+                      className="w-full"
+                    />
                   </div>
-                  <p className="text-xs text-muted-foreground mb-2">
-                    Type an utterance and press Enter to add it. You can
-                    also paste multiple lines.
-                  </p>
-                  <AntdSelect
-                    mode="tags"
-                    value={route.utterances}
-                    onChange={(utterances) =>
-                      updateRoute(route.id, "utterances", utterances)
-                    }
-                    placeholder="Type an utterance and press Enter..."
-                    style={{ width: "100%" }}
-                    tokenSeparators={["\n"]}
-                    maxTagCount="responsive"
-                    allowClear
-                  />
-                </div>
-              </Card>
-            ),
-          }))}
-        />
+
+                  <div className="mb-4 w-full">
+                    <div className="flex items-center gap-2 mb-2">
+                      <span className="text-sm font-medium">Score Threshold</span>
+                      <InfoTip>
+                        Minimum similarity score to route to this model (0-1)
+                      </InfoTip>
+                    </div>
+                    <Input
+                      type="number"
+                      value={route.score_threshold}
+                      onChange={(e) => {
+                        const raw = e.target.value;
+                        if (raw === "") {
+                          updateRoute(route.id, "score_threshold", 0);
+                          return;
+                        }
+                        const num = Number(raw);
+                        updateRoute(route.id, "score_threshold", Number.isNaN(num) ? 0 : num);
+                      }}
+                      min={0}
+                      max={1}
+                      step={0.1}
+                      placeholder="0.5"
+                      className="w-full"
+                    />
+                  </div>
+
+                  <div className="w-full">
+                    <div className="flex items-center gap-2 mb-2">
+                      <span className="text-sm font-medium">Example Utterances</span>
+                      <InfoTip>
+                        Training examples for this route. Type an utterance and press
+                        Enter to add it.
+                      </InfoTip>
+                    </div>
+                    <p className="text-xs text-muted-foreground mb-2">
+                      Type an utterance and press Enter to add it. You can also paste
+                      multiple lines.
+                    </p>
+                    <UtterancesInput
+                      value={route.utterances}
+                      onChange={(next) => updateRoute(route.id, "utterances", next)}
+                    />
+                  </div>
+                </Card>
+              </AccordionContent>
+            </AccordionItem>
+          ))}
+        </Accordion>
       )}
 
       {/* JSON Preview */}

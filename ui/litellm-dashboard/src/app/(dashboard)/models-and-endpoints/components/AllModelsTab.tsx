@@ -8,19 +8,28 @@ import { getDisplayModelName } from "@/components/view_model/model_name_display"
 import DeleteResourceModal from "@/components/common_components/DeleteResourceModal";
 import NotificationsManager from "@/components/molecules/notifications_manager";
 import { modelDeleteCall } from "@/components/networking";
-import { Info as InfoCircleOutlined, Settings as SettingOutlined } from "lucide-react";
+import { Info, Settings, Filter, RefreshCw, Search } from "lucide-react";
 import { PaginationState, SortingState } from "@tanstack/react-table";
-// eslint-disable-next-line litellm-ui/no-banned-ui-imports
 import { useQueryClient } from "@tanstack/react-query";
-import { Grid, TabPanel } from "@tremor/react";
-import { Badge, Button, Select, Skeleton, Space, Typography } from "antd";
+// eslint-disable-next-line litellm-ui/no-banned-ui-imports
+import { TabPanel } from "@tremor/react";
+import { Button } from "@/components/ui/button";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Badge } from "@/components/ui/badge";
 import ModelSettingsModal from "@/components/model_dashboard/ModelSettingsModal/ModelSettingsModal";
 import debounce from "lodash/debounce";
 import { useEffect, useMemo, useState } from "react";
 import { useModelsInfo } from "../../hooks/models/useModels";
 import { transformModelData } from "../utils/modelDataTransformer";
+
 type ModelViewMode = "all" | "current_team";
-const { Text } = Typography;
 
 interface AllModelsTabProps {
   selectedModelGroup: string | null;
@@ -60,12 +69,10 @@ const AllModelsTab = ({
   const [sorting, setSorting] = useState<SortingState>([]);
   const [isModelSettingsModalVisible, setIsModelSettingsModalVisible] = useState(false);
 
-  // Debounce search input
   const debouncedUpdateSearch = useMemo(
     () =>
       debounce((value: string) => {
         setDebouncedSearch(value);
-        // Reset to page 1 when search changes
         setCurrentPage(1);
         setPagination((prev: PaginationState) => ({ ...prev, pageIndex: 0 }));
       }, 200),
@@ -79,18 +86,16 @@ const AllModelsTab = ({
     };
   }, [modelNameSearch, debouncedUpdateSearch]);
 
-  // Determine teamId to pass to the query - only pass if not "personal"
   const teamIdForQuery = currentTeam === "personal" ? undefined : currentTeam.team_id;
 
-  // Convert sorting state to sortBy and sortOrder for API
   const sortBy = useMemo(() => {
     if (sorting.length === 0) return undefined;
     const sort = sorting[0];
     const columnIdToServerField: Record<string, string> = {
-      input_cost: "costs", // Map input_cost column to "costs" for server-side sorting
-      model_info_db_model: "status", // Map model_info.db_model column to "status" for server-side sorting
-      model_info_created_by: "created_at", // Map model_info.created_by column to "created_at" for server-side sorting
-      model_info_updated_at: "updated_at", // Map model_info.updated_at column to "updated_at" for server-side sorting
+      input_cost: "costs",
+      model_info_db_model: "status",
+      model_info_created_by: "created_at",
+      model_info_updated_at: "updated_at",
     };
     return columnIdToServerField[sort.id] || sort.id;
   }, [sorting]);
@@ -129,7 +134,6 @@ const AllModelsTab = ({
   const [deleteModalModelId, setDeleteModalModelId] = useState<string | null>(null);
   const [deleteLoading, setDeleteLoading] = useState(false);
 
-  // Get pagination metadata from the response
   const paginationMeta = useMemo(() => {
     if (!rawModelData) {
       return {
@@ -152,7 +156,6 @@ const AllModelsTab = ({
       return [];
     }
 
-    // Server-side search is now handled by the API, so we only filter by other criteria
     return modelData.data.filter((model: any) => {
       const modelNameMatch =
         selectedModelGroup === "all" ||
@@ -165,8 +168,6 @@ const AllModelsTab = ({
         model.model_info["access_groups"]?.includes(selectedModelAccessGroupFilter) ||
         !selectedModelAccessGroupFilter;
 
-      // Team filtering is now handled server-side via teamId query parameter
-      // Only apply client-side filtering for model groups and access groups
       return modelNameMatch && accessGroupMatch;
     });
   }, [modelData, selectedModelGroup, selectedModelAccessGroupFilter]);
@@ -176,13 +177,11 @@ const AllModelsTab = ({
     setCurrentPage(1);
   }, [selectedModelGroup, selectedModelAccessGroupFilter]);
 
-  // Reset pagination when team changes
   useEffect(() => {
     setCurrentPage(1);
     setPagination((prev: PaginationState) => ({ ...prev, pageIndex: 0 }));
   }, [teamIdForQuery]);
 
-  // Reset pagination when sorting changes
   useEffect(() => {
     setCurrentPage(1);
     setPagination((prev: PaginationState) => ({ ...prev, pageIndex: 0 }));
@@ -221,103 +220,96 @@ const AllModelsTab = ({
     }
   };
 
+  const currentTeamValue =
+    currentTeam === "personal" ? "personal" : currentTeam.team_id;
+
+  const onTeamChange = (value: string) => {
+    if (value === "personal") {
+      setCurrentTeam("personal");
+      setCurrentPage(1);
+      setPagination((prev: PaginationState) => ({ ...prev, pageIndex: 0 }));
+    } else {
+      const team = teams?.find((t) => t.team_id === value);
+      if (team) {
+        setCurrentTeam(team);
+        setCurrentPage(1);
+        setPagination((prev: PaginationState) => ({ ...prev, pageIndex: 0 }));
+      }
+    }
+  };
+
   return (
     <TabPanel>
-      <Grid>
+      <div>
         <div className="flex flex-col space-y-4">
-          <div className="bg-white rounded-lg shadow">
+          <div className="bg-background rounded-lg shadow">
             {/* Current Team and View Mode Selector - Prominent Section */}
-            <div className="border-b px-6 py-4 bg-gray-50">
+            <div className="border-b px-6 py-4 bg-muted/40">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-4">
-                  <Text className="text-lg font-semibold text-gray-900">Current Team:</Text>
+                  <span className="text-lg font-semibold">Current Team:</span>
                   <div className="w-80">
-                    {isLoading ? (
-                      <Skeleton.Input active block size="large" />
+                    {isLoading || isLoadingTeams ? (
+                      <Skeleton className="h-11 w-full" />
                     ) : (
-                      <Select
-                        style={{ width: "100%" }}
-                        size="large"
-                        defaultValue="personal"
-                        value={currentTeam === "personal" ? "personal" : currentTeam.team_id}
-                        onChange={(value) => {
-                          if (value === "personal") {
-                            setCurrentTeam("personal");
-                            // Reset to page 1 when team changes
-                            setCurrentPage(1);
-                            setPagination((prev: PaginationState) => ({ ...prev, pageIndex: 0 }));
-                          } else {
-                            const team = teams?.find((t) => t.team_id === value);
-                            if (team) {
-                              setCurrentTeam(team);
-                              // Reset to page 1 when team changes
-                              setCurrentPage(1);
-                              setPagination((prev: PaginationState) => ({ ...prev, pageIndex: 0 }));
-                            }
-                          }
-                        }}
-                        loading={isLoadingTeams}
-                        options={[
-                          {
-                            value: "personal",
-                            label: (
-                              <Space direction="horizontal" align="center">
-                                <Badge color="blue" size="small" />
-                                <Text style={{ fontSize: 16 }}>Personal</Text>
-                              </Space>
-                            ),
-                          },
-                          ...(teams
+                      <Select value={currentTeamValue} onValueChange={onTeamChange}>
+                        <SelectTrigger className="h-11">
+                          <SelectValue placeholder="Select team" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="personal">
+                            <span className="inline-flex items-center gap-2">
+                              <Badge variant="secondary" className="h-2 w-2 p-0 rounded-full bg-blue-500" />
+                              <span>Personal</span>
+                            </span>
+                          </SelectItem>
+                          {teams
                             ?.filter((team) => team.team_id)
-                            .map((team) => ({
-                              value: team.team_id,
-                              label: (
-                                <Space direction="horizontal" align="center">
-                                  <Badge color="green" size="small" />
-                                  <Text ellipsis style={{ fontSize: 16 }}>
+                            .map((team) => (
+                              <SelectItem key={team.team_id} value={team.team_id}>
+                                <span className="inline-flex items-center gap-2">
+                                  <Badge variant="secondary" className="h-2 w-2 p-0 rounded-full bg-emerald-500" />
+                                  <span className="truncate">
                                     {team.team_alias ? team.team_alias : team.team_id}
-                                  </Text>
-                                </Space>
-                              ),
-                            })) ?? []),
-                        ]}
-                      />
+                                  </span>
+                                </span>
+                              </SelectItem>
+                            ))}
+                        </SelectContent>
+                      </Select>
                     )}
                   </div>
                 </div>
                 <div className="flex items-center gap-4">
-                  <Text className="text-lg font-semibold text-gray-900">View:</Text>
+                  <span className="text-lg font-semibold">View:</span>
                   <div className="w-64">
                     {isLoading ? (
-                      <Skeleton.Input active block size="large" />
+                      <Skeleton className="h-11 w-full" />
                     ) : (
                       <Select
-                        style={{ width: "100%" }}
-                        size="large"
-                        defaultValue="current_team"
                         value={modelViewMode}
-                        onChange={(value) => setModelViewMode(value as "current_team" | "all")}
-                        options={[
-                          {
-                            value: "current_team",
-                            label: (
-                              <Space direction="horizontal" align="center">
-                                <Badge color="purple" size="small" />
-                                <Text style={{ fontSize: 16 }}>Current Team Models</Text>
-                              </Space>
-                            ),
-                          },
-                          {
-                            value: "all",
-                            label: (
-                              <Space direction="horizontal" align="center">
-                                <Badge color="gray" size="small" />
-                                <Text style={{ fontSize: 16 }}>All Available Models</Text>
-                              </Space>
-                            ),
-                          },
-                        ]}
-                      />
+                        onValueChange={(value) =>
+                          setModelViewMode(value as "current_team" | "all")
+                        }
+                      >
+                        <SelectTrigger className="h-11">
+                          <SelectValue placeholder="View" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="current_team">
+                            <span className="inline-flex items-center gap-2">
+                              <Badge variant="secondary" className="h-2 w-2 p-0 rounded-full bg-purple-500" />
+                              <span>Current Team Models</span>
+                            </span>
+                          </SelectItem>
+                          <SelectItem value="all">
+                            <span className="inline-flex items-center gap-2">
+                              <Badge variant="secondary" className="h-2 w-2 p-0 rounded-full bg-muted-foreground" />
+                              <span>All Available Models</span>
+                            </span>
+                          </SelectItem>
+                        </SelectContent>
+                      </Select>
                     )}
                   </div>
                 </div>
@@ -325,14 +317,14 @@ const AllModelsTab = ({
 
               {modelViewMode === "current_team" && (
                 <div className="flex items-start gap-2 mt-3">
-                  <InfoCircleOutlined className="text-gray-400 mt-0.5 flex-shrink-0 text-xs" />
-                  <div className="text-xs text-gray-500">
+                  <Info className="text-muted-foreground mt-0.5 flex-shrink-0 h-3 w-3" />
+                  <div className="text-xs text-muted-foreground">
                     {currentTeam === "personal" ? (
                       <span>
                         To access these models: Create a Virtual Key without selecting a team on the{" "}
                         <a
                           href="/public?login=success&page=api-keys"
-                          className="text-gray-600 hover:text-gray-800 underline"
+                          className="text-muted-foreground hover:text-foreground underline"
                         >
                           Virtual Keys page
                         </a>
@@ -344,7 +336,7 @@ const AllModelsTab = ({
                         the{" "}
                         <a
                           href="/public?login=success&page=api-keys"
-                          className="text-gray-600 hover:text-gray-800 underline"
+                          className="text-muted-foreground hover:text-foreground underline"
                         >
                           Virtual Keys page
                         </a>
@@ -358,7 +350,6 @@ const AllModelsTab = ({
             {/* Search and Filter Controls */}
             <div className="border-b px-6 py-4">
               <div className="flex flex-col space-y-4">
-                {/* Search and Filter Controls */}
                 <div className="flex items-center justify-between gap-3">
                   <div className="flex flex-wrap items-center gap-3">
                     {/* Model Name Search */}
@@ -367,104 +358,94 @@ const AllModelsTab = ({
                         type="text"
                         placeholder="Search model names..."
                         data-testid="model-search-input"
-                        className="w-full px-3 py-2 pl-8 border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                        className="w-full px-3 py-2 pl-8 border border-input bg-background rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-ring focus:border-ring"
                         value={modelNameSearch}
                         onChange={(e) => setModelNameSearch(e.target.value)}
                       />
-                      <svg
-                        className="absolute left-2.5 top-2.5 h-4 w-4 text-gray-500"
-                        fill="none"
-                        stroke="currentColor"
-                        viewBox="0 0 24 24"
-                      >
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          strokeWidth={2}
-                          d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
-                        />
-                      </svg>
+                      <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
                     </div>
 
                     {/* Filter Button */}
-                    <button
-                      className={`px-3 py-2 text-sm border rounded-md hover:bg-gray-50 flex items-center gap-2 ${showFilters ? "bg-gray-100" : ""}`}
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className={showFilters ? "bg-muted" : ""}
                       onClick={() => setShowFilters(!showFilters)}
                     >
-                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          strokeWidth={2}
-                          d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z"
-                        />
-                      </svg>
+                      <Filter className="h-4 w-4 mr-2" />
                       Filters
-                    </button>
+                    </Button>
 
                     {/* Reset Filters Button */}
-                    <button
-                      className="px-3 py-2 text-sm border rounded-md hover:bg-gray-50 flex items-center gap-2"
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
                       onClick={resetFilters}
                     >
-                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          strokeWidth={2}
-                          d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
-                        />
-                      </svg>
+                      <RefreshCw className="h-4 w-4 mr-2" />
                       Reset Filters
-                    </button>
+                    </Button>
                   </div>
 
                   {/* Model Settings Button */}
                   <Button
-                    icon={<SettingOutlined />}
+                    type="button"
+                    variant="outline"
+                    size="icon"
                     onClick={() => setIsModelSettingsModalVisible(true)}
                     title="Model Settings"
-                  />
+                    aria-label="Model Settings"
+                  >
+                    <Settings className="h-4 w-4" />
+                  </Button>
                 </div>
 
                 {/* Additional Filters */}
                 {showFilters && (
                   <div className="flex flex-wrap items-center gap-3 mt-3">
-                    {/* Model Name Filter */}
                     <div className="w-64">
                       <Select
-                        className="w-full"
                         value={selectedModelGroup ?? "all"}
-                        onChange={(value) => setSelectedModelGroup(value === "all" ? "all" : value)}
-                        placeholder="Filter by Public Model Name"
-                        showSearch
-                        options={[
-                          { value: "all", label: "All Models" },
-                          { value: "wildcard", label: "Wildcard Models (*)" },
-                          ...availableModelGroups.map((group, idx) => ({
-                            value: group,
-                            label: group,
-                          })),
-                        ]}
-                      />
+                        onValueChange={(value) =>
+                          setSelectedModelGroup(value === "all" ? "all" : value)
+                        }
+                      >
+                        <SelectTrigger>
+                          <SelectValue placeholder="Filter by Public Model Name" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="all">All Models</SelectItem>
+                          <SelectItem value="wildcard">Wildcard Models (*)</SelectItem>
+                          {availableModelGroups.map((group) => (
+                            <SelectItem key={group} value={group}>
+                              {group}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
                     </div>
 
-                    {/* Model Access Group Filter */}
                     <div className="w-64">
                       <Select
-                        className="w-full"
                         value={selectedModelAccessGroupFilter ?? "all"}
-                        onChange={(value) => setSelectedModelAccessGroupFilter(value === "all" ? null : value)}
-                        placeholder="Filter by Model Access Group"
-                        showSearch
-                        options={[
-                          { value: "all", label: "All Model Access Groups" },
-                          ...availableModelAccessGroups.map((accessGroup, idx) => ({
-                            value: accessGroup,
-                            label: accessGroup,
-                          })),
-                        ]}
-                      />
+                        onValueChange={(value) =>
+                          setSelectedModelAccessGroupFilter(value === "all" ? null : value)
+                        }
+                      >
+                        <SelectTrigger>
+                          <SelectValue placeholder="Filter by Model Access Group" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="all">All Model Access Groups</SelectItem>
+                          {availableModelAccessGroups.map((accessGroup) => (
+                            <SelectItem key={accessGroup} value={accessGroup}>
+                              {accessGroup}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
                     </div>
                   </div>
                 )}
@@ -472,9 +453,9 @@ const AllModelsTab = ({
                 {/* Results Count and Pagination Controls */}
                 <div className="flex justify-between items-center">
                   {isLoading ? (
-                    <Skeleton.Input active style={{ width: 184, height: 20 }} />
+                    <Skeleton className="h-5 w-[184px]" />
                   ) : (
-                    <span data-testid="models-results-count" className="text-sm text-gray-700">
+                    <span data-testid="models-results-count" className="text-sm text-foreground">
                       {paginationMeta.total_count > 0
                         ? `Showing ${((currentPage - 1) * pageSize) + 1} - ${Math.min(currentPage * pageSize, paginationMeta.total_count)} of ${paginationMeta.total_count} results`
                         : "Showing 0 results"}
@@ -483,41 +464,39 @@ const AllModelsTab = ({
 
                   <div className="flex items-center space-x-2">
                     {isLoading ? (
-                      <Skeleton.Button active style={{ width: 84, height: 30 }} />
+                      <Skeleton className="h-8 w-[84px]" />
                     ) : (
-                      <button
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
                         onClick={() => {
                           const newPage = currentPage - 1;
                           setCurrentPage(newPage);
                           setPagination((prev: PaginationState) => ({ ...prev, pageIndex: 0 }));
                         }}
                         disabled={currentPage === 1}
-                        className={`px-3 py-1 text-sm border rounded-md ${currentPage === 1
-                          ? "bg-gray-100 text-gray-400 cursor-not-allowed"
-                          : "hover:bg-gray-50"
-                          }`}
                       >
                         Previous
-                      </button>
+                      </Button>
                     )}
 
                     {isLoading ? (
-                      <Skeleton.Button active style={{ width: 56, height: 30 }} />
+                      <Skeleton className="h-8 w-[56px]" />
                     ) : (
-                      <button
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
                         onClick={() => {
                           const newPage = currentPage + 1;
                           setCurrentPage(newPage);
                           setPagination((prev: PaginationState) => ({ ...prev, pageIndex: 0 }));
                         }}
                         disabled={currentPage >= paginationMeta.total_pages}
-                        className={`px-3 py-1 text-sm border rounded-md ${currentPage >= paginationMeta.total_pages
-                          ? "bg-gray-100 text-gray-400 cursor-not-allowed"
-                          : "hover:bg-gray-50"
-                          }`}
                       >
                         Next
-                      </button>
+                      </Button>
                     )}
                   </div>
                 </div>
@@ -549,7 +528,7 @@ const AllModelsTab = ({
             />
           </div>
         </div>
-      </Grid>
+      </div>
 
       <DeleteResourceModal
         isOpen={!!deleteModalModelId}

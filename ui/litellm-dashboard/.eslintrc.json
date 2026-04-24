@@ -137,6 +137,7 @@
         "src/app/(dashboard)/teams/components/TeamsTable/ModelsCell.tsx",
         "src/app/(dashboard)/teams/components/TeamsTable/TeamsTable.tsx",
         "src/app/onboarding/OnboardingFormBody.tsx",
+        "src/app/(dashboard)/models-and-endpoints/components/AllModelsTab.tsx",
         "src/components/prompts/prompt_editor_view/conversation_panel/MessageBubble.tsx",
         "src/components/playground/chat_ui/SessionManagement.tsx",
         "src/components/playground/chat_ui/SearchResultsDisplay.tsx",
