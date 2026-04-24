@@ -1,5 +1,6 @@
 import logging
 from typing import Optional
+from unittest.mock import patch
 
 import pytest
 from pydantic import BaseModel, ValidationError
@@ -49,6 +50,41 @@ class TestCacheCodecSerialize:
     def test_with_model_type_invalid_dict_raises(self):
         with pytest.raises(ValidationError):
             CacheCodec.serialize({"count": 1}, model_type=_SampleModel)
+
+    def test_with_model_type_already_correct_instance_skips_revalidation(self):
+        """Fast-path: value is already model_type — model_validate must NOT be called."""
+        m = _SampleModel(name="fast", count=7)
+        with patch.object(_SampleModel, "model_validate", wraps=_SampleModel.model_validate) as mock_validate:
+            out = CacheCodec.serialize(m, model_type=_SampleModel)
+        assert out == {"name": "fast", "count": 7}
+        mock_validate.assert_not_called()
+
+    def test_with_model_type_subclass_instance_skips_revalidation(self):
+        """Subclass is isinstance of base → should also take the fast path."""
+        sub = _SampleSubModel(name="sub", count=2)
+        with patch.object(_SampleModel, "model_validate", wraps=_SampleModel.model_validate) as mock_validate:
+            out = CacheCodec.serialize(sub, model_type=_SampleModel)
+        assert out == {"name": "sub", "count": 2}
+        mock_validate.assert_not_called()
+
+    def test_with_model_type_dict_input_goes_through_model_validate(self):
+        """A dict value (not yet an instance) must still go through model_validate."""
+        raw = {"name": "via-dict", "count": 5}
+        with patch.object(
+            _SampleModel, "model_validate", wraps=_SampleModel.model_validate
+        ) as mock_validate:
+            out = CacheCodec.serialize(raw, model_type=_SampleModel)
+        assert out == {"name": "via-dict", "count": 5}
+        mock_validate.assert_called_once()
+
+    def test_with_model_type_incompatible_model_raises_validation_error(self):
+        """Passing an instance of a completely different model is a caller error and raises."""
+
+        class _IncompatibleModel(BaseModel):
+            name: str
+
+        with pytest.raises(Exception):
+            CacheCodec.serialize(_IncompatibleModel(name="x"), model_type=_SampleModel)
 
 
 class TestCacheCodecDeserialize:

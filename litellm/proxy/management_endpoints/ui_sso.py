@@ -70,6 +70,7 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.auth_checks import ExperimentalUIJWTToken, get_user_object
+from litellm.proxy.common_utils.cache_pydantic_utils import CacheCodec
 from litellm.proxy.auth.auth_utils import _has_user_setup_sso
 from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -1233,11 +1234,7 @@ async def _sync_user_role_from_jwt_role_map(
         user_info.user_role = mapped_role.value
         await user_api_key_cache.async_set_cache(
             key=user_info.user_id,
-            value=(
-                user_info.model_dump()
-                if hasattr(user_info, "model_dump")
-                else dict(user_info)
-            ),
+            value=CacheCodec.serialize(user_info, model_type=LiteLLM_UserTable),
         )
 
 

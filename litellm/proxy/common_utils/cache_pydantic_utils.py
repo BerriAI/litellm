@@ -44,10 +44,17 @@ class CacheCodec:
         If ``model_type`` is set, the payload is validated with that model, then
         ``model_dump(mode="json", exclude_none=True)`` — symmetric with ``deserialize``.
 
+        If the value is already an instance of ``model_type`` (or a subclass),
+        ``model_validate`` is skipped to avoid an unnecessary Pydantic copy — the
+        value is dumped directly.
+
         If ``model_type`` is omitted, any ``BaseModel`` is dumped as above; other
         values (e.g. plain ``dict``) are returned unchanged.
         """
         if model_type is not None:
+            if isinstance(value, model_type):
+                # Already the right type: dump directly, skip re-validation copy.
+                return value.model_dump(mode="json", exclude_none=True)
             if isinstance(value, (dict, BaseModel)):
                 return model_type.model_validate(value).model_dump(
                     mode="json", exclude_none=True
