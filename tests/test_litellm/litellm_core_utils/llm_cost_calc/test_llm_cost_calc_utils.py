@@ -411,6 +411,44 @@ def test_generic_cost_per_token_gpt55_pro():
     )
 
 
+@pytest.mark.parametrize(
+    "base_model,dated_model",
+    [
+        ("gpt-5.5", "gpt-5.5-2026-04-23"),
+        ("gpt-5.5-pro", "gpt-5.5-pro-2026-04-23"),
+    ],
+)
+def test_gpt55_dated_variants_match_base_reasoning_effort_capabilities(
+    base_model, dated_model
+):
+    """Dated snapshots must carry the same reasoning_effort capability flags as
+    their non-dated counterparts.
+
+    Regression guard: ``supports_{none,minimal,xhigh}_reasoning_effort`` gate
+    downstream routing in ``OpenAIGPT5Config`` — a missing flag is treated as
+    ``False`` for opt-in levels (e.g. ``xhigh``), which silently diverges
+    behavior between ``gpt-5.5`` and ``gpt-5.5-2026-04-23``. Pinning to a
+    dated variant must never lose capabilities relative to the base alias.
+    """
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    base = litellm.model_cost[base_model]
+    dated = litellm.model_cost[dated_model]
+
+    for flag in (
+        "supports_none_reasoning_effort",
+        "supports_minimal_reasoning_effort",
+        "supports_xhigh_reasoning_effort",
+    ):
+        assert dated.get(flag) == base.get(flag), (
+            f"{dated_model} has {flag}={dated.get(flag)!r}, "
+            f"but {base_model} has {flag}={base.get(flag)!r}. "
+            f"Dated snapshots must inherit the base model's reasoning_effort "
+            f"capability profile."
+        )
+
+
 def test_generic_cost_per_token_anthropic_prompt_caching():
     model = "claude-sonnet-4@20250514"
     usage = Usage(

@@ -19378,7 +19378,10 @@
         "supports_tool_choice": true,
         "supports_service_tier": true,
         "supports_vision": true,
-        "supports_web_search": true
+        "supports_web_search": true,
+        "supports_none_reasoning_effort": true,
+        "supports_xhigh_reasoning_effort": true,
+        "supports_minimal_reasoning_effort": true
     },
     "gpt-5.5-pro": {
         "cache_read_input_token_cost": 6e-06,
@@ -19461,7 +19464,10 @@
         "supports_tool_choice": true,
         "supports_service_tier": true,
         "supports_vision": true,
-        "supports_web_search": true
+        "supports_web_search": true,
+        "supports_none_reasoning_effort": false,
+        "supports_xhigh_reasoning_effort": true,
+        "supports_minimal_reasoning_effort": true
     },
     "gpt-5.4": {
         "cache_read_input_token_cost": 2.5e-07,
