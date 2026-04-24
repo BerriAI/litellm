@@ -208,12 +208,18 @@ class _ProxyDBLogger(CustomLogger):
 
                     # Atomically update spend counters (in-memory + Redis)
                     # for cross-pod budget enforcement.
+                    _model_for_counter = (
+                        sl_object.get("model_group") or sl_object.get("model")
+                        if sl_object is not None
+                        else kwargs.get("model")
+                    )
                     await increment_spend_counters(
                         token=user_api_key,
                         team_id=team_id,
                         user_id=user_id,
                         response_cost=response_cost,
                         org_id=org_id,
+                        model=_model_for_counter,
                     )
 
                     # update cache (fire-and-forget for backward compat:
