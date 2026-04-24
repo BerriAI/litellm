@@ -209,17 +209,18 @@ class LLMAsAJudgeGuardrail(CustomGuardrail):
             else:
                 _metadata["eval_information"] = eval_info
 
-            if not passed and self.on_failure == "block":
+            if not passed:
                 status = "guardrail_intervened"
-                raise HTTPException(
-                    status_code=422,
-                    detail={
-                        "error": "LLM judge rejected response: score below threshold",
-                        "overall_score": overall_score,
-                        "threshold": self.overall_threshold,
-                        "verdicts": judge_result.get("verdicts", []),
-                    },
-                )
+                if self.on_failure == "block":
+                    raise HTTPException(
+                        status_code=422,
+                        detail={
+                            "error": "LLM judge rejected response: score below threshold",
+                            "overall_score": overall_score,
+                            "threshold": self.overall_threshold,
+                            "verdicts": judge_result.get("verdicts", []),
+                        },
+                    )
 
             return inputs
 
