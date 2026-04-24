@@ -1,6 +1,6 @@
 #### CRUD ENDPOINTS for UI Settings #####
 import json
-from typing import Any, Dict, List, Optional, Set, Tuple, Union
+from typing import Any, Dict, List, Optional, Set, Tuple, Type, Union
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Body, Depends, File, HTTPException, UploadFile
@@ -204,7 +204,7 @@ _EXTRA_UI_SETTINGS_FIELDS: Dict[str, Tuple[Any, FieldInfo]] = {}
 _ENTERPRISE_ONLY_UI_SETTINGS: Set[str] = {"enable_projects_ui"}
 
 # Memoized effective class; invalidated on registration.
-_EFFECTIVE_UI_SETTINGS_CLASS: Optional[type] = None
+_EFFECTIVE_UI_SETTINGS_CLASS: Optional[Type[UISettings]] = None
 
 
 def register_extra_ui_setting(name: str, annotation: Any, field: FieldInfo) -> None:
@@ -221,7 +221,7 @@ def register_extra_ui_setting(name: str, annotation: Any, field: FieldInfo) -> N
     _EFFECTIVE_UI_SETTINGS_CLASS = None
 
 
-def _get_effective_ui_settings_class() -> type:
+def _get_effective_ui_settings_class() -> Type[UISettings]:
     """Return UISettings with any extension-registered fields merged in.
 
     Memoized — pydantic ``create_model`` runs metaclass + schema work
