@@ -160,12 +160,15 @@ async def test_create_vertex_fine_tune_jobs_mocked():
     litellm._async_success_callback = []
 
     try:
-        with patch(
-            "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
-            return_value=mock_response,
-        ) as mock_post, patch(
-            "litellm.llms.vertex_ai.vertex_llm_base.VertexBase._ensure_access_token",
-            return_value=("fake-token", project_id),
+        with (
+            patch(
+                "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+                return_value=mock_response,
+            ) as mock_post,
+            patch(
+                "litellm.llms.vertex_ai.vertex_llm_base.VertexBase._ensure_access_token",
+                return_value=("fake-token", project_id),
+            ),
         ):
             create_fine_tuning_response = await litellm.acreate_fine_tuning_job(
                 model=base_model,
@@ -255,12 +258,15 @@ async def test_create_vertex_fine_tune_jobs_mocked_with_hyperparameters():
     litellm._async_success_callback = []
 
     try:
-        with patch(
-            "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
-            return_value=mock_response,
-        ) as mock_post, patch(
-            "litellm.llms.vertex_ai.vertex_llm_base.VertexBase._ensure_access_token",
-            return_value=("fake-token", project_id),
+        with (
+            patch(
+                "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+                return_value=mock_response,
+            ) as mock_post,
+            patch(
+                "litellm.llms.vertex_ai.vertex_llm_base.VertexBase._ensure_access_token",
+                return_value=("fake-token", project_id),
+            ),
         ):
             create_fine_tuning_response = await litellm.acreate_fine_tuning_job(
                 model=base_model,

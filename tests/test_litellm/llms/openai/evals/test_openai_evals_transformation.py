@@ -64,7 +64,7 @@ def test_transform_create_eval_request(config: OpenAIEvalsConfig):
         "name": "Test Eval",
         "data_source_config": {
             "type": "stored_completions",
-            "metadata": {"usecase": "chatbot"}
+            "metadata": {"usecase": "chatbot"},
         },
         "testing_criteria": [
             {
@@ -73,7 +73,7 @@ def test_transform_create_eval_request(config: OpenAIEvalsConfig):
                 "input": [{"role": "user", "content": "Test"}],
                 "passing_labels": ["positive"],
                 "labels": ["positive", "negative"],
-                "name": "Test Grader"
+                "name": "Test Grader",
             }
         ],
     }
@@ -205,11 +205,7 @@ def test_transform_delete_eval_response(config: OpenAIEvalsConfig):
     """Test transformation of delete eval response"""
     response = httpx.Response(
         status_code=200,
-        json={
-            "object": "eval.deleted",
-            "deleted": True,
-            "eval_id": "eval_abc123"
-            },
+        json={"object": "eval.deleted", "deleted": True, "eval_id": "eval_abc123"},
         request=httpx.Request("DELETE", "https://api.openai.com/v1/evals/eval_123"),
     )
 
@@ -245,7 +241,9 @@ def test_transform_cancel_eval_response(config: OpenAIEvalsConfig):
             "object": "eval",
             "status": "cancelled",
         },
-        request=httpx.Request("POST", "https://api.openai.com/v1/evals/eval_123/cancel"),
+        request=httpx.Request(
+            "POST", "https://api.openai.com/v1/evals/eval_123/cancel"
+        ),
     )
 
     result = config.transform_cancel_eval_response(
