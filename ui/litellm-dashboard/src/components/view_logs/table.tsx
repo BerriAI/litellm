@@ -1,15 +1,14 @@
 import { Fragment, useState } from "react";
 import { ColumnDef, flexRender, getCoreRowModel, getExpandedRowModel, Row, useReactTable, getSortedRowModel, SortingState } from "@tanstack/react-table";
 
-// eslint-disable-next-line litellm-ui/no-banned-ui-imports
 import {
   Table,
-  TableHead,
-  TableHeaderCell,
   TableBody,
-  TableRow,
   TableCell,
-} from "@tremor/react";
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 
 interface DataTableProps<TData, TValue> {
   data: TData[];
@@ -66,7 +65,7 @@ export function DataTable<TData, TValue>({
   return (
     <div className="rounded-lg custom-border overflow-x-auto w-full max-w-full box-border">
       <Table className="[&_td]:py-0.5 [&_th]:py-1 table-fixed w-full box-border" style={{ minWidth: "400px" }}>
-        <TableHead>
+        <TableHeader>
           {table.getHeaderGroups().map((headerGroup) => (
             <TableRow key={headerGroup.id}>
               {headerGroup.headers.map((header) => {
@@ -74,7 +73,7 @@ export function DataTable<TData, TValue>({
                 const isSorted = header.column.getIsSorted();
                 
                 return (
-                  <TableHeaderCell
+                  <TableHead
                     key={header.id}
                     className={`py-1 h-8 ${canSort ? "cursor-pointer select-none hover:bg-muted" : ""}`}
                     onClick={
@@ -100,12 +99,12 @@ export function DataTable<TData, TValue>({
                         )}
                       </div>
                     )}
-                  </TableHeaderCell>
+                  </TableHead>
                 );
               })}
             </TableRow>
           ))}
-        </TableHead>
+        </TableHeader>
         <TableBody>
           {isLoading ? (
             <TableRow>

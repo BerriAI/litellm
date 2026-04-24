@@ -6,17 +6,21 @@ import {
   useReactTable,
 } from "@tanstack/react-table";
 import React from "react";
-// eslint-disable-next-line litellm-ui/no-banned-ui-imports
 import {
   Table,
-  TableHead,
-  TableHeaderCell,
   TableBody,
-  TableRow,
   TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import {
   Select,
+  SelectContent,
   SelectItem,
-} from "@tremor/react";
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import {
   ArrowUpDown,
   ChevronDown,
@@ -286,31 +290,39 @@ export function UserDataTable({
               {/* Role Dropdown */}
               <div className="w-64">
                 <Select
-                  value={filters.user_role}
+                  value={filters.user_role || undefined}
                   onValueChange={(value) => updateFilters({ user_role: value })}
-                  placeholder="Select Role"
                 >
-                  {possibleUIRoles &&
-                    Object.entries(possibleUIRoles).map(([key, value]) => (
-                      <SelectItem key={key} value={key}>
-                        {value.ui_label}
-                      </SelectItem>
-                    ))}
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select Role" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {possibleUIRoles &&
+                      Object.entries(possibleUIRoles).map(([key, value]) => (
+                        <SelectItem key={key} value={key}>
+                          {value.ui_label}
+                        </SelectItem>
+                      ))}
+                  </SelectContent>
                 </Select>
               </div>
 
               {/* Team Dropdown */}
               <div className="w-64">
                 <Select
-                  value={filters.team}
+                  value={filters.team || undefined}
                   onValueChange={(value) => updateFilters({ team: value })}
-                  placeholder="Select Team"
                 >
-                  {teams?.map((team) => (
-                    <SelectItem key={team.team_id} value={team.team_id}>
-                      {team.team_alias || team.team_id}
-                    </SelectItem>
-                  ))}
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select Team" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {teams?.map((team) => (
+                      <SelectItem key={team.team_id} value={team.team_id}>
+                        {team.team_alias || team.team_id}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
                 </Select>
               </div>
             </div>
@@ -390,11 +402,11 @@ export function UserDataTable({
         <div className="rounded-lg custom-border relative">
           <div className="overflow-x-auto">
             <Table className="[&_td]:py-0.5 [&_th]:py-1">
-              <TableHead>
+              <TableHeader>
                 {table.getHeaderGroups().map((headerGroup) => (
                   <TableRow key={headerGroup.id}>
                     {headerGroup.headers.map((header) => (
-                      <TableHeaderCell
+                      <TableHead
                         key={header.id}
                         className={cn(
                           "py-1 h-8",
@@ -429,11 +441,11 @@ export function UserDataTable({
                               </div>
                             )}
                         </div>
-                      </TableHeaderCell>
+                      </TableHead>
                     ))}
                   </TableRow>
                 ))}
-              </TableHead>
+              </TableHeader>
               <TableBody>
                 {isLoading ? (
                   <TableRow>
