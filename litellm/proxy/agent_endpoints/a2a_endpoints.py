@@ -6,7 +6,7 @@ The A2A SDK can point to LiteLLM's URL and invoke agents registered with LiteLLM
 """
 
 import json
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -444,6 +444,21 @@ async def invoke_agent_a2a(  # noqa: PLR0915
             dynamic_headers=dynamic_headers or None,
             static_headers=static_headers or None,
         )
+
+        # Merge agent-level guardrails into data so post_call_success_hook and
+        # _handle_stream_message both pick them up.  A2A agents use model
+        # a2a_agent/*, which is not an llm_router deployment, so
+        # _check_and_merge_model_level_guardrails() skips them.
+        _agent_guardrails = litellm_params.get("guardrails")
+        if _agent_guardrails:
+            if not isinstance(_agent_guardrails, list):
+                _agent_guardrails = [_agent_guardrails]
+            _existing_guardrails: List = data.get("guardrails") or []
+            if not isinstance(_existing_guardrails, list):
+                _existing_guardrails = [_existing_guardrails]
+            data["guardrails"] = _existing_guardrails + [
+                g for g in _agent_guardrails if g not in _existing_guardrails
+            ]
 
         # Route through SDK functions
         if method == "message/send":
