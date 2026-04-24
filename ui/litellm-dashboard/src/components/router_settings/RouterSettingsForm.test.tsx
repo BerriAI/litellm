@@ -4,30 +4,8 @@ import userEvent from "@testing-library/user-event";
 import RouterSettingsForm from "./RouterSettingsForm";
 import type { RouterSettingsFormValue } from "./RouterSettingsForm";
 
-// Override antd Select (complex to drive in JSDOM) while preserving the rest
-// of antd (Switch, Button, etc.) so nested components render normally.
-vi.mock("antd", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("antd")>();
-  return {
-    ...actual,
-    Select: Object.assign(
-      ({ value, onChange, children }: any) => (
-        <select
-          data-testid="strategy-select"
-          value={value ?? ""}
-          onChange={(e) => onChange(e.target.value)}
-        >
-          {children}
-        </select>
-      ),
-      {
-        Option: ({ value, children }: any) => (
-          <option value={value}>{children}</option>
-        ),
-      }
-    ),
-  };
-});
+// The strategy selector is a shadcn Select (role="combobox"). Additional
+// antd components (Switch, Button, …) render from the real antd package.
 
 const defaultValue: RouterSettingsFormValue = {
   routerSettings: {},
@@ -51,7 +29,7 @@ describe("RouterSettingsForm", () => {
 
   it("should not show the strategy selector when no strategies are provided", () => {
     render(<RouterSettingsForm {...baseProps} />);
-    expect(screen.queryByTestId("strategy-select")).not.toBeInTheDocument();
+    expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
   });
 
   it("should show the strategy selector when strategies are available", () => {
@@ -60,7 +38,7 @@ describe("RouterSettingsForm", () => {
       availableRoutingStrategies: ["simple-shuffle", "latency-based-routing"],
     };
     render(<RouterSettingsForm {...props} />);
-    expect(screen.getByTestId("strategy-select")).toBeInTheDocument();
+    expect(screen.getByRole("combobox")).toBeInTheDocument();
   });
 
   it("should not render LatencyBasedConfiguration for non-latency strategies", () => {
@@ -97,7 +75,9 @@ describe("RouterSettingsForm", () => {
     };
     render(<RouterSettingsForm {...props} />);
 
-    await user.selectOptions(screen.getByTestId("strategy-select"), "latency-based-routing");
+    await user.click(screen.getByRole("combobox"));
+    const option = await screen.findByRole("option", { name: /latency-based-routing/ });
+    await user.click(option);
 
     expect(onChange).toHaveBeenCalledWith(
       expect.objectContaining({ selectedStrategy: "latency-based-routing" })

@@ -3,29 +3,6 @@ import { renderWithProviders, screen, waitFor } from "../../../tests/test-utils"
 import userEvent from "@testing-library/user-event";
 import RouterSettings from "./index";
 
-vi.mock("antd", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("antd")>();
-  return {
-    ...actual,
-    Select: Object.assign(
-      ({ value, onChange, children }: any) => (
-        <select
-          data-testid="strategy-select"
-          value={value ?? ""}
-          onChange={(e) => onChange(e.target.value)}
-        >
-          {children}
-        </select>
-      ),
-      {
-        Option: ({ value, children }: any) => (
-          <option value={value}>{children}</option>
-        ),
-      }
-    ),
-  };
-});
-
 vi.mock("@/components/networking", () => ({
   getCallbacksCall: vi.fn(),
   getRouterSettingsCall: vi.fn(),
@@ -115,16 +92,19 @@ describe("RouterSettings", () => {
   });
 
   it("should render routing strategies loaded from the API", async () => {
+    const user = userEvent.setup();
     renderWithProviders(<RouterSettings {...defaultProps} />);
 
-    await waitFor(() => {
-      expect(screen.getByTestId("strategy-select")).toBeInTheDocument();
-    });
+    const combobox = await screen.findByRole("combobox");
+    expect(combobox).toBeInTheDocument();
 
-    const select = screen.getByTestId("strategy-select") as HTMLSelectElement;
-    const optionValues = Array.from(select.options).map((o) => o.value);
-    expect(optionValues).toContain("simple-shuffle");
-    expect(optionValues).toContain("latency-based-routing");
+    await user.click(combobox);
+    expect(
+      await screen.findByRole("option", { name: /simple-shuffle/ }),
+    ).toBeInTheDocument();
+    expect(
+      await screen.findByRole("option", { name: /latency-based-routing/ }),
+    ).toBeInTheDocument();
   });
 
   it("should call setCallbacksCall with updated settings on Save Changes", async () => {
@@ -132,9 +112,7 @@ describe("RouterSettings", () => {
     renderWithProviders(<RouterSettings {...defaultProps} />);
 
     // Wait for the strategy select to appear — it only renders after getRouterSettingsCall resolves
-    await waitFor(() => {
-      expect(screen.getByTestId("strategy-select")).toBeInTheDocument();
-    });
+    await screen.findByRole("combobox");
 
     await user.click(screen.getByRole("button", { name: /save changes/i }));
 
@@ -153,9 +131,7 @@ describe("RouterSettings", () => {
     renderWithProviders(<RouterSettings {...defaultProps} />);
 
     // Wait for data to load before interacting
-    await waitFor(() => {
-      expect(screen.getByTestId("strategy-select")).toBeInTheDocument();
-    });
+    await screen.findByRole("combobox");
     await user.click(screen.getByRole("button", { name: /save changes/i }));
 
     expect(NotificationsManager.success).toHaveBeenCalledWith(
