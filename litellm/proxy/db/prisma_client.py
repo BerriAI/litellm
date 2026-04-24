@@ -435,10 +435,16 @@ class PrismaManager:
 
                     prisma_dir = PrismaManager._get_prisma_dir()
 
-                    return ProxyExtrasDBManager.setup_database(
-                        use_migrate=use_migrate,
-                        use_v2_resolver=use_v2_resolver,
-                    )
+                    try:
+                        return ProxyExtrasDBManager.setup_database(
+                            use_migrate=use_migrate,
+                            use_v2_resolver=use_v2_resolver,
+                        )
+                    except TypeError:
+                        # Older proxy-extras doesn't support use_v2_resolver
+                        return ProxyExtrasDBManager.setup_database(
+                            use_migrate=use_migrate,
+                        )
                 else:
                     # Use prisma db push with increased timeout
                     subprocess.run(
