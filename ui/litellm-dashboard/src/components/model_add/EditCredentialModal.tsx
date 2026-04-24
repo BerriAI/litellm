@@ -20,7 +20,7 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import type { UploadProps } from "antd/es/upload";
+import type { UploadProps } from "../add_model/add_model_upload_types";
 import { useEffect, useState } from "react";
 import { Controller, FormProvider, useForm } from "react-hook-form";
 import ProviderSpecificFields from "../add_model/provider_specific_fields";

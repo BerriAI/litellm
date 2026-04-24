@@ -17,7 +17,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
-import { UploadProps } from "antd/es/upload";
+import { UploadProps } from "../add_model/add_model_upload_types";
 import { useState } from "react";
 import DeleteResourceModal from "../common_components/DeleteResourceModal";
 import NotificationsManager from "../molecules/notifications_manager";

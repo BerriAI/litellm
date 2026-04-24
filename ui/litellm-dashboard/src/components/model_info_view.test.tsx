@@ -30,6 +30,7 @@ vi.mock("./networking", () => ({
   modelPatchUpdateCall: vi.fn(),
   modelDeleteCall: vi.fn(),
   credentialCreateCall: vi.fn(),
+  vectorStoreListCall: vi.fn().mockResolvedValue({ data: [] }),
 }));
 
 const mockUseModelsInfo = vi.fn();
