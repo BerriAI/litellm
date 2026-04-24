@@ -362,14 +362,21 @@ def _update_litellm_params_for_health_check(
     Update the litellm params for health check.
 
     - gets a short `messages` param for health check
+    - adds a bounded `max_tokens`, except when
+      `model_info.mode == "image_generation"` — OpenAI
+      `/v1/images/generations` rejects unknown fields with
+      400 "Unknown parameter: 'max_tokens'".
     - updates the `model` param with the `health_check_model` if it exists Doc: https://docs.litellm.ai/docs/proxy/health#wildcard-routes
     - updates the `voice` param with the `health_check_voice` for `audio_speech` mode if it exists Doc: https://docs.litellm.ai/docs/proxy/health#text-to-speech-models
     - for Bedrock models with region routing (bedrock/region/model), strips the litellm routing prefix but preserves the model ID
     """
     litellm_params["messages"] = _get_random_llm_message()
-    _resolved_max_tokens = _resolve_health_check_max_tokens(model_info, litellm_params)
-    if _resolved_max_tokens is not None:
-        litellm_params["max_tokens"] = _resolved_max_tokens
+    if model_info.get("mode", None) != "image_generation":
+        _resolved_max_tokens = _resolve_health_check_max_tokens(
+            model_info, litellm_params
+        )
+        if _resolved_max_tokens is not None:
+            litellm_params["max_tokens"] = _resolved_max_tokens
 
     _health_check_model = model_info.get("health_check_model", None)
     if _health_check_model is not None:

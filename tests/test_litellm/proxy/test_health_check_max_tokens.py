@@ -225,3 +225,59 @@ def test_wildcard_ignores_reasoning_split_model_info(monkeypatch):
     litellm_params = {"model": "openai/*"}
 
     assert _resolve_health_check_max_tokens(model_info, litellm_params) is None
+
+
+# ---------------------------------------------------------------------------
+# image_generation must not receive max_tokens.
+#
+# _update_litellm_params_for_health_check injected `max_tokens` for every
+# deployment. For `mode: image_generation` that leaked into OpenAI
+# `/v1/images/generations`, which strictly rejects unknown fields with
+# `400 "Unknown parameter: 'max_tokens'"`, marking dall-e-* and
+# gpt-image-1 as permanently unhealthy even though their actual image
+# calls succeed. `messages` still gets injected (downstream
+# `_filter_model_params` already strips it for non-chat handlers).
+# ---------------------------------------------------------------------------
+
+
+def test_image_generation_mode_skips_max_tokens():
+    """image_generation must not receive max_tokens."""
+    model_info = {"mode": "image_generation"}
+    litellm_params = {"model": "openai/dall-e-3", "api_key": "sk-test"}
+
+    updated = _update_litellm_params_for_health_check(model_info, litellm_params)
+
+    assert "max_tokens" not in updated
+    # connection-level params must still pass through unchanged
+    assert updated["api_key"] == "sk-test"
+
+
+def test_image_generation_ignores_explicit_health_check_max_tokens():
+    """Even an explicit `health_check_max_tokens` override must not be
+    forwarded to image endpoints — the field is invalid there."""
+    model_info = {"mode": "image_generation", "health_check_max_tokens": 50}
+    litellm_params = {"model": "openai/dall-e-3"}
+
+    updated = _update_litellm_params_for_health_check(model_info, litellm_params)
+
+    assert "max_tokens" not in updated
+
+
+def test_chat_mode_still_injects_max_tokens():
+    """Regression guard: the chat-style probe payload is unchanged."""
+    model_info = {"mode": "chat"}
+    litellm_params = {"model": "gpt-4"}
+
+    updated = _update_litellm_params_for_health_check(model_info, litellm_params)
+
+    assert updated["max_tokens"] == 5
+
+
+def test_no_mode_still_injects_max_tokens():
+    """Regression guard: model_info without `mode` keeps the legacy path."""
+    model_info: dict = {}
+    litellm_params = {"model": "gpt-4"}
+
+    updated = _update_litellm_params_for_health_check(model_info, litellm_params)
+
+    assert updated["max_tokens"] == 5
