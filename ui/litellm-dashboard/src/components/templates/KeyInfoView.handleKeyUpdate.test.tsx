@@ -164,37 +164,6 @@ vi.mock("antd", async (importOriginal) => {
   return { ...actual, Form, Input, InputNumber, Select, Tooltip, Button };
 });
 
-// Icons -> async factory & local React
-vi.mock("@heroicons/react/outline", async () => {
-  const React = await import("react");
-  function ArrowLeftIcon() {
-    return React.createElement("span");
-  }
-  (ArrowLeftIcon as any).displayName = "ArrowLeftIcon";
-  function TrashIcon() {
-    return React.createElement("span");
-  }
-  (TrashIcon as any).displayName = "TrashIcon";
-  function RefreshIcon() {
-    return React.createElement("span");
-  }
-  (RefreshIcon as any).displayName = "RefreshIcon";
-  return { ArrowLeftIcon, TrashIcon, RefreshIcon };
-});
-
-vi.mock("lucide-react", async () => {
-  const React = await import("react");
-  function CopyIcon() {
-    return React.createElement("span");
-  }
-  (CopyIcon as any).displayName = "CopyIcon";
-  function CheckIcon() {
-    return React.createElement("span");
-  }
-  (CheckIcon as any).displayName = "CheckIcon";
-  return { CopyIcon, CheckIcon };
-});
-
 // Heavy children -> async factories & local React
 vi.mock("../organisms/RegenerateKeyModal", async () => {
   const React = await import("react");

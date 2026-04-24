@@ -56,55 +56,6 @@ vi.mock("./impact_popover", () => ({
   default: () => <button type="button" aria-label="View blast radius" />,
 }));
 
-vi.mock("@heroicons/react/outline", () => ({
-  TrashIcon: function TrashIcon() {
-    return null;
-  },
-  SwitchVerticalIcon: function SwitchVerticalIcon() {
-    return null;
-  },
-  ChevronUpIcon: function ChevronUpIcon() {
-    return null;
-  },
-  ChevronDownIcon: function ChevronDownIcon() {
-    return null;
-  },
-}));
-
-vi.mock("@tremor/react", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@tremor/react")>();
-  return {
-    ...actual,
-    Button: React.forwardRef<HTMLButtonElement, any>(({ children, ...props }, ref) =>
-      React.createElement("button", { ...props, ref }, children),
-    ),
-    Tooltip: ({ children }: { children?: React.ReactNode }) =>
-      React.createElement(React.Fragment, null, children),
-    Switch: ({
-      checked,
-      onChange,
-      className,
-    }: {
-      checked?: boolean;
-      onChange?: (v: boolean) => void;
-      className?: string;
-    }) =>
-      React.createElement("input", {
-        type: "checkbox",
-        role: "switch",
-        checked,
-        onChange: (e: React.ChangeEvent<HTMLInputElement>) => onChange?.(e.target.checked),
-        className,
-      }),
-    Icon: ({ icon: _IconComp, onClick, className }: any) =>
-      React.createElement(
-        "button",
-        { type: "button", onClick, className },
-        "TrashIcon",
-      ),
-  };
-});
-
 vi.mock("./policy_templates", () => ({
   __esModule: true,
   default: () => <div data-testid="policy-templates-stub" />,
@@ -168,9 +119,9 @@ describe("PoliciesPanel attachment delete", () => {
       expect(screen.getByText("test-policy")).toBeInTheDocument();
     });
 
-    await user.click(screen.getByRole("button", { name: /TrashIcon/i }));
+    await user.click(screen.getByRole("button", { name: /delete attachment/i }));
 
-    const dialog = await screen.findByRole("dialog", {}, { timeout: 5000 });
+    const dialog = await screen.findByRole("alertdialog", {}, { timeout: 5000 });
     expect(
       within(dialog).getByText(/Are you sure you want to delete this attachment/i),
     ).toBeInTheDocument();
@@ -202,8 +153,8 @@ describe("PoliciesPanel attachment delete", () => {
       expect(screen.getByText("test-policy")).toBeInTheDocument();
     });
 
-    await user.click(screen.getByRole("button", { name: /TrashIcon/i }));
-    const dialog = await screen.findByRole("dialog", {}, { timeout: 5000 });
+    await user.click(screen.getByRole("button", { name: /delete attachment/i }));
+    const dialog = await screen.findByRole("alertdialog", {}, { timeout: 5000 });
 
     const deleteButton = within(dialog).getByRole("button", { name: /^delete$/i });
     await user.click(deleteButton);
@@ -214,7 +165,7 @@ describe("PoliciesPanel attachment delete", () => {
 
     resolveDelete?.();
     await waitFor(() => {
-      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+      expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
     });
   });
 });

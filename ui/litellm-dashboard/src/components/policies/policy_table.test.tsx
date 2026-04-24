@@ -6,30 +6,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import PolicyTable from "./policy_table";
 import { Policy } from "./types";
 
-vi.mock("@heroicons/react/outline", () => ({
-  TrashIcon: function TrashIcon() { return null; },
-  PencilIcon: function PencilIcon() { return null; },
-  SwitchVerticalIcon: function SwitchVerticalIcon() { return null; },
-  ChevronUpIcon: function ChevronUpIcon() { return null; },
-  ChevronDownIcon: function ChevronDownIcon() { return null; },
-}));
-
-vi.mock("@tremor/react", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@tremor/react")>();
-  return {
-    ...actual,
-    Button: React.forwardRef<HTMLButtonElement, any>(({ children, ...props }, ref) =>
-      React.createElement("button", { ...props, ref }, children)
-    ),
-    Icon: ({ icon: IconComp, onClick, className }: any) =>
-      React.createElement("button", { type: "button", onClick, className }, IconComp?.displayName ?? IconComp?.name ?? "icon"),
-    Tooltip: ({ children }: { children?: React.ReactNode }) =>
-      React.createElement(React.Fragment, null, children),
-    Badge: ({ children }: { children?: React.ReactNode }) =>
-      React.createElement("span", null, children),
-  };
-});
-
 const makePolicy = (overrides: Partial<Policy> = {}): Policy => ({
   policy_id: "policy-id-1",
   policy_name: "test-policy",
@@ -94,7 +70,7 @@ describe("PolicyTable", () => {
     const user = userEvent.setup();
     const policy = makePolicy({ policy_name: "del-policy", policy_id: "del-id-1" });
     renderWithProviders(<PolicyTable {...defaultProps} policies={[policy]} />);
-    await user.click(screen.getByRole("button", { name: /TrashIcon/i }));
+    await user.click(screen.getByRole("button", { name: /delete policy/i }));
     expect(defaultProps.onDeleteClick).toHaveBeenCalledWith("del-id-1", "del-policy");
   });
 
@@ -102,15 +78,15 @@ describe("PolicyTable", () => {
     const user = userEvent.setup();
     const policy = makePolicy({ policy_name: "edit-policy", policy_id: "edit-id-1" });
     renderWithProviders(<PolicyTable {...defaultProps} policies={[policy]} />);
-    await user.click(screen.getByRole("button", { name: /PencilIcon/i }));
+    await user.click(screen.getByRole("button", { name: /edit policy/i }));
     expect(defaultProps.onEditClick).toHaveBeenCalledWith(policy);
   });
 
   it("should not show admin action icons for non-admins", () => {
     const policy = makePolicy();
     renderWithProviders(<PolicyTable {...defaultProps} policies={[policy]} isAdmin={false} />);
-    expect(screen.queryByRole("button", { name: /TrashIcon/i })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /PencilIcon/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /delete policy/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /edit policy/i })).not.toBeInTheDocument();
   });
 
   it("should show a version badge when multiple versions of the same policy name exist", () => {

@@ -10,35 +10,6 @@ vi.mock("./impact_popover", () => ({
   default: () => <button aria-label="View blast radius" />,
 }));
 
-vi.mock("@heroicons/react/outline", () => ({
-  TrashIcon: function TrashIcon() { return null; },
-  SwitchVerticalIcon: function SwitchVerticalIcon() { return null; },
-  ChevronUpIcon: function ChevronUpIcon() { return null; },
-  ChevronDownIcon: function ChevronDownIcon() { return null; },
-}));
-
-vi.mock("@tremor/react", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@tremor/react")>();
-  return {
-    ...actual,
-    Button: React.forwardRef<HTMLButtonElement, any>(({ children, ...props }, ref) =>
-      React.createElement("button", { ...props, ref }, children)
-    ),
-    Tooltip: ({ children }: { children?: React.ReactNode }) =>
-      React.createElement(React.Fragment, null, children),
-    Switch: ({ checked, onChange, className }: { checked?: boolean; onChange?: (v: boolean) => void; className?: string }) =>
-      React.createElement("input", {
-        type: "checkbox",
-        role: "switch",
-        checked,
-        onChange: (e: React.ChangeEvent<HTMLInputElement>) => onChange?.(e.target.checked),
-        className,
-      }),
-    Icon: ({ icon: IconComp, onClick, className }: any) =>
-      React.createElement("button", { type: "button", onClick, className }, IconComp?.displayName ?? IconComp?.name ?? "icon"),
-  };
-});
-
 const makeAttachment = (overrides: Partial<PolicyAttachment> = {}): PolicyAttachment => ({
   attachment_id: "att-abcdef1",
   policy_name: "my-policy",
@@ -111,14 +82,14 @@ describe("AttachmentTable", () => {
     const attachment = makeAttachment({ attachment_id: "att-del-me1" });
     const user = userEvent.setup();
     renderWithProviders(<AttachmentTable {...defaultProps} attachments={[attachment]} />);
-    await user.click(screen.getByRole("button", { name: /TrashIcon/i }));
+    await user.click(screen.getByRole("button", { name: /delete attachment/i }));
     expect(defaultProps.onDeleteClick).toHaveBeenCalledWith("att-del-me1");
   });
 
   it("should not show the delete icon for non-admins", () => {
     const attachment = makeAttachment();
     renderWithProviders(<AttachmentTable {...defaultProps} attachments={[attachment]} isAdmin={false} />);
-    expect(screen.queryByRole("button", { name: /TrashIcon/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /delete attachment/i })).not.toBeInTheDocument();
   });
 
   it("should show a truncated attachment ID in the table", () => {

@@ -9,42 +9,31 @@ import { PolicyAttachment } from "./types";
 
 vi.mock("../networking");
 
-vi.mock("@heroicons/react/outline", () => ({
-  EyeIcon: function EyeIcon() { return null; },
-}));
-
-vi.mock("@tremor/react", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@tremor/react")>();
-  return {
-    ...actual,
-    Icon: ({ icon: IconComp, onClick, className }: any) =>
-      React.createElement("button", { type: "button", onClick, className }, IconComp?.displayName ?? IconComp?.name ?? "icon"),
-  };
-});
-
 // Expose the Popover's onOpenChange so tests can trigger it programmatically.
-vi.mock("antd", async (importOriginal) => {
-  const actual = await importOriginal<any>();
+// The source uses shadcn Popover (Radix UI) which renders content in a portal
+// only when open; replace it with a simple inline renderer so test assertions
+// can reach popover content without having to wait for Radix animations.
+vi.mock("@/components/ui/popover", () => {
+  const PopoverContext = React.createContext<{
+    onOpenChange?: (open: boolean) => void;
+  }>({});
   return {
-    ...actual,
-    Popover: ({ children, onOpenChange, content }: any) =>
+    Popover: ({ children, onOpenChange }: any) =>
       React.createElement(
-        "div",
-        null,
-        React.createElement("div", { "data-testid": "popover-content" }, content),
-        React.createElement(
-          "div",
-          {
-            role: "button",
-            "aria-label": "open-popover",
-            onClick: () => onOpenChange?.(true),
-          },
-          children
-        )
+        PopoverContext.Provider,
+        { value: { onOpenChange } },
+        children,
       ),
-    Tooltip: ({ children }: any) => React.createElement(React.Fragment, null, children),
-    Spin: () => React.createElement("span", null, "Loading..."),
-    Tag: ({ children }: any) => React.createElement("span", null, children),
+    PopoverTrigger: ({ children }: any) => {
+      const ctx = React.useContext(PopoverContext);
+      return React.cloneElement(children, {
+        "aria-label": "open-popover",
+        role: "button",
+        onClick: () => ctx.onOpenChange?.(true),
+      });
+    },
+    PopoverContent: ({ children }: any) =>
+      React.createElement("div", { "data-testid": "popover-content" }, children),
   };
 });
 
