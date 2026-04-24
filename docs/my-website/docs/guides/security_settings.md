@@ -13,7 +13,7 @@ LiteLLM uses HTTPX for network requests, unless otherwise specified.
 
 ## 1. Custom CA Bundle
 
-You can set a custom CA bundle file path using the `SSL_CERT_FILE` environmental variable or passing a string to the the ssl_verify setting.
+You can set a custom CA bundle file path using the `SSL_CERT_FILE` environmental variable or passing a string to the ssl_verify setting.
 
 <Tabs>
 <TabItem value="sdk" label="SDK">
