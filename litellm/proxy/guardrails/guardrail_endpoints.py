@@ -347,10 +347,12 @@ async def create_guardrail(
             if prisma_client is not None:
                 try:
                     await prisma_client.db.litellm_guardrailstable.delete(
-                        where={"id": guardrail_id}
+                        where={"guardrail_id": guardrail_id}
                     )
-                except Exception:
-                    pass
+                except Exception as rollback_err:
+                    verbose_proxy_logger.warning(
+                        f"Rollback failed for guardrail '{guardrail_id}': {rollback_err}"
+                    )
             raise HTTPException(
                 status_code=400,
                 detail=f"Guardrail configuration error: {init_error}",
