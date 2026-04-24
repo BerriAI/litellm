@@ -198,6 +198,20 @@ const CreateTeamModal = ({
           formValues.metadata = JSON.stringify(metadata);
         }
 
+        if (formValues.team_member_model_max_budget) {
+          if (typeof formValues.team_member_model_max_budget === "string") {
+            if (formValues.team_member_model_max_budget.trim() === "") {
+              delete formValues.team_member_model_max_budget;
+            } else {
+              try {
+                formValues.team_member_model_max_budget = JSON.parse(formValues.team_member_model_max_budget);
+              } catch (e) {
+                throw new Error("Failed to parse per-model member budget: " + e);
+              }
+            }
+          }
+        }
+
         if (formValues.secret_manager_settings) {
           if (typeof formValues.secret_manager_settings === "string") {
             if (formValues.secret_manager_settings.trim() === "") {
@@ -468,6 +482,20 @@ const CreateTeamModal = ({
               </Form.Item>
             </AccordionBody>
           </Accordion>
+
+          <Form.Item
+            label={
+              <span>
+                Default Member Model Budget{" "}
+                <Tooltip title="Optional. Set independent spend limits per model for each team member. Format: {&quot;model-name&quot;: {&quot;max_budget&quot;: 10.0}}. Each member gets their own independent budget per model.">
+                  <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                </Tooltip>
+              </span>
+            }
+            name="team_member_model_max_budget"
+          >
+            <TextInput placeholder={'{"gpt-3.5-turbo": {"max_budget": 10.0}}'} />
+          </Form.Item>
 
           <Form.Item label="Max Budget (USD)" name="max_budget">
             <NumericalInput step={0.01} precision={2} width={200} />

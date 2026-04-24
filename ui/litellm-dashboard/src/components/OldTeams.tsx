@@ -563,6 +563,21 @@ const Teams: React.FC<TeamProps> = ({
           delete formValues.allowed_agents_and_groups;
         }
 
+        // Parse team_member_model_max_budget from JSON string
+        if (formValues.team_member_model_max_budget) {
+          if (typeof formValues.team_member_model_max_budget === "string") {
+            if (formValues.team_member_model_max_budget.trim() === "") {
+              delete formValues.team_member_model_max_budget;
+            } else {
+              try {
+                formValues.team_member_model_max_budget = JSON.parse(formValues.team_member_model_max_budget);
+              } catch (e) {
+                throw new Error("Failed to parse team member model budget: " + e);
+              }
+            }
+          }
+        }
+
         // Add model_aliases if any are defined
         if (Object.keys(modelAliases).length > 0) {
           formValues.model_aliases = modelAliases;
@@ -1222,6 +1237,14 @@ const Teams: React.FC<TeamProps> = ({
                   </Form.Item>
                   <Form.Item label="Requests per minute Limit (RPM)" name="rpm_limit">
                     <NumericalInput step={1} width={400} />
+                  </Form.Item>
+
+                  <Form.Item
+                    label="Default Member Model Budget"
+                    name="team_member_model_max_budget"
+                    tooltip='Optional. Set independent spend limits per model for each team member. Each member gets their own independent budget per model. Format: {"model-name": {"max_budget": 10.0}}'
+                  >
+                    <TextInput placeholder='{"gpt-3.5-turbo": {"max_budget": 10.0}}' />
                   </Form.Item>
 
                   <Accordion
