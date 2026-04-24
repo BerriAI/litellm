@@ -277,6 +277,125 @@ async def test_gemini_3_responses_api_streaming_with_thought_signatures():
     print(f"✅ Collected {len(chunks)} streaming chunks")
 
 
+@pytest.mark.asyncio
+async def test_mock_google_ai_studio_compaction():
+    """
+    Test that universal compaction works for Google AI Studio via the Responses API.
+
+    Sends a very large input ("cats " * 100_000) with a low compact_threshold (50_000).
+    Mocks litellm.acompletion so no real API call is made:
+      - 1st call: summarization (triggered by compaction)
+      - 2nd call: the actual completion using ONLY the summary
+    Validates the response output has a compaction item followed by a text item.
+    """
+    request_model = "gemini/gemini-2.5-flash"
+    large_input = "cats " * 100_000
+
+    summary_response = litellm.ModelResponse(
+        id="summary-id",
+        created=1000000000,
+        model=request_model,
+        object="chat.completion",
+        choices=[
+            litellm.utils.Choices(
+                index=0,
+                message=litellm.utils.Message(
+                    role="assistant",
+                    content="<summary>The user repeated the word cats many times.</summary>",
+                ),
+                finish_reason="stop",
+            )
+        ],
+    )
+
+    final_response = litellm.ModelResponse(
+        id="final-id",
+        created=1000000001,
+        model=request_model,
+        object="chat.completion",
+        choices=[
+            litellm.utils.Choices(
+                index=0,
+                message=litellm.utils.Message(
+                    role="assistant",
+                    content="Based on the summary, you were talking about cats.",
+                ),
+                finish_reason="stop",
+            )
+        ],
+    )
+
+    call_count = 0
+
+    async def mock_acompletion(*args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return summary_response
+        return final_response
+
+    with patch("litellm.acompletion", new_callable=AsyncMock) as mock_ac:
+        mock_ac.side_effect = mock_acompletion
+
+        response = await litellm.aresponses(
+            model=request_model,
+            input=large_input,
+            context_management=[
+                {"type": "compaction", "compact_threshold": 50000}
+            ],
+        )
+
+        assert call_count == 2, f"Expected 2 acompletion calls, got {call_count}"
+
+        # 1st call: summarization — messages should contain the large input
+        first_call_kwargs = mock_ac.call_args_list[0][1]
+        first_msgs = first_call_kwargs.get("messages", [])
+        assert any(
+            "cats" in str(m.get("content", "")) for m in first_msgs
+        ), "Summarization call should contain the original input"
+
+        # 2nd call: actual completion — messages should contain ONLY the summary
+        second_call_kwargs = mock_ac.call_args_list[1][1]
+        second_msgs = second_call_kwargs.get("messages", [])
+        assert len(second_msgs) == 1, (
+            f"After compaction, completion should receive exactly 1 message (the summary), "
+            f"got {len(second_msgs)}"
+        )
+        assert "cats many times" in str(second_msgs[0].get("content", "")), (
+            "Completion call should see the extracted summary, not the original input"
+        )
+
+        # Validate response structure
+        from litellm.types.llms.openai import ResponsesAPIResponse
+
+        assert isinstance(response, ResponsesAPIResponse)
+        assert len(response.output) >= 2, (
+            f"Response output should have at least 2 items (compaction + text), "
+            f"got {len(response.output)}"
+        )
+
+        # First output item should be the text response (assistant message)
+        text_item = response.output[0]
+        if isinstance(text_item, dict):
+            assert text_item.get("type") == "message"
+        else:
+            assert getattr(text_item, "type", None) == "message"
+
+        # Second output item should be the compaction block
+        import base64
+        compaction_item = response.output[1]
+        if isinstance(compaction_item, dict):
+            assert compaction_item["type"] == "compaction"
+            assert "encrypted_content" in compaction_item
+            decoded = base64.b64decode(compaction_item["encrypted_content"]).decode("utf-8")
+            assert "cats many times" in decoded
+            assert compaction_item["id"].startswith("cmp_")
+        else:
+            assert getattr(compaction_item, "type", None) == "compaction"
+
+        print("compaction test passed: response output =", json.dumps(response.output, indent=2, default=str))
+
+
 class TestGoogleAIStudioResponsesAPITest(BaseResponsesAPITest):
     def get_base_completion_call_args(self):
         # litellm._turn_on_debug()

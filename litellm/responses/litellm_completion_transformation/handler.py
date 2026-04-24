@@ -2,9 +2,12 @@
 Handler for transforming responses api requests to litellm.completion requests
 """
 
-from typing import Any, Coroutine, Dict, Optional, Union
+import base64
+import uuid
+from typing import Any, Coroutine, Dict, List, Optional, Union
 
 import litellm
+from litellm.responses.compaction import maybe_compact_context
 from litellm.responses.litellm_completion_transformation.streaming_iterator import (
     LiteLLMCompletionStreamingIterator,
 )
@@ -61,12 +64,12 @@ class LiteLLMCompletionTransformationHandler:
         completion_args = {}
         completion_args.update(kwargs)
         completion_args.update(litellm_completion_request)
+        completion_args.pop("context_management", None)
 
         litellm_completion_response: Union[
             ModelResponse, litellm.CustomStreamWrapper
         ] = litellm.completion(
-            **litellm_completion_request,
-            **kwargs,
+            **completion_args,
         )
 
         if isinstance(litellm_completion_response, ModelResponse):
@@ -109,9 +112,18 @@ class LiteLLMCompletionTransformationHandler:
                 litellm_completion_request=litellm_completion_request,
             )
 
-        acompletion_args = {}
-        acompletion_args.update(kwargs)
-        acompletion_args.update(litellm_completion_request)
+        acompletion_args = {**kwargs, **litellm_completion_request}
+        context_management = acompletion_args.pop("context_management", None)
+        summary_text: Optional[str] = None
+        if context_management:
+            compacted_messages, summary_text = await maybe_compact_context(
+                messages=acompletion_args["messages"],
+                model=acompletion_args["model"],
+                context_management=context_management,
+                custom_llm_provider=acompletion_args.get("custom_llm_provider"),
+                litellm_metadata=kwargs.get("litellm_metadata"),
+            )
+            acompletion_args["messages"] = compacted_messages
 
         litellm_completion_response: Union[
             ModelResponse, litellm.CustomStreamWrapper
@@ -128,6 +140,11 @@ class LiteLLMCompletionTransformationHandler:
                 )
             )
 
+            if summary_text is not None:
+                responses_api_response.output = _append_compaction_output(
+                    summary_text, responses_api_response.output
+                )
+
             return responses_api_response
 
         elif isinstance(litellm_completion_response, litellm.CustomStreamWrapper):
@@ -140,7 +157,23 @@ class LiteLLMCompletionTransformationHandler:
                     "custom_llm_provider"
                 ),
                 litellm_metadata=kwargs.get("litellm_metadata", {}),
+                compaction_summary_text=summary_text,
             )
         raise ValueError(
             f"Unexpected response type: {type(litellm_completion_response)}"
         )
+
+
+def _append_compaction_output(
+    summary_text: str, existing_output: List[Any]
+) -> List[Any]:
+    """Append a compaction output item after the first output item."""
+    encoded_content = base64.b64encode(summary_text.encode("utf-8")).decode("utf-8")
+    compaction_item = {
+        "type": "compaction",
+        "id": "cmp_" + uuid.uuid4().hex,
+        "encrypted_content": encoded_content,
+    }
+    if existing_output:
+        return [existing_output[0], compaction_item] + list(existing_output[1:])
+    return [compaction_item]

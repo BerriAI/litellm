@@ -919,7 +919,16 @@ def responses(
                 **emulated_kwargs,
             )
 
-        if responses_api_provider_config is None:
+        _override_native_compaction = False
+        _ctx_mgmt = response_api_optional_params.get("context_management")
+        if _ctx_mgmt and isinstance(_ctx_mgmt, list):
+            for e in _ctx_mgmt:
+                if isinstance(e, dict) and e.get("type") == "compaction":
+                    if e.get("override_native_compaction", False):
+                        _override_native_compaction = True
+                    break
+
+        if responses_api_provider_config is None or _override_native_compaction:
             return litellm_completion_transformation_handler.response_api_handler(
                 model=model,
                 input=input,

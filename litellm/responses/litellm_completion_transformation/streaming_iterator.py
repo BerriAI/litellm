@@ -57,8 +57,10 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         responses_api_request: ResponsesAPIOptionalRequestParams,
         custom_llm_provider: Optional[str] = None,
         litellm_metadata: Optional[dict] = None,
+        compaction_summary_text: Optional[str] = None,
     ):
         self.model: str = model
+        self.compaction_summary_text: Optional[str] = compaction_summary_text
         self.litellm_custom_stream_wrapper: litellm.CustomStreamWrapper = (
             litellm_custom_stream_wrapper
         )
@@ -1179,6 +1181,17 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                 chat_completion_response=litellm_model_response,
                 responses_api_request=self.responses_api_request,
             )
+
+            # Append compaction output item if compaction was triggered
+            if self.compaction_summary_text is not None:
+                from litellm.responses.litellm_completion_transformation.handler import (
+                    _append_compaction_output,
+                )
+
+                responses_api_response.output = _append_compaction_output(
+                    self.compaction_summary_text,
+                    responses_api_response.output,
+                )
 
             # Use the cached response ID to ensure consistency across all events
             if self._cached_response_id:

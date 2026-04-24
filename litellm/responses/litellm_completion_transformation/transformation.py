@@ -2,6 +2,7 @@
 Handles transforming from Responses API -> LiteLLM completion  (Chat Completion API)
 """
 
+import base64
 from collections.abc import Sequence
 from typing import Any, Dict, List, Literal, Optional, Set, Tuple, Union, cast
 
@@ -374,6 +375,38 @@ class LiteLLMCompletionResponsesConfig:
         if isinstance(input, str):
             messages.append(ChatCompletionUserMessage(role="user", content=input))
         elif isinstance(input, list):
+            last_compaction_idx: Optional[int] = None
+            for idx, _inp in enumerate(input):
+                if isinstance(_inp, dict) and _inp.get("type") == "compaction":
+                    last_compaction_idx = idx
+
+            if last_compaction_idx is not None:
+                compaction_item = input[last_compaction_idx]
+                encrypted = compaction_item.get("encrypted_content", "")
+                if encrypted:
+                    decoded_content = base64.b64decode(
+                        encrypted.encode("utf-8")
+                    ).decode("utf-8")
+                else:
+                    decoded_content = compaction_item.get("content", "")
+                messages.append(
+                    ChatCompletionSystemMessage(
+                        role="system",
+                        content=(
+                            "The following is a summary of the prior conversation history, "
+                            "which was compacted to save context space. Treat this as established "
+                            "context, not as a new user message:\n\n" + decoded_content
+                        ),
+                    )
+                )
+                if last_compaction_idx > 0:
+                    pre_item = input[last_compaction_idx - 1]
+                    pre_msgs = LiteLLMCompletionResponsesConfig._transform_responses_api_input_item_to_chat_completion_message(
+                        input_item=pre_item
+                    )
+                    messages.extend(pre_msgs)
+                input = list(input[last_compaction_idx + 1:])
+
             existing_tool_call_ids: Set[str] = set()
             for _input in input:
                 chat_completion_messages = LiteLLMCompletionResponsesConfig._transform_responses_api_input_item_to_chat_completion_message(
