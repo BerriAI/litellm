@@ -1521,9 +1521,7 @@ async def test_auth_builder_admin_on_llm_route_honors_team_header():
         ),
     )
 
-    team_object = LiteLLM_TeamTable(
-        team_id="team-low", tpm_limit=100, rpm_limit=2
-    )
+    team_object = LiteLLM_TeamTable(team_id="team-low", tpm_limit=100, rpm_limit=2)
 
     with (
         patch.object(jwt_handler, "auth_jwt", new_callable=AsyncMock) as mock_auth_jwt,

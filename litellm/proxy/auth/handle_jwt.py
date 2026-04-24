@@ -1406,6 +1406,39 @@ class JWTAuthManager:
         return None
 
     @staticmethod
+    async def _attach_team_from_header_for_admin(
+        admin_result: JWTAuthBuilderResult,
+        route: str,
+        request_headers: Optional[dict],
+        jwt_handler: JWTHandler,
+        prisma_client: Optional[PrismaClient],
+        user_api_key_cache: DualCache,
+        parent_otel_span: Optional[Span],
+        proxy_logging_obj: ProxyLogging,
+    ) -> None:
+        """Attach team context from x-litellm-team-id to an admin result.
+
+        Only applies on LLM API routes so team TPM/RPM limits and attribution
+        are enforced when admins act on behalf of a team. Admin management
+        routes ignore the header to preserve pre-existing bypass behavior.
+        """
+        header_team_id = (
+            request_headers.get("x-litellm-team-id") if request_headers else None
+        )
+        if not header_team_id or not RouteChecks.is_llm_api_route(route=route):
+            return
+        team_object = await get_team_object(
+            team_id=header_team_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            parent_otel_span=parent_otel_span,
+            proxy_logging_obj=proxy_logging_obj,
+            team_id_upsert=jwt_handler.litellm_jwtauth.team_id_upsert,
+        )
+        admin_result["team_id"] = header_team_id
+        admin_result["team_object"] = team_object
+
+    @staticmethod
     async def auth_builder(
         api_key: str,
         jwt_handler: JWTHandler,
@@ -1494,25 +1527,16 @@ class JWTAuthManager:
             jwt_handler, scopes, route, user_id, org_id, api_key, jwt_valid_token
         )
         if admin_result:
-            # When an admin explicitly acts on behalf of a team via
-            # x-litellm-team-id on an LLM API route, fetch the team so
-            # team TPM/RPM limits and attribution apply. For admin
-            # management routes we intentionally ignore the header to
-            # preserve the pre-existing bypass behavior.
-            header_team_id = (
-                request_headers.get("x-litellm-team-id") if request_headers else None
+            await JWTAuthManager._attach_team_from_header_for_admin(
+                admin_result=admin_result,
+                route=route,
+                request_headers=request_headers,
+                jwt_handler=jwt_handler,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                parent_otel_span=parent_otel_span,
+                proxy_logging_obj=proxy_logging_obj,
             )
-            if header_team_id and RouteChecks.is_llm_api_route(route=route):
-                team_object = await get_team_object(
-                    team_id=header_team_id,
-                    prisma_client=prisma_client,
-                    user_api_key_cache=user_api_key_cache,
-                    parent_otel_span=parent_otel_span,
-                    proxy_logging_obj=proxy_logging_obj,
-                    team_id_upsert=jwt_handler.litellm_jwtauth.team_id_upsert,
-                )
-                admin_result["team_id"] = header_team_id
-                admin_result["team_object"] = team_object
             return admin_result
 
         # Get team with model access
