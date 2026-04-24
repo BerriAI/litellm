@@ -1224,9 +1224,13 @@ model LiteLLM_ClaudeCodePluginTable {
   @@map("LiteLLM_ClaudeCodePluginTable")
 }
 
-// User/team-scoped memory store. Keyed by (key, user_id, team_id).
+// User/team-scoped memory store with a GLOBAL unique key.
 // `value` is a string (typically markdown/text meant for LLM context);
 // `metadata` is an optional JSON envelope for structured tags without schema changes.
+// Note: `key` is globally unique across all users/teams — callers should
+// namespace their keys (e.g. `user:123:notes`) if they need per-user isolation.
+// `user_id` / `team_id` stamp ownership for visibility filtering, but do NOT
+// participate in the unique constraint.
 model LiteLLM_MemoryTable {
   memory_id   String   @id @default(uuid())
   key         String   @unique

@@ -58,12 +58,20 @@ function formatTimestamp(ts?: string): string {
   }
 }
 
+const PAGE_SIZE = 50;
+
 export const MemoryView: React.FC<MemoryViewProps> = ({ accessToken }) => {
   const [searchInput, setSearchInput] = useState("");
   const [appliedSearch, setAppliedSearch] = useState("");
   const [detailRow, setDetailRow] = useState<MemoryRow | null>(null);
   const [editRow, setEditRow] = useState<MemoryRow | null>(null);
   const [isCreateOpen, setIsCreateOpen] = useState(false);
+  const [currentPage, setCurrentPage] = useState(1);
+
+  // Reset to page 1 whenever the filter changes.
+  React.useEffect(() => {
+    setCurrentPage(1);
+  }, [appliedSearch]);
 
   const {
     data,
@@ -71,20 +79,22 @@ export const MemoryView: React.FC<MemoryViewProps> = ({ accessToken }) => {
     isFetching,
     refetch,
   } = useQuery({
-    queryKey: ["memoryList", appliedSearch],
+    queryKey: ["memoryList", appliedSearch, currentPage],
     queryFn: () => {
       if (!accessToken) throw new Error("Access token required");
       // Prefix search matches the Redis-style mental model (namespace scan):
       // typing "user:" finds "user:profile", "user:prefs", etc.
       return fetchMemoryList(accessToken, {
         keyPrefix: appliedSearch || undefined,
-        pageSize: 200,
+        page: currentPage,
+        pageSize: PAGE_SIZE,
       });
     },
     enabled: !!accessToken,
   });
 
   const rows = useMemo(() => data?.memories ?? [], [data]);
+  const total = data?.total ?? 0;
 
   const handleDelete = async (row: MemoryRow) => {
     Modal.confirm({
@@ -325,7 +335,18 @@ export const MemoryView: React.FC<MemoryViewProps> = ({ accessToken }) => {
             loading={isLoading}
             dataSource={rows}
             columns={columns}
-            pagination={{ pageSize: 20, showSizeChanger: true }}
+            // Server-side pagination: we fetch one page at a time so we never
+            // silently truncate large stores. `total` drives the page count;
+            // changing page/pageSize retriggers the query via `currentPage`.
+            pagination={{
+              current: currentPage,
+              pageSize: PAGE_SIZE,
+              total,
+              showSizeChanger: false,
+              showTotal: (n, range) =>
+                `${range[0]}–${range[1]} of ${n}`,
+              onChange: (page) => setCurrentPage(page),
+            }}
             locale={{
               emptyText: (
                 <Empty
@@ -338,11 +359,6 @@ export const MemoryView: React.FC<MemoryViewProps> = ({ accessToken }) => {
               ),
             }}
           />
-          {data?.total !== undefined && (
-            <Text type="secondary">
-              Showing {rows.length} of {data.total}
-            </Text>
-          )}
         </Card>
       </Space>
 

@@ -43,6 +43,11 @@ class MemoryCreateRequest(BaseModel):
 class MemoryUpdateRequest(BaseModel):
     value: Optional[str] = None
     metadata: Optional[Any] = None
+    # Only honored on create (when the row doesn't yet exist) and only for
+    # PROXY_ADMIN callers — mirrors MemoryCreateRequest so admins can bootstrap
+    # rows scoped to another user/team via PUT, not just POST.
+    user_id: Optional[str] = None
+    team_id: Optional[str] = None
 
 
 class MemoryListResponse(BaseModel):

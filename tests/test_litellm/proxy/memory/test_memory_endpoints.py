@@ -203,6 +203,76 @@ class TestMemoryEndpoints:
             )
         assert resp.status_code == 403
 
+    def test_create_memory_identity_less_caller_returns_400(self):
+        """
+        A non-admin caller with neither user_id nor team_id would produce an
+        orphan row unreachable by the visibility filter. Reject up front.
+        """
+        client = _make_client(UserAPIKeyAuth(api_key="sk-anon"))
+        with _patch_prisma(self.prisma):
+            resp = client.post("/v1/memory", json={"key": "notes", "value": "x"})
+        assert resp.status_code == 400
+
+    def test_put_memory_admin_can_bootstrap_foreign_scope(self):
+        """PUT-create should mirror POST's admin scope override."""
+        client = _make_client(_admin_auth())
+        with _patch_prisma(self.prisma):
+            resp = client.put(
+                "/v1/memory/notes",
+                json={"value": "x", "user_id": "some-user", "team_id": "some-team"},
+            )
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["user_id"] == "some-user"
+        assert body["team_id"] == "some-team"
+
+    def test_put_memory_race_returns_update_on_unique_violation(self):
+        """
+        Simulate the check-then-create race: _find_memory_for_caller says the
+        row doesn't exist, then the create call gets a unique-constraint
+        violation (a concurrent writer beat us). The handler should re-read
+        and fall through to an update instead of surfacing a 500.
+        """
+        table = self.prisma.db.litellm_memorytable
+
+        original_create = table.create
+        original_find_many = table.find_many
+        pre_create_calls = {"n": 0}
+
+        async def racing_create(data):
+            # On the very first create call we issue during the upsert, pretend
+            # another writer inserted the row just before us.
+            pre_create_calls["n"] += 1
+            if pre_create_calls["n"] == 1:
+                table.rows.append(
+                    _make_row(
+                        memory_id="m-race",
+                        key=data["key"],
+                        value="from-other-writer",
+                        user_id="user-a",
+                        team_id="team-a",
+                    )
+                )
+                raise Exception("UniqueViolation: duplicate key (raced)")
+            return await original_create(data)
+
+        table.create = racing_create  # type: ignore[assignment]
+
+        client = _make_client(_user_auth("user-a", "team-a"))
+        with _patch_prisma(self.prisma):
+            resp = client.put("/v1/memory/notes", json={"value": "mine"})
+
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        # Update path kicked in: our value replaced the racer's.
+        assert body["value"] == "mine"
+        # Only one row exists (the one the racer inserted, now updated).
+        assert len(table.rows) == 1
+
+        # Restore the fake's methods.
+        table.create = original_create  # type: ignore[assignment]
+        table.find_many = original_find_many  # type: ignore[assignment]
+
     def test_admin_can_set_any_scope(self):
         client = _make_client(_admin_auth())
         with _patch_prisma(self.prisma):

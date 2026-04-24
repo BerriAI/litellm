@@ -86,6 +86,67 @@ def _require_prisma():
     return prisma_client
 
 
+def _is_unique_violation(exc: Exception) -> bool:
+    """Best-effort detection of a Prisma unique-constraint violation."""
+    msg = str(exc)
+    return "Unique" in msg or "unique" in msg or "UniqueViolation" in msg
+
+
+def _resolve_scope(
+    user_api_key_dict: UserAPIKeyAuth,
+    requested_user_id: Optional[str],
+    requested_team_id: Optional[str],
+) -> tuple[Optional[str], Optional[str]]:
+    """
+    Resolve the (user_id, team_id) to stamp on a new row.
+
+    - PROXY_ADMIN: may override either dimension via the request body.
+    - Everyone else: the requested values must match their own (or be omitted).
+
+    Also rejects identity-less creation: a row with both user_id and team_id
+    NULL is invisible to every non-admin caller (the visibility filter would
+    never match it), so we refuse to create orphan rows unless the caller is
+    a PROXY_ADMIN who is explicitly stamping a global/shared row.
+    """
+    if _is_admin(user_api_key_dict):
+        user_id = (
+            requested_user_id
+            if requested_user_id is not None
+            else user_api_key_dict.user_id
+        )
+        team_id = (
+            requested_team_id
+            if requested_team_id is not None
+            else user_api_key_dict.team_id
+        )
+        return user_id, team_id
+
+    if requested_user_id is not None and requested_user_id != user_api_key_dict.user_id:
+        raise HTTPException(
+            status_code=403,
+            detail="Only proxy admins may set user_id to a different user.",
+        )
+    if requested_team_id is not None and requested_team_id != user_api_key_dict.team_id:
+        raise HTTPException(
+            status_code=403,
+            detail="Only proxy admins may set team_id to a different team.",
+        )
+    user_id = user_api_key_dict.user_id
+    team_id = user_api_key_dict.team_id
+    if not user_id and not team_id:
+        # Orphan row: no user_id and no team_id means no non-admin can ever
+        # see it again via the visibility filter. Reject up front.
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Cannot create a memory entry without a user_id or team_id. "
+                "Authenticate with a key that has a user_id or team_id, or call "
+                "as a proxy admin."
+            ),
+        )
+    return user_id, team_id
+
+
 @router.post(
     "/v1/memory",
     tags=["memory management"],
@@ -98,28 +159,7 @@ async def create_memory(
 ):
     """Create a new memory entry for the caller (or, for admins, any scope)."""
     prisma_client = _require_prisma()
-
-    if _is_admin(user_api_key_dict):
-        user_id = (
-            body.user_id if body.user_id is not None else user_api_key_dict.user_id
-        )
-        team_id = (
-            body.team_id if body.team_id is not None else user_api_key_dict.team_id
-        )
-    else:
-        # Non-admins cannot set a scope other than their own.
-        if body.user_id is not None and body.user_id != user_api_key_dict.user_id:
-            raise HTTPException(
-                status_code=403,
-                detail="Only proxy admins may set user_id to a different user.",
-            )
-        if body.team_id is not None and body.team_id != user_api_key_dict.team_id:
-            raise HTTPException(
-                status_code=403,
-                detail="Only proxy admins may set team_id to a different team.",
-            )
-        user_id = user_api_key_dict.user_id
-        team_id = user_api_key_dict.team_id
+    user_id, team_id = _resolve_scope(user_api_key_dict, body.user_id, body.team_id)
 
     # Prisma's Python client rejects `metadata=None` on a `Json?` field —
     # the field must be omitted entirely to store SQL NULL. Build the data
@@ -139,8 +179,7 @@ async def create_memory(
         row = await prisma_client.db.litellm_memorytable.create(data=create_data)
     except Exception as e:
         # Key is globally unique. Any duplicate → 409.
-        msg = str(e)
-        if "Unique" in msg or "unique" in msg or "UniqueViolation" in msg:
+        if _is_unique_violation(e):
             raise HTTPException(
                 status_code=409,
                 detail=f"Memory with key '{body.key}' already exists.",
@@ -265,16 +304,17 @@ async def upsert_memory(
         )
     data["updated_by"] = user_api_key_dict.user_id
 
-    try:
-        existing = None
+    async def _find_existing() -> Any:
+        """Return the caller-visible row for `key`, or None."""
         try:
-            existing = await _find_memory_for_caller(
-                prisma_client, key, user_api_key_dict
-            )
+            return await _find_memory_for_caller(prisma_client, key, user_api_key_dict)
         except HTTPException as e:
-            if e.status_code != 404:
-                raise
+            if e.status_code == 404:
+                return None
+            raise
 
+    try:
+        existing = await _find_existing()
         if existing is not None:
             row = await prisma_client.db.litellm_memorytable.update(
                 where={"memory_id": existing.memory_id},
@@ -286,18 +326,46 @@ async def upsert_memory(
                     status_code=400,
                     detail="Cannot create a new memory via PUT without a 'value'.",
                 )
+            # PUT-create must honor admin scope override, matching POST semantics.
+            user_id, team_id = _resolve_scope(
+                user_api_key_dict, body.user_id, body.team_id
+            )
             # Omit `metadata` when None — Prisma rejects None on Json? fields.
             create_data: dict = {
                 "key": key,
                 "value": body.value,
-                "user_id": user_api_key_dict.user_id,
-                "team_id": user_api_key_dict.team_id,
+                "user_id": user_id,
+                "team_id": team_id,
                 "created_by": user_api_key_dict.user_id,
                 "updated_by": user_api_key_dict.user_id,
             }
             if body.metadata is not None:
                 create_data["metadata"] = body.metadata
-            row = await prisma_client.db.litellm_memorytable.create(data=create_data)
+            try:
+                row = await prisma_client.db.litellm_memorytable.create(
+                    data=create_data
+                )
+            except Exception as e:
+                # Race: a concurrent PUT/POST created the row after our check.
+                # Re-read and fall back to an update so the PUT stays idempotent
+                # instead of surfacing a 500 on a unique-violation.
+                if not _is_unique_violation(e):
+                    raise
+                existing_after_race = await _find_existing()
+                if existing_after_race is None:
+                    # Row exists globally but isn't visible to this caller
+                    # (owned by someone else). Treat as conflict.
+                    raise HTTPException(
+                        status_code=409,
+                        detail=(
+                            f"Memory with key '{key}' already exists in a "
+                            "different scope."
+                        ),
+                    )
+                row = await prisma_client.db.litellm_memorytable.update(
+                    where={"memory_id": existing_after_race.memory_id},
+                    data=data,
+                )
     except HTTPException:
         raise
     except Exception as e:
