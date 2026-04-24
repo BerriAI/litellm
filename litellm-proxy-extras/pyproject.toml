@@ -19,7 +19,7 @@ requires = ["uv_build==0.10.7"]
 build-backend = "uv_build"
 
 [tool.uv]
-required-version = "==0.10.9"
+required-version = ">=0.10.9"
 
 [tool.uv.build-backend]
 module-root = ""
