@@ -21,9 +21,6 @@ from litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails import (
 )
 from litellm.proxy.utils import ProxyLogging
 from litellm.types.guardrails import GuardrailEventHooks
-from litellm.types.proxy.guardrails.guardrail_hooks.bedrock_guardrails import (
-    BedrockGuardrailResponse,
-)
 from litellm.types.utils import ModelResponse
 
 
@@ -2270,9 +2267,16 @@ async def test_make_bedrock_api_request_skips_http_call_when_all_messages_filter
     messages = [
         {"role": "system", "content": "You are a helpful assistant."},
     ]
-    with patch.object(guardrail, "_prepare_request") as mock_prepare:
+    with (
+        patch.object(
+            guardrail,
+            "_load_credentials",
+            return_value=(MagicMock(), "us-east-1"),
+        ),
+        patch.object(guardrail, "_prepare_request") as mock_prepare,
+    ):
         response = await guardrail.make_bedrock_api_request(
             source="INPUT", messages=messages
         )
     mock_prepare.assert_not_called()
-    assert isinstance(response, BedrockGuardrailResponse)
+    assert isinstance(response, dict)
