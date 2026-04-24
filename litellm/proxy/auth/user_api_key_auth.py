@@ -810,6 +810,19 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                                 if team_object is not None
                                 else None
                             ),
+                            team_tpm_limit=(
+                                team_object.tpm_limit
+                                if team_object is not None
+                                else None
+                            ),
+                            team_rpm_limit=(
+                                team_object.rpm_limit
+                                if team_object is not None
+                                else None
+                            ),
+                            team_models=(
+                                team_object.models if team_object is not None else []
+                            ),
                             team_metadata=(
                                 team_object.metadata
                                 if team_object is not None
