@@ -264,7 +264,9 @@ messages=[{"role": "user", "content": [
 
 - `api_version`: *string (optional)* - (Azure-specific) the api version for the call
 
-- `num_retries`: *int (optional)* - The number of times to retry the API call if an APIError, TimeoutError or ServiceUnavailableError occurs 
+- `num_retries`: *int (optional)* - The number of times litellm retries the API call (with backoff) if an APIError, TimeoutError or ServiceUnavailableError occurs. **Note:** This is independent of `max_retries`, which controls the underlying SDK client's own retry loop (default 2 for OpenAI/Azure, i.e. 3 attempts per request). When both are active they **multiply** — e.g. `num_retries=3` with the default `max_retries=2` produces up to 12 HTTP requests. Set `max_retries=0` when using `num_retries` to get predictable retry counts.
+
+- `max_retries`: *int (optional)* - The number of retries the underlying SDK client (e.g. openai-python) makes per request before returning an error to litellm. Default is **2** (3 total attempts). Set to `0` to disable SDK-level retries and let `num_retries` be the sole retry layer.
 
 - `context_window_fallback_dict`: *dict (optional)* - A mapping of model to use if call fails due to context window error
 

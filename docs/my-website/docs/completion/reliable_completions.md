@@ -31,6 +31,27 @@ response = completion(
         )
 ```
 
+### Avoiding retry amplification
+
+`num_retries` controls litellm's retry loop, but the underlying SDK client (e.g. openai-python) has its **own** retry loop via `max_retries` (default **2**, i.e. 3 total attempts per request). When both are active they multiply:
+
+| `num_retries` | `max_retries` (SDK) | Total HTTP requests (worst case) |
+|---|---|---|
+| 3 | 2 (default) | **12** (4 × 3) |
+| 3 | 0 | **4** |
+| 0 | 2 (default) | **3** |
+
+To use only litellm-level retries and get predictable retry counts, set `max_retries=0`:
+
+```python
+response = completion(
+    model="gpt-3.5-turbo",
+    messages=messages,
+    num_retries=2,
+    max_retries=0,  # disable SDK-level retries
+)
+```
+
 ## Fallbacks (SDK)
 
 :::info

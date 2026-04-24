@@ -1138,7 +1138,8 @@ def completion(  # type: ignore # noqa: PLR0915
         LITELLM Specific Params
         mock_response (str, optional): If provided, return a mock completion response for testing or debugging purposes (default is None).
         custom_llm_provider (str, optional): Used for Non-OpenAI LLMs, Example usage for bedrock, set model="amazon.titan-tg1-large" and custom_llm_provider="bedrock"
-        max_retries (int, optional): The number of retries to attempt (default is 0).
+        max_retries (int, optional): The number of retries the underlying SDK client makes per request (default is 2, i.e. 3 total attempts). In ``completion()``, ``num_retries`` overwrites this value. In ``completion_with_retries()`` and the Router, they are independent and multiply — e.g. ``num_retries=3`` with ``max_retries=2`` produces up to 12 HTTP requests. Set ``max_retries=0`` when using ``num_retries`` via the Router or ``completion_with_retries()`` to avoid compounding.
+        num_retries (int, optional): In ``completion()``, this is an alias for ``max_retries`` (overwrites it). In ``completion_with_retries()`` and the Router, this drives a separate tenacity retry loop around the full call. See ``max_retries`` note above about the interaction.
     Returns:
         ModelResponse: A response object containing the generated completion and associated metadata.
 
@@ -1264,7 +1265,15 @@ def completion(  # type: ignore # noqa: PLR0915
             verbose_logger.warning(f"Failed to get proxy auth headers: {e}")
     num_retries = kwargs.get(
         "num_retries", None
-    )  ## alt. param for 'max_retries'. Use this to pass retries w/ instructor.
+    )  ## litellm-level retry loop (wraps full completion call); distinct from max_retries (SDK-level). See NOTE below.
+    # NOTE: In completion(), num_retries is aliased to max_retries (line ~1351)
+    # and passed to the SDK client.  In completion_with_retries(), they are
+    # independent: num_retries drives a tenacity loop while max_retries is
+    # reset to 0.  When calling completion() directly with num_retries, the
+    # SDK default of max_retries=2 is overwritten, so there is no
+    # multiplication.  But when using the Router or completion_with_retries(),
+    # both layers can be active — e.g. num_retries=3 + max_retries=2 → up to
+    # 12 HTTP requests.  Pass max_retries=0 to avoid compounding.
     max_retries = kwargs.get("max_retries", None)
     cooldown_time = kwargs.get("cooldown_time", None)
     context_window_fallback_dict = kwargs.get("context_window_fallback_dict", None)
