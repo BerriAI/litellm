@@ -3533,38 +3533,45 @@ def _get_masked_values(
         "key",
         "secret",
         "vertex_credentials",
+        "credentials",
+        "password",
+        "passwd",
     ]
+
+    def _mask_value(v: Any) -> Any:
+        if isinstance(v, dict):
+            return _get_masked_values(
+                v,
+                ignore_sensitive_values=ignore_sensitive_values,
+                mask_all_values=mask_all_values,
+                unmasked_length=unmasked_length,
+                number_of_asterisks=number_of_asterisks,
+            )
+        if not isinstance(v, str):
+            return v
+        if len(v) <= unmasked_length:
+            return "*****"
+        if number_of_asterisks is not None:
+            return (
+                v[: unmasked_length // 2]
+                + "*" * number_of_asterisks
+                + v[-unmasked_length // 2 :]
+            )
+        return (
+            v[: unmasked_length // 2]
+            + "*" * (len(v) - unmasked_length)
+            + v[-unmasked_length // 2 :]
+        )
+
     return {
         k: (
-            # If ignore_sensitive_values is True, or if this key doesn't contain sensitive keywords, return original value
             v
             if ignore_sensitive_values
             or not any(
                 sensitive_keyword in k.lower()
                 for sensitive_keyword in sensitive_keywords
             )
-            else (
-                # Apply masking to sensitive keys
-                (
-                    v[: unmasked_length // 2]
-                    + "*" * number_of_asterisks
-                    + v[-unmasked_length // 2 :]
-                )
-                if (
-                    isinstance(v, str)
-                    and len(v) > unmasked_length
-                    and number_of_asterisks is not None
-                )
-                else (
-                    (
-                        v[: unmasked_length // 2]
-                        + "*" * (len(v) - unmasked_length)
-                        + v[-unmasked_length // 2 :]
-                    )
-                    if (isinstance(v, str) and len(v) > unmasked_length)
-                    else ("*****" if isinstance(v, str) else v)
-                )
-            )
+            else _mask_value(v)
         )
         for k, v in sensitive_object.items()
     }
