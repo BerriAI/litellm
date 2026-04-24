@@ -1,9 +1,10 @@
 import React from "react";
+import { useForm } from "react-hook-form";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { Info } from "lucide-react";
-import { Form, Input as AntInput } from "antd";
+import { Label } from "@/components/ui/label";
+import { Info, LoaderCircle } from "lucide-react";
 
 type OnboardingFormBodyProps = {
   variant: "signup" | "reset_password";
@@ -13,6 +14,11 @@ type OnboardingFormBodyProps = {
   onSubmit: (values: { password: string }) => void;
 };
 
+type FormValues = {
+  user_email: string;
+  password: string;
+};
+
 export function OnboardingFormBody({
   variant,
   userEmail,
@@ -20,11 +26,18 @@ export function OnboardingFormBody({
   claimError,
   onSubmit,
 }: OnboardingFormBodyProps) {
-  const [form] = Form.useForm();
+  const {
+    register,
+    handleSubmit,
+    formState: { errors },
+    setValue,
+  } = useForm<FormValues>({
+    defaultValues: { user_email: userEmail, password: "" },
+  });
 
   React.useEffect(() => {
-    if (userEmail) form.setFieldValue("user_email", userEmail);
-  }, [userEmail, form]);
+    if (userEmail) setValue("user_email", userEmail);
+  }, [userEmail, setValue]);
 
   return (
     <div className="mx-auto w-full max-w-md mt-10">
@@ -62,48 +75,64 @@ export function OnboardingFormBody({
           </div>
         )}
 
-        <Form
-          className="mt-10 mb-5"
-          layout="vertical"
-          form={form}
-          onFinish={(values) => onSubmit({ password: values.password })}
+        <form
+          className="mt-10 mb-5 flex flex-col gap-4"
+          onSubmit={handleSubmit((values) =>
+            onSubmit({ password: values.password }),
+          )}
         >
-          <Form.Item label="Email Address" name="user_email">
-            <Input type="email" disabled />
-          </Form.Item>
+          <div className="space-y-2">
+            <Label htmlFor="user_email">Email Address</Label>
+            <Input
+              id="user_email"
+              type="email"
+              disabled
+              {...register("user_email")}
+            />
+          </div>
 
-          <Form.Item
-            label="Password"
-            name="password"
-            rules={[
-              { required: true, message: "password required to sign up" },
-            ]}
-            help={
-              variant === "reset_password"
-                ? "Enter your new password"
-                : "Create a password for your account"
-            }
-          >
-            <AntInput.Password />
-          </Form.Item>
+          <div className="space-y-2">
+            <Label htmlFor="password">Password</Label>
+            <Input
+              id="password"
+              type="password"
+              {...register("password", {
+                required: "password required to sign up",
+              })}
+            />
+            {errors.password ? (
+              <p className="text-sm text-destructive">
+                {errors.password.message as string}
+              </p>
+            ) : (
+              <p className="text-sm text-muted-foreground">
+                {variant === "reset_password"
+                  ? "Enter your new password"
+                  : "Create a password for your account"}
+              </p>
+            )}
+          </div>
 
           {claimError && (
-            <div className="flex gap-2 items-start p-3 rounded-md bg-destructive/10 border border-destructive/30 text-destructive mb-4">
+            <div className="flex gap-2 items-start p-3 rounded-md bg-destructive/10 border border-destructive/30 text-destructive">
               <Info className="h-4 w-4 mt-0.5 shrink-0" />
               <div className="text-sm">{claimError}</div>
             </div>
           )}
 
-          <div className="mt-10">
+          <div className="mt-6">
             <Button type="submit" disabled={isPending}>
-              {isPending
-                ? "…"
-                : variant === "reset_password"
-                  ? "Reset Password"
-                  : "Sign Up"}
+              {isPending && (
+                <LoaderCircle
+                  className="h-4 w-4 animate-spin mr-2"
+                  aria-label="loading"
+                  role="img"
+                />
+              )}
+              {variant === "reset_password" ? "Reset Password" : "Sign Up"}
             </Button>
           </div>
-        </Form>
+        </form>
       </Card>
     </div>
   );

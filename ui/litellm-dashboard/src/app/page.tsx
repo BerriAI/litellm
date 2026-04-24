@@ -46,11 +46,9 @@ import { clearTokenCookies, getCookie } from "@/utils/cookieUtils";
 import { isJwtExpired } from "@/utils/jwtUtils";
 import { buildLoginUrlWithReturn, consumeReturnUrl, isValidReturnUrl, normalizeUrlForCompare, storeReturnUrl } from "@/utils/returnUrlUtils";
 import { formatUserRole, isAdminRole } from "@/utils/roles";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { jwtDecode } from "jwt-decode";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useMemo, useRef, useState } from "react";
-import { ConfigProvider, theme } from "antd";
 
 function deleteCookie(name: string, path = "/") {
   // Best-effort client-side clear (works for non-HttpOnly cookies without Domain)
@@ -113,6 +111,16 @@ function CreateKeyPageContent() {
   const toggleDarkMode = () => {
     setIsDarkMode(!isDarkMode);
   };
+
+  // Apply dark-mode class to the root element so shadcn CSS variables switch.
+  useEffect(() => {
+    const root = document.documentElement;
+    if (isDarkMode) {
+      root.classList.add("dark");
+    } else {
+      root.classList.remove("dark");
+    }
+  }, [isDarkMode]);
 
   const invitation_id = searchParams.get("invitation_id");
 
@@ -451,9 +459,6 @@ function CreateKeyPageContent() {
 
   return (
     <Suspense fallback={<LoadingScreen />}>
-      <ConfigProvider theme={{
-          algorithm: isDarkMode ? theme.darkAlgorithm : theme.defaultAlgorithm,
-        }}>
           <ThemeProvider accessToken={accessToken}>
             {invitation_id ? (
               <UserDashboard
@@ -675,7 +680,6 @@ function CreateKeyPageContent() {
               </div>
             )}
           </ThemeProvider>
-        </ConfigProvider>
     </Suspense>
   );
 }
