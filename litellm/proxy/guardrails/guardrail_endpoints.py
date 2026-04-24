@@ -136,10 +136,11 @@ async def list_guardrails():
 @router.get(
     "/v2/guardrails/list",
     tags=["Guardrails"],
-    dependencies=[Depends(user_api_key_auth)],
     response_model=ListGuardrailsResponse,
 )
-async def list_guardrails_v2():
+async def list_guardrails_v2(
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
     """
     List the guardrails that are available in the database using GuardrailRegistry
 
@@ -179,13 +180,29 @@ async def list_guardrails_v2():
     if prisma_client is None:
         raise HTTPException(status_code=500, detail="Prisma client not initialized")
 
+    is_admin = user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
+
     try:
         guardrails = await GUARDRAIL_REGISTRY.get_all_guardrails_from_db(
             prisma_client=prisma_client
         )
 
+        excluded_guardrail_ids: set = set()
+        if not is_admin:
+            caller_team_ids = await _get_user_team_ids(user_api_key_dict)
+            allowed: List[Guardrail] = []
+            for g in guardrails:
+                g_team_id = g.get("team_id")
+                if g_team_id is None or g_team_id in caller_team_ids:
+                    allowed.append(g)
+                else:
+                    gid = g.get("guardrail_id")
+                    if gid:
+                        excluded_guardrail_ids.add(gid)
+            guardrails = allowed
+
         guardrail_configs: List[GuardrailInfoResponse] = []
-        seen_guardrail_ids = set()
+        seen_guardrail_ids: set = excluded_guardrail_ids.copy()
         for guardrail in guardrails:
             litellm_params: Optional[Union[LitellmParams, dict]] = guardrail.get(
                 "litellm_params"
@@ -221,7 +238,7 @@ async def list_guardrails_v2():
         # get guardrails initialized on litellm config.yaml
         in_memory_guardrails = IN_MEMORY_GUARDRAIL_HANDLER.list_in_memory_guardrails()
         for guardrail in in_memory_guardrails:
-            # only add guardrails that are not in DB guardrail list already
+            # only add guardrails that are not in DB guardrail list already and not excluded
             if guardrail.get("guardrail_id") not in seen_guardrail_ids:
                 in_memory_litellm_params_raw = guardrail.get("litellm_params")
                 in_memory_litellm_params_dict = (
@@ -751,15 +768,21 @@ async def _get_user_team_ids(user_api_key_dict: UserAPIKeyAuth) -> List[str]:
 
 
 def _row_to_submission_item(row: Any) -> GuardrailSubmissionItem:
+    from litellm.litellm_core_utils.litellm_logging import _get_masked_values
+
     guardrail_info = _parse_json_field(row.guardrail_info) or {}
     team_guardrail = row.team_id is not None
+    raw_params = _parse_json_field(row.litellm_params) or {}
+    masked_params = _get_masked_values(
+        raw_params, unmasked_length=4, number_of_asterisks=4
+    )
     return GuardrailSubmissionItem(
         guardrail_id=row.guardrail_id,
         guardrail_name=row.guardrail_name,
         status=row.status or "active",
         team_id=row.team_id,
         team_guardrail=team_guardrail,
-        litellm_params=_parse_json_field(row.litellm_params),
+        litellm_params=masked_params,
         guardrail_info=guardrail_info,
         submitted_by_user_id=guardrail_info.get("submitted_by_user_id"),
         submitted_by_email=guardrail_info.get("submitted_by_email"),
@@ -966,6 +989,7 @@ async def approve_guardrail_submission(
             "guardrail_name": row.guardrail_name,
             "litellm_params": litellm_params,
             "guardrail_info": guardrail_info or {},
+            "team_id": row.team_id,
         }
         try:
             IN_MEMORY_GUARDRAIL_HANDLER.initialize_guardrail(
