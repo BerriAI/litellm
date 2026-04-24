@@ -7,7 +7,7 @@ import inspect
 import json
 import os
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Type, TypeVar, Union, cast
+from typing import Any, Dict, List, Literal, Optional, Type, TypeVar, Union, cast
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -2167,10 +2167,16 @@ async def apply_guardrail(
                 detail=f"Guardrail '{request.guardrail_name}' not found. Please ensure the guardrail is configured in your LiteLLM proxy.",
             )
 
+        request_data: dict = {}
+        if request.messages:
+            request_data["messages"] = request.messages
+        _input_type: Literal["request", "response"] = (
+            "response" if request.input_type == "response" else "request"
+        )
         guardrailed_inputs = await active_guardrail.apply_guardrail(
             inputs={"texts": [request.text]},
-            request_data={},
-            input_type="request",
+            request_data=request_data,
+            input_type=_input_type,
         )
         response_text = guardrailed_inputs.get("texts", [])
 
