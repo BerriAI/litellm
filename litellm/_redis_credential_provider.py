@@ -1,7 +1,7 @@
 import asyncio
 import threading
 import time
-from typing import Dict, Optional, Tuple
+from typing import Dict, Tuple
 
 from redis.credentials import CredentialProvider  # type: ignore[attr-defined]
 
