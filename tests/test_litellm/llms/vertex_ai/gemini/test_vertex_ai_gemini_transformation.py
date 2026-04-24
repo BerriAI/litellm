@@ -86,8 +86,10 @@ def test_check_if_part_exists_in_parts_camel_case_snake_case():
     assert check_if_part_exists_in_parts(parts_mixed, part_mixed_casing)
 
 
-def test_cached_content_omits_system_instruction_tools_toolconfig():
-    """Regression: #26014 / #17304 — cachedContent must not ship with tools/system/toolConfig."""
+def test_cached_content_respects_modify_params_for_cache_incompatible_fields():
+    """Regression: cachedContent drops system/tools/toolConfig only when modify_params=True."""
+    import litellm
+
     cache_name = "projects/p/locations/us-central1/cachedContents/abc123"
     messages = [
         {"role": "system", "content": "You are helpful"},
@@ -104,33 +106,54 @@ def test_cached_content_omits_system_instruction_tools_toolconfig():
         "tool_choice": {"functionCallingConfig": {"mode": "AUTO"}},
     }
 
-    result = _transform_request_body(
-        messages=list(messages),
-        model="gemini-2.5-pro",
-        optional_params=dict(optional_params),
-        custom_llm_provider="vertex_ai",
-        litellm_params={},
-        cached_content=cache_name,
-    )
+    original_modify_params = litellm.modify_params
+    try:
+        # With modify_params=False (default), keep fields even with cachedContent.
+        litellm.modify_params = False
+        result = _transform_request_body(
+            messages=list(messages),
+            model="gemini-2.5-pro",
+            optional_params=dict(optional_params),
+            custom_llm_provider="vertex_ai",
+            litellm_params={},
+            cached_content=cache_name,
+        )
+        assert result.get("cachedContent") == cache_name
+        assert "system_instruction" in result
+        assert "tools" in result
+        assert "toolConfig" in result
+        assert "contents" in result
 
-    assert result.get("cachedContent") == cache_name
-    assert "system_instruction" not in result
-    assert "tools" not in result
-    assert "toolConfig" not in result
-    assert "contents" in result
+        # With modify_params=True, drop cache-incompatible fields.
+        litellm.modify_params = True
+        result_modify_true = _transform_request_body(
+            messages=list(messages),
+            model="gemini-2.5-pro",
+            optional_params=dict(optional_params),
+            custom_llm_provider="vertex_ai",
+            litellm_params={},
+            cached_content=cache_name,
+        )
+        assert result_modify_true.get("cachedContent") == cache_name
+        assert "system_instruction" not in result_modify_true
+        assert "tools" not in result_modify_true
+        assert "toolConfig" not in result_modify_true
+        assert "contents" in result_modify_true
 
-    # Without cache, conflicting fields are included as before
-    result_no_cache = _transform_request_body(
-        messages=list(messages),
-        model="gemini-2.5-pro",
-        optional_params=dict(optional_params),
-        custom_llm_provider="vertex_ai",
-        litellm_params={},
-        cached_content=None,
-    )
-    assert "system_instruction" in result_no_cache
-    assert "tools" in result_no_cache
-    assert "toolConfig" in result_no_cache
+        # Without cache, fields are always included.
+        result_no_cache = _transform_request_body(
+            messages=list(messages),
+            model="gemini-2.5-pro",
+            optional_params=dict(optional_params),
+            custom_llm_provider="vertex_ai",
+            litellm_params={},
+            cached_content=None,
+        )
+        assert "system_instruction" in result_no_cache
+        assert "tools" in result_no_cache
+        assert "toolConfig" in result_no_cache
+    finally:
+        litellm.modify_params = original_modify_params
 
 
 # Tests for issue #14556: Labels field provider-aware filtering
