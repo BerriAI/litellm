@@ -91,16 +91,6 @@ class NewRelicLogger(CustomLogger):
         self.license_key = os.getenv("NEW_RELIC_LICENSE_KEY")
         self.app_name = os.getenv("NEW_RELIC_APP_NAME")
 
-        # Determine if message content should be recorded
-        # Both turn_off_message_logging param AND env var must agree to record content
-        # If either disables recording, content will not be recorded
-        # Default: Messages ARE recorded (record_content=True) unless explicitly disabled by either method
-        self.record_content = (
-            not self.turn_off_message_logging
-        ) and self._parse_bool_env(
-            "NEW_RELIC_AI_MONITORING_RECORD_CONTENT_ENABLED", True
-        )
-
         # Validate configuration
         if not self.license_key or not self.app_name:
             verbose_logger.warning(
@@ -117,7 +107,9 @@ class NewRelicLogger(CustomLogger):
             self.enabled = False
         else:
             try:
-                _newrelic_agent.register_application()
+                # timeout=0 forces non-blocking startup: the agent connects in a
+                # background thread regardless of newrelic.ini / NEW_RELIC_STARTUP_TIMEOUT.
+                _newrelic_agent.register_application(timeout=0)
 
                 self.enabled = True
                 verbose_logger.info(
@@ -147,6 +139,19 @@ class NewRelicLogger(CustomLogger):
                     **litellm.newrelic_params
                 ).model_dump()
         return dict_newrelic_params
+
+    @property
+    def record_content(self) -> bool:
+        """Whether to record message content in New Relic.
+
+        Both turn_off_message_logging param AND NEW_RELIC_AI_MONITORING_RECORD_CONTENT_ENABLED
+        env var must agree to record content. If either disables recording, content will not
+        be recorded. Read at call time so UI config changes take effect without a restart.
+        Default: True (record content) unless explicitly disabled by either method.
+        """
+        return (not self.turn_off_message_logging) and self._parse_bool_env(
+            "NEW_RELIC_AI_MONITORING_RECORD_CONTENT_ENABLED", True
+        )
 
     def _parse_bool_env(self, var_name: str, default: bool = False) -> bool:
         """Parse boolean environment variable. Accepts 'true' (case-insensitive) per spec."""

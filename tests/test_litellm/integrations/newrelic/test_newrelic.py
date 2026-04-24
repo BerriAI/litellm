@@ -152,7 +152,7 @@ class TestNewRelicLoggerInit:
                 {**NR_ENV, "NEW_RELIC_AI_MONITORING_RECORD_CONTENT_ENABLED": "false"},
             ):
                 logger = NewRelicLogger()
-        assert logger.record_content is False
+                assert logger.record_content is False
 
     def test_record_content_requires_both_enabled(self):
         """param says record, but env var says no — result is False."""
@@ -162,7 +162,7 @@ class TestNewRelicLoggerInit:
                 {**NR_ENV, "NEW_RELIC_AI_MONITORING_RECORD_CONTENT_ENABLED": "false"},
             ):
                 logger = NewRelicLogger(turn_off_message_logging=False)
-        assert logger.record_content is False
+                assert logger.record_content is False
 
     def test_constructor_kwargs_take_priority_over_global_params(self):
         """Constructor turn_off_message_logging=True must not be overwritten by
