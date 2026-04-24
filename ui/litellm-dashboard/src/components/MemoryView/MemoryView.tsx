@@ -11,12 +11,13 @@ import {
   Modal,
   Space,
   Table,
-  Tag,
+  Tooltip,
   Typography,
   message,
 } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import {
+  CopyOutlined,
   DeleteOutlined,
   EditOutlined,
   EyeOutlined,
@@ -149,14 +150,45 @@ export const MemoryView: React.FC<MemoryViewProps> = ({ accessToken }) => {
     }
   };
 
+  const renderIdCell = (id?: string | null, labelOnCopy = "ID") => {
+    if (!id) return <Text type="secondary">-</Text>;
+    const short = id.length > 10 ? `${id.slice(0, 7)}...` : id;
+    return (
+      <Space size={4}>
+        <Tooltip title={id}>
+          <Text code style={{ fontSize: 12 }}>
+            {short}
+          </Text>
+        </Tooltip>
+        <Tooltip title={`Copy ${labelOnCopy}`}>
+          <CopyOutlined
+            onClick={(e) => {
+              e.stopPropagation();
+              navigator.clipboard?.writeText(id);
+              message.success(`${labelOnCopy} copied`);
+            }}
+            style={{ color: "#8c8c8c", cursor: "pointer", fontSize: 12 }}
+          />
+        </Tooltip>
+      </Space>
+    );
+  };
+
   const columns: ColumnsType<MemoryRow> = [
     {
-      title: "Key",
+      title: "ID",
+      dataIndex: "memory_id",
+      key: "memory_id",
+      width: 140,
+      render: (id: string) => renderIdCell(id, "Memory ID"),
+    },
+    {
+      title: "Name",
       dataIndex: "key",
       key: "key",
+      width: 200,
       render: (k: string) => <Text code>{k}</Text>,
       sorter: (a, b) => a.key.localeCompare(b.key),
-      width: 240,
     },
     {
       title: "Preview",
@@ -169,16 +201,18 @@ export const MemoryView: React.FC<MemoryViewProps> = ({ accessToken }) => {
       ),
     },
     {
-      title: "Scope",
-      key: "scope",
-      width: 220,
-      render: (_: unknown, r: MemoryRow) => (
-        <Space size={4} wrap>
-          {r.user_id && <Tag color="blue">user: {r.user_id}</Tag>}
-          {r.team_id && <Tag color="purple">team: {r.team_id}</Tag>}
-          {!r.user_id && !r.team_id && <Tag>global</Tag>}
-        </Space>
-      ),
+      title: "User ID",
+      dataIndex: "user_id",
+      key: "user_id",
+      width: 160,
+      render: (uid?: string | null) => renderIdCell(uid, "User ID"),
+    },
+    {
+      title: "Team ID",
+      dataIndex: "team_id",
+      key: "team_id",
+      width: 160,
+      render: (tid?: string | null) => renderIdCell(tid, "Team ID"),
     },
     {
       title: "Updated",
@@ -227,12 +261,8 @@ export const MemoryView: React.FC<MemoryViewProps> = ({ accessToken }) => {
   ];
 
   return (
-    <div style={{ padding: 24 }}>
-      <Space
-        direction="vertical"
-        size="large"
-        style={{ width: "100%" }}
-      >
+    <div className="w-full" style={{ padding: 24 }}>
+      <Space direction="vertical" size="large" style={{ width: "100%" }}>
         <div>
           <Title level={3} style={{ marginBottom: 4 }}>
             Memory
@@ -334,20 +364,32 @@ export const MemoryView: React.FC<MemoryViewProps> = ({ accessToken }) => {
       >
         {detailRow && (
           <Space direction="vertical" size="middle" style={{ width: "100%" }}>
-            <div>
-              <Text strong>Scope</Text>
+            <Space size="large" wrap>
               <div>
-                <Space size={4} wrap>
-                  {detailRow.user_id && (
-                    <Tag color="blue">user: {detailRow.user_id}</Tag>
-                  )}
-                  {detailRow.team_id && (
-                    <Tag color="purple">team: {detailRow.team_id}</Tag>
-                  )}
-                  {!detailRow.user_id && !detailRow.team_id && <Tag>global</Tag>}
-                </Space>
+                <Text strong style={{ display: "block" }}>
+                  Memory ID
+                </Text>
+                <Text code style={{ fontSize: 12 }}>
+                  {detailRow.memory_id}
+                </Text>
               </div>
-            </div>
+              <div>
+                <Text strong style={{ display: "block" }}>
+                  User ID
+                </Text>
+                <Text type={detailRow.user_id ? undefined : "secondary"}>
+                  {detailRow.user_id ?? "-"}
+                </Text>
+              </div>
+              <div>
+                <Text strong style={{ display: "block" }}>
+                  Team ID
+                </Text>
+                <Text type={detailRow.team_id ? undefined : "secondary"}>
+                  {detailRow.team_id ?? "-"}
+                </Text>
+              </div>
+            </Space>
             <div>
               <Text strong>Value</Text>
               <Paragraph
