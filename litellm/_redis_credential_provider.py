@@ -80,16 +80,13 @@ def _get_cached_gcp_iam_token(service_account: str) -> str:
 
 class GCPIAMCredentialProvider(CredentialProvider):
     """
-    redis.credentials.CredentialProvider implementation that generates a fresh GCP IAM
-    token on every new connection. This fixes the 1-hour token expiry issue for async
-    Redis cluster clients, which previously generated the token once at startup and
-    cached it as a static password.
+    redis.credentials.CredentialProvider implementation that supplies GCP IAM tokens
+    for Redis authentication, with module-level caching per service account.
 
-    Tokens are cached at module level per service account for
-    _GCP_IAM_TOKEN_TTL_SECONDS (55 min) so that repeated connection
-    establishments — e.g. during connection pool warm-up or health checks —
-    do not each trigger a synchronous network round-trip that would block
-    Python's async event loop and cause cascading request latency.
+    Tokens are cached for _GCP_IAM_TOKEN_TTL_SECONDS (55 min) so that repeated
+    connection establishments — e.g. during connection pool warm-up or health checks —
+    do not each trigger a synchronous network round-trip that would block Python's
+    async event loop and cause cascading request latency.
     """
 
     def __init__(self, gcp_service_account: str) -> None:
