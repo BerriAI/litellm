@@ -60,7 +60,7 @@ class AzureImageEditConfig(OpenAIImageEditConfig):
             )
 
         # Extract api_version or use default
-        api_version = cast(Optional[str], litellm_params.get("api_version"))
+        api_version = cast(Optional[str], litellm_params.get("api_version")) or get_secret_str("AZURE_API_VERSION")
 
         if BaseAzureLLM._is_azure_v1_api_version(api_version):
             # V1 unified endpoint: /openai/v1/images/edits (model in request body, no deployment path)
