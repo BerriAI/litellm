@@ -12,7 +12,7 @@ from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
 )
-from litellm.types.guardrails import GuardrailEventHooks, SupportedGuardrailIntegrations
+from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import GenericGuardrailAPIInputs, GuardrailStatus
 
 if TYPE_CHECKING:
@@ -71,7 +71,7 @@ def _build_judge_prompt(
     response_text: str,
 ) -> str:
     criteria_block = "\n".join(
-        f'- {c["name"]} (weight {c["weight"]}%): {c.get("description", "")}'
+        f'- {c.get("name", "")} (weight {c.get("weight", 0)}%): {c.get("description", "")}'
         for c in criteria
     )
     conversation = "\n".join(
@@ -181,6 +181,7 @@ class LLMAsAJudgeGuardrail(CustomGuardrail):
                 verbose_logger.warning(
                     f"llm_as_a_judge guardrail: judge call failed, failing open. Error: {judge_err}"
                 )
+                status = "guardrail_failed_to_respond"
                 return inputs
 
             try:
@@ -296,14 +297,6 @@ def initialize_guardrail(
     litellm.logging_callback_manager.add_litellm_callback(instance)
     return instance
 
-
-guardrail_initializer_registry = {
-    SupportedGuardrailIntegrations.LLM_AS_A_JUDGE.value: initialize_guardrail,
-}
-
-guardrail_class_registry = {
-    SupportedGuardrailIntegrations.LLM_AS_A_JUDGE.value: LLMAsAJudgeGuardrail,
-}
 
 __all__ = [
     "LLMAsAJudgeGuardrail",
