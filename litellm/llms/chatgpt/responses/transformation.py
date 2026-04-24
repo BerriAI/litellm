@@ -213,6 +213,8 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
         if not isinstance(item, dict):
             return
         try:
+            if output_index is None:
+                raise ValueError("missing output_index")
             index = int(output_index)
         except (TypeError, ValueError):
             index = len(streamed_output_items)
