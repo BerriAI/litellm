@@ -102,6 +102,17 @@ jobs:
                 body: updatedBody,
                 draft: false,
               });
+
             } catch (error) {
               core.setFailed(error.message);
             }
+
+  create-branch:
+    name: Create Release Branch
+    needs: release
+    permissions:
+      contents: write
+    uses: ./.github/workflows/create-release-branch.yml
+    with:
+      tag: ${{ inputs.tag }}
+      commit_hash: ${{ inputs.commit_hash }}
