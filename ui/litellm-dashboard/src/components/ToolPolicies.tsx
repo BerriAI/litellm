@@ -1,8 +1,14 @@
 "use client";
 
 import React, { useCallback, useDeferredValue, useEffect, useMemo, useState } from "react";
+import { Switch } from "@/components/ui/switch";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 // eslint-disable-next-line litellm-ui/no-banned-ui-imports
-import { Button, Switch, Tooltip } from "antd";
 import { Table, TableHead, TableHeaderCell, TableBody, TableRow, TableCell } from "@tremor/react";
 import { TimeCell } from "./view_logs/time_cell";
 import type { SortState } from "./common_components/TableHeaderSortDropdown/TableHeaderSortDropdown";
@@ -51,6 +57,23 @@ interface ToolPoliciesProps {
   accessToken: string | null;
   userRole?: string;
   onSelectTool?: (toolName: string) => void;
+}
+
+function TT({
+  title,
+  children,
+}: {
+  title: React.ReactNode;
+  children: React.ReactNode;
+}) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span>{children}</span>
+      </TooltipTrigger>
+      <TooltipContent>{title}</TooltipContent>
+    </Tooltip>
+  );
 }
 
 export const ToolPolicies: React.FC<ToolPoliciesProps> = ({ accessToken, onSelectTool }) => {
@@ -263,6 +286,7 @@ export const ToolPolicies: React.FC<ToolPoliciesProps> = ({ accessToken, onSelec
   };
 
   return (
+    <TooltipProvider>
     <div className="w-full">
       <h1 className="text-2xl font-semibold text-gray-900 mb-6">Tool Policies</h1>
 
@@ -348,7 +372,7 @@ export const ToolPolicies: React.FC<ToolPoliciesProps> = ({ accessToken, onSelec
 
               <div className="flex items-center gap-2">
                 <span className="text-sm font-medium text-gray-900">Live Tail</span>
-                <Switch checked={isLiveTail} onChange={setIsLiveTail} />
+                <Switch checked={isLiveTail} onCheckedChange={setIsLiveTail} />
               </div>
 
               <button
@@ -476,9 +500,9 @@ export const ToolPolicies: React.FC<ToolPoliciesProps> = ({ accessToken, onSelec
                       onClick={() => onSelectTool?.(tool.tool_name)}
                       className="text-left w-full font-mono text-xs max-w-[20ch] truncate block font-medium text-blue-600 hover:text-blue-800 hover:underline focus:outline-none focus:ring-0"
                     >
-                      <Tooltip title={onSelectTool ? "Click to view details and block for team/key" : tool.tool_name}>
+                      <TT title={onSelectTool ? "Click to view details and block for team/key" : tool.tool_name}>
                         <span>{tool.tool_name}</span>
-                      </Tooltip>
+                      </TT>
                     </button>
                   </TableCell>
                   <TableCell className="py-0.5 max-h-8">
@@ -505,26 +529,26 @@ export const ToolPolicies: React.FC<ToolPoliciesProps> = ({ accessToken, onSelec
                     </div>
                   </TableCell>
                   <TableCell className="py-0.5 max-h-8 overflow-hidden whitespace-nowrap">
-                    <Tooltip title={tool.team_id ?? "-"}>
+                    <TT title={tool.team_id ?? "-"}>
                       <span className="max-w-[15ch] truncate block">{tool.team_id ?? "-"}</span>
-                    </Tooltip>
+                    </TT>
                   </TableCell>
                   <TableCell className="py-0.5 max-h-8 overflow-hidden whitespace-nowrap">
-                    <Tooltip title={tool.key_hash ?? "-"}>
+                    <TT title={tool.key_hash ?? "-"}>
                       <span className="font-mono max-w-[15ch] truncate block text-blue-600">
                         {tool.key_hash ?? "-"}
                       </span>
-                    </Tooltip>
+                    </TT>
                   </TableCell>
                   <TableCell className="py-0.5 max-h-8 overflow-hidden whitespace-nowrap">
-                    <Tooltip title={tool.key_alias ?? "-"}>
+                    <TT title={tool.key_alias ?? "-"}>
                       <span className="max-w-[15ch] truncate block">{tool.key_alias ?? "-"}</span>
-                    </Tooltip>
+                    </TT>
                   </TableCell>
                   <TableCell className="py-0.5 max-h-8 overflow-hidden whitespace-nowrap">
-                    <Tooltip title={tool.user_agent ?? "-"}>
+                    <TT title={tool.user_agent ?? "-"}>
                       <span className="font-mono max-w-[20ch] truncate block text-xs text-gray-500">{tool.user_agent ?? "-"}</span>
-                    </Tooltip>
+                    </TT>
                   </TableCell>
                 </TableRow>
               ))
@@ -559,6 +583,7 @@ export const ToolPolicies: React.FC<ToolPoliciesProps> = ({ accessToken, onSelec
       </div>
 
     </div>
+    </TooltipProvider>
   );
 };
 

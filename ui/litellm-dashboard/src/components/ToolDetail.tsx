@@ -2,8 +2,16 @@
 
 import { ArrowLeft as ArrowLeftOutlined, History as HistoryOutlined, Wrench as ToolOutlined } from "lucide-react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Button, Select, Spin } from "antd";
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import { Button } from "@/components/ui/button";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Skeleton } from "@/components/ui/skeleton";
+import React, { useCallback, useMemo, useState } from "react";
 import TeamDropdown from "@/components/common_components/team_dropdown";
 import { LogViewer } from "@/components/GuardrailsMonitor/LogViewer";
 import type { LogEntry } from "@/components/GuardrailsMonitor/mockData";
@@ -16,7 +24,6 @@ import {
   keyListCall,
   teamListCall,
   updateToolPolicy,
-  type ToolPolicyOption,
   type ToolPolicyOverrideRow,
 } from "@/components/networking";
 import type { Team } from "@/components/key_team_helpers/key_list";
@@ -210,7 +217,7 @@ export function ToolDetail({ toolName, onBack, accessToken }: ToolDetailProps) {
   if (detailLoading && !detail) {
     return (
       <div className="flex items-center justify-center py-12">
-        <Spin size="large" />
+        <Skeleton className="h-10 w-32" />
       </div>
     );
   }
@@ -218,9 +225,11 @@ export function ToolDetail({ toolName, onBack, accessToken }: ToolDetailProps) {
   if (detailError && !detail) {
     return (
       <div>
-        <Button type="link" icon={<ArrowLeftOutlined />} onClick={onBack} className="pl-0 mb-4">
+        <Button variant="link" onClick={onBack} className="pl-0 mb-4">
+          <ArrowLeftOutlined className="mr-1 h-4 w-4" />
           Back to Tool Policies
         </Button>
+        {/* eslint-disable-next-line litellm-ui/no-raw-tailwind-colors */}
         <p className="text-red-600">Failed to load tool details.</p>
       </div>
     );
@@ -243,11 +252,11 @@ export function ToolDetail({ toolName, onBack, accessToken }: ToolDetailProps) {
     <div>
       <div className="mb-6">
         <Button
-          type="link"
-          icon={<ArrowLeftOutlined />}
+          variant="link"
           onClick={onBack}
           className="pl-0 mb-4"
         >
+          <ArrowLeftOutlined className="mr-1 h-4 w-4" />
           Back to Tool Policies
         </Button>
 
@@ -341,9 +350,9 @@ export function ToolDetail({ toolName, onBack, accessToken }: ToolDetailProps) {
                     {!ov.team_id && !ov.key_hash ? "—" : ""}
                   </span>
                   <Button
-                    type="link"
-                    danger
-                    size="small"
+                    variant="link"
+                    size="sm"
+                    className="text-destructive"
                     disabled={overrideSaving}
                     onClick={() => handleRemoveOverride(ov)}
                   >
@@ -392,29 +401,28 @@ export function ToolDetail({ toolName, onBack, accessToken }: ToolDetailProps) {
                 />
               ) : (
                 <Select
-                  placeholder="Select key"
-                  allowClear
-                  showSearch
-                  optionFilterProp="label"
-                  value={blockKey ? blockKey.token : undefined}
-                  onChange={(token) => {
+                  value={blockKey ? blockKey.token : ""}
+                  onValueChange={(token) => {
                     const k = keys.find((x) => x.token === token);
                     setBlockKey(k ?? null);
                   }}
-                  options={keys.map((k) => ({
-                    value: k.token,
-                    label: k.key_alias || k.token?.substring?.(0, 12) || k.token,
-                  }))}
-                  className="w-full"
-                  style={{ minWidth: 200 }}
-                />
+                >
+                  <SelectTrigger className="w-full min-w-[200px]">
+                    <SelectValue placeholder="Select key" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {keys.map((k) => (
+                      <SelectItem key={k.token} value={k.token}>
+                        {k.key_alias || k.token?.substring?.(0, 12) || k.token}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               )}
             </div>
             <Button
-              type="primary"
-              danger
+              variant="destructive"
               disabled={overrideSaving || (blockScope === "team" ? !blockTeamId : !blockKey?.token)}
-              loading={overrideSaving}
               onClick={handleAddOverride}
             >
               Block for {blockScope}

@@ -24,6 +24,8 @@
         "src/components/molecules/notifications_manager.tsx",
         "src/components/molecules/message_manager.tsx",
         "src/components/ToolPolicies/PolicySelect.tsx",
+        "src/components/ToolDetail.tsx",
+        "src/components/ToolPolicies.tsx",
         "src/components/GuardrailsMonitor/GuardrailConfig.tsx",
         "src/components/GuardrailsMonitor/GuardrailDetail.tsx",
         "src/components/GuardrailsMonitor/LogViewer.tsx",
