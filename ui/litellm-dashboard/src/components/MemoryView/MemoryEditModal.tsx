@@ -80,7 +80,7 @@ export const MemoryEditModal: React.FC<MemoryEditModalProps> = ({
           label="Key"
           name="key"
           rules={[{ required: true, message: "Key is required" }]}
-          tooltip="Unique per user/team scope. Acts as the namespace in /v1/memory/{key}."
+          tooltip="Globally unique — two memories cannot share a key. Namespace your own keys if you need per-user isolation (e.g. user:123:notes)."
         >
           <Input
             placeholder="e.g. user_role"

@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Button,
   Card,
@@ -73,13 +73,18 @@ export const MemoryView: React.FC<MemoryViewProps> = ({ accessToken }) => {
     setCurrentPage(1);
   }, [appliedSearch]);
 
+  const queryClient = useQueryClient();
+  // React Query key prefix for all memory-list variants (paged + filtered).
+  // Mutations invalidate the whole prefix so the next render refetches the
+  // currently-visible page without us needing a manual refetch().
+  const MEMORY_LIST_KEY = "memoryList" as const;
+
   const {
     data,
     isLoading,
     isFetching,
-    refetch,
   } = useQuery({
-    queryKey: ["memoryList", appliedSearch, currentPage],
+    queryKey: [MEMORY_LIST_KEY, appliedSearch, currentPage],
     queryFn: () => {
       if (!accessToken) throw new Error("Access token required");
       // Prefix search matches the Redis-style mental model (namespace scan):
@@ -96,7 +101,67 @@ export const MemoryView: React.FC<MemoryViewProps> = ({ accessToken }) => {
   const rows = useMemo(() => data?.memories ?? [], [data]);
   const total = data?.total ?? 0;
 
-  const handleDelete = async (row: MemoryRow) => {
+  // -- Mutations --------------------------------------------------------
+  // All three write endpoints share the same success/error plumbing:
+  //   - on success: invalidate the list query so every cached page
+  //     refetches from scratch (pagination + filter-aware).
+  //   - on error: surface the message via antd `message.error`.
+
+  const invalidateList = () =>
+    queryClient.invalidateQueries({ queryKey: [MEMORY_LIST_KEY] });
+
+  const createMutation = useMutation({
+    mutationFn: (args: {
+      key: string;
+      value: string;
+      metadata: unknown;
+    }) => {
+      if (!accessToken) throw new Error("Access token required");
+      return createMemory(accessToken, args);
+    },
+    onSuccess: (row) => {
+      message.success(`Created ${row.key}`);
+      invalidateList();
+    },
+    onError: (err: Error) => {
+      message.error(`Save failed: ${err.message}`);
+    },
+  });
+
+  const updateMutation = useMutation({
+    mutationFn: (args: {
+      key: string;
+      value?: string;
+      metadata: unknown;
+    }) => {
+      if (!accessToken) throw new Error("Access token required");
+      const { key, ...payload } = args;
+      return updateMemory(accessToken, key, payload);
+    },
+    onSuccess: (row) => {
+      message.success(`Updated ${row.key}`);
+      invalidateList();
+    },
+    onError: (err: Error) => {
+      message.error(`Save failed: ${err.message}`);
+    },
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: (key: string) => {
+      if (!accessToken) throw new Error("Access token required");
+      return deleteMemory(accessToken, key).then(() => key);
+    },
+    onSuccess: (key) => {
+      message.success(`Deleted ${key}`);
+      invalidateList();
+    },
+    onError: (err: Error) => {
+      message.error(`Delete failed: ${err.message}`);
+    },
+  });
+
+  const handleDelete = (row: MemoryRow) => {
     Modal.confirm({
       title: "Delete memory",
       content: (
@@ -107,16 +172,7 @@ export const MemoryView: React.FC<MemoryViewProps> = ({ accessToken }) => {
       okText: "Delete",
       okType: "danger",
       cancelText: "Cancel",
-      onOk: async () => {
-        if (!accessToken) return;
-        try {
-          await deleteMemory(accessToken, row.key);
-          message.success(`Deleted ${row.key}`);
-          refetch();
-        } catch (err: any) {
-          message.error(`Delete failed: ${err?.message ?? err}`);
-        }
-      },
+      onOk: () => deleteMutation.mutateAsync(row.key).catch(() => {}),
     });
   };
 
@@ -150,23 +206,21 @@ export const MemoryView: React.FC<MemoryViewProps> = ({ accessToken }) => {
 
     try {
       if (isCreate) {
-        await createMemory(accessToken, {
+        await createMutation.mutateAsync({
           key,
           value,
           metadata: metadataPayload,
         });
-        message.success(`Created ${key}`);
       } else {
-        await updateMemory(accessToken, key, {
+        await updateMutation.mutateAsync({
+          key,
           value,
           metadata: metadataPayload,
         });
-        message.success(`Updated ${key}`);
       }
-      refetch();
       return true;
-    } catch (err: any) {
-      message.error(`Save failed: ${err?.message ?? err}`);
+    } catch {
+      // error already surfaced by mutation's onError handler
       return false;
     }
   };
@@ -327,7 +381,7 @@ export const MemoryView: React.FC<MemoryViewProps> = ({ accessToken }) => {
               </Button>
               <Button
                 icon={<ReloadOutlined />}
-                onClick={() => refetch()}
+                onClick={() => invalidateList()}
                 loading={isFetching && !isLoading}
               >
                 Refresh
