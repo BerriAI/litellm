@@ -123,6 +123,9 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         self.experimental_use_latest_role_message_only = bool(
             kwargs.get("experimental_use_latest_role_message_only")
         )
+        self.experimental_guardrail_input_roles: Optional[List[str]] = kwargs.get(
+            "experimental_guardrail_input_roles"
+        )
 
         # store kwargs as optional_params
         self.optional_params = kwargs
@@ -214,6 +217,17 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         """
         bedrock_request: BedrockRequest = BedrockRequest(source=source)
         if source == "INPUT":
+            if (
+                messages is not None
+                and self.experimental_guardrail_input_roles is not None
+            ):
+                messages = [
+                    m
+                    for m in messages
+                    if m.get("role") in self.experimental_guardrail_input_roles
+                ]
+                if not messages:
+                    return bedrock_request
             bedrock_request = self._create_bedrock_input_content_request(
                 messages=messages
             )
@@ -411,6 +425,8 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         bedrock_guardrail_response: BedrockGuardrailResponse = (
             BedrockGuardrailResponse()
         )
+        if not bedrock_request_data.get("content"):
+            return bedrock_guardrail_response
         api_key: Optional[str] = None
         if request_data:
             bedrock_request_data.update(

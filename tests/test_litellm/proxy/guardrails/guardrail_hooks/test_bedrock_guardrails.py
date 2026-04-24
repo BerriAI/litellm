@@ -2164,3 +2164,119 @@ async def test_streaming_post_call_output_only_path_passes_request_data_to_make_
     c = mock_make.call_args
     assert c.kwargs.get("source") == "OUTPUT"
     assert c.kwargs.get("request_data") is request_data
+
+
+# ---------------------------------------------------------------------------
+# experimental_guardrail_input_roles: role-based message filtering
+# ---------------------------------------------------------------------------
+
+
+def test_convert_to_bedrock_format_filters_by_input_roles():
+    """When experimental_guardrail_input_roles is set, only messages with matching
+    roles are sent to Bedrock for INPUT validation."""
+    guardrail = BedrockGuardrail(
+        guardrailIdentifier="test-id",
+        guardrailVersion="DRAFT",
+        experimental_guardrail_input_roles=["user"],
+    )
+    messages = [
+        {"role": "system", "content": "You are a helpful assistant."},
+        {"role": "user", "content": "Hello"},
+        {"role": "assistant", "content": "Hi there"},
+    ]
+    result = guardrail.convert_to_bedrock_format(source="INPUT", messages=messages)
+    texts = [item["text"]["text"] for item in result.get("content", [])]
+    assert texts == ["Hello"], f"Expected only user message, got: {texts}"
+
+
+def test_convert_to_bedrock_format_no_filter_when_roles_not_set():
+    """When experimental_guardrail_input_roles is not set, all messages pass through."""
+    guardrail = BedrockGuardrail(
+        guardrailIdentifier="test-id",
+        guardrailVersion="DRAFT",
+    )
+    messages = [
+        {"role": "system", "content": "You are a helpful assistant."},
+        {"role": "user", "content": "Hello"},
+        {"role": "assistant", "content": "Hi there"},
+    ]
+    result = guardrail.convert_to_bedrock_format(source="INPUT", messages=messages)
+    texts = [item["text"]["text"] for item in result.get("content", [])]
+    assert texts == [
+        "You are a helpful assistant.",
+        "Hello",
+        "Hi there",
+    ], f"Expected all messages, got: {texts}"
+
+
+def test_convert_to_bedrock_format_input_roles_does_not_affect_output():
+    """experimental_guardrail_input_roles must not filter OUTPUT source requests."""
+    guardrail = BedrockGuardrail(
+        guardrailIdentifier="test-id",
+        guardrailVersion="DRAFT",
+        experimental_guardrail_input_roles=["user"],
+    )
+    response = ModelResponse(
+        id="r1",
+        choices=[
+            litellm.Choices(
+                message=litellm.Message(role="assistant", content="response text"),
+                finish_reason="stop",
+                index=0,
+            )
+        ],
+        created=1,
+        model="gpt-4o-mini",
+        object="chat.completion",
+    )
+    result = guardrail.convert_to_bedrock_format(source="OUTPUT", response=response)
+    texts = [item["text"]["text"] for item in result.get("content", [])]
+    assert texts == ["response text"], f"Expected assistant response, got: {texts}"
+
+
+def test_convert_to_bedrock_format_returns_empty_bedrock_request_when_all_messages_filtered():
+    """When role filtering removes all messages, return an empty BedrockRequest rather
+    than forwarding an empty content list to Bedrock (which would cause an API error)."""
+    guardrail = BedrockGuardrail(
+        guardrailIdentifier="test-id",
+        guardrailVersion="DRAFT",
+        experimental_guardrail_input_roles=["user"],
+    )
+    # Only system messages — all will be filtered out
+    messages = [
+        {"role": "system", "content": "You are a helpful assistant."},
+    ]
+    result = guardrail.convert_to_bedrock_format(source="INPUT", messages=messages)
+    # Should return the empty BedrockRequest rather than content: []
+    assert result.get("content", []) == [], f"Expected no content, got: {result}"
+    assert "guardrailIdentifier" not in result, (
+        "Should return empty BedrockRequest, not a populated one"
+    )
+
+
+@pytest.mark.asyncio
+async def test_make_bedrock_api_request_skips_http_call_when_all_messages_filtered():
+    """make_bedrock_api_request must not POST to Bedrock when role filtering removes all
+    messages — the empty BedrockRequest from convert_to_bedrock_format should trigger an
+    early return before _prepare_request is reached."""
+    guardrail = BedrockGuardrail(
+        guardrailIdentifier="test-id",
+        guardrailVersion="DRAFT",
+        experimental_guardrail_input_roles=["user"],
+    )
+    messages = [
+        {"role": "system", "content": "You are a helpful assistant."},
+    ]
+    with (
+        patch.object(
+            guardrail,
+            "_load_credentials",
+            return_value=(MagicMock(), "us-east-1"),
+        ),
+        patch.object(guardrail, "_prepare_request") as mock_prepare,
+    ):
+        response = await guardrail.make_bedrock_api_request(
+            source="INPUT", messages=messages
+        )
+    mock_prepare.assert_not_called()
+    assert isinstance(response, dict)

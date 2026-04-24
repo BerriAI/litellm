@@ -614,6 +614,15 @@ class BaseLitellmParams(
         description="When True, guardrails only receive the latest message for the relevant role (e.g., newest user input pre-call, newest assistant output post-call)",
     )
 
+    experimental_guardrail_input_roles: Optional[List[str]] = Field(
+        default=None,
+        description=(
+            "When set, only messages whose role appears in this list are forwarded "
+            'for INPUT validation (e.g. ["user"] to exclude system prompts). '
+            "Currently wired for Bedrock guardrails; silently ignored by other providers."
+        ),
+    )
+
     skip_system_message_in_guardrail: Optional[bool] = Field(
         default=None,
         description=(
