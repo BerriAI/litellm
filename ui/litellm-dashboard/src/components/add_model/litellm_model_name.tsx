@@ -1,6 +1,16 @@
 import React from "react";
-import { Form, Select as AntSelect } from "antd";
+import { Controller, useFormContext, useWatch } from "react-hook-form";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Badge } from "@/components/ui/badge";
+import { X } from "lucide-react";
 import { Providers } from "../provider_info_helpers";
 
 interface LiteLLMModelNameFieldProps {
@@ -9,53 +19,128 @@ interface LiteLLMModelNameFieldProps {
   getPlaceholder: (provider: Providers) => string;
 }
 
+/**
+ * Multi-select rendered with shadcn Select + chip list below. Accepts any
+ * `Array<{ label: string; value: string }>` list of options. Mirrors the
+ * pattern established in `AccessGroupBaseForm.tsx`.
+ */
+function MultiSelect({
+  value,
+  onChange,
+  options,
+  placeholder,
+  testId,
+}: {
+  value: string[];
+  onChange: (next: string[]) => void;
+  options: { label: string; value: string }[];
+  placeholder: string;
+  testId?: string;
+}) {
+  const selected = value ?? [];
+  const remaining = options.filter((o) => !selected.includes(o.value));
+
+  return (
+    <div className="space-y-2" data-testid={testId}>
+      <Select
+        value=""
+        onValueChange={(v) => {
+          if (v) onChange([...selected, v]);
+        }}
+      >
+        <SelectTrigger>
+          <SelectValue placeholder={placeholder} />
+        </SelectTrigger>
+        <SelectContent>
+          {remaining.length === 0 ? (
+            <div className="py-2 px-3 text-sm text-muted-foreground">
+              No options available
+            </div>
+          ) : (
+            remaining.map((opt) => (
+              <SelectItem key={opt.value} value={opt.value}>
+                {opt.label}
+              </SelectItem>
+            ))
+          )}
+        </SelectContent>
+      </Select>
+      {selected.length > 0 && (
+        <div className="flex flex-wrap gap-1">
+          {selected.map((v) => {
+            const opt = options.find((o) => o.value === v);
+            return (
+              <Badge
+                key={v}
+                variant="secondary"
+                className="flex items-center gap-1"
+              >
+                {opt?.label ?? v}
+                <button
+                  type="button"
+                  onClick={() =>
+                    onChange(selected.filter((s) => s !== v))
+                  }
+                  className="inline-flex items-center justify-center rounded-full hover:bg-muted-foreground/20"
+                  aria-label={`Remove ${opt?.label ?? v}`}
+                >
+                  <X size={12} />
+                </button>
+              </Badge>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 const LiteLLMModelNameField: React.FC<LiteLLMModelNameFieldProps> = ({
   selectedProvider,
   providerModels,
   getPlaceholder,
 }) => {
-  const form = Form.useFormInstance();
+  const { control, setValue, getValues, formState } = useFormContext();
+  const selectedModels = (useWatch({ control, name: "model" }) || []) as
+    | string[]
+    | string;
+  const modelArray = Array.isArray(selectedModels)
+    ? selectedModels
+    : selectedModels
+      ? [selectedModels]
+      : [];
 
-  const handleModelChange = (value: string | string[]) => {
-    // Ensure value is always treated as an array
-    const values = Array.isArray(value) ? value : [value];
-
-    // If "all-wildcard" is selected, clear the model_name field
+  const handleModelChange = (values: string[]) => {
     if (values.includes("all-wildcard")) {
-      form.setFieldsValue({ model_name: undefined, model_mappings: [] });
-    } else {
-      // Get current model value to check if we need to update
-      const currentModel = form.getFieldValue("model");
+      setValue("model_name", undefined);
+      setValue("model_mappings", []);
+      setValue("model", values);
+      return;
+    }
 
-      // Only update if the value has actually changed
-      if (JSON.stringify(currentModel) !== JSON.stringify(values)) {
-        // Create mappings first
-        const mappings = values.map((model) => {
-          if (selectedProvider === Providers.Azure) {
-            return {
-              public_name: model,
-              litellm_model: `azure/${model}`,
-            };
-          }
+    const currentModel = getValues("model");
+    if (JSON.stringify(currentModel) !== JSON.stringify(values)) {
+      const mappings = values.map((model) => {
+        if (selectedProvider === Providers.Azure) {
           return {
             public_name: model,
-            litellm_model: model,
+            litellm_model: `azure/${model}`,
           };
-        });
-
-        // Update both fields in one call to reduce re-renders
-        form.setFieldsValue({
-          model: values,
-          model_mappings: mappings,
-        });
-      }
+        }
+        return {
+          public_name: model,
+          litellm_model: model,
+        };
+      });
+      setValue("model", values);
+      setValue("model_mappings", mappings);
     }
   };
 
-  const handleAzureDeploymentNameChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleAzureDeploymentNameChange = (
+    e: React.ChangeEvent<HTMLInputElement>,
+  ) => {
     const deploymentName = e.target.value;
-
-    // Create mapping with Azure-specific format
     const mappings = deploymentName
       ? [
           {
@@ -64,23 +149,23 @@ const LiteLLMModelNameField: React.FC<LiteLLMModelNameFieldProps> = ({
           },
         ]
       : [];
-
-    // Update both fields
-    form.setFieldsValue({
-      model: deploymentName,
-      model_mappings: mappings,
-    });
+    setValue("model", deploymentName);
+    setValue("model_mappings", mappings);
   };
 
-  // Handle custom model name changes
-  const handleCustomModelNameChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleCustomModelNameChange = (
+    e: React.ChangeEvent<HTMLInputElement>,
+  ) => {
     const customName = e.target.value;
+    setValue("custom_model_name", customName);
 
-    // Immediately update the model mappings
-    const currentMappings = form.getFieldValue("model_mappings") || [];
+    const currentMappings = getValues("model_mappings") || [];
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const updatedMappings = currentMappings.map((mapping: any) => {
-      if (mapping.public_name === "custom" || mapping.litellm_model === "custom") {
+      if (
+        mapping.public_name === "custom" ||
+        mapping.litellm_model === "custom"
+      ) {
         if (selectedProvider === Providers.Azure) {
           return {
             public_name: customName,
@@ -94,100 +179,149 @@ const LiteLLMModelNameField: React.FC<LiteLLMModelNameFieldProps> = ({
       }
       return mapping;
     });
-
-    form.setFieldsValue({ model_mappings: updatedMappings });
+    setValue("model_mappings", updatedMappings);
   };
+
+  const showSelectVariant =
+    selectedProvider !== Providers.Azure &&
+    selectedProvider !== Providers.OpenAI_Compatible &&
+    selectedProvider !== Providers.Ollama &&
+    providerModels.length > 0;
+
+  const modelError = (formState.errors as Record<string, { message?: string }>)
+    .model;
+  const customNameError = (
+    formState.errors as Record<string, { message?: string }>
+  ).custom_model_name;
+
+  const requiredMessage = `Please enter ${
+    selectedProvider === Providers.Azure
+      ? "a deployment name"
+      : "at least one model"
+  }.`;
 
   return (
     <>
-      <Form.Item
-        label="LiteLLM Model Name(s)"
-        tooltip="The model name LiteLLM will send to the LLM API"
-        className="mb-0"
-      >
-        <Form.Item
-          name="model"
-          rules={[
-            {
-              required: true,
-              message: `Please enter ${selectedProvider === Providers.Azure ? "a deployment name" : "at least one model"}.`,
-            },
-          ]}
-          noStyle
-        >
+      <div className="grid grid-cols-24 gap-2 mb-0 items-start">
+        <Label className="col-span-10 pt-2" title="The model name LiteLLM will send to the LLM API">
+          LiteLLM Model Name(s)
+        </Label>
+        <div className="col-span-14 space-y-2">
           {selectedProvider === Providers.Azure ||
           selectedProvider === Providers.OpenAI_Compatible ||
           selectedProvider === Providers.Ollama ? (
-            <Input
-              placeholder={getPlaceholder(selectedProvider)}
-              onChange={
-                selectedProvider === Providers.Azure
-                  ? handleAzureDeploymentNameChange
-                  : undefined
-              }
+            <Controller
+              control={control}
+              name="model"
+              rules={{
+                validate: (value) =>
+                  (typeof value === "string" && value.length > 0) ||
+                  (Array.isArray(value) && value.length > 0) ||
+                  requiredMessage,
+              }}
+              render={({ field }) => (
+                <Input
+                  placeholder={getPlaceholder(selectedProvider)}
+                  value={(field.value as string) ?? ""}
+                  onChange={(e) => {
+                    field.onChange(e.target.value);
+                    if (selectedProvider === Providers.Azure) {
+                      handleAzureDeploymentNameChange(e);
+                    }
+                  }}
+                />
+              )}
             />
-          ) : providerModels.length > 0 ? (
-            <AntSelect
-              data-testid="model-name-select"
-              mode="multiple"
-              allowClear
-              showSearch
-              placeholder="Select models"
-              onChange={handleModelChange}
-              optionFilterProp="children"
-              filterOption={(input, option) => (option?.label ?? "").toLowerCase().includes(input.toLowerCase())}
-              options={[
-                {
-                  label: "Custom Model Name (Enter below)",
-                  value: "custom",
-                },
-                {
-                  label: `All ${selectedProvider} Models (Wildcard)`,
-                  value: "all-wildcard",
-                },
-                ...providerModels.map((model) => ({
-                  label: model,
-                  value: model,
-                })),
-              ]}
-              style={{ width: "100%" }}
+          ) : showSelectVariant ? (
+            <Controller
+              control={control}
+              name="model"
+              rules={{
+                validate: (value) =>
+                  (Array.isArray(value) && value.length > 0) ||
+                  requiredMessage,
+              }}
+              render={({ field }) => (
+                <MultiSelect
+                  testId="model-name-select"
+                  value={(field.value as string[]) ?? []}
+                  onChange={(next) => {
+                    field.onChange(next);
+                    handleModelChange(next);
+                  }}
+                  placeholder="Select models"
+                  options={[
+                    {
+                      label: "Custom Model Name (Enter below)",
+                      value: "custom",
+                    },
+                    {
+                      label: `All ${selectedProvider} Models (Wildcard)`,
+                      value: "all-wildcard",
+                    },
+                    ...providerModels.map((model) => ({
+                      label: model,
+                      value: model,
+                    })),
+                  ]}
+                />
+              )}
             />
           ) : (
-            <Input placeholder={getPlaceholder(selectedProvider)} />
+            <Controller
+              control={control}
+              name="model"
+              rules={{
+                validate: (value) =>
+                  (typeof value === "string" && value.length > 0) ||
+                  (Array.isArray(value) && value.length > 0) ||
+                  requiredMessage,
+              }}
+              render={({ field }) => (
+                <Input
+                  placeholder={getPlaceholder(selectedProvider)}
+                  value={(field.value as string) ?? ""}
+                  onChange={(e) => field.onChange(e.target.value)}
+                />
+              )}
+            />
           )}
-        </Form.Item>
+          {modelError?.message && (
+            <p className="text-sm text-destructive">
+              {String(modelError.message)}
+            </p>
+          )}
 
-        {/* Custom Model Name field */}
-        <Form.Item noStyle shouldUpdate={(prevValues, currentValues) => prevValues.model !== currentValues.model}>
-          {({ getFieldValue }) => {
-            const selectedModels = getFieldValue("model") || [];
-            const modelArray = Array.isArray(selectedModels) ? selectedModels : [selectedModels];
-            return (
-              modelArray.includes("custom") && (
-                <Form.Item
-                  name="custom_model_name"
-                  rules={[
-                    {
-                      required: true,
-                      message: "Please enter a custom model name.",
-                    },
-                  ]}
-                  className="mt-2"
-                >
+          {modelArray.includes("custom") && (
+            <div className="mt-2 space-y-1">
+              <Controller
+                control={control}
+                name="custom_model_name"
+                rules={{ required: "Please enter a custom model name." }}
+                render={({ field }) => (
                   <Input
                     placeholder={
                       selectedProvider === Providers.Azure
                         ? "Enter Azure deployment name"
                         : "Enter custom model name"
                     }
-                    onChange={handleCustomModelNameChange}
+                    value={(field.value as string) ?? ""}
+                    onChange={(e) => {
+                      field.onChange(e.target.value);
+                      handleCustomModelNameChange(e);
+                    }}
                   />
-                </Form.Item>
-              )
-            );
-          }}
-        </Form.Item>
-      </Form.Item>
+                )}
+              />
+              {customNameError?.message && (
+                <p className="text-sm text-destructive">
+                  {String(customNameError.message)}
+                </p>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
       <div className="grid grid-cols-24 gap-2">
         <div className="col-span-10" />
         <p className="col-span-14 mb-3 mt-1 text-sm text-muted-foreground">

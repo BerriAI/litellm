@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor } from "@testing-library/react";
-import { Form } from "antd";
+import { FormProvider, useForm } from "react-hook-form";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { Providers } from "../provider_info_helpers";
 import ProviderSpecificFields from "./provider_specific_fields";
@@ -124,19 +124,24 @@ const createQueryClient = () =>
     },
   });
 
+function Wrapper({ children }: { children: React.ReactNode }) {
+  const form = useForm({ defaultValues: {} });
+  return <FormProvider {...form}>{children}</FormProvider>;
+}
+
 describe("ProviderSpecificFields", () => {
   it("should render", async () => {
     const queryClient = createQueryClient();
     render(
       <QueryClientProvider client={queryClient}>
-        <Form>
+        <Wrapper>
           <ProviderSpecificFields selectedProvider={Providers.OpenAI} />
-        </Form>
+        </Wrapper>
       </QueryClientProvider>,
     );
 
     await waitFor(() => {
-      expect(screen.getByLabelText("OpenAI API Key")).toBeInTheDocument();
+      expect(screen.getByLabelText(/OpenAI API Key/i)).toBeInTheDocument();
     });
   });
 
@@ -144,14 +149,14 @@ describe("ProviderSpecificFields", () => {
     const queryClient = createQueryClient();
     render(
       <QueryClientProvider client={queryClient}>
-        <Form>
+        <Wrapper>
           <ProviderSpecificFields selectedProvider={Providers.OpenAI} />
-        </Form>
+        </Wrapper>
       </QueryClientProvider>,
     );
 
     await waitFor(() => {
-      const apiKeyLabel = screen.getByLabelText("OpenAI API Key");
+      const apiKeyLabel = screen.getByLabelText(/OpenAI API Key/i);
       expect(apiKeyLabel).toBeInTheDocument();
 
       const apiBaseInput = screen.getByPlaceholderText("https://api.openai.com/v1");
@@ -167,14 +172,14 @@ describe("ProviderSpecificFields", () => {
     const queryClient = createQueryClient();
     render(
       <QueryClientProvider client={queryClient}>
-        <Form>
+        <Wrapper>
           <ProviderSpecificFields selectedProvider={"Hosted_Vllm" as Providers} />
-        </Form>
+        </Wrapper>
       </QueryClientProvider>,
     );
 
     await waitFor(() => {
-      const apiKeyLabel = screen.getByLabelText("vLLM API Key");
+      const apiKeyLabel = screen.getByLabelText(/vLLM API Key/i);
       expect(apiKeyLabel).toBeInTheDocument();
 
       const apiBaseInput = screen.getByPlaceholderText("https://...");
@@ -187,19 +192,19 @@ describe("ProviderSpecificFields", () => {
     const queryClient = createQueryClient();
     render(
       <QueryClientProvider client={queryClient}>
-        <Form>
+        <Wrapper>
           <ProviderSpecificFields selectedProvider={Providers.Azure} />
-        </Form>
+        </Wrapper>
       </QueryClientProvider>,
     );
 
     await waitFor(() => {
-      const apiKeyInput = screen.getByLabelText("Azure API Key");
+      const apiKeyInput = screen.getByLabelText(/Azure API Key/i);
       expect(apiKeyInput).toBeInTheDocument();
       expect(apiKeyInput).toHaveAttribute("type", "password");
       expect(apiKeyInput).toHaveAttribute("placeholder", "Enter your Azure API Key");
 
-      const azureAdTokenInput = screen.getByLabelText("Azure AD Token");
+      const azureAdTokenInput = screen.getByLabelText(/Azure AD Token/i);
       expect(azureAdTokenInput).toBeInTheDocument();
       expect(azureAdTokenInput).toHaveAttribute("type", "password");
       expect(azureAdTokenInput).toHaveAttribute("placeholder", "Enter your Azure AD Token");

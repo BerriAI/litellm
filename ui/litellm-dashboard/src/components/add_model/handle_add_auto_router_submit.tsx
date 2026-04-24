@@ -73,8 +73,14 @@ export const handleAddAutoRouterSubmit = async (values: any, accessToken: string
     const routerTypeName = values.model_type === "complexity_router" ? "Complexity Router" : "Semantic Router";
     NotificationManager.success(`Successfully created ${routerTypeName}: ${values.auto_router_name}`);
 
-    // Reset the form
-    form.resetFields();
+    // Reset the form. The `form` argument may be an antd FormInstance
+    // (legacy) or a RHF `UseFormReturn` (phase-1 shadcn migration); we
+    // support both by feature-detecting the reset method.
+    if (typeof form?.resetFields === "function") {
+      form.resetFields();
+    } else if (typeof form?.reset === "function") {
+      form.reset();
+    }
 
     // Call the callback if provided (e.g., to close modal)
     if (callback) {

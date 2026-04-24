@@ -1,12 +1,12 @@
 import { renderHook, screen, waitFor, renderWithProviders } from "../../../tests/test-utils";
 import userEvent from "@testing-library/user-event";
-import { Form } from "antd";
-import type { UploadProps } from "antd/es/upload";
+import { useForm } from "react-hook-form";
 import { describe, expect, it, vi } from "vitest";
 import type { Team } from "../key_team_helpers/key_list";
 import type { CredentialItem } from "../networking";
 import { Providers } from "../provider_info_helpers";
-import AddModelForm from "./AddModelForm";
+import AddModelForm, { type AddModelFormValues } from "./AddModelForm";
+import type { UploadProps } from "./add_model_upload_types";
 
 vi.mock("../molecules/models/ProviderLogo", () => ({
   ProviderLogo: ({ provider, className }: { provider: string; className?: string }) => (
@@ -101,6 +101,8 @@ vi.mock("@/app/(dashboard)/hooks/tags/useTags", () => ({
 }));
 
 const mockAuthorizedUser = (userRole: string, userId: string, premiumUser: boolean) => ({
+  isLoading: false,
+  isAuthorized: true,
   token: "test-token",
   accessToken: "test-access-token",
   userId,
@@ -123,11 +125,14 @@ const testTeam: Team = {
   created_at: "2024-01-01T00:00:00Z",
   keys: [],
   members_with_roles: [],
-};
+  spend: 0,
+} as Team;
 
 const createTestProps = (userRole = "proxy_admin", userId = "user-1", isTeamAdmin = false) => {
-  const { result } = renderHook(() => Form.useForm());
-  const [form] = result.current;
+  const { result } = renderHook(() =>
+    useForm<AddModelFormValues>({ defaultValues: { model_mappings: [] } }),
+  );
+  const form = result.current;
 
   const teams = [
     {
@@ -147,10 +152,7 @@ const createTestProps = (userRole = "proxy_admin", userId = "user-1", isTeamAdmi
     },
   ];
 
-  const uploadProps: UploadProps = {
-    beforeUpload: () => false,
-    showUploadList: false,
-  };
+  const uploadProps: UploadProps = {};
 
   return {
     form,

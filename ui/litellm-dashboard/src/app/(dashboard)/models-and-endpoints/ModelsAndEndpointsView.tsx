@@ -6,6 +6,10 @@ import AllModelsTab from "@/app/(dashboard)/models-and-endpoints/components/AllM
 import ModelRetrySettingsTab from "@/app/(dashboard)/models-and-endpoints/components/ModelRetrySettingsTab";
 import PriceDataManagementTab from "@/app/(dashboard)/models-and-endpoints/components/PriceDataManagementTab";
 import { handleAddModelSubmit } from "@/components/add_model/handle_add_model_submit";
+import type {
+  AddModelFormValues,
+} from "@/components/add_model/AddModelForm";
+import type { UploadProps } from "@/components/add_model/add_model_upload_types";
 import { Team } from "@/components/key_team_helpers/key_list";
 import CredentialsPanel from "@/components/model_add/credentials";
 import { getCallbacksCall, setCallbacksCall } from "@/components/networking";
@@ -17,8 +21,7 @@ import { RefreshCcw } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 // eslint-disable-next-line litellm-ui/no-banned-ui-imports
 import { Tab, TabGroup, TabList, TabPanel, TabPanels } from "@tremor/react";
-import type { UploadProps } from "antd";
-import { Form } from "antd";
+import { useForm } from "react-hook-form";
 import { PlusCircle as PlusCircleOutlined } from "lucide-react";
 import React, { useEffect, useMemo, useState } from "react";
 import AddModelTab from "../../../components/add_model/add_model_tab";
@@ -49,7 +52,11 @@ interface GlobalRetryPolicyObject {
 
 const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({ premiumUser, teams }) => {
   const { accessToken, token, userRole, userId: userID } = useAuthorized();
-  const [addModelForm] = Form.useForm();
+  const addModelForm = useForm<AddModelFormValues>({
+    defaultValues: {
+      model_mappings: [],
+    },
+  });
   const [lastRefreshed, setLastRefreshed] = useState("");
   const [providerModels, setProviderModels] = useState<Array<string>>([]);
   const [selectedProvider, setSelectedProvider] = useState<Providers>(Providers.Anthropic);
@@ -140,22 +147,6 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({ premiumUser, te
   };
 
   const uploadProps: UploadProps = {
-    name: "file",
-    accept: ".json",
-    pastable: false,
-    beforeUpload: (file) => {
-      if (file.type === "application/json") {
-        const reader = new FileReader();
-        reader.onload = (e) => {
-          if (e.target) {
-            const jsonStr = e.target.result as string;
-            addModelForm.setFieldsValue({ vertex_credentials: jsonStr });
-          }
-        };
-        reader.readAsText(file);
-      }
-      return false;
-    },
     onChange(info) {
       if (info.file.status === "done") {
         NotificationsManager.success(`${info.file.name} file uploaded successfully`);
@@ -242,17 +233,16 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({ premiumUser, te
   }
 
   const handleOk = async () => {
+    // Form validation is handled inside the shadcn `AddModelForm` via
+    // `form.handleSubmit` before calling this callback; at this point the
+    // form values are already valid and we can proceed with the submit.
+    const values = addModelForm.getValues();
     try {
-      const values = await addModelForm.validateFields();
       await handleAddModelSubmit(values, accessToken, addModelForm, handleRefreshClick);
     } catch (error: any) {
-      const errorMessages =
-        error.errorFields
-          ?.map((field: any) => {
-            return `${field.name.join(".")}: ${field.errors.join(", ")}`;
-          })
-          .join(" | ") || "Unknown validation error";
-      NotificationsManager.fromBackend(`Please fill in the following required fields: ${errorMessages}`);
+      NotificationsManager.fromBackend(
+        `Failed to add model: ${error?.message ?? "Unknown error"}`,
+      );
     }
   };
 

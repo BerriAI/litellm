@@ -165,7 +165,13 @@ export const handleAddModelSubmit = async (values: any, accessToken: string, for
     }
 
     callback && callback();
-    form.resetFields();
+    // `form` may be an antd FormInstance (legacy) or a RHF `UseFormReturn`
+    // (phase-1 shadcn migration); we support both.
+    if (typeof form?.resetFields === "function") {
+      form.resetFields();
+    } else if (typeof form?.reset === "function") {
+      form.reset();
+    }
   } catch (error) {
     NotificationManager.fromBackend("Failed to add model: " + error);
   }

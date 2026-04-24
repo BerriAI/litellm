@@ -4,19 +4,20 @@ import {
   TabsList,
   TabsTrigger,
 } from "@/components/ui/tabs";
-import type { FormInstance } from "antd";
-import { Form } from "antd";
-import type { UploadProps } from "antd/es/upload";
 import React from "react";
+import { useForm, UseFormReturn } from "react-hook-form";
 import type { Team } from "../key_team_helpers/key_list";
 import { type CredentialItem } from "../networking";
 import { Providers } from "../provider_info_helpers";
-import AddAutoRouterTab from "./add_auto_router_tab";
-import AddModelForm from "./AddModelForm";
+import AddAutoRouterTab, {
+  type AutoRouterFormValues,
+} from "./add_auto_router_tab";
+import AddModelForm, { type AddModelFormValues } from "./AddModelForm";
 import { handleAddAutoRouterSubmit } from "./handle_add_auto_router_submit";
+import type { UploadProps } from "./add_model_upload_types";
 
 interface AddModelTabProps {
-  form: FormInstance;
+  form: UseFormReturn<AddModelFormValues>;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   handleOk: (values?: any) => Promise<void>;
   selectedProvider: Providers;
@@ -49,22 +50,22 @@ const AddModelTab: React.FC<AddModelTabProps> = ({
   accessToken,
   userRole,
 }) => {
-  const [autoRouterForm] = Form.useForm();
+  const autoRouterForm = useForm<AutoRouterFormValues>({
+    defaultValues: {
+      auto_router_name: "",
+      auto_router_default_model: "",
+      auto_router_embedding_model: "",
+      model_access_group: [],
+    },
+  });
 
-  const handleAutoRouterOk = () => {
-    autoRouterForm
-      .validateFields()
-      .then((values) => {
-        handleAddAutoRouterSubmit(
-          values,
-          accessToken,
-          autoRouterForm,
-          handleOk,
-        );
-      })
-      .catch((error) => {
-        console.error("Validation failed:", error);
-      });
+  const handleAutoRouterOk = async (values: AutoRouterFormValues) => {
+    await handleAddAutoRouterSubmit(
+      values,
+      accessToken,
+      autoRouterForm,
+      () => handleOk(),
+    );
   };
 
   return (

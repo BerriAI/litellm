@@ -1,57 +1,83 @@
-import React, { useEffect, useState } from "react";
-import { Form, Table } from "antd";
+import React, { useEffect } from "react";
+import { Controller, useFormContext, useWatch } from "react-hook-form";
 import { Input } from "@/components/ui/input";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import { Label } from "@/components/ui/label";
 import { Tooltip } from "../atoms/index";
 import { Providers } from "../provider_info_helpers";
 
-const ConditionalPublicModelName: React.FC = () => {
-  const form = Form.useFormInstance();
-  const [tableKey, setTableKey] = useState(0); // Add a key to force table re-render
+interface ModelMapping {
+  public_name: string;
+  litellm_model: string;
+}
 
-  // Watch the 'model' field for changes and ensure it's always an array
-  const modelValue = Form.useWatch("model", form) || [];
-  const selectedModels = Array.isArray(modelValue) ? modelValue : [modelValue];
-  const customModelName = Form.useWatch("custom_model_name", form);
+const ConditionalPublicModelName: React.FC = () => {
+  const { control, setValue, getValues, formState } = useFormContext();
+
+  const modelValue = useWatch({ control, name: "model" });
+  const customModelName = useWatch({ control, name: "custom_model_name" });
+  const selectedProvider = useWatch({ control, name: "custom_llm_provider" });
+  const modelMappings = (useWatch({ control, name: "model_mappings" }) ??
+    []) as ModelMapping[];
+
+  const selectedModels = Array.isArray(modelValue)
+    ? (modelValue as string[])
+    : modelValue
+      ? [modelValue as string]
+      : [];
   const showPublicModelName = !selectedModels.includes("all-wildcard");
-  const selectedProvider = Form.useWatch("custom_llm_provider", form);
-  // Force table to re-render when custom model name changes
+
   useEffect(() => {
     if (customModelName && selectedModels.includes("custom")) {
-      const currentMappings = form.getFieldValue("model_mappings") || [];
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const updatedMappings = currentMappings.map((mapping: any) => {
-        if (mapping.public_name === "custom" || mapping.litellm_model === "custom") {
+      const currentMappings = (getValues("model_mappings") ||
+        []) as ModelMapping[];
+      const updatedMappings = currentMappings.map((mapping) => {
+        if (
+          mapping.public_name === "custom" ||
+          mapping.litellm_model === "custom"
+        ) {
           if (selectedProvider === Providers.Azure) {
             return {
-              public_name: customModelName,
-              litellm_model: `azure/${customModelName}`,
+              public_name: customModelName as string,
+              litellm_model: `azure/${customModelName as string}`,
             };
           }
           return {
-            public_name: customModelName,
-            litellm_model: customModelName,
+            public_name: customModelName as string,
+            litellm_model: customModelName as string,
           };
         }
         return mapping;
       });
-      form.setFieldValue("model_mappings", updatedMappings);
-      setTableKey((prev) => prev + 1); // Force table re-render
+      setValue("model_mappings", updatedMappings);
     }
-  }, [customModelName, selectedModels, selectedProvider, form]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [customModelName, JSON.stringify(selectedModels), selectedProvider]);
 
-  // Initial setup of model mappings when models are selected
   useEffect(() => {
-    if (selectedModels.length > 0 && !selectedModels.includes("all-wildcard")) {
-      // Check if we already have mappings that match the selected models
-      const currentMappings = form.getFieldValue("model_mappings") || [];
+    if (
+      selectedModels.length > 0 &&
+      !selectedModels.includes("all-wildcard")
+    ) {
+      const currentMappings = (getValues("model_mappings") ||
+        []) as ModelMapping[];
 
-      // Only update if the mappings don't exist or don't match the selected models
       const shouldUpdateMappings =
         currentMappings.length !== selectedModels.length ||
         !selectedModels.every((model) =>
-          currentMappings.some((mapping: { public_name: string; litellm_model: string }) => {
+          currentMappings.some((mapping) => {
             if (model === "custom") {
-              return mapping.litellm_model === "custom" || mapping.litellm_model === customModelName;
+              return (
+                mapping.litellm_model === "custom" ||
+                mapping.litellm_model === customModelName
+              );
             }
             if (selectedProvider === Providers.Azure) {
               return mapping.litellm_model === `azure/${model}`;
@@ -65,13 +91,13 @@ const ConditionalPublicModelName: React.FC = () => {
           if (model === "custom" && customModelName) {
             if (selectedProvider === Providers.Azure) {
               return {
-                public_name: customModelName,
-                litellm_model: `azure/${customModelName}`,
+                public_name: customModelName as string,
+                litellm_model: `azure/${customModelName as string}`,
               };
             }
             return {
-              public_name: customModelName,
-              litellm_model: customModelName,
+              public_name: customModelName as string,
+              litellm_model: customModelName as string,
             };
           }
           if (selectedProvider === Providers.Azure) {
@@ -86,11 +112,11 @@ const ConditionalPublicModelName: React.FC = () => {
           };
         });
 
-        form.setFieldValue("model_mappings", mappings);
-        setTableKey((prev) => prev + 1); // Force table re-render
+        setValue("model_mappings", mappings);
       }
     }
-  }, [selectedModels, customModelName, selectedProvider, form]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [JSON.stringify(selectedModels), customModelName, selectedProvider]);
 
   if (!showPublicModelName) return null;
 
@@ -126,104 +152,128 @@ const ConditionalPublicModelName: React.FC = () => {
     </>
   );
 
-  const liteLLMModelTooltipContent = <div>The model name LiteLLM will send to the LLM API</div>;
+  const liteLLMModelTooltipContent = (
+    <div>The model name LiteLLM will send to the LLM API</div>
+  );
 
-  const columns = [
-    {
-      title: (
-        <span className="flex items-center">
-          Public Model Name
-          <Tooltip content={publicNameTooltipContent} width="500px" />
-        </span>
-      ),
-      dataIndex: "public_name",
-      key: "public_name",
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      render: (text: string, record: any, index: number) => {
-        return (
-          <Input
-            value={text}
-            onChange={(e) => {
-              const newValue = e.target.value;
-              const newMappings = [...form.getFieldValue("model_mappings")];
+  const handlePublicNameChange = (index: number, newValue: string) => {
+    const newMappings = [
+      ...((getValues("model_mappings") || []) as ModelMapping[]),
+    ];
 
-              // Check conditions for Anthropic -1m suffix handling
-              const isAnthropic = selectedProvider === Providers.Anthropic;
-              const endsWith1m = newValue.endsWith("-1m");
-              const litellmParams = form.getFieldValue("litellm_extra_params");
-              const isLitellmParamsEmpty = !litellmParams || litellmParams.trim() === "";
+    const isAnthropic = selectedProvider === Providers.Anthropic;
+    const endsWith1m = newValue.endsWith("-1m");
+    const litellmParams = getValues("litellm_extra_params") as
+      | string
+      | undefined;
+    const isLitellmParamsEmpty = !litellmParams || litellmParams.trim() === "";
 
-              let finalPublicName = newValue;
+    let finalPublicName = newValue;
 
-              if (isAnthropic && endsWith1m && isLitellmParamsEmpty) {
-                // Set litellm params with extra_headers
-                const litellmParamsValue = JSON.stringify(
-                  { extra_headers: { "anthropic-beta": "context-1m-2025-08-07" } },
-                  null,
-                  2,
-                );
-                form.setFieldValue("litellm_extra_params", litellmParamsValue);
+    if (isAnthropic && endsWith1m && isLitellmParamsEmpty) {
+      const litellmParamsValue = JSON.stringify(
+        { extra_headers: { "anthropic-beta": "context-1m-2025-08-07" } },
+        null,
+        2,
+      );
+      setValue("litellm_extra_params", litellmParamsValue);
+      finalPublicName = newValue.slice(0, -3);
+    }
 
-                // Remove -1m suffix from public_name
-                finalPublicName = newValue.slice(0, -3); // Remove "-1m" (3 characters)
-              }
+    newMappings[index] = {
+      ...newMappings[index],
+      public_name: finalPublicName,
+    };
+    setValue("model_mappings", newMappings);
+  };
 
-              newMappings[index].public_name = finalPublicName;
-              form.setFieldValue("model_mappings", newMappings);
-            }}
-          />
-        );
-      },
-    },
-    {
-      title: (
-        <span className="flex items-center">
-          LiteLLM Model Name
-          <Tooltip content={liteLLMModelTooltipContent} width="360px" />
-        </span>
-      ),
-      dataIndex: "litellm_model",
-      key: "litellm_model",
-    },
-  ];
+  const mappingsError = (formState.errors as Record<string, { message?: string }>)
+    .model_mappings;
 
   return (
-    <>
-      <Form.Item
-        label="Model Mappings"
-        name="model_mappings"
-        tooltip="Map public model names to LiteLLM model names for load balancing"
-        labelCol={{ span: 10 }}
-        wrapperCol={{ span: 16 }}
-        labelAlign="left"
-        rules={[
-          {
-            required: true,
-            validator: async (_, value) => {
+    <div className="grid grid-cols-24 gap-2 mb-4 items-start">
+      <Label
+        className="col-span-10 pt-2"
+        title="Map public model names to LiteLLM model names for load balancing"
+      >
+        Model Mappings
+      </Label>
+      <div className="col-span-14 space-y-2">
+        <Controller
+          control={control}
+          name="model_mappings"
+          rules={{
+            validate: (value) => {
               if (!value || value.length === 0) {
-                throw new Error("At least one model mapping is required");
+                return "At least one model mapping is required";
               }
-              const invalidMappings = value.filter(
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                (mapping: any) =>
+              const invalidMappings = (value as ModelMapping[]).filter(
+                (mapping) =>
                   !mapping.public_name || mapping.public_name.trim() === "",
               );
               if (invalidMappings.length > 0) {
-                throw new Error("All model mappings must have valid public names");
+                return "All model mappings must have valid public names";
               }
+              return true;
             },
-          },
-        ]}
-      >
-        <Table
-          key={tableKey} // Add key to force re-render
-          dataSource={form.getFieldValue("model_mappings")}
-          columns={columns}
-          pagination={false}
-          size="small"
+          }}
+          render={() => (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>
+                    <span className="flex items-center">
+                      Public Model Name
+                      <Tooltip content={publicNameTooltipContent} width="500px" />
+                    </span>
+                  </TableHead>
+                  <TableHead>
+                    <span className="flex items-center">
+                      LiteLLM Model Name
+                      <Tooltip
+                        content={liteLLMModelTooltipContent}
+                        width="360px"
+                      />
+                    </span>
+                  </TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {modelMappings.length === 0 ? (
+                  <TableRow>
+                    <TableCell
+                      colSpan={2}
+                      className="text-center text-muted-foreground py-4"
+                    >
+                      Select at least one model
+                    </TableCell>
+                  </TableRow>
+                ) : (
+                  modelMappings.map((record, index) => (
+                    <TableRow key={`${record.litellm_model}-${index}`}>
+                      <TableCell>
+                        <Input
+                          value={record.public_name}
+                          onChange={(e) =>
+                            handlePublicNameChange(index, e.target.value)
+                          }
+                        />
+                      </TableCell>
+                      <TableCell>{record.litellm_model}</TableCell>
+                    </TableRow>
+                  ))
+                )}
+              </TableBody>
+            </Table>
+          )}
         />
-      </Form.Item>
-    </>
+        {mappingsError?.message && (
+          <p className="text-sm text-destructive">
+            {String(mappingsError.message)}
+          </p>
+        )}
+      </div>
+    </div>
   );
 };
 

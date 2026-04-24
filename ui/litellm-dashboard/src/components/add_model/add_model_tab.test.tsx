@@ -1,13 +1,14 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, renderHook, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { Form } from "antd";
-import type { UploadProps } from "antd/es/upload";
+import { useForm } from "react-hook-form";
 import { describe, expect, it, vi } from "vitest";
 import type { Team } from "../key_team_helpers/key_list";
 import type { CredentialItem } from "../networking";
 import { Providers } from "../provider_info_helpers";
 import AddModelTab from "./add_model_tab";
+import type { AddModelFormValues } from "./AddModelForm";
+import type { UploadProps } from "./add_model_upload_types";
 
 vi.mock("../molecules/models/ProviderLogo", () => ({
   ProviderLogo: ({ provider, className }: { provider: string; className?: string }) => (
@@ -64,9 +65,16 @@ vi.mock("@/app/(dashboard)/hooks/providers/useProviderFields", () => ({
 
 vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
   default: vi.fn().mockReturnValue({
+    isLoading: false,
+    isAuthorized: true,
+    token: "test-token",
     accessToken: "test-access-token",
+    userId: "user-1",
+    userEmail: "test@example.com",
     userRole: "Admin",
     premiumUser: true,
+    disabledPersonalKeyCreation: false,
+    showSSOBanner: false,
   }),
 }));
 
@@ -85,8 +93,10 @@ const createQueryClient = () =>
   });
 
 const createTestProps = () => {
-  const { result } = renderHook(() => Form.useForm());
-  const [form] = result.current;
+  const { result } = renderHook(() =>
+    useForm<AddModelFormValues>({ defaultValues: { model_mappings: [] } }),
+  );
+  const form = result.current;
 
   const handleOk = vi.fn();
   const setSelectedProvider = vi.fn();
@@ -111,7 +121,8 @@ const createTestProps = () => {
       created_at: "2024-01-01T00:00:00Z",
       keys: [],
       members_with_roles: [],
-    },
+      spend: 0,
+    } as Team,
   ];
 
   const credentials: CredentialItem[] = [
@@ -125,10 +136,7 @@ const createTestProps = () => {
     },
   ];
 
-  const uploadProps: UploadProps = {
-    beforeUpload: () => false,
-    showUploadList: false,
-  };
+  const uploadProps: UploadProps = {};
 
   return {
     form,
@@ -259,7 +267,6 @@ describe("Add Model Tab", () => {
       </QueryClientProvider>,
     );
 
-    // Wait for async operations to complete and buttons to appear
     await waitFor(
       async () => {
         const testConnectButtons = await screen.findAllByRole("button", { name: "Test Connect" });
@@ -296,20 +303,15 @@ describe("Add Model Tab", () => {
       </QueryClientProvider>,
     );
 
-    // Wait for component to load
     await screen.findByText("Provider");
 
-    // Find the team-BYOK switch by its role
     const teamSwitch = screen.getByRole("switch");
     expect(teamSwitch).toBeInTheDocument();
 
-    // Initially, team selection should not be visible
     expect(screen.queryByText("Select Team")).not.toBeInTheDocument();
 
-    // Click the switch to enable team-only mode
     await userEvent.click(teamSwitch!);
 
-    // Now team selection should be visible
     expect(await screen.findByText("Select Team")).toBeInTheDocument();
   });
 });

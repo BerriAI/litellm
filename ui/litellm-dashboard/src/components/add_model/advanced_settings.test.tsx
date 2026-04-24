@@ -1,32 +1,43 @@
 import { act, fireEvent, render, waitFor } from "@testing-library/react";
+import { FormProvider, useForm } from "react-hook-form";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import AdvancedSettings from "./advanced_settings";
+
+function Wrapper({ children }: { children: React.ReactNode }) {
+  const form = useForm({ defaultValues: {} });
+  return <FormProvider {...form}>{children}</FormProvider>;
+}
 
 describe("AdvancedSettings", () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
+
   it("should render", () => {
     render(
-      <AdvancedSettings
-        showAdvancedSettings={true}
-        setShowAdvancedSettings={() => {}}
-        guardrailsList={[]}
-        tagsList={{}}
-        accessToken="test-token"
-      />,
+      <Wrapper>
+        <AdvancedSettings
+          showAdvancedSettings={true}
+          setShowAdvancedSettings={() => {}}
+          guardrailsList={[]}
+          tagsList={{}}
+          accessToken="test-token"
+        />
+      </Wrapper>,
     );
   });
 
   it("should render tags list", async () => {
     const { getByText } = render(
-      <AdvancedSettings
-        showAdvancedSettings={true}
-        setShowAdvancedSettings={() => {}}
-        guardrailsList={[]}
-        tagsList={{}}
-        accessToken="test-token"
-      />,
+      <Wrapper>
+        <AdvancedSettings
+          showAdvancedSettings={true}
+          setShowAdvancedSettings={() => {}}
+          guardrailsList={[]}
+          tagsList={{}}
+          accessToken="test-token"
+        />
+      </Wrapper>,
     );
     fireEvent.click(getByText("Advanced Settings"));
     await waitFor(() => {
@@ -36,13 +47,15 @@ describe("AdvancedSettings", () => {
 
   it("should render the litellm params", async () => {
     const { getByText } = render(
-      <AdvancedSettings
-        showAdvancedSettings={true}
-        setShowAdvancedSettings={() => {}}
-        guardrailsList={[]}
-        tagsList={{}}
-        accessToken="test-token"
-      />,
+      <Wrapper>
+        <AdvancedSettings
+          showAdvancedSettings={true}
+          setShowAdvancedSettings={() => {}}
+          guardrailsList={[]}
+          tagsList={{}}
+          accessToken="test-token"
+        />
+      </Wrapper>,
     );
     act(() => {
       fireEvent.click(getByText("Advanced Settings"));
