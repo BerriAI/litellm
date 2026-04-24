@@ -217,8 +217,15 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         """
         bedrock_request: BedrockRequest = BedrockRequest(source=source)
         if source == "INPUT":
-            if messages is not None and self.experimental_guardrail_input_roles is not None:
-                messages = [m for m in messages if m.get("role") in self.experimental_guardrail_input_roles]
+            if (
+                messages is not None
+                and self.experimental_guardrail_input_roles is not None
+            ):
+                messages = [
+                    m
+                    for m in messages
+                    if m.get("role") in self.experimental_guardrail_input_roles
+                ]
             bedrock_request = self._create_bedrock_input_content_request(
                 messages=messages
             )
