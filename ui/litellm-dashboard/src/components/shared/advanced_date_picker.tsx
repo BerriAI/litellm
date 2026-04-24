@@ -1,6 +1,7 @@
 import { Calendar as CalendarIcon, Clock } from "lucide-react";
 // eslint-disable-next-line litellm-ui/no-banned-ui-imports
-import { Button, DateRangePickerValue } from "@tremor/react";
+import { DateRangePickerValue } from "@tremor/react";
+import { Button } from "@/components/ui/button";
 import moment from "moment";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 
