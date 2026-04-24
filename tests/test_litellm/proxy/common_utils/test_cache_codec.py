@@ -78,13 +78,18 @@ class TestCacheCodecSerialize:
         mock_validate.assert_called_once()
 
     def test_with_model_type_incompatible_model_raises_validation_error(self):
-        """Passing an instance of a completely different model is a caller error and raises."""
+        """Passing a BaseModel whose fields don't satisfy model_type's required fields raises.
+
+        _IncompatibleModel only has `foo: int`, so when Pydantic v2 extracts its
+        data and validates it against _SampleModel (which requires `name: str`),
+        a ValidationError is raised.
+        """
 
         class _IncompatibleModel(BaseModel):
-            name: str
+            foo: int  # missing required 'name' field of _SampleModel
 
-        with pytest.raises(Exception):
-            CacheCodec.serialize(_IncompatibleModel(name="x"), model_type=_SampleModel)
+        with pytest.raises(ValidationError):
+            CacheCodec.serialize(_IncompatibleModel(foo=1), model_type=_SampleModel)
 
 
 class TestCacheCodecDeserialize:
