@@ -13,7 +13,7 @@ dependencies = [
     "fastuuid==0.14.0",
     "httpx==0.28.1",
     "openai==2.24.0",
-    "python-dotenv==1.0.1",
+    "python-dotenv==1.2.2",
     "tiktoken==0.12.0",
     "importlib-metadata==8.5.0",
     "tokenizers==0.22.2",
