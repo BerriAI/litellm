@@ -15,7 +15,7 @@ FeatureName = Literal["agents", "vector_stores"]
 
 OrgAdminFeatureName = Literal["key_generate", "team_create", "model_add"]
 
-_ORG_ADMIN_FEATURE_LABELS: dict = {
+_ORG_ADMIN_FEATURE_LABELS: dict[str, str] = {
     "key_generate": "key generation",
     "team_create": "team creation",
     "model_add": "model creation",
