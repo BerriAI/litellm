@@ -199,11 +199,12 @@ def test_column_limit_truncates_large_fields():
     # Messages field should be truncated, keeping tail
     msg_str = str(result["messages"])
     assert msg_str.startswith("[truncated by litellm]...")
-    assert len(msg_str) <= logger.MAX_COLUMN_CHARS + len("[truncated by litellm]...")
+    assert len(msg_str) <= logger.MAX_COLUMN_CHARS
 
     # Response field should be truncated, keeping tail
     resp_str = str(result["response"])
     assert resp_str.startswith("[truncated by litellm]...")
+    assert len(resp_str) <= logger.MAX_COLUMN_CHARS
 
     # Truncation metadata present
     metadata = result.get("metadata", {})

@@ -284,13 +284,15 @@ class AzureSentinelLogger(CustomBatchLogger):
 
         entry = deepcopy(payload)
         truncated_fields: List[str] = []
+        prefix = "[truncated by litellm]..."
+        tail_limit = limit - len(prefix)
 
         if len(msg_str) > limit:
-            entry["messages"] = "[truncated by litellm]..." + msg_str[-limit:]
+            entry["messages"] = prefix + msg_str[-tail_limit:]
             truncated_fields.append("messages")
 
         if len(resp_str) > limit:
-            entry["response"] = "[truncated by litellm]..." + resp_str[-limit:]
+            entry["response"] = prefix + resp_str[-tail_limit:]
             truncated_fields.append("response")
 
         truncation_info: Dict[str, Any] = {
