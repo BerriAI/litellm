@@ -328,6 +328,43 @@ def test_generic_cost_per_token_gpt54_above_272k_tokens():
     assert round(completion_cost, 10) == round(expected_completion, 10)
 
 
+def test_generic_cost_per_token_gpt55():
+    """gpt-5.5: base pricing — $5/1M input, $30/1M output, $0.50/1M cached input."""
+    model = "gpt-5.5"
+    custom_llm_provider = "openai"
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    model_cost_map = litellm.model_cost[model]
+
+    # Sanity-check the map values match OpenAI's published pricing.
+    assert model_cost_map["input_cost_per_token"] == 5e-6
+    assert model_cost_map["output_cost_per_token"] == 3e-5
+    assert model_cost_map["cache_read_input_token_cost"] == 5e-7
+    assert model_cost_map["litellm_provider"] == "openai"
+    assert model_cost_map["mode"] == "chat"
+    assert model_cost_map["max_input_tokens"] == 272000
+
+    prompt_tokens = 1000
+    completion_tokens = 500
+    usage = Usage(
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        total_tokens=prompt_tokens + completion_tokens,
+    )
+    prompt_cost, completion_cost = generic_cost_per_token(
+        model=model,
+        usage=usage,
+        custom_llm_provider=custom_llm_provider,
+    )
+    assert round(prompt_cost, 10) == round(
+        model_cost_map["input_cost_per_token"] * prompt_tokens, 10
+    )
+    assert round(completion_cost, 10) == round(
+        model_cost_map["output_cost_per_token"] * completion_tokens, 10
+    )
+
+
 def test_generic_cost_per_token_anthropic_prompt_caching():
     model = "claude-sonnet-4@20250514"
     usage = Usage(

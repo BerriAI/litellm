@@ -547,6 +547,8 @@ async def test_router_caching_ttl():
 
     assert router.cache.redis_cache is not None
 
+    from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+
     increment_cache_kwargs = {}
     with patch.object(
         router.cache,
@@ -554,6 +556,10 @@ async def test_router_caching_ttl():
         new=AsyncMock(),
     ) as mock_client:
         await router.acompletion(model=model, messages=messages)
+
+        # Async success callbacks are dispatched to GLOBAL_LOGGING_WORKER's
+        # background queue; drain it before asserting the mock was invoked.
+        await GLOBAL_LOGGING_WORKER.flush()
 
         # mock_client.assert_called_once()
         print(f"mock_client.call_args.kwargs: {mock_client.call_args.kwargs}")

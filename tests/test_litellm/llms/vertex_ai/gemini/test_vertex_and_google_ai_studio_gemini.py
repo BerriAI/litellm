@@ -3476,8 +3476,8 @@ def test_new_detail_levels():
     assert file_part["media_resolution"] == {"level": "MEDIA_RESOLUTION_MEDIUM"}
 
 
-def test_video_metadata_only_for_gemini_3():
-    """Test that video_metadata is only applied for Gemini 3+ models (Issue #19026)"""
+def test_video_metadata_supported_for_all_gemini_models():
+    """Test that video_metadata is applied for all Gemini models (Issue #25474)"""
     from litellm.llms.vertex_ai.gemini.transformation import (
         _gemini_convert_messages_with_history,
     )
@@ -3499,39 +3499,29 @@ def test_video_metadata_only_for_gemini_3():
         }
     ]
 
-    # Test with Gemini 1.5 (should not have video_metadata or media_resolution)
-    contents_1_5 = _gemini_convert_messages_with_history(
-        messages=messages, model="gemini-1.5-pro"
-    )
+    for model in ["gemini-1.5-pro", "gemini-2.5-flash", "gemini-2.5-pro", "gemini-3-pro-preview"]:
+        contents = _gemini_convert_messages_with_history(messages=messages, model=model)
 
-    file_part_1_5 = None
-    for part in contents_1_5[0]["parts"]:
-        if "file_data" in part:
-            file_part_1_5 = part
-            break
+        file_part = None
+        for part in contents[0]["parts"]:
+            if "file_data" in part:
+                file_part = part
+                break
 
-    assert file_part_1_5 is not None
-    assert (
-        "media_resolution" not in file_part_1_5
-    ), "Gemini 1.5 should not have media_resolution"
-    assert (
-        "video_metadata" not in file_part_1_5
-    ), "Gemini 1.5 should not have video_metadata"
+        assert file_part is not None, f"{model}: file part should exist"
+        assert "video_metadata" in file_part, f"{model}: video_metadata should be present"
+        assert file_part["video_metadata"]["fps"] == 5, f"{model}: fps should be 5"
 
-    # Test with Gemini 3 (should have both)
-    contents_3 = _gemini_convert_messages_with_history(
-        messages=messages, model="gemini-3-pro-preview"
-    )
+    # Per-part media_resolution is Gemini 3+ only; 2.x uses generation_config global
+    for model in ["gemini-3-pro-preview"]:
+        contents = _gemini_convert_messages_with_history(messages=messages, model=model)
+        file_part = next(p for p in contents[0]["parts"] if "file_data" in p)
+        assert "media_resolution" in file_part, f"{model}: media_resolution should be present"
 
-    file_part_3 = None
-    for part in contents_3[0]["parts"]:
-        if "file_data" in part:
-            file_part_3 = part
-            break
-
-    assert file_part_3 is not None
-    assert "media_resolution" in file_part_3, "Gemini 3 should have media_resolution"
-    assert "video_metadata" in file_part_3, "Gemini 3 should have video_metadata"
+    for model in ["gemini-1.5-pro", "gemini-2.5-flash", "gemini-2.5-pro"]:
+        contents = _gemini_convert_messages_with_history(messages=messages, model=model)
+        file_part = next(p for p in contents[0]["parts"] if "file_data" in p)
+        assert "media_resolution" not in file_part, f"{model}: per-part media_resolution should not be set"
 
 
 def test_chunk_parser_handles_prompt_feedback_block():

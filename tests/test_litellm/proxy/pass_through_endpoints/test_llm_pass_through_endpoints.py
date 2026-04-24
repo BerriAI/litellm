@@ -21,6 +21,7 @@ from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     bedrock_llm_proxy_route,
     create_pass_through_route,
     cursor_proxy_route,
+    get_vertex_base_url,
     llm_passthrough_factory_proxy_route,
     milvus_proxy_route,
     openai_proxy_route,
@@ -29,6 +30,35 @@ from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     vllm_proxy_route,
 )
 from litellm.types.passthrough_endpoints.vertex_ai import VertexPassThroughCredentials
+
+
+class TestVertexPassthroughGetVertexBaseUrl:
+    """Module-local get_vertex_base_url (trailing slash); rules match common_utils."""
+
+    @pytest.mark.parametrize(
+        "vertex_location, expected",
+        [
+            ("global", "https://aiplatform.googleapis.com/"),
+            ("us-central1", "https://us-central1-aiplatform.googleapis.com/"),
+            ("us", "https://aiplatform.us.rep.googleapis.com/"),
+            ("eu", "https://aiplatform.eu.rep.googleapis.com/"),
+        ],
+    )
+    def test_returns_base_with_trailing_slash(self, vertex_location, expected):
+        assert get_vertex_base_url(vertex_location) == expected
+
+    @pytest.mark.parametrize(
+        "vertex_location, expected_host",
+        [
+            ("global", "aiplatform.googleapis.com"),
+            ("us-central1", "us-central1-aiplatform.googleapis.com"),
+            ("us", "aiplatform.us.rep.googleapis.com"),
+            ("eu", "aiplatform.eu.rep.googleapis.com"),
+        ],
+    )
+    def test_websocket_host_strips_scheme(self, vertex_location, expected_host):
+        host = get_vertex_base_url(vertex_location).removeprefix("https://").rstrip("/")
+        assert host == expected_host
 
 
 class TestBaseOpenAIPassThroughHandler:

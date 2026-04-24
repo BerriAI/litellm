@@ -3907,7 +3907,7 @@ class OrganizationMemberUpdateResponse(MemberUpdateResponse):
 
 
 class TeamInfoResponseObjectTeamTable(LiteLLM_TeamTable):
-    team_member_budget_table: Optional[LiteLLM_BudgetTable] = None
+    team_member_budget_table: Optional[LiteLLM_BudgetTableFull] = None
     # Resources inherited from access groups (separate from direct assignments)
     access_group_models: Optional[List[str]] = None
     access_group_mcp_server_ids: Optional[List[str]] = None

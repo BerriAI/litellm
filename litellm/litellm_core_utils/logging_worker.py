@@ -370,11 +370,17 @@ class LoggingWorker:
         self._running_tasks.clear()
 
     async def flush(self) -> None:
-        """Flush the logging queue."""
+        """Flush the logging queue.
+
+        Waits until every enqueued task has completed. ``queue.join()`` blocks
+        on the queue's unfinished-task counter (decremented by ``task_done()``),
+        so it correctly handles items that have been dequeued but whose
+        callback hasn't finished yet — ``queue.empty()`` would return True in
+        that window and cause us to skip the wait.
+        """
         if self._queue is None:
             return
-        while not self._queue.empty():
-            await self._queue.join()
+        await self._queue.join()
 
     async def clear_queue(self):
         """
