@@ -1637,6 +1637,36 @@ class JWTAuthManager:
             user_api_key_cache=user_api_key_cache,
         )
 
+        # If JWT did not resolve team_id, but the user belongs to exactly one team in
+        # LiteLLM, use that team for auth and spend. Multiple teams: ambiguous — skip.
+        if (
+            team_id is None
+            and user_object is not None
+            and user_object.teams
+            and len(user_object.teams) == 1
+        ):
+            _fallback_team_id = user_object.teams[0]
+            _fallback_team_obj = await get_team_object(
+                team_id=_fallback_team_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                parent_otel_span=parent_otel_span,
+                proxy_logging_obj=proxy_logging_obj,
+                team_id_upsert=jwt_handler.litellm_jwtauth.team_id_upsert,
+            )
+            if _fallback_team_obj is not None:
+                team_id = _fallback_team_id
+                team_object = _fallback_team_obj
+                if user_id and team_id:
+                    team_membership_object = await get_team_membership(
+                        user_id=user_id,
+                        team_id=team_id,
+                        prisma_client=prisma_client,
+                        user_api_key_cache=user_api_key_cache,
+                        parent_otel_span=parent_otel_span,
+                        proxy_logging_obj=proxy_logging_obj,
+                    )
+
         ## MAP USER TO TEAMS
         await JWTAuthManager.map_user_to_teams(
             user_object=user_object,
