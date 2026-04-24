@@ -17,7 +17,6 @@ import {
 } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import {
-  CopyOutlined,
   DeleteOutlined,
   EditOutlined,
   EyeOutlined,
@@ -150,27 +149,27 @@ export const MemoryView: React.FC<MemoryViewProps> = ({ accessToken }) => {
     }
   };
 
-  const renderIdCell = (id?: string | null, labelOnCopy = "ID") => {
+  const renderIdPill = (
+    id: string | null | undefined,
+    onClick?: () => void,
+  ) => {
     if (!id) return <Text type="secondary">-</Text>;
     const short = id.length > 10 ? `${id.slice(0, 7)}...` : id;
+    const pillClass =
+      "font-mono text-blue-600 bg-blue-50 text-xs font-medium px-2 py-0.5 rounded-md border border-blue-200 inline-block max-w-[15ch] truncate whitespace-nowrap";
     return (
-      <Space size={4}>
-        <Tooltip title={id}>
-          <Text code style={{ fontSize: 12 }}>
+      <Tooltip title={id}>
+        {onClick ? (
+          <button
+            onClick={onClick}
+            className={`${pillClass} hover:bg-blue-100 cursor-pointer transition-colors text-left`}
+          >
             {short}
-          </Text>
-        </Tooltip>
-        <Tooltip title={`Copy ${labelOnCopy}`}>
-          <CopyOutlined
-            onClick={(e) => {
-              e.stopPropagation();
-              navigator.clipboard?.writeText(id);
-              message.success(`${labelOnCopy} copied`);
-            }}
-            style={{ color: "#8c8c8c", cursor: "pointer", fontSize: 12 }}
-          />
-        </Tooltip>
-      </Space>
+          </button>
+        ) : (
+          <span className={pillClass}>{short}</span>
+        )}
+      </Tooltip>
     );
   };
 
@@ -180,7 +179,8 @@ export const MemoryView: React.FC<MemoryViewProps> = ({ accessToken }) => {
       dataIndex: "memory_id",
       key: "memory_id",
       width: 140,
-      render: (id: string) => renderIdCell(id, "Memory ID"),
+      render: (_: unknown, r: MemoryRow) =>
+        renderIdPill(r.memory_id, () => setDetailRow(r)),
     },
     {
       title: "Name",
@@ -205,14 +205,14 @@ export const MemoryView: React.FC<MemoryViewProps> = ({ accessToken }) => {
       dataIndex: "user_id",
       key: "user_id",
       width: 160,
-      render: (uid?: string | null) => renderIdCell(uid, "User ID"),
+      render: (uid?: string | null) => renderIdPill(uid),
     },
     {
       title: "Team ID",
       dataIndex: "team_id",
       key: "team_id",
       width: 160,
-      render: (tid?: string | null) => renderIdCell(tid, "Team ID"),
+      render: (tid?: string | null) => renderIdPill(tid),
     },
     {
       title: "Updated",
