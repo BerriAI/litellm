@@ -425,6 +425,8 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         bedrock_guardrail_response: BedrockGuardrailResponse = (
             BedrockGuardrailResponse()
         )
+        if not bedrock_request_data.get("content"):
+            return bedrock_guardrail_response
         api_key: Optional[str] = None
         if request_data:
             bedrock_request_data.update(

@@ -21,6 +21,9 @@ from litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails import (
 )
 from litellm.proxy.utils import ProxyLogging
 from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.proxy.guardrails.guardrail_hooks.bedrock_guardrails import (
+    BedrockGuardrailResponse,
+)
 from litellm.types.utils import ModelResponse
 
 
@@ -2252,3 +2255,24 @@ def test_convert_to_bedrock_format_returns_empty_bedrock_request_when_all_messag
     assert "guardrailIdentifier" not in result, (
         "Should return empty BedrockRequest, not a populated one"
     )
+
+
+@pytest.mark.asyncio
+async def test_make_bedrock_api_request_skips_http_call_when_all_messages_filtered():
+    """make_bedrock_api_request must not POST to Bedrock when role filtering removes all
+    messages — the empty BedrockRequest from convert_to_bedrock_format should trigger an
+    early return before _prepare_request is reached."""
+    guardrail = BedrockGuardrail(
+        guardrailIdentifier="test-id",
+        guardrailVersion="DRAFT",
+        experimental_guardrail_input_roles=["user"],
+    )
+    messages = [
+        {"role": "system", "content": "You are a helpful assistant."},
+    ]
+    with patch.object(guardrail, "_prepare_request") as mock_prepare:
+        response = await guardrail.make_bedrock_api_request(
+            source="INPUT", messages=messages
+        )
+    mock_prepare.assert_not_called()
+    assert isinstance(response, BedrockGuardrailResponse)
