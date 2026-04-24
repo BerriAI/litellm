@@ -868,6 +868,11 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                         ),
                         jwt_claims=jwt_claims,
                     )
+                    valid_token.team_object_permission = (
+                        team_object.object_permission
+                        if team_object is not None
+                        else None
+                    )
 
                     # Check if model has zero cost - if so, skip all budget checks
                     model = get_model_from_request(request_data, route)
@@ -1466,6 +1471,11 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                     )
             else:
                 _team_obj = None
+
+            if _team_obj is not None:
+                valid_token.team_object_permission = _team_obj.object_permission
+            else:
+                valid_token.team_object_permission = None
 
             # Only cache when the key is a real team_id (non-team keys must not use key=None).
             if valid_token.team_id is not None and _team_obj is not None:

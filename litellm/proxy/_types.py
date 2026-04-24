@@ -2582,6 +2582,9 @@ class UserAPIKeyAuth(
         None  # Expanded created_by user when expand=user is used
     )
     end_user_object_permission: Optional[LiteLLM_ObjectPermissionTable] = None
+    # Team object_permission preloaded in auth (e.g. get_team_object) to avoid
+    # per-request object_permission fetches in downstream checks (vector stores, etc.)
+    team_object_permission: Optional[LiteLLM_ObjectPermissionTable] = None
     # Decoded upstream IdP claims (groups, roles, etc.) propagated by JWT auth machinery
     # and forwarded into outbound tokens by guardrails such as MCPJWTSigner.
     jwt_claims: Optional[Dict] = None
