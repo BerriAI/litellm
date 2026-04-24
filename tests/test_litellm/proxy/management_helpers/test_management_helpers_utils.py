@@ -20,14 +20,13 @@ from litellm.proxy.management_helpers.utils import add_new_member
 
 
 @pytest.mark.asyncio
-async def test_add_new_member_uses_default_team_budget_id():
+async def test_add_new_member_clones_default_team_budget_id():
     """
-    Test that add_new_member uses the default_team_budget_id when max_budget_in_team is None.
+    Test that add_new_member CLONES the team's default member budget when
+    max_budget_in_team is None and a default_team_budget_id is provided.
 
-    This test verifies that:
-    1. When max_budget_in_team is None
-    2. And default_team_budget_id is provided
-    3. The team membership is created with the default_team_budget_id
+    Cloning (rather than sharing the same budget row) is what lets admins later
+    edit one member's budget without mutating every other member's budget.
     """
     from litellm.proxy._types import LitellmUserRoles
 
@@ -35,17 +34,15 @@ async def test_add_new_member_uses_default_team_budget_id():
     test_user_id = "test_user_123"
     test_team_id = "test_team_456"
     test_default_budget_id = "default_budget_789"
+    test_cloned_budget_id = "cloned_budget_xyz"
     test_admin_name = "test_admin"
 
-    # Create a Member object with user_id
     new_member = Member(user_id=test_user_id, role="user")
 
-    # Create UserAPIKeyAuth object
     user_api_key_dict = UserAPIKeyAuth(
         user_id="admin_user", user_role=LitellmUserRoles.PROXY_ADMIN
     )
 
-    # Mock the prisma client
     mock_prisma_client = AsyncMock()
 
     # Mock the user table upsert operation
@@ -60,56 +57,140 @@ async def test_add_new_member_uses_default_team_budget_id():
         return_value=mock_user_response
     )
 
+    # Mock the default budget row fetched for cloning.
+    mock_default_budget_row = MagicMock()
+    mock_default_budget_row.model_dump.return_value = {
+        "budget_id": test_default_budget_id,
+        "max_budget": 100.0,
+        "soft_budget": None,
+        "max_parallel_requests": None,
+        "tpm_limit": 1000,
+        "rpm_limit": None,
+        "model_max_budget": None,
+        "budget_duration": "1d",
+        "allowed_models": [],
+    }
+    mock_prisma_client.db.litellm_budgettable.find_unique = AsyncMock(
+        return_value=mock_default_budget_row
+    )
+
+    # Mock the cloned budget row that .create() returns.
+    mock_cloned_budget_row = MagicMock()
+    mock_cloned_budget_row.budget_id = test_cloned_budget_id
+    mock_prisma_client.db.litellm_budgettable.create = AsyncMock(
+        return_value=mock_cloned_budget_row
+    )
+
     # Mock the team membership creation
     mock_team_membership_response = MagicMock()
     mock_team_membership_response.model_dump.return_value = {
         "team_id": test_team_id,
         "user_id": test_user_id,
-        "budget_id": test_default_budget_id,
+        "budget_id": test_cloned_budget_id,
         "litellm_budget_table": None,
     }
     mock_prisma_client.db.litellm_teammembership.create = AsyncMock(
         return_value=mock_team_membership_response
     )
 
-    # Call the function with max_budget_in_team=None and a default_team_budget_id
     result_user, result_team_membership = await add_new_member(
         new_member=new_member,
-        max_budget_in_team=None,  # This is the key - no max budget specified
+        max_budget_in_team=None,
         prisma_client=mock_prisma_client,
         team_id=test_team_id,
         user_api_key_dict=user_api_key_dict,
         litellm_proxy_admin_name=test_admin_name,
-        default_team_budget_id=test_default_budget_id,  # This should be used
+        default_team_budget_id=test_default_budget_id,
     )
 
-    # Verify that the user was created/updated correctly
     assert result_user is not None
     assert result_user.user_id == test_user_id
 
-    # Verify that the team membership was created correctly
+    # Membership should be linked to the new cloned budget, not the shared default.
     assert result_team_membership is not None
-    assert result_team_membership.team_id == test_team_id
-    assert result_team_membership.user_id == test_user_id
-    assert result_team_membership.budget_id == test_default_budget_id
+    assert result_team_membership.budget_id == test_cloned_budget_id
+    assert result_team_membership.budget_id != test_default_budget_id
 
-    # Verify that the prisma client methods were called correctly
     mock_prisma_client.db.litellm_usertable.upsert.assert_called_once()
     mock_prisma_client.db.litellm_teammembership.create.assert_called_once()
 
-    # Verify that no budget table creation was called (since max_budget_in_team is None)
-    assert (
-        not hasattr(mock_prisma_client.db, "litellm_budgettable")
-        or not mock_prisma_client.db.litellm_budgettable.create.called
+    # The clone must have happened: find_unique on the default, create for the clone.
+    mock_prisma_client.db.litellm_budgettable.find_unique.assert_called_once_with(
+        where={"budget_id": test_default_budget_id}
     )
+    mock_prisma_client.db.litellm_budgettable.create.assert_called_once()
+    cloned_create_data = (
+        mock_prisma_client.db.litellm_budgettable.create.call_args.kwargs["data"]
+    )
+    # Cloned values from the default budget row
+    assert cloned_create_data["max_budget"] == 100.0
+    assert cloned_create_data["tpm_limit"] == 1000
+    assert cloned_create_data["budget_duration"] == "1d"
+    assert cloned_create_data["created_by"] == user_api_key_dict.user_id
 
-    # Verify the team membership was created with the correct budget_id
     team_membership_call_args = (
         mock_prisma_client.db.litellm_teammembership.create.call_args
     )
-    assert team_membership_call_args is not None
     create_data = team_membership_call_args.kwargs["data"]
-    assert create_data["budget_id"] == test_default_budget_id
+    assert create_data["budget_id"] == test_cloned_budget_id
+
+
+@pytest.mark.asyncio
+async def test_add_new_member_no_budget_when_no_default_and_no_max_budget():
+    """
+    Test that add_new_member links no budget to the team membership when
+    neither max_budget_in_team nor default_team_budget_id is provided.
+
+    When the team has no default member budget, new members get nothing.
+    """
+    from litellm.proxy._types import LitellmUserRoles
+
+    test_user_id = "test_user_no_budget"
+    test_team_id = "test_team_no_budget"
+    test_admin_name = "test_admin"
+
+    new_member = Member(user_id=test_user_id, role="user")
+
+    user_api_key_dict = UserAPIKeyAuth(
+        user_id="admin_user", user_role=LitellmUserRoles.PROXY_ADMIN
+    )
+
+    mock_prisma_client = AsyncMock()
+
+    mock_user_response = MagicMock()
+    mock_user_response.model_dump.return_value = {
+        "user_id": test_user_id,
+        "user_email": None,
+        "teams": [test_team_id],
+        "user_role": "internal_user",
+    }
+    mock_prisma_client.db.litellm_usertable.upsert = AsyncMock(
+        return_value=mock_user_response
+    )
+
+    # Even though we mock these, they must NOT be called on the no-budget path.
+    mock_prisma_client.db.litellm_budgettable.find_unique = AsyncMock()
+    mock_prisma_client.db.litellm_budgettable.create = AsyncMock()
+    mock_prisma_client.db.litellm_teammembership.create = AsyncMock()
+
+    result_user, result_team_membership = await add_new_member(
+        new_member=new_member,
+        max_budget_in_team=None,
+        prisma_client=mock_prisma_client,
+        team_id=test_team_id,
+        user_api_key_dict=user_api_key_dict,
+        litellm_proxy_admin_name=test_admin_name,
+        default_team_budget_id=None,
+    )
+
+    assert result_user is not None
+    assert result_user.user_id == test_user_id
+
+    # No budget id, so no team membership row is created.
+    assert result_team_membership is None
+    mock_prisma_client.db.litellm_budgettable.find_unique.assert_not_called()
+    mock_prisma_client.db.litellm_budgettable.create.assert_not_called()
+    mock_prisma_client.db.litellm_teammembership.create.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -206,38 +287,30 @@ async def test_add_new_member_creates_new_budget_when_max_budget_provided():
 
 
 @pytest.mark.asyncio
-async def test_add_new_member_with_user_email():
+async def test_add_new_member_with_user_email_clones_default_budget():
     """
-    Test add_new_member with user_email instead of user_id and default budget.
-
-    This test verifies that:
-    1. When new_member has user_email instead of user_id
-    2. And max_budget_in_team is None
-    3. The default_team_budget_id is used correctly
+    Test add_new_member with user_email instead of user_id and a team default
+    budget. The default budget should be CLONED into a new private row for
+    this user, not shared with other members of the team.
     """
     from litellm.proxy._types import LitellmUserRoles
 
-    # Setup test data
     test_user_email = "test@example.com"
     test_team_id = "test_team_456"
     test_default_budget_id = "default_budget_789"
+    test_cloned_budget_id = "cloned_budget_for_email_user"
     test_admin_name = "test_admin"
 
-    # Create a Member object with user_email
     new_member = Member(user_email=test_user_email, role="user")
 
-    # Create UserAPIKeyAuth object
     user_api_key_dict = UserAPIKeyAuth(
         user_id="admin_user", user_role=LitellmUserRoles.PROXY_ADMIN
     )
 
-    # Mock the prisma client
     mock_prisma_client = AsyncMock()
 
-    # Mock get_data to return empty list (no existing user)
     mock_prisma_client.get_data = AsyncMock(return_value=[])
 
-    # Mock insert_data for new user creation
     mock_user_response = MagicMock()
     mock_user_response.model_dump.return_value = {
         "user_id": "generated_user_id",
@@ -247,19 +320,41 @@ async def test_add_new_member_with_user_email():
     }
     mock_prisma_client.insert_data = AsyncMock(return_value=mock_user_response)
 
-    # Mock the team membership creation
+    # Default budget that will be cloned
+    mock_default_budget_row = MagicMock()
+    mock_default_budget_row.model_dump.return_value = {
+        "budget_id": test_default_budget_id,
+        "max_budget": 25.0,
+        "soft_budget": None,
+        "max_parallel_requests": None,
+        "tpm_limit": None,
+        "rpm_limit": None,
+        "model_max_budget": None,
+        "budget_duration": None,
+        "allowed_models": [],
+    }
+    mock_prisma_client.db.litellm_budgettable.find_unique = AsyncMock(
+        return_value=mock_default_budget_row
+    )
+
+    # Cloned budget result
+    mock_cloned_budget_row = MagicMock()
+    mock_cloned_budget_row.budget_id = test_cloned_budget_id
+    mock_prisma_client.db.litellm_budgettable.create = AsyncMock(
+        return_value=mock_cloned_budget_row
+    )
+
     mock_team_membership_response = MagicMock()
     mock_team_membership_response.model_dump.return_value = {
         "team_id": test_team_id,
         "user_id": "generated_user_id",
-        "budget_id": test_default_budget_id,
+        "budget_id": test_cloned_budget_id,
         "litellm_budget_table": None,
     }
     mock_prisma_client.db.litellm_teammembership.create = AsyncMock(
         return_value=mock_team_membership_response
     )
 
-    # Call the function
     result_user, result_team_membership = await add_new_member(
         new_member=new_member,
         max_budget_in_team=None,
@@ -270,27 +365,30 @@ async def test_add_new_member_with_user_email():
         default_team_budget_id=test_default_budget_id,
     )
 
-    # Verify that the user was created correctly
     assert result_user is not None
     assert result_user.user_email == test_user_email
 
-    # Verify that the team membership was created with the default budget_id
+    # Membership should point at the cloned (private) budget, not the shared default.
     assert result_team_membership is not None
-    assert result_team_membership.budget_id == test_default_budget_id
+    assert result_team_membership.budget_id == test_cloned_budget_id
 
-    # Verify that get_data was called to check for existing user
     mock_prisma_client.get_data.assert_called_once_with(
         key_val={"user_email": test_user_email},
         table_name="user",
         query_type="find_all",
     )
 
-    # Verify that insert_data was called to create new user
     mock_prisma_client.insert_data.assert_called_once()
     insert_call_args = mock_prisma_client.insert_data.call_args
     insert_data = insert_call_args.kwargs["data"]
     assert insert_data["user_email"] == test_user_email
     assert insert_data["teams"] == [test_team_id]
+
+    # Confirm the clone path ran
+    mock_prisma_client.db.litellm_budgettable.find_unique.assert_called_once_with(
+        where={"budget_id": test_default_budget_id}
+    )
+    mock_prisma_client.db.litellm_budgettable.create.assert_called_once()
 
 
 @pytest.mark.asyncio
