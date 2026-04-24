@@ -120,6 +120,7 @@ You should see following logs in Azure Workspace.
 | `AZURE_SENTINEL_TENANT_ID` | Azure Tenant ID for OAuth2 authentication | None (falls back to `AZURE_TENANT_ID`) | ✅ Yes |
 | `AZURE_SENTINEL_CLIENT_ID` | Application (client) ID for OAuth2 authentication | None (falls back to `AZURE_CLIENT_ID`) | ✅ Yes |
 | `AZURE_SENTINEL_CLIENT_SECRET` | Client secret for OAuth2 authentication | None (falls back to `AZURE_CLIENT_SECRET`) | ✅ Yes |
+| `AZURE_SENTINEL_TRUNCATE_CONTENT` | Truncate `messages`/`response` fields to the Azure Log Analytics 256 KB column limit, keeping the most recent content (see [Handling Large Payloads](#handling-large-payloads)) | `"false"` | ❌ No |
 
 ## How It Works
 
@@ -127,7 +128,57 @@ The Azure Sentinel integration uses the [Azure Monitor Logs Ingestion API](https
 
 - Authenticates using OAuth2 client credentials flow with your app registration
 - Sends logs to the Data Collection Rule (DCR) endpoint
-- Batches logs for efficient transmission
+- **Gzip-compresses** all request bodies (`Content-Encoding: gzip`) for efficient transmission
+- **Batches logs** and automatically splits batches that would exceed the Azure DCR 1MB request limit into multiple requests
+- Sends logs in the [StandardLoggingPayload](../proxy/logging_spec) format
+- Automatically handles both success and failure events
+- Caches OAuth2 tokens and refreshes them automatically
+- Optionally **truncates large string fields** to the Azure Log Analytics column limit (see below)
+
+Logs sent to the Log Analytics workspace are automatically available in Azure Sentinel for security monitoring, threat detection, and analysis.
+
+## Handling Large Payloads
+
+The Azure Monitor Logs Ingestion API enforces a **1MB per-request limit**, and Azure Log Analytics silently truncates individual string columns at **256 KB (262,144 characters)**. LiteLLM handles both of these automatically:
+
+### Gzip Compression
+
+All log payloads are gzip-compressed before sending (`Content-Encoding: gzip`). This is always enabled and typically reduces payload size by 5–10x, allowing most requests to fit within the 1MB request limit without any content loss.
+
+### Automatic Batch Splitting
+
+When the log queue is flushed, LiteLLM estimates the uncompressed JSON size of each entry and groups them into batches that stay under ~950KB. If a flush contains more data than fits in one request, it is automatically split into multiple API calls. This is always enabled.
+
+### Content Truncation (Column Limit)
+
+Azure Log Analytics silently truncates any string column value longer than **262,144 characters (256 KB)**. When `AZURE_SENTINEL_TRUNCATE_CONTENT` is enabled, LiteLLM truncates `messages` and `response` fields to this limit **before** sending, keeping the **tail** (most recent content) so the latest conversation turns and response text are preserved.
+
+To enable:
+
+```shell
+AZURE_SENTINEL_TRUNCATE_CONTENT="true"
+```
+
+
+#### Truncation Metadata
+
+When a field is truncated, a `litellm_content_truncated` object is added to the entry’s `metadata`:
+
+```json
+{
+  "truncated": true,
+  "truncate_reason": "azure_column_limit",
+  "truncated_fields": ["messages", "response"],
+  "original_messages_chars": 500000,
+  "original_response_chars": 300000,
+  "max_column_chars": 262144
+}
+```
+
+
+#### Behavior When Truncation is Disabled
+
+When `AZURE_SENTINEL_TRUNCATE_CONTENT` is `"false"` (the default), fields are sent as-is. Azure Log Analytics will silently truncate any string column values exceeding 256 KB, discarding the tail of the content without any metadata. Enabling truncation is recommended for workloads with large prompts or responses.
 - Sends logs in the [StandardLoggingPayload](../proxy/logging_spec) format
 - Automatically handles both success and failure events
 - Caches OAuth2 tokens and refreshes them automatically

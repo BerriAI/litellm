@@ -13,9 +13,11 @@ For batching specific details see CustomBatchLogger class
 """
 
 import asyncio
+import gzip
 import os
 import traceback
-from typing import List, Optional
+from copy import deepcopy
+from typing import Any, Dict, List, Optional
 
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
@@ -119,6 +121,14 @@ class AzureSentinelLogger(CustomBatchLogger):
         asyncio.create_task(self.periodic_flush())
         self.log_queue: List[StandardLoggingPayload] = []
 
+        # When True, string fields (messages, response) are truncated to the
+        # Azure Log Analytics column limit (256 KB / 262,144 chars). Azure
+        # silently truncates at this limit anyway; doing it ourselves lets us
+        # keep the tail (most recent content) and record metadata.
+        # Controlled by AZURE_SENTINEL_TRUNCATE_CONTENT env var (default: false).
+        truncate_env = os.getenv("AZURE_SENTINEL_TRUNCATE_CONTENT", "false")
+        self.truncate_content = truncate_env.lower() in ("true", "1", "yes")
+
     async def _get_oauth_token(self) -> str:
         """
         Get OAuth2 Bearer token for Azure Monitor Logs Ingestion API
@@ -189,9 +199,6 @@ class AzureSentinelLogger(CustomBatchLogger):
             Raises a NON Blocking verbose_logger.exception if an error occurs
         """
         try:
-            verbose_logger.debug(
-                "Azure Sentinel: Logging - Enters logging function for model %s", kwargs
-            )
             standard_logging_payload = kwargs.get("standard_logging_object", None)
 
             if standard_logging_payload is None:
@@ -223,10 +230,6 @@ class AzureSentinelLogger(CustomBatchLogger):
             Raises a NON Blocking verbose_logger.exception if an error occurs
         """
         try:
-            verbose_logger.debug(
-                "Azure Sentinel: Logging - Enters failure logging function for model %s",
-                kwargs,
-            )
             standard_logging_payload = kwargs.get("standard_logging_object", None)
 
             if standard_logging_payload is None:
@@ -246,9 +249,141 @@ class AzureSentinelLogger(CustomBatchLogger):
             )
             pass
 
+    # Azure DCR Logs Ingestion API has a 1MB request size limit.
+    # We target a conservative threshold to stay safely under the limit.
+    MAX_BATCH_SIZE_BYTES = 950_000  # ~950KB uncompressed target per batch
+
+    # Azure Log Analytics silently truncates string column values at 256 KB.
+    # We enforce this limit ourselves so we can keep the tail (most recent
+    # content) and record truncation metadata.
+    MAX_COLUMN_CHARS = 262_144  # 256 KB Azure Log Analytics column limit
+
+    def _enforce_column_limits(
+        self, payload: StandardLoggingPayload
+    ) -> StandardLoggingPayload:
+        """
+        Truncate messages/response string fields to the Azure Log Analytics
+        column limit (262,144 chars). Keeps the *tail* of each field so that
+        the most recent conversation turns and response text are preserved.
+
+        Only called when ``self.truncate_content`` is True.
+
+        Returns the original payload unchanged if neither field exceeds the
+        limit, otherwise returns a deep copy with truncated fields and
+        truncation metadata added.
+        """
+        limit = self.MAX_COLUMN_CHARS
+        messages = payload.get("messages")
+        response = payload.get("response")
+        msg_str = str(messages) if messages is not None else ""
+        resp_str = str(response) if response is not None else ""
+
+        needs_truncation = len(msg_str) > limit or len(resp_str) > limit
+        if not needs_truncation:
+            return payload
+
+        entry = deepcopy(payload)
+        truncated_fields: List[str] = []
+
+        if len(msg_str) > limit:
+            entry["messages"] = "[truncated by litellm]..." + msg_str[-limit:]
+            truncated_fields.append("messages")
+
+        if len(resp_str) > limit:
+            entry["response"] = "[truncated by litellm]..." + resp_str[-limit:]
+            truncated_fields.append("response")
+
+        truncation_info: Dict[str, Any] = {
+            "truncated": True,
+            "truncate_reason": "azure_column_limit",
+            "truncated_fields": truncated_fields,
+            "original_messages_chars": len(msg_str),
+            "original_response_chars": len(resp_str),
+            "max_column_chars": limit,
+        }
+
+        if "metadata" in entry and isinstance(entry.get("metadata"), dict):
+            entry["metadata"]["litellm_content_truncated"] = truncation_info  # type: ignore
+        else:
+            entry["litellm_content_truncated"] = truncation_info  # type: ignore
+
+        verbose_logger.debug(
+            "Azure Sentinel: column-level truncation (id=%s). "
+            "messages: %d→%d chars, response: %d→%d chars",
+            entry.get("id", "?"),
+            len(msg_str),
+            min(len(msg_str), limit),
+            len(resp_str),
+            min(len(resp_str), limit),
+        )
+
+        return entry
+
+    def _split_into_batches(
+        self, payloads: List[StandardLoggingPayload]
+    ) -> List[bytes]:
+        """
+        Splits payloads into gzip-compressed batches that stay under
+        MAX_BATCH_SIZE_BYTES (uncompressed) per batch.
+
+        When truncate_content is enabled, enforces the Azure Log Analytics
+        column limit (256 KB) on messages/response fields before batching.
+
+        Returns a list of gzip-compressed byte strings, each representing
+        a JSON array of log entries.
+        """
+        from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+
+        batches: List[bytes] = []
+        current_batch: list = []
+        current_size = 2  # account for JSON array brackets '[]'
+
+        for payload in payloads:
+            # Enforce Azure column-level string limit when enabled
+            if self.truncate_content:
+                payload = self._enforce_column_limits(payload)
+
+            entry_json = safe_dumps(payload)
+            entry_size = len(entry_json.encode("utf-8"))
+
+            # If a single entry exceeds the uncompressed batch limit,
+            # send it alone in its own batch
+            if entry_size + 2 > self.MAX_BATCH_SIZE_BYTES:
+                # Flush any accumulated batch first
+                if current_batch:
+                    batch_body = safe_dumps(current_batch)
+                    batches.append(gzip.compress(batch_body.encode("utf-8")))
+                    current_batch = []
+                    current_size = 2
+
+                single_body = safe_dumps([payload])
+                batches.append(gzip.compress(single_body.encode("utf-8")))
+                continue
+
+            # +1 for comma separator between entries
+            separator = 1 if current_batch else 0
+            if current_size + separator + entry_size > self.MAX_BATCH_SIZE_BYTES:
+                # Current batch is full — flush it
+                batch_body = safe_dumps(current_batch)
+                batches.append(gzip.compress(batch_body.encode("utf-8")))
+                current_batch = []
+                current_size = 2
+
+            current_batch.append(payload)
+            current_size += entry_size + (1 if len(current_batch) > 1 else 0)
+
+        # Flush remaining
+        if current_batch:
+            batch_body = safe_dumps(current_batch)
+            batches.append(gzip.compress(batch_body.encode("utf-8")))
+
+        return batches
+
     async def async_send_batch(self):
         """
         Sends the batch of logs to Azure Monitor Logs Ingestion API
+        with gzip compression. Splits into multiple requests if the
+        batch exceeds ~1MB uncompressed.
 
         Raises:
             Raises a NON Blocking verbose_logger.exception if an error occurs
@@ -261,40 +396,49 @@ class AzureSentinelLogger(CustomBatchLogger):
                 "Azure Sentinel - about to flush %s events", len(self.log_queue)
             )
 
-            from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
-
             # Get OAuth2 token
             bearer_token = await self._get_oauth_token()
 
-            # Convert log queue to JSON array format expected by Logs Ingestion API
-            # Each log entry should be a JSON object in the array
-            body = safe_dumps(self.log_queue)
+            # Split into size-limited, gzip-compressed batches
+            compressed_batches = self._split_into_batches(self.log_queue)
 
-            # Set headers for Logs Ingestion API
+            verbose_logger.debug(
+                "Azure Sentinel - split into %s batch(es)", len(compressed_batches)
+            )
+
+            # Set headers for Logs Ingestion API with gzip encoding
             headers = {
                 "Authorization": f"Bearer {bearer_token}",
                 "Content-Type": "application/json",
+                "Content-Encoding": "gzip",
             }
 
-            # Send the request
-            response = await self.async_httpx_client.post(
-                url=self.api_endpoint, data=body.encode("utf-8"), headers=headers
-            )
+            # Send each batch
+            for i, compressed_body in enumerate(compressed_batches):
+                response = await self.async_httpx_client.post(
+                    url=self.api_endpoint,
+                    content=compressed_body,
+                    headers=headers,
+                )
 
-            if response.status_code not in [200, 204]:
-                verbose_logger.error(
-                    "Azure Sentinel API error: status_code=%s, response=%s",
+                if response.status_code not in [200, 204]:
+                    verbose_logger.error(
+                        "Azure Sentinel API error on batch %s/%s: status_code=%s, response=%s",
+                        i + 1,
+                        len(compressed_batches),
+                        response.status_code,
+                        response.text,
+                    )
+                    raise Exception(
+                        f"Failed to send logs to Azure Sentinel: {response.status_code} - {response.text}"
+                    )
+
+                verbose_logger.debug(
+                    "Azure Sentinel: batch %s/%s sent, status_code: %s",
+                    i + 1,
+                    len(compressed_batches),
                     response.status_code,
-                    response.text,
                 )
-                raise Exception(
-                    f"Failed to send logs to Azure Sentinel: {response.status_code} - {response.text}"
-                )
-
-            verbose_logger.debug(
-                "Azure Sentinel: Response from API status_code: %s",
-                response.status_code,
-            )
 
         except Exception as e:
             verbose_logger.exception(
