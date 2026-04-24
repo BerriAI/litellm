@@ -1,4 +1,6 @@
-import React, { useEffect, useState, useCallback } from "react";
+import React, { useEffect, useState, useCallback, useMemo } from "react";
+import { Controller, FormProvider, useForm } from "react-hook-form";
+import { X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -8,7 +10,15 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { Form, Select as AntdSelect } from "antd";
+import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Badge } from "@/components/ui/badge";
 import { modelAvailableCall, modelPatchUpdateCall } from "../networking";
 import {
   fetchAvailableModels,
@@ -28,6 +38,96 @@ interface EditAutoRouterModalProps {
   userRole: string;
 }
 
+interface FormValues {
+  auto_router_name: string;
+  auto_router_default_model: string;
+  auto_router_embedding_model: string;
+  model_access_group: string[];
+}
+
+function TagsInput({
+  value,
+  onChange,
+  options,
+  placeholder,
+}: {
+  value: string[];
+  onChange: (next: string[]) => void;
+  options: string[];
+  placeholder?: string;
+}) {
+  const [query, setQuery] = useState("");
+  const selected = value ?? [];
+  const remaining = useMemo(
+    () => options.filter((o) => !selected.includes(o)),
+    [options, selected],
+  );
+
+  const addTag = (tag: string) => {
+    const trimmed = tag.trim();
+    if (!trimmed) return;
+    if (selected.includes(trimmed)) return;
+    onChange([...selected, trimmed]);
+    setQuery("");
+  };
+
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center gap-2">
+        <Input
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder={placeholder}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === ",") {
+              e.preventDefault();
+              addTag(query);
+            } else if (e.key === "Backspace" && !query && selected.length) {
+              onChange(selected.slice(0, -1));
+            }
+          }}
+        />
+      </div>
+      {remaining.length > 0 && (
+        <Select
+          value=""
+          onValueChange={(v) => {
+            if (v) onChange([...selected, v]);
+          }}
+        >
+          <SelectTrigger>
+            <SelectValue placeholder="Pick from existing groups" />
+          </SelectTrigger>
+          <SelectContent>
+            {remaining.map((opt) => (
+              <SelectItem key={opt} value={opt}>
+                {opt}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      )}
+      {selected.length > 0 && (
+        <div className="flex flex-wrap gap-1">
+          {selected.map((v) => (
+            <Badge key={v} variant="secondary" className="flex items-center gap-1">
+              {v}
+              <button
+                type="button"
+                onClick={() => onChange(selected.filter((s) => s !== v))}
+                className="inline-flex items-center justify-center rounded-full hover:bg-muted-foreground/20"
+                aria-label={`Remove ${v}`}
+              >
+                <X size={12} />
+              </button>
+            </Badge>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
   isVisible,
   onCancel,
@@ -36,14 +136,17 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
   accessToken,
   userRole,
 }) => {
-  const [form] = Form.useForm();
+  const form = useForm<FormValues>({
+    defaultValues: {
+      auto_router_name: "",
+      auto_router_default_model: "",
+      auto_router_embedding_model: "",
+      model_access_group: [],
+    },
+  });
   const [loading, setLoading] = useState(false);
   const [modelAccessGroups, setModelAccessGroups] = useState<string[]>([]);
   const [modelInfo, setModelInfo] = useState<ModelGroup[]>([]);
-  const [_showCustomDefaultModel, setShowCustomDefaultModel] =
-    useState<boolean>(false);
-  const [_showCustomEmbeddingModel, setShowCustomEmbeddingModel] =
-    useState<boolean>(false);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const [routerConfig, setRouterConfig] = useState<any>(null);
 
@@ -62,7 +165,7 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
 
       setRouterConfig(parsedConfig);
 
-      form.setFieldsValue({
+      form.reset({
         auto_router_name: modelData.model_name,
         auto_router_default_model:
           modelData.litellm_params?.auto_router_default_model || "",
@@ -70,23 +173,11 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
           modelData.litellm_params?.auto_router_embedding_model || "",
         model_access_group: modelData.model_info?.access_groups || [],
       });
-
-      const allModelGroups = new Set(
-        modelInfo.map((model) => model.model_group),
-      );
-      setShowCustomDefaultModel(
-        !allModelGroups.has(modelData.litellm_params?.auto_router_default_model),
-      );
-      setShowCustomEmbeddingModel(
-        !allModelGroups.has(
-          modelData.litellm_params?.auto_router_embedding_model,
-        ),
-      );
     } catch (error) {
       console.error("Error parsing auto router config:", error);
       NotificationsManager.fromBackend("Error loading auto router configuration");
     }
-  }, [form, modelData, modelInfo]);
+  }, [form, modelData]);
 
   useEffect(() => {
     if (isVisible && modelData) {
@@ -132,12 +223,10 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
     }
   }, [isVisible, accessToken]);
 
-  const handleSubmit = async () => {
+  const handleSubmit = form.handleSubmit(async (values) => {
     try {
       setLoading(true);
-      const values = await form.validateFields();
 
-      // Prepare the updated litellm_params
       const updatedLitellmParams = {
         ...modelData.litellm_params,
         auto_router_config: JSON.stringify(routerConfig),
@@ -145,7 +234,6 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
         auto_router_embedding_model: values.auto_router_embedding_model || undefined,
       };
 
-      // Prepare updated model_info
       const updatedModelInfo = {
         ...modelData.model_info,
         access_groups: values.model_access_group || [],
@@ -175,12 +263,9 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
     } finally {
       setLoading(false);
     }
-  };
+  });
 
-  const modelOptions = modelInfo.map((model) => ({
-    value: model.model_group,
-    label: model.model_group,
-  }));
+  const modelOptions = modelInfo.map((model) => model.model_group);
 
   return (
     <Dialog
@@ -197,87 +282,113 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
             models, and access settings.
           </p>
 
-          <Form form={form} layout="vertical" className="space-y-4">
-            <Form.Item
-              label="Auto Router Name"
-              name="auto_router_name"
-              rules={[
-                { required: true, message: "Auto router name is required" },
-              ]}
-            >
-              <Input placeholder="e.g., auto_router_1, smart_routing" />
-            </Form.Item>
-
-            <div className="w-full">
-              <RouterConfigBuilder
-                modelInfo={modelInfo}
-                value={routerConfig}
-                onChange={(config) => {
-                  setRouterConfig(config);
-                }}
-              />
-            </div>
-
-            <Form.Item
-              label="Default Model"
-              name="auto_router_default_model"
-              rules={[
-                { required: true, message: "Default model is required" },
-              ]}
-            >
-              <AntdSelect
-                placeholder="Select a default model"
-                onChange={(value) => {
-                  setShowCustomDefaultModel(value === "custom");
-                }}
-                options={[
-                  ...modelOptions,
-                  { value: "custom", label: "Enter custom model name" },
-                ]}
-                showSearch={true}
-              />
-            </Form.Item>
-
-            <Form.Item
-              label="Embedding Model"
-              name="auto_router_embedding_model"
-            >
-              <AntdSelect
-                placeholder="Select an embedding model (optional)"
-                onChange={(value) => {
-                  setShowCustomEmbeddingModel(value === "custom");
-                }}
-                options={[
-                  ...modelOptions,
-                  { value: "custom", label: "Enter custom model name" },
-                ]}
-                showSearch={true}
-                allowClear
-              />
-            </Form.Item>
-
-            {userRole === "Admin" && (
-              <Form.Item
-                label="Model Access Groups"
-                name="model_access_group"
-                tooltip="Control who can access this auto router"
-              >
-                <AntdSelect
-                  mode="tags"
-                  showSearch
-                  placeholder="Select existing groups or type to create new ones"
-                  optionFilterProp="children"
-                  tokenSeparators={[","]}
-                  options={modelAccessGroups.map((group) => ({
-                    value: group,
-                    label: group,
-                  }))}
-                  maxTagCount="responsive"
-                  allowClear
+          <FormProvider {...form}>
+            <form onSubmit={handleSubmit} className="space-y-4">
+              <div className="space-y-2">
+                <Label htmlFor="auto-router-name">
+                  Auto Router Name <span className="text-destructive">*</span>
+                </Label>
+                <Input
+                  id="auto-router-name"
+                  placeholder="e.g., auto_router_1, smart_routing"
+                  {...form.register("auto_router_name", {
+                    required: "Auto router name is required",
+                  })}
                 />
-              </Form.Item>
-            )}
-          </Form>
+                {form.formState.errors.auto_router_name && (
+                  <p className="text-sm text-destructive">
+                    {form.formState.errors.auto_router_name.message as string}
+                  </p>
+                )}
+              </div>
+
+              <div className="w-full">
+                <RouterConfigBuilder
+                  modelInfo={modelInfo}
+                  value={routerConfig}
+                  onChange={(config) => {
+                    setRouterConfig(config);
+                  }}
+                />
+              </div>
+
+              <div className="space-y-2">
+                <Label>
+                  Default Model <span className="text-destructive">*</span>
+                </Label>
+                <Controller
+                  control={form.control}
+                  name="auto_router_default_model"
+                  rules={{ required: "Default model is required" }}
+                  render={({ field, fieldState }) => (
+                    <>
+                      <Select value={field.value || ""} onValueChange={field.onChange}>
+                        <SelectTrigger>
+                          <SelectValue placeholder="Select a default model" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {modelOptions.map((m) => (
+                            <SelectItem key={m} value={m}>
+                              {m}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      {fieldState.error && (
+                        <p className="text-sm text-destructive">{fieldState.error.message}</p>
+                      )}
+                    </>
+                  )}
+                />
+              </div>
+
+              <div className="space-y-2">
+                <Label>Embedding Model</Label>
+                <Controller
+                  control={form.control}
+                  name="auto_router_embedding_model"
+                  render={({ field }) => (
+                    <Select
+                      value={field.value || ""}
+                      onValueChange={field.onChange}
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="Select an embedding model (optional)" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {modelOptions.map((m) => (
+                          <SelectItem key={m} value={m}>
+                            {m}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  )}
+                />
+              </div>
+
+              {userRole === "Admin" && (
+                <div className="space-y-2">
+                  <Label>Model Access Groups</Label>
+                  <p className="text-xs text-muted-foreground">
+                    Control who can access this auto router
+                  </p>
+                  <Controller
+                    control={form.control}
+                    name="model_access_group"
+                    render={({ field }) => (
+                      <TagsInput
+                        value={field.value ?? []}
+                        onChange={field.onChange}
+                        options={modelAccessGroups}
+                        placeholder="Select existing groups or type to create new ones"
+                      />
+                    )}
+                  />
+                </div>
+              )}
+            </form>
+          </FormProvider>
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={onCancel}>

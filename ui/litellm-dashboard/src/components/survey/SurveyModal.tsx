@@ -1,6 +1,11 @@
 import React, { useState } from "react";
 import { X, MessageSquare, ArrowRight, ArrowLeft } from "lucide-react";
-import { Button, Input, Radio, Space, Progress, Checkbox } from "antd";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Progress } from "@/components/ui/progress";
+import { Checkbox } from "@/components/ui/checkbox";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+import { Label } from "@/components/ui/label";
 
 interface SurveyModalProps {
   isOpen: boolean;
@@ -57,17 +62,13 @@ export function SurveyModal({ isOpen, onClose, onComplete }: SurveyModalProps) {
   });
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  // Steps: 1=company?, 2=company name (conditional), 3=when, 4=why, 5=email
-  // If not at company: skip step 2, so total is 4
-  // If at company: total is 5
   const totalSteps = data.usingAtCompany === true ? 5 : 4;
 
   if (!isOpen) return null;
 
   const handleNext = () => {
-    // Skip company name step if not using at company
     if (step === 1 && data.usingAtCompany === false) {
-      setStep(3); // Skip to "when did you start"
+      setStep(3);
     } else if (step < 5) {
       setStep(step + 1);
     } else {
@@ -77,7 +78,7 @@ export function SurveyModal({ isOpen, onClose, onComplete }: SurveyModalProps) {
 
   const handleBack = () => {
     if (step === 3 && data.usingAtCompany === false) {
-      setStep(1); // Go back to first question if we skipped company name
+      setStep(1);
     } else {
       setStep(step - 1);
     }
@@ -86,7 +87,6 @@ export function SurveyModal({ isOpen, onClose, onComplete }: SurveyModalProps) {
   const handleSubmit = async () => {
     setIsSubmitting(true);
     try {
-      // Map reason IDs to readable labels
       const reasonLabels: Record<string, string> = {
         oss_adoption: "OSS Adoption (stars, contributors, forks)",
         ai_integration: "AI Integration (Langfuse, OTEL, S3, Azure Content Safety)",
@@ -101,9 +101,8 @@ export function SurveyModal({ isOpen, onClose, onComplete }: SurveyModalProps) {
         return reasonLabels[r] || r;
       });
 
-      // Submit to feedback endpoint (redirects to Google Form)
       const feedbackUrl = "https://feedback.litellm.ai/survey";
-      
+
       const formData = new URLSearchParams({
         "entry.2015264290": data.usingAtCompany ? "Yes" : "No",
         "entry.1876243786": data.companyName || "",
@@ -118,7 +117,6 @@ export function SurveyModal({ isOpen, onClose, onComplete }: SurveyModalProps) {
         body: formData,
       });
     } catch (error) {
-      // Silently fail - don't block the user experience
       console.error("Failed to submit survey:", error);
     }
     setIsSubmitting(false);
@@ -146,19 +144,17 @@ export function SurveyModal({ isOpen, onClose, onComplete }: SurveyModalProps) {
     if (step === 2) return data.companyName.trim().length > 0;
     if (step === 3) return data.startDate !== "";
     if (step === 4) {
-      // If "other" is selected, require the text field
       if (data.reasons.includes("other")) {
         return data.reasons.length > 0 && data.otherReason.trim().length > 0;
       }
       return data.reasons.length > 0;
     }
-    if (step === 5) return true; // Email is optional
+    if (step === 5) return true;
     return false;
   };
 
   const getStepNumber = () => {
     if (data.usingAtCompany === false) {
-      // When not at company: skip step 2, so steps 3,4,5 become 2,3,4
       if (step === 1) return 1;
       if (step === 3) return 2;
       if (step === 4) return 3;
@@ -168,7 +164,6 @@ export function SurveyModal({ isOpen, onClose, onComplete }: SurveyModalProps) {
   };
 
   const renderStepContent = () => {
-    // Step 1: Using at company?
     if (step === 1) {
       return (
         <div className="space-y-6">
@@ -202,14 +197,13 @@ export function SurveyModal({ isOpen, onClose, onComplete }: SurveyModalProps) {
       );
     }
 
-    // Step 2: Company name (only if using at company)
     if (step === 2 && data.usingAtCompany === true) {
       return (
         <div className="space-y-6">
           <h2 className="text-2xl font-bold text-gray-900">What company are you using LiteLLM at?</h2>
           <p className="text-gray-500">This helps us understand our user base better.</p>
           <Input
-            size="large"
+            className="h-11 text-base"
             placeholder="Enter your company name"
             value={data.companyName}
             onChange={(e) => updateData("companyName", e.target.value)}
@@ -219,36 +213,34 @@ export function SurveyModal({ isOpen, onClose, onComplete }: SurveyModalProps) {
       );
     }
 
-    // Step 3: When did you start?
     if (step === 3) {
       return (
         <div className="space-y-6">
           <h2 className="text-2xl font-bold text-gray-900">When did you start using LiteLLM?</h2>
-          <Radio.Group
+          <RadioGroup
             value={data.startDate}
-            onChange={(e) => updateData("startDate", e.target.value)}
-            className="w-full"
+            onValueChange={(v) => updateData("startDate", v)}
+            className="w-full flex flex-col gap-2"
           >
-            <Space direction="vertical" className="w-full">
-              {["Less than a month ago", "1-3 months ago", "3-6 months ago", "More than 6 months ago"].map((option) => (
-                <label
-                  key={option}
-                  className={`flex items-center p-4 rounded-lg border cursor-pointer transition-all w-full ${
-                    data.startDate === option
-                      ? "border-blue-600 bg-blue-50 ring-1 ring-blue-600"
-                      : "border-gray-200 hover:bg-gray-50"
-                  }`}
-                >
-                  <Radio value={option}>{option}</Radio>
-                </label>
-              ))}
-            </Space>
-          </Radio.Group>
+            {["Less than a month ago", "1-3 months ago", "3-6 months ago", "More than 6 months ago"].map((option) => (
+              <Label
+                key={option}
+                htmlFor={`start-${option}`}
+                className={`flex items-center p-4 rounded-lg border cursor-pointer transition-all w-full ${
+                  data.startDate === option
+                    ? "border-blue-600 bg-blue-50 ring-1 ring-blue-600"
+                    : "border-gray-200 hover:bg-gray-50"
+                }`}
+              >
+                <RadioGroupItem value={option} id={`start-${option}`} className="mr-2" />
+                <span>{option}</span>
+              </Label>
+            ))}
+          </RadioGroup>
         </div>
       );
     }
 
-    // Step 4: Why did you pick LiteLLM?
     if (step === 4) {
       return (
         <div className="space-y-6">
@@ -259,17 +251,10 @@ export function SurveyModal({ isOpen, onClose, onComplete }: SurveyModalProps) {
               const isSelected = data.reasons.includes(option.id);
               return (
                 <div key={option.id}>
-                  <div
-                    role="button"
-                    tabIndex={0}
+                  <button
+                    type="button"
                     onClick={() => toggleReason(option.id)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter" || e.key === " ") {
-                        e.preventDefault();
-                        toggleReason(option.id);
-                      }
-                    }}
-                    className={`flex items-start p-4 rounded-lg border cursor-pointer transition-all ${
+                    className={`w-full flex items-start p-4 rounded-lg border cursor-pointer transition-all text-left ${
                       isSelected
                         ? "border-blue-600 bg-blue-50 ring-1 ring-blue-600"
                         : "border-gray-200 hover:bg-gray-50"
@@ -280,8 +265,7 @@ export function SurveyModal({ isOpen, onClose, onComplete }: SurveyModalProps) {
                       <span className="block font-medium text-gray-900">{option.label}</span>
                       <span className="text-sm text-gray-500">{option.description}</span>
                     </div>
-                  </div>
-                  {/* Show text input if "Other" is selected */}
+                  </button>
                   {option.id === "other" && isSelected && (
                     <Input
                       className="mt-2 ml-7"
@@ -300,7 +284,6 @@ export function SurveyModal({ isOpen, onClose, onComplete }: SurveyModalProps) {
       );
     }
 
-    // Step 5: Email (optional)
     if (step === 5) {
       return (
         <div className="space-y-6">
@@ -309,7 +292,7 @@ export function SurveyModal({ isOpen, onClose, onComplete }: SurveyModalProps) {
             Leave your email and we may reach out to learn more about your experience. This is completely optional.
           </p>
           <Input
-            size="large"
+            className="h-11 text-base"
             type="email"
             placeholder="your@email.com (optional)"
             value={data.email}
@@ -350,7 +333,7 @@ export function SurveyModal({ isOpen, onClose, onComplete }: SurveyModalProps) {
         </div>
 
         {/* Progress Bar */}
-        <Progress percent={(getStepNumber() / totalSteps) * 100} showInfo={false} strokeColor="#2563eb" className="m-0" />
+        <Progress value={(getStepNumber() / totalSteps) * 100} className="h-1 rounded-none" />
 
         {/* Content */}
         <div className="p-8 flex-1 overflow-y-auto">{renderStepContent()}</div>
@@ -362,15 +345,14 @@ export function SurveyModal({ isOpen, onClose, onComplete }: SurveyModalProps) {
           </div>
           <div className="flex gap-3">
             {step > 1 && (
-              <Button onClick={handleBack} disabled={isSubmitting} icon={<ArrowLeft className="h-4 w-4" />}>
+              <Button variant="outline" onClick={handleBack} disabled={isSubmitting}>
+                <ArrowLeft className="h-4 w-4 mr-1" />
                 Back
               </Button>
             )}
             <Button
-              type="primary"
               onClick={handleNext}
               disabled={!isStepValid() || isSubmitting}
-              loading={isSubmitting}
               className="min-w-[100px]"
             >
               {isLastStep ? "Submit" : "Next"}
@@ -382,4 +364,3 @@ export function SurveyModal({ isOpen, onClose, onComplete }: SurveyModalProps) {
     </div>
   );
 }
-

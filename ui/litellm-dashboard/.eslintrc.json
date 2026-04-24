@@ -109,6 +109,7 @@
         "src/components/permissions/AgentPermissions.tsx",
         "src/components/permissions/MCPServerPermissions.tsx",
         "src/components/survey/ClaudeCodeModal.tsx",
+        "src/components/survey/SurveyModal.tsx",
         "src/components/view_logs/ToolsSection/ToolItem.tsx",
         "src/components/guardrails/content_filter/PatternTable.tsx",
         "src/components/guardrails/content_filter/ContentFilterDisplay.tsx",

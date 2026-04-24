@@ -8,10 +8,23 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { Check, Copy, AlertTriangle, RefreshCw } from "lucide-react";
-import { Form, InputNumber, Input as AntInput } from "antd";
+import { Label } from "@/components/ui/label";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import {
+  Check,
+  Copy,
+  AlertTriangle,
+  RefreshCw,
+  HelpCircle,
+} from "lucide-react";
 import { add } from "date-fns";
 import { useEffect, useState } from "react";
+import { Controller, FormProvider, useForm, useWatch } from "react-hook-form";
 import { CopyToClipboard } from "react-copy-to-clipboard";
 import { KeyResponse } from "../key_team_helpers/key_list";
 import NotificationManager from "../molecules/notifications_manager";
@@ -24,6 +37,15 @@ interface RegenerateKeyModalProps {
   onKeyUpdate?: (updatedKeyData: Partial<KeyResponse>) => void;
 }
 
+interface RegenerateFormValues {
+  key_alias: string;
+  max_budget: number | null;
+  tpm_limit: number | null;
+  rpm_limit: number | null;
+  duration: string;
+  grace_period: string;
+}
+
 export function RegenerateKeyModal({
   selectedToken,
   visible,
@@ -31,21 +53,33 @@ export function RegenerateKeyModal({
   onKeyUpdate,
 }: RegenerateKeyModalProps) {
   const { accessToken } = useAuthorized();
-  const [form] = Form.useForm();
+  const form = useForm<RegenerateFormValues>({
+    defaultValues: {
+      key_alias: "",
+      max_budget: null,
+      tpm_limit: null,
+      rpm_limit: null,
+      duration: "",
+      grace_period: "",
+    },
+  });
   const [regeneratedKey, setRegeneratedKey] = useState<string | null>(null);
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const [regenerateFormData, setRegenerateFormData] = useState<any>(null);
   const [newExpiryTime, setNewExpiryTime] = useState<string | null>(null);
   const [isRegenerating, setIsRegenerating] = useState(false);
   const [copied, setCopied] = useState(false);
 
+  const duration = useWatch({ control: form.control, name: "duration" });
+
   useEffect(() => {
     if (visible && selectedToken && accessToken) {
-      form.setFieldsValue({
-        key_alias: selectedToken.key_alias,
-        max_budget: selectedToken.max_budget,
-        tpm_limit: selectedToken.tpm_limit,
-        rpm_limit: selectedToken.rpm_limit,
+      form.reset({
+        key_alias: selectedToken.key_alias ?? "",
+        max_budget:
+          (selectedToken.max_budget as number | null | undefined) ?? null,
+        tpm_limit:
+          (selectedToken.tpm_limit as number | null | undefined) ?? null,
+        rpm_limit:
+          (selectedToken.rpm_limit as number | null | undefined) ?? null,
         duration: selectedToken.duration || "",
         grace_period: "",
       });
@@ -63,7 +97,6 @@ export function RegenerateKeyModal({
         throw new Error("Invalid duration format");
       }
       const now = new Date();
-      // Check "mo" before "m" to avoid a false prefix match (e.g. "1mo" → minutes).
       let newExpiry: Date;
       if (duration.endsWith("mo")) {
         newExpiry = add(now, { months: amount });
@@ -89,20 +122,18 @@ export function RegenerateKeyModal({
   };
 
   useEffect(() => {
-    if (regenerateFormData?.duration) {
-      setNewExpiryTime(calculateNewExpiryTime(regenerateFormData.duration));
+    if (duration) {
+      setNewExpiryTime(calculateNewExpiryTime(duration));
     } else {
       setNewExpiryTime(null);
     }
-  }, [regenerateFormData?.duration]);
+  }, [duration]);
 
-  const handleRegenerateKey = async () => {
+  const handleRegenerateKey = form.handleSubmit(async (formValues) => {
     if (!selectedToken || !accessToken) return;
 
     setIsRegenerating(true);
     try {
-      const formValues = await form.validateFields();
-
       const response = await regenerateKeyCall(
         accessToken,
         selectedToken.token || selectedToken.token_id,
@@ -115,9 +146,9 @@ export function RegenerateKeyModal({
         ...response,
         token: response.token || response.key_id || selectedToken.token,
         key_name: response.key,
-        max_budget: formValues.max_budget,
-        tpm_limit: formValues.tpm_limit,
-        rpm_limit: formValues.rpm_limit,
+        max_budget: formValues.max_budget as number | undefined,
+        tpm_limit: formValues.tpm_limit as number | undefined,
+        rpm_limit: formValues.rpm_limit as number | undefined,
         expires: formValues.duration
           ? (calculateNewExpiryTime(formValues.duration) ??
             selectedToken.expires)
@@ -134,13 +165,20 @@ export function RegenerateKeyModal({
       NotificationManager.fromBackend(error);
       setIsRegenerating(false);
     }
-  };
+  });
 
   const handleClose = () => {
     setRegeneratedKey(null);
     setIsRegenerating(false);
     setCopied(false);
-    form.resetFields();
+    form.reset({
+      key_alias: "",
+      max_budget: null,
+      tpm_limit: null,
+      rpm_limit: null,
+      duration: "",
+      grace_period: "",
+    });
     onClose();
   };
 
@@ -183,46 +221,79 @@ export function RegenerateKeyModal({
             </div>
           </div>
         ) : (
-          <Form
-            form={form}
-            layout="vertical"
-            className="mt-1"
-            onValuesChange={(changedValues) => {
-              if ("duration" in changedValues) {
-                setRegenerateFormData(
-                  (prev: { duration?: string }) => ({
-                    ...prev,
-                    duration: changedValues.duration,
-                  }),
-                );
-              }
-            }}
-          >
-            <Form.Item name="key_alias" label="Key Alias">
-              <Input disabled />
-            </Form.Item>
+          <FormProvider {...form}>
+            <form onSubmit={handleRegenerateKey} className="mt-1 space-y-4">
+              <div className="space-y-2">
+                <Label htmlFor="key_alias">Key Alias</Label>
+                <Input id="key_alias" disabled {...form.register("key_alias")} />
+              </div>
 
-            <div className="grid grid-cols-3 gap-3">
-              <Form.Item name="max_budget" label="Max Budget (USD)">
-                <InputNumber
-                  step={0.01}
-                  precision={2}
-                  style={{ width: "100%" }}
-                />
-              </Form.Item>
-              <Form.Item name="tpm_limit" label="TPM Limit">
-                <InputNumber style={{ width: "100%" }} />
-              </Form.Item>
-              <Form.Item name="rpm_limit" label="RPM Limit">
-                <InputNumber style={{ width: "100%" }} />
-              </Form.Item>
-            </div>
+              <div className="grid grid-cols-3 gap-3">
+                <div className="space-y-2">
+                  <Label htmlFor="max_budget">Max Budget (USD)</Label>
+                  <Controller
+                    control={form.control}
+                    name="max_budget"
+                    render={({ field }) => (
+                      <Input
+                        id="max_budget"
+                        type="number"
+                        step={0.01}
+                        value={field.value ?? ""}
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          field.onChange(v === "" ? null : Number(v));
+                        }}
+                      />
+                    )}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="tpm_limit">TPM Limit</Label>
+                  <Controller
+                    control={form.control}
+                    name="tpm_limit"
+                    render={({ field }) => (
+                      <Input
+                        id="tpm_limit"
+                        type="number"
+                        value={field.value ?? ""}
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          field.onChange(v === "" ? null : Number(v));
+                        }}
+                      />
+                    )}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="rpm_limit">RPM Limit</Label>
+                  <Controller
+                    control={form.control}
+                    name="rpm_limit"
+                    render={({ field }) => (
+                      <Input
+                        id="rpm_limit"
+                        type="number"
+                        value={field.value ?? ""}
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          field.onChange(v === "" ? null : Number(v));
+                        }}
+                      />
+                    )}
+                  />
+                </div>
+              </div>
 
-            <div className="grid grid-cols-2 gap-3">
-              <Form.Item
-                name="duration"
-                label="Expire Key"
-                extra={
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-2">
+                  <Label htmlFor="duration">Expire Key</Label>
+                  <Input
+                    id="duration"
+                    placeholder="e.g. 30s, 30h, 30d"
+                    {...form.register("duration")}
+                  />
                   <div className="flex flex-col gap-0.5">
                     <span className="text-muted-foreground text-xs">
                       Current expiry:{" "}
@@ -237,31 +308,48 @@ export function RegenerateKeyModal({
                       </span>
                     )}
                   </div>
-                }
-              >
-                <AntInput placeholder="e.g. 30s, 30h, 30d" />
-              </Form.Item>
-              <Form.Item
-                name="grace_period"
-                label="Grace Period"
-                tooltip="Keep the old key valid for this duration after rotation. Both keys work during this period for seamless cutover. Empty = immediate revoke."
-                extra={
-                  <span className="text-muted-foreground text-xs">
-                    Recommended: 24h to 72h for production keys
-                  </span>
-                }
-                rules={[
-                  {
-                    pattern: /^(\d+(s|m|h|d|w|mo))?$/,
-                    message:
-                      "Must be a duration like 30s, 30m, 24h, 2d, 1w, or 1mo",
-                  },
-                ]}
-              >
-                <AntInput placeholder="e.g. 24h, 2d" />
-              </Form.Item>
-            </div>
-          </Form>
+                </div>
+                <div className="space-y-2">
+                  <div className="flex items-center gap-1">
+                    <Label htmlFor="grace_period">Grace Period</Label>
+                    <TooltipProvider>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <HelpCircle className="h-3.5 w-3.5 text-muted-foreground" />
+                        </TooltipTrigger>
+                        <TooltipContent>
+                          Keep the old key valid for this duration after rotation.
+                          Both keys work during this period for seamless cutover.
+                          Empty = immediate revoke.
+                        </TooltipContent>
+                      </Tooltip>
+                    </TooltipProvider>
+                  </div>
+                  <Input
+                    id="grace_period"
+                    placeholder="e.g. 24h, 2d"
+                    aria-invalid={!!form.formState.errors.grace_period}
+                    {...form.register("grace_period", {
+                      pattern: {
+                        value: /^(\d+(s|m|h|d|w|mo))?$/,
+                        message:
+                          "Must be a duration like 30s, 30m, 24h, 2d, 1w, or 1mo",
+                      },
+                    })}
+                  />
+                  {form.formState.errors.grace_period ? (
+                    <p className="text-sm text-destructive">
+                      {form.formState.errors.grace_period.message as string}
+                    </p>
+                  ) : (
+                    <span className="text-muted-foreground text-xs">
+                      Recommended: 24h to 72h for production keys
+                    </span>
+                  )}
+                </div>
+              </div>
+            </form>
+          </FormProvider>
         )}
 
         <DialogFooter>

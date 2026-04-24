@@ -31,6 +31,16 @@ stay on antd for phase 1 and will be addressed in a targeted follow-up.
   with Switch/InputNumber/Select controls. Defer until shared section
   unblocks.
 - `src/components/add_pass_through.tsx`: same dependency chain.
+- `src/components/OldTeams.tsx` (1577 LoC): legacy teams page that mirrors
+  `team/TeamInfo.tsx` in structure — deeply coupled antd `Form` with model /
+  guardrail multi-selects, `Form.List`-style panels, antd `Pagination` + `Table`
+  driven by server-side sort, antd `Tabs` container, and Tremor `Accordion`
+  sections for router / logging / advanced settings. Same migration surface
+  and blockers as TeamInfo (still-required Tremor `Accordion`, wide antd Form
+  context consumed by several common_components). Defer until the TeamInfo
+  blocker clears — these two pages must be migrated together or the shared
+  form-surface common_components (ModelAliasManager, PremiumLoggingSettings,
+  RouterSettingsAccordion) will be in an inconsistent state.
 - `src/components/team/TeamInfo.tsx` (1724 LoC): team detail/edit page with a
   deeply coupled antd `Form` — `Form.List` + inline Promise validators for
   per-model rate limits, `Form.useWatch` hooks driving dependent rendering,
