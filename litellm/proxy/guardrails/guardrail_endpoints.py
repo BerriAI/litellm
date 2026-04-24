@@ -238,34 +238,39 @@ async def list_guardrails_v2(
         # get guardrails initialized on litellm config.yaml
         in_memory_guardrails = IN_MEMORY_GUARDRAIL_HANDLER.list_in_memory_guardrails()
         for guardrail in in_memory_guardrails:
-            # only add guardrails that are not in DB guardrail list already and not excluded
-            if guardrail.get("guardrail_id") not in seen_guardrail_ids:
-                in_memory_litellm_params_raw = guardrail.get("litellm_params")
-                in_memory_litellm_params_dict = (
-                    in_memory_litellm_params_raw.model_dump(exclude_none=True)
-                    if isinstance(in_memory_litellm_params_raw, LitellmParams)
-                    else in_memory_litellm_params_raw
-                ) or {}
-                masked_in_memory_litellm_params = _get_masked_values(
-                    in_memory_litellm_params_dict,
-                    unmasked_length=4,
-                    number_of_asterisks=4,
+            gid = guardrail.get("guardrail_id")
+            if gid in seen_guardrail_ids:
+                continue
+            if not is_admin:
+                g_team_id = guardrail.get("team_id")
+                if g_team_id is not None and g_team_id not in caller_team_ids:
+                    continue
+            in_memory_litellm_params_raw = guardrail.get("litellm_params")
+            in_memory_litellm_params_dict = (
+                in_memory_litellm_params_raw.model_dump(exclude_none=True)
+                if isinstance(in_memory_litellm_params_raw, LitellmParams)
+                else in_memory_litellm_params_raw
+            ) or {}
+            masked_in_memory_litellm_params = _get_masked_values(
+                in_memory_litellm_params_dict,
+                unmasked_length=4,
+                number_of_asterisks=4,
+            )
+            masked_in_memory_litellm_params_typed = (
+                BaseLitellmParams(**masked_in_memory_litellm_params)
+                if masked_in_memory_litellm_params
+                else None
+            )
+            guardrail_configs.append(
+                GuardrailInfoResponse(
+                    guardrail_id=guardrail.get("guardrail_id"),
+                    guardrail_name=guardrail.get("guardrail_name"),
+                    litellm_params=masked_in_memory_litellm_params_typed,
+                    guardrail_info=dict(guardrail.get("guardrail_info") or {}),
+                    guardrail_definition_location="config",
                 )
-                masked_in_memory_litellm_params_typed = (
-                    BaseLitellmParams(**masked_in_memory_litellm_params)
-                    if masked_in_memory_litellm_params
-                    else None
-                )
-                guardrail_configs.append(
-                    GuardrailInfoResponse(
-                        guardrail_id=guardrail.get("guardrail_id"),
-                        guardrail_name=guardrail.get("guardrail_name"),
-                        litellm_params=masked_in_memory_litellm_params_typed,
-                        guardrail_info=dict(guardrail.get("guardrail_info") or {}),
-                        guardrail_definition_location="config",
-                    )
-                )
-                seen_guardrail_ids.add(guardrail.get("guardrail_id"))
+            )
+            seen_guardrail_ids.add(gid)
 
         return ListGuardrailsResponse(guardrails=guardrail_configs)
     except Exception as e:
