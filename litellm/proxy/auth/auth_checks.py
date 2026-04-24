@@ -485,7 +485,7 @@ async def common_checks(  # noqa: PLR0915
     from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
 
     _model: Optional[Union[str, List[str]]] = get_model_from_request(
-        request_body, route
+        request_body, route, llm_router=llm_router
     )
 
     # 1. If team is blocked

@@ -255,6 +255,128 @@ def test_get_model_from_request_vertex_passthrough_still_works():
     assert get_model_from_request(request_data={}, route=route) == "gemini-1.5-pro"
 
 
+class TestGetModelFromRequestBedrockPassthrough:
+    """
+    Bedrock passthrough routes put the model in the URL, not the body.
+    Auth ACL enforcement must extract the model from the path, otherwise
+    key.models / user.models restrictions are silently bypassed.
+    """
+
+    BEDROCK_MODEL_ID = "global.anthropic.claude-opus-4-7"
+
+    def _router_with_bedrock_deployment(
+        self, model_name: str = "claude-opus-4-7", bedrock_model: Optional[str] = None
+    ) -> MagicMock:
+        """Mock an llm_router that exposes one deployment for reverse-lookup."""
+        router = MagicMock()
+        configured_model = bedrock_model or f"bedrock/{self.BEDROCK_MODEL_ID}"
+        router.get_model_list.return_value = [
+            {
+                "model_name": model_name,
+                "litellm_params": {"model": configured_model},
+            }
+        ]
+        return router
+
+    def test_invoke_returns_bedrock_model_id_without_router(self):
+        route = f"/bedrock/model/{self.BEDROCK_MODEL_ID}/invoke"
+        assert (
+            get_model_from_request(request_data={}, route=route)
+            == self.BEDROCK_MODEL_ID
+        )
+
+    def test_invoke_with_response_stream_returns_bedrock_model_id(self):
+        route = f"/bedrock/model/{self.BEDROCK_MODEL_ID}/invoke-with-response-stream"
+        assert (
+            get_model_from_request(request_data={}, route=route)
+            == self.BEDROCK_MODEL_ID
+        )
+
+    def test_converse_returns_bedrock_model_id(self):
+        route = f"/bedrock/model/{self.BEDROCK_MODEL_ID}/converse"
+        assert (
+            get_model_from_request(request_data={}, route=route)
+            == self.BEDROCK_MODEL_ID
+        )
+
+    def test_converse_stream_returns_bedrock_model_id(self):
+        route = f"/bedrock/model/{self.BEDROCK_MODEL_ID}/converse-stream"
+        assert (
+            get_model_from_request(request_data={}, route=route)
+            == self.BEDROCK_MODEL_ID
+        )
+
+    def test_application_inference_profile_returns_full_profile_id(self):
+        profile_id = "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abc123"
+        route = f"/bedrock/model/application-inference-profile/{profile_id}/invoke"
+        # The application-inference-profile path segment is part of the identifier.
+        result = get_model_from_request(request_data={}, route=route)
+        assert result == f"application-inference-profile/{profile_id}"
+
+    def test_v2_route_prefix_is_supported(self):
+        route = f"/bedrock/v2/model/{self.BEDROCK_MODEL_ID}/invoke"
+        assert (
+            get_model_from_request(request_data={}, route=route)
+            == self.BEDROCK_MODEL_ID
+        )
+
+    def test_model_id_with_slashes_is_preserved(self):
+        # e.g. aws/anthropic/bedrock-claude-3-5-sonnet-v1
+        slashed_model = "aws/anthropic/bedrock-claude-3-5-sonnet-v1"
+        route = f"/bedrock/model/{slashed_model}/converse"
+        assert get_model_from_request(request_data={}, route=route) == slashed_model
+
+    def test_reverse_lookup_returns_model_group_name_when_router_maps_it(self):
+        """When a router deployment maps bedrock/<modelId> to a model_group,
+        return the model_group name so user-configured ACLs match."""
+        router = self._router_with_bedrock_deployment(model_name="claude-opus-4-7")
+        route = f"/bedrock/model/{self.BEDROCK_MODEL_ID}/invoke"
+        assert (
+            get_model_from_request(request_data={}, route=route, llm_router=router)
+            == "claude-opus-4-7"
+        )
+
+    def test_reverse_lookup_falls_back_to_raw_id_when_router_has_no_match(self):
+        router = MagicMock()
+        router.get_model_list.return_value = [
+            {
+                "model_name": "some-other-model",
+                "litellm_params": {"model": "bedrock/us.anthropic.claude-3-haiku"},
+            }
+        ]
+        route = f"/bedrock/model/{self.BEDROCK_MODEL_ID}/invoke"
+        assert (
+            get_model_from_request(request_data={}, route=route, llm_router=router)
+            == self.BEDROCK_MODEL_ID
+        )
+
+    def test_reverse_lookup_handles_bedrock_converse_prefix(self):
+        """litellm_params.model may be 'bedrock/converse/<modelId>'."""
+        router = self._router_with_bedrock_deployment(
+            model_name="claude-opus-4-7",
+            bedrock_model=f"bedrock/converse/{self.BEDROCK_MODEL_ID}",
+        )
+        route = f"/bedrock/model/{self.BEDROCK_MODEL_ID}/converse"
+        assert (
+            get_model_from_request(request_data={}, route=route, llm_router=router)
+            == "claude-opus-4-7"
+        )
+
+    def test_non_bedrock_route_ignored(self):
+        # sanity: make sure we don't accidentally match unrelated routes.
+        assert get_model_from_request(request_data={}, route="/health") is None
+
+    def test_bedrock_count_tokens_not_model_path(self):
+        # count_tokens / count-tokens is handled separately in the passthrough
+        # layer and the body usually carries `model`; the path has no modelId.
+        route = f"/bedrock/model/{self.BEDROCK_MODEL_ID}/count-tokens"
+        # We still extract the model from the path — ACL must apply.
+        assert (
+            get_model_from_request(request_data={}, route=route)
+            == self.BEDROCK_MODEL_ID
+        )
+
+
 def test_get_customer_user_header_returns_none_when_no_customer_role():
     from litellm.proxy.auth.auth_utils import get_customer_user_header_from_mapping
 

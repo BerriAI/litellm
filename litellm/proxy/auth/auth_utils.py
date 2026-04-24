@@ -879,8 +879,52 @@ def get_end_user_id_from_request_body(
     return None
 
 
+_BEDROCK_PASSTHROUGH_ROUTE_PATTERN = re.compile(
+    r"^/bedrock(?:/v\d+)?/model/(?P<model>.+)/"
+    r"(?:invoke|invoke-with-response-stream|converse|converse-stream|count_tokens|count-tokens)"
+    r"(?:/|$)"
+)
+
+
+def _resolve_bedrock_model_id_to_model_group(
+    bedrock_model_id: str, llm_router: Optional[Router]
+) -> Optional[str]:
+    """
+    Reverse-lookup a Bedrock modelId (as it appears in the URL path) to the
+    LiteLLM `model_name` (model_group) that routes to it.
+
+    The path-side id does not carry a provider prefix, whereas router
+    deployments are configured as `bedrock/<modelId>` or
+    `bedrock/converse/<modelId>`. We normalize both sides before comparing.
+
+    Returns the deployment's `model_name` if a match is found, else None.
+    """
+    if llm_router is None:
+        return None
+    try:
+        deployments = llm_router.get_model_list() or []
+    except Exception:
+        return None
+    for deployment in deployments:
+        params = deployment.get("litellm_params") or {}
+        configured = params.get("model") or ""
+        if not configured:
+            continue
+        for prefix in ("bedrock/converse/", "bedrock/"):
+            if configured.startswith(prefix):
+                configured = configured[len(prefix) :]
+                break
+        if configured == bedrock_model_id:
+            name = deployment.get("model_name")
+            if name:
+                return name
+    return None
+
+
 def get_model_from_request(
-    request_data: dict, route: str
+    request_data: dict,
+    route: str,
+    llm_router: Optional[Router] = None,
 ) -> Optional[Union[str, List[str]]]:
     # First try to get model from request_data
     model = request_data.get("model") or request_data.get("target_model_names")
@@ -922,6 +966,19 @@ def get_model_from_request(
         vertex_match = re.search(r"/models/([^:]+)", route)
         if vertex_match:
             model = vertex_match.group(1)
+
+    # Bedrock passthrough routes carry the modelId exclusively in the URL.
+    # Pattern: /bedrock[/v{N}]/model/{modelId}/{invoke|converse|...}
+    # The modelId may contain slashes (e.g. `aws/anthropic/…`) and may be
+    # prefixed with `application-inference-profile/` for inference profiles.
+    if model is None:
+        bedrock_match = _BEDROCK_PASSTHROUGH_ROUTE_PATTERN.match(route)
+        if bedrock_match:
+            bedrock_model_id = bedrock_match.group("model")
+            resolved = _resolve_bedrock_model_id_to_model_group(
+                bedrock_model_id=bedrock_model_id, llm_router=llm_router
+            )
+            model = resolved or bedrock_model_id
 
     return model
 
