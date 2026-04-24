@@ -2,8 +2,15 @@
 
 "use client";
 import { useKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
+import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
-import { ChevronDown as ChevronDownIcon, ChevronRight as ChevronRightIcon, ChevronUp as ChevronUpIcon, ChevronsUpDown as SwitchVerticalIcon } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { ChevronDown, ChevronRight, ChevronUp, ChevronsUpDown, Info } from "lucide-react";
 import {
   ColumnDef,
   flexRender,
@@ -12,35 +19,38 @@ import {
   SortingState,
   useReactTable,
 } from "@tanstack/react-table";
-// eslint-disable-next-line litellm-ui/no-banned-ui-imports
-import {
-  Badge,
-  Button,
-  Icon,
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeaderCell,
-  TableRow,
-  Text,
-} from "@tremor/react";
-import { Info as InfoCircleOutlined } from "lucide-react";
-import { Popover, Skeleton, Tooltip } from "antd";
+import { useQuery } from "@tanstack/react-query";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
+import { fetchTeamFilterOptions } from "../key_team_helpers/filter_helpers";
 import { getModelDisplayName } from "../key_team_helpers/fetch_available_models_team_key";
 import { KeyResponse, Team } from "../key_team_helpers/key_list";
 import FilterComponent, { FilterOption } from "../molecules/filter";
 import { Organization } from "../networking";
 import KeyInfoView from "../templates/key_info_view";
-import { useQuery } from "@tanstack/react-query";
-import { fetchTeamFilterOptions } from "../key_team_helpers/filter_helpers";
-import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 
 interface TeamVirtualKeysTableProps {
   teamId: string;
   teamAlias?: string;
   organization: Organization | null;
+}
+
+/**
+ * Cell that renders a truncated value with a tooltip showing the full value.
+ */
+function TruncatedCell({ value, width }: { value: string | null | undefined; width: number }) {
+  const displayValue = value ?? "-";
+  return (
+    <TooltipProvider>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <span className="font-mono text-xs truncate block" style={{ maxWidth: width, overflow: "hidden" }}>
+            {displayValue}
+          </span>
+        </TooltipTrigger>
+        {value ? <TooltipContent>{displayValue}</TooltipContent> : null}
+      </Tooltip>
+    </TooltipProvider>
+  );
 }
 
 /**
@@ -50,9 +60,7 @@ interface TeamVirtualKeysTableProps {
 export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVirtualKeysTableProps) {
   const { accessToken } = useAuthorized();
   const [selectedKey, setSelectedKey] = useState<KeyResponse | null>(null);
-  const [sorting, setSorting] = useState<SortingState>([
-    { id: "created_at", desc: true },
-  ]);
+  const [sorting, setSorting] = useState<SortingState>([{ id: "created_at", desc: true }]);
   const [tablePagination, setTablePagination] = useState<PaginationState>({
     pageIndex: 0,
     pageSize: 50,
@@ -173,9 +181,7 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
           const { organizationIds } = teamFilterOptions;
           if (!organizationIds.length) return [];
           const lower = searchText.toLowerCase();
-          const filtered = lower
-            ? organizationIds.filter((id) => id.toLowerCase().includes(lower))
-            : organizationIds;
+          const filtered = lower ? organizationIds.filter((id) => id.toLowerCase().includes(lower)) : organizationIds;
           return filtered.map((id) => ({ label: id, value: id }));
         },
       },
@@ -186,9 +192,7 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
         searchFn: async (searchText: string) => {
           const { keyAliases } = teamFilterOptions;
           const lower = searchText.toLowerCase();
-          const filtered = lower
-            ? keyAliases.filter((alias) => alias.toLowerCase().includes(lower))
-            : keyAliases;
+          const filtered = lower ? keyAliases.filter((alias) => alias.toLowerCase().includes(lower)) : keyAliases;
           return filtered.map((alias) => ({ label: alias, value: alias }));
         },
       },
@@ -200,10 +204,7 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
           const { userIds } = teamFilterOptions;
           const lower = searchText.toLowerCase();
           const filtered = lower
-            ? userIds.filter(
-                (u) =>
-                  u.id.toLowerCase().includes(lower) || u.email.toLowerCase().includes(lower),
-              )
+            ? userIds.filter((u) => u.id.toLowerCase().includes(lower) || u.email.toLowerCase().includes(lower))
             : userIds;
           return filtered.map((u) => ({
             label: u.email ? `${u.id} (${u.email})` : u.id,
@@ -227,17 +228,21 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
           const value = info.getValue() as string;
           const width = info.cell.column.getSize();
           return (
-            <Tooltip title={value}>
-              <Button
-                size="xs"
-                variant="light"
-                className="font-mono text-blue-500 bg-blue-50 hover:bg-blue-100 text-xs font-normal px-2 py-0.5 text-left overflow-hidden truncate block"
-                style={{ maxWidth: width, overflow: "hidden" }}
-                onClick={() => setSelectedKey(info.row.original)}
-              >
-                {value ?? "-"}
-              </Button>
-            </Tooltip>
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    className="font-mono text-primary bg-primary/10 hover:bg-primary/20 text-xs font-normal px-2 py-0.5 text-left overflow-hidden truncate block rounded"
+                    style={{ maxWidth: width }}
+                    onClick={() => setSelectedKey(info.row.original)}
+                  >
+                    {value ?? "-"}
+                  </button>
+                </TooltipTrigger>
+                {value ? <TooltipContent>{value}</TooltipContent> : null}
+              </Tooltip>
+            </TooltipProvider>
           );
         },
       },
@@ -247,20 +252,7 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
         header: "Key Alias",
         size: 150,
         enableSorting: true,
-        cell: (info) => {
-          const value = info.getValue() as string;
-          const width = info.cell.column.getSize();
-          return (
-            <Tooltip title={value}>
-              <span
-                className="font-mono text-xs truncate block"
-                style={{ maxWidth: width, overflow: "hidden" }}
-              >
-                {value ?? "-"}
-              </span>
-            </Tooltip>
-          );
-        },
+        cell: (info) => <TruncatedCell value={info.getValue() as string} width={info.cell.column.getSize()} />,
       },
       {
         id: "key_name",
@@ -286,18 +278,7 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
         enableSorting: false,
         cell: (info) => {
           const user = info.getValue() as { user_email?: string } | undefined;
-          const value = user?.user_email;
-          const width = info.cell.column.getSize();
-          return (
-            <Tooltip title={value}>
-              <span
-                className="font-mono text-xs truncate block"
-                style={{ maxWidth: width, overflow: "hidden" }}
-              >
-                {value ?? "-"}
-              </span>
-            </Tooltip>
-          );
+          return <TruncatedCell value={user?.user_email} width={info.cell.column.getSize()} />;
         },
       },
       {
@@ -309,17 +290,7 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
         cell: (info) => {
           const userId = info.getValue() as string | null;
           const displayValue = userId === "default_user_id" ? "Default Proxy Admin" : userId;
-          const width = info.cell.column.getSize();
-          return (
-            <Tooltip title={displayValue}>
-              <span
-                className="font-mono text-xs truncate block"
-                style={{ maxWidth: width, overflow: "hidden" }}
-              >
-                {displayValue ?? "-"}
-              </span>
-            </Tooltip>
-          );
+          return <TruncatedCell value={displayValue} width={info.cell.column.getSize()} />;
         },
       },
       {
@@ -342,17 +313,7 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
         cell: (info) => {
           const value = info.getValue() as string | null;
           const displayValue = value === "default_user_id" ? "Default Proxy Admin" : value;
-          const width = info.cell.column.getSize();
-          return (
-            <Tooltip title={displayValue}>
-              <span
-                className="font-mono text-xs truncate block"
-                style={{ maxWidth: width, overflow: "hidden" }}
-              >
-                {displayValue ?? "-"}
-              </span>
-            </Tooltip>
-          );
+          return <TruncatedCell value={displayValue} width={info.cell.column.getSize()} />;
         },
       },
       {
@@ -372,11 +333,15 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
         header: () => (
           <span className="flex items-center gap-1">
             Last Active
-            <Popover
-              content="This is a new field and is not backfilled. Only new key usage will update this value."
-              trigger="hover"
-            >
-              <InfoCircleOutlined className="text-gray-400 text-xs cursor-help" />
+            <Popover>
+              <PopoverTrigger asChild>
+                <button type="button" className="inline-flex items-center" aria-label="Last Active info">
+                  <Info className="h-3 w-3 text-muted-foreground cursor-help" />
+                </button>
+              </PopoverTrigger>
+              <PopoverContent className="text-xs max-w-xs">
+                This is a new field and is not backfilled. Only new key usage will update this value.
+              </PopoverContent>
             </Popover>
           </span>
         ),
@@ -387,9 +352,19 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
           if (!value) return "Unknown";
           const date = new Date(value as string);
           return (
-            <Tooltip title={date.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "long" })}>
-              <span>{date.toLocaleDateString()}</span>
-            </Tooltip>
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span>{date.toLocaleDateString()}</span>
+                </TooltipTrigger>
+                <TooltipContent>
+                  {date.toLocaleString(undefined, {
+                    dateStyle: "medium",
+                    timeStyle: "long",
+                  })}
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
           );
         },
       },
@@ -443,80 +418,74 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
         enableSorting: false,
         cell: (info) => {
           const models = info.getValue() as string[];
+          if (!Array.isArray(models)) return null;
+          if (models.length === 0) {
+            return (
+              <Badge variant="destructive" className="mb-1">
+                All Proxy Models
+              </Badge>
+            );
+          }
           return (
             <div className="flex flex-col py-2">
-              {Array.isArray(models) ? (
-                <div className="flex flex-col">
-                  {models.length === 0 ? (
-                    <Badge size="xs" className="mb-1" color="red">
-                      <Text>All Proxy Models</Text>
+              <div className="flex items-start">
+                {models.length > 3 && (
+                  <button
+                    type="button"
+                    className="cursor-pointer mr-1"
+                    onClick={() =>
+                      setExpandedAccordions((prev) => ({
+                        ...prev,
+                        [info.row.id]: !prev[info.row.id],
+                      }))
+                    }
+                    aria-label={expandedAccordions[info.row.id] ? "Collapse" : "Expand"}
+                  >
+                    {expandedAccordions[info.row.id] ? (
+                      <ChevronDown className="h-3 w-3" />
+                    ) : (
+                      <ChevronRight className="h-3 w-3" />
+                    )}
+                  </button>
+                )}
+                <div className="flex flex-wrap gap-1">
+                  {models.slice(0, 3).map((model, index) =>
+                    model === "all-proxy-models" ? (
+                      <Badge key={index} variant="destructive">
+                        All Proxy Models
+                      </Badge>
+                    ) : (
+                      <Badge key={index} variant="secondary">
+                        {model.length > 30
+                          ? `${getModelDisplayName(model).slice(0, 30)}...`
+                          : getModelDisplayName(model)}
+                      </Badge>
+                    ),
+                  )}
+                  {models.length > 3 && !expandedAccordions[info.row.id] && (
+                    <Badge variant="outline" className="cursor-pointer">
+                      +{models.length - 3} {models.length - 3 === 1 ? "more model" : "more models"}
                     </Badge>
-                  ) : (
-                    <>
-                      <div className="flex items-start">
-                        {models.length > 3 && (
-                          <div>
-                            <Icon
-                              icon={expandedAccordions[info.row.id] ? ChevronDownIcon : ChevronRightIcon}
-                              className="cursor-pointer"
-                              size="xs"
-                              onClick={() =>
-                                setExpandedAccordions((prev) => ({
-                                  ...prev,
-                                  [info.row.id]: !prev[info.row.id],
-                                }))
-                              }
-                            />
-                          </div>
-                        )}
-                        <div className="flex flex-wrap gap-1">
-                          {models.slice(0, 3).map((model, index) =>
-                            model === "all-proxy-models" ? (
-                              <Badge key={index} size="xs" color="red">
-                                <Text>All Proxy Models</Text>
-                              </Badge>
-                            ) : (
-                              <Badge key={index} size="xs" color="blue">
-                                <Text>
-                                  {model.length > 30
-                                    ? `${getModelDisplayName(model).slice(0, 30)}...`
-                                    : getModelDisplayName(model)}
-                                </Text>
-                              </Badge>
-                            ),
-                          )}
-                          {models.length > 3 && !expandedAccordions[info.row.id] && (
-                            <Badge size="xs" color="gray" className="cursor-pointer">
-                              <Text>
-                                +{models.length - 3} {models.length - 3 === 1 ? "more model" : "more models"}
-                              </Text>
-                            </Badge>
-                          )}
-                          {expandedAccordions[info.row.id] && (
-                            <div className="flex flex-wrap gap-1">
-                              {models.slice(3).map((model, index) =>
-                                model === "all-proxy-models" ? (
-                                  <Badge key={index + 3} size="xs" color="red">
-                                    <Text>All Proxy Models</Text>
-                                  </Badge>
-                                ) : (
-                                  <Badge key={index + 3} size="xs" color="blue">
-                                    <Text>
-                                      {model.length > 30
-                                        ? `${getModelDisplayName(model).slice(0, 30)}...`
-                                        : getModelDisplayName(model)}
-                                    </Text>
-                                  </Badge>
-                                ),
-                              )}
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                    </>
+                  )}
+                  {expandedAccordions[info.row.id] && (
+                    <div className="flex flex-wrap gap-1">
+                      {models.slice(3).map((model, index) =>
+                        model === "all-proxy-models" ? (
+                          <Badge key={index + 3} variant="destructive">
+                            All Proxy Models
+                          </Badge>
+                        ) : (
+                          <Badge key={index + 3} variant="secondary">
+                            {model.length > 30
+                              ? `${getModelDisplayName(model).slice(0, 30)}...`
+                              : getModelDisplayName(model)}
+                          </Badge>
+                        ),
+                      )}
+                    </div>
                   )}
                 </div>
-              ) : null}
+              </div>
             </div>
           );
         },
@@ -542,8 +511,7 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
 
   const handleSortingChange = useCallback(
     (updaterOrValue: React.SetStateAction<SortingState>) => {
-      const newSorting =
-        typeof updaterOrValue === "function" ? updaterOrValue(sorting) : updaterOrValue;
+      const newSorting = typeof updaterOrValue === "function" ? updaterOrValue(sorting) : updaterOrValue;
       setSorting(newSorting);
       if (newSorting?.length > 0) {
         const sortState = newSorting[0];
@@ -599,35 +567,37 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
           <div className="flex items-center justify-end w-full mb-4">
             <div className="inline-flex items-center gap-2">
               {isLoading || isFetching ? (
-                <Skeleton.Node active style={{ width: 74, height: 20 }} />
+                <Skeleton className="h-5 w-[74px]" />
               ) : (
-                <span className="text-sm text-gray-700">
+                <span className="text-sm text-muted-foreground">
                   Page {pageIndex + 1} of {table.getPageCount()}
                 </span>
               )}
 
               {isLoading || isFetching ? (
-                <Skeleton.Button active size="small" style={{ width: 84, height: 30 }} />
+                <Skeleton className="h-8 w-[84px]" />
               ) : (
-                <button
+                <Button
+                  variant="outline"
+                  size="sm"
                   onClick={() => table.previousPage()}
                   disabled={isLoading || isFetching || !table.getCanPreviousPage()}
-                  className="px-3 py-1 text-sm border rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   Previous
-                </button>
+                </Button>
               )}
 
               {isLoading || isFetching ? (
-                <Skeleton.Button active size="small" style={{ width: 58, height: 30 }} />
+                <Skeleton className="h-8 w-[58px]" />
               ) : (
-                <button
+                <Button
+                  variant="outline"
+                  size="sm"
                   onClick={() => table.nextPage()}
                   disabled={isLoading || isFetching || !table.getCanNextPage()}
-                  className="px-3 py-1 text-sm border rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   Next
-                </button>
+                </Button>
               )}
             </div>
           </div>
@@ -635,16 +605,16 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
             <div className="rounded-lg custom-border relative">
               <div className="overflow-x-auto">
                 <Table className="[&_td]:py-0.5 [&_th]:py-1" style={{ width: table.getCenterTotalSize() }}>
-                  <TableHead>
+                  <TableHeader>
                     {table.getHeaderGroups().map((headerGroup) => (
                       <TableRow key={headerGroup.id}>
                         {headerGroup.headers.map((header) => (
-                          <TableHeaderCell
+                          <TableHead
                             key={header.id}
                             data-header-id={header.id}
-                            className={`py-1 h-8 relative hover:bg-gray-50 ${
+                            className={`py-1 h-8 relative hover:bg-muted ${
                               header.id === "actions"
-                                ? "sticky right-0 bg-white shadow-[-4px_0_8px_-6px_rgba(0,0,0,0.1)]"
+                                ? "sticky right-0 bg-background shadow-[-4px_0_8px_-6px_rgba(0,0,0,0.1)]"
                                 : ""
                             }`}
                             style={{
@@ -653,23 +623,15 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
                               cursor: header.column.getCanSort() ? "pointer" : "default",
                             }}
                             onMouseEnter={() => {
-                              const resizer = document.querySelector(
-                                `[data-header-id="${header.id}"] .resizer`,
-                              );
+                              const resizer = document.querySelector(`[data-header-id="${header.id}"] .resizer`);
                               if (resizer) (resizer as HTMLElement).style.opacity = "0.5";
                             }}
                             onMouseLeave={() => {
-                              const resizer = document.querySelector(
-                                `[data-header-id="${header.id}"] .resizer`,
-                              );
+                              const resizer = document.querySelector(`[data-header-id="${header.id}"] .resizer`);
                               if (resizer && !header.column.getIsResizing())
                                 (resizer as HTMLElement).style.opacity = "0";
                             }}
-                            onClick={
-                              header.column.getCanSort()
-                                ? header.column.getToggleSortingHandler()
-                                : undefined
-                            }
+                            onClick={header.column.getCanSort() ? header.column.getToggleSortingHandler() : undefined}
                           >
                             <div className="flex items-center justify-between gap-2">
                               <div className="flex items-center">
@@ -681,11 +643,11 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
                                 <div className="w-4">
                                   {header.column.getIsSorted() ? (
                                     {
-                                      asc: <ChevronUpIcon className="h-4 w-4 text-blue-500" />,
-                                      desc: <ChevronDownIcon className="h-4 w-4 text-blue-500" />,
+                                      asc: <ChevronUp className="h-4 w-4 text-primary" />,
+                                      desc: <ChevronDown className="h-4 w-4 text-primary" />,
                                     }[header.column.getIsSorted() as string]
                                   ) : (
-                                    <SwitchVerticalIcon className="h-4 w-4 text-gray-400" />
+                                    <ChevronsUpDown className="h-4 w-4 text-muted-foreground" />
                                   )}
                                 </div>
                               )}
@@ -702,7 +664,7 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
                                   top: 0,
                                   height: "100%",
                                   width: "5px",
-                                  background: header.column.getIsResizing() ? "#3b82f6" : "transparent",
+                                  background: header.column.getIsResizing() ? "hsl(var(--primary))" : "transparent",
                                   cursor: "col-resize",
                                   userSelect: "none",
                                   touchAction: "none",
@@ -710,16 +672,16 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
                                 }}
                               />
                             </div>
-                          </TableHeaderCell>
+                          </TableHead>
                         ))}
                       </TableRow>
                     ))}
-                  </TableHead>
+                  </TableHeader>
                   <TableBody>
                     {isLoading || isFetching ? (
                       <TableRow>
                         <TableCell colSpan={columns.length} className="h-8 text-center">
-                          <div className="text-center text-gray-500">
+                          <div className="text-center text-muted-foreground">
                             <p>Loading keys...</p>
                           </div>
                         </TableCell>
@@ -752,7 +714,7 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
                     ) : (
                       <TableRow>
                         <TableCell colSpan={columns.length} className="h-8 text-center">
-                          <div className="text-center text-gray-500">
+                          <div className="text-center text-muted-foreground">
                             <p>No keys found</p>
                           </div>
                         </TableCell>

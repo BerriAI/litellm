@@ -31,3 +31,12 @@ stay on antd for phase 1 and will be addressed in a targeted follow-up.
   with Switch/InputNumber/Select controls. Defer until shared section
   unblocks.
 - `src/components/add_pass_through.tsx`: same dependency chain.
+- `src/components/team/TeamInfo.tsx` (1724 LoC): team detail/edit page with a
+  deeply coupled antd `Form` — `Form.List` + inline Promise validators for
+  per-model rate limits, `Form.useWatch` hooks driving dependent rendering,
+  `shouldUpdate` patterns, hidden form fields registered via `Form.Item`,
+  antd `Select.OptGroup` with a custom `tagRender` for guardrails, and the
+  Tremor `Accordion` still required by the settings panel. Migration
+  exceeds the two-attempt budget for this batch. Defer until Tremor
+  `Accordion` has a shadcn replacement adopted and the antd Form surface
+  can be broken into sub-forms.
