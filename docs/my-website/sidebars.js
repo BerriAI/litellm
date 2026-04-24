@@ -1011,6 +1011,7 @@ const sidebars = {
         "providers/synthetic",
         "providers/telnyx",
         "providers/telnyx",
+        "providers/telnyx",
         "providers/snowflake",
         "providers/togetherai",
         "providers/topaz",
