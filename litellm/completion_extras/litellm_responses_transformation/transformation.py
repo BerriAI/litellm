@@ -625,7 +625,10 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         if not isinstance(item, dict):
             return
         try:
-            output_index = int(parsed_chunk.get("output_index"))
+            output_index_raw = parsed_chunk.get("output_index")
+            if output_index_raw is None:
+                raise ValueError("missing output_index")
+            output_index = int(output_index_raw)
         except (TypeError, ValueError):
             output_index = len(recovered_output_items)
         recovered_output_items[output_index] = item
@@ -642,7 +645,10 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             return
 
         try:
-            output_index = int(parsed_chunk.get("output_index"))
+            output_index_raw = parsed_chunk.get("output_index")
+            if output_index_raw is None:
+                raise ValueError("missing output_index")
+            output_index = int(output_index_raw)
         except (TypeError, ValueError):
             output_index = len(recovered_text_only_items)
 
@@ -664,7 +670,10 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             return
 
         try:
-            content_index = int(parsed_chunk.get("content_index"))
+            content_index_raw = parsed_chunk.get("content_index")
+            if content_index_raw is None:
+                raise ValueError("missing content_index")
+            content_index = int(content_index_raw)
         except (TypeError, ValueError):
             content_index = len(content)
 
@@ -771,8 +780,8 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 logging_obj
             )
             if recovered_output_items:
-                output_items = recovered_output_items
-                raw_response.output = recovered_output_items
+                output_items = cast(Any, recovered_output_items)
+                raw_response.output = cast(Any, recovered_output_items)
                 verbose_logger.warning(
                     "Recovered empty Responses API output from raw SSE for model=%s",
                     model,
