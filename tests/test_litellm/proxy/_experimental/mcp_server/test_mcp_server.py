@@ -1298,6 +1298,91 @@ async def test_list_tools_multiple_servers_prefixed_names():
 
 
 @pytest.mark.asyncio
+async def test_list_tools_scoped_via_url_path_does_not_prefix_stdio_server():
+    """Regression test for https://github.com/BerriAI/litellm/issues/22670.
+
+    When an MCP list_tools request arrives via the scoped URL path
+    ``/mcp/{server_name}`` (rather than the aggregated ``/mcp`` endpoint),
+    the client has already disambiguated the server by the URL, so tool
+    names MUST NOT be prefixed with the server name.  This must hold for
+    every transport — stdio included — so that the stdio-backed GitHub
+    on-prem MCP server in issue #22670 does not return names like
+    ``github_onprem-get_repo`` when scoped.
+    """
+    try:
+        from litellm.proxy._experimental.mcp_server.mcp_context import (
+            _mcp_request_scoped_to_single_server,
+        )
+        from litellm.proxy._experimental.mcp_server.server import (
+            _get_tools_from_mcp_servers,
+            set_auth_context,
+        )
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    user_api_key_auth = UserAPIKeyAuth(api_key="test_key", user_id="test_user")
+    set_auth_context(user_api_key_auth)
+
+    # stdio-transport MCP server matching the reporter's config in #22670.
+    server = MagicMock()
+    server.server_id = "github_onprem_id"
+    server.name = "github_onprem"
+    server.alias = "github_onprem"
+    server.server_name = "github_onprem"
+    server.allowed_tools = None
+    server.disallowed_tools = None
+    server.auth_type = None
+    server.extra_headers = None
+    server.transport = MCPTransport.stdio
+
+    received_add_prefix: dict = {}
+
+    async def mock_get_tools_from_server(
+        server,
+        mcp_auth_header=None,
+        extra_headers=None,
+        add_prefix=True,
+        raw_headers=None,
+    ):
+        received_add_prefix["value"] = add_prefix
+        tool = MagicMock()
+        tool.name = f"{server.alias}-get_repo" if add_prefix else "get_repo"
+        tool.description = "desc"
+        tool.inputSchema = {}
+        return [tool]
+
+    mock_manager = MagicMock()
+    mock_manager.get_allowed_mcp_servers = AsyncMock(return_value=["github_onprem_id"])
+    mock_manager.get_mcp_server_by_id = MagicMock(return_value=server)
+    mock_manager.filter_server_ids_by_ip_with_info = lambda ids, _ip: (ids, 0)
+    mock_manager._get_tools_from_server = mock_get_tools_from_server
+
+    # Simulate the scoped /mcp/{server_name} request by setting the
+    # ContextVar that `extract_mcp_auth_context` sets on the real request
+    # path.  Setting it here lets us unit-test the decision logic without
+    # bringing up a Starlette app.
+    token = _mcp_request_scoped_to_single_server.set(True)
+    try:
+        with patch(
+            "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager",
+            mock_manager,
+        ):
+            tools = await _get_tools_from_mcp_servers(
+                user_api_key_auth=user_api_key_auth,
+                mcp_auth_header=None,
+                mcp_servers=["github_onprem"],
+                mcp_server_auth_headers=None,
+            )
+    finally:
+        _mcp_request_scoped_to_single_server.reset(token)
+
+    # Core bug: on the scoped URL, tool names must be returned unprefixed.
+    assert received_add_prefix.get("value") is False
+    assert len(tools) == 1
+    assert tools[0].name == "get_repo"
+
+
+@pytest.mark.asyncio
 async def test_mcp_manager_allows_public_servers_without_permissions():
     try:
         from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
