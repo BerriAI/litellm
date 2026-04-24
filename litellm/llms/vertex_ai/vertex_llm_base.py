@@ -45,7 +45,7 @@ class VertexBase:
         self._credentials: Optional[GoogleCredentialsObject] = None
         self._credentials_project_mapping: Dict[
             Tuple[Optional[VERTEX_CREDENTIALS_TYPES], Optional[str]],
-            Tuple[GoogleCredentialsObject, str],
+            Tuple[GoogleCredentialsObject, Optional[str]],
         ] = {}
         self.project_id: Optional[str] = None
         self.async_handler: Optional[AsyncHTTPHandler] = None
