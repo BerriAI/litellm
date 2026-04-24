@@ -1628,6 +1628,16 @@ async def _run_centralized_common_checks(
         user_custom_auth,
     )
 
+    # Public routes (e.g. /health/readiness, /metrics) are exempt from
+    # auth in the builder — the wrapper must not retroactively apply
+    # authz on top, or k8s readiness probes and other unauthenticated
+    # callers get 401.
+    if (
+        route in LiteLLMRoutes.public_routes.value  # type: ignore[attr-defined]
+        or route_in_additonal_public_routes(current_route=route)
+    ):
+        return
+
     # No-auth dev mode: master_key unset AND no JWT/OAuth2 auth
     # configured. The builder returns an INTERNAL_USER token for any
     # api_key; the proxy is unauthenticated by configuration.
@@ -1754,16 +1764,17 @@ async def _run_centralized_common_checks(
 
     # common_checks identifies admin via user_object, not the token
     # (non_proxy_admin_allowed_routes_check). JWT admin shortcut and
-    # master_key tokens have no DB user row — synthesize one so admin
-    # route access is granted after centralization.
-    if (
-        user_object is None
-        and user_api_key_auth_obj.user_role == LitellmUserRoles.PROXY_ADMIN
-    ):
+    # master_key tokens get admin from the token; the DB row for the
+    # same user_id (e.g. litellm_proxy_admin_name = "default_user_id")
+    # may have a non-admin user_role and would otherwise demote the
+    # caller. The token is the source of truth for these paths — force
+    # the admin user_object whenever the token says PROXY_ADMIN, even
+    # if a DB row was fetched.
+    if user_api_key_auth_obj.user_role == LitellmUserRoles.PROXY_ADMIN:
         user_object = LiteLLM_UserTable(
             user_id=user_api_key_auth_obj.user_id or litellm_proxy_admin_name,
             user_role=LitellmUserRoles.PROXY_ADMIN,
-            spend=0.0,
+            spend=user_object.spend if user_object is not None else 0.0,
         )
 
     if project_object is not None:
