@@ -193,7 +193,7 @@ class LLMAsAJudgeGuardrail(CustomGuardrail):
             passed = overall_score >= self.overall_threshold
 
             eval_info: "StandardLoggingEvalInformation" = {
-                "eval_name": self.guardrail_name,
+                "eval_name": self.guardrail_name or "",
                 "overall_score": overall_score,
                 "passed": passed,
                 "judge_model": self.judge_model,
