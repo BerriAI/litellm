@@ -384,9 +384,7 @@ class VertexPassthroughLoggingHandler:
             )
 
         custom_llm_provider = (
-            VertexPassthroughLoggingHandler._get_custom_llm_provider_from_url(
-                url_route
-            )
+            VertexPassthroughLoggingHandler._get_custom_llm_provider_from_url(url_route)
         )
 
         litellm_embedding_response.model = model
