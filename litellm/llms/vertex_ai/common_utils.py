@@ -597,8 +597,32 @@ def process_items(schema, depth=0):
             f"Max depth of {DEFAULT_MAX_RECURSE_DEPTH} exceeded while processing schema. Please check the schema for excessive nesting."
         )
     if isinstance(schema, dict):
+        # Convert prefixItems (JSON Schema tuple validation) to items.
+        # Gemini does not support prefixItems; collapse to a single items
+        # schema using the common type if all prefix items share one, else string.
+        if "prefixItems" in schema and "items" not in schema:
+            prefix = schema.pop("prefixItems")
+            if isinstance(prefix, list) and prefix:
+                types = {
+                    item.get("type") for item in prefix if isinstance(item, dict) and "type" in item
+                }
+                if len(types) == 1:
+                    schema["items"] = {"type": types.pop()}
+                else:
+                    schema["items"] = {"type": "string"}
+            else:
+                schema["items"] = {"type": "string"}
+        elif "prefixItems" in schema:
+            # items already exists; just drop prefixItems
+            schema.pop("prefixItems")
+
         if "items" in schema and schema["items"] == {}:
             schema["items"] = {"type": "object"}
+
+        # Ensure type=array always has an items field (Gemini requires it)
+        if schema.get("type") == "array" and "items" not in schema:
+            schema["items"] = {"type": "string"}
+
         for key, value in schema.items():
             if isinstance(value, dict):
                 process_items(value, depth + 1)
