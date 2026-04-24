@@ -119,6 +119,50 @@ class TestExpiredUISessionKeyCleanupManager:
         )
 
     @pytest.mark.asyncio
+    async def test_cleanup_expired_keys_deletes_multiple_keys(self):
+        mock_prisma_client = AsyncMock()
+        mock_cache = MagicMock()
+        manager = ExpiredUISessionKeyCleanupManager(
+            prisma_client=mock_prisma_client,
+            user_api_key_cache=mock_cache,
+        )
+        expired_keys = [
+            LiteLLM_VerificationToken(
+                token="expired-dashboard-token-1",
+                team_id=UI_SESSION_TOKEN_TEAM_ID,
+                expires=datetime.now(timezone.utc) - timedelta(seconds=1),
+            ),
+            LiteLLM_VerificationToken(
+                token="expired-dashboard-token-2",
+                team_id=UI_SESSION_TOKEN_TEAM_ID,
+                expires=datetime.now(timezone.utc) - timedelta(seconds=1),
+            ),
+        ]
+        tokens = [key.token for key in expired_keys]
+        manager._find_expired_ui_session_keys = AsyncMock(return_value=expired_keys)
+
+        with patch(
+            "litellm.proxy.common_utils.expired_ui_session_key_cleanup_manager.delete_verification_tokens",
+            new_callable=AsyncMock,
+        ) as mock_delete_verification_tokens:
+            mock_delete_verification_tokens.return_value = (
+                {"deleted_keys": tokens, "failed_tokens": []},
+                expired_keys,
+            )
+            with patch(
+                "litellm.proxy.common_utils.expired_ui_session_key_cleanup_manager.KeyManagementEventHooks.async_key_deleted_hook",
+                new_callable=AsyncMock,
+            ) as mock_key_deleted_hook:
+                deleted_count = await manager.cleanup_expired_keys()
+
+        assert deleted_count == 2
+        assert mock_delete_verification_tokens.call_args.kwargs["tokens"] == tokens
+        hook_kwargs = mock_key_deleted_hook.call_args.kwargs
+        assert hook_kwargs["data"].keys == tokens
+        assert hook_kwargs["keys_being_deleted"] == expired_keys
+        assert hook_kwargs["response"] == {"deleted_keys": tokens, "failed_tokens": []}
+
+    @pytest.mark.asyncio
     async def test_cleanup_expired_keys_noops_when_no_keys_found(self):
         mock_prisma_client = AsyncMock()
         mock_cache = MagicMock()
