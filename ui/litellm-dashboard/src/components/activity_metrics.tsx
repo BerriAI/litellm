@@ -1,7 +1,7 @@
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { resolveTeamAliasFromTeamID } from "@/utils/teamUtils";
-// eslint-disable-next-line litellm-ui/no-banned-ui-imports
-import { AreaChart, BarChart, Card, Grid, Text, Title } from "@tremor/react";
+import { AreaChart, BarChart } from "@tremor/react";
+import { Card } from "@/components/ui/card";
 import {
   Accordion,
   AccordionContent,
@@ -32,45 +32,45 @@ const ModelSection = ({
   return (
     <div className="space-y-2">
       {/* Summary Cards */}
-      <Grid numItems={4} className="gap-4">
-        <Card>
-          <Text>Total Requests</Text>
-          <Title>{metrics.total_requests.toLocaleString()}</Title>
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <Card className="p-6">
+          <p className="text-sm text-muted-foreground">Total Requests</p>
+          <h3 className="text-lg font-semibold">{metrics.total_requests.toLocaleString()}</h3>
         </Card>
-        <Card>
-          <Text>Total Successful Requests</Text>
-          <Title>{metrics.total_successful_requests.toLocaleString()}</Title>
+        <Card className="p-6">
+          <p className="text-sm text-muted-foreground">Total Successful Requests</p>
+          <h3 className="text-lg font-semibold">{metrics.total_successful_requests.toLocaleString()}</h3>
         </Card>
-        <Card>
-          <Text>Total Tokens</Text>
-          <Title>{metrics.total_tokens.toLocaleString()}</Title>
-          <Text>{Math.round(metrics.total_tokens / metrics.total_successful_requests)} avg per successful request</Text>
+        <Card className="p-6">
+          <p className="text-sm text-muted-foreground">Total Tokens</p>
+          <h3 className="text-lg font-semibold">{metrics.total_tokens.toLocaleString()}</h3>
+          <p className="text-sm text-muted-foreground">{Math.round(metrics.total_tokens / metrics.total_successful_requests)} avg per successful request</p>
         </Card>
-        <Card>
-          <Text>Total Spend</Text>
-          <Title>${formatNumberWithCommas(metrics.total_spend, 2)}</Title>
-          <Text>
+        <Card className="p-6">
+          <p className="text-sm text-muted-foreground">Total Spend</p>
+          <h3 className="text-lg font-semibold">${formatNumberWithCommas(metrics.total_spend, 2)}</h3>
+          <p className="text-sm text-muted-foreground">
             ${formatNumberWithCommas(metrics.total_spend / metrics.total_successful_requests, 3)} per successful request
-          </Text>
+          </p>
         </Card>
-      </Grid>
+      </div>
 
       {metrics.top_api_keys && metrics.top_api_keys.length > 0 && (
-        <Card className="mt-4">
-          <Title>Top Virtual Keys by Spend</Title>
+        <Card className="mt-4 p-6">
+          <h3 className="text-lg font-semibold">Top Virtual Keys by Spend</h3>
           <div className="mt-3">
             <div className="grid grid-cols-1 gap-2">
               {metrics.top_api_keys.map((keyData, index) => (
-                <div key={keyData.api_key} className="flex justify-between items-center p-3 bg-gray-50 rounded-lg">
+                <div key={keyData.api_key} className="flex justify-between items-center p-3 bg-muted rounded-lg">
                   <div>
-                    <Text className="font-medium">{keyData.key_alias || `${keyData.api_key.substring(0, 10)}...`}</Text>
-                    {keyData.team_id && <Text className="text-xs text-gray-500">Team: {keyData.team_id}</Text>}
+                    <p className="font-medium">{keyData.key_alias || `${keyData.api_key.substring(0, 10)}...`}</p>
+                    {keyData.team_id && <p className="text-xs text-muted-foreground">Team: {keyData.team_id}</p>}
                   </div>
                   <div className="text-right">
-                    <Text className="font-medium">${formatNumberWithCommas(keyData.spend, 2)}</Text>
-                    <Text className="text-xs text-gray-500">
+                    <p className="font-medium">${formatNumberWithCommas(keyData.spend, 2)}</p>
+                    <p className="text-xs text-muted-foreground">
                       {keyData.requests.toLocaleString()} requests | {keyData.tokens.toLocaleString()} tokens
-                    </Text>
+                    </p>
                   </div>
                 </div>
               ))}
@@ -84,9 +84,9 @@ const ModelSection = ({
       )}
 
       {/* Spend per day - Full width card */}
-      <Card className="mt-4">
+      <Card className="mt-4 p-6">
         <div className="flex justify-between items-center">
-          <Title>Spend per day</Title>
+          <h3 className="text-lg font-semibold">Spend per day</h3>
           <CustomLegend categories={["metrics.spend"]} colors={["green"]} />
         </div>
         <BarChart
@@ -101,10 +101,10 @@ const ModelSection = ({
       </Card>
 
       {/* Charts */}
-      <Grid numItems={2} className="gap-4 mt-4">
-        <Card>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
+        <Card className="p-6">
           <div className="flex justify-between items-center">
-            <Title>Total Tokens</Title>
+            <h3 className="text-lg font-semibold">Total Tokens</h3>
             <CustomLegend
               categories={["metrics.prompt_tokens", "metrics.completion_tokens", "metrics.total_tokens"]}
               colors={["blue", "cyan", "indigo"]}
@@ -122,9 +122,9 @@ const ModelSection = ({
           />
         </Card>
 
-        <Card>
+        <Card className="p-6">
           <div className="flex justify-between items-center">
-            <Title>Requests per day</Title>
+            <h3 className="text-lg font-semibold">Requests per day</h3>
             <CustomLegend categories={["metrics.api_requests"]} colors={["blue"]} />
           </div>
           <BarChart
@@ -139,9 +139,9 @@ const ModelSection = ({
           />
         </Card>
 
-        <Card>
+        <Card className="p-6">
           <div className="flex justify-between items-center">
-            <Title>Success vs Failed Requests</Title>
+            <h3 className="text-lg font-semibold">Success vs Failed Requests</h3>
             <CustomLegend
               categories={["metrics.successful_requests", "metrics.failed_requests"]}
               colors={["green", "red"]}
@@ -160,17 +160,17 @@ const ModelSection = ({
         </Card>
 
         {!hidePromptCachingMetrics && (
-          <Card>
+          <Card className="p-6">
             <div className="flex justify-between items-center">
-              <Title>Prompt Caching Metrics</Title>
+              <h3 className="text-lg font-semibold">Prompt Caching Metrics</h3>
               <CustomLegend
                 categories={["metrics.cache_read_input_tokens", "metrics.cache_creation_input_tokens"]}
                 colors={["cyan", "purple"]}
               />
             </div>
             <div className="mb-2">
-              <Text>Cache Read: {metrics.total_cache_read_input_tokens?.toLocaleString() || 0} tokens</Text>
-              <Text>Cache Creation: {metrics.total_cache_creation_input_tokens?.toLocaleString() || 0} tokens</Text>
+              <p className="text-sm text-muted-foreground">Cache Read: {metrics.total_cache_read_input_tokens?.toLocaleString() || 0} tokens</p>
+              <p className="text-sm text-muted-foreground">Cache Creation: {metrics.total_cache_creation_input_tokens?.toLocaleString() || 0} tokens</p>
             </div>
             <AreaChart
               className="mt-4"
@@ -184,7 +184,7 @@ const ModelSection = ({
             />
           </Card>
         )}
-      </Grid>
+      </div>
     </div>
   );
 };
@@ -265,30 +265,30 @@ export const ActivityMetrics: React.FC<ActivityMetricsProps> = ({ modelMetrics, 
     <div className="space-y-8">
       {/* Global Summary */}
       <div className="border rounded-lg p-4">
-        <Title>Overall Usage</Title>
-        <Grid numItems={4} className="gap-4 mb-4">
-          <Card>
-            <Text>Total Requests</Text>
-            <Title>{totalMetrics.total_requests.toLocaleString()}</Title>
+        <h3 className="text-lg font-semibold">Overall Usage</h3>
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-4">
+          <Card className="p-6">
+            <p className="text-sm text-muted-foreground">Total Requests</p>
+            <h3 className="text-lg font-semibold">{totalMetrics.total_requests.toLocaleString()}</h3>
           </Card>
-          <Card>
-            <Text>Total Successful Requests</Text>
-            <Title>{totalMetrics.total_successful_requests.toLocaleString()}</Title>
+          <Card className="p-6">
+            <p className="text-sm text-muted-foreground">Total Successful Requests</p>
+            <h3 className="text-lg font-semibold">{totalMetrics.total_successful_requests.toLocaleString()}</h3>
           </Card>
-          <Card>
-            <Text>Total Tokens</Text>
-            <Title>{totalMetrics.total_tokens.toLocaleString()}</Title>
+          <Card className="p-6">
+            <p className="text-sm text-muted-foreground">Total Tokens</p>
+            <h3 className="text-lg font-semibold">{totalMetrics.total_tokens.toLocaleString()}</h3>
           </Card>
-          <Card>
-            <Text>Total Spend</Text>
-            <Title>${formatNumberWithCommas(totalMetrics.total_spend, 2)}</Title>
+          <Card className="p-6">
+            <p className="text-sm text-muted-foreground">Total Spend</p>
+            <h3 className="text-lg font-semibold">${formatNumberWithCommas(totalMetrics.total_spend, 2)}</h3>
           </Card>
-        </Grid>
+        </div>
 
-        <Grid numItems={2} className="gap-4">
-          <Card>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <Card className="p-6">
             <div className="flex justify-between items-center">
-              <Title>Total Tokens Over Time</Title>
+              <h3 className="text-lg font-semibold">Total Tokens Over Time</h3>
               <CustomLegend
                 categories={["metrics.prompt_tokens", "metrics.completion_tokens", "metrics.total_tokens"]}
                 colors={["blue", "cyan", "indigo"]}
@@ -305,9 +305,9 @@ export const ActivityMetrics: React.FC<ActivityMetricsProps> = ({ modelMetrics, 
               showLegend={false}
             />
           </Card>
-          <Card>
+          <Card className="p-6">
             <div className="flex justify-between items-center">
-              <Title>Total Requests Over Time</Title>
+              <h3 className="text-lg font-semibold">Total Requests Over Time</h3>
               <CustomLegend
                 categories={["metrics.successful_requests", "metrics.failed_requests"]}
                 colors={["emerald", "red"]}
@@ -324,7 +324,7 @@ export const ActivityMetrics: React.FC<ActivityMetricsProps> = ({ modelMetrics, 
               showLegend={false}
             />
           </Card>
-        </Grid>
+        </div>
       </div>
 
       {/* Individual Model Sections */}
@@ -333,9 +333,9 @@ export const ActivityMetrics: React.FC<ActivityMetricsProps> = ({ modelMetrics, 
           <AccordionItem key={modelName} value={modelName}>
             <AccordionTrigger>
               <div className="flex justify-between items-center w-full pr-2">
-                <Title>
+                <h3 className="text-lg font-semibold">
                   {modelMetrics[modelName].label || "Unknown Item"}
-                </Title>
+                </h3>
                 <div className="flex space-x-4 text-sm text-muted-foreground">
                   <span>
                     $

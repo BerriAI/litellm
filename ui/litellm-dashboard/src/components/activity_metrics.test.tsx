@@ -16,10 +16,6 @@ beforeAll(() => {
 });
 
 vi.mock("@tremor/react", () => ({
-  Card: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
-  Grid: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
-  Text: ({ children }: { children: React.ReactNode }) => <span>{children}</span>,
-  Title: ({ children }: { children: React.ReactNode }) => <h2>{children}</h2>,
   AreaChart: () => <div>AreaChart</div>,
   BarChart: () => <div>BarChart</div>,
 }));
@@ -270,7 +266,7 @@ describe("ActivityMetrics", () => {
     };
 
     render(<ActivityMetrics modelMetrics={multipleModels} />);
-    const headers = screen.getAllByRole("heading", { level: 2 });
+    const headers = screen.getAllByRole("heading", { level: 3 });
     const gpt4Index = headers.findIndex((h) => h.textContent?.includes("GPT-4"));
     const gpt35Index = headers.findIndex((h) => h.textContent?.includes("GPT-3.5"));
     expect(gpt4Index).toBeLessThan(gpt35Index);
@@ -401,7 +397,7 @@ describe("ActivityMetrics", () => {
     };
 
     render(<ActivityMetrics modelMetrics={modelsWithEmptyKey} />);
-    const headings = screen.getAllByRole("heading", { level: 2 });
+    const headings = screen.getAllByRole("heading", { level: 3 });
     const gpt4Index = headings.findIndex((h) => h.textContent?.includes("GPT-4"));
     const unknownIndex = headings.findIndex((h) => h.textContent?.includes("Unknown"));
     expect(gpt4Index).toBeLessThan(unknownIndex);

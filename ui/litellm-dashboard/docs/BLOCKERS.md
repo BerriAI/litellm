@@ -131,6 +131,17 @@ stay on antd for phase 1 and will be addressed in a targeted follow-up.
  antd Form via `form.setFieldValue`. `MCPPermissionManagement.test.tsx`
  wraps it in an antd `<Form form={form}>` harness.  Cannot migrate
  independently of the parent forms. Defer with parents.
+- `src/components/usage.tsx` (949 LoC): legacy admin usage page with a very
+ wide tremor surface — BarList, DonutChart, AreaChart, DateRangePickerValue,
+ Tremor MultiSelect / MultiSelectItem (no direct shadcn primitive — requires
+ a custom searchable-multi-select combobox), Select/SelectItem used with
+ the Tremor API, plus TabGroup / TabList / Tab / TabPanels / TabPanel driving
+ four distinct admin reports, and Tremor Table inside Card wrappers for tag /
+ provider / customer views. Accurate migration requires building the same
+ searchable MultiSelect primitive blocking ChatUI, migrating the tab content
+ into value-keyed shadcn Tabs, and splitting the many chart imports from the
+ non-chart primitives in a way that preserves the categorical color palettes.
+ Exceeds the two-attempt budget for this run — defer.
 - `src/components/playground/chat_ui/ChatUI.tsx` (2239 LoC): chrome-only
  migration blocked by deeply-coupled antd `Select.OptGroup` + `optionLabelProp`
  + `maxTagCount="responsive"` + custom `filterOption` on the MCP servers
