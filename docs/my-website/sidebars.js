@@ -179,6 +179,7 @@ const sidebars = {
         "tutorials/google_genai_sdk",
         "tutorials/livekit_xai_realtime",
         "integrations/letta",
+        "integrations/semantix",
         { type: "doc", id: "tutorials/instructor", label: "Instructor with LiteLLM" },
         { type: "doc", id: "langchain/langchain", label: "LangChain with LiteLLM" },
         "projects/openai-agents"
