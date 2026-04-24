@@ -918,19 +918,35 @@ def test_vertex_ai_usage_metadata_accumulates_duplicate_modalities():
 
 def test_vertex_ai_map_thinking_param_with_budget_tokens_0():
     """
-    If budget_tokens is 0, do not set includeThoughts to True
+    budget_tokens=0 must produce includeThoughts: False with no thinkingBudget field.
+    Models with a minimum budget requirement (e.g. gemini-2.5-pro) reject thinkingBudget: 0.
     """
     from litellm.types.llms.anthropic import AnthropicThinkingParam
 
     v = VertexGeminiConfig()
     thinking_param: AnthropicThinkingParam = {"type": "enabled", "budget_tokens": 0}
-    assert "includeThoughts" not in v._map_thinking_param(thinking_param=thinking_param)
+    result = v._map_thinking_param(thinking_param=thinking_param)
+    assert result == {"includeThoughts": False}
+    assert "thinkingBudget" not in result
 
     thinking_param: AnthropicThinkingParam = {"type": "enabled", "budget_tokens": 100}
     assert v._map_thinking_param(thinking_param=thinking_param) == {
         "includeThoughts": True,
         "thinkingBudget": 100,
     }
+
+
+def test_vertex_ai_map_thinking_param_disabled():
+    """
+    type="adaptive" (non-enabled) must produce includeThoughts: False with no thinkingBudget field.
+    """
+    from litellm.types.llms.anthropic import AnthropicThinkingParam
+
+    v = VertexGeminiConfig()
+    thinking_param: AnthropicThinkingParam = {"type": "adaptive"}
+    result = v._map_thinking_param(thinking_param=thinking_param)
+    assert result == {"includeThoughts": False}
+    assert "thinkingBudget" not in result
 
 
 def test_vertex_ai_map_tools():
