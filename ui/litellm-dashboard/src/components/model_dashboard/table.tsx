@@ -12,15 +12,14 @@ import {
   OnChangeFn,
 } from "@tanstack/react-table";
 import React from "react";
-// eslint-disable-next-line litellm-ui/no-banned-ui-imports
 import {
   Table,
-  TableHead,
-  TableHeaderCell,
   TableBody,
-  TableRow,
   TableCell,
-} from "@tremor/react";
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import { ArrowUpDown, ChevronDown, ChevronUp } from "lucide-react";
 
 // Extend the column meta type to include className
@@ -93,11 +92,11 @@ export function ModelDataTable<TData, TValue>({
               tableLayout: "fixed",
             }}
           >
-            <TableHead>
+            <TableHeader>
               {tableInstance.getHeaderGroups().map((headerGroup) => (
                 <TableRow key={headerGroup.id}>
                   {headerGroup.headers.map((header) => (
-                    <TableHeaderCell
+                    <TableHead
                       key={header.id}
                       className={`py-1 h-8 relative ${
                         header.id === "actions"
@@ -146,11 +145,11 @@ export function ModelDataTable<TData, TValue>({
                           }`}
                         />
                       )}
-                    </TableHeaderCell>
+                    </TableHead>
                   ))}
                 </TableRow>
               ))}
-            </TableHead>
+            </TableHeader>
             <TableBody>
               {isLoading ? (
                 <TableRow>
