@@ -93,7 +93,7 @@ class Uploader:
             timeout=30.0,
             label="initiate",
         )
-        if resp.status_code != 201:
+        if resp.status_code not in (200, 201):
             raise RuntimeError(
                 f"GCS initiate upload failed: {resp.status_code} {resp.text[:200]}"
             )

@@ -17,14 +17,18 @@ Internal methods:
 DB not connected: all methods log a warning and return empty/None — never raise.
 The scheduler skips the date gracefully; user-triggered endpoints surface the
 missing-DB error through Settings._ensure_prisma_client() before reaching here.
+
+polars is an optional [proxy] dependency — imported lazily inside methods so
+SDK-only users are not affected when Logger is imported via custom_logger_registry.
 """
 
 import io
-from typing import Any, AsyncIterator, List, Optional, Tuple
-
-import polars as pl
+from typing import Any, AsyncIterator, List, Optional, Tuple, TYPE_CHECKING
 
 from litellm._logging import verbose_proxy_logger
+
+if TYPE_CHECKING:
+    import polars as pl
 
 # query_raw is used here instead of Prisma model methods because the query
 # requires a 4-table LEFT JOIN (DailyUserSpend → VerificationToken →
@@ -79,7 +83,7 @@ class Exporter:
         date_str: str,
         connection_id: Optional[str] = None,
         limit: Optional[int] = None,
-    ) -> Tuple[pl.DataFrame, str]:
+    ) -> Tuple["pl.DataFrame", str]:
         """Fetch and serialize spend data for one calendar date.
 
         All rows are exported — including failed requests. Mavvrik decides
@@ -101,14 +105,19 @@ class Exporter:
 
         Uses LIMIT/OFFSET pagination so only page_size rows are in memory at once.
         All rows exported — including failed requests.
-        Yields nothing when DB is not connected or no rows exist for the date.
+
+        When DB is not connected, raises RuntimeError so the caller (Orchestrator)
+        knows the export failed — distinct from a legitimate zero-traffic day which
+        yields nothing without raising.
         """
+        import polars as pl
+
         client = self._prisma_client
         if client is None:
-            verbose_proxy_logger.warning(
-                "Exporter: database not connected, skipping stream for %s", date_str
+            raise RuntimeError(
+                "Exporter: database not connected — cannot stream pages for "
+                f"{date_str}. Connect a database to your proxy."
             )
-            return
 
         header_written = False
         offset = 0
@@ -122,7 +131,7 @@ class Exporter:
             )
 
             if not rows:
-                break
+                break  # legitimate end — no more rows (or zero-traffic day)
 
             df = pl.DataFrame(rows, infer_schema_length=None)
 
@@ -168,11 +177,13 @@ class Exporter:
         self,
         date_str: str,
         limit: Optional[int] = None,
-    ) -> pl.DataFrame:
+    ) -> "pl.DataFrame":
         """Retrieve all spend rows for a single calendar date.
 
         Returns empty DataFrame when DB is not connected.
         """
+        import polars as pl
+
         client = self._prisma_client
         if client is None:
             verbose_proxy_logger.warning(
@@ -191,8 +202,10 @@ class Exporter:
         db_response = await client.db.query_raw(query, *params)
         return pl.DataFrame(db_response, infer_schema_length=None)
 
-    def _to_csv(self, df: pl.DataFrame, connection_id: Optional[str] = None) -> str:
+    def _to_csv(self, df: "pl.DataFrame", connection_id: Optional[str] = None) -> str:
         """Serialize a DataFrame to CSV, adding connection_id column if provided."""
+        import polars as pl
+
         if df.is_empty():
             verbose_proxy_logger.debug("Exporter: empty DataFrame, nothing to export")
             return ""

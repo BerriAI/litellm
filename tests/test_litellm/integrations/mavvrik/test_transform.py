@@ -444,18 +444,21 @@ class TestExporterNoDb:
         assert result is None
 
     @pytest.mark.asyncio
-    async def test_stream_pages_yields_nothing_when_no_db(self):
-        """_stream_pages yields nothing when DB not connected."""
+    async def test_stream_pages_raises_when_no_db(self):
+        """_stream_pages raises RuntimeError when DB not connected.
+
+        Raising (not silently returning) ensures the Orchestrator's try/except
+        catches it and does NOT advance the marker — preventing silent data loss.
+        """
         exporter = Exporter()
         with patch.object(
             type(exporter),
             "_prisma_client",
             new_callable=lambda: property(lambda self: None),
         ):
-            chunks = []
-            async for chunk in exporter._stream_pages("2026-04-10", connection_id="c"):
-                chunks.append(chunk)
-        assert chunks == []
+            with pytest.raises(RuntimeError, match="database not connected"):
+                async for _ in exporter._stream_pages("2026-04-10", connection_id="c"):
+                    pass
 
     @pytest.mark.asyncio
     async def test_stream_pages_yields_nothing_when_db_empty(self):

@@ -171,11 +171,13 @@ class TestRunExportLoop:
         assert exported_dates == ["2026-04-09", "2026-04-10"]
 
     @pytest.mark.asyncio
-    async def test_does_not_advance_when_no_data(self):
-        """When export returns 0 bytes, marker is NOT advanced — prevents silent data loss.
+    async def test_advances_marker_on_zero_traffic_day(self):
+        """Zero-traffic days (0 bytes, no DB error) still advance the marker.
 
-        0 bytes means DB was unavailable or no data for that date.
-        Raising ensures the marker stays put so the date is retried next run.
+        A legitimate date with no spend rows returns 0 bytes without raising.
+        The marker must advance so the pipeline doesn't stall on quiet days.
+        DB-unavailability is handled differently — _stream_pages raises, which
+        propagates through _export and aborts before _advance is reached.
         """
         orc = _make_orchestrator()
 
@@ -192,9 +194,32 @@ class TestRunExportLoop:
         ):
             await orc.run()
 
-        # advance_marker must NOT be called when 0 bytes exported
+        # advance_marker IS called — zero bytes is a legitimate empty day
+        orc._client.advance_marker.assert_called_once()
+        orc._client.report_error.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_does_not_advance_when_db_unavailable(self):
+        """When DB is unavailable, _export raises — marker NOT advanced."""
+        orc = _make_orchestrator()
+
+        orc._client.register = AsyncMock(return_value="2026-04-09")
+        orc._client.advance_marker = AsyncMock()
+        orc._client.report_error = AsyncMock()
+
+        with patch.object(
+            orc,
+            "_export",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("database not connected"),
+        ), patch.object(
+            Orchestrator, "_utc_today", return_value=date(2026, 4, 10)
+        ), patch.object(
+            Orchestrator, "_get_pod_lock_manager", return_value=None
+        ):
+            await orc.run()
+
         orc._client.advance_marker.assert_not_called()
-        # error reported to Mavvrik so the failure is visible
         orc._client.report_error.assert_called_once()
 
     @pytest.mark.asyncio
