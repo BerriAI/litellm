@@ -1,6 +1,10 @@
 import React, { useEffect, useState, useImperativeHandle, forwardRef, useRef } from "react";
-// eslint-disable-next-line litellm-ui/no-banned-ui-imports
-import { TabPanel, TabPanels, TabGroup, TabList, Tab } from "@tremor/react";
+import {
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
+} from "@/components/ui/tabs";
 import { getRouterSettingsCall } from "../networking";
 import RouterSettingsForm, { RouterSettingsFormValue } from "../router_settings/RouterSettingsForm";
 import { Fallbacks } from "../Settings/RouterSettings/Fallbacks/AddFallbacks";
@@ -343,31 +347,29 @@ const RouterSettingsAccordion = forwardRef<RouterSettingsAccordionRef, RouterSet
 
     return (
       <div className="w-full">
-        <TabGroup className="w-full">
-          <TabList variant="line" defaultValue="1" className="px-8 pt-4">
-            <Tab value="1">Loadbalancing</Tab>
-            <Tab value="2">Fallbacks</Tab>
-          </TabList>
-          <TabPanels className="px-8 py-6">
-            <TabPanel>
-              <RouterSettingsForm
-                value={formValue}
-                onChange={setFormValue}
-                routerFieldsMetadata={routerFieldsMetadata}
-                availableRoutingStrategies={availableRoutingStrategies}
-                routingStrategyDescriptions={routingStrategyDescriptions}
-              />
-            </TabPanel>
-            <TabPanel>
-              <FallbackSelectionForm
-                groups={fallbackGroups}
-                onGroupsChange={handleFallbackGroupsChange}
-                availableModels={availableModels}
-                maxGroups={5}
-              />
-            </TabPanel>
-          </TabPanels>
-        </TabGroup>
+        <Tabs defaultValue="loadbalancing" className="w-full">
+          <TabsList className="px-8 pt-4 bg-transparent p-0 h-auto">
+            <TabsTrigger value="loadbalancing">Loadbalancing</TabsTrigger>
+            <TabsTrigger value="fallbacks">Fallbacks</TabsTrigger>
+          </TabsList>
+          <TabsContent value="loadbalancing" className="px-8 py-6">
+            <RouterSettingsForm
+              value={formValue}
+              onChange={setFormValue}
+              routerFieldsMetadata={routerFieldsMetadata}
+              availableRoutingStrategies={availableRoutingStrategies}
+              routingStrategyDescriptions={routingStrategyDescriptions}
+            />
+          </TabsContent>
+          <TabsContent value="fallbacks" className="px-8 py-6">
+            <FallbackSelectionForm
+              groups={fallbackGroups}
+              onGroupsChange={handleFallbackGroupsChange}
+              availableModels={availableModels}
+              maxGroups={5}
+            />
+          </TabsContent>
+        </Tabs>
       </div>
     );
   });

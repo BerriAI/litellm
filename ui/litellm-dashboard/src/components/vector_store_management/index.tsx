@@ -1,8 +1,12 @@
 import React, { useCallback, useState, useEffect } from "react";
-// eslint-disable-next-line litellm-ui/no-banned-ui-imports
-import { TabGroup, TabList, Tab, TabPanels, TabPanel } from "@tremor/react";
 import { RefreshCcw } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import {
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
+} from "@/components/ui/tabs";
 import {
   vectorStoreListCall,
   vectorStoreDeleteCall,
@@ -157,46 +161,41 @@ const VectorStoreManagement: React.FC<VectorStoreProps> = ({ accessToken, userID
           You can use vector stores to store and retrieve LLM embeddings.
         </p>
 
-        <TabGroup>
-          <TabList className="mb-6">
-            <Tab>Create Vector Store</Tab>
-            <Tab>Manage Vector Stores</Tab>
-            <Tab>Test Vector Store</Tab>
-          </TabList>
+        <Tabs defaultValue="create">
+          <TabsList className="mb-6">
+            <TabsTrigger value="create">Create Vector Store</TabsTrigger>
+            <TabsTrigger value="manage">Manage Vector Stores</TabsTrigger>
+            <TabsTrigger value="test">Test Vector Store</TabsTrigger>
+          </TabsList>
 
-          <TabPanels>
-            {/* Tab 1: Create Vector Store */}
-            <TabPanel>
-              <CreateVectorStore accessToken={accessToken} onSuccess={handleVectorStoreCreated} />
-            </TabPanel>
+          <TabsContent value="create">
+            <CreateVectorStore accessToken={accessToken} onSuccess={handleVectorStoreCreated} />
+          </TabsContent>
 
-            {/* Tab 2: Manage Vector Stores */}
-            <TabPanel>
-              <Button
-                className="mb-4"
-                onClick={() => setIsCreateModalVisible(true)}
-              >
-                + Add Vector Store
-              </Button>
+          <TabsContent value="manage">
+            <Button
+              className="mb-4"
+              onClick={() => setIsCreateModalVisible(true)}
+            >
+              + Add Vector Store
+            </Button>
 
-              <div className="grid grid-cols-1 gap-2 pt-2 pb-2 w-full mt-2">
-                <div className="col-span-1">
-                  <VectorStoreTable
-                    data={vectorStores}
-                    onView={handleView}
-                    onEdit={handleEdit}
-                    onDelete={handleDelete}
-                  />
-                </div>
+            <div className="grid grid-cols-1 gap-2 pt-2 pb-2 w-full mt-2">
+              <div className="col-span-1">
+                <VectorStoreTable
+                  data={vectorStores}
+                  onView={handleView}
+                  onEdit={handleEdit}
+                  onDelete={handleDelete}
+                />
               </div>
-            </TabPanel>
+            </div>
+          </TabsContent>
 
-            {/* Tab 3: Test Vector Store */}
-            <TabPanel>
-              <TestVectorStoreTab accessToken={accessToken} vectorStores={vectorStores} />
-            </TabPanel>
-          </TabPanels>
-        </TabGroup>
+          <TabsContent value="test">
+            <TestVectorStoreTab accessToken={accessToken} vectorStores={vectorStores} />
+          </TabsContent>
+        </Tabs>
 
         {/* Create Vector Store Modal */}
         <VectorStoreForm
