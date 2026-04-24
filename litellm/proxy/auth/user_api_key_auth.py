@@ -801,6 +801,19 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                                 if team_object is not None
                                 else None
                             ),
+                            team_tpm_limit=(
+                                team_object.tpm_limit
+                                if team_object is not None
+                                else None
+                            ),
+                            team_rpm_limit=(
+                                team_object.rpm_limit
+                                if team_object is not None
+                                else None
+                            ),
+                            team_models=(
+                                team_object.models if team_object is not None else []
+                            ),
                             team_metadata=(
                                 team_object.metadata
                                 if team_object is not None
@@ -857,6 +870,11 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                             team_object.metadata if team_object is not None else None
                         ),
                         jwt_claims=jwt_claims,
+                    )
+                    valid_token.team_object_permission = (
+                        team_object.object_permission
+                        if team_object is not None
+                        else None
                     )
 
                     # Check if model has zero cost - if so, skip all budget checks
@@ -1424,6 +1442,11 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                     )
             else:
                 _team_obj = None
+
+            if _team_obj is not None:
+                valid_token.team_object_permission = _team_obj.object_permission
+            else:
+                valid_token.team_object_permission = None
 
             await user_api_key_cache.async_set_cache(
                 key=valid_token.team_id, value=_team_obj

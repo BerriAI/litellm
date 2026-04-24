@@ -130,6 +130,14 @@ class VertexPassthroughLoggingHandler:
                 "kwargs": kwargs,
             }
 
+        elif "embedContent" in url_route or "batchEmbedContents" in url_route:
+            return VertexPassthroughLoggingHandler._handle_embed_content_response(
+                httpx_response=httpx_response,
+                logging_obj=logging_obj,
+                url_route=url_route,
+                kwargs=kwargs,
+                request_body=request_body,
+            )
         elif "predict" in url_route:
             return VertexPassthroughLoggingHandler._handle_predict_response(
                 httpx_response=httpx_response,
@@ -319,6 +327,85 @@ class VertexPassthroughLoggingHandler:
 
         return {
             "result": litellm_prediction_response,
+            "kwargs": kwargs,
+        }
+
+    @staticmethod
+    def _extract_embed_content_input(request_body: Optional[dict], batch: bool) -> str:
+        """Extract raw input text from an :embedContent or :batchEmbedContents request body for token counting."""
+        if not request_body:
+            return ""
+        if batch:
+            texts = []
+            for req in request_body.get("requests", []):
+                for part in req.get("content", {}).get("parts", []):
+                    texts.append(part.get("text", ""))
+            return " ".join(texts)
+        else:
+            parts = request_body.get("content", {}).get("parts", [])
+            return " ".join(part.get("text", "") for part in parts)
+
+    @staticmethod
+    def _handle_embed_content_response(
+        httpx_response: httpx.Response,
+        logging_obj: LiteLLMLoggingObj,
+        url_route: str,
+        kwargs: dict,
+        request_body: Optional[dict] = None,
+    ) -> PassThroughEndpointLoggingTypedDict:
+        """Handle Vertex :embedContent and :batchEmbedContents endpoint responses."""
+        from litellm.llms.vertex_ai.gemini_embeddings.batch_embed_content_transformation import (
+            process_embed_content_response,
+            process_response as process_batch_embed_response,
+        )
+
+        model = VertexPassthroughLoggingHandler.extract_model_from_url(url_route)
+        response_json = httpx_response.json()
+        is_batch = "batchEmbedContents" in url_route
+
+        input_text = VertexPassthroughLoggingHandler._extract_embed_content_input(
+            request_body=request_body, batch=is_batch
+        )
+
+        model_response = litellm.EmbeddingResponse()
+        if is_batch:
+            litellm_embedding_response = process_batch_embed_response(
+                input=input_text,
+                model_response=model_response,
+                model=model,
+                _predictions=response_json,
+            )
+        else:
+            litellm_embedding_response = process_embed_content_response(
+                input=input_text,
+                model_response=model_response,
+                model=model,
+                response_json=response_json,
+            )
+
+        custom_llm_provider = (
+            VertexPassthroughLoggingHandler._get_custom_llm_provider_from_url(url_route)
+        )
+
+        litellm_embedding_response.model = model
+        logging_obj.model = model
+        logging_obj.model_call_details["model"] = model
+        logging_obj.model_call_details["custom_llm_provider"] = custom_llm_provider
+        logging_obj.custom_llm_provider = custom_llm_provider
+
+        response_cost = litellm.completion_cost(
+            completion_response=litellm_embedding_response,
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+        )
+
+        kwargs["response_cost"] = response_cost
+        kwargs["model"] = model
+        kwargs["custom_llm_provider"] = custom_llm_provider
+        logging_obj.model_call_details["response_cost"] = response_cost
+
+        return {
+            "result": litellm_embedding_response,
             "kwargs": kwargs,
         }
 

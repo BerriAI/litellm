@@ -32,41 +32,39 @@ on:
         required: false
         type: boolean
         default: false
+      dist:
+        description: "pytest-xdist distribution mode (loadscope|load|worksteal|loadfile|no)"
+        required: false
+        type: string
+        default: "loadscope"
       artifact-name:
         description: "Unique name for the coverage artifact (must be unique per run)"
         required: false
         type: string
         default: "run"
-    secrets:
-      DATABASE_URL:
-        required: false
-      POSTGRES_USER:
-        required: false
-      POSTGRES_PASSWORD:
-        required: false
 
 permissions:
   contents: read
 
+# The postgres service container below is spawned per-job on localhost and
+# destroyed with the job. Nothing outside the runner can reach it. The
+# user/password/database here are not secrets — they're bootstrap values
+# for a throwaway container — so we hardcode them instead of attaching
+# every matrix shard to a GHA environment just to read three "secrets"
+# (which also produces a "temporarily deployed to …" notification on the
+# PR timeline per shard per push).
 jobs:
   run:
     name: Run tests
     runs-on: ubuntu-latest
     timeout-minutes: ${{ inputs.timeout-minutes }}
-    # Environment is derived from the enable-* flags, not caller-controllable.
-    # This prevents callers from passing arbitrary environment names to bypass secret scoping.
-    environment: >-
-      ${{
-        inputs.enable-postgres && 'integration-postgres' ||
-        ''
-      }}
 
     services:
       postgres:
         image: postgres@sha256:705a5d5b5836f3fcba0d02c4d281e6a7dd9ed2dd4078640f08a1e1e9896e097d # postgres:14
         env:
-          POSTGRES_USER: ${{ secrets.POSTGRES_USER }}
-          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          POSTGRES_USER: litellm
+          POSTGRES_PASSWORD: litellm
           POSTGRES_DB: litellm_test
         ports:
           - 5432:5432
@@ -114,7 +112,7 @@ jobs:
       - name: Run Prisma migrations
         if: ${{ inputs.enable-postgres }}
         env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          DATABASE_URL: "postgresql://litellm:litellm@localhost:5432/litellm_test"
         run: |
           uv run --no-sync prisma db push --schema litellm/proxy/schema.prisma --accept-data-loss
 
@@ -124,7 +122,8 @@ jobs:
           MAX_FAILURES: ${{ inputs.max-failures }}
           WORKERS: ${{ inputs.workers }}
           RERUNS: ${{ inputs.reruns }}
-          DATABASE_URL: ${{ inputs.enable-postgres && secrets.DATABASE_URL || '' }}
+          DIST: ${{ inputs.dist }}
+          DATABASE_URL: ${{ inputs.enable-postgres && 'postgresql://litellm:litellm@localhost:5432/litellm_test' || '' }}
         run: |
           if [ "${WORKERS}" = "0" ]; then
             uv run --no-sync pytest ${TEST_PATH:?} \
@@ -143,7 +142,7 @@ jobs:
               -n "${WORKERS}" \
               --reruns "${RERUNS}" \
               --reruns-delay 1 \
-              --dist=loadscope \
+              --dist="${DIST}" \
               --durations=20 \
               --cov=litellm \
               --cov-report=xml:coverage.xml \
