@@ -1427,14 +1427,27 @@ class JWTAuthManager:
         )
         if not header_team_id or not RouteChecks.is_llm_api_route(route=route):
             return
-        team_object = await get_team_object(
-            team_id=header_team_id,
-            prisma_client=prisma_client,
-            user_api_key_cache=user_api_key_cache,
-            parent_otel_span=parent_otel_span,
-            proxy_logging_obj=proxy_logging_obj,
-            team_id_upsert=jwt_handler.litellm_jwtauth.team_id_upsert,
-        )
+        try:
+            team_object = await get_team_object(
+                team_id=header_team_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                parent_otel_span=parent_otel_span,
+                proxy_logging_obj=proxy_logging_obj,
+                team_id_upsert=jwt_handler.litellm_jwtauth.team_id_upsert,
+            )
+        except Exception as e:
+            # Fall back to pre-PR admin behavior: honor the admin's
+            # authorization but skip team attribution/limits for this
+            # request. Log so operators can find the misconfigured caller.
+            verbose_proxy_logger.warning(
+                "admin x-litellm-team-id=%r on route=%s could not be resolved (%s); "
+                "proceeding with admin access, team context NOT attached.",
+                header_team_id,
+                route,
+                e,
+            )
+            return
         admin_result["team_id"] = header_team_id
         admin_result["team_object"] = team_object
 
