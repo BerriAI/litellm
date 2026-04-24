@@ -178,8 +178,8 @@ class QdrantSemanticCache(BaseCache):
         from litellm._uuid import uuid
 
         # get the prompt
-        messages = kwargs.get("messages") or kwargs.get("message")
-        if not messages:
+        messages = kwargs.get("messages") if "messages" in kwargs else kwargs.get("message")
+        if messages is None:
             print_verbose("No messages provided for semantic caching")
             return
         prompt = get_str_from_messages(messages)
@@ -223,8 +223,8 @@ class QdrantSemanticCache(BaseCache):
         print_verbose(f"sync qdrant semantic-cache get_cache, kwargs: {kwargs}")
 
         # get the messages
-        messages = kwargs.get("messages") or kwargs.get("message")
-        if not messages:
+        messages = kwargs.get("messages") if "messages" in kwargs else kwargs.get("message")
+        if messages is None:
             print_verbose("No messages provided for semantic lookup")
             return
         prompt = get_str_from_messages(messages)
@@ -295,8 +295,8 @@ class QdrantSemanticCache(BaseCache):
         print_verbose(f"async qdrant semantic-cache set_cache, kwargs: {kwargs}")
 
         # get the prompt
-        messages = kwargs.get("messages") or kwargs.get("message")
-        if not messages:
+        messages = kwargs.get("messages") if "messages" in kwargs else kwargs.get("message")
+        if messages is None:
             print_verbose("No messages provided for semantic caching")
             return
         prompt = get_str_from_messages(messages)
@@ -357,8 +357,8 @@ class QdrantSemanticCache(BaseCache):
         from litellm.proxy.proxy_server import llm_model_list, llm_router
 
         # get the messages
-        messages = kwargs.get("messages") or kwargs.get("message")
-        if not messages:
+        messages = kwargs.get("messages") if "messages" in kwargs else kwargs.get("message")
+        if messages is None:
             print_verbose("No messages provided for semantic lookup")
             return
         prompt = get_str_from_messages(messages)
