@@ -3,7 +3,7 @@
 import React from "react";
 import { Form, Select, InputNumber, Input, Tooltip } from "antd";
 import { PlusOutlined, QuestionCircleOutlined } from "@ant-design/icons";
-import { Button } from "@tremor/react";
+import { Button } from "antd";
 
 interface LLMJudgeFieldsProps {
   availableModels: string[];
@@ -135,9 +135,9 @@ const LLMJudgeFields: React.FC<LLMJudgeFieldsProps> = ({ availableModels, form }
                     </Form.Item>
                     <div style={{ marginBottom: 8 }}>
                       <Button
-                        variant="light"
-                        size="xs"
-                        className="text-red-500 hover:text-red-700"
+                        type="text"
+                        danger
+                        size="small"
                         onClick={() => remove(name)}
                       >
                         ×
@@ -155,12 +155,13 @@ const LLMJudgeFields: React.FC<LLMJudgeFieldsProps> = ({ availableModels, form }
                 </div>
               ))}
               <Button
-                variant="secondary"
-                size="sm"
-                className="w-full mt-1"
+                type="dashed"
+                block
+                style={{ marginTop: 4 }}
                 onClick={() => add({ name: "", weight: 0, description: "" })}
+                icon={<PlusOutlined />}
               >
-                <PlusOutlined className="mr-1" /> Add Criterion
+                Add Criterion
               </Button>
               {fields.length > 0 && (
                 <Form.Item shouldUpdate noStyle>
