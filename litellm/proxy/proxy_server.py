@@ -478,6 +478,7 @@ from litellm.proxy.search_endpoints.search_tool_management import (
     router as search_tool_management_router,
 )
 from litellm.proxy.spend_tracking.cloudzero_endpoints import router as cloudzero_router
+from litellm.proxy.spend_tracking.mavvrik_endpoints import router as mavvrik_router
 from litellm.proxy.spend_tracking.spend_management_endpoints import (
     router as spend_management_router,
 )
@@ -6716,6 +6717,49 @@ class ProxyStartupEvent:
                         "Failed to register VantageLogger from DB settings: %s", e
                     )
             await VantageLogger.init_vantage_background_job(scheduler=scheduler)
+
+        ########################################################
+        # Mavvrik Background Job
+        ########################################################
+        from litellm.constants import (
+            MAVVRIK_EXPORT_INTERVAL_MINUTES,
+            MAVVRIK_EXPORT_USAGE_DATA_JOB_NAME,
+        )
+        from litellm.integrations.mavvrik import (
+            Client as MavvrikClient,
+            Orchestrator as MavvrikOrchestrator,
+            Settings as MavvrikSettings,
+            Uploader as MavvrikUploader,
+        )
+
+        settings = MavvrikSettings()
+        if await settings.is_setup():
+            # Skip DB load when credentials come from env vars — avoids raising
+            # if prisma_client is not yet connected at startup.
+            data = {} if settings.has_env_vars else await settings.load()
+            import os as _os
+
+            client = MavvrikClient(
+                api_key=data.get("api_key") or _os.getenv("MAVVRIK_API_KEY", ""),
+                api_endpoint=data.get("api_endpoint")
+                or _os.getenv("MAVVRIK_API_ENDPOINT", ""),
+                connection_id=data.get("connection_id")
+                or _os.getenv("MAVVRIK_CONNECTION_ID", ""),
+            )
+            uploader = MavvrikUploader(client=client)
+            orchestrator = MavvrikOrchestrator(client=client, uploader=uploader)
+            scheduler.add_job(
+                orchestrator.run,
+                "interval",
+                minutes=MAVVRIK_EXPORT_INTERVAL_MINUTES,
+                id=MAVVRIK_EXPORT_USAGE_DATA_JOB_NAME,
+                replace_existing=True,
+            )
+            verbose_proxy_logger.warning(
+                "Mavvrik: background export job scheduled every %d min (connection_id=%s)",
+                MAVVRIK_EXPORT_INTERVAL_MINUTES,
+                client.connection_id,
+            )
 
         ########################################################
         # Prometheus Background Job
@@ -14131,6 +14175,7 @@ app.include_router(customer_router)
 app.include_router(spend_management_router)
 app.include_router(cloudzero_router)
 app.include_router(vantage_router)
+app.include_router(mavvrik_router)
 app.include_router(caching_router)
 app.include_router(analytics_router)
 app.include_router(guardrails_router)
