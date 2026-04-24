@@ -1,0 +1,3 @@
+"""
+Pixverse Video Generation Integration
+"""
