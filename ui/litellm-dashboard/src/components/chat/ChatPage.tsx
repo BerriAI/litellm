@@ -1,9 +1,20 @@
 "use client";
 
 import React, { useCallback, useEffect, useRef, useState, useLayoutEffect } from "react";
-import { Tooltip, Skeleton, Popover } from "antd";
+import { Skeleton } from "@/components/ui/skeleton";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import MessageManager from "@/components/molecules/message_manager";
-import { Settings as SettingOutlined, Plus as PlusOutlined, Pencil as EditOutlined, PanelLeftClose as MenuFoldOutlined, PanelLeft as MenuUnfoldOutlined, Search as SearchOutlined, MessageSquare as MessageOutlined, LayoutGrid as AppstoreOutlined, Key as KeyOutlined, ArrowLeft as ArrowLeftOutlined, ChevronDown as DownOutlined, X as CloseOutlined, Check as CheckOutlined } from "lucide-react";
+import { Settings as SettingOutlined, Plus as PlusOutlined, Pencil as EditOutlined, PanelLeftClose as MenuFoldOutlined, PanelLeft as MenuUnfoldOutlined, Search as SearchOutlined, MessageSquare as MessageOutlined, LayoutGrid as AppstoreOutlined, Key as KeyOutlined, ArrowLeft as ArrowLeftOutlined, ChevronDown as DownOutlined, Check as CheckOutlined } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -583,7 +594,9 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
     active = false,
     kbd?: string,
   ) => (
-    <Tooltip title={sidebarCollapsed ? label : undefined} placement="right" key={label}>
+    <TooltipProvider key={label}>
+      <Tooltip>
+        <TooltipTrigger asChild>
       <button
         onClick={onClick}
         style={{
@@ -617,20 +630,23 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
           </>
         )}
       </button>
-    </Tooltip>
+        </TooltipTrigger>
+        {sidebarCollapsed && (
+          <TooltipContent side="right">{label}</TooltipContent>
+        )}
+      </Tooltip>
+    </TooltipProvider>
   );
 
   // ---- Model selector trigger button ----
   const modelSelectorTrigger = isLoadingModels ? (
-    <Skeleton.Input active style={{ width: 160, height: 28 }} />
+    <Skeleton className="w-40 h-7" />
   ) : (
     <Popover
       open={modelSelectorOpen}
       onOpenChange={(open) => { setModelSelectorOpen(open); if (!open) setModelSearchText(""); }}
-      content={modelSelectorContent}
-      trigger="click"
-      placement="bottomLeft"
     >
+      <PopoverTrigger asChild>
       <button
         style={{
           display: "flex",
@@ -683,6 +699,10 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
         )}
         <DownOutlined style={{ fontSize: 10, color: "#9ca3af", flexShrink: 0, marginLeft: 2 }} />
       </button>
+      </PopoverTrigger>
+      <PopoverContent align="start" className="p-0 w-auto">
+        {modelSelectorContent}
+      </PopoverContent>
     </Popover>
   );
 
@@ -722,32 +742,29 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
         padding: inConversation ? "4px 12px 10px" : "8px 12px 12px",
         borderTop: "1px solid #f3f4f6",
       }}>
-        <Popover
-          open={mcpPopoverOpen}
-          onOpenChange={setMcpPopoverOpen}
-          content={
+        <Popover open={mcpPopoverOpen} onOpenChange={setMcpPopoverOpen}>
+          <PopoverTrigger asChild>
+            <button style={{
+              background: "none", border: "1px solid #d1d5db",
+              borderRadius: 6, padding: "5px 10px",
+              cursor: "pointer", fontSize: 14, color: "#6b7280",
+              display: "flex", alignItems: "center", gap: 4,
+            }}>
+              <PlusOutlined />
+              {selectedMCPServers.length > 0 && (
+                <span style={{ fontSize: 12, color: "#1677ff", fontWeight: 500 }}>
+                  {selectedMCPServers.length}
+                </span>
+              )}
+            </button>
+          </PopoverTrigger>
+          <PopoverContent side="top" align="start" className="p-0 w-auto">
             <MCPConnectPicker
               accessToken={accessToken}
               selectedServers={selectedMCPServers}
               onChange={setSelectedMCPServers}
             />
-          }
-          trigger="click"
-          placement="topLeft"
-        >
-          <button style={{
-            background: "none", border: "1px solid #d1d5db",
-            borderRadius: 6, padding: "5px 10px",
-            cursor: "pointer", fontSize: 14, color: "#6b7280",
-            display: "flex", alignItems: "center", gap: 4,
-          }}>
-            <PlusOutlined />
-            {selectedMCPServers.length > 0 && (
-              <span style={{ fontSize: 12, color: "#1677ff", fontWeight: 500 }}>
-                {selectedMCPServers.length}
-              </span>
-            )}
-          </button>
+          </PopoverContent>
         </Popover>
 
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -834,18 +851,26 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
               </span>
             </div>
           )}
-          <Tooltip title={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"} placement="right">
-            <button
-              onClick={() => setSidebarCollapsed((v) => !v)}
-              style={{
-                background: "none", border: "none", cursor: "pointer",
-                padding: 6, borderRadius: 7, color: "#6b7280", fontSize: 16,
-                display: "flex", alignItems: "center",
-              }}
-            >
-              {sidebarCollapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
-            </button>
-          </Tooltip>
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  onClick={() => setSidebarCollapsed((v) => !v)}
+                  style={{
+                    background: "none", border: "none", cursor: "pointer",
+                    padding: 6, borderRadius: 7, color: "#6b7280", fontSize: 16,
+                    display: "flex", alignItems: "center",
+                  }}
+                  aria-label={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+                >
+                  {sidebarCollapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="right">
+                {sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+              </TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
         </div>
 
         {/* Sidebar nav buttons */}
@@ -861,35 +886,44 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
           {sidebarNavItem(<MessageOutlined />, "Chats", () => setSidebarView("chats"), sidebarView === "chats")}
           {sidebarNavItem(<AppstoreOutlined />, "Apps", () => setSidebarView("apps"), sidebarView === "apps")}
           {sidebarNavItem(<KeyOutlined />, "Credentials", () => setSidebarView("credentials"), sidebarView === "credentials")}
-          <Tooltip title={sidebarCollapsed ? "Back to Developer Console UI" : undefined} placement="right">
-            <a
-              href={dashboardUrl}
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: 10,
-                padding: "8px 10px",
-                width: "100%",
-                borderRadius: 7,
-                color: "#6b7280",
-                textDecoration: "none",
-                fontSize: 14,
-                justifyContent: sidebarCollapsed ? "center" : "flex-start",
-                boxSizing: "border-box",
-              }}
-              onMouseEnter={(e) => {
-                (e.currentTarget as HTMLAnchorElement).style.background = "#f5f5f5";
-              }}
-              onMouseLeave={(e) => {
-                (e.currentTarget as HTMLAnchorElement).style.background = "transparent";
-              }}
-            >
-              <ArrowLeftOutlined style={{ fontSize: 16, flexShrink: 0 }} />
-              {!sidebarCollapsed && (
-                <span>Back to Developer Console UI</span>
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <a
+                  href={dashboardUrl}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 10,
+                    padding: "8px 10px",
+                    width: "100%",
+                    borderRadius: 7,
+                    color: "#6b7280",
+                    textDecoration: "none",
+                    fontSize: 14,
+                    justifyContent: sidebarCollapsed ? "center" : "flex-start",
+                    boxSizing: "border-box",
+                  }}
+                  onMouseEnter={(e) => {
+                    (e.currentTarget as HTMLAnchorElement).style.background = "#f5f5f5";
+                  }}
+                  onMouseLeave={(e) => {
+                    (e.currentTarget as HTMLAnchorElement).style.background = "transparent";
+                  }}
+                >
+                  <ArrowLeftOutlined style={{ fontSize: 16, flexShrink: 0 }} />
+                  {!sidebarCollapsed && (
+                    <span>Back to Developer Console UI</span>
+                  )}
+                </a>
+              </TooltipTrigger>
+              {sidebarCollapsed && (
+                <TooltipContent side="right">
+                  Back to Developer Console UI
+                </TooltipContent>
               )}
-            </a>
-          </Tooltip>
+            </Tooltip>
+          </TooltipProvider>
         </div>
 
         <div style={{ height: 1, background: "#e5e7eb", margin: "4px 8px", flexShrink: 0 }} />
@@ -931,15 +965,23 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
 
           {/* Right: settings */}
           <div style={{ display: "flex", alignItems: "center", gap: 4, flexShrink: 0 }}>
-            <Tooltip title="Settings">
-              <button style={{
-                background: "none", border: "none", cursor: "pointer",
-                padding: 7, borderRadius: 7, color: "#6b7280", fontSize: 16,
-                display: "flex", alignItems: "center",
-              }}>
-                <SettingOutlined />
-              </button>
-            </Tooltip>
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    style={{
+                      background: "none", border: "none", cursor: "pointer",
+                      padding: 7, borderRadius: 7, color: "#6b7280", fontSize: 16,
+                      display: "flex", alignItems: "center",
+                    }}
+                    aria-label="Settings"
+                  >
+                    <SettingOutlined />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent>Settings</TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
           </div>
         </div>
 

@@ -1,20 +1,52 @@
 "use client";
 
 import React, { useState, useEffect, useRef, useCallback } from "react";
+import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { Button } from "@/components/ui/button";
 import {
-  Button,
-  Input,
-  Modal,
-  Popconfirm,
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import {
   Tooltip,
-  Avatar,
-  Typography,
-} from "antd";
-import { Pencil as EditOutlined, Trash2 as DeleteOutlined, Plus as PlusOutlined, Search as SearchOutlined, User as UserOutlined, MessageSquare as MessageOutlined } from "lucide-react";
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import {
+  Pencil as EditOutlined,
+  Trash2 as DeleteOutlined,
+  Plus as PlusOutlined,
+  Search as SearchOutlined,
+  User as UserOutlined,
+  MessageSquare as MessageOutlined,
+} from "lucide-react";
 import dayjs from "dayjs";
 import { Conversation } from "./types";
 
-const { Text } = Typography;
+const Text = ({
+  className,
+  style,
+  children,
+  title,
+}: {
+  className?: string;
+  style?: React.CSSProperties;
+  children?: React.ReactNode;
+  title?: string;
+}) => (
+  <span className={className} style={style} title={title}>
+    {children}
+  </span>
+);
 
 interface Props {
   conversations: Conversation[];
@@ -59,6 +91,51 @@ const groupConversations = (conversations: Conversation[]): GroupedConversations
     group: g,
     items: map.get(g)!,
   }));
+};
+
+// ---- Delete confirmation popover (replaces antd Popconfirm) ----
+
+const DeleteConfirmPopover: React.FC<{ onConfirm: () => void }> = ({
+  onConfirm,
+}) => {
+  const [open, setOpen] = useState(false);
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button
+          variant="ghost"
+          size="sm"
+          aria-label="Delete"
+          className="h-[22px] w-[22px] p-0 min-w-[22px] text-destructive hover:text-destructive"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <DeleteOutlined className="h-3 w-3" />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent
+        className="w-56"
+        align="end"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <p className="text-sm mb-3">Delete this conversation?</p>
+        <div className="flex justify-end gap-2">
+          <Button variant="outline" size="sm" onClick={() => setOpen(false)}>
+            Cancel
+          </Button>
+          <Button
+            variant="destructive"
+            size="sm"
+            onClick={() => {
+              setOpen(false);
+              onConfirm();
+            }}
+          >
+            Delete
+          </Button>
+        </div>
+      </PopoverContent>
+    </Popover>
+  );
 };
 
 // ---- Single conversation row ----
@@ -149,16 +226,13 @@ const ConversationRow: React.FC<ConversationRowProps> = ({
     >
       {editing ? (
         <Input
-          ref={(node) => {
-            inputRef.current = node?.input ?? null;
-          }}
-          size="small"
+          ref={inputRef}
           value={editValue}
           onChange={(e) => setEditValue(e.target.value)}
           onKeyDown={handleKeyDown}
           onBlur={commitRename}
           onClick={(e) => e.stopPropagation()}
-          style={{ flex: 1, fontSize: 13 }}
+          className="flex-1 h-7 text-[13px]"
         />
       ) : (
         <>
@@ -189,32 +263,23 @@ const ConversationRow: React.FC<ConversationRowProps> = ({
             }}
             onClick={(e) => e.stopPropagation()}
           >
-            <Tooltip title="Rename">
-              <Button
-                type="text"
-                size="small"
-                icon={<EditOutlined style={{ fontSize: 12 }} />}
-                onClick={startEditing}
-                style={{ width: 22, height: 22, padding: 0, minWidth: 22 }}
-              />
-            </Tooltip>
-            <Popconfirm
-              title="Delete this conversation?"
-              onConfirm={() => onDelete(conv.id)}
-              okText="Delete"
-              cancelText="Cancel"
-              okButtonProps={{ danger: true }}
-            >
-              <Tooltip title="Delete">
-                <Button
-                  type="text"
-                  size="small"
-                  danger
-                  icon={<DeleteOutlined style={{ fontSize: 12 }} />}
-                  style={{ width: 22, height: 22, padding: 0, minWidth: 22 }}
-                />
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={startEditing}
+                    aria-label="Rename"
+                    className="h-[22px] w-[22px] p-0 min-w-[22px]"
+                  >
+                    <EditOutlined className="h-3 w-3" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Rename</TooltipContent>
               </Tooltip>
-            </Popconfirm>
+            </TooltipProvider>
+            <DeleteConfirmPopover onConfirm={() => onDelete(conv.id)} />
           </div>
         </>
       )}
@@ -255,67 +320,51 @@ const SearchModal: React.FC<SearchModalProps> = ({
   };
 
   return (
-    <Modal
-      open={open}
-      onCancel={onClose}
-      footer={null}
-      title={null}
-      width={480}
-      styles={{ body: { padding: "16px 16px 8px" } }}
-    >
-      <Input
-        autoFocus
-        prefix={<SearchOutlined style={{ color: "#bbb" }} />}
-        placeholder="Search conversations…"
-        value={query}
-        onChange={(e) => setQuery(e.target.value)}
-        style={{ marginBottom: 12 }}
-        allowClear
-      />
+    <Dialog open={open} onOpenChange={(o) => (!o ? onClose() : undefined)}>
+      <DialogContent className="sm:max-w-[480px] p-4">
+        <DialogHeader className="sr-only">
+          <DialogTitle>Search conversations</DialogTitle>
+        </DialogHeader>
+        <div className="relative mb-3">
+          <SearchOutlined className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+          <Input
+            autoFocus
+            placeholder="Search conversations…"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            className="pl-9"
+          />
+        </div>
 
-      <div style={{ maxHeight: 320, overflowY: "auto" }}>
-        {filtered.length === 0 ? (
-          <div style={{ textAlign: "center", padding: "24px 0", color: "#999" }}>
-            No conversations found
-          </div>
-        ) : (
-          filtered.map((conv) => {
-            const truncated =
-              conv.title.length > 55 ? conv.title.slice(0, 55) + "…" : conv.title;
-            return (
-              <div
-                key={conv.id}
-                onClick={() => handleSelect(conv.id)}
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 8,
-                  padding: "8px 10px",
-                  borderRadius: 6,
-                  cursor: "pointer",
-                  transition: "background-color 0.1s",
-                }}
-                onMouseEnter={(e) => {
-                  (e.currentTarget as HTMLDivElement).style.backgroundColor = "#f0f5ff";
-                }}
-                onMouseLeave={(e) => {
-                  (e.currentTarget as HTMLDivElement).style.backgroundColor = "transparent";
-                }}
-              >
-                <MessageOutlined style={{ color: "#999", flexShrink: 0 }} />
-                <Text style={{ fontSize: 13 }}>{truncated}</Text>
-                <Text
-                  type="secondary"
-                  style={{ fontSize: 11, marginLeft: "auto", flexShrink: 0 }}
+        <div style={{ maxHeight: 320, overflowY: "auto" }}>
+          {filtered.length === 0 ? (
+            <div className="text-center py-6 text-muted-foreground">
+              No conversations found
+            </div>
+          ) : (
+            filtered.map((conv) => {
+              const truncated =
+                conv.title.length > 55
+                  ? conv.title.slice(0, 55) + "…"
+                  : conv.title;
+              return (
+                <div
+                  key={conv.id}
+                  onClick={() => handleSelect(conv.id)}
+                  className="flex items-center gap-2 px-3 py-2 rounded-md cursor-pointer hover:bg-accent"
                 >
-                  {dayjs(conv.updatedAt).format("MMM D")}
-                </Text>
-              </div>
-            );
-          })
-        )}
-      </div>
-    </Modal>
+                  <MessageOutlined className="h-4 w-4 text-muted-foreground flex-shrink-0" />
+                  <Text style={{ fontSize: 13 }}>{truncated}</Text>
+                  <span className="ml-auto flex-shrink-0 text-xs text-muted-foreground">
+                    {dayjs(conv.updatedAt).format("MMM D")}
+                  </span>
+                </div>
+              );
+            })
+          )}
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 };
 
@@ -366,19 +415,23 @@ const ConversationList: React.FC<Props> = ({
       >
         {/* Top: New Chat button */}
         <div style={{ padding: "12px 10px 8px" }}>
-          <Tooltip
-            title="Chats are saved locally in this browser. All requests are logged in Spend → Logs."
-            placement="right"
-          >
-            <Button
-              type="primary"
-              icon={<PlusOutlined />}
-              onClick={onNewChat}
-              style={{ width: "100%" }}
-            >
-              New Chat
-            </Button>
-          </Tooltip>
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  onClick={onNewChat}
+                  className="w-full"
+                >
+                  <PlusOutlined className="mr-2 h-4 w-4" />
+                  New Chat
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="right">
+                Chats are saved locally in this browser. All requests are
+                logged in Spend → Logs.
+              </TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
         </div>
 
         {/* Conversation list (scrollable) */}
@@ -443,11 +496,14 @@ const ConversationList: React.FC<Props> = ({
             gap: 8,
           }}
         >
-          <Avatar
-            size={28}
-            icon={<UserOutlined />}
-            style={{ backgroundColor: "#e0e7ff", color: "#4f46e5", flexShrink: 0 }}
-          />
+          <Avatar className="h-7 w-7 flex-shrink-0">
+            <AvatarFallback
+              // eslint-disable-next-line litellm-ui/no-raw-tailwind-colors
+              className="bg-indigo-100 text-indigo-600"
+            >
+              <UserOutlined className="h-3.5 w-3.5" />
+            </AvatarFallback>
+          </Avatar>
           <Text
             style={{
               fontSize: 13,

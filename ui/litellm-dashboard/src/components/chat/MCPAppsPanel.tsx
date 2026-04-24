@@ -1,8 +1,32 @@
 "use client";
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { Spin, Input, Button, Skeleton } from "antd";
-import { Search as SearchOutlined, ArrowLeft as ArrowLeftOutlined, ChevronRight as RightOutlined, Wrench as ToolOutlined, CheckCircle2 as CheckCircleOutlined } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Skeleton } from "@/components/ui/skeleton";
+import {
+  Search as SearchOutlined,
+  ArrowLeft as ArrowLeftOutlined,
+  ChevronRight as RightOutlined,
+  Wrench as ToolOutlined,
+  CheckCircle2 as CheckCircleOutlined,
+  LoaderCircle,
+} from "lucide-react";
+
+const Spin = ({
+  size,
+  style,
+}: {
+  size?: "small" | "default" | "large";
+  style?: React.CSSProperties;
+}) => (
+  <LoaderCircle
+    style={style}
+    className={`animate-spin ${
+      size === "small" ? "w-3 h-3" : size === "large" ? "w-6 h-6" : "w-4 h-4"
+    } text-muted-foreground`}
+  />
+);
 import { deleteMCPOAuthUserCredential, fetchMCPServers, getMCPOAuthUserCredentialStatus, listMCPTools } from "../networking";
 import { AUTH_TYPE, MCPServer, MCPTool, handleTransport } from "../mcp_tools/types";
 import MessageManager from "@/components/molecules/message_manager";
@@ -37,12 +61,18 @@ const OAuth2ConnectButton: React.FC<OAuth2ConnectButtonProps> = ({
   if (variant === "button") {
     return (
       <Button
-        type="primary"
-        loading={loading}
         onClick={startOAuthFlow}
+        disabled={loading}
         style={{ borderRadius: 8, fontWeight: 600, height: 38, minWidth: 110 }}
       >
-        {loading ? "Connecting…" : "Connect"}
+        {loading ? (
+          <>
+            <LoaderCircle className="mr-2 h-4 w-4 animate-spin" />
+            Connecting…
+          </>
+        ) : (
+          "Connect"
+        )}
       </Button>
     );
   }
@@ -310,8 +340,7 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange 
           {detailServer.auth_type === AUTH_TYPE.OAUTH2 ? (
             oauthConnected.has(detailServer.server_id) ? (
               <Button
-                type="default"
-                danger
+                variant="destructive"
                 onClick={async () => {
                   try {
                     await deleteMCPOAuthUserCredential(accessToken, detailServer.server_id);
@@ -337,12 +366,21 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange 
             )
           ) : (
             <Button
-              type={isConnected ? "default" : "primary"}
-              loading={isTogglingOn}
+              variant={isConnected ? "outline" : "default"}
+              disabled={isTogglingOn}
               onClick={() => handleToggle(name, !isConnected, detailServer.server_id)}
               style={{ borderRadius: 8, fontWeight: 600, height: 38, minWidth: 110 }}
             >
-              {isConnected ? "Disconnect" : "Connect"}
+              {isTogglingOn ? (
+                <>
+                  <LoaderCircle className="mr-2 h-4 w-4 animate-spin" />
+                  {isConnected ? "Disconnecting…" : "Connecting…"}
+                </>
+              ) : isConnected ? (
+                "Disconnect"
+              ) : (
+                "Connect"
+              )}
             </Button>
           )}
         </div>
@@ -439,15 +477,28 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange 
             ) : null}
           </div>
         </div>
-        <Input
-          prefix={<SearchOutlined style={{ color: "#9ca3af", fontSize: 13 }} />}
-          placeholder="Search servers..."
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          allowClear
-          style={{ width: 220, borderRadius: 8, fontSize: 13 }}
-          size="middle"
-        />
+        <div className="relative w-[220px]">
+          <SearchOutlined
+            // eslint-disable-next-line litellm-ui/no-raw-tailwind-colors
+            className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-gray-400"
+          />
+          <Input
+            placeholder="Search servers..."
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            className="pl-9 pr-8 h-9 text-[13px] rounded-lg"
+          />
+          {query && (
+            <button
+              type="button"
+              onClick={() => setQuery("")}
+              className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground text-xs"
+              aria-label="Clear"
+            >
+              ×
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Tabs */}
@@ -545,7 +596,7 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange 
                         </span>
                       ) : null
                     ) : loadingCounts ? (
-                      <Skeleton.Input active size="small" style={{ width: 28, height: 12, minWidth: 28, flexShrink: 0 }} />
+                      <Skeleton className="w-7 h-3 flex-shrink-0" />
                     ) : null}
                   </div>
                 </div>

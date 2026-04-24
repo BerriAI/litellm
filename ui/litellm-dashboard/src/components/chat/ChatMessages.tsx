@@ -1,7 +1,23 @@
 "use client";
 
-import { Wrench as ToolOutlined, Copy as CopyOutlined, Check as CheckOutlined, Pencil as EditOutlined } from "lucide-react";
-import { Collapse, Tooltip } from "antd";
+import {
+  Wrench as ToolOutlined,
+  Copy as CopyOutlined,
+  Check as CheckOutlined,
+  Pencil as EditOutlined,
+} from "lucide-react";
+import {
+  Accordion,
+  AccordionContent,
+  AccordionItem,
+  AccordionTrigger,
+} from "@/components/ui/accordion";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import React, { useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -10,8 +26,6 @@ import { coy } from "react-syntax-highlighter/dist/esm/styles/prism";
 import ReasoningContent from "../playground/chat_ui/ReasoningContent";
 import MCPEventsDisplay from "../playground/chat_ui/MCPEventsDisplay";
 import { ChatMessage } from "./types";
-
-const { Panel } = Collapse;
 
 // Keys whose values must be redacted in tool args display
 const REDACTED_KEY_PATTERNS = /token|key|secret|password|auth/i;
@@ -194,22 +208,41 @@ function UserBubble({ message, onEdit, isStreaming }: UserBubbleProps) {
       <div style={{ display: "flex", alignItems: "flex-end", gap: 6, maxWidth: "72%" }}>
         {/* Edit button — appears on hover, to the left of the bubble */}
         {hovered && !isStreaming && onEdit && (
-          <Tooltip title="Edit message">
-            <button
-              onClick={() => { setEditValue(message.content); setEditing(true); }}
-              style={{
-                background: "none", border: "none", cursor: "pointer",
-                padding: "4px 6px", borderRadius: 5,
-                color: "#9ca3af", fontSize: 13, flexShrink: 0,
-                display: "flex", alignItems: "center",
-                transition: "color 0.15s",
-              }}
-              onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.color = "#6b7280"; }}
-              onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.color = "#9ca3af"; }}
-            >
-              <EditOutlined />
-            </button>
-          </Tooltip>
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  onClick={() => {
+                    setEditValue(message.content);
+                    setEditing(true);
+                  }}
+                  style={{
+                    background: "none",
+                    border: "none",
+                    cursor: "pointer",
+                    padding: "4px 6px",
+                    borderRadius: 5,
+                    color: "#9ca3af",
+                    fontSize: 13,
+                    flexShrink: 0,
+                    display: "flex",
+                    alignItems: "center",
+                    transition: "color 0.15s",
+                  }}
+                  onMouseEnter={(e) => {
+                    (e.currentTarget as HTMLButtonElement).style.color = "#6b7280";
+                  }}
+                  onMouseLeave={(e) => {
+                    (e.currentTarget as HTMLButtonElement).style.color = "#9ca3af";
+                  }}
+                  aria-label="Edit message"
+                >
+                  <EditOutlined className="h-3.5 w-3.5" />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent>Edit message</TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
         )}
         <div
           style={{
@@ -348,32 +381,40 @@ function CopyButton({ text }: { text: string }) {
 
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 4, marginTop: 6 }}>
-      <Tooltip title={copied ? "Copied!" : "Copy"}>
-        <button
-          onClick={handleCopy}
-          style={{
-            background: "none",
-            border: "none",
-            cursor: "pointer",
-            padding: "4px 6px",
-            borderRadius: 5,
-            color: copied ? "#52c41a" : "#9ca3af",
-            fontSize: 13,
-            display: "flex",
-            alignItems: "center",
-            gap: 4,
-            transition: "color 0.15s",
-          }}
-          onMouseEnter={(e) => {
-            if (!copied) (e.currentTarget as HTMLButtonElement).style.color = "#6b7280";
-          }}
-          onMouseLeave={(e) => {
-            if (!copied) (e.currentTarget as HTMLButtonElement).style.color = "#9ca3af";
-          }}
-        >
-          {copied ? <CheckOutlined /> : <CopyOutlined />}
-        </button>
-      </Tooltip>
+      <TooltipProvider>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button
+              onClick={handleCopy}
+              style={{
+                background: "none",
+                border: "none",
+                cursor: "pointer",
+                padding: "4px 6px",
+                borderRadius: 5,
+                color: copied ? "#52c41a" : "#9ca3af",
+                fontSize: 13,
+                display: "flex",
+                alignItems: "center",
+                gap: 4,
+                transition: "color 0.15s",
+              }}
+              onMouseEnter={(e) => {
+                if (!copied)
+                  (e.currentTarget as HTMLButtonElement).style.color = "#6b7280";
+              }}
+              onMouseLeave={(e) => {
+                if (!copied)
+                  (e.currentTarget as HTMLButtonElement).style.color = "#9ca3af";
+              }}
+              aria-label={copied ? "Copied!" : "Copy"}
+            >
+              {copied ? <CheckOutlined className="h-3.5 w-3.5" /> : <CopyOutlined className="h-3.5 w-3.5" />}
+            </button>
+          </TooltipTrigger>
+          <TooltipContent>{copied ? "Copied!" : "Copy"}</TooltipContent>
+        </Tooltip>
+      </TooltipProvider>
     </div>
   );
 }
@@ -445,25 +486,32 @@ function ToolCard({ message }: ToolCardProps) {
 
   return (
     <div style={{ maxWidth: "80%" }}>
-      <Collapse
-        size="small"
+      <Accordion
+        type="single"
+        collapsible
         style={{
           backgroundColor: "#fafafa",
           border: "1px solid #e5e7eb",
           borderRadius: 8,
         }}
       >
-        <Panel
-          header={
-            <span style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13 }}>
-              <ToolOutlined style={{ color: "#6b7280" }} />
+        <AccordionItem value="tool" className="border-0">
+          <AccordionTrigger className="px-3 py-2 hover:no-underline">
+            <span
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 6,
+                fontSize: 13,
+              }}
+            >
+              <ToolOutlined className="h-3.5 w-3.5 text-muted-foreground" />
               <span style={{ color: "#374151", fontWeight: 500 }}>
                 {message.toolName ?? "Tool call"}
               </span>
             </span>
-          }
-          key="tool"
-        >
+          </AccordionTrigger>
+          <AccordionContent className="px-3 pb-3">
           {redactedArgs !== undefined && (
             <div style={{ marginBottom: message.toolResult ? 12 : 0 }}>
               <div
@@ -525,8 +573,9 @@ function ToolCard({ message }: ToolCardProps) {
               </div>
             </div>
           )}
-        </Panel>
-      </Collapse>
+          </AccordionContent>
+        </AccordionItem>
+      </Accordion>
       <div style={{ fontSize: 11, color: "#9ca3af", marginTop: 4 }}>
         {formatTimestamp(message.timestamp)}
       </div>

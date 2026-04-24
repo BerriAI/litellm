@@ -152,6 +152,7 @@
         "src/components/playground/chat_ui/AgentBuilderView.tsx",
         "src/components/playground/chat_ui/RealtimePlayground.tsx",
         "src/components/playground/compareUI/CompareUI.tsx",
+        "src/components/chat/ChatMessages.tsx",
         "src/components/DeletedKeysPage/DeletedKeysPage.tsx",
         "src/components/DeletedTeamsPage/DeletedTeamsPage.tsx",
         "src/components/molecules/models/columns.tsx",
