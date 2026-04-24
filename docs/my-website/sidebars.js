@@ -460,7 +460,7 @@ const sidebars = {
           label: "All Endpoints (Swagger)",
           href: "https://litellm-api.up.railway.app/",
         },
-        "proxy/enterprise",
+        "enterprise",
         {
           type: "category",
           label: "Authentication",

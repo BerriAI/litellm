@@ -12,7 +12,7 @@
 
 :::tip
 
-[BETA] AWS Key Management v2 is on the enterprise tier. Go [here for docs](../proxy/enterprise.md#beta-aws-key-manager---key-decryption)
+[BETA] AWS Key Management v2 is on the enterprise tier. Go [here for docs](../enterprise.md#beta-aws-key-manager--key-decryption)
 
 :::
 

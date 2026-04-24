@@ -1,4 +1,8 @@
-# [Beta] Project Management
+# ✨ Project Management
+
+:::info
+Project Management is an Enterprise Feature - [get in touch with us](https://enterprise.litellm.ai/demo).
+:::
 
 Projects in LiteLLM sit between teams and keys in the organizational hierarchy, enabling fine-grained access control and budget management for specific use cases or applications.
 
