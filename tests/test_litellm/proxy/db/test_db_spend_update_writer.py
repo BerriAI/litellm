@@ -30,10 +30,11 @@ async def test_daily_spend_tracking_with_disabled_spend_logs():
     db_writer.add_spend_log_transaction_to_daily_user_transaction = AsyncMock()
 
     # Mock the imported modules/variables
-    with patch("litellm.proxy.proxy_server.disable_spend_logs", True), patch(
-        "litellm.proxy.proxy_server.prisma_client", MagicMock()
-    ), patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()), patch(
-        "litellm.proxy.proxy_server.litellm_proxy_budget_name", "test-budget"
+    with (
+        patch("litellm.proxy.proxy_server.disable_spend_logs", True),
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
+        patch("litellm.proxy.proxy_server.litellm_proxy_budget_name", "test-budget"),
     ):
         # Test data
         test_data = {
@@ -642,6 +643,81 @@ async def test_commit_spend_updates_to_db_increments_agent_spend():
 
 
 @pytest.mark.asyncio
+async def test_commit_spend_updates_to_db_increments_team_member_spend_and_total_spend():
+    """
+    Verify that _commit_spend_updates_to_db increments BOTH spend (cycle-scoped)
+    and total_spend (non-resetting) on LiteLLM_TeamMembership in a single
+    update_many call, using the same response_cost.
+    """
+    db_writer = DBSpendUpdateWriter()
+
+    mock_batcher = MagicMock()
+    mock_batcher.litellm_verificationtoken = MagicMock()
+    mock_batcher.litellm_verificationtoken.update_many = MagicMock()
+    mock_batcher.litellm_usertable = MagicMock()
+    mock_batcher.litellm_usertable.update_many = MagicMock()
+    mock_batcher.litellm_teamtable = MagicMock()
+    mock_batcher.litellm_teamtable.update_many = MagicMock()
+    mock_batcher.litellm_teammembership = MagicMock()
+    mock_batcher.litellm_teammembership.update_many = MagicMock()
+    mock_batcher.litellm_organizationtable = MagicMock()
+    mock_batcher.litellm_organizationtable.update_many = MagicMock()
+    mock_batcher.litellm_tagtable = MagicMock()
+    mock_batcher.litellm_tagtable.update_many = MagicMock()
+    mock_batcher.litellm_agentstable = MagicMock()
+    mock_batcher.litellm_agentstable.update_many = MagicMock()
+
+    mock_transaction = AsyncMock()
+    mock_transaction.__aenter__ = AsyncMock(return_value=mock_transaction)
+    mock_transaction.__aexit__ = AsyncMock(return_value=False)
+    mock_transaction.batch_ = MagicMock(
+        return_value=AsyncMock(
+            __aenter__=AsyncMock(return_value=mock_batcher),
+            __aexit__=AsyncMock(return_value=False),
+        )
+    )
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db = MagicMock()
+    mock_prisma_client.db.tx = MagicMock(return_value=mock_transaction)
+
+    mock_proxy_logging = MagicMock()
+    # Skip team-membership cache invalidation — out of scope for this test.
+    mock_proxy_logging.call_details.get = MagicMock(return_value=None)
+
+    team_id = "team-abc"
+    user_id = "user-xyz"
+    response_cost = 0.75
+    entity_id = f"team_id::{team_id}::user_id::{user_id}"
+    db_spend_update_transactions = {
+        "user_list_transactions": {},
+        "end_user_list_transactions": {},
+        "key_list_transactions": {},
+        "team_list_transactions": {},
+        "team_member_list_transactions": {entity_id: response_cost},
+        "org_list_transactions": {},
+        "tag_list_transactions": {},
+        "agent_list_transactions": {},
+    }
+
+    with patch("litellm.proxy.utils._raise_failed_update_spend_exception"):
+        await db_writer._commit_spend_updates_to_db(
+            prisma_client=mock_prisma_client,
+            n_retry_times=0,
+            proxy_logging_obj=mock_proxy_logging,
+            db_spend_update_transactions=db_spend_update_transactions,
+        )
+
+    mock_batcher.litellm_teammembership.update_many.assert_called_once()
+    call_kwargs = mock_batcher.litellm_teammembership.update_many.call_args[1]
+    assert call_kwargs["where"] == {"team_id": team_id, "user_id": user_id}
+    assert call_kwargs["data"] == {
+        "spend": {"increment": response_cost},
+        "total_spend": {"increment": response_cost},
+    }
+
+
+@pytest.mark.asyncio
 async def test_add_spend_log_transaction_to_daily_tag_transaction_with_request_id():
     """
     Test that add_spend_log_transaction_to_daily_tag_transaction correctly processes request_id.
@@ -1230,13 +1306,15 @@ async def test_update_database_creates_single_task():
     db_writer._insert_spend_log_to_db = AsyncMock()
     db_writer._batch_database_updates = AsyncMock()
 
-    with patch("litellm.proxy.proxy_server.disable_spend_logs", False), patch(
-        "litellm.proxy.proxy_server.prisma_client", MagicMock()
-    ), patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()), patch(
-        "litellm.proxy.proxy_server.litellm_proxy_budget_name", "test-budget"
-    ), patch(
-        "litellm.proxy.db.db_spend_update_writer.asyncio.create_task"
-    ) as mock_create_task:
+    with (
+        patch("litellm.proxy.proxy_server.disable_spend_logs", False),
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
+        patch("litellm.proxy.proxy_server.litellm_proxy_budget_name", "test-budget"),
+        patch(
+            "litellm.proxy.db.db_spend_update_writer.asyncio.create_task"
+        ) as mock_create_task,
+    ):
         await db_writer.update_database(
             token="test-token",
             user_id="test-user",
@@ -1354,13 +1432,15 @@ async def test_daily_agent_receives_deepcopied_payload():
     }
     original_payload_ref["obj"] = fake_payload  # store reference to the original
 
-    with patch("litellm.proxy.proxy_server.disable_spend_logs", True), patch(
-        "litellm.proxy.proxy_server.prisma_client", MagicMock()
-    ), patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()), patch(
-        "litellm.proxy.proxy_server.litellm_proxy_budget_name", "test-budget"
-    ), patch(
-        "litellm.proxy.spend_tracking.spend_tracking_utils.get_logging_payload",
-        return_value=fake_payload,
+    with (
+        patch("litellm.proxy.proxy_server.disable_spend_logs", True),
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
+        patch("litellm.proxy.proxy_server.litellm_proxy_budget_name", "test-budget"),
+        patch(
+            "litellm.proxy.spend_tracking.spend_tracking_utils.get_logging_payload",
+            return_value=fake_payload,
+        ),
     ):
         await db_writer.update_database(
             token="test-token",
@@ -1398,8 +1478,8 @@ async def test_commit_spend_updates_uses_pipeline():
     mock_redis_update_buffer = AsyncMock()
     mock_redis_update_buffer.store_in_memory_spend_updates_in_redis = AsyncMock()
     # Return all-None tuple (no data to commit)
-    mock_redis_update_buffer.get_all_transactions_from_redis_buffer_pipeline = AsyncMock(
-        return_value=(None, None, None, None, None, None, None)
+    mock_redis_update_buffer.get_all_transactions_from_redis_buffer_pipeline = (
+        AsyncMock(return_value=(None, None, None, None, None, None, None))
     )
     db_writer.redis_update_buffer = mock_redis_update_buffer
 
