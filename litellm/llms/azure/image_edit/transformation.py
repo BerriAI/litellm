@@ -3,6 +3,7 @@ from typing import Optional, cast
 import httpx
 
 import litellm
+from litellm.llms.azure.common_utils import BaseAzureLLM
 from litellm.llms.openai.image_edit.transformation import OpenAIImageEditConfig
 from litellm.secret_managers.main import get_secret_str
 from litellm.utils import _add_path_to_api_base
@@ -57,11 +58,20 @@ class AzureImageEditConfig(OpenAIImageEditConfig):
             raise ValueError(
                 f"api_base is required for Azure AI Studio. Please set the api_base parameter. Passed `api_base={api_base}`"
             )
-        original_url = httpx.URL(api_base)
 
         # Extract api_version or use default
         api_version = cast(Optional[str], litellm_params.get("api_version"))
 
+        if BaseAzureLLM._is_azure_v1_api_version(api_version):
+            # V1 unified endpoint: /openai/v1/images/edits (model in request body, no deployment path)
+            return BaseAzureLLM._get_base_azure_url(
+                api_base=api_base,
+                litellm_params=litellm_params,
+                route="/openai/images/edits",
+            )
+
+        original_url = httpx.URL(api_base)
+ 
         # Create a new dictionary with existing params
         query_params = dict(original_url.params)
 
