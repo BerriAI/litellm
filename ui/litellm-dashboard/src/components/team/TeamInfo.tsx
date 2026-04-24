@@ -15,7 +15,6 @@ import {
   teamUpdateCall,
 } from "@/components/networking";
 import { useGuardrails } from "@/app/(dashboard)/hooks/guardrails/useGuardrails";
-import { formatBudgetReset } from "@/utils/budgetUtils";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { mapEmptyStringToNull } from "@/utils/keyUpdateUtils";
 import { isProxyAdminRole } from "@/utils/roles";
@@ -71,7 +70,6 @@ export interface TeamMembership {
     rpm_limit: number | null;
     model_max_budget: Record<string, number> | null;
     budget_duration: string | null;
-    budget_reset_at: string | null;
     allowed_models?: string[] | null;
   };
 }
@@ -122,7 +120,6 @@ export interface TeamData {
     team_member_budget_table: {
       max_budget: number;
       budget_duration: string;
-      budget_reset_at: string | null;
       tpm_limit: number | null;
       rpm_limit: number | null;
     } | null;
@@ -735,21 +732,12 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     <Text>
                       of {info.max_budget === null ? "Unlimited" : `$${formatNumberWithCommas(info.max_budget, 4)}`}
                     </Text>
-                    {formatBudgetReset(info.budget_reset_at) && (
-                      <Text className="text-gray-500">Resets {formatBudgetReset(info.budget_reset_at)}</Text>
-                    )}
+                    {info.budget_duration && <Text className="text-gray-500">Reset: {info.budget_duration}</Text>}
                     <br />
                     {info.team_member_budget_table && (
-                      <>
-                        <Text className="text-gray-500">
-                          Team Member Budget: ${formatNumberWithCommas(info.team_member_budget_table.max_budget, 4)}
-                        </Text>
-                        {formatBudgetReset(info.team_member_budget_table.budget_reset_at) && (
-                          <Text className="text-gray-500">
-                            Member budgets reset {formatBudgetReset(info.team_member_budget_table.budget_reset_at)}
-                          </Text>
-                        )}
-                      </>
+                      <Text className="text-gray-500">
+                        Team Member Budget: ${formatNumberWithCommas(info.team_member_budget_table.max_budget, 4)}
+                      </Text>
                     )}
                   </div>
                 </Card>
