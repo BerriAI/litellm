@@ -1499,6 +1499,174 @@ async def test_auth_builder_uses_team_from_header_e2e():
 
 
 @pytest.mark.asyncio
+async def test_auth_builder_admin_on_llm_route_honors_team_header():
+    """JWT proxy_admin + x-litellm-team-id on an LLM API route -> team context is
+    attached to the admin result so team TPM/RPM limits and attribution apply."""
+    from litellm.caching import DualCache
+    from litellm.proxy.utils import ProxyLogging
+
+    jwt_handler = JWTHandler()
+    user_api_key_cache = DualCache()
+    jwt_handler.update_environment(
+        prisma_client=None,
+        user_api_key_cache=user_api_key_cache,
+        litellm_jwtauth=LiteLLM_JWTAuth(
+            team_ids_jwt_field="groups",
+            user_id_jwt_field="sub",
+            admin_allowed_routes=[
+                "management_routes",
+                "info_routes",
+                "openai_routes",
+            ],
+        ),
+    )
+
+    team_object = LiteLLM_TeamTable(team_id="team-low", tpm_limit=100, rpm_limit=2)
+
+    with (
+        patch.object(jwt_handler, "auth_jwt", new_callable=AsyncMock) as mock_auth_jwt,
+        patch.object(JWTAuthManager, "check_rbac_role", new_callable=AsyncMock),
+        patch.object(jwt_handler, "is_admin", return_value=True),
+        patch(
+            "litellm.proxy.auth.handle_jwt.get_team_object", new_callable=AsyncMock
+        ) as mock_get_team,
+    ):
+        mock_auth_jwt.return_value = {
+            "sub": "admin-user",
+            "scope": "",
+            "groups": [],
+        }
+        mock_get_team.return_value = team_object
+
+        result = await JWTAuthManager.auth_builder(
+            api_key="jwt-token",
+            jwt_handler=jwt_handler,
+            request_data={"model": "gpt-4"},
+            general_settings={},
+            route="/chat/completions",
+            prisma_client=None,
+            user_api_key_cache=user_api_key_cache,
+            parent_otel_span=None,
+            proxy_logging_obj=ProxyLogging(user_api_key_cache=user_api_key_cache),
+            request_headers={"x-litellm-team-id": "team-low"},
+        )
+
+        assert result["is_proxy_admin"] is True
+        assert result["team_id"] == "team-low"
+        assert result["team_object"] == team_object
+        mock_get_team.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_auth_builder_admin_on_mgmt_route_ignores_team_header():
+    """JWT proxy_admin + x-litellm-team-id on an admin management route -> header
+    is ignored; no team fetch. Preserves pre-existing bypass behavior and avoids
+    phantom team creation when team_id_upsert is enabled."""
+    from litellm.caching import DualCache
+    from litellm.proxy.utils import ProxyLogging
+
+    jwt_handler = JWTHandler()
+    user_api_key_cache = DualCache()
+    jwt_handler.update_environment(
+        prisma_client=None,
+        user_api_key_cache=user_api_key_cache,
+        litellm_jwtauth=LiteLLM_JWTAuth(
+            team_ids_jwt_field="groups",
+            user_id_jwt_field="sub",
+            team_id_upsert=True,
+        ),
+    )
+
+    with (
+        patch.object(jwt_handler, "auth_jwt", new_callable=AsyncMock) as mock_auth_jwt,
+        patch.object(JWTAuthManager, "check_rbac_role", new_callable=AsyncMock),
+        patch.object(jwt_handler, "is_admin", return_value=True),
+        patch(
+            "litellm.proxy.auth.handle_jwt.get_team_object", new_callable=AsyncMock
+        ) as mock_get_team,
+    ):
+        mock_auth_jwt.return_value = {
+            "sub": "admin-user",
+            "scope": "",
+            "groups": [],
+        }
+
+        result = await JWTAuthManager.auth_builder(
+            api_key="jwt-token",
+            jwt_handler=jwt_handler,
+            request_data={},
+            general_settings={},
+            route="/user/info",
+            prisma_client=None,
+            user_api_key_cache=user_api_key_cache,
+            parent_otel_span=None,
+            proxy_logging_obj=ProxyLogging(user_api_key_cache=user_api_key_cache),
+            request_headers={"x-litellm-team-id": "totally-made-up-team"},
+        )
+
+        assert result["is_proxy_admin"] is True
+        assert result["team_id"] is None
+        assert result["team_object"] is None
+        mock_get_team.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_auth_builder_admin_on_llm_route_without_header_unchanged():
+    """JWT proxy_admin on an LLM API route without x-litellm-team-id -> no team
+    context (team limits not applied, admin keeps unrestricted access)."""
+    from litellm.caching import DualCache
+    from litellm.proxy.utils import ProxyLogging
+
+    jwt_handler = JWTHandler()
+    user_api_key_cache = DualCache()
+    jwt_handler.update_environment(
+        prisma_client=None,
+        user_api_key_cache=user_api_key_cache,
+        litellm_jwtauth=LiteLLM_JWTAuth(
+            team_ids_jwt_field="groups",
+            user_id_jwt_field="sub",
+            admin_allowed_routes=[
+                "management_routes",
+                "info_routes",
+                "openai_routes",
+            ],
+        ),
+    )
+
+    with (
+        patch.object(jwt_handler, "auth_jwt", new_callable=AsyncMock) as mock_auth_jwt,
+        patch.object(JWTAuthManager, "check_rbac_role", new_callable=AsyncMock),
+        patch.object(jwt_handler, "is_admin", return_value=True),
+        patch(
+            "litellm.proxy.auth.handle_jwt.get_team_object", new_callable=AsyncMock
+        ) as mock_get_team,
+    ):
+        mock_auth_jwt.return_value = {
+            "sub": "admin-user",
+            "scope": "",
+            "groups": [],
+        }
+
+        result = await JWTAuthManager.auth_builder(
+            api_key="jwt-token",
+            jwt_handler=jwt_handler,
+            request_data={"model": "gpt-4"},
+            general_settings={},
+            route="/chat/completions",
+            prisma_client=None,
+            user_api_key_cache=user_api_key_cache,
+            parent_otel_span=None,
+            proxy_logging_obj=ProxyLogging(user_api_key_cache=user_api_key_cache),
+            request_headers={},
+        )
+
+        assert result["is_proxy_admin"] is True
+        assert result["team_id"] is None
+        assert result["team_object"] is None
+        mock_get_team.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_get_team_alias_with_nested_fields():
     """
     Test get_team_alias() method with nested JWT fields

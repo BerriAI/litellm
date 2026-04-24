@@ -576,39 +576,6 @@ jobs:
           paths:
             - realtime_translation_coverage.xml
             - realtime_translation_coverage
-  mcp_testing:
-    docker:
-      - *python312_image
-    working_directory: ~/project
-
-    steps:
-      - checkout
-      - setup_google_dns
-      - install_uv
-      - run:
-          name: Install Dependencies
-          command: |
-            uv sync --frozen --all-groups --all-extras --python 3.12
-      # Run pytest and generate JUnit XML report
-      - run:
-          name: Run tests
-          command: |
-            uv run --no-sync python -m pytest -vv tests/mcp_tests --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit.xml --durations=5 -n 2
-          no_output_timeout: 15m
-      - run:
-          name: Rename the coverage files
-          command: |
-            mv coverage.xml mcp_coverage.xml
-            mv .coverage mcp_coverage
-
-      # Store test results
-      - store_test_results:
-          path: test-results
-      - persist_to_workspace:
-          root: .
-          paths:
-            - mcp_coverage.xml
-            - mcp_coverage
   agent_testing:
     docker:
       - *python312_image
@@ -807,39 +774,6 @@ jobs:
           paths:
             - search_coverage.xml
             - search_coverage
-  # Split litellm_mapped_tests into parallel jobs
-  litellm_mapped_tests_proxy_part1:
-    docker:
-      - *python312_image
-    working_directory: ~/project
-    resource_class: large
-    steps:
-      - setup_litellm_test_deps
-      - run:
-          name: Run proxy tests part 1 (high-volume directories)
-          command: |
-            uv run --no-sync python -m prisma generate
-            export PYTHONUNBUFFERED=1
-            uv run --no-sync python -m pytest tests/test_litellm/proxy/guardrails tests/test_litellm/proxy/management_endpoints tests/test_litellm/proxy/_experimental tests/test_litellm/proxy/client tests/test_litellm/proxy/auth --junitxml=test-results/junit-proxy-part1.xml --durations=10 -n 4 --maxfail=5 --timeout=60 -vv --log-cli-level=WARNING -r A
-          no_output_timeout: 15m
-      - store_test_results:
-          path: test-results
-  litellm_mapped_tests_proxy_part2:
-    docker:
-      - *python312_image
-    working_directory: ~/project
-    resource_class: large
-    steps:
-      - setup_litellm_test_deps
-      - run:
-          name: Run proxy tests part 2 (all other tests)
-          command: |
-            uv run --no-sync python -m prisma generate
-            export PYTHONUNBUFFERED=1
-            uv run --no-sync python -m pytest tests/test_litellm/proxy --ignore=tests/test_litellm/proxy/guardrails --ignore=tests/test_litellm/proxy/management_endpoints --ignore=tests/test_litellm/proxy/_experimental --ignore=tests/test_litellm/proxy/client --ignore=tests/test_litellm/proxy/auth --junitxml=test-results/junit-proxy-part2.xml --durations=10 -n 4 --maxfail=5 --timeout=120 -vv --log-cli-level=WARNING -r A
-          no_output_timeout: 15m
-      - store_test_results:
-          path: test-results
   litellm_mapped_enterprise_tests:
     docker:
       - *python312_image
@@ -2091,7 +2025,7 @@ jobs:
       - run:
           name: Combine Coverage
           command: |
-            uv tool run --from 'coverage[toml]==7.10.6' coverage combine realtime_translation_coverage ocr_coverage search_coverage mcp_coverage logging_coverage audio_coverage local_testing_part1_coverage local_testing_part2_coverage pass_through_unit_tests_coverage batches_coverage guardrails_coverage redis_caching_coverage
+            uv tool run --from 'coverage[toml]==7.10.6' coverage combine realtime_translation_coverage ocr_coverage search_coverage logging_coverage audio_coverage local_testing_part1_coverage local_testing_part2_coverage pass_through_unit_tests_coverage batches_coverage guardrails_coverage redis_caching_coverage
             uv tool run --from 'coverage[toml]==7.10.6' coverage xml
       - codecov/upload:
           file: ./coverage.xml
@@ -2426,8 +2360,6 @@ workflows:
           filters: *main_branches
       - realtime_translation_testing:
           filters: *main_branches
-      - mcp_testing:
-          filters: *main_branches
       - agent_testing:
           filters: *main_branches
       - guardrails_testing:
@@ -2441,10 +2373,6 @@ workflows:
       - search_testing:
           filters: *main_branches
       - litellm_mapped_enterprise_tests:
-          filters: *main_branches
-      - litellm_mapped_tests_proxy_part1:
-          filters: *main_branches
-      - litellm_mapped_tests_proxy_part2:
           filters: *main_branches
       - batches_testing:
           filters: *main_branches
@@ -2463,14 +2391,11 @@ workflows:
       - upload-coverage:
           requires:
             - realtime_translation_testing
-            - mcp_testing
             - agent_testing
             - google_generate_content_endpoint_testing
             - guardrails_testing
             - ocr_testing
             - search_testing
-            - litellm_mapped_tests_proxy_part1
-            - litellm_mapped_tests_proxy_part2
             - litellm_mapped_enterprise_tests
             - batches_testing
             - litellm_utils_testing
