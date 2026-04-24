@@ -307,7 +307,6 @@ router_settings:
 | token_rate_limit_type | string | Rate limit counting method: "total", "output", or "input" tokens |
 | use_redis_transaction_buffer | boolean | If true, buffers database transactions in Redis before writing |
 | use_shared_health_check | boolean | If true, uses Redis-backed shared health check state across multiple proxy instances |
-| enable_redis_auth_cache | boolean | **[Beta]** When `true`, attaches Redis to the virtual-key auth cache (`user_api_key_cache`) so all proxy workers/pods share the same cache instead of each pod resolving keys independently against the database. Requires `litellm_settings.cache: true` with a Redis backend. Significantly reduces database load in multi-worker deployments by eliminating per-pod cache misses on the `combined_view` query. Off by default for a safe phased rollout — enable once your Redis cluster is healthy. Will become the default in a future release. See [Redis Auth Cache](#redis-auth-cache-multi-worker-db-load-reduction). |
 | user_header_mappings | dict | Map custom request headers to user IDs using lookup rules |
 | user_header_name | string | HTTP header name to extract user identity from requests |
 
@@ -323,21 +322,22 @@ In multi-worker or multi-pod deployments each worker process keeps its own **in-
 
 ### Solution
 
-Setting `enable_redis_auth_cache: true` attaches Redis to `user_api_key_cache` so the resolved key object is stored in a **shared** Redis cache. A cache hit on any worker prevents the DB query entirely.
+Setting `enable_redis_auth_cache: true` under `litellm_settings` attaches Redis to `user_api_key_cache` so the resolved key object is stored in a **shared** Redis cache. A cache hit on any worker prevents the DB query entirely.
 
 ```yaml
 # config.yaml
 
 litellm_settings:
+  enable_redis_auth_cache: true   # ← share the auth cache across workers
   cache: true
   cache_params:
     type: redis
     host: os.environ/REDIS_HOST
     port: os.environ/REDIS_PORT
+    max_connections: 100          # optional — tune per-worker pool size (default: 50)
 
 general_settings:
   master_key: sk-1234
-  enable_redis_auth_cache: true   # ← share the auth cache across workers
 ```
 
 ### Requirements
@@ -366,7 +366,7 @@ enable_redis_auth_cache=True: attached Redis to user_api_key_cache — virtual-k
 If the flag is off you will see:
 
 ```
-enable_redis_auth_cache is not set: user_api_key_cache remains in-memory only (per-worker). Set general_settings.enable_redis_auth_cache: true to share the auth cache across workers and reduce DB load.
+enable_redis_auth_cache is not set: user_api_key_cache remains in-memory only (per-worker). Set litellm_settings.enable_redis_auth_cache: true to share the auth cache across workers and reduce DB load.
 ```
 
 ---

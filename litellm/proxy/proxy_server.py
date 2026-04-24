@@ -2979,6 +2979,7 @@ class ProxyConfig:
     def _init_cache(
         self,
         cache_params: dict,
+        enable_redis_auth_cache: bool = False,
     ):
         global redis_usage_cache, llm_router, general_settings
         from litellm import Cache
@@ -3002,7 +3003,7 @@ class ProxyConfig:
             )
             # Note: PKCE verifier storage uses redis_usage_cache directly (not
             # user_api_key_cache) to avoid routing all API-key lookups through Redis.
-            if general_settings.get("enable_redis_auth_cache") is True:
+            if enable_redis_auth_cache is True:
                 user_api_key_cache.attach_redis_cache(
                     redis_usage_cache,
                     default_redis_ttl=litellm.default_redis_ttl,
@@ -3016,7 +3017,7 @@ class ProxyConfig:
                 verbose_proxy_logger.info(
                     "enable_redis_auth_cache is not set: user_api_key_cache "
                     "remains in-memory only (per-worker). Set "
-                    "general_settings.enable_redis_auth_cache: true to share "
+                    "litellm_settings.enable_redis_auth_cache: true to share "
                     "the auth cache across workers and reduce DB load."
                 )
 
@@ -3337,7 +3338,13 @@ class ProxyConfig:
                             cache_params[key] = get_secret(value)
 
                     ## to pass a complete url, or set ssl=True, etc. just set it as `os.environ[REDIS_URL] = <your-redis-url>`, _redis.py checks for REDIS specific environment variables
-                    self._init_cache(cache_params=cache_params)
+                    self._init_cache(
+                        cache_params=cache_params,
+                        enable_redis_auth_cache=litellm_settings.get(
+                            "enable_redis_auth_cache", False
+                        )
+                        is True,
+                    )
                     if litellm.cache is not None:
                         verbose_proxy_logger.debug(
                             f"{blue_color_code}Set Cache on LiteLLM Proxy{reset_color_code}"
