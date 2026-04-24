@@ -8,8 +8,14 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-// eslint-disable-next-line litellm-ui/no-banned-ui-imports
-import { Table, TableHead, TableHeaderCell, TableBody, TableRow, TableCell } from "@tremor/react";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import { TimeCell } from "./view_logs/time_cell";
 import type { SortState } from "./common_components/TableHeaderSortDropdown/TableHeaderSortDropdown";
 import { TableHeaderSortDropdown } from "./common_components/TableHeaderSortDropdown/TableHeaderSortDropdown";
@@ -448,33 +454,33 @@ export const ToolPolicies: React.FC<ToolPoliciesProps> = ({ accessToken, onSelec
         )}
 
         <Table className="[&_td]:py-0.5 [&_th]:py-1 w-full">
-          <TableHead>
+          <TableHeader>
             <TableRow>
-              <TableHeaderCell className="py-1 h-8">
+              <TableHead className="py-1 h-8">
                 <SortHeader label="Discovered" field="created_at" />
-              </TableHeaderCell>
-              <TableHeaderCell className="py-1 h-8">
+              </TableHead>
+              <TableHead className="py-1 h-8">
                 <SortHeader label="Tool Name" field="tool_name" />
-              </TableHeaderCell>
-              <TableHeaderCell className="py-1 h-8">
+              </TableHead>
+              <TableHead className="py-1 h-8">
                 <SortHeader label="Input Policy" field="input_policy" />
-              </TableHeaderCell>
-              <TableHeaderCell className="py-1 h-8">
+              </TableHead>
+              <TableHead className="py-1 h-8">
                 <SortHeader label="Output Policy" field="output_policy" />
-              </TableHeaderCell>
-              <TableHeaderCell className="py-1 h-8">
+              </TableHead>
+              <TableHead className="py-1 h-8">
                 <SortHeader label="# Calls" field="call_count" />
-              </TableHeaderCell>
-              <TableHeaderCell className="py-1 h-8">
+              </TableHead>
+              <TableHead className="py-1 h-8">
                 <SortHeader label="Team Name" field="team_id" />
-              </TableHeaderCell>
-              <TableHeaderCell className="py-1 h-8">Key Hash</TableHeaderCell>
-              <TableHeaderCell className="py-1 h-8">
+              </TableHead>
+              <TableHead className="py-1 h-8">Key Hash</TableHead>
+              <TableHead className="py-1 h-8">
                 <SortHeader label="Key Name" field="key_alias" />
-              </TableHeaderCell>
-              <TableHeaderCell className="py-1 h-8">User Agent</TableHeaderCell>
+              </TableHead>
+              <TableHead className="py-1 h-8">User Agent</TableHead>
             </TableRow>
-          </TableHead>
+          </TableHeader>
           <TableBody>
             {loading ? (
               <TableRow>

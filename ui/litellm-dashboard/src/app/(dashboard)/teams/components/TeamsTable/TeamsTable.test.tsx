@@ -5,12 +5,12 @@ import { describe, expect, it, vi } from "vitest";
 import { Team } from "@/components/key_team_helpers/key_list";
 import TeamsTable from "./TeamsTable";
 
-vi.mock("@tremor/react", () => ({
+vi.mock("@/components/ui/table", () => ({
   Table: ({ children }: any) => <table>{children}</table>,
-  TableHead: ({ children }: any) => <thead>{children}</thead>,
+  TableHeader: ({ children }: any) => <thead>{children}</thead>,
   TableBody: ({ children }: any) => <tbody>{children}</tbody>,
   TableRow: ({ children }: any) => <tr>{children}</tr>,
-  TableHeaderCell: ({ children }: any) => <th>{children}</th>,
+  TableHead: ({ children }: any) => <th>{children}</th>,
   TableCell: ({ children, ...props }: any) => <td {...props}>{children}</td>,
 }));
 

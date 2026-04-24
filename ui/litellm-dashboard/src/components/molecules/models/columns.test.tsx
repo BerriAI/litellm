@@ -4,7 +4,14 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 import { useReactTable, getCoreRowModel, flexRender } from "@tanstack/react-table";
 import { columns } from "./columns";
 import { ModelData } from "../../model_dashboard/types";
-import { Table, TableHead, TableHeaderCell, TableBody, TableRow, TableCell } from "@tremor/react";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import * as providerInfoHelpers from "../../provider_info_helpers";
 
 vi.mock("../../provider_info_helpers");
@@ -69,19 +76,19 @@ const TestTable = ({
 
   return (
     <Table>
-      <TableHead>
+      <TableHeader>
         {table.getHeaderGroups().map((headerGroup) => (
           <TableRow key={headerGroup.id}>
             {headerGroup.headers.map((header) => (
-              <TableHeaderCell key={header.id}>
+              <TableHead key={header.id}>
                 {header.isPlaceholder
                   ? null
                   : flexRender(header.column.columnDef.header, header.getContext())}
-              </TableHeaderCell>
+              </TableHead>
             ))}
           </TableRow>
         ))}
-      </TableHead>
+      </TableHeader>
       <TableBody>
         {table.getRowModel().rows.map((row) => (
           <TableRow key={row.id}>

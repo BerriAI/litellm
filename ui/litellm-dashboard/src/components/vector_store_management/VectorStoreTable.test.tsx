@@ -28,13 +28,13 @@ vi.mock("../common_components/IconActionButton/TableIconActionButtons/TableIconA
   },
 }));
 
-// Mock Tremor components to avoid complex styling issues
-vi.mock("@tremor/react", () => ({
+// Mock shadcn table components to avoid complex styling issues
+vi.mock("@/components/ui/table", () => ({
   Table: ({ children, ...props }: any) => <table {...props}>{children}</table>,
-  TableHead: ({ children, ...props }: any) => <thead {...props}>{children}</thead>,
+  TableHeader: ({ children, ...props }: any) => <thead {...props}>{children}</thead>,
   TableBody: ({ children, ...props }: any) => <tbody {...props}>{children}</tbody>,
   TableRow: ({ children, ...props }: any) => <tr {...props}>{children}</tr>,
-  TableHeaderCell: ({ children, ...props }: any) => <th {...props}>{children}</th>,
+  TableHead: ({ children, ...props }: any) => <th {...props}>{children}</th>,
   TableCell: ({ children, ...props }: any) => <td {...props}>{children}</td>,
 }));
 

@@ -1,14 +1,13 @@
 import React, { useState, useEffect } from "react";
 import { Pencil, Plus, Trash2 } from "lucide-react";
-// eslint-disable-next-line litellm-ui/no-banned-ui-imports
 import {
   Table,
   TableBody,
   TableCell,
   TableHead,
-  TableHeaderCell,
+  TableHeader,
   TableRow,
-} from "@tremor/react";
+} from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -205,17 +204,17 @@ const ModelAliasManager: React.FC<ModelAliasManagerProps> = ({
       <div className="rounded-lg custom-border relative mb-6">
         <div className="overflow-x-auto">
           <Table className="[&_td]:py-0.5 [&_th]:py-1">
-            <TableHead>
+            <TableHeader>
               <TableRow>
-                <TableHeaderCell className="py-1 h-8">
+                <TableHead className="py-1 h-8">
                   Alias Name
-                </TableHeaderCell>
-                <TableHeaderCell className="py-1 h-8">
+                </TableHead>
+                <TableHead className="py-1 h-8">
                   Target Model
-                </TableHeaderCell>
-                <TableHeaderCell className="py-1 h-8">Actions</TableHeaderCell>
+                </TableHead>
+                <TableHead className="py-1 h-8">Actions</TableHead>
               </TableRow>
-            </TableHead>
+            </TableHeader>
             <TableBody>
               {aliases.map((alias) => (
                 <TableRow key={alias.id} className="h-8">

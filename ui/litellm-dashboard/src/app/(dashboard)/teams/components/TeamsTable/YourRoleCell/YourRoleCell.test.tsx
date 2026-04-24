@@ -6,7 +6,7 @@ import type { Team } from "@/components/key_team_helpers/key_list";
 import YourRoleCell from "./YourRoleCell";
 
 // Lightweight mocks for stable, focused tests
-vi.mock("@tremor/react", () => ({
+vi.mock("@/components/ui/table", () => ({
   TableCell: ({ children }: { children: React.ReactNode }) => <div data-testid="cell">{children}</div>,
 }));
 

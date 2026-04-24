@@ -7,15 +7,14 @@ import {
   SortingState,
   useReactTable,
 } from "@tanstack/react-table";
-// eslint-disable-next-line litellm-ui/no-banned-ui-imports
 import {
   Table,
   TableBody,
   TableCell,
   TableHead,
-  TableHeaderCell,
+  TableHeader,
   TableRow,
-} from "@tremor/react";
+} from "@/components/ui/table";
 import {
   Tooltip,
   TooltipContent,
@@ -210,11 +209,11 @@ const VectorStoreTable: React.FC<VectorStoreTableProps> = ({ data, onView, onEdi
     <div className="rounded-lg custom-border relative">
       <div className="overflow-x-auto">
         <Table className="[&_td]:py-0.5 [&_th]:py-1">
-          <TableHead>
+          <TableHeader>
             {table.getHeaderGroups().map((headerGroup) => (
               <TableRow key={headerGroup.id}>
                 {headerGroup.headers.map((header) => (
-                  <TableHeaderCell
+                  <TableHead
                     key={header.id}
                     className={`py-1 h-8 ${
                       header.id === "actions"
@@ -244,11 +243,11 @@ const VectorStoreTable: React.FC<VectorStoreTableProps> = ({ data, onView, onEdi
                         </div>
                       )}
                     </div>
-                  </TableHeaderCell>
+                  </TableHead>
                 ))}
               </TableRow>
             ))}
-          </TableHead>
+          </TableHeader>
           <TableBody>
             {table.getRowModel().rows.length > 0 ? (
               table.getRowModel().rows.map((row) => (

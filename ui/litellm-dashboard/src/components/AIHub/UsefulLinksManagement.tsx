@@ -7,15 +7,14 @@ import {
   ExternalLink as ExternalLinkIcon,
   Plus,
 } from "lucide-react";
-// eslint-disable-next-line litellm-ui/no-banned-ui-imports
 import {
   Table,
   TableBody,
   TableCell,
   TableHead,
-  TableHeaderCell,
+  TableHeader,
   TableRow,
-} from "@tremor/react";
+} from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -373,13 +372,13 @@ const UsefulLinksManagement: React.FC<UsefulLinksManagementProps> = ({ accessTok
           <div className="rounded-lg custom-border relative">
             <div className="overflow-x-auto">
               <Table className="[&_td]:py-0.5 [&_th]:py-1">
-                <TableHead>
+                <TableHeader>
                   <TableRow>
-                    <TableHeaderCell className="py-1 h-8">Display Name</TableHeaderCell>
-                    <TableHeaderCell className="py-1 h-8">URL</TableHeaderCell>
-                    <TableHeaderCell className="py-1 h-8">Actions</TableHeaderCell>
+                    <TableHead className="py-1 h-8">Display Name</TableHead>
+                    <TableHead className="py-1 h-8">URL</TableHead>
+                    <TableHead className="py-1 h-8">Actions</TableHead>
                   </TableRow>
-                </TableHead>
+                </TableHeader>
                 <TableBody>
                   {links.map((link, index) => (
                     <TableRow key={link.id} className="h-8">

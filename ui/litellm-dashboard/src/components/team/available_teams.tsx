@@ -1,13 +1,12 @@
 import React, { useState, useEffect } from "react";
-// eslint-disable-next-line litellm-ui/no-banned-ui-imports
 import {
   Table,
   TableBody,
   TableCell,
   TableHead,
-  TableHeaderCell,
+  TableHeader,
   TableRow,
-} from "@tremor/react";
+} from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -75,15 +74,15 @@ const AvailableTeamsPanel: React.FC<AvailableTeamsProps> = ({
   return (
     <Card className="w-full mx-auto flex-auto overflow-y-auto max-h-[50vh]">
       <Table>
-        <TableHead>
+        <TableHeader>
           <TableRow>
-            <TableHeaderCell>Team Name</TableHeaderCell>
-            <TableHeaderCell>Description</TableHeaderCell>
-            <TableHeaderCell>Members</TableHeaderCell>
-            <TableHeaderCell>Models</TableHeaderCell>
-            <TableHeaderCell>Actions</TableHeaderCell>
+            <TableHead>Team Name</TableHead>
+            <TableHead>Description</TableHead>
+            <TableHead>Members</TableHead>
+            <TableHead>Models</TableHead>
+            <TableHead>Actions</TableHead>
           </TableRow>
-        </TableHead>
+        </TableHeader>
         <TableBody>
           {availableTeams.map((team) => (
             <TableRow key={team.team_id}>

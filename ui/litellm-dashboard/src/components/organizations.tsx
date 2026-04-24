@@ -5,15 +5,14 @@ import {
   ChevronRight as ChevronRightIcon,
   RefreshCcw as RefreshIcon,
 } from "lucide-react";
-// eslint-disable-next-line litellm-ui/no-banned-ui-imports
 import {
   Table,
   TableBody,
   TableCell,
   TableHead,
-  TableHeaderCell,
+  TableHeader,
   TableRow,
-} from "@tremor/react";
+} from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -324,19 +323,19 @@ const OrganizationsTable: React.FC<OrganizationsTableProps> = ({
                         </div>
                       </div>
                       <Table>
-                        <TableHead>
+                        <TableHeader>
                           <TableRow>
-                            <TableHeaderCell>Organization ID</TableHeaderCell>
-                            <TableHeaderCell>Organization Name</TableHeaderCell>
-                            <TableHeaderCell>Created</TableHeaderCell>
-                            <TableHeaderCell>Spend (USD)</TableHeaderCell>
-                            <TableHeaderCell>Budget (USD)</TableHeaderCell>
-                            <TableHeaderCell>Models</TableHeaderCell>
-                            <TableHeaderCell>TPM / RPM Limits</TableHeaderCell>
-                            <TableHeaderCell>Info</TableHeaderCell>
-                            <TableHeaderCell>Actions</TableHeaderCell>
+                            <TableHead>Organization ID</TableHead>
+                            <TableHead>Organization Name</TableHead>
+                            <TableHead>Created</TableHead>
+                            <TableHead>Spend (USD)</TableHead>
+                            <TableHead>Budget (USD)</TableHead>
+                            <TableHead>Models</TableHead>
+                            <TableHead>TPM / RPM Limits</TableHead>
+                            <TableHead>Info</TableHead>
+                            <TableHead>Actions</TableHead>
                           </TableRow>
-                        </TableHead>
+                        </TableHeader>
 
                         <TableBody>
                           {organizations && organizations.length > 0

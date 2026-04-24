@@ -1,5 +1,4 @@
-// eslint-disable-next-line litellm-ui/no-banned-ui-imports
-import { TableCell } from "@tremor/react";
+import { TableCell } from "@/components/ui/table";
 import { Team } from "@/components/key_team_helpers/key_list";
 import TeamRoleBadge from "@/app/(dashboard)/teams/components/TeamsTable/YourRoleCell/TeamRoleBadge";
 

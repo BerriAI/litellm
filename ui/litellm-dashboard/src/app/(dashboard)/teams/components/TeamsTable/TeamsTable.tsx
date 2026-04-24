@@ -1,12 +1,11 @@
-// eslint-disable-next-line litellm-ui/no-banned-ui-imports
 import {
   Table,
   TableBody,
   TableCell,
   TableHead,
-  TableHeaderCell,
+  TableHeader,
   TableRow,
-} from "@tremor/react";
+} from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
 import {
   Tooltip,
@@ -57,19 +56,19 @@ const TeamsTable = ({
 }: TeamsTableProps) => {
   return (
     <Table>
-      <TableHead>
+      <TableHeader>
         <TableRow>
-          <TableHeaderCell>Team Name</TableHeaderCell>
-          <TableHeaderCell>Team ID</TableHeaderCell>
-          <TableHeaderCell>Created</TableHeaderCell>
-          <TableHeaderCell>Spend (USD)</TableHeaderCell>
-          <TableHeaderCell>Budget (USD)</TableHeaderCell>
-          <TableHeaderCell>Models</TableHeaderCell>
-          <TableHeaderCell>Organization</TableHeaderCell>
-          <TableHeaderCell>Your Role</TableHeaderCell>
-          <TableHeaderCell>Info</TableHeaderCell>
+          <TableHead>Team Name</TableHead>
+          <TableHead>Team ID</TableHead>
+          <TableHead>Created</TableHead>
+          <TableHead>Spend (USD)</TableHead>
+          <TableHead>Budget (USD)</TableHead>
+          <TableHead>Models</TableHead>
+          <TableHead>Organization</TableHead>
+          <TableHead>Your Role</TableHead>
+          <TableHead>Info</TableHead>
         </TableRow>
-      </TableHead>
+      </TableHeader>
 
       <TableBody>
         {teams && teams.length > 0

@@ -1,13 +1,12 @@
 import React, { useState, useEffect } from "react";
-// eslint-disable-next-line litellm-ui/no-banned-ui-imports
 import {
   Table,
   TableBody,
   TableCell,
   TableHead,
-  TableHeaderCell,
+  TableHeader,
   TableRow,
-} from "@tremor/react";
+} from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
 import {
   Tooltip,
@@ -351,11 +350,11 @@ const PromptTable: React.FC<PromptTableProps> = ({
     <div className="rounded-lg custom-border relative">
       <div className="overflow-x-auto">
         <Table className="[&_td]:py-0.5 [&_th]:py-1">
-          <TableHead>
+          <TableHeader>
             {table.getHeaderGroups().map((headerGroup) => (
               <TableRow key={headerGroup.id}>
                 {headerGroup.headers.map((header) => (
-                  <TableHeaderCell
+                  <TableHead
                     key={header.id}
                     className="py-1 h-8"
                     onClick={header.column.getToggleSortingHandler()}
@@ -384,11 +383,11 @@ const PromptTable: React.FC<PromptTableProps> = ({
                         )}
                       </div>
                     </div>
-                  </TableHeaderCell>
+                  </TableHead>
                 ))}
               </TableRow>
             ))}
-          </TableHead>
+          </TableHeader>
           <TableBody>
             {isLoading ? (
               <TableRow>

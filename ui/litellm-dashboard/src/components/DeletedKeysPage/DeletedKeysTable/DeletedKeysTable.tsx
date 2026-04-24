@@ -11,15 +11,14 @@ import {
   SortingState,
   useReactTable,
 } from "@tanstack/react-table";
-// eslint-disable-next-line litellm-ui/no-banned-ui-imports
 import {
   Table,
   TableBody,
   TableCell,
   TableHead,
-  TableHeaderCell,
+  TableHeader,
   TableRow,
-} from "@tremor/react";
+} from "@/components/ui/table";
 import {
   Tooltip,
   TooltipContent,
@@ -319,11 +318,11 @@ export function DeletedKeysTable({
           <div className="rounded-lg custom-border relative">
             <div className="overflow-x-auto">
               <Table className="[&_td]:py-0.5 [&_th]:py-1" style={{ width: table.getCenterTotalSize() }}>
-                <TableHead>
+                <TableHeader>
                   {table.getHeaderGroups().map((headerGroup) => (
                     <TableRow key={headerGroup.id}>
                       {headerGroup.headers.map((header) => (
-                        <TableHeaderCell
+                        <TableHead
                           key={header.id}
                           data-header-id={header.id}
                           className="py-1 h-8 relative hover:bg-muted"
@@ -385,11 +384,11 @@ export function DeletedKeysTable({
                               }}
                             />
                           </div>
-                        </TableHeaderCell>
+                        </TableHead>
                       ))}
                     </TableRow>
                   ))}
-                </TableHead>
+                </TableHeader>
                 <TableBody>
                   {isLoading || isFetching ? (
                     <TableRow>

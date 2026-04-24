@@ -1,13 +1,12 @@
 import React, { useState } from "react";
-// eslint-disable-next-line litellm-ui/no-banned-ui-imports
 import {
   Table,
   TableBody,
   TableCell,
   TableHead,
-  TableHeaderCell,
+  TableHeader,
   TableRow,
-} from "@tremor/react";
+} from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -238,11 +237,11 @@ const AttachmentTable: React.FC<AttachmentTableProps> = ({
     <div className="rounded-lg custom-border relative">
       <div className="overflow-x-auto">
         <Table className="[&_td]:py-0.5 [&_th]:py-1">
-          <TableHead>
+          <TableHeader>
             {table.getHeaderGroups().map((headerGroup) => (
               <TableRow key={headerGroup.id}>
                 {headerGroup.headers.map((header) => (
-                  <TableHeaderCell
+                  <TableHead
                     key={header.id}
                     className={`py-1 h-8 ${
                       header.id === "actions"
@@ -277,11 +276,11 @@ const AttachmentTable: React.FC<AttachmentTableProps> = ({
                         </div>
                       )}
                     </div>
-                  </TableHeaderCell>
+                  </TableHead>
                 ))}
               </TableRow>
             ))}
-          </TableHead>
+          </TableHeader>
           <TableBody>
             {isLoading ? (
               <TableRow>

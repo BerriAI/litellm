@@ -4,17 +4,8 @@ import { describe, expect, it, vi } from "vitest";
 import { Team } from "@/components/key_team_helpers/key_list";
 import ModelsCell from "./ModelsCell";
 
-// The Icon component from @tremor/react does not forward onClick to the rendered element
-// by default in the test environment, so we stub it with a clickable button so accordion
-// interaction can be tested end-to-end.
-vi.mock("@tremor/react", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@tremor/react")>();
-  return {
-    ...actual,
-    Icon: ({ onClick, "aria-label": ariaLabel }: { onClick?: () => void; "aria-label"?: string }) =>
-      React.createElement("button", { onClick, "aria-label": ariaLabel ?? "accordion-toggle", type: "button" }),
-  };
-});
+// The component now uses a native <button> with lucide icons for the
+// expand/collapse toggle, so no Tremor mock is needed.
 
 const makeTeam = (models: string[], overrides: Partial<Team> = {}): Team => ({
   team_id: "team-1",
@@ -63,7 +54,7 @@ describe("ModelsCell", () => {
     expect(screen.getByText("gpt-4")).toBeInTheDocument();
     expect(screen.getByText("gpt-3.5-turbo")).toBeInTheDocument();
     expect(screen.getByText("claude-3")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /accordion/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /(Expand|Collapse)/ })).not.toBeInTheDocument();
   });
 
   it("should truncate model names longer than 30 characters with an ellipsis", () => {
@@ -95,14 +86,14 @@ describe("ModelsCell", () => {
   it("should show the accordion toggle button when there are more than 3 models", () => {
     renderModelsCell(makeTeam(["m1", "m2", "m3", "m4"]));
 
-    expect(screen.getByRole("button", { name: /accordion/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /(Expand|Collapse)/ })).toBeInTheDocument();
   });
 
   it("should expand to show all models when the accordion toggle is clicked", () => {
     renderModelsCell(makeTeam(["m1", "m2", "m3", "m4", "m5"]));
 
     act(() => {
-      screen.getByRole("button", { name: /accordion/i }).click();
+      screen.getByRole("button", { name: /(Expand|Collapse)/ }).click();
     });
 
     expect(screen.getByText("m4")).toBeInTheDocument();
@@ -113,7 +104,7 @@ describe("ModelsCell", () => {
   it("should collapse back to show the overflow badge after a second click on the toggle", () => {
     renderModelsCell(makeTeam(["m1", "m2", "m3", "m4", "m5"]));
 
-    const toggle = screen.getByRole("button", { name: /accordion/i });
+    const toggle = screen.getByRole("button", { name: /(Expand|Collapse)/ });
     act(() => {
       toggle.click();
     });
@@ -133,6 +124,6 @@ describe("ModelsCell", () => {
     expect(screen.queryByText("m1")).not.toBeInTheDocument();
     expect(screen.queryByText("m2")).not.toBeInTheDocument();
     expect(screen.queryByText("m3")).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /accordion/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /(Expand|Collapse)/ })).not.toBeInTheDocument();
   });
 });

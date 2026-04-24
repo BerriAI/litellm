@@ -1,6 +1,5 @@
 import { Badge } from "@/components/ui/badge";
-// eslint-disable-next-line litellm-ui/no-banned-ui-imports
-import { TableCell } from "@tremor/react";
+import { TableCell } from "@/components/ui/table";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { getModelDisplayName } from "@/components/key_team_helpers/fetch_available_models_team_key";
