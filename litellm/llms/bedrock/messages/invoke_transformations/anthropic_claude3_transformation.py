@@ -767,12 +767,23 @@ class AmazonAnthropicClaudeMessagesStreamDecoder(AWSEventStreamDecoder):
         Bedrock returns usage metrics using camelCase keys. Convert these to
         the Anthropic `/v1/messages` specification so callers receive a
         consistent response shape when streaming.
+
+        Cache fields (cacheReadInputTokenCount / cacheWriteInputTokenCount)
+        are emitted by Bedrock Invoke on the final chunk's
+        amazon-bedrock-invocationMetrics. Without copying them here the
+        synthesized usage dict is missing both cache fields; downstream cost
+        calculation then treats the request as fresh-input-only and drops
+        every dollar of cache_read / cache_creation cost. On cache-heavy
+        workloads (Claude Code with >90% cache hit rates) this silently
+        under-bills by 6-10x on the spend table, even though the raw
+        usage_object later written to the log metadata does carry the cache
+        counts via _transform_usage upstream of this parser.
         """
         amazon_bedrock_invocation_metrics = chunk_data.pop(
             "amazon-bedrock-invocationMetrics", {}
         )
         if amazon_bedrock_invocation_metrics:
-            anthropic_usage = {}
+            anthropic_usage: dict = {}
             if "inputTokenCount" in amazon_bedrock_invocation_metrics:
                 anthropic_usage["input_tokens"] = amazon_bedrock_invocation_metrics[
                     "inputTokenCount"
@@ -781,5 +792,13 @@ class AmazonAnthropicClaudeMessagesStreamDecoder(AWSEventStreamDecoder):
                 anthropic_usage["output_tokens"] = amazon_bedrock_invocation_metrics[
                     "outputTokenCount"
                 ]
+            if "cacheReadInputTokenCount" in amazon_bedrock_invocation_metrics:
+                anthropic_usage["cache_read_input_tokens"] = (
+                    amazon_bedrock_invocation_metrics["cacheReadInputTokenCount"]
+                )
+            if "cacheWriteInputTokenCount" in amazon_bedrock_invocation_metrics:
+                anthropic_usage["cache_creation_input_tokens"] = (
+                    amazon_bedrock_invocation_metrics["cacheWriteInputTokenCount"]
+                )
             chunk_data["usage"] = anthropic_usage
         return chunk_data

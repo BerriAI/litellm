@@ -160,6 +160,65 @@ def test_chunk_parser_usage_transformation():
     assert parsed["usage"]["output_tokens"] == 5
 
 
+def test_chunk_parser_usage_transformation_with_cache_metrics():
+    """
+    Bedrock Invoke streaming carries cache usage on the final chunk as
+    cacheReadInputTokenCount / cacheWriteInputTokenCount inside
+    amazon-bedrock-invocationMetrics. Dropping these (historical behavior)
+    caused downstream cost calculation to see no cached_tokens and silently
+    bill the request as fresh-input-only — an under-report of 6-10x on
+    cache-heavy Claude Code traffic.
+    """
+
+    decoder = AmazonAnthropicClaudeMessagesStreamDecoder(
+        model="bedrock/invoke/anthropic.claude-sonnet-4-6"
+    )
+
+    chunk = {
+        "type": "message_delta",
+        "amazon-bedrock-invocationMetrics": {
+            "inputTokenCount": 1,
+            "outputTokenCount": 162,
+            "cacheReadInputTokenCount": 421714,
+            "cacheWriteInputTokenCount": 1139,
+        },
+    }
+
+    parsed = decoder._chunk_parser(chunk.copy())
+
+    assert "amazon-bedrock-invocationMetrics" not in parsed
+    assert parsed["usage"]["input_tokens"] == 1
+    assert parsed["usage"]["output_tokens"] == 162
+    # These two are the fix — they must be copied onto the synthesized
+    # usage dict so _transform_usage upstream and the cost calculator see
+    # them. Anthropic /v1/messages uses snake_case keys.
+    assert parsed["usage"]["cache_read_input_tokens"] == 421714
+    assert parsed["usage"]["cache_creation_input_tokens"] == 1139
+
+
+def test_chunk_parser_usage_omits_cache_fields_when_absent():
+    """Cache fields stay absent on the synthesized usage dict when the
+    upstream metrics don't include them (e.g. first chunk, no caching).
+    We don't want to default to 0 — that would mask legitimate cases
+    where Bedrock simply didn't report the field on this chunk."""
+
+    decoder = AmazonAnthropicClaudeMessagesStreamDecoder(
+        model="bedrock/invoke/anthropic.claude-sonnet-4-6"
+    )
+
+    chunk = {
+        "type": "message_delta",
+        "amazon-bedrock-invocationMetrics": {
+            "inputTokenCount": 14,
+            "outputTokenCount": 67,
+        },
+    }
+
+    parsed = decoder._chunk_parser(chunk.copy())
+
+    assert parsed["usage"] == {"input_tokens": 14, "output_tokens": 67}
+
+
 def test_remove_ttl_from_cache_control():
     """Ensure ttl field is removed from cache_control in messages."""
 
