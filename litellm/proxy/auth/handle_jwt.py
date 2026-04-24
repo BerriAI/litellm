@@ -1452,6 +1452,61 @@ class JWTAuthManager:
         admin_result["team_object"] = team_object
 
     @staticmethod
+    async def _resolve_single_team_fallback(
+        user_object: Optional[LiteLLM_UserTable],
+        user_id: Optional[str],
+        prisma_client: Optional[PrismaClient],
+        user_api_key_cache: DualCache,
+        parent_otel_span: Optional[Span],
+        proxy_logging_obj: ProxyLogging,
+        team_id_upsert: Optional[bool],
+    ) -> tuple:
+        """
+        If JWT did not resolve team_id, but the user belongs to exactly one team
+        in LiteLLM, load that team (and membership when user_id is set) so that
+        spend / metadata can be attributed correctly.
+
+        Returns (team_id, team_object, team_membership_object).
+        Any DB error is debug-logged and the tuple is (None, None, None) — no
+        exception ever propagates from this helper.
+        """
+        if user_object is None or not user_object.teams or len(user_object.teams) != 1:
+            return None, None, None
+
+        _tid = user_object.teams[0]
+        try:
+            team_row = await get_team_object(
+                team_id=_tid,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                parent_otel_span=parent_otel_span,
+                proxy_logging_obj=proxy_logging_obj,
+                team_id_upsert=team_id_upsert,
+            )
+            if team_row is None:
+                return None, None, None
+
+            if not user_id:
+                return _tid, team_row, None
+
+            team_membership = await get_team_membership(
+                user_id=user_id,
+                team_id=_tid,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                parent_otel_span=parent_otel_span,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+            return _tid, team_row, team_membership
+        except Exception:
+            verbose_proxy_logger.debug(
+                "JWT single-team fallback error, skipping. team_id=%s",
+                _tid,
+                exc_info=True,
+            )
+            return None, None, None
+
+    @staticmethod
     async def auth_builder(
         api_key: str,
         jwt_handler: JWTHandler,
@@ -1515,7 +1570,6 @@ class JWTAuthManager:
         object_id = jwt_handler.get_object_id(token=jwt_valid_token, default_value=None)
 
         # Get basic user info
-        scopes = jwt_handler.get_scopes(token=jwt_valid_token)
         user_id, user_email, valid_user_email = await JWTAuthManager.get_user_info(
             jwt_handler, jwt_valid_token
         )
@@ -1637,42 +1691,19 @@ class JWTAuthManager:
             user_api_key_cache=user_api_key_cache,
         )
 
-        # If JWT did not resolve team_id, but the user belongs to exactly one team in
-        # LiteLLM, use that team for auth and spend. Multiple teams: ambiguous — skip.
-        if (
-            team_id is None
-            and user_object is not None
-            and user_object.teams
-            and len(user_object.teams) == 1
-        ):
-            _tid = user_object.teams[0]
-            try:
-                team_row = await get_team_object(
-                    team_id=_tid,
+        # If JWT did not resolve team_id, attempt single-team DB fallback.
+        if team_id is None:
+            team_id, team_object, team_membership_object = (
+                await JWTAuthManager._resolve_single_team_fallback(
+                    user_object=user_object,
+                    user_id=user_id,
                     prisma_client=prisma_client,
                     user_api_key_cache=user_api_key_cache,
                     parent_otel_span=parent_otel_span,
                     proxy_logging_obj=proxy_logging_obj,
                     team_id_upsert=jwt_handler.litellm_jwtauth.team_id_upsert,
                 )
-                if team_row is not None and not user_id:
-                    team_id, team_object = _tid, team_row
-                elif team_row is not None and user_id:
-                    team_membership_object = await get_team_membership(
-                        user_id=user_id,
-                        team_id=_tid,
-                        prisma_client=prisma_client,
-                        user_api_key_cache=user_api_key_cache,
-                        parent_otel_span=parent_otel_span,
-                        proxy_logging_obj=proxy_logging_obj,
-                    )
-                    team_id, team_object = _tid, team_row
-            except Exception:
-                verbose_proxy_logger.debug(
-                    "JWT single-team fallback error, skipping. team_id=%s",
-                    _tid,
-                    exc_info=True,
-                )
+            )
 
         ## MAP USER TO TEAMS
         await JWTAuthManager.map_user_to_teams(
