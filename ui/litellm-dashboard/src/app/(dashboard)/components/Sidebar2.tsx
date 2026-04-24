@@ -1,21 +1,43 @@
 "use client";
 
-import { Layout, Menu, ConfigProvider } from "antd";
-import { Key as KeyOutlined, PlayCircle as PlayCircleOutlined, Square as BlockOutlined, BarChart3 as BarChartOutlined, Users as TeamOutlined, Landmark as BankOutlined, User as UserOutlined, Settings as SettingOutlined, Plug as ApiOutlined, LayoutGrid as AppstoreOutlined, Database as DatabaseOutlined, FileText as FileTextOutlined, LineChart as LineChartOutlined, ShieldCheck as SafetyOutlined, FlaskConical as ExperimentOutlined, Wrench as ToolOutlined, Tags as TagsOutlined, ClipboardCheck as AuditOutlined } from "lucide-react";
-// import {
-//   all_admin_roles,
-//   rolesWithWriteAccess,
-//   internalUserRoles,
-//   isAdminRole,
-// } from "../utils/roles";
-// import UsageIndicator from "./usage_indicator";
+import {
+  Key as KeyOutlined,
+  PlayCircle as PlayCircleOutlined,
+  Square as BlockOutlined,
+  BarChart3 as BarChartOutlined,
+  Users as TeamOutlined,
+  Landmark as BankOutlined,
+  User as UserOutlined,
+  Settings as SettingOutlined,
+  Plug as ApiOutlined,
+  LayoutGrid as AppstoreOutlined,
+  Database as DatabaseOutlined,
+  FileText as FileTextOutlined,
+  LineChart as LineChartOutlined,
+  ShieldCheck as SafetyOutlined,
+  FlaskConical as ExperimentOutlined,
+  Wrench as ToolOutlined,
+  Tags as TagsOutlined,
+  ClipboardCheck as AuditOutlined,
+  ChevronDown,
+} from "lucide-react";
 import * as React from "react";
 import { useRouter, usePathname } from "next/navigation";
-import { all_admin_roles, internalUserRoles, isAdminRole, rolesWithWriteAccess } from "@/utils/roles";
+import {
+  all_admin_roles,
+  internalUserRoles,
+  isAdminRole,
+  rolesWithWriteAccess,
+} from "@/utils/roles";
 import UsageIndicator from "@/components/UsageIndicator";
 import { serverRootPath } from "@/components/networking";
-
-const { Sider } = Layout;
+import { cn } from "@/lib/utils";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 
 // -------- Types --------
 interface SidebarProps {
@@ -364,90 +386,133 @@ const Sidebar2: React.FC<SidebarProps> = ({ accessToken, userRole, defaultSelect
     }
   };
 
-  // Wrap label in <a> so every nav item supports right-click → "Open in new tab"
-  // and Ctrl/Cmd+click to open in a new tab, while preserving SPA navigation for normal clicks.
-  const renderNavLink = (label: string, page: string, newTab?: boolean): React.ReactNode => {
-    const href = toHref(page);
-    return (
+  // Track which submenu parents are open. Defaults to none expanded in
+  // collapsed mode (the whole panel collapses). In expanded mode, open any
+  // parent whose child is currently selected.
+  const initialOpenKeys = React.useMemo(() => {
+    const open: string[] = [];
+    for (const item of filteredMenuItems) {
+      if (item.children?.some((c) => c.key === selectedMenuKey)) {
+        open.push(item.key);
+      }
+    }
+    return open;
+  }, [filteredMenuItems, selectedMenuKey]);
+
+  const [openKeys, setOpenKeys] = React.useState<string[]>(initialOpenKeys);
+
+  const toggleKey = (key: string) => {
+    setOpenKeys((prev) =>
+      prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key],
+    );
+  };
+
+  const renderItem = (item: MenuItemCfg, depth: number) => {
+    const isSelected = item.key === selectedMenuKey;
+    const hasChildren = !!item.children && item.children.length > 0;
+    const isOpen = openKeys.includes(item.key);
+    const indent = depth * 12;
+
+    const handleClick = (e: React.MouseEvent<HTMLAnchorElement>) => {
+      if (e.metaKey || e.ctrlKey || e.shiftKey || e.button === 1) return;
+      e.preventDefault();
+      if (hasChildren) {
+        toggleKey(item.key);
+      } else {
+        goTo(item.page, item.newTab);
+      }
+    };
+
+    const href = toHref(item.page);
+    const itemClasses = cn(
+      "flex items-center gap-2 rounded-md text-sm px-2 mx-1 h-[34px]",
+      "transition-colors cursor-pointer text-foreground no-underline",
+      isSelected
+        ? "bg-primary/10 text-primary font-medium"
+        : "hover:bg-muted",
+    );
+
+    const linkContent = (
+      <>
+        {item.icon && (
+          <span
+            className={cn(
+              "inline-flex items-center justify-center shrink-0",
+              "h-[18px] w-[18px]",
+              "[&>svg]:h-[18px] [&>svg]:w-[18px]",
+            )}
+          >
+            {item.icon}
+          </span>
+        )}
+        {!collapsed && <span className="flex-1 truncate">{item.label}</span>}
+        {!collapsed && hasChildren && (
+          <ChevronDown
+            className={cn(
+              "h-3.5 w-3.5 transition-transform text-muted-foreground",
+              isOpen && "rotate-180",
+            )}
+          />
+        )}
+      </>
+    );
+
+    const link = (
       <a
         href={href}
-        target={newTab ? "_blank" : undefined}
-        rel={newTab ? "noopener noreferrer" : undefined}
-        onClick={(e) => {
-          if (newTab) {
-            e.stopPropagation();
-            return;
-          }
-          if (e.metaKey || e.ctrlKey || e.shiftKey || e.button === 1) {
-            e.stopPropagation();
-            return;
-          }
-          e.preventDefault();
-        }}
-        style={{ color: "inherit", textDecoration: "none" }}
+        target={item.newTab ? "_blank" : undefined}
+        rel={item.newTab ? "noopener noreferrer" : undefined}
+        onClick={handleClick}
+        style={{ paddingLeft: `${8 + indent}px` }}
+        className={itemClasses}
       >
-        {label}
+        {linkContent}
       </a>
+    );
+
+    const wrapped = collapsed ? (
+      <TooltipProvider>
+        <Tooltip>
+          <TooltipTrigger asChild>{link}</TooltipTrigger>
+          <TooltipContent side="right">{item.label}</TooltipContent>
+        </Tooltip>
+      </TooltipProvider>
+    ) : (
+      link
+    );
+
+    return (
+      <li key={item.key} role="none">
+        {wrapped}
+        {hasChildren && !collapsed && isOpen && (
+          <ul role="group" className="mt-[2px] mb-[2px] list-none p-0">
+            {item.children!.map((child) => renderItem(child, depth + 1))}
+          </ul>
+        )}
+      </li>
     );
   };
 
   return (
-    <Layout style={{ minHeight: "100vh" }}>
-      <Sider
-        theme="light"
-        width={220}
-        collapsed={collapsed}
-        collapsedWidth={80}
-        collapsible
-        trigger={null}
-        style={{
-          transition: "all 0.3s cubic-bezier(0.4, 0, 0.2, 1)",
-          position: "relative",
-          display: "flex",
-          flexDirection: "column",
-        }}
+    <aside
+      className={cn(
+        "relative bg-background flex flex-col min-h-screen",
+        "transition-all duration-300 ease-[cubic-bezier(0.4,0,0.2,1)]",
+      )}
+      style={{ width: collapsed ? 80 : 220 }}
+    >
+      <nav
+        aria-label="Main navigation"
+        className="custom-sidebar-menu flex-1 overflow-y-auto"
       >
-        <ConfigProvider
-          theme={{
-            components: {
-              Menu: {
-                iconSize: 18,
-                fontSize: 14,
-              },
-            },
-          }}
-        >
-          <Menu
-            mode="inline"
-            selectedKeys={[selectedMenuKey]}
-            defaultOpenKeys={collapsed ? [] : ["llm-tools"]} // kept to preserve original appearance
-            inlineCollapsed={collapsed}
-            className="custom-sidebar-menu"
-            style={{
-              borderRight: 0,
-              backgroundColor: "transparent",
-              fontSize: "14px",
-              flex: 1,
-              overflowY: "auto",
-            }}
-            items={filteredMenuItems.map((item) => ({
-              key: item.key,
-              icon: item.icon,
-              label: renderNavLink(item.label, item.page, item.newTab),
-              children: item.children?.map((child) => ({
-                key: child.key,
-                icon: child.icon,
-                label: renderNavLink(child.label, child.page, child.newTab),
-                onClick: () => goTo(child.page, child.newTab),
-              })),
-              onClick: !item.children ? () => goTo(item.page, item.newTab) : undefined,
-            }))}
-          />
-        </ConfigProvider>
-        {isAdminRole(userRole) && !collapsed && <UsageIndicator accessToken={accessToken} width={220} />}
-
-      </Sider>
-    </Layout>
+        <ul role="menu" className="list-none p-0 m-0">
+          {filteredMenuItems.map((item) => renderItem(item, 0))}
+        </ul>
+      </nav>
+      {isAdminRole(userRole) && !collapsed && (
+        <UsageIndicator accessToken={accessToken} width={220} />
+      )}
+    </aside>
   );
 };
 
