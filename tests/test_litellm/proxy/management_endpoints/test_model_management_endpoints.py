@@ -1066,6 +1066,7 @@ class TestModelInfoEndpoint:
 
         with (
             patch("litellm.proxy.proxy_server.llm_router") as mock_router,
+            patch("litellm.proxy.proxy_server.prisma_client", None),
             patch("litellm.proxy.proxy_server.get_key_models") as mock_get_key_models,
             patch("litellm.proxy.proxy_server.get_team_models") as mock_get_team_models,
             patch(
@@ -1116,6 +1117,7 @@ class TestModelInfoEndpoint:
 
         with (
             patch("litellm.proxy.proxy_server.llm_router") as mock_router,
+            patch("litellm.proxy.proxy_server.prisma_client", None),
             patch("litellm.proxy.proxy_server.get_key_models") as mock_get_key_models,
             patch("litellm.proxy.proxy_server.get_team_models") as mock_get_team_models,
             patch(
@@ -1155,6 +1157,7 @@ class TestModelInfoEndpoint:
 
         with (
             patch("litellm.proxy.proxy_server.llm_router") as mock_router,
+            patch("litellm.proxy.proxy_server.prisma_client", None),
             patch("litellm.proxy.proxy_server.get_key_models") as mock_get_key_models,
             patch("litellm.proxy.proxy_server.get_team_models") as mock_get_team_models,
             patch(
