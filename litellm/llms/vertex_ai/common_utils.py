@@ -229,11 +229,20 @@ def get_vertex_base_url(
 ) -> str:
     """
     Get the base URL for Vertex AI API calls.
+
+    - ``global`` uses the global control plane host.
+    - Multi-region geographies (e.g. ``us``, ``eu``) use ``aiplatform.{geo}.rep.googleapis.com``.
+    - Regional locations (e.g. ``us-central1``) use ``{region}-aiplatform.googleapis.com``.
     """
     if vertex_location == "global":
         return "https://aiplatform.googleapis.com"
-    else:
-        return f"https://{vertex_location}-aiplatform.googleapis.com"
+    if vertex_location is None:
+        raise ValueError("vertex_location is required")
+    if not re.match(r"^[a-z][a-z0-9-]*$", vertex_location):
+        raise ValueError("Invalid vertex_location format")
+    if "-" not in vertex_location:
+        return f"https://aiplatform.{vertex_location}.rep.googleapis.com"
+    return f"https://{vertex_location}-aiplatform.googleapis.com"
 
 
 def _get_embedding_url(

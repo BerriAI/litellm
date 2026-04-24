@@ -2163,9 +2163,6 @@ class TestTranslateAnthropicOutputFormatToOpenAI:
         assert sorted(schema["required"]) == ["age", "email", "name"]
 
     def test_invalid_output_format_returns_none(self):
-        assert self.adapter.translate_anthropic_output_format_to_openai("invalid") is None
-        assert self.adapter.translate_anthropic_output_format_to_openai({"type": "text"}) is None
-        assert self.adapter.translate_anthropic_output_format_to_openai({"type": "json_schema"}) is None
         assert (
             self.adapter.translate_anthropic_output_format_to_openai("invalid") is None
         )
@@ -2330,3 +2327,16 @@ class TestAnthropicStreamWrapperToolArgs:
         parsed = json.loads(combined)
         assert parsed == {"city": "Tokyo"}
 
+
+
+def test_translate_anthropic_tool_choice_none():
+    """
+    Regression test for issue #24443.
+
+    tool_choice={"type": "none"} should be translated to "none" for OpenAI format,
+    not raise a ValueError.
+    """
+    adapter = LiteLLMAnthropicMessagesAdapter()
+
+    result = adapter.translate_anthropic_tool_choice_to_openai({"type": "none"})
+    assert result == "none"

@@ -616,6 +616,7 @@ model LiteLLM_TeamMembership {
   user_id    String
   team_id    String
   spend      Float    @default(0.0)
+  total_spend Float @default(0.0)
   budget_id String?
   litellm_budget_table LiteLLM_BudgetTable?   @relation(fields: [budget_id], references: [budget_id])
   @@id([user_id, team_id])

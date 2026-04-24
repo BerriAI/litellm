@@ -422,6 +422,26 @@ def reset_router_callbacks():
     litellm.logging_callback_manager._reset_all_callbacks()
 
 
+@pytest.fixture(autouse=True)
+def reset_proxy_auth_globals(monkeypatch):
+    """
+    Pin proxy auth-related globals to a known baseline so tests don't inherit
+    leaked state (master_key, prisma_client, custom auth, cached tokens) from
+    earlier tests. Individual tests can still override via their own
+    monkeypatch calls — those run after this fixture and revert first.
+    """
+    import litellm.proxy.proxy_server as ps
+
+    monkeypatch.setattr(ps, "prisma_client", None)
+    monkeypatch.setattr(ps, "master_key", None)
+    monkeypatch.setattr(ps, "user_custom_auth", None)
+    monkeypatch.setattr(ps, "general_settings", {})
+    try:
+        ps.user_api_key_cache.in_memory_cache.cache_dict.clear()
+    except AttributeError:
+        pass
+
+
 @pytest.mark.asyncio
 async def test_ui_view_spend_logs_with_user_id(client, monkeypatch):
     mock_spend_logs = [
@@ -1150,14 +1170,14 @@ async def test_ui_view_spend_logs_date_range_filter(client, monkeypatch):
 async def test_ui_view_spend_logs_unauthorized(client):
     # Test without authorization header
     response = client.get("/spend/logs/ui")
-    assert response.status_code == 401 or response.status_code == 403
+    assert response.status_code in (401, 403), response.text
 
     # Test with invalid authorization
     response = client.get(
         "/spend/logs/ui",
         headers={"Authorization": "Bearer invalid-token"},
     )
-    assert response.status_code == 401 or response.status_code == 403
+    assert response.status_code in (401, 403), response.text
 
 
 @pytest.mark.asyncio
