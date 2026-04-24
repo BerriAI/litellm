@@ -1,4 +1,4 @@
-import { screen, waitFor } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders } from "../../../../tests/test-utils";
@@ -40,6 +40,19 @@ const mockEmptyPages = {
   pages: [{ aliases: [], total_count: 0, current_page: 1, total_pages: 1, size: 50 }],
 };
 
+// The popover renders option rows as plain <button> elements inside the
+// popover content. This helper fetches them scoped to the open popover.
+const getAliasButton = (name: string) => {
+  const dialog = screen.queryByRole("dialog");
+  const scope = dialog ? within(dialog) : screen;
+  return scope.getByRole("button", { name });
+};
+const queryAllAliasButtons = (name: string) => {
+  const dialog = screen.queryByRole("dialog");
+  const scope = dialog ? within(dialog) : screen;
+  return scope.queryAllByRole("button", { name });
+};
+
 describe("PaginatedKeyAliasSelect", () => {
   const mockOnChange = vi.fn();
 
@@ -72,25 +85,26 @@ describe("PaginatedKeyAliasSelect", () => {
   });
 
   it("should display alias options when data is loaded", async () => {
-    renderWithProviders(<PaginatedKeyAliasSelect onChange={mockOnChange} />);
-
-    const combobox = screen.getByRole("combobox");
-    await userEvent.click(combobox);
-
-    await waitFor(() => {
-      expect(screen.getByRole("option", { name: "alias-1" })).toBeInTheDocument();
-      expect(screen.getByRole("option", { name: "alias-2" })).toBeInTheDocument();
-    });
-  });
-
-  it("should call onChange when user selects an alias", async () => {
-    const user = userEvent.setup({ delay: null });
+    const user = userEvent.setup();
     renderWithProviders(<PaginatedKeyAliasSelect onChange={mockOnChange} />);
 
     const combobox = screen.getByRole("combobox");
     await user.click(combobox);
 
-    const option = await screen.findByTitle("alias-1");
+    await waitFor(() => {
+      expect(getAliasButton("alias-1")).toBeInTheDocument();
+      expect(getAliasButton("alias-2")).toBeInTheDocument();
+    });
+  });
+
+  it("should call onChange when user selects an alias", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<PaginatedKeyAliasSelect onChange={mockOnChange} />);
+
+    const combobox = screen.getByRole("combobox");
+    await user.click(combobox);
+
+    const option = await waitFor(() => getAliasButton("alias-1"));
     await user.click(option);
 
     await waitFor(() => {
@@ -135,19 +149,19 @@ describe("PaginatedKeyAliasSelect", () => {
       isFetchingNextPage: false,
     } as any);
 
+    const user = userEvent.setup();
     renderWithProviders(<PaginatedKeyAliasSelect onChange={mockOnChange} />);
 
     const combobox = screen.getByRole("combobox");
-    await userEvent.click(combobox);
+    await user.click(combobox);
 
     await waitFor(() => {
-      expect(screen.getByRole("option", { name: "alias-1" })).toBeInTheDocument();
+      expect(getAliasButton("alias-1")).toBeInTheDocument();
     });
 
-    const scrollableContainer = document.querySelector(
-      ".ant-select-dropdown .rc-virtual-list-holder",
-    );
-    expect(scrollableContainer).toBeInTheDocument();
+    // The scrollable area wraps the option buttons inside the popover content.
+    const scrollableContainer = getAliasButton("alias-1").parentElement;
+    expect(scrollableContainer).toHaveClass("overflow-y-auto");
   });
 
   it("should deduplicate aliases with the same value across pages", async () => {
@@ -166,13 +180,14 @@ describe("PaginatedKeyAliasSelect", () => {
       },
     } as any);
 
+    const user = userEvent.setup();
     renderWithProviders(<PaginatedKeyAliasSelect onChange={mockOnChange} />);
 
     const combobox = screen.getByRole("combobox");
-    await userEvent.click(combobox);
+    await user.click(combobox);
 
     await waitFor(() => {
-      const options = screen.queryAllByRole("option", { name: "alias-1" });
+      const options = queryAllAliasButtons("alias-1");
       expect(options.length).toBe(1);
     });
   });
@@ -193,16 +208,20 @@ describe("PaginatedKeyAliasSelect", () => {
       },
     } as any);
 
+    const user = userEvent.setup();
     renderWithProviders(<PaginatedKeyAliasSelect onChange={mockOnChange} />);
 
     const combobox = screen.getByRole("combobox");
-    await userEvent.click(combobox);
+    await user.click(combobox);
 
     await waitFor(() => {
-      expect(screen.getByRole("option", { name: "valid-alias" })).toBeInTheDocument();
-      const allOptions = screen.queryAllByRole("option");
-      expect(allOptions.length).toBe(1);
+      expect(getAliasButton("valid-alias")).toBeInTheDocument();
     });
+    // Only the single valid-alias row is rendered inside the popover.
+    const dialog = screen.getByRole("dialog");
+    const rows = within(dialog).getAllByRole("button");
+    // Rows = option button(s); the trigger button is outside the dialog.
+    expect(rows.length).toBe(1);
   });
 
   it("should respect allowClear prop", () => {
@@ -217,7 +236,7 @@ describe("PaginatedKeyAliasSelect", () => {
     renderWithProviders(<PaginatedKeyAliasSelect onChange={mockOnChange} disabled />);
 
     const combobox = screen.getByRole("combobox");
-    expect(combobox.closest(".ant-select")).toHaveClass("ant-select-disabled");
+    expect(combobox).toBeDisabled();
   });
 
   it("should not call fetchNextPage when hasNextPage is false", async () => {
@@ -226,12 +245,13 @@ describe("PaginatedKeyAliasSelect", () => {
       hasNextPage: false,
     } as any);
 
+    const user = userEvent.setup();
     renderWithProviders(<PaginatedKeyAliasSelect onChange={mockOnChange} />);
 
-    await userEvent.click(screen.getByRole("combobox"));
+    await user.click(screen.getByRole("combobox"));
 
     await waitFor(() => {
-      expect(screen.getByRole("option", { name: "alias-1" })).toBeInTheDocument();
+      expect(getAliasButton("alias-1")).toBeInTheDocument();
     });
 
     expect(mockFetchNextPage).not.toHaveBeenCalled();
@@ -243,10 +263,11 @@ describe("PaginatedKeyAliasSelect", () => {
       data: mockEmptyPages,
     } as any);
 
+    const user = userEvent.setup();
     renderWithProviders(<PaginatedKeyAliasSelect onChange={mockOnChange} />);
 
     const combobox = screen.getByRole("combobox");
-    await userEvent.click(combobox);
+    await user.click(combobox);
 
     await waitFor(() => {
       expect(screen.getByText("No key aliases found")).toBeInTheDocument();

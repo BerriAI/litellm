@@ -1,4 +1,4 @@
-import { screen, waitFor } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders } from "../../../../tests/test-utils";
@@ -43,6 +43,24 @@ const mockEmptyPages = {
   pages: [{ data: [], total_count: 0, current_page: 1, total_pages: 1, size: 50 }],
 };
 
+// The popover renders each option as a <button> containing the model name
+// and model ID as separate text nodes. Because these are not role="option",
+// we locate them via the visible "Model ID: <id>" label.
+const getModelOption = (modelId: string) => {
+  const dialog = screen.queryByRole("dialog");
+  const scope = dialog ? within(dialog) : screen;
+  const idText = scope.getByText(`Model ID: ${modelId}`);
+  const btn = idText.closest("button");
+  if (!btn) throw new Error(`No button for model ${modelId}`);
+  return btn;
+};
+const queryModelOption = (modelId: string) => {
+  const dialog = screen.queryByRole("dialog");
+  const scope = dialog ? within(dialog) : screen;
+  const idText = scope.queryByText(`Model ID: ${modelId}`);
+  return idText ? idText.closest("button") : null;
+};
+
 describe("PaginatedModelSelect", () => {
   const mockOnChange = vi.fn();
 
@@ -75,26 +93,30 @@ describe("PaginatedModelSelect", () => {
   });
 
   it("should display model options when data is loaded", async () => {
-    renderWithProviders(<PaginatedModelSelect onChange={mockOnChange} />);
-
-    const combobox = screen.getByRole("combobox");
-    await userEvent.click(combobox);
-
-    await waitFor(() => {
-      expect(screen.getByRole("option", { name: "GPT-4 (model-1)" })).toBeInTheDocument();
-      expect(screen.getByRole("option", { name: "Claude-3 (model-2)" })).toBeInTheDocument();
-    });
-  });
-
-  it("should call onChange when user selects a model", async () => {
-    const user = userEvent.setup({ delay: null });
+    const user = userEvent.setup();
     renderWithProviders(<PaginatedModelSelect onChange={mockOnChange} />);
 
     const combobox = screen.getByRole("combobox");
     await user.click(combobox);
 
-    const visibleOption = await screen.findByTitle("GPT-4 (model-1)");
-    await user.click(visibleOption);
+    await waitFor(() => {
+      expect(getModelOption("model-1")).toBeInTheDocument();
+      expect(getModelOption("model-2")).toBeInTheDocument();
+    });
+    const dialog = screen.getByRole("dialog");
+    expect(within(dialog).getByText("GPT-4")).toBeInTheDocument();
+    expect(within(dialog).getByText("Claude-3")).toBeInTheDocument();
+  });
+
+  it("should call onChange when user selects a model", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<PaginatedModelSelect onChange={mockOnChange} />);
+
+    const combobox = screen.getByRole("combobox");
+    await user.click(combobox);
+
+    const option = await waitFor(() => getModelOption("model-1"));
+    await user.click(option);
 
     await waitFor(() => {
       expect(mockOnChange).toHaveBeenCalledWith("model-1");
@@ -102,15 +124,16 @@ describe("PaginatedModelSelect", () => {
   });
 
   it("should display selected value when value prop is provided", async () => {
+    const user = userEvent.setup();
     renderWithProviders(
       <PaginatedModelSelect value="model-1" onChange={mockOnChange} />,
     );
 
     const combobox = screen.getByRole("combobox");
-    await userEvent.click(combobox);
+    await user.click(combobox);
 
     await waitFor(() => {
-      expect(screen.getByRole("option", { name: "GPT-4 (model-1)" })).toBeInTheDocument();
+      expect(getModelOption("model-1")).toBeInTheDocument();
     });
   });
 
@@ -151,20 +174,20 @@ describe("PaginatedModelSelect", () => {
       isFetchingNextPage: false,
     } as any);
 
+    const user = userEvent.setup();
     renderWithProviders(<PaginatedModelSelect onChange={mockOnChange} />);
 
     const combobox = screen.getByRole("combobox");
-    await userEvent.click(combobox);
+    await user.click(combobox);
 
+    let option: HTMLElement | null = null;
     await waitFor(() => {
-      expect(screen.getByRole("option", { name: "GPT-4 (model-1)" })).toBeInTheDocument();
+      option = getModelOption("model-1");
+      expect(option).toBeInTheDocument();
     });
 
-    const scrollableContainer = document.querySelector(
-      ".ant-select-dropdown .rc-virtual-list-holder",
-    );
-    expect(scrollableContainer).toBeInTheDocument();
-    expect(scrollableContainer).toHaveAttribute("style");
+    const scrollableContainer = option!.parentElement;
+    expect(scrollableContainer).toHaveClass("overflow-y-auto");
   });
 
   it("should deduplicate models with same id across pages", async () => {
@@ -190,14 +213,16 @@ describe("PaginatedModelSelect", () => {
       isLoading: false,
     } as any);
 
+    const user = userEvent.setup();
     renderWithProviders(<PaginatedModelSelect onChange={mockOnChange} />);
 
     const combobox = screen.getByRole("combobox");
-    await userEvent.click(combobox);
+    await user.click(combobox);
 
     await waitFor(() => {
-      const model1Options = screen.queryAllByRole("option", { name: /model-1/ });
-      expect(model1Options.length).toBe(1);
+      const dialog = screen.getByRole("dialog");
+      const matches = within(dialog).queryAllByText("Model ID: model-1");
+      expect(matches.length).toBe(1);
     });
   });
 
@@ -225,16 +250,18 @@ describe("PaginatedModelSelect", () => {
       isLoading: false,
     } as any);
 
+    const user = userEvent.setup();
     renderWithProviders(<PaginatedModelSelect onChange={mockOnChange} />);
 
     const combobox = screen.getByRole("combobox");
-    await userEvent.click(combobox);
+    await user.click(combobox);
 
     await waitFor(() => {
-      expect(screen.getByRole("option", { name: "Valid Model (valid-id)" })).toBeInTheDocument();
-      expect(screen.queryByRole("option", { name: "No ID" })).not.toBeInTheDocument();
-      expect(screen.queryByRole("option", { name: "Empty ID" })).not.toBeInTheDocument();
+      expect(getModelOption("valid-id")).toBeInTheDocument();
     });
+    const dialog = screen.getByRole("dialog");
+    expect(within(dialog).queryByText("No ID")).not.toBeInTheDocument();
+    expect(within(dialog).queryByText("Empty ID")).not.toBeInTheDocument();
   });
 
   it("should show model ID only when model_name is empty", async () => {
@@ -257,14 +284,18 @@ describe("PaginatedModelSelect", () => {
       isLoading: false,
     } as any);
 
+    const user = userEvent.setup();
     renderWithProviders(<PaginatedModelSelect onChange={mockOnChange} />);
 
     const combobox = screen.getByRole("combobox");
-    await userEvent.click(combobox);
+    await user.click(combobox);
 
     await waitFor(() => {
-      expect(screen.getByRole("option", { name: "id-only" })).toBeInTheDocument();
+      expect(getModelOption("id-only")).toBeInTheDocument();
     });
+    // No "Model name:" label is shown when model_name is empty.
+    const dialog = screen.getByRole("dialog");
+    expect(within(dialog).queryByText("Model name:")).not.toBeInTheDocument();
   });
 
   it("should respect allowClear prop", () => {
@@ -279,7 +310,7 @@ describe("PaginatedModelSelect", () => {
     renderWithProviders(<PaginatedModelSelect onChange={mockOnChange} disabled />);
 
     const combobox = screen.getByRole("combobox");
-    expect(combobox.closest(".ant-select")).toHaveClass("ant-select-disabled");
+    expect(combobox).toBeDisabled();
   });
 
   it("should not call fetchNextPage when hasNextPage is false", async () => {
@@ -288,12 +319,13 @@ describe("PaginatedModelSelect", () => {
       hasNextPage: false,
     } as any);
 
+    const user = userEvent.setup();
     renderWithProviders(<PaginatedModelSelect onChange={mockOnChange} />);
 
-    await userEvent.click(screen.getByRole("combobox"));
+    await user.click(screen.getByRole("combobox"));
 
     await waitFor(() => {
-      expect(screen.getByRole("option", { name: "GPT-4 (model-1)" })).toBeInTheDocument();
+      expect(getModelOption("model-1")).toBeInTheDocument();
     });
 
     expect(mockFetchNextPage).not.toHaveBeenCalled();
