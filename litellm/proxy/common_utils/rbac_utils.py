@@ -13,6 +13,14 @@ from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 
 FeatureName = Literal["agents", "vector_stores"]
 
+OrgAdminFeatureName = Literal["key_generate", "team_create", "model_add"]
+
+_ORG_ADMIN_FEATURE_LABELS: dict = {
+    "key_generate": "key generation",
+    "team_create": "team creation",
+    "model_add": "model creation",
+}
+
 
 async def check_feature_access_for_user(
     user_api_key_dict: UserAPIKeyAuth,
@@ -66,5 +74,38 @@ async def check_feature_access_for_user(
         status_code=403,
         detail={
             "error": f"Access to {feature_name} is disabled for your role. Contact your proxy admin."
+        },
+    )
+
+
+async def check_org_admin_feature_access(
+    user_api_key_dict: UserAPIKeyAuth,
+    feature_name: OrgAdminFeatureName,
+) -> None:
+    """
+    Raise HTTP 403 if the user is an org admin and the given feature is
+    disabled for org admins via UI settings.
+
+    Only blocks the ORG_ADMIN role — proxy admins and all other roles are
+    unaffected, so those paths continue to be gated by their existing auth
+    checks.
+    """
+    if user_api_key_dict.user_role not in (
+        LitellmUserRoles.ORG_ADMIN,
+        LitellmUserRoles.ORG_ADMIN.value,
+    ):
+        return
+
+    from litellm.proxy.proxy_server import general_settings
+
+    disable_flag = f"disable_{feature_name}_for_org_admin"
+    if not general_settings.get(disable_flag, False):
+        return
+
+    label = _ORG_ADMIN_FEATURE_LABELS.get(feature_name, feature_name)
+    raise HTTPException(
+        status_code=403,
+        detail={
+            "error": f"{label} is disabled for org admins. Contact your proxy admin."
         },
     )
