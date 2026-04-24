@@ -184,9 +184,13 @@ class TestAnthropicLoggingHandlerModelFallback:
         logging_obj = self._create_mock_logging_obj()  # Empty dict
 
         model = request_body.get("model", "")
-        if not model and hasattr(logging_obj, 'model_call_details') and logging_obj.model_call_details.get('model'):
-            model = logging_obj.model_call_details.get('model')
-            
+        if (
+            not model
+            and hasattr(logging_obj, "model_call_details")
+            and logging_obj.model_call_details.get("model")
+        ):
+            model = logging_obj.model_call_details.get("model")
+
         assert model == ""  # Should remain empty
 
 
@@ -339,10 +343,10 @@ class TestAnthropicBatchPassthroughCostTracking:
                 "errored": 0,
                 "expired": 0,
                 "processing": 1,
-                "succeeded": 0
+                "succeeded": 0,
             },
             "results_url": "https://api.anthropic.com/v1/messages/batches/msgbatch_01Wj7gkQk7gn4MpAKR8ZEDU2/results",
-            "type": "message_batch"
+            "type": "message_batch",
         }
         return mock_response
 
@@ -364,21 +368,20 @@ class TestAnthropicBatchPassthroughCostTracking:
                     "custom_id": "my-custom-id-1",
                     "params": {
                         "max_tokens": 1024,
-                        "messages": [
-                            {
-                                "content": "Hello, world",
-                                "role": "user"
-                            }
-                        ],
-                        "model": "claude-sonnet-4-5-20250929"
-                    }
+                        "messages": [{"content": "Hello, world", "role": "user"}],
+                        "model": "claude-sonnet-4-5-20250929",
+                    },
                 }
             ]
         }
 
-    @patch('litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler.AnthropicPassthroughLoggingHandler._store_batch_managed_object')
-    @patch('litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler.AnthropicPassthroughLoggingHandler.get_actual_model_id_from_router')
-    @patch('litellm.llms.anthropic.batches.transformation.AnthropicBatchesConfig')
+    @patch(
+        "litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler.AnthropicPassthroughLoggingHandler._store_batch_managed_object"
+    )
+    @patch(
+        "litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler.AnthropicPassthroughLoggingHandler.get_actual_model_id_from_router"
+    )
+    @patch("litellm.llms.anthropic.batches.transformation.AnthropicBatchesConfig")
     def test_batch_creation_handler_success(
         self,
         mock_batches_config,
@@ -386,14 +389,14 @@ class TestAnthropicBatchPassthroughCostTracking:
         mock_store_batch,
         mock_httpx_response,
         mock_logging_obj,
-        mock_request_body
+        mock_request_body,
     ):
         """Test successful batch creation and managed object storage"""
         from litellm.types.utils import LiteLLMBatch
-        
+
         # Setup mocks
         mock_get_model_id.return_value = "claude-sonnet-4-5-20250929"
-        
+
         mock_batch_response = LiteLLMBatch(
             id="msgbatch_01Wj7gkQk7gn4MpAKR8ZEDU2",
             object="batch",
@@ -416,11 +419,13 @@ class TestAnthropicBatchPassthroughCostTracking:
             request_counts={"total": 1, "completed": 0, "failed": 0},
             metadata={},
         )
-        
+
         mock_batches_config_instance = MagicMock()
-        mock_batches_config_instance.transform_retrieve_batch_response.return_value = mock_batch_response
+        mock_batches_config_instance.transform_retrieve_batch_response.return_value = (
+            mock_batch_response
+        )
         mock_batches_config.return_value = mock_batches_config_instance
-        
+
         # Test the handler
         result = AnthropicPassthroughLoggingHandler.batch_creation_handler(
             httpx_response=mock_httpx_response,
@@ -432,7 +437,7 @@ class TestAnthropicBatchPassthroughCostTracking:
             cache_hit=False,
             request_body=mock_request_body,
         )
-        
+
         # Verify the result
         assert result is not None
         assert "result" in result
@@ -442,33 +447,33 @@ class TestAnthropicBatchPassthroughCostTracking:
         assert result["kwargs"]["batch_id"] == "msgbatch_01Wj7gkQk7gn4MpAKR8ZEDU2"
         assert result["kwargs"]["batch_job_state"] == "in_progress"
         assert "unified_object_id" in result["kwargs"]
-        
+
         # Verify batch was stored
         mock_store_batch.assert_called_once()
         call_kwargs = mock_store_batch.call_args[1]
         assert call_kwargs["model_object_id"] == "msgbatch_01Wj7gkQk7gn4MpAKR8ZEDU2"
         assert call_kwargs["batch_object"].status == "validating"
-        
+
         # Verify the response object
         assert result["result"].model == "claude-sonnet-4-5-20250929"
         assert result["result"].object == "batch"
 
-    @patch('litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler.AnthropicPassthroughLoggingHandler._store_batch_managed_object')
-    @patch('litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler.AnthropicPassthroughLoggingHandler.get_actual_model_id_from_router')
+    @patch(
+        "litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler.AnthropicPassthroughLoggingHandler._store_batch_managed_object"
+    )
+    @patch(
+        "litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler.AnthropicPassthroughLoggingHandler.get_actual_model_id_from_router"
+    )
     def test_batch_creation_handler_model_extraction_from_nested_request(
-        self,
-        mock_get_model_id,
-        mock_store_batch,
-        mock_httpx_response,
-        mock_logging_obj
+        self, mock_get_model_id, mock_store_batch, mock_httpx_response, mock_logging_obj
     ):
         """Test that model is correctly extracted from nested request structure"""
         from litellm.llms.anthropic.batches.transformation import AnthropicBatchesConfig
         from litellm.types.utils import LiteLLMBatch
-        
+
         # Setup mocks
         mock_get_model_id.return_value = "claude-sonnet-4-5-20250929"
-        
+
         mock_batch_response = LiteLLMBatch(
             id="msgbatch_123",
             object="batch",
@@ -479,8 +484,12 @@ class TestAnthropicBatchPassthroughCostTracking:
             created_at=1704067200,
             request_counts={"total": 1, "completed": 0, "failed": 0},
         )
-        
-        with patch.object(AnthropicBatchesConfig, 'transform_retrieve_batch_response', return_value=mock_batch_response):
+
+        with patch.object(
+            AnthropicBatchesConfig,
+            "transform_retrieve_batch_response",
+            return_value=mock_batch_response,
+        ):
             # Request body with nested model in requests[0].params.model
             request_body = {
                 "requests": [
@@ -488,12 +497,12 @@ class TestAnthropicBatchPassthroughCostTracking:
                         "custom_id": "test-1",
                         "params": {
                             "model": "claude-sonnet-4-5-20250929",
-                            "messages": [{"role": "user", "content": "test"}]
-                        }
+                            "messages": [{"role": "user", "content": "test"}],
+                        },
                     }
                 ]
             }
-            
+
             result = AnthropicPassthroughLoggingHandler.batch_creation_handler(
                 httpx_response=mock_httpx_response,
                 logging_obj=mock_logging_obj,
@@ -504,26 +513,28 @@ class TestAnthropicBatchPassthroughCostTracking:
                 cache_hit=False,
                 request_body=request_body,
             )
-            
+
             # Verify model was extracted correctly
             assert result["kwargs"]["model"] == "claude-sonnet-4-5-20250929"
 
-    @patch('litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler.AnthropicPassthroughLoggingHandler.get_actual_model_id_from_router')
+    @patch(
+        "litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler.AnthropicPassthroughLoggingHandler.get_actual_model_id_from_router"
+    )
     def test_batch_creation_handler_model_prefix_when_not_in_router(
         self,
         mock_get_model_id,
         mock_httpx_response,
         mock_logging_obj,
-        mock_request_body
+        mock_request_body,
     ):
         """Test that model gets 'anthropic/' prefix when not found in router"""
         from litellm.llms.anthropic.batches.transformation import AnthropicBatchesConfig
         from litellm.types.utils import LiteLLMBatch
         import base64
-        
+
         # Model not in router - returns same model name
         mock_get_model_id.return_value = "claude-sonnet-4-5-20250929"
-        
+
         mock_batch_response = LiteLLMBatch(
             id="msgbatch_123",
             object="batch",
@@ -534,9 +545,15 @@ class TestAnthropicBatchPassthroughCostTracking:
             created_at=1704067200,
             request_counts={"total": 1, "completed": 0, "failed": 0},
         )
-        
-        with patch.object(AnthropicBatchesConfig, 'transform_retrieve_batch_response', return_value=mock_batch_response):
-            with patch.object(AnthropicPassthroughLoggingHandler, '_store_batch_managed_object'):
+
+        with patch.object(
+            AnthropicBatchesConfig,
+            "transform_retrieve_batch_response",
+            return_value=mock_batch_response,
+        ):
+            with patch.object(
+                AnthropicPassthroughLoggingHandler, "_store_batch_managed_object"
+            ):
                 result = AnthropicPassthroughLoggingHandler.batch_creation_handler(
                     httpx_response=mock_httpx_response,
                     logging_obj=mock_logging_obj,
@@ -547,22 +564,23 @@ class TestAnthropicBatchPassthroughCostTracking:
                     cache_hit=False,
                     request_body=mock_request_body,
                 )
-                
+
                 # Verify unified_object_id contains anthropic/ prefix
                 unified_object_id = result["kwargs"]["unified_object_id"]
                 decoded = base64.urlsafe_b64decode(unified_object_id + "==").decode()
-                assert "anthropic/claude-sonnet-4-5-20250929" in decoded or "claude-sonnet-4-5-20250929" in decoded
+                assert (
+                    "anthropic/claude-sonnet-4-5-20250929" in decoded
+                    or "claude-sonnet-4-5-20250929" in decoded
+                )
 
     def test_batch_creation_handler_failure_status_code(
-        self,
-        mock_logging_obj,
-        mock_request_body
+        self, mock_logging_obj, mock_request_body
     ):
         """Test batch creation handler with non-200 status code"""
         mock_response = MagicMock()
         mock_response.status_code = 400
         mock_response.json.return_value = {"error": "Bad request"}
-        
+
         result = AnthropicPassthroughLoggingHandler.batch_creation_handler(
             httpx_response=mock_response,
             logging_obj=mock_logging_obj,
@@ -573,26 +591,24 @@ class TestAnthropicBatchPassthroughCostTracking:
             cache_hit=False,
             request_body=mock_request_body,
         )
-        
+
         # Verify error response
         assert result is not None
         assert result["kwargs"]["batch_job_state"] == "failed"
         assert result["kwargs"]["response_cost"] == 0.0
 
-    @patch('litellm.proxy.proxy_server.proxy_logging_obj')
+    @patch("litellm.proxy.proxy_server.proxy_logging_obj")
     def test_store_batch_managed_object_success(
-        self,
-        mock_proxy_logging_obj,
-        mock_logging_obj
+        self, mock_proxy_logging_obj, mock_logging_obj
     ):
         """Test storing batch managed object"""
         from litellm.types.utils import LiteLLMBatch
-        
+
         # Setup mocks
         mock_managed_files_hook = MagicMock()
         mock_managed_files_hook.store_unified_object_id = AsyncMock()
         mock_proxy_logging_obj.get_proxy_hook.return_value = mock_managed_files_hook
-        
+
         batch_object = LiteLLMBatch(
             id="msgbatch_123",
             object="batch",
@@ -603,15 +619,17 @@ class TestAnthropicBatchPassthroughCostTracking:
             created_at=1704067200,
             request_counts={"total": 1, "completed": 0, "failed": 0},
         )
-        
-        with patch('asyncio.create_task'):
+
+        with patch("asyncio.create_task"):
             AnthropicPassthroughLoggingHandler._store_batch_managed_object(
                 unified_object_id="test-unified-id",
                 batch_object=batch_object,
                 model_object_id="msgbatch_123",
                 logging_obj=mock_logging_obj,
-                user_id="test-user"
+                user_id="test-user",
             )
-            
+
             # Verify managed files hook was called
-            mock_proxy_logging_obj.get_proxy_hook.assert_called_once_with("managed_files") 
+            mock_proxy_logging_obj.get_proxy_hook.assert_called_once_with(
+                "managed_files"
+            )

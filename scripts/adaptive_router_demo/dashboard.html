@@ -1,0 +1,635 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Adaptive Router — Live</title>
+  <style>
+    :root {
+      --bg: #0b0f17;
+      --panel: #131a26;
+      --panel-2: #1b2433;
+      --fg: #e7ecf3;
+      --muted: #8a95a8;
+      --accent: #5dd6a4;
+      --accent-2: #6fb6ff;
+      --warn: #f6b94d;
+      --bad: #ff6b6b;
+      --bar-bg: #233047;
+      --border: #25324a;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display",
+                   "Segoe UI", Roboto, Inter, sans-serif;
+      background: var(--bg);
+      color: var(--fg);
+      font-size: 14px;
+      line-height: 1.45;
+    }
+    header {
+      padding: 18px 28px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      background: var(--panel);
+    }
+    header h1 {
+      margin: 0;
+      font-size: 18px;
+      font-weight: 600;
+      letter-spacing: 0.2px;
+    }
+    header .dot {
+      width: 8px; height: 8px; border-radius: 50%;
+      background: var(--bad); display: inline-block; margin-right: 6px;
+    }
+    header .dot.ok { background: var(--accent); }
+    header .status { color: var(--muted); font-size: 12px; }
+
+    .connect {
+      padding: 16px 28px;
+      display: flex; gap: 12px; align-items: center;
+      background: var(--panel-2);
+      border-bottom: 1px solid var(--border);
+      flex-wrap: wrap;
+    }
+    .connect input, .connect select {
+      background: #0e1422;
+      color: var(--fg);
+      border: 1px solid var(--border);
+      padding: 7px 10px;
+      border-radius: 6px;
+      font-size: 13px;
+      font-family: inherit;
+    }
+    .connect input[type=text] { width: 240px; }
+    .connect input[type=password] { width: 200px; }
+    .connect input[type=number] { width: 70px; }
+    .connect button {
+      background: var(--accent-2);
+      color: #0b0f17;
+      border: none;
+      padding: 7px 14px;
+      border-radius: 6px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .connect label { color: var(--muted); font-size: 12px; }
+
+    main {
+      display: grid;
+      grid-template-columns: 1fr 360px;
+      gap: 20px;
+      padding: 20px 28px 40px;
+      max-width: 1400px;
+    }
+    @media (max-width: 1000px) { main { grid-template-columns: 1fr; } }
+
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 18px 20px;
+    }
+    .panel h2 {
+      margin: 0 0 14px;
+      font-size: 13px;
+      text-transform: uppercase;
+      letter-spacing: 0.6px;
+      color: var(--muted);
+      font-weight: 600;
+    }
+
+    .rt-group {
+      margin-bottom: 18px;
+      padding-bottom: 14px;
+      border-bottom: 1px dashed var(--border);
+    }
+    .rt-group:last-child { border-bottom: none; margin-bottom: 0; }
+
+    .rt-title {
+      font-weight: 600;
+      font-size: 13px;
+      color: var(--fg);
+      margin-bottom: 8px;
+      display: flex; justify-content: space-between;
+    }
+    .rt-title .meta { color: var(--muted); font-weight: 400; font-size: 12px; }
+
+    .row {
+      display: grid;
+      grid-template-columns: 80px 1fr 130px;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 4px;
+      font-size: 13px;
+    }
+    .row .name { color: var(--muted); font-family: ui-monospace, monospace; }
+    .row .name.lead { color: var(--accent); font-weight: 600; }
+    .row .num   { color: var(--muted); font-family: ui-monospace, monospace;
+                  text-align: right; font-size: 12px; }
+
+    .bar { height: 14px; background: var(--bar-bg); border-radius: 4px;
+           position: relative; overflow: hidden; }
+    .bar > .fill {
+      height: 100%;
+      background: linear-gradient(90deg, var(--accent), var(--accent-2));
+      border-radius: 4px;
+      transition: width 0.4s ease;
+    }
+    .bar > .conf {
+      position: absolute; top: 0; bottom: 0; width: 1px;
+      background: rgba(255,255,255,0.4);
+    }
+    .bar > .conf.lo { background: rgba(255,255,255,0.5); }
+    .bar > .conf.hi { background: rgba(255,255,255,0.5); }
+
+    .pick-pct {
+      margin-top: 4px;
+      font-size: 11px;
+      color: var(--muted);
+      padding-left: 90px;
+    }
+
+    .cost-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .cost-card {
+      background: var(--panel-2);
+      border-radius: 8px;
+      padding: 14px 16px;
+    }
+    .cost-card .label { color: var(--muted); font-size: 11px;
+                        text-transform: uppercase; letter-spacing: 0.5px; }
+    .cost-card .value { font-size: 22px; font-weight: 600; margin-top: 4px;
+                        font-family: ui-monospace, monospace; }
+    .cost-card .value.big { font-size: 28px; }
+    .cost-card .sub   { color: var(--muted); font-size: 12px; margin-top: 2px; }
+    .cost-card.good   { border: 1px solid rgba(93, 214, 164, 0.35); }
+    .cost-card.warn   { border: 1px solid rgba(246, 185, 77, 0.35); }
+    .cost-card.bad    { border: 1px solid rgba(255, 107, 107, 0.35); }
+    .savings {
+      margin-top: 12px;
+      padding: 10px 14px;
+      background: rgba(93, 214, 164, 0.08);
+      border: 1px solid rgba(93, 214, 164, 0.3);
+      border-radius: 8px;
+      color: var(--accent);
+      font-weight: 600;
+      font-size: 14px;
+    }
+    .savings.warn {
+      background: rgba(246, 185, 77, 0.08);
+      border-color: rgba(246, 185, 77, 0.3);
+      color: var(--warn);
+    }
+    .savings.bad {
+      background: rgba(255, 107, 107, 0.08);
+      border-color: rgba(255, 107, 107, 0.3);
+      color: var(--bad);
+    }
+    .savings .verdict-sub {
+      display: block;
+      color: var(--muted);
+      font-weight: 400;
+      font-size: 12px;
+      margin-top: 4px;
+    }
+    .panel-explainer {
+      margin: -8px 0 14px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.5;
+      padding: 10px 12px;
+      background: var(--panel-2);
+      border-radius: 6px;
+      border-left: 3px solid var(--accent-2);
+    }
+    .panel-explainer b { color: var(--fg); font-weight: 600; }
+
+    .activity {
+      max-height: 360px; overflow-y: auto;
+      font-family: ui-monospace, monospace;
+      font-size: 12px;
+    }
+    .activity-row {
+      padding: 6px 8px;
+      border-bottom: 1px solid var(--border);
+      color: var(--muted);
+      display: grid;
+      grid-template-columns: 70px 1fr;
+      gap: 8px;
+    }
+    .activity-row .ts { color: #4f5d77; }
+    .activity-row .alpha { color: var(--accent); }
+    .activity-row .beta  { color: var(--bad); }
+
+    .queue {
+      display: flex; gap: 16px; flex-wrap: wrap;
+      font-size: 12px; color: var(--muted);
+      margin-top: 8px;
+    }
+    .queue span b { color: var(--fg); font-weight: 600; }
+
+    .empty {
+      color: var(--muted); font-style: italic;
+      text-align: center; padding: 20px;
+    }
+
+    .pill {
+      background: var(--panel-2);
+      color: var(--muted);
+      padding: 3px 8px;
+      border-radius: 12px;
+      font-size: 11px;
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>⚡ Adaptive Router — Live</h1>
+  <span class="status"><span id="conn-dot" class="dot"></span><span id="conn-label">Disconnected</span></span>
+  <span id="poll-info" class="status"></span>
+</header>
+
+<div class="connect">
+  <label>Proxy URL <input id="proxy-url" type="text" value="http://localhost:4000" /></label>
+  <label>Master Key <input id="api-key" type="password" placeholder="sk-1234" /></label>
+  <label>Avg tokens/req <input id="avg-tokens" type="number" value="500" min="1" /></label>
+  <label>Poll ms <input id="poll-ms" type="number" value="500" min="100" /></label>
+  <button id="connect-btn">Connect</button>
+  <select id="router-select" style="display:none;"></select>
+</div>
+
+<main>
+  <section class="panel" id="bandit-panel">
+    <h2>How well each model performs, by request type</h2>
+    <div class="panel-explainer">
+      Each bar shows the <b>fraction of recent feedback that was positive</b>
+      for that model on that kind of request. Wider = better. The number
+      next to it (<b>"N signals"</b>) is how much real feedback the bar is
+      based on — more signals means the router is more confident.
+      It picks higher-quality bars first, with cost as a tiebreaker.
+    </div>
+    <div id="cells" class="empty">Connect to see live bandit state.</div>
+  </section>
+
+  <aside style="display:flex; flex-direction:column; gap:20px;">
+    <section class="panel">
+      <h2>Are the savings worth it?</h2>
+      <div class="panel-explainer">
+        <b>Cost saved</b> is what you spent vs. always picking the most
+        expensive model. <b>Quality kept</b> is the average quality of
+        the model that was actually picked, divided by the average
+        quality of the best-known model for each request type.
+        <i>If quality kept stays high while cost saved is high, you're
+        winning. If quality drops fast, you're saving money but making
+        users mad.</i>
+      </div>
+      <div class="cost-grid">
+        <div class="cost-card good">
+          <div class="label">💰 Cost saved</div>
+          <div class="value big" id="metric-cost-pct">—</div>
+          <div class="sub" id="metric-cost-sub">no traffic yet</div>
+        </div>
+        <div class="cost-card good">
+          <div class="label">⭐ Quality kept</div>
+          <div class="value big" id="metric-quality-pct">—</div>
+          <div class="sub" id="metric-quality-sub">vs best-known model</div>
+        </div>
+      </div>
+      <div class="savings" id="verdict">Send some traffic to see how the router is balancing cost and quality.</div>
+      <div class="queue" id="queue-info"></div>
+    </section>
+
+    <section class="panel">
+      <h2>Activity (last 30)</h2>
+      <div id="activity" class="activity empty">Waiting for signals…</div>
+    </section>
+  </aside>
+</main>
+
+<script>
+// ---- helpers ---------------------------------------------------------
+const REQ_TYPE_ORDER = [
+  "code_generation",
+  "code_understanding",
+  "technical_design",
+  "analytical_reasoning",
+  "writing",
+  "factual_lookup",
+  "general",
+];
+
+function fmtPct(n)   { return (n * 100).toFixed(0) + "%"; }
+function fmtUSD(n)   { return "$" + n.toFixed(4); }
+function nowTS()     {
+  const d = new Date();
+  return d.toTimeString().slice(0, 8);
+}
+function ssGet(k)    { try { return sessionStorage.getItem(k) || ""; } catch { return ""; } }
+function ssSet(k, v) { try { sessionStorage.setItem(k, v); } catch {} }
+
+// ---- state -----------------------------------------------------------
+const STATE = {
+  proxyUrl: "",
+  apiKey: "",
+  pollMs: 500,
+  avgTokens: 500,
+  timer: null,
+  routers: [],            // last snapshot list
+  selectedRouter: null,   // name
+  prevCells: new Map(),   // (router, rt, model) -> {alpha,beta,samples}
+  costAdaptive: 0,
+  costBaseline: 0,
+  totalRequests: 0,
+  activity: [],           // [{ts, msg, kind}]
+};
+
+// ---- rendering -------------------------------------------------------
+function renderRouters(routers) {
+  const sel = document.getElementById("router-select");
+  if (routers.length <= 1) {
+    sel.style.display = "none";
+  } else {
+    sel.style.display = "";
+    if (sel.options.length !== routers.length) {
+      sel.innerHTML = "";
+      for (const r of routers) {
+        const opt = document.createElement("option");
+        opt.value = r.router_name; opt.textContent = r.router_name;
+        sel.appendChild(opt);
+      }
+      sel.value = STATE.selectedRouter || routers[0].router_name;
+    }
+  }
+  if (!STATE.selectedRouter) STATE.selectedRouter = routers[0].router_name;
+}
+
+function pickShare(rows) {
+  // Approximate prob each model wins a Thompson-sample draw against the others.
+  // Simple proxy: softmax over quality_mean with temperature=0.05.
+  if (rows.length === 0) return {};
+  const T = 0.05;
+  const expv = rows.map(r => Math.exp(r.quality_mean / T));
+  const sum = expv.reduce((a, b) => a + b, 0);
+  const out = {};
+  rows.forEach((r, i) => out[r.model] = expv[i] / sum);
+  return out;
+}
+
+function renderCells(router) {
+  const container = document.getElementById("cells");
+  container.classList.remove("empty");
+  const byType = new Map();
+  for (const c of router.cells) {
+    if (!byType.has(c.request_type)) byType.set(c.request_type, []);
+    byType.get(c.request_type).push(c);
+  }
+  const order = REQ_TYPE_ORDER.filter(t => byType.has(t));
+  for (const t of byType.keys()) if (!order.includes(t)) order.push(t);
+
+  let html = "";
+  for (const rt of order) {
+    const rows = byType.get(rt).sort((a, b) => b.quality_mean - a.quality_mean);
+    const shares = pickShare(rows);
+    const lead = rows[0];
+    html += `<div class="rt-group">`;
+    html += `<div class="rt-title"><span>${rt}</span>`;
+    html += `<span class="meta">${rows.reduce((s, r) => s + (r.samples - 10), 0)} learning signals</span>`;
+    html += `</div>`;
+    for (const r of rows) {
+      const pct = fmtPct(r.quality_mean);
+      const share = fmtPct(shares[r.model] || 0);
+      const observed = Math.max(0, r.samples - 10); // strip cold-start prior mass
+      const isLead = r.model === lead.model;
+      const sigLabel = observed === 0 ? "no signals yet" : `${observed.toFixed(0)} signals`;
+      // Tooltip exposes raw Beta(α,β) for power users.
+      const tip = `Beta(α=${r.alpha.toFixed(1)}, β=${r.beta.toFixed(1)}) — ` +
+                  `started at α=5,β=5 (cold-start prior), so the bar reflects ` +
+                  `${observed.toFixed(0)} real feedback signals so far.`;
+      html += `<div class="row" title="${tip}">`;
+      html += `<div class="name ${isLead ? 'lead' : ''}">${r.model}</div>`;
+      html += `<div class="bar"><div class="fill" style="width:${(r.quality_mean*100).toFixed(1)}%"></div></div>`;
+      html += `<div class="num">${pct} good · ${sigLabel}</div>`;
+      html += `</div>`;
+      html += `<div class="pick-pct">→ ${share} of picks (Thompson softmax estimate)</div>`;
+    }
+    html += `</div>`;
+  }
+  container.innerHTML = html;
+}
+
+function computeQualityKept(router) {
+  // For each request type: pick_count_per_cell × quality_mean_per_cell
+  // summed and divided by total picks gives "average quality delivered".
+  // Compare against best-cell quality per type (weighted by picks in that type).
+  const byType = new Map();
+  for (const c of router.cells) {
+    if (!byType.has(c.request_type)) byType.set(c.request_type, []);
+    byType.get(c.request_type).push(c);
+  }
+  let totalPicks = 0, weightedDelivered = 0, weightedBest = 0;
+  for (const cells of byType.values()) {
+    const bestQ = Math.max(...cells.map(c => c.quality_mean));
+    for (const c of cells) {
+      const picks = Math.max(0, c.samples - 10);
+      if (picks === 0) continue;
+      totalPicks       += picks;
+      weightedDelivered += picks * c.quality_mean;
+      weightedBest     += picks * bestQ;
+    }
+  }
+  if (totalPicks === 0 || weightedBest === 0) return null;
+  return {
+    delivered: weightedDelivered / totalPicks,
+    best:      weightedBest      / totalPicks,
+    keptPct:   weightedDelivered / weightedBest,
+    totalPicks,
+  };
+}
+
+function renderTradeoff(router) {
+  const costEl   = document.getElementById("metric-cost-pct");
+  const costSub  = document.getElementById("metric-cost-sub");
+  const qualEl   = document.getElementById("metric-quality-pct");
+  const qualSub  = document.getElementById("metric-quality-sub");
+  const verdict  = document.getElementById("verdict");
+
+  // ---- Cost side ---------------------------------------------------
+  let costSavedPct = null;
+  if (STATE.costBaseline > 0) {
+    costSavedPct = 1 - STATE.costAdaptive / STATE.costBaseline;
+    costEl.textContent = (costSavedPct * 100).toFixed(0) + "%";
+    costSub.textContent = `${fmtUSD(STATE.costAdaptive)} spent vs ${fmtUSD(STATE.costBaseline)} baseline`;
+  } else {
+    costEl.textContent = "—";
+    costSub.textContent = "no traffic yet";
+  }
+
+  // ---- Quality side ------------------------------------------------
+  const q = computeQualityKept(router);
+  if (q) {
+    qualEl.textContent = (q.keptPct * 100).toFixed(0) + "%";
+    qualSub.textContent =
+      `delivered ${(q.delivered*100).toFixed(0)}% vs best-known ${(q.best*100).toFixed(0)}%`;
+  } else {
+    qualEl.textContent = "—";
+    qualSub.textContent = "vs best-known model";
+  }
+
+  // ---- Color-code the cards ----------------------------------------
+  const costCard = costEl.closest(".cost-card");
+  const qualCard = qualEl.closest(".cost-card");
+  costCard.className = "cost-card " + (costSavedPct === null ? "good"
+                                       : costSavedPct >= 0.30 ? "good"
+                                       : costSavedPct >= 0.05 ? "warn" : "bad");
+  qualCard.className = "cost-card " + (!q ? "good"
+                                       : q.keptPct >= 0.90 ? "good"
+                                       : q.keptPct >= 0.75 ? "warn" : "bad");
+
+  // ---- Verdict line ------------------------------------------------
+  if (costSavedPct === null || !q) {
+    verdict.className = "savings";
+    verdict.textContent = "Send some traffic to see how the router is balancing cost and quality.";
+    return;
+  }
+  const savedTxt = costSavedPct >= 0
+    ? `${(costSavedPct*100).toFixed(0)}% cheaper`
+    : `${((-costSavedPct)*100).toFixed(0)}% MORE expensive (still exploring)`;
+  const qualLost = (1 - q.keptPct) * 100;
+  let line, cls;
+  if (q.keptPct >= 0.95 && costSavedPct >= 0.30) {
+    cls = "savings"; line = `✅ Big win: ${savedTxt}, lost only ${qualLost.toFixed(0)}% quality.`;
+  } else if (q.keptPct >= 0.85 && costSavedPct >= 0.10) {
+    cls = "savings"; line = `✅ Good trade: ${savedTxt}, gave up ${qualLost.toFixed(0)}% quality.`;
+  } else if (q.keptPct >= 0.75) {
+    cls = "savings warn"; line = `⚠️ Mixed: ${savedTxt}, but ${qualLost.toFixed(0)}% quality lost. Consider raising the quality weight.`;
+  } else {
+    cls = "savings bad"; line = `❌ Saving money, hurting users: ${savedTxt} but ${qualLost.toFixed(0)}% quality lost. Raise quality weight in the router config.`;
+  }
+  verdict.className = cls;
+  verdict.innerHTML = line +
+    `<span class="verdict-sub">Based on ${q.totalPicks} feedback signals across ${STATE.totalRequests} routed requests.</span>`;
+}
+
+function renderQueue(router) {
+  const q = router.queue || {};
+  document.getElementById("queue-info").innerHTML =
+    `<span>state pending: <b>${q.state_pending ?? 0}</b></span>` +
+    `<span>session pending: <b>${q.session_pending ?? 0}</b></span>` +
+    `<span>sticky live: <b>${router.sticky_sessions_live ?? 0}</b></span>` +
+    `<span>weights: q=<b>${router.weights?.quality ?? "?"}</b> c=<b>${router.weights?.cost ?? "?"}</b></span>`;
+}
+
+function renderActivity() {
+  const el = document.getElementById("activity");
+  if (STATE.activity.length === 0) {
+    el.classList.add("empty");
+    el.textContent = "Waiting for signals…";
+    return;
+  }
+  el.classList.remove("empty");
+  el.innerHTML = STATE.activity.map(a =>
+    `<div class="activity-row"><span class="ts">${a.ts}</span><span>${a.msg}</span></div>`
+  ).join("");
+}
+
+// ---- diff & cost accounting -----------------------------------------
+function processDiff(router, costsByModel) {
+  const maxCost = Math.max(0, ...Object.values(costsByModel));
+  for (const c of router.cells) {
+    const key = `${router.router_name}|${c.request_type}|${c.model}`;
+    const prev = STATE.prevCells.get(key);
+    if (prev) {
+      const dA = c.alpha - prev.alpha;
+      const dB = c.beta  - prev.beta;
+      const dPicks = (c.samples - 10) - (prev.samples - 10);
+      if (dA > 0.001 || dB > 0.001) {
+        const tag = dA > dB
+          ? `<span class="alpha">+${dA.toFixed(0)} 👍</span>`
+          : `<span class="beta">+${dB.toFixed(0)} 👎</span>`;
+        const qNow = (c.alpha / (c.alpha + c.beta) * 100).toFixed(0);
+        STATE.activity.unshift({
+          ts: nowTS(),
+          msg: `${c.request_type} → <b>${c.model}</b> ${tag} (now ${qNow}% good)`,
+        });
+        STATE.activity = STATE.activity.slice(0, 30);
+      }
+      if (dPicks > 0) {
+        const cost = costsByModel[c.model] || 0;
+        STATE.costAdaptive += dPicks * cost * STATE.avgTokens;
+        STATE.costBaseline += dPicks * maxCost * STATE.avgTokens;
+        STATE.totalRequests += dPicks;
+      }
+    }
+    STATE.prevCells.set(key, {
+      alpha: c.alpha, beta: c.beta, samples: c.samples
+    });
+  }
+}
+
+// ---- polling ---------------------------------------------------------
+async function pollOnce() {
+  try {
+    const r = await fetch(`${STATE.proxyUrl}/adaptive_router/state`, {
+      headers: { "Authorization": `Bearer ${STATE.apiKey}` },
+    });
+    if (!r.ok) {
+      setConn(false, `HTTP ${r.status}`);
+      return;
+    }
+    const data = await r.json();
+    setConn(true, `Polling every ${STATE.pollMs}ms`);
+    STATE.routers = data.routers || [];
+    renderRouters(STATE.routers);
+    const router = STATE.routers.find(r => r.router_name === STATE.selectedRouter)
+                 || STATE.routers[0];
+    if (!router) return;
+    processDiff(router, router.model_costs || {});
+    renderCells(router);
+    renderQueue(router);
+    renderTradeoff(router);
+    renderActivity();
+  } catch (e) {
+    setConn(false, e.message);
+  }
+}
+
+function setConn(ok, msg) {
+  document.getElementById("conn-dot").className  = "dot" + (ok ? " ok" : "");
+  document.getElementById("conn-label").textContent = ok ? "Connected" : "Disconnected";
+  document.getElementById("poll-info").textContent = msg || "";
+}
+
+function startPolling() {
+  if (STATE.timer) clearInterval(STATE.timer);
+  pollOnce();
+  STATE.timer = setInterval(pollOnce, STATE.pollMs);
+}
+
+// ---- wiring ----------------------------------------------------------
+document.getElementById("connect-btn").addEventListener("click", () => {
+  STATE.proxyUrl  = document.getElementById("proxy-url").value.trim().replace(/\/$/, "");
+  STATE.apiKey    = document.getElementById("api-key").value.trim();
+  STATE.pollMs    = parseInt(document.getElementById("poll-ms").value, 10) || 500;
+  STATE.avgTokens = parseInt(document.getElementById("avg-tokens").value, 10) || 500;
+  ssSet("ar_proxy_url", STATE.proxyUrl);
+  ssSet("ar_api_key",   STATE.apiKey);
+  startPolling();
+});
+
+document.getElementById("router-select").addEventListener("change", (e) => {
+  STATE.selectedRouter = e.target.value;
+  STATE.prevCells.clear();
+});
+
+window.addEventListener("DOMContentLoaded", () => {
+  const u = ssGet("ar_proxy_url"); if (u) document.getElementById("proxy-url").value = u;
+  const k = ssGet("ar_api_key");   if (k) document.getElementById("api-key").value   = k;
+});
+</script>
+
+</body>
+</html>

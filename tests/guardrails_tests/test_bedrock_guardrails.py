@@ -1107,7 +1107,12 @@ async def test_convert_to_bedrock_format_post_call_streaming_hook():
 
     # Mock the make_bedrock_api_request method to track calls
     async def mock_make_bedrock_api_request(
-        source, messages=None, response=None, request_data=None
+        source,
+        messages=None,
+        response=None,
+        request_data=None,
+        logging_event_type=None,
+        **kwargs,
     ):
         bedrock_calls.append(
             {
@@ -1115,6 +1120,7 @@ async def test_convert_to_bedrock_format_post_call_streaming_hook():
                 "messages": messages,
                 "response": response,
                 "request_data": request_data,
+                "logging_event_type": logging_event_type,
             }
         )
         # Return the mock bedrock response
@@ -1628,7 +1634,9 @@ async def test__redact_pii_matches_null_list_fields():
     }
     redacted = _redact_pii_matches(response_with_null_pii)
     assert redacted is not None
-    assert redacted["assessments"][0]["sensitiveInformationPolicy"]["piiEntities"] is None
+    assert (
+        redacted["assessments"][0]["sensitiveInformationPolicy"]["piiEntities"] is None
+    )
     assert redacted["assessments"][0]["sensitiveInformationPolicy"]["regexes"] is None
 
     # Test 2: null customWords and managedWordLists
@@ -1693,39 +1701,60 @@ async def test_should_raise_guardrail_blocked_exception_null_fields():
         "action": "GUARDRAIL_INTERVENED",
         "assessments": None,
     }
-    assert guardrail._should_raise_guardrail_blocked_exception(response_null_assessments) is False
+    assert (
+        guardrail._should_raise_guardrail_blocked_exception(response_null_assessments)
+        is False
+    )
 
     # Test with null topics in topicPolicy
     response_null_topics = {
         "action": "GUARDRAIL_INTERVENED",
         "assessments": [{"topicPolicy": {"topics": None}}],
     }
-    assert guardrail._should_raise_guardrail_blocked_exception(response_null_topics) is False
+    assert (
+        guardrail._should_raise_guardrail_blocked_exception(response_null_topics)
+        is False
+    )
 
     # Test with null filters in contentPolicy
     response_null_filters = {
         "action": "GUARDRAIL_INTERVENED",
         "assessments": [{"contentPolicy": {"filters": None}}],
     }
-    assert guardrail._should_raise_guardrail_blocked_exception(response_null_filters) is False
+    assert (
+        guardrail._should_raise_guardrail_blocked_exception(response_null_filters)
+        is False
+    )
 
     # Test with null customWords and managedWordLists in wordPolicy
     response_null_words = {
         "action": "GUARDRAIL_INTERVENED",
-        "assessments": [{"wordPolicy": {"customWords": None, "managedWordLists": None}}],
+        "assessments": [
+            {"wordPolicy": {"customWords": None, "managedWordLists": None}}
+        ],
     }
-    assert guardrail._should_raise_guardrail_blocked_exception(response_null_words) is False
+    assert (
+        guardrail._should_raise_guardrail_blocked_exception(response_null_words)
+        is False
+    )
 
     # Test with null piiEntities and regexes in sensitiveInformationPolicy
     response_null_pii = {
         "action": "GUARDRAIL_INTERVENED",
-        "assessments": [{"sensitiveInformationPolicy": {"piiEntities": None, "regexes": None}}],
+        "assessments": [
+            {"sensitiveInformationPolicy": {"piiEntities": None, "regexes": None}}
+        ],
     }
-    assert guardrail._should_raise_guardrail_blocked_exception(response_null_pii) is False
+    assert (
+        guardrail._should_raise_guardrail_blocked_exception(response_null_pii) is False
+    )
 
     # Test with null filters in contextualGroundingPolicy
     response_null_grounding = {
         "action": "GUARDRAIL_INTERVENED",
         "assessments": [{"contextualGroundingPolicy": {"filters": None}}],
     }
-    assert guardrail._should_raise_guardrail_blocked_exception(response_null_grounding) is False
+    assert (
+        guardrail._should_raise_guardrail_blocked_exception(response_null_grounding)
+        is False
+    )

@@ -1,10 +1,8 @@
 import re
-from dataclasses import dataclass
+from dataclasses import MISSING, dataclass, field, fields
 from enum import Enum
-from typing import Any, ClassVar, Dict, List, Literal, Optional, Tuple
-
-from pydantic import BaseModel, Field, field_validator
-from typing_extensions import Annotated
+from types import MappingProxyType
+from typing import Any, ClassVar, Dict, List, Literal, Mapping, Optional, Tuple, Union
 
 import litellm
 
@@ -41,35 +39,34 @@ def _sanitize_prometheus_label_name(label: str) -> str:
     return sanitized
 
 
+# v1: single translate pass + escape loop (avoids chained str.replace allocations).
+_PROMETHEUS_LABEL_VALUE_TRANSLATE_V1 = str.maketrans("\n", " ", "\r\u2028\u2029")
+
+
 def _sanitize_prometheus_label_value(value: Optional[Any]) -> Optional[str]:
     """
-    Sanitize a label value for Prometheus text format compatibility.
-
-    Removes or replaces characters that break the Prometheus exposition format:
-    - U+2028 (Line Separator) and U+2029 (Paragraph Separator) are removed
-    - Carriage returns are removed
-    - Newlines are replaced with spaces
-    - Backslashes and double quotes are escaped per Prometheus spec
+    Same semantics as :func:`_sanitize_prometheus_label_value`, implemented with
+    ``str.translate`` plus a single escape pass instead of chained ``replace``.
     """
     if value is None:
         return None
 
-    # Coerce non-string values (int, bool, etc.) to str before sanitizing
     str_value: str = value if isinstance(value, str) else str(value)
 
-    # Remove Unicode line/paragraph separators that break text format
-    str_value = str_value.replace("\u2028", "").replace("\u2029", "")
+    cleaned = str_value.translate(_PROMETHEUS_LABEL_VALUE_TRANSLATE_V1)
+    if "\\" not in cleaned and '"' not in cleaned:
+        return cleaned
 
-    # Remove carriage returns
-    str_value = str_value.replace("\r", "")
-
-    # Replace newlines with spaces
-    str_value = str_value.replace("\n", " ")
-
-    # Escape backslashes and double quotes per Prometheus exposition format
-    str_value = str_value.replace("\\", "\\\\").replace('"', '\\"')
-
-    return str_value
+    parts: List[str] = []
+    append = parts.append
+    for ch in cleaned:
+        if ch == "\\":
+            append("\\\\")
+        elif ch == '"':
+            append('\\"')
+        else:
+            append(ch)
+    return "".join(parts)
 
 
 @dataclass
@@ -678,9 +675,9 @@ class PrometheusMetricLabels:
 
     litellm_managed_batch_created_total = _batch_user_labels
 
-    litellm_managed_file_size_bytes: List[
-        str
-    ] = []  # labels: purpose, file_type, model, api_provider, user (custom)
+    litellm_managed_file_size_bytes: List[str] = (
+        []
+    )  # labels: purpose, file_type, model, api_provider, user (custom)
 
     litellm_managed_batch_duration_seconds = [
         UserAPIKeyLabelNames.v1_LITELLM_MODEL_NAME.value,
@@ -689,9 +686,9 @@ class PrometheusMetricLabels:
 
     litellm_managed_file_created_total = _batch_user_labels
 
-    litellm_managed_file_deleted_total: List[
-        str
-    ] = []  # only "result" label, added at metric creation
+    litellm_managed_file_deleted_total: List[str] = (
+        []
+    )  # only "result" label, added at metric creation
 
     litellm_check_batch_cost_jobs_polled: List[str] = []
 
@@ -744,112 +741,115 @@ class PrometheusMetricLabels:
         return default_labels + custom_labels
 
 
-class UserAPIKeyLabelValues(BaseModel):
-    end_user: Annotated[
-        Optional[str], Field(..., alias=UserAPIKeyLabelNames.END_USER.value)
-    ] = None
-    user: Annotated[
-        Optional[str], Field(..., alias=UserAPIKeyLabelNames.USER.value)
-    ] = None
-    user_email: Annotated[
-        Optional[str], Field(..., alias=UserAPIKeyLabelNames.USER_EMAIL.value)
-    ] = None
-    hashed_api_key: Annotated[
-        Optional[str], Field(..., alias=UserAPIKeyLabelNames.API_KEY_HASH.value)
-    ] = None
-    api_key_alias: Annotated[
-        Optional[str], Field(..., alias=UserAPIKeyLabelNames.API_KEY_ALIAS.value)
-    ] = None
-    team: Annotated[
-        Optional[str], Field(..., alias=UserAPIKeyLabelNames.TEAM.value)
-    ] = None
-    team_alias: Annotated[
-        Optional[str], Field(..., alias=UserAPIKeyLabelNames.TEAM_ALIAS.value)
-    ] = None
-    model_group: Annotated[
-        Optional[str], Field(..., alias=UserAPIKeyLabelNames.MODEL_GROUP.value)
-    ] = None
-    requested_model: Annotated[
-        Optional[str], Field(..., alias=UserAPIKeyLabelNames.REQUESTED_MODEL.value)
-    ] = None
-    model: Annotated[
-        Optional[str],
-        Field(..., alias=UserAPIKeyLabelNames.v1_LITELLM_MODEL_NAME.value),
-    ] = None
-    litellm_model_name: Annotated[
-        Optional[str],
-        Field(..., alias=UserAPIKeyLabelNames.v2_LITELLM_MODEL_NAME.value),
-    ] = None
-    tags: List[str] = []
-    custom_metadata_labels: Dict[str, str] = {}
-    model_id: Annotated[
-        Optional[str], Field(..., alias=UserAPIKeyLabelNames.MODEL_ID.value)
-    ] = None
-    api_base: Annotated[
-        Optional[str], Field(..., alias=UserAPIKeyLabelNames.API_BASE.value)
-    ] = None
-    api_provider: Annotated[
-        Optional[str], Field(..., alias=UserAPIKeyLabelNames.API_PROVIDER.value)
-    ] = None
-    exception_status: Annotated[
-        Optional[str], Field(..., alias=UserAPIKeyLabelNames.EXCEPTION_STATUS.value)
-    ] = None
-    exception_class: Annotated[
-        Optional[str], Field(..., alias=UserAPIKeyLabelNames.EXCEPTION_CLASS.value)
-    ] = None
-    status_code: Annotated[
-        Optional[str], Field(..., alias=UserAPIKeyLabelNames.STATUS_CODE.value)
-    ] = None
-    fallback_model: Annotated[
-        Optional[str], Field(..., alias=UserAPIKeyLabelNames.FALLBACK_MODEL.value)
-    ] = None
-    route: Annotated[
-        Optional[str], Field(..., alias=UserAPIKeyLabelNames.ROUTE.value)
-    ] = None
-    client_ip: Annotated[
-        Optional[str], Field(..., alias=UserAPIKeyLabelNames.CLIENT_IP.value)
-    ] = None
-    user_agent: Annotated[
-        Optional[str], Field(..., alias=UserAPIKeyLabelNames.USER_AGENT.value)
-    ] = None
-    stream: Annotated[
-        Optional[str], Field(..., alias=UserAPIKeyLabelNames.STREAM.value)
-    ] = None
-    org_id: Annotated[
-        Optional[str], Field(..., alias=UserAPIKeyLabelNames.ORG_ID.value)
-    ] = None
-    org_alias: Annotated[
-        Optional[str], Field(..., alias=UserAPIKeyLabelNames.ORG_ALIAS.value)
-    ] = None
-
-    @field_validator("stream", mode="before")
-    @classmethod
-    def coerce_stream_to_str(cls, v: Any) -> Optional[str]:
-        if v is None:
-            return None
-        return str(v)
+_USER_API_KEY_LABEL_VALUE_INIT_ALIASES: Dict[str, str] = {
+    # Some tests / call sites use ``api_key_hash``; Prometheus field is ``hashed_api_key``.
+    "api_key_hash": "hashed_api_key",
+}
 
 
-class PrometheusMetricsConfig(BaseModel):
-    """Configuration for filtering Prometheus metrics"""
+@dataclass(frozen=True, init=False)
+class UserAPIKeyLabelValues:
+    """
+    Prometheus metric label inputs (Python field names match historical Pydantic ``model_dump`` keys).
 
-    group: str = Field(..., description="Group name for this set of metrics")
-    metrics: List[str] = Field(
-        ..., description="List of metric names to include in this group"
-    )
-    include_labels: Optional[List[str]] = Field(
-        None,
-        description="List of labels to include for these metrics. If None, includes all default labels.",
-    )
+    Immutable value object: use ``dataclasses.replace()`` to derive a new instance.
+    ``model_dump()`` is provided for call sites that still expect a Pydantic-like dict.
+    """
+
+    end_user: Optional[str] = None
+    user: Optional[str] = None
+    user_email: Optional[str] = None
+    hashed_api_key: Optional[str] = None
+    api_key_alias: Optional[str] = None
+    team: Optional[str] = None
+    team_alias: Optional[str] = None
+    model_group: Optional[str] = None
+    requested_model: Optional[str] = None
+    model: Optional[str] = None
+    litellm_model_name: Optional[str] = None
+    # Accept list/tuple at construction time; normalize to tuple in __post_init__.
+    tags: Union[Tuple[str, ...], List[str]] = ()
+    custom_metadata_labels: Mapping[str, str] = field(default_factory=dict)
+    model_id: Optional[str] = None
+    api_base: Optional[str] = None
+    api_provider: Optional[str] = None
+    exception_status: Optional[str] = None
+    exception_class: Optional[str] = None
+    status_code: Optional[str] = None
+    fallback_model: Optional[str] = None
+    route: Optional[str] = None
+    client_ip: Optional[str] = None
+    user_agent: Optional[str] = None
+    stream: Optional[str] = None
+    org_id: Optional[str] = None
+    org_alias: Optional[str] = None
+
+    # Added for test compatibility.
+    def __init__(self, **kwargs: Any) -> None:
+        """
+        Match former Pydantic behavior: unknown keys are ignored; ``api_key_hash`` maps to
+        ``hashed_api_key``. This supports ``**standard_logging_payload`` in tests.
+        """
+        field_names = {f.name for f in fields(self)}
+        merged: Dict[str, Any] = {}
+        for f in fields(self):
+            if f.default_factory is not MISSING:
+                merged[f.name] = f.default_factory()
+            else:
+                merged[f.name] = f.default
+
+        for k, v in kwargs.items():
+            if k in field_names:
+                merged[k] = v
+                continue
+            canon = _USER_API_KEY_LABEL_VALUE_INIT_ALIASES.get(k)
+            if canon is not None and canon in field_names:
+                merged[canon] = v
+
+        for f in fields(self):
+            object.__setattr__(self, f.name, merged[f.name])
+        self.__post_init__()
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "tags", tuple(self.tags))
+        if self.stream is not None:
+            object.__setattr__(self, "stream", str(self.stream))
+        _cmd = dict(self.custom_metadata_labels)
+        object.__setattr__(
+            self,
+            "custom_metadata_labels",
+            MappingProxyType(_cmd),
+        )
+
+    def __repr__(self) -> str:
+        # Perf: this object is constructed on every Prometheus logging path; verbose
+        # dataclass/Pydantic-style repr is expensive and often pulled in accidentally
+        # via f-strings / debug logging. Return empty so accidental stringification
+        # stays cheap. (Dataclass default `str()` delegates to `__repr__`.)
+        return ""
+
+    def model_dump(self) -> Dict[str, Any]:
+        """Same shape as the former Pydantic ``model_dump()`` (plain dict, list tags)."""
+        d: Dict[str, Any] = {f.name: getattr(self, f.name) for f in fields(self)}
+        d["tags"] = list(self.tags)
+        d["custom_metadata_labels"] = dict(self.custom_metadata_labels)
+        return d
 
 
-class PrometheusSettings(BaseModel):
-    """Settings for Prometheus metrics configuration"""
+@dataclass
+class PrometheusMetricsConfig:
+    """Configuration for filtering Prometheus metrics (parsed once from proxy config)."""
 
-    prometheus_metrics_config: Optional[List[PrometheusMetricsConfig]] = Field(
-        None,
-        description="Configuration for filtering Prometheus metrics by groups and labels",
-    )
+    group: str
+    metrics: List[str]
+    include_labels: Optional[List[str]] = None
+
+
+@dataclass
+class PrometheusSettings:
+    """Settings for Prometheus metrics configuration."""
+
+    prometheus_metrics_config: Optional[List[PrometheusMetricsConfig]] = None
 
 
 class NoOpMetric:

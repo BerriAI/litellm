@@ -1,6 +1,7 @@
 """
 Calls Perplexity's /search endpoint to search the web.
 """
+
 from typing import Dict, List, Optional, TypedDict, Union
 
 import httpx

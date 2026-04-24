@@ -620,7 +620,7 @@ function CreateKeyPageContent() {
                     <SearchTools accessToken={accessToken} userRole={userRole} userID={userID} />
                   ) : page == "tag-management" ? (
                     <TagManagement accessToken={accessToken} userRole={userRole} userID={userID} />
-                  ) : page == "claude-code-plugins" ? (
+                  ) : page == "skills" || page == "claude-code-plugins" ? (
                     <ClaudeCodePluginsPanel accessToken={accessToken} userRole={userRole} />
                   ) : page == "access-groups" ? (
                     <AccessGroupsPage />

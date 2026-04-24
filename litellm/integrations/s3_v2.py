@@ -597,9 +597,11 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
             request_url = prepped.url or url
 
             httpx_client = _get_httpx_client(
-                params={"ssl_verify": self.s3_verify}
-                if self.s3_verify is not None
-                else None
+                params=(
+                    {"ssl_verify": self.s3_verify}
+                    if self.s3_verify is not None
+                    else None
+                )
             )
             # Make the request with retry for transient S3 errors (500/503)
             max_retries = 3

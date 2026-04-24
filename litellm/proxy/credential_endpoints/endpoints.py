@@ -364,7 +364,8 @@ async def update_credential(
             # Remove old entry if renamed, then use upsert_credentials to handle duplicates
             if new_name != credential_name:
                 litellm.credential_list = [
-                    c for c in litellm.credential_list
+                    c
+                    for c in litellm.credential_list
                     if c.credential_name != credential_name
                 ]
             CredentialAccessor.upsert_credentials([updated_in_memory])

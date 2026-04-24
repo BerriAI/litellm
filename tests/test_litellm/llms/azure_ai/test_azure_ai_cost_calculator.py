@@ -13,12 +13,14 @@ from litellm.utils import get_model_info
 
 # Get the flat cost from model_prices_and_context_window.json
 _model_info = get_model_info(model="model_router", custom_llm_provider="azure_ai")
-AZURE_MODEL_ROUTER_FLAT_COST_PER_M_INPUT_TOKENS = _model_info.get("input_cost_per_token", 0) * 1_000_000
+AZURE_MODEL_ROUTER_FLAT_COST_PER_M_INPUT_TOKENS = (
+    _model_info.get("input_cost_per_token", 0) * 1_000_000
+)
 
 
 class TestAzureModelRouterDetection:
     """Test that we correctly identify Azure Model Router models.
-    
+
     Model Router deployments follow the pattern: model_router/<deployment-name>
     where deployment-name is the Azure deployment (e.g., 'azure-model-router', 'prod-router')
     """
@@ -52,7 +54,7 @@ class TestAzureModelRouterDetection:
 
 class TestAzureModelRouterPrefix:
     """Test Azure Model Router prefix stripping."""
-    
+
     @pytest.mark.parametrize(
         "model,expected",
         [
@@ -68,12 +70,12 @@ class TestAzureModelRouterPrefix:
     )
     def test_strip_model_router_prefix(self, model: str, expected: str):
         """Test that model_router prefix is stripped correctly.
-        
+
         The pattern is: model_router/<deployment-name>
         where deployment-name is the Azure deployment (e.g., 'azure-model-router', 'prod-router')
         """
         from litellm.llms.azure_ai.common_utils import AzureFoundryModelInfo
-        
+
         result = AzureFoundryModelInfo.strip_model_router_prefix(model)
         assert result == expected
 
@@ -94,7 +96,9 @@ class TestAzureModelRouterFlatCost:
 
         # Calculate expected flat cost
         expected_flat_cost = (
-            usage.prompt_tokens * AZURE_MODEL_ROUTER_FLAT_COST_PER_M_INPUT_TOKENS / 1_000_000
+            usage.prompt_tokens
+            * AZURE_MODEL_ROUTER_FLAT_COST_PER_M_INPUT_TOKENS
+            / 1_000_000
         )
 
         # Flat cost should be $0.00014 (1000 tokens × $0.14 / 1M tokens)
@@ -121,13 +125,17 @@ class TestAzureModelRouterFlatCost:
 
         # Calculate expected flat cost
         expected_flat_cost = (
-            usage.prompt_tokens * AZURE_MODEL_ROUTER_FLAT_COST_PER_M_INPUT_TOKENS / 1_000_000
+            usage.prompt_tokens
+            * AZURE_MODEL_ROUTER_FLAT_COST_PER_M_INPUT_TOKENS
+            / 1_000_000
         )
 
         # Flat cost should be $0.014 (100k tokens × $0.14 / 1M tokens)
         assert expected_flat_cost == pytest.approx(0.014, rel=1e-9)
         # Use approx for floating-point comparison
-        assert prompt_cost >= expected_flat_cost or prompt_cost == pytest.approx(expected_flat_cost, rel=1e-9)
+        assert prompt_cost >= expected_flat_cost or prompt_cost == pytest.approx(
+            expected_flat_cost, rel=1e-9
+        )
         print(
             f"Model Router flat cost for {usage.prompt_tokens} tokens: ${expected_flat_cost:.6f}"
         )
@@ -186,7 +194,9 @@ class TestAzureModelRouterFlatCost:
 
         # Flat cost is based on ALL prompt tokens (including cached)
         expected_flat_cost = (
-            usage.prompt_tokens * AZURE_MODEL_ROUTER_FLAT_COST_PER_M_INPUT_TOKENS / 1_000_000
+            usage.prompt_tokens
+            * AZURE_MODEL_ROUTER_FLAT_COST_PER_M_INPUT_TOKENS
+            / 1_000_000
         )
 
         assert expected_flat_cost == pytest.approx(0.00028, rel=1e-9)
@@ -223,7 +233,9 @@ class TestAzureModelRouterFlatCost:
 
         # Expected: model cost (from gpt-5-nano) + router flat cost
         expected_flat_cost = (
-            usage.prompt_tokens * AZURE_MODEL_ROUTER_FLAT_COST_PER_M_INPUT_TOKENS / 1_000_000
+            usage.prompt_tokens
+            * AZURE_MODEL_ROUTER_FLAT_COST_PER_M_INPUT_TOKENS
+            / 1_000_000
         )
         assert expected_flat_cost == pytest.approx(0.0014, rel=1e-9)
 
@@ -306,7 +318,9 @@ class TestAzureModelRouterCostBreakdown:
         )
 
         # Cost should include the flat cost (use approx for floating-point comparison)
-        assert cost >= expected_flat_cost or cost == pytest.approx(expected_flat_cost, rel=1e-9)
+        assert cost >= expected_flat_cost or cost == pytest.approx(
+            expected_flat_cost, rel=1e-9
+        )
         print(f"Total cost with flat fee: ${cost:.6f}")
         print(f"Expected minimum flat cost: ${expected_flat_cost:.6f}")
 
@@ -368,18 +382,18 @@ class TestAzureModelRouterCostBreakdown:
         assert logging_obj.cost_breakdown is not None
         assert "additional_costs" in logging_obj.cost_breakdown
         assert isinstance(logging_obj.cost_breakdown["additional_costs"], dict)
-        
+
         # Check that the Azure Model Router flat cost is in additional_costs
         additional_costs = logging_obj.cost_breakdown["additional_costs"]
         assert "Azure Model Router Flat Cost" in additional_costs
-        
+
         # Verify the flat cost value
         expected_flat_cost = (
             5000 * AZURE_MODEL_ROUTER_FLAT_COST_PER_M_INPUT_TOKENS / 1_000_000
         )
         actual_flat_cost = additional_costs["Azure Model Router Flat Cost"]
         assert actual_flat_cost == pytest.approx(expected_flat_cost, rel=1e-9)
-        
+
         print(f"Additional costs in breakdown: {additional_costs}")
         print(f"Azure Model Router Flat Cost: ${actual_flat_cost:.6f}")
 
@@ -402,7 +416,13 @@ class TestAzureModelRouterCostBreakdown:
         )
         response = ModelResponse(
             id="test-123",
-            choices=[Choices(finish_reason="stop", index=0, message=Message(role="assistant", content="Hello"))],
+            choices=[
+                Choices(
+                    finish_reason="stop",
+                    index=0,
+                    message=Message(role="assistant", content="Hello"),
+                )
+            ],
             created=1234567890,
             model="gpt-4.1-nano-2025-04-14",
             object="chat.completion",
@@ -424,7 +444,10 @@ class TestAzureModelRouterCostBreakdown:
         assert cost >= expected_flat_cost
         assert logging_obj.cost_breakdown is not None
         assert "additional_costs" in logging_obj.cost_breakdown
-        assert "Azure Model Router Flat Cost" in logging_obj.cost_breakdown["additional_costs"]
-        assert logging_obj.cost_breakdown["additional_costs"]["Azure Model Router Flat Cost"] == pytest.approx(
-            expected_flat_cost, rel=1e-9
+        assert (
+            "Azure Model Router Flat Cost"
+            in logging_obj.cost_breakdown["additional_costs"]
         )
+        assert logging_obj.cost_breakdown["additional_costs"][
+            "Azure Model Router Flat Cost"
+        ] == pytest.approx(expected_flat_cost, rel=1e-9)

@@ -2671,13 +2671,19 @@ if MCP_AVAILABLE:
                     server_name, client_ip=_client_ip
                 )
                 if server and server.auth_type == MCPAuth.oauth2 and not oauth2_headers:
-                    # For servers that store per-user tokens server-side, skip the
-                    # pre-emptive 401 — the call_tool / list_tools dispatch will look
-                    # up the stored token from Redis / DB and only fail at the MCP
-                    # protocol level if none is found, giving the client a proper
-                    # tool-execution error rather than an HTTP 401.
+                    # For per-user OAuth servers, only skip the pre-emptive 401 when
+                    # a stored token actually exists for this user+server pair.
+                    # If no stored token exists, fail fast with 401 so clients can
+                    # kick off PKCE/interactive OAuth flow immediately.
                     if server.needs_user_oauth_token:
-                        continue
+                        stored_oauth_headers = (
+                            await _get_user_oauth_extra_headers_from_db(
+                                server=server,
+                                user_api_key_auth=user_api_key_auth,
+                            )
+                        )
+                        if stored_oauth_headers:
+                            continue
 
                     request = StarletteRequest(scope)
                     base_url = get_request_base_url(request)

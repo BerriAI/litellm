@@ -1,6 +1,7 @@
 """
 Translate from OpenAI's `/v1/chat/completions` to SAP Generative AI Hub's Orchestration Service`v2/completion`
 """
+
 from typing import (
     List,
     Optional,
@@ -89,9 +90,7 @@ def _tools_response_format_and_stream(
     resp_type = response_format.get("type", None)
     if resp_type:
         if resp_type == "json_schema":
-            response_format = validate_dict(
-                response_format, ResponseFormatJSONSchema
-            )
+            response_format = validate_dict(response_format, ResponseFormatJSONSchema)
         else:
             response_format = validate_dict(response_format, ResponseFormat)
         response_format = {"response_format": response_format}

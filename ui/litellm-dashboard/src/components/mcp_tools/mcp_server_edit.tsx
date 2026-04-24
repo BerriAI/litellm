@@ -189,6 +189,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
       ...mcpServer,
       transport: effectiveTransport,
       static_headers: initialStaticHeaders,
+      extra_headers: mcpServer.extra_headers || [],
       oauth_flow_type: mcpServer.token_url ? OAUTH_FLOW.M2M : OAUTH_FLOW.INTERACTIVE,
       token_validation_json: mcpServer.token_validation
         ? JSON.stringify(mcpServer.token_validation, null, 2)

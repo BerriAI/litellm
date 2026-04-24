@@ -65,9 +65,9 @@ class TestUnmappedModelBudgetEnforcement:
             ]
         )
         result = _is_model_cost_zero(model="free-model", llm_router=router)
-        assert result is True, (
-            "Explicitly free model should bypass budget (return True)"
-        )
+        assert (
+            result is True
+        ), "Explicitly free model should bypass budget (return True)"
 
     def test_known_paid_model_enforces_budget(self):
         """A model in the cost map with non-zero costs should enforce budget."""
@@ -83,9 +83,7 @@ class TestUnmappedModelBudgetEnforcement:
             ]
         )
         result = _is_model_cost_zero(model="paid-model", llm_router=router)
-        assert result is False, (
-            "Known paid model should enforce budget (return False)"
-        )
+        assert result is False, "Known paid model should enforce budget (return False)"
 
     def test_unmapped_model_with_litellm_params_pricing(self):
         """A model with cost=0 in litellm_params (not model_info) should bypass budget."""
@@ -103,6 +101,6 @@ class TestUnmappedModelBudgetEnforcement:
             ]
         )
         result = _is_model_cost_zero(model="free-via-params", llm_router=router)
-        assert result is True, (
-            "Model with explicit cost=0 in litellm_params should bypass budget"
-        )
+        assert (
+            result is True
+        ), "Model with explicit cost=0 in litellm_params should bypass budget"
