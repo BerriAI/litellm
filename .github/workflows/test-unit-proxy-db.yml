@@ -215,6 +215,7 @@ jobs:
               tests/proxy_unit_tests/test_google_gemini_proxy_request.py
               tests/proxy_unit_tests/test_get_favicon.py
               tests/proxy_unit_tests/test_get_image.py
+              tests/proxy_unit_tests/test_reducto_ocr_route.py
               tests/proxy_unit_tests/test_ui_path_detection.py
               tests/proxy_unit_tests/test_prompt_test_endpoint.py
               tests/proxy_unit_tests/test_check_batch_cost.py
