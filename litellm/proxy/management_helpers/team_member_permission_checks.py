@@ -67,6 +67,7 @@ class TeamMemberPermissionChecks:
         prisma_client: PrismaClient,
         user_api_key_cache: DualCache,
         existing_key_row: LiteLLM_VerificationToken,
+        team_table: Optional[LiteLLM_TeamTableCachedObj] = None,
     ):
         """
         Main handler for checking if a team member can update a key
@@ -83,14 +84,15 @@ class TeamMemberPermissionChecks:
         if existing_key_row.team_id is None:
             return
 
-        # 3. Get Team Object from DB
-        team_table = await get_team_object(
-            team_id=existing_key_row.team_id,
-            prisma_client=prisma_client,
-            user_api_key_cache=user_api_key_cache,
-            parent_otel_span=user_api_key_dict.parent_otel_span,
-            check_db_only=True,
-        )
+        # 3. Get Team Object from DB (skip if already fetched by caller)
+        if team_table is None:
+            team_table = await get_team_object(
+                team_id=existing_key_row.team_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                parent_otel_span=user_api_key_dict.parent_otel_span,
+                check_db_only=True,
+            )
 
         # 4. Extract `Member` object from `team_table`
         key_assigned_user_in_team = _get_user_in_team(

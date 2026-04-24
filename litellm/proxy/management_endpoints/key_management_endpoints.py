@@ -1828,24 +1828,39 @@ async def _validate_update_key_data(
         premium_user=premium_user,
     )
 
+    # Fetch the existing key's team once; reuse for permission check and limit check.
+    # Avoids a duplicate DB round-trip when the team is not changing (the common case).
+    existing_team_obj: Optional[LiteLLM_TeamTableCachedObj] = None
+    if existing_key_row.team_id is not None:
+        existing_team_obj = await get_team_object(
+            team_id=existing_key_row.team_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            check_db_only=True,
+        )
+
     await TeamMemberPermissionChecks.can_team_member_execute_key_management_endpoint(
         user_api_key_dict=user_api_key_dict,
         route=KeyManagementRoutes.KEY_UPDATE,
         prisma_client=prisma_client,
         existing_key_row=existing_key_row,
         user_api_key_cache=user_api_key_cache,
+        team_table=existing_team_obj,
     )
 
     # Check team limits if key has a team_id (from request or existing key)
     team_obj: Optional[LiteLLM_TeamTableCachedObj] = None
     _team_id_to_check = data.team_id or getattr(existing_key_row, "team_id", None)
     if _team_id_to_check is not None:
-        team_obj = await get_team_object(
-            team_id=_team_id_to_check,
-            prisma_client=prisma_client,
-            user_api_key_cache=user_api_key_cache,
-            check_db_only=True,
-        )
+        if _team_id_to_check == existing_key_row.team_id and existing_team_obj is not None:
+            team_obj = existing_team_obj
+        else:
+            team_obj = await get_team_object(
+                team_id=_team_id_to_check,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                check_db_only=True,
+            )
 
         if team_obj is not None:
             await _check_team_key_limits(
