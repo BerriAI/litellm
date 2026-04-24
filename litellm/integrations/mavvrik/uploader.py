@@ -103,14 +103,19 @@ class Uploader:
         return session_uri
 
     async def _finalize_upload(self, session_uri: str, gzip_bytes: bytes) -> None:
-        """PUT gzip bytes to the GCS session URI to complete the bulk upload."""
+        """PUT gzip bytes to the GCS session URI to complete the bulk upload.
+
+        Sends Content-Range: bytes 0-{last}/{total} per the GCS resumable upload
+        spec so GCS knows the object is complete (consistent with _put_chunk final=True).
+        """
+        total = len(gzip_bytes)
+        content_range = f"bytes 0-{total - 1}/{total}" if total > 0 else "bytes */0"
         resp = await http_request(
             "PUT",
             session_uri,
             headers={
                 "Content-Type": "application/gzip",
-                "Content-Encoding": "gzip",
-                "x-goog-resumable": "stop",
+                "Content-Range": content_range,
             },
             content=gzip_bytes,
             timeout=120.0,

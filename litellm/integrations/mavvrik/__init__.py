@@ -16,8 +16,6 @@ from datetime import datetime, timedelta
 from datetime import timezone as _tz
 from typing import Optional
 
-import polars as pl
-
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import MAVVRIK_MAX_FETCHED_DATA_RECORDS
 from litellm.integrations.mavvrik.client import Client

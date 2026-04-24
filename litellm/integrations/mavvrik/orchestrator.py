@@ -102,8 +102,16 @@ class Orchestrator:
             verbose_logger.warning("Orchestrator: exporting %s → %s", start, end)
 
             for export_date in self._date_range(start, end):
-                await self._export(export_date)
-                await self._advance(export_date)
+                total_bytes = await self._export(export_date)
+                if total_bytes > 0:
+                    await self._advance(export_date)
+                else:
+                    # DB unavailable or no data — raise so the marker does NOT advance.
+                    # Next run will retry this date from the same marker position.
+                    raise RuntimeError(
+                        f"No data streamed for {export_date.isoformat()} "
+                        f"— DB may be unavailable; marker not advanced"
+                    )
 
             verbose_logger.warning("Orchestrator: export complete, last date=%s", end)
 

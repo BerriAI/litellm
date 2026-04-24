@@ -171,8 +171,12 @@ class TestRunExportLoop:
         assert exported_dates == ["2026-04-09", "2026-04-10"]
 
     @pytest.mark.asyncio
-    async def test_skips_upload_when_no_data(self):
-        """When export returns 0 bytes, advance still called (date was processed)."""
+    async def test_does_not_advance_when_no_data(self):
+        """When export returns 0 bytes, marker is NOT advanced — prevents silent data loss.
+
+        0 bytes means DB was unavailable or no data for that date.
+        Raising ensures the marker stays put so the date is retried next run.
+        """
         orc = _make_orchestrator()
 
         orc._client.register = AsyncMock(return_value="2026-04-09")
@@ -188,8 +192,10 @@ class TestRunExportLoop:
         ):
             await orc.run()
 
-        # advance_marker always called — even for empty dates
-        orc._client.advance_marker.assert_called_once()
+        # advance_marker must NOT be called when 0 bytes exported
+        orc._client.advance_marker.assert_not_called()
+        # error reported to Mavvrik so the failure is visible
+        orc._client.report_error.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_reports_error_on_pipeline_failure(self):
