@@ -635,6 +635,7 @@ async def pass_through_request(  # noqa: PLR0915
         custom_llm_provider: Optional field - custom LLM provider for the endpoint
         guardrails_config: Optional field - guardrails configuration for passthrough endpoint
     """
+    from litellm.exceptions import ModifyResponseException
     from litellm.litellm_core_utils.litellm_logging import Logging
     from litellm.proxy.pass_through_endpoints.passthrough_guardrails import (
         PassthroughGuardrailHandler,
@@ -915,8 +916,41 @@ async def pass_through_request(  # noqa: PLR0915
 
         content = await response.aread()
 
-        ## LOG SUCCESS
+        ## POST-CALL GUARDRAILS ##
+        _content_modified = False
         response_body: Optional[dict] = get_response_body(response)
+        if response_body is not None and guardrails_to_run:
+            # Build an enriched data dict: _parsed_body has been stripped of
+            # `metadata` by both pre_call_hook and _init_kwargs_for_pass_through_endpoint,
+            # so we re-attach the configured guardrails here so should_run_guardrail
+            # sees them.
+            hook_data = dict(_parsed_body or {})
+            existing_metadata = hook_data.get("metadata")
+            if not isinstance(existing_metadata, dict):
+                existing_metadata = {}
+            hook_data["metadata"] = {
+                **existing_metadata,
+                "guardrails": guardrails_to_run,
+            }
+            response_body = await proxy_logging_obj.post_call_success_hook(
+                data=hook_data,
+                user_api_key_dict=user_api_key_dict,
+                response=response_body,  # type: ignore[arg-type]
+            )
+            if isinstance(response_body, dict):
+                content = json.dumps(response_body).encode("utf-8")
+                _content_modified = True
+            else:
+                verbose_proxy_logger.debug(
+                    "pass_through_endpoint: post_call_success_hook returned %s, expected dict — using original response",
+                    type(response_body).__name__,
+                )
+        elif response_body is None:
+            verbose_proxy_logger.debug(
+                "pass_through_endpoint: response body not JSON-parseable, skipping post-call guardrails"
+            )
+
+        ## LOG SUCCESS
         passthrough_logging_payload["response_body"] = response_body
         end_time = datetime.now()
         asyncio.create_task(
@@ -944,13 +978,47 @@ async def pass_through_request(  # noqa: PLR0915
             api_base=str(url._uri_reference),
         )
 
+        response_headers = HttpPassThroughEndpointHelpers.get_response_headers(
+            headers=response.headers,
+            custom_headers=custom_headers,
+        )
+        if _content_modified:
+            response_headers.pop("content-length", None)
+
         return Response(
             content=content,
             status_code=response.status_code,
-            headers=HttpPassThroughEndpointHelpers.get_response_headers(
-                headers=response.headers,
-                custom_headers=custom_headers,
-            ),
+            headers=response_headers,
+        )
+    except ModifyResponseException as e:
+        verbose_proxy_logger.info(
+            "pass_through_endpoint: Guardrail %s modified response: %s",
+            e.guardrail_name,
+            str(e.message or "")[:200],
+        )
+        try:
+            await proxy_logging_obj.post_call_failure_hook(
+                user_api_key_dict=user_api_key_dict,
+                original_exception=e,
+                request_data=e.request_data,
+            )
+        except Exception:
+            verbose_proxy_logger.warning(
+                "pass_through_endpoint: post_call_failure_hook raised during guardrail block",
+                exc_info=True,
+            )
+        error_body = {
+            "error": {
+                "message": e.message or "Response blocked by guardrail",
+                "type": "content_filter",
+                "guardrail_name": e.guardrail_name,
+                "model": e.model,
+            }
+        }
+        return Response(
+            content=json.dumps(error_body),
+            status_code=200,
+            media_type="application/json",
         )
     except Exception as e:
         custom_headers = ProxyBaseLLMRequestProcessing.get_custom_headers(
