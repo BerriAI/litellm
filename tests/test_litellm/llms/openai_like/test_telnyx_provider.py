@@ -4,12 +4,10 @@ Tests for Telnyx provider configuration via JSON providers system.
 
 import os
 import sys
-from unittest.mock import MagicMock, patch
 
-try:
-    import pytest
-except ImportError:
-    pytest = None
+import pytest
+
+from unittest.mock import MagicMock, patch
 
 # Add workspace to path
 workspace_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../.."))
