@@ -1,17 +1,37 @@
 import { isAdminRole } from "@/utils/roles";
 import { Info as InfoCircleOutlined } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
-// eslint-disable-next-line litellm-ui/no-banned-ui-imports
-import { Button, TextInput } from "@tremor/react";
-import { Form, Input, Modal, Select, Tooltip, Typography } from "antd";
+import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Textarea } from "@/components/ui/textarea";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import Image from "next/image";
 import React, { useState } from "react";
+import { Controller, FormProvider, useForm } from "react-hook-form";
 import NotificationsManager from "../molecules/notifications_manager";
 import { createSearchTool, fetchAvailableSearchProviders } from "../networking";
 import SearchConnectionTest from "./SearchConnectionTest";
 import { AvailableSearchProvider, SearchTool } from "./types";
-
-const { TextArea } = Input;
 
 // Search provider logos folder path (matches existing provider logo pattern)
 const searchProviderLogosFolder = "../ui/assets/logos/";
@@ -21,7 +41,6 @@ const getSearchProviderLogo = (providerName: string): string => {
   return `${searchProviderLogosFolder}${providerName}.png`;
 };
 
-// Component to display search provider logo and name
 interface SearchProviderLabelProps {
   providerName: string;
   displayName: string;
@@ -54,6 +73,16 @@ interface CreateSearchToolProps {
   setModalVisible: (visible: boolean) => void;
 }
 
+interface CreateFormValues {
+  search_tool_name: string;
+  search_provider: string;
+  api_key?: string;
+  api_base?: string;
+  description?: string;
+}
+
+const SEARCH_TOOL_NAME_PATTERN = /^[a-zA-Z0-9_-]+$/;
+
 const CreateSearchTool: React.FC<CreateSearchToolProps> = ({
   userRole,
   accessToken,
@@ -61,14 +90,20 @@ const CreateSearchTool: React.FC<CreateSearchToolProps> = ({
   isModalVisible,
   setModalVisible,
 }) => {
-  const [form] = Form.useForm();
+  const form = useForm<CreateFormValues>({
+    defaultValues: {
+      search_tool_name: "",
+      search_provider: "",
+      api_key: "",
+      api_base: "",
+      description: "",
+    },
+  });
   const [isLoading, setIsLoading] = useState(false);
-  const [formValues, setFormValues] = useState<Record<string, any>>({});
   const [isTestModalVisible, setIsTestModalVisible] = useState(false);
   const [isTestingConnection, setIsTestingConnection] = useState(false);
   const [connectionTestId, setConnectionTestId] = useState<string>("");
 
-  // Fetch available search providers
   const {
     data: providersResponse,
     isLoading: isLoadingProviders,
@@ -83,23 +118,20 @@ const CreateSearchTool: React.FC<CreateSearchToolProps> = ({
 
   const availableProviders = providersResponse?.providers || [];
 
-  const handleCreate = async (formValues: Record<string, any>) => {
+  const onSubmit = form.handleSubmit(async (formValues) => {
     setIsLoading(true);
     try {
-      // Prepare the payload
       const payload = {
         search_tool_name: formValues.search_tool_name,
         litellm_params: {
           search_provider: formValues.search_provider,
           api_key: formValues.api_key,
           api_base: formValues.api_base,
-          timeout: formValues.timeout ? parseFloat(formValues.timeout) : undefined,
-          max_retries: formValues.max_retries ? parseInt(formValues.max_retries) : undefined,
         },
         search_tool_info: formValues.description
           ? {
-            description: formValues.description,
-          }
+              description: formValues.description,
+            }
           : undefined,
       };
 
@@ -107,10 +139,8 @@ const CreateSearchTool: React.FC<CreateSearchToolProps> = ({
 
       if (accessToken != null) {
         const response = await createSearchTool(accessToken, payload);
-
         NotificationsManager.success("Search tool created successfully");
-        form.resetFields();
-        setFormValues({});
+        form.reset();
         setModalVisible(false);
         onCreateSuccess(response);
       }
@@ -119,219 +149,237 @@ const CreateSearchTool: React.FC<CreateSearchToolProps> = ({
     } finally {
       setIsLoading(false);
     }
-  };
+  });
 
   const handleCancel = () => {
-    form.resetFields();
-    setFormValues({});
+    form.reset();
     setModalVisible(false);
   };
 
   const handleTestConnection = async () => {
-    try {
-      // Validate required fields for testing
-      await form.validateFields(["search_provider", "api_key"]);
-
-      setIsTestingConnection(true);
-      // Generate a new test ID (using timestamp for uniqueness)
-      setConnectionTestId(`test-${Date.now()}`);
-      // Show the modal with the fresh test
-      setIsTestModalVisible(true);
-    } catch (error) {
+    const valid = await form.trigger(["search_provider", "api_key"]);
+    if (!valid) {
       NotificationsManager.error("Please fill in Search Provider and API Key before testing");
+      return;
     }
+
+    setIsTestingConnection(true);
+    setConnectionTestId(`test-${Date.now()}`);
+    setIsTestModalVisible(true);
   };
 
-  // Clear formValues when modal closes to reset
+  // Clear form when modal closes to reset
   React.useEffect(() => {
     if (!isModalVisible) {
-      setFormValues({});
+      form.reset();
     }
-  }, [isModalVisible]);
+  }, [isModalVisible, form]);
+
+  const formValues = form.watch();
 
   if (!isAdminRole(userRole)) {
     return null;
   }
 
   return (
-    <Modal
-      title={
-        <div className="flex items-center space-x-3 pb-4 border-b border-gray-100">
-          <span className="text-2xl">🔍</span>
-          <h2 className="text-xl font-semibold text-gray-900">Add New Search Tool</h2>
-        </div>
-      }
-      open={isModalVisible}
-      width={800}
-      onCancel={handleCancel}
-      footer={null}
-      className="top-8"
-      styles={{
-        body: { padding: "24px" },
-        header: { padding: "24px 24px 0 24px", border: "none" },
-      }}
-    >
-      <div className="mt-6">
-        <Form
-          form={form}
-          onFinish={handleCreate}
-          onValuesChange={(_, allValues) => setFormValues(allValues)}
-          layout="vertical"
-          className="space-y-6"
-        >
-          <div className="grid grid-cols-1 gap-6">
-            <Form.Item
-              label={
-                <span className="text-sm font-medium text-gray-700 flex items-center">
-                  Search Tool Name
-                  <Tooltip title="A unique name to identify this search tool configuration (e.g., 'perplexity-search', 'tavily-news-search').">
-                    <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
-                  </Tooltip>
-                </span>
-              }
-              name="search_tool_name"
-              rules={[
-                { required: true, message: "Please enter a search tool name" },
-                {
-                  pattern: /^[a-zA-Z0-9_-]+$/,
-                  message: "Name can only contain letters, numbers, hyphens, and underscores",
-                },
-              ]}
-            >
-              <TextInput
-                placeholder="e.g., perplexity-search, my-tavily-tool"
-                className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
-              />
-            </Form.Item>
-
-            <Form.Item
-              label={
-                <span className="text-sm font-medium text-gray-700 flex items-center">
-                  Search Provider
-                  <Tooltip title="Select the search provider you want to use. Each provider has different capabilities and pricing.">
-                    <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
-                  </Tooltip>
-                </span>
-              }
-              name="search_provider"
-              rules={[{ required: true, message: "Please select a search provider" }]}
-            >
-              <Select
-                placeholder="Select a search provider"
-                className="rounded-lg"
-                size="large"
-                loading={isLoadingProviders}
-                showSearch
-                optionFilterProp="children"
-                optionLabelProp="label"
-              >
-                {availableProviders.map((provider) => (
-                  <Select.Option
-                    key={provider.provider_name}
-                    value={provider.provider_name}
-                    label={
-                      <SearchProviderLabel
-                        providerName={provider.provider_name}
-                        displayName={provider.ui_friendly_name}
-                      />
-                    }
-                  >
-                    <SearchProviderLabel
-                      providerName={provider.provider_name}
-                      displayName={provider.ui_friendly_name}
-                    />
-                  </Select.Option>
-                ))}
-              </Select>
-            </Form.Item>
-
-            <Form.Item
-              label={
-                <span className="text-sm font-medium text-gray-700 flex items-center">
-                  API Key
-                  <Tooltip title="The API key for authenticating with the search provider. This will be securely stored.">
-                    <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
-                  </Tooltip>
-                </span>
-              }
-              name="api_key"
-              rules={[{ required: false, message: "Please enter an API key" }]}
-            >
-              <TextInput
-                type="password"
-                placeholder="Enter your API key"
-                className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
-              />
-            </Form.Item>
-
-            <Form.Item
-              label={<span className="text-sm font-medium text-gray-700">Description (Optional)</span>}
-              name="description"
-            >
-              <TextArea
-                rows={3}
-                placeholder="Brief description of this search tool's purpose"
-                className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
-              />
-            </Form.Item>
-          </div>
-
-          <div className="flex justify-between items-center pt-6 border-t border-gray-100">
-            <Tooltip title="Get help on our github">
-              <Typography.Link href="https://github.com/BerriAI/litellm/issues" target="_blank">
-                Need Help?
-              </Typography.Link>
-            </Tooltip>
-            <div className="space-x-2">
-              <Button onClick={handleTestConnection} loading={isTestingConnection}>
-                Test Connection
-              </Button>
-              <Button loading={isLoading} type="submit">
-                Add Search Tool
-              </Button>
+    <Dialog open={isModalVisible} onOpenChange={(o) => (!o ? handleCancel() : undefined)}>
+      <DialogContent className="max-w-[800px]">
+        <DialogHeader>
+          <DialogTitle asChild>
+            <div className="flex items-center space-x-3 pb-4 border-b border-border">
+              <span className="text-2xl">🔍</span>
+              <h2 className="text-xl font-semibold text-foreground">Add New Search Tool</h2>
             </div>
-          </div>
-        </Form>
-      </div>
+          </DialogTitle>
+        </DialogHeader>
 
-      {/* Test Connection Results Modal */}
-      <Modal
-        title="Connection Test Results"
-        open={isTestModalVisible}
-        onCancel={() => {
-          setIsTestModalVisible(false);
-          setIsTestingConnection(false);
-        }}
-        footer={[
-          <Button
-            key="close"
-            onClick={() => {
+        <FormProvider {...form}>
+          <form onSubmit={onSubmit} className="space-y-6">
+            <div className="grid grid-cols-1 gap-6">
+              <div className="space-y-2">
+                <Label htmlFor="create-search-tool-name" className="flex items-center">
+                  Search Tool Name <span className="text-destructive ml-1">*</span>
+                  <TooltipProvider>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <InfoCircleOutlined className="ml-2 h-4 w-4 text-muted-foreground hover:text-foreground cursor-help" />
+                      </TooltipTrigger>
+                      <TooltipContent>
+                        A unique name to identify this search tool configuration
+                        (e.g., &quot;perplexity-search&quot;, &quot;tavily-news-search&quot;).
+                      </TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
+                </Label>
+                <Input
+                  id="create-search-tool-name"
+                  placeholder="e.g., perplexity-search, my-tavily-tool"
+                  {...form.register("search_tool_name", {
+                    required: "Please enter a search tool name",
+                    pattern: {
+                      value: SEARCH_TOOL_NAME_PATTERN,
+                      message: "Name can only contain letters, numbers, hyphens, and underscores",
+                    },
+                  })}
+                />
+                {form.formState.errors.search_tool_name && (
+                  <p className="text-sm text-destructive">
+                    {form.formState.errors.search_tool_name.message as string}
+                  </p>
+                )}
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="create-search-provider" className="flex items-center">
+                  Search Provider <span className="text-destructive ml-1">*</span>
+                  <TooltipProvider>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <InfoCircleOutlined className="ml-2 h-4 w-4 text-muted-foreground hover:text-foreground cursor-help" />
+                      </TooltipTrigger>
+                      <TooltipContent>
+                        Select the search provider you want to use. Each provider has different capabilities and pricing.
+                      </TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
+                </Label>
+                <Controller
+                  control={form.control}
+                  name="search_provider"
+                  rules={{ required: "Please select a search provider" }}
+                  render={({ field }) => (
+                    <Select value={field.value} onValueChange={field.onChange} disabled={isLoadingProviders}>
+                      <SelectTrigger id="create-search-provider">
+                        <SelectValue placeholder="Select a search provider" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {availableProviders.map((provider) => (
+                          <SelectItem key={provider.provider_name} value={provider.provider_name}>
+                            <SearchProviderLabel
+                              providerName={provider.provider_name}
+                              displayName={provider.ui_friendly_name}
+                            />
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  )}
+                />
+                {form.formState.errors.search_provider && (
+                  <p className="text-sm text-destructive">
+                    {form.formState.errors.search_provider.message as string}
+                  </p>
+                )}
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="create-api-key" className="flex items-center">
+                  API Key
+                  <TooltipProvider>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <InfoCircleOutlined className="ml-2 h-4 w-4 text-muted-foreground hover:text-foreground cursor-help" />
+                      </TooltipTrigger>
+                      <TooltipContent>
+                        The API key for authenticating with the search provider. This will be securely stored.
+                      </TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
+                </Label>
+                <Input
+                  id="create-api-key"
+                  type="password"
+                  placeholder="Enter your API key"
+                  {...form.register("api_key")}
+                />
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="create-description">Description (Optional)</Label>
+                <Textarea
+                  id="create-description"
+                  rows={3}
+                  placeholder="Brief description of this search tool's purpose"
+                  {...form.register("description")}
+                />
+              </div>
+            </div>
+
+            <DialogFooter className="pt-6 border-t border-border flex !justify-between">
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <a
+                      href="https://github.com/BerriAI/litellm/issues"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-primary hover:underline text-sm"
+                    >
+                      Need Help?
+                    </a>
+                  </TooltipTrigger>
+                  <TooltipContent>Get help on our github</TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+              <div className="space-x-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={handleTestConnection}
+                  disabled={isTestingConnection}
+                >
+                  {isTestingConnection ? "Testing..." : "Test Connection"}
+                </Button>
+                <Button type="submit" disabled={isLoading}>
+                  {isLoading ? "Adding..." : "Add Search Tool"}
+                </Button>
+              </div>
+            </DialogFooter>
+          </form>
+        </FormProvider>
+
+        {/* Test Connection Results Dialog */}
+        <Dialog
+          open={isTestModalVisible}
+          onOpenChange={(o) => {
+            if (!o) {
               setIsTestModalVisible(false);
               setIsTestingConnection(false);
-            }}
-          >
-            Close
-          </Button>,
-        ]}
-        width={700}
-      >
-        {/* Only render the SearchConnectionTest when modal is visible and we have a test ID */}
-        {isTestModalVisible && accessToken && (
-          <SearchConnectionTest
-            key={connectionTestId}
-            litellmParams={{
-              search_provider: formValues.search_provider,
-              api_key: formValues.api_key,
-              api_base: formValues.api_base,
-            }}
-            accessToken={accessToken}
-            onTestComplete={() => setIsTestingConnection(false)}
-          />
-        )}
-      </Modal>
-    </Modal>
+            }
+          }}
+        >
+          <DialogContent className="max-w-[700px]">
+            <DialogHeader>
+              <DialogTitle>Connection Test Results</DialogTitle>
+            </DialogHeader>
+            {isTestModalVisible && accessToken && (
+              <SearchConnectionTest
+                key={connectionTestId}
+                litellmParams={{
+                  search_provider: formValues.search_provider,
+                  api_key: formValues.api_key,
+                  api_base: formValues.api_base,
+                }}
+                accessToken={accessToken}
+                onTestComplete={() => setIsTestingConnection(false)}
+              />
+            )}
+            <DialogFooter>
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setIsTestModalVisible(false);
+                  setIsTestingConnection(false);
+                }}
+              >
+                Close
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      </DialogContent>
+    </Dialog>
   );
 };
 
 export default CreateSearchTool;
-
