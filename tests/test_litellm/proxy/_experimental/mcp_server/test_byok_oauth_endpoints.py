@@ -564,6 +564,35 @@ async def test_check_byok_credential_has_credential():
         await _check_byok_credential(server, user_auth)
 
 
+@pytest.mark.asyncio
+async def test_check_byok_credential_db_unavailable_fails_closed():
+    """BYOK server with no prisma_client → 503, not silent pass.
+
+    Regression for GHSA-6762: previously returned silently, bypassing the
+    ownership check during DB outage windows.
+    """
+    from litellm.proxy._experimental.mcp_server.server import _check_byok_credential
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    server = MCPServer(
+        server_id="byok-4",
+        name="byok-server",
+        transport=MCPTransport.http,
+        is_byok=True,
+    )
+    user_auth = UserAPIKeyAuth(user_id="user-55", api_key="sk-test")
+
+    with patch("litellm.proxy.proxy_server.prisma_client", None):
+        with pytest.raises(HTTPException) as exc_info:
+            await _check_byok_credential(server, user_auth)
+
+    assert exc_info.value.status_code == 503
+    detail: Any = exc_info.value.detail
+    assert detail["error"] == "byok_auth_unavailable"
+    assert detail["server_id"] == "byok-4"
+
+
 # ---------------------------------------------------------------------------
 # Security regression tests for AO2kf_-9 / GHSA-jg3h:
 # Unauthenticated /v1/mcp/oauth/authorize previously allowed an attacker to
