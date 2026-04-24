@@ -1,9 +1,21 @@
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Select } from "antd";
-import { Filter } from "lucide-react";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { cn } from "@/lib/utils";
+import { Filter, Loader2, X } from "lucide-react";
 import debounce from "lodash/debounce";
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 
 export interface FilterOptionCustomComponentProps {
   value?: string;
@@ -33,6 +45,122 @@ interface FilterComponentProps {
   onResetFilters: () => void;
 }
 
+// Searchable combobox — shadcn Popover + async results list. Mirrors antd's
+// Select in showSearch mode closely enough to preserve UX:
+//   - typing triggers debounced search via option.searchFn
+//   - selecting a result closes the popover and sets the value
+//   - clear button (x) on the trigger resets the value
+interface SearchableSelectProps {
+  option: FilterOption;
+  value: string;
+  loading: boolean;
+  results: Array<{ label: string; value: string }>;
+  onOpenChange: (open: boolean) => void;
+  onSearch: (text: string) => void;
+  onSelect: (value: string) => void;
+}
+
+const SearchableSelect: React.FC<SearchableSelectProps> = ({
+  option,
+  value,
+  loading,
+  results,
+  onOpenChange,
+  onSearch,
+  onSelect,
+}) => {
+  const [open, setOpen] = useState(false);
+  const [searchText, setSearchText] = useState("");
+  const selectedOption = results.find((r) => r.value === value);
+  const displayLabel = selectedOption?.label ?? value;
+
+  const handleOpenChange = (next: boolean) => {
+    setOpen(next);
+    onOpenChange(next);
+    if (!next) setSearchText("");
+  };
+
+  return (
+    <Popover open={open} onOpenChange={handleOpenChange}>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          role="combobox"
+          aria-expanded={open}
+          className={cn(
+            "flex h-10 w-full items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50",
+          )}
+          aria-label={`Search ${option.label || option.name}...`}
+        >
+          <span className={cn("truncate", !value && "text-muted-foreground")}>
+            {value
+              ? displayLabel
+              : `Search ${option.label || option.name}...`}
+          </span>
+          <span className="flex items-center gap-1 text-muted-foreground">
+            {value && (
+              <span
+                role="button"
+                tabIndex={0}
+                aria-label="Clear"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onSelect("");
+                }}
+                className="inline-flex items-center"
+              >
+                <X className="h-3 w-3" />
+              </span>
+            )}
+          </span>
+        </button>
+      </PopoverTrigger>
+      <PopoverContent className="p-0 w-[--radix-popover-trigger-width] max-w-none">
+        <div className="flex items-center border-b border-border p-2">
+          <Input
+            value={searchText}
+            onChange={(e) => {
+              setSearchText(e.target.value);
+              onSearch(e.target.value);
+            }}
+            placeholder={`Search ${option.label || option.name}...`}
+            className="h-8 border-0 focus-visible:ring-0 focus-visible:ring-offset-0 shadow-none"
+          />
+        </div>
+        <div className="max-h-60 overflow-y-auto">
+          {loading ? (
+            <div className="flex items-center justify-center p-3 text-sm text-muted-foreground gap-2">
+              <Loader2 className="h-3 w-3 animate-spin" />
+              Loading...
+            </div>
+          ) : results.length === 0 ? (
+            <div className="p-3 text-sm text-muted-foreground text-center">
+              No results found
+            </div>
+          ) : (
+            results.map((r) => (
+              <button
+                key={r.value}
+                type="button"
+                onClick={() => {
+                  onSelect(r.value);
+                  handleOpenChange(false);
+                }}
+                className={cn(
+                  "w-full text-left text-sm px-3 py-2 hover:bg-muted",
+                  r.value === value && "bg-muted font-medium",
+                )}
+              >
+                {r.label}
+              </button>
+            ))
+          )}
+        </div>
+      </PopoverContent>
+    </Popover>
+  );
+};
+
 const FilterComponent: React.FC<FilterComponentProps> = ({
   options,
   onApplyFilters,
@@ -48,12 +176,15 @@ const FilterComponent: React.FC<FilterComponentProps> = ({
   const [searchLoadingMap, setSearchLoadingMap] = useState<{
     [key: string]: boolean;
   }>({});
-  const [searchInputValueMap, setSearchInputValueMap] = useState<{
-    [key: string]: string;
-  }>({});
   const [initialOptionsLoaded, setInitialOptionsLoaded] = useState<{
     [key: string]: boolean;
   }>({});
+
+  // Keep internal state in sync with externally provided initialValues
+  const initialValuesRef = useRef(initialValues);
+  useEffect(() => {
+    initialValuesRef.current = initialValues;
+  }, [initialValues]);
 
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const debouncedSearch = useCallback(
@@ -83,7 +214,6 @@ const FilterComponent: React.FC<FilterComponentProps> = ({
       setInitialOptionsLoaded((prev) => ({ ...prev, [option.name]: true }));
 
       try {
-        // Load initial options with empty search to get some default results
         const results = await option.searchFn("");
         setSearchOptionsMap((prev) => ({ ...prev, [option.name]: results }));
       } catch (error) {
@@ -96,7 +226,6 @@ const FilterComponent: React.FC<FilterComponentProps> = ({
     [initialOptionsLoaded],
   );
 
-  // Load initial options when filters are shown
   useEffect(() => {
     if (showFilters) {
       options.forEach((option) => {
@@ -125,14 +254,12 @@ const FilterComponent: React.FC<FilterComponentProps> = ({
     onResetFilters();
   };
 
-  // Handle dropdown open to load initial options
-  const handleDropdownVisibleChange = (open: boolean, option: FilterOption) => {
+  const handleDropdownOpenChange = (open: boolean, option: FilterOption) => {
     if (open && option.isSearchable && !initialOptionsLoaded[option.name]) {
       loadInitialOptions(option);
     }
   };
 
-  // Define the order of filters
   const orderedFilters = [
     "Team ID",
     "Status",
@@ -149,10 +276,7 @@ const FilterComponent: React.FC<FilterComponentProps> = ({
   return (
     <div className="w-full">
       <div className="flex items-center gap-2 mb-6">
-        <Button
-          variant="outline"
-          onClick={() => setShowFilters(!showFilters)}
-        >
+        <Button variant="outline" onClick={() => setShowFilters(!showFilters)}>
           <Filter className="h-4 w-4" />
           {buttonLabel}
         </Button>
@@ -164,7 +288,9 @@ const FilterComponent: React.FC<FilterComponentProps> = ({
       {showFilters && (
         <div className="grid grid-cols-3 gap-x-6 gap-y-4 mb-6">
           {orderedFilters.map((filterName) => {
-            const option = options.find((opt) => opt.label === filterName || opt.name === filterName);
+            const option = options.find(
+              (opt) => opt.label === filterName || opt.name === filterName,
+            );
             if (!option) return null;
 
             return (
@@ -173,41 +299,43 @@ const FilterComponent: React.FC<FilterComponentProps> = ({
                   {option.label || option.name}
                 </label>
                 {option.isSearchable ? (
-                  <Select
-                    showSearch
-                    className="w-full"
-                    placeholder={`Search ${option.label || option.name}...`}
-                    value={tempValues[option.name] || undefined}
-                    onChange={(value) => handleFilterChange(option.name, value)}
-                    onOpenChange={(open) => handleDropdownVisibleChange(open, option)}
-                    onSearch={(value) => {
-                      setSearchInputValueMap((prev) => ({
-                        ...prev,
-                        [option.name]: value,
-                      }));
-                      if (option.searchFn) {
-                        debouncedSearch(value, option);
-                      }
+                  <SearchableSelect
+                    option={option}
+                    value={tempValues[option.name] || ""}
+                    loading={!!searchLoadingMap[option.name]}
+                    results={searchOptionsMap[option.name] || []}
+                    onOpenChange={(open) =>
+                      handleDropdownOpenChange(open, option)
+                    }
+                    onSearch={(text) => {
+                      if (option.searchFn) debouncedSearch(text, option);
                     }}
-                    filterOption={false}
-                    loading={searchLoadingMap[option.name]}
-                    options={searchOptionsMap[option.name] || []}
-                    allowClear
-                    notFoundContent={searchLoadingMap[option.name] ? "Loading..." : "No results found"}
+                    onSelect={(value) => handleFilterChange(option.name, value)}
                   />
                 ) : option.options ? (
                   <Select
-                    className="w-full"
-                    placeholder={`Select ${option.label || option.name}...`}
-                    value={tempValues[option.name] || undefined}
-                    onChange={(value) => handleFilterChange(option.name, value)}
-                    allowClear
+                    value={tempValues[option.name] || ""}
+                    onValueChange={(value) =>
+                      handleFilterChange(option.name, value === "__clear__" ? "" : value)
+                    }
                   >
-                    {option.options.map((opt) => (
-                      <Select.Option key={opt.value} value={opt.value}>
-                        {opt.label}
-                      </Select.Option>
-                    ))}
+                    <SelectTrigger className="w-full">
+                      <SelectValue
+                        placeholder={`Select ${option.label || option.name}...`}
+                      />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="__clear__">
+                        <span className="text-muted-foreground">
+                          (Any)
+                        </span>
+                      </SelectItem>
+                      {option.options.map((opt) => (
+                        <SelectItem key={opt.value} value={opt.value}>
+                          {opt.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
                   </Select>
                 ) : option.customComponent ? (
                   (() => {

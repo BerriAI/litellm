@@ -112,3 +112,21 @@ global.ResizeObserver = class ResizeObserver {
   unobserve() {}
   disconnect() {}
 };
+
+// Radix UI primitives (used by shadcn Select/Popover/Dropdown) call
+// element.hasPointerCapture / setPointerCapture / releasePointerCapture in
+// their pointer-event handlers. JSDOM doesn't implement these, so stub them
+// here to prevent "target.hasPointerCapture is not a function" exceptions
+// from bubbling up during user-event interactions.
+if (!HTMLElement.prototype.hasPointerCapture) {
+  HTMLElement.prototype.hasPointerCapture = () => false;
+}
+if (!HTMLElement.prototype.setPointerCapture) {
+  HTMLElement.prototype.setPointerCapture = () => {};
+}
+if (!HTMLElement.prototype.releasePointerCapture) {
+  HTMLElement.prototype.releasePointerCapture = () => {};
+}
+if (!HTMLElement.prototype.scrollIntoView) {
+  HTMLElement.prototype.scrollIntoView = () => {};
+}

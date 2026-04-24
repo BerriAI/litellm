@@ -279,7 +279,10 @@ describe("FilterComponent", () => {
     const modelSection = modelLabel.closest("div");
     const modelSelect = within(modelSection!).getByRole("combobox");
     await user.click(modelSelect);
-    await user.type(modelSelect, "test");
+
+    // shadcn Popover renders a search textbox once open; type into that.
+    const searchInput = await screen.findByPlaceholderText("Search Model...");
+    await user.type(searchInput, "test");
 
     expect(mockSearchFn).not.toHaveBeenCalled();
 
@@ -329,7 +332,9 @@ describe("FilterComponent", () => {
     const modelSection = modelLabel.closest("div");
     const modelSelect = within(modelSection!).getByRole("combobox");
     await user.click(modelSelect);
-    await user.type(modelSelect, "test");
+
+    const searchInput = await screen.findByPlaceholderText("Search Model...");
+    await user.type(searchInput, "test");
 
     await waitFor(
       () => {
@@ -378,7 +383,9 @@ describe("FilterComponent", () => {
     const modelSection = modelLabel.closest("div");
     const modelSelect = within(modelSection!).getByRole("combobox");
     await user.click(modelSelect);
-    await user.type(modelSelect, "test");
+
+    const searchInput = await screen.findByPlaceholderText("Search Model...");
+    await user.type(searchInput, "test");
 
     await waitFor(
       () => {
