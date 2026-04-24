@@ -2218,7 +2218,16 @@ async def test_streaming_hook_converts_http_exception_to_sse_error_frame_paralle
         for c in chunks:
             yield c
 
-    hard_block = HTTPException(status_code=400, detail="Violated guardrail policy")
+    # Use the production dict-detail shape from _get_http_exception_for_blocked_guardrail
+    hard_block = HTTPException(
+        status_code=400,
+        detail={
+            "error": "Violated guardrail policy",
+            "bedrock_guardrail_response": "",
+            "guardrailIdentifier": "test-id",
+            "guardrailVersion": "DRAFT",
+        },
+    )
 
     with patch.object(
         guardrail, "make_bedrock_api_request", AsyncMock(side_effect=hard_block)
@@ -2240,7 +2249,8 @@ async def test_streaming_hook_converts_http_exception_to_sse_error_frame_paralle
     payload = _json.loads(error_frame[len("data: "):].rstrip())
     assert payload["error"]["code"] == 400
     assert payload["error"]["type"] == "guardrail_violation"
-    assert "Violated guardrail policy" in payload["error"]["message"]
+    # Must be a clean string, not a Python dict repr
+    assert payload["error"]["message"] == "Violated guardrail policy"
 
 
 @pytest.mark.asyncio
@@ -2271,7 +2281,16 @@ async def test_streaming_hook_converts_http_exception_to_sse_error_frame_output_
         for c in chunks:
             yield c
 
-    hard_block = HTTPException(status_code=400, detail="Violated guardrail policy")
+    # Use the production dict-detail shape from _get_http_exception_for_blocked_guardrail
+    hard_block = HTTPException(
+        status_code=400,
+        detail={
+            "error": "Violated guardrail policy",
+            "bedrock_guardrail_response": "",
+            "guardrailIdentifier": "test-id",
+            "guardrailVersion": "DRAFT",
+        },
+    )
 
     with patch.object(
         guardrail, "make_bedrock_api_request", AsyncMock(side_effect=hard_block)
@@ -2292,4 +2311,5 @@ async def test_streaming_hook_converts_http_exception_to_sse_error_frame_output_
     payload = _json.loads(error_frame[len("data: "):].rstrip())
     assert payload["error"]["code"] == 400
     assert payload["error"]["type"] == "guardrail_violation"
-    assert "Violated guardrail policy" in payload["error"]["message"]
+    # Must be a clean string, not a Python dict repr
+    assert payload["error"]["message"] == "Violated guardrail policy"

@@ -1332,9 +1332,15 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             # An async generator cannot propagate an exception as an HTTP error response
             # after the 200 header has been written. Convert hard-block exceptions to
             # in-band SSE error frames so the client receives a structured error.
+            # _get_http_exception_for_blocked_guardrail raises with a dict detail;
+            # extract the human-readable "error" key
+            if isinstance(e.detail, dict):
+                message = e.detail.get("error", str(e.detail))
+            else:
+                message = str(e.detail)
             error_data = {
                 "error": {
-                    "message": str(e.detail),
+                    "message": message,
                     "code": e.status_code,
                     "type": "guardrail_violation",
                 }
