@@ -34,7 +34,9 @@ from .guardrail_initializers import (
     initialize_presidio,
     initialize_tool_permission,
 )
-from .guardrail_hooks.llm_as_a_judge import initialize_guardrail as initialize_llm_as_a_judge
+from .guardrail_hooks.llm_as_a_judge import (
+    initialize_guardrail as initialize_llm_as_a_judge,
+)
 
 guardrail_initializer_registry = {
     SupportedGuardrailIntegrations.BEDROCK.value: initialize_bedrock,
