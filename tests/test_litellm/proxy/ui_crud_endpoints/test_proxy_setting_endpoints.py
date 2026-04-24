@@ -888,6 +888,55 @@ class TestProxySettingEndpoints:
             where={"id": "ui_settings"}
         )
 
+    def test_get_ui_settings_schema_description_preserved_with_extensions(
+        self, mock_auth, monkeypatch
+    ):
+        """The UI renders ``schema.description`` as a header paragraph.
+        When an extension package registers extra fields, the effective
+        class is built via ``create_model`` — which drops the base
+        class docstring unless we pass ``__doc__`` explicitly."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        from pydantic.fields import FieldInfo
+
+        from litellm.proxy.ui_crud_endpoints import proxy_setting_endpoints
+        from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import (
+            _EXTRA_UI_SETTINGS_FIELDS,
+            ALLOWED_UI_SETTINGS_FIELDS,
+            register_extra_ui_setting,
+        )
+
+        # Snapshot + restore extension registry so the test doesn't leak.
+        original_fields = dict(_EXTRA_UI_SETTINGS_FIELDS)
+        original_allowed = set(ALLOWED_UI_SETTINGS_FIELDS)
+        monkeypatch.setattr(
+            proxy_setting_endpoints, "_EFFECTIVE_UI_SETTINGS_CLASS", None
+        )
+
+        try:
+            register_extra_ui_setting(
+                "test_extension_flag", bool, FieldInfo(default=False)
+            )
+
+            mock_prisma = MagicMock()
+            mock_prisma.db.litellm_uisettings.find_unique = AsyncMock(return_value=None)
+            monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+
+            response = client.get("/get/ui_settings")
+
+            assert response.status_code == 200
+            data = response.json()
+            assert (
+                data["field_schema"]["description"]
+                == "Configuration for UI-specific flags"
+            )
+        finally:
+            _EXTRA_UI_SETTINGS_FIELDS.clear()
+            _EXTRA_UI_SETTINGS_FIELDS.update(original_fields)
+            ALLOWED_UI_SETTINGS_FIELDS.clear()
+            ALLOWED_UI_SETTINGS_FIELDS.update(original_allowed)
+            proxy_setting_endpoints._EFFECTIVE_UI_SETTINGS_CLASS = None
+
     @pytest.mark.parametrize(
         "user_role",
         [
