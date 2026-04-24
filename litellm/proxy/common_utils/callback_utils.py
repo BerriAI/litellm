@@ -445,7 +445,8 @@ def add_guardrail_to_applied_guardrails_header(
         return
     _metadata = request_data.get("metadata", None) or {}
     if "applied_guardrails" in _metadata:
-        _metadata["applied_guardrails"].append(guardrail_name)
+        if guardrail_name not in _metadata["applied_guardrails"]:
+            _metadata["applied_guardrails"].append(guardrail_name)
     else:
         _metadata["applied_guardrails"] = [guardrail_name]
     # Ensure metadata is set back to request_data (important when metadata didn't exist)

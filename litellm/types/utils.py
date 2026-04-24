@@ -140,7 +140,9 @@ class ProviderSpecificModelInfo(TypedDict, total=False):
     supports_native_advisor_tool: Optional[bool]
     supports_url_context: Optional[bool]
     supports_none_reasoning_effort: Optional[bool]
+    supports_minimal_reasoning_effort: Optional[bool]
     supports_xhigh_reasoning_effort: Optional[bool]
+    supports_max_reasoning_effort: Optional[bool]
 
 
 class SearchContextCostPerQuery(TypedDict, total=False):
@@ -2852,6 +2854,7 @@ class StandardAuditLogPayload(TypedDict):
 class StandardLoggingPayload(TypedDict):
     id: str
     trace_id: str  # Trace multiple LLM calls belonging to same overall request (e.g. fallbacks/retries)
+    litellm_call_id: Optional[str]  # UUID returned in x-litellm-call-id response header
     call_type: str
     stream: Optional[bool]
     response_cost: float
