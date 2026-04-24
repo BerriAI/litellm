@@ -65,7 +65,7 @@ See our status page for [**live reliability**](https://status.litellm.ai/)
 ### **Benefits**
 - **No Maintenance, No Infra**: We'll maintain the proxy, and spin up any additional infrastructure (e.g.: separate server for spend logs) to make sure you can load balance + track spend across multiple LLM projects. 
 - **Reliable**: Our hosted proxy is tested on 1k requests per second, making it reliable for high load.
-- **Secure**: LiteLLM is SOC-2 Type 2 and ISO 27001 certified, to make sure your data is as secure as possible.
+- **Secure**: LiteLLM is SOC 2 Type I and ISO 27001 certified, and is in the process of obtaining SOC 2 Type II certification (expected by Q3 2026).
 
 ### Supported data regions for LiteLLM Cloud
 
