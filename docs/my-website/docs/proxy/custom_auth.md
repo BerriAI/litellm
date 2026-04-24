@@ -230,6 +230,30 @@ general_settings:
 
 [**Implementation Code**](https://github.com/BerriAI/litellm/blob/caf2a6b279ddbe89ebd1d8f4499f65715d684851/litellm/proxy/utils.py#L122)
 
+### Optional: run LiteLLM's post-custom-auth checks
+
+If your custom auth function returns a `UserAPIKeyAuth` object and you want LiteLLM to run the built-in checks on that object, enable the following flags in `litellm_settings` and `general_settings`:
+
+```yaml
+litellm_settings:
+  enable_post_custom_auth_checks: true   # opt in to LiteLLM post-auth checks
+
+general_settings:
+  custom_auth: custom_auth.user_api_key_auth
+  custom_auth_run_common_checks: true    # optional: also run standard model access checks
+```
+
+What each flag does:
+
+- `enable_post_custom_auth_checks: true`
+  - Runs LiteLLM's post-custom-auth validation on the returned `UserAPIKeyAuth`
+  - This includes checks such as key expiry, end-user budget enforcement, and per-model budget enforcement
+- `custom_auth_run_common_checks: true`
+  - Runs the common model-access / fallback checks inside the post-custom-auth flow
+  - This flag only has an effect when `enable_post_custom_auth_checks` is also enabled
+
+By default, `enable_post_custom_auth_checks` is `false`. This keeps trusted custom-auth deployments on the fast path and avoids extra DB-backed checks unless you explicitly opt in.
+
 #### 3. Start the proxy
 ```shell
 $ litellm --config /path/to/config.yaml 
