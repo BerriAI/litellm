@@ -1,5 +1,4 @@
 import React, { useState, useEffect } from "react";
-import { Form, Steps } from "antd";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -10,11 +9,10 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
+import { Check } from "lucide-react";
 import { makeAgentsPublicCall } from "../../networking";
 import NotificationsManager from "../../molecules/notifications_manager";
 import { AgentHubData } from "@/components/AIHub/AgentHubTableColumns";
-
-const { Step } = Steps;
 
 interface MakeAgentPublicFormProps {
   visible: boolean;
@@ -22,6 +20,49 @@ interface MakeAgentPublicFormProps {
   accessToken: string;
   agentHubData: AgentHubData[];
   onSuccess: () => void;
+}
+
+function Stepper({ current, steps }: { current: number; steps: string[] }) {
+  return (
+    <ol className="flex items-center gap-2 mb-6">
+      {steps.map((label, i) => {
+        const active = i === current;
+        const completed = i < current;
+        return (
+          <li
+            key={label}
+            className="flex items-center gap-2 flex-1 min-w-0"
+          >
+            <div
+              className={cn(
+                "flex h-6 w-6 items-center justify-center rounded-full border text-xs font-medium",
+                completed
+                  ? "bg-primary text-primary-foreground border-primary"
+                  : active
+                    ? "border-primary text-primary"
+                    : "border-border text-muted-foreground",
+              )}
+            >
+              {completed ? <Check className="h-3 w-3" /> : i + 1}
+            </div>
+            <span
+              className={cn(
+                "text-sm truncate",
+                active || completed
+                  ? "text-foreground"
+                  : "text-muted-foreground",
+              )}
+            >
+              {label}
+            </span>
+            {i < steps.length - 1 && (
+              <div className="h-px flex-1 bg-border" />
+            )}
+          </li>
+        );
+      })}
+    </ol>
+  );
 }
 
 const MakeAgentPublicForm: React.FC<MakeAgentPublicFormProps> = ({
@@ -34,12 +75,10 @@ const MakeAgentPublicForm: React.FC<MakeAgentPublicFormProps> = ({
   const [currentStep, setCurrentStep] = useState(0);
   const [selectedAgents, setSelectedAgents] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(false);
-  const [form] = Form.useForm();
 
   const handleClose = () => {
     setCurrentStep(0);
     setSelectedAgents(new Set());
-    form.resetFields();
     onClose();
   };
 
@@ -314,7 +353,11 @@ const MakeAgentPublicForm: React.FC<MakeAgentPublicFormProps> = ({
           )}
 
           {currentStep === 1 && (
-            <Button onClick={handleSubmit} disabled={loading}>
+            <Button
+              onClick={handleSubmit}
+              disabled={loading}
+              data-loading={loading ? "true" : undefined}
+            >
               {loading ? "Making Public..." : "Make Public"}
             </Button>
           )}
@@ -332,15 +375,9 @@ const MakeAgentPublicForm: React.FC<MakeAgentPublicFormProps> = ({
         <DialogHeader>
           <DialogTitle>Make Agents Public</DialogTitle>
         </DialogHeader>
-        <Form form={form} layout="vertical">
-          <Steps current={currentStep} className="mb-6">
-            <Step title="Select Agents" />
-            <Step title="Confirm" />
-          </Steps>
-
-          {renderStepContent()}
-          {renderStepButtons()}
-        </Form>
+        <Stepper current={currentStep} steps={["Select Agents", "Confirm"]} />
+        {renderStepContent()}
+        {renderStepButtons()}
       </DialogContent>
     </Dialog>
   );

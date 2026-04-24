@@ -23,10 +23,17 @@ import {
 } from "@/components/networking";
 import PublicModelHub from "@/components/public_model_hub";
 import { isAdminRole } from "@/utils/roles";
-// eslint-disable-next-line litellm-ui/no-banned-ui-imports
-import { Copy as CopyOutlined } from "lucide-react";
-import { Badge, Button, Card, Tab, TabGroup, TabList, TabPanel, TabPanels, Text, Title } from "@tremor/react";
-import { Modal } from "antd";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { cn } from "@/lib/utils";
 import { Copy } from "lucide-react";
 import { useRouter } from "next/navigation";
 import React, { useCallback, useEffect, useState } from "react";
@@ -60,6 +67,26 @@ interface ModelGroupInfo {
   // Allow any additional properties for flexibility
   [key: string]: any;
 }
+
+const BADGE_COLOR_CLASSES: Record<string, string> = {
+  blue: "bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300",
+  green:
+    "bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300",
+  purple:
+    "bg-purple-100 text-purple-700 dark:bg-purple-950 dark:text-purple-300",
+  orange:
+    "bg-orange-100 text-orange-700 dark:bg-orange-950 dark:text-orange-300",
+  red: "bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300",
+  yellow:
+    "bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300",
+  gray: "bg-muted text-muted-foreground",
+};
+
+const colorBadge = (
+  color: keyof typeof BADGE_COLOR_CLASSES | string,
+  extra?: string,
+) =>
+  cn(BADGE_COLOR_CLASSES[color] ?? BADGE_COLOR_CLASSES.gray, extra);
 
 const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, premiumUser, userRole }) => {
   const [publicPageAllowed, setPublicPageAllowed] = useState<boolean>(false);
@@ -258,8 +285,6 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
     if (!accessToken) {
       return;
     }
-
-    // Show the modal for selecting models to make public
     setIsMakePublicModalVisible(true);
   };
 
@@ -267,8 +292,6 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
     if (!accessToken) {
       return;
     }
-
-    // Show the modal for selecting agents to make public
     setIsMakeAgentPublicModalVisible(true);
   };
 
@@ -276,22 +299,10 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
     if (!accessToken) {
       return;
     }
-
-    // Show the modal for selecting MCP servers to make public
     setIsMakeMcpPublicModalVisible(true);
   };
 
-  const handleOk = () => {
-    setIsModalVisible(false);
-    setIsPublicPageModalVisible(false);
-    setSelectedModel(null);
-    setIsAgentModalVisible(false);
-    setSelectedAgent(null);
-    setIsMcpModalVisible(false);
-    setSelectedMcpServer(null);
-  };
-
-  const handleCancel = () => {
+  const closeDetailDialogs = () => {
     setIsModalVisible(false);
     setIsPublicPageModalVisible(false);
     setSelectedModel(null);
@@ -307,7 +318,6 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
   };
 
   const formatCapabilityName = (key: string) => {
-    // Remove 'supports_' prefix and convert snake_case to Title Case
     return key
       .replace(/^supports_/, "")
       .split("_")
@@ -316,7 +326,6 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
   };
 
   const getModelCapabilities = (model: ModelGroupInfo) => {
-    // Find all properties that start with 'supports_' and are true
     return Object.entries(model)
       .filter(([key, value]) => key.startsWith("supports_") && value === true)
       .map(([key]) => key);
@@ -327,7 +336,6 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
   };
 
   const handleMakePublicSuccess = () => {
-    // Refresh the model hub data after successful public operation
     if (accessToken) {
       const fetchData = async () => {
         try {
@@ -342,7 +350,6 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
   };
 
   const handleMakeAgentPublicSuccess = () => {
-    // Refresh the agent hub data after successful public operation
     if (accessToken) {
       const fetchAgentData = async () => {
         try {
@@ -363,7 +370,6 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
   };
 
   const handleMakeMcpPublicSuccess = () => {
-    // Refresh the MCP hub data after successful public operation
     if (accessToken) {
       const fetchMcpData = async () => {
         try {
@@ -396,25 +402,25 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
           {/* Header with Title, Description and URL */}
           <div className="flex justify-between items-center mb-6">
             <div className="flex flex-col items-start">
-              <Title className="text-center">AI Hub</Title>
+              <h2 className="text-2xl font-semibold m-0">AI Hub</h2>
               {isAdminRole(userRole || "") ? (
-                <p className="text-sm text-gray-600">
+                <p className="text-sm text-muted-foreground">
                   Make models, agents, and MCP servers public for developers to know what&apos;s available.
                 </p>
               ) : (
-                <p className="text-sm text-gray-600">A list of all public model names personally available to you.</p>
+                <p className="text-sm text-muted-foreground">A list of all public model names personally available to you.</p>
               )}
             </div>
             <div className="flex items-center space-x-4">
-              <Text>Model Hub URL:</Text>
-              <div className="flex items-center bg-gray-200 px-2 py-1 rounded">
-                <Text className="mr-2">{`${getProxyBaseUrl()}/ui/model_hub_table`}</Text>
+              <span className="text-sm">Model Hub URL:</span>
+              <div className="flex items-center bg-muted px-2 py-1 rounded">
+                <span className="mr-2 text-sm">{`${getProxyBaseUrl()}/ui/model_hub_table`}</span>
                 <button
                   onClick={() => copyToClipboard(`${getProxyBaseUrl()}/ui/model_hub_table`)}
-                  className="p-1 hover:bg-gray-300 rounded transition-colors"
+                  className="p-1 hover:bg-muted-foreground/10 rounded transition-colors"
                   title="Copy URL"
                 >
-                  <Copy size={16} className="text-gray-600" />
+                  <Copy size={16} className="text-muted-foreground" />
                 </button>
               </div>
             </div>
@@ -428,278 +434,271 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
           )}
 
           {/* Tab System for Model Hub, Agent Hub, MCP Hub, and Plugin Marketplace */}
-          <TabGroup>
-            <TabList className="mb-4">
-              <Tab>Model Hub</Tab>
-              <Tab>Agent Hub</Tab>
-              <Tab>MCP Hub</Tab>
-              <Tab>Skill Hub</Tab>
-            </TabList>
+          <Tabs defaultValue="models" className="w-full">
+            <TabsList className="mb-4">
+              <TabsTrigger value="models">Model Hub</TabsTrigger>
+              <TabsTrigger value="agents">Agent Hub</TabsTrigger>
+              <TabsTrigger value="mcp">MCP Hub</TabsTrigger>
+              <TabsTrigger value="skills">Skill Hub</TabsTrigger>
+            </TabsList>
 
-            <TabPanels>
-              {/* Model Hub Tab */}
-              <TabPanel>
-                {/* Model Filters and Table */}
-                <Card>
-                  {/* Header with Make Public Button */}
-                  {publicPage == false && isAdminRole(userRole || "") && (
-                    <div className="flex justify-end mb-4">
-                      <Button onClick={() => handleMakePublicPage()}>Select Models to Make Public</Button>
-                    </div>
-                  )}
-
-                  {/* Filters */}
-                  <ModelFilters modelHubData={modelHubData || []} onFilteredDataChange={handleFilteredDataChange} />
-
-                  {/* Model Table */}
-                  <ModelDataTable
-                    columns={modelHubColumns(showModal, copyToClipboard, publicPage)}
-                    data={filteredData}
-                    isLoading={loading}
-                    defaultSorting={[{ id: "model_group", desc: false }]}
-                  />
-                </Card>
-
-                <div className="mt-4 text-center space-y-2">
-                  <Text className="text-sm text-gray-600">
-                    Showing {filteredData.length} of {modelHubData?.length || 0} models
-                  </Text>
-                </div>
-              </TabPanel>
-
-              {/* Agent Hub Tab */}
-              <TabPanel>
-                <Card>
-                  {/* Header with Make Public Button */}
-                  {publicPage == false && isAdminRole(userRole || "") && (
-                    <div className="flex justify-end mb-4">
-                      <Button onClick={() => handleMakeAgentPublicPage()}>Select Agents to Make Public</Button>
-                    </div>
-                  )}
-
-                  {/* Agent Table */}
-                  <ModelDataTable
-                    columns={getAgentHubTableColumns(showAgentModal, copyToClipboard, publicPage)}
-                    data={agentHubData || []}
-                    isLoading={agentLoading}
-                    defaultSorting={[{ id: "name", desc: false }]}
-                  />
-                </Card>
-
-                <div className="mt-4 text-center space-y-2">
-                  <Text className="text-sm text-gray-600">
-                    Showing {agentHubData?.length || 0} agent{agentHubData?.length !== 1 ? "s" : ""}
-                  </Text>
-                </div>
-              </TabPanel>
-
-              {/* MCP Hub Tab */}
-              <TabPanel>
-                <Card>
-                  {/* Header with Make Public Button */}
-                  {publicPage == false && isAdminRole(userRole || "") && (
-                    <div className="flex justify-end mb-4">
-                      <Button onClick={() => handleMakeMcpPublicPage()}>Select MCP Servers to Make Public</Button>
-                    </div>
-                  )}
-
-                  {/* MCP Server Table */}
-                  <ModelDataTable
-                    columns={mcpHubColumns(showMcpModal, copyToClipboard, publicPage)}
-                    data={mcpHubData || []}
-                    isLoading={mcpLoading}
-                    defaultSorting={[{ id: "server_name", desc: false }]}
-                  />
-                </Card>
-
-                <div className="mt-4 text-center space-y-2">
-                  <Text className="text-sm text-gray-600">
-                    Showing {mcpHubData?.length || 0} MCP server{mcpHubData?.length !== 1 ? "s" : ""}
-                  </Text>
-                </div>
-              </TabPanel>
-
-              {/* Skill Hub Tab */}
-              <TabPanel>
+            {/* Model Hub Tab */}
+            <TabsContent value="models">
+              <Card className="p-6">
                 {publicPage == false && isAdminRole(userRole || "") && (
                   <div className="flex justify-end mb-4">
-                    <Button onClick={() => setIsMakeSkillPublicModalVisible(true)}>
-                      Select Skills to Make Public
-                    </Button>
+                    <Button onClick={() => handleMakePublicPage()}>Select Models to Make Public</Button>
                   </div>
                 )}
-                <SkillHubDashboard
-                  skills={skillHubData}
-                  isLoading={skillLoading}
-                  isAdmin={isAdminRole(userRole || "")}
-                  accessToken={accessToken}
-                  publicPage={publicPage}
-                  onPublishSuccess={async () => {
-                    const response = await getClaudeCodePluginsList(accessToken || "", publicPage);
-                    setSkillHubData(response.plugins);
-                  }}
+
+                <ModelFilters modelHubData={modelHubData || []} onFilteredDataChange={handleFilteredDataChange} />
+
+                <ModelDataTable
+                  columns={modelHubColumns(showModal, copyToClipboard, publicPage)}
+                  data={filteredData}
+                  isLoading={loading}
+                  defaultSorting={[{ id: "model_group", desc: false }]}
                 />
-              </TabPanel>
-            </TabPanels>
-          </TabGroup>
+              </Card>
+
+              <div className="mt-4 text-center space-y-2">
+                <span className="text-sm text-muted-foreground">
+                  Showing {filteredData.length} of {modelHubData?.length || 0} models
+                </span>
+              </div>
+            </TabsContent>
+
+            {/* Agent Hub Tab */}
+            <TabsContent value="agents">
+              <Card className="p-6">
+                {publicPage == false && isAdminRole(userRole || "") && (
+                  <div className="flex justify-end mb-4">
+                    <Button onClick={() => handleMakeAgentPublicPage()}>Select Agents to Make Public</Button>
+                  </div>
+                )}
+
+                <ModelDataTable
+                  columns={getAgentHubTableColumns(showAgentModal, copyToClipboard, publicPage)}
+                  data={agentHubData || []}
+                  isLoading={agentLoading}
+                  defaultSorting={[{ id: "name", desc: false }]}
+                />
+              </Card>
+
+              <div className="mt-4 text-center space-y-2">
+                <span className="text-sm text-muted-foreground">
+                  Showing {agentHubData?.length || 0} agent{agentHubData?.length !== 1 ? "s" : ""}
+                </span>
+              </div>
+            </TabsContent>
+
+            {/* MCP Hub Tab */}
+            <TabsContent value="mcp">
+              <Card className="p-6">
+                {publicPage == false && isAdminRole(userRole || "") && (
+                  <div className="flex justify-end mb-4">
+                    <Button onClick={() => handleMakeMcpPublicPage()}>Select MCP Servers to Make Public</Button>
+                  </div>
+                )}
+
+                <ModelDataTable
+                  columns={mcpHubColumns(showMcpModal, copyToClipboard, publicPage)}
+                  data={mcpHubData || []}
+                  isLoading={mcpLoading}
+                  defaultSorting={[{ id: "server_name", desc: false }]}
+                />
+              </Card>
+
+              <div className="mt-4 text-center space-y-2">
+                <span className="text-sm text-muted-foreground">
+                  Showing {mcpHubData?.length || 0} MCP server{mcpHubData?.length !== 1 ? "s" : ""}
+                </span>
+              </div>
+            </TabsContent>
+
+            {/* Skill Hub Tab */}
+            <TabsContent value="skills">
+              {publicPage == false && isAdminRole(userRole || "") && (
+                <div className="flex justify-end mb-4">
+                  <Button onClick={() => setIsMakeSkillPublicModalVisible(true)}>
+                    Select Skills to Make Public
+                  </Button>
+                </div>
+              )}
+              <SkillHubDashboard
+                skills={skillHubData}
+                isLoading={skillLoading}
+                isAdmin={isAdminRole(userRole || "")}
+                accessToken={accessToken}
+                publicPage={publicPage}
+                onPublishSuccess={async () => {
+                  const response = await getClaudeCodePluginsList(accessToken || "", publicPage);
+                  setSkillHubData(response.plugins);
+                }}
+              />
+            </TabsContent>
+          </Tabs>
         </div>
       ) : (
-        <Card className="mx-auto max-w-xl mt-10">
-          <Text className="text-xl text-center mb-2 text-black">Public Model Hub not enabled.</Text>
-          <p className="text-base text-center text-slate-800">Ask your proxy admin to enable this on their Admin UI.</p>
+        <Card className="mx-auto max-w-xl mt-10 p-6">
+          <p className="text-xl text-center mb-2 text-foreground">Public Model Hub not enabled.</p>
+          <p className="text-base text-center text-muted-foreground">
+            Ask your proxy admin to enable this on their Admin UI.
+          </p>
         </Card>
       )}
 
       {/* Public Page Modal */}
-      <Modal
-        title="Public Model Hub"
-        width={600}
+      <Dialog
         open={isPublicPageModalVisible}
-        footer={null}
-        onOk={handleOk}
-        onCancel={handleCancel}
+        onOpenChange={(o) => (!o ? closeDetailDialogs() : undefined)}
       >
-        <div className="pt-5 pb-5">
-          <div className="flex justify-between mb-4">
-            <Text className="text-base mr-2">Shareable Link:</Text>
-            <Text className="max-w-sm ml-2 bg-gray-200 pr-2 pl-2 pt-1 pb-1 text-center rounded">
-              {`${getProxyBaseUrl()}/ui/model_hub_table`}
-            </Text>
+        <DialogContent className="max-w-[600px]">
+          <DialogHeader>
+            <DialogTitle>Public Model Hub</DialogTitle>
+          </DialogHeader>
+          <div className="pt-5 pb-5">
+            <div className="flex justify-between mb-4">
+              <span className="text-base mr-2">Shareable Link:</span>
+              <span className="max-w-sm ml-2 bg-muted pr-2 pl-2 pt-1 pb-1 text-center rounded text-sm">
+                {`${getProxyBaseUrl()}/ui/model_hub_table`}
+              </span>
+            </div>
+            <div className="flex justify-end">
+              <Button onClick={goToPublicModelPage}>See Page</Button>
+            </div>
           </div>
-          <div className="flex justify-end">
-            <Button onClick={goToPublicModelPage}>See Page</Button>
-          </div>
-        </div>
-      </Modal>
+        </DialogContent>
+      </Dialog>
 
       {/* Model Details Modal */}
-      <Modal
-        title={selectedModel?.model_group || "Model Details"}
-        width={1000}
+      <Dialog
         open={isModalVisible}
-        footer={null}
-        onOk={handleOk}
-        onCancel={handleCancel}
+        onOpenChange={(o) => (!o ? closeDetailDialogs() : undefined)}
       >
-        {selectedModel && (
-          <div className="space-y-6">
-            {/* Model Overview */}
-            <div>
-              <Text className="text-lg font-semibold mb-4">Model Overview</Text>
-              <div className="grid grid-cols-2 gap-4 mb-4">
-                <div>
-                  <Text className="font-medium">Model Group:</Text>
-                  <Text>{selectedModel.model_group}</Text>
+        <DialogContent className="max-w-[1000px] max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>{selectedModel?.model_group || "Model Details"}</DialogTitle>
+          </DialogHeader>
+          {selectedModel && (
+            <div className="space-y-6">
+              {/* Model Overview */}
+              <div>
+                <p className="text-lg font-semibold mb-4">Model Overview</p>
+                <div className="grid grid-cols-2 gap-4 mb-4">
+                  <div>
+                    <p className="font-medium">Model Group:</p>
+                    <p>{selectedModel.model_group}</p>
+                  </div>
+                  <div>
+                    <p className="font-medium">Mode:</p>
+                    <p>{selectedModel.mode || "Not specified"}</p>
+                  </div>
+                  <div>
+                    <p className="font-medium">Providers:</p>
+                    <div className="flex flex-wrap gap-1 mt-1">
+                      {selectedModel.providers.map((provider) => (
+                        <Badge key={provider} className={colorBadge("blue")}>
+                          {provider}
+                        </Badge>
+                      ))}
+                    </div>
+                  </div>
                 </div>
-                <div>
-                  <Text className="font-medium">Mode:</Text>
-                  <Text>{selectedModel.mode || "Not specified"}</Text>
+              </div>
+
+              {/* Token and Cost Information */}
+              <div>
+                <p className="text-lg font-semibold mb-4">Token & Cost Information</p>
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <p className="font-medium">Max Input Tokens:</p>
+                    <p>{selectedModel.max_input_tokens?.toLocaleString() || "Not specified"}</p>
+                  </div>
+                  <div>
+                    <p className="font-medium">Max Output Tokens:</p>
+                    <p>{selectedModel.max_output_tokens?.toLocaleString() || "Not specified"}</p>
+                  </div>
+                  <div>
+                    <p className="font-medium">Input Cost per 1M Tokens:</p>
+                    <p>
+                      {selectedModel.input_cost_per_token
+                        ? formatCost(selectedModel.input_cost_per_token)
+                        : "Not specified"}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="font-medium">Output Cost per 1M Tokens:</p>
+                    <p>
+                      {selectedModel.output_cost_per_token
+                        ? formatCost(selectedModel.output_cost_per_token)
+                        : "Not specified"}
+                    </p>
+                  </div>
                 </div>
+              </div>
+
+              {/* Capabilities */}
+              <div>
+                <p className="text-lg font-semibold mb-4">Capabilities</p>
+                <div className="flex flex-wrap gap-2">
+                  {(() => {
+                    const capabilities = getModelCapabilities(selectedModel);
+                    const colors = ["green", "blue", "purple", "orange", "red", "yellow"];
+
+                    if (capabilities.length === 0) {
+                      return <p className="text-muted-foreground">No special capabilities listed</p>;
+                    }
+
+                    return capabilities.map((capability, index) => (
+                      <Badge key={capability} className={colorBadge(colors[index % colors.length])}>
+                        {formatCapabilityName(capability)}
+                      </Badge>
+                    ));
+                  })()}
+                </div>
+              </div>
+
+              {/* Rate Limits */}
+              {(selectedModel.tpm || selectedModel.rpm) && (
                 <div>
-                  <Text className="font-medium">Providers:</Text>
-                  <div className="flex flex-wrap gap-1 mt-1">
-                    {selectedModel.providers.map((provider) => (
-                      <Badge key={provider} color="blue">
-                        {provider}
+                  <p className="text-lg font-semibold mb-4">Rate Limits</p>
+                  <div className="grid grid-cols-2 gap-4">
+                    {selectedModel.tpm && (
+                      <div>
+                        <p className="font-medium">Tokens per Minute:</p>
+                        <p>{selectedModel.tpm.toLocaleString()}</p>
+                      </div>
+                    )}
+                    {selectedModel.rpm && (
+                      <div>
+                        <p className="font-medium">Requests per Minute:</p>
+                        <p>{selectedModel.rpm.toLocaleString()}</p>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* Supported OpenAI Parameters */}
+              {selectedModel.supported_openai_params && (
+                <div>
+                  <p className="text-lg font-semibold mb-4">Supported OpenAI Parameters</p>
+                  <div className="flex flex-wrap gap-2">
+                    {selectedModel.supported_openai_params.map((param) => (
+                      <Badge key={param} className={colorBadge("green")}>
+                        {param}
                       </Badge>
                     ))}
                   </div>
                 </div>
-              </div>
-            </div>
+              )}
 
-            {/* Token and Cost Information */}
-            <div>
-              <Text className="text-lg font-semibold mb-4">Token & Cost Information</Text>
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <Text className="font-medium">Max Input Tokens:</Text>
-                  <Text>{selectedModel.max_input_tokens?.toLocaleString() || "Not specified"}</Text>
-                </div>
-                <div>
-                  <Text className="font-medium">Max Output Tokens:</Text>
-                  <Text>{selectedModel.max_output_tokens?.toLocaleString() || "Not specified"}</Text>
-                </div>
-                <div>
-                  <Text className="font-medium">Input Cost per 1M Tokens:</Text>
-                  <Text>
-                    {selectedModel.input_cost_per_token
-                      ? formatCost(selectedModel.input_cost_per_token)
-                      : "Not specified"}
-                  </Text>
-                </div>
-                <div>
-                  <Text className="font-medium">Output Cost per 1M Tokens:</Text>
-                  <Text>
-                    {selectedModel.output_cost_per_token
-                      ? formatCost(selectedModel.output_cost_per_token)
-                      : "Not specified"}
-                  </Text>
-                </div>
-              </div>
-            </div>
-
-            {/* Capabilities */}
-            <div>
-              <Text className="text-lg font-semibold mb-4">Capabilities</Text>
-              <div className="flex flex-wrap gap-2">
-                {(() => {
-                  const capabilities = getModelCapabilities(selectedModel);
-                  const colors = ["green", "blue", "purple", "orange", "red", "yellow"];
-
-                  if (capabilities.length === 0) {
-                    return <Text className="text-gray-500">No special capabilities listed</Text>;
-                  }
-
-                  return capabilities.map((capability, index) => (
-                    <Badge key={capability} color={colors[index % colors.length]}>
-                      {formatCapabilityName(capability)}
-                    </Badge>
-                  ));
-                })()}
-              </div>
-            </div>
-
-            {/* Rate Limits */}
-            {(selectedModel.tpm || selectedModel.rpm) && (
+              {/* Usage Example */}
               <div>
-                <Text className="text-lg font-semibold mb-4">Rate Limits</Text>
-                <div className="grid grid-cols-2 gap-4">
-                  {selectedModel.tpm && (
-                    <div>
-                      <Text className="font-medium">Tokens per Minute:</Text>
-                      <Text>{selectedModel.tpm.toLocaleString()}</Text>
-                    </div>
-                  )}
-                  {selectedModel.rpm && (
-                    <div>
-                      <Text className="font-medium">Requests per Minute:</Text>
-                      <Text>{selectedModel.rpm.toLocaleString()}</Text>
-                    </div>
-                  )}
-                </div>
-              </div>
-            )}
-
-            {/* Supported OpenAI Parameters */}
-            {selectedModel.supported_openai_params && (
-              <div>
-                <Text className="text-lg font-semibold mb-4">Supported OpenAI Parameters</Text>
-                <div className="flex flex-wrap gap-2">
-                  {selectedModel.supported_openai_params.map((param) => (
-                    <Badge key={param} color="green">
-                      {param}
-                    </Badge>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* Usage Example */}
-            <div>
-              <Text className="text-lg font-semibold mb-4">Usage Example</Text>
-              <SyntaxHighlighter language="python" className="text-sm">
-                {`import openai
+                <p className="text-lg font-semibold mb-4">Usage Example</p>
+                <SyntaxHighlighter language="python" className="text-sm">
+                  {`import openai
 
 client = openai.OpenAI(
     api_key="your_api_key",
@@ -717,324 +716,333 @@ response = client.chat.completions.create(
 )
 
 print(response.choices[0].message.content)`}
-              </SyntaxHighlighter>
+                </SyntaxHighlighter>
+              </div>
             </div>
-          </div>
-        )}
-      </Modal>
+          )}
+        </DialogContent>
+      </Dialog>
 
       {/* Agent Details Modal */}
-      <Modal
-        title={selectedAgent?.name || "Agent Details"}
-        width={1000}
+      <Dialog
         open={isAgentModalVisible}
-        footer={null}
-        onOk={handleOk}
-        onCancel={handleCancel}
+        onOpenChange={(o) => (!o ? closeDetailDialogs() : undefined)}
       >
-        {selectedAgent && (
-          <div className="space-y-6">
-            {/* Agent Overview */}
-            <div>
-              <Text className="text-lg font-semibold mb-4">Agent Overview</Text>
-              <div className="grid grid-cols-2 gap-4 mb-4">
-                <div>
-                  <Text className="font-medium">Name:</Text>
-                  <Text>{selectedAgent.name}</Text>
-                </div>
-                <div>
-                  <Text className="font-medium">Version:</Text>
-                  <Badge color="blue">v{selectedAgent.version}</Badge>
-                </div>
-                <div>
-                  <Text className="font-medium">Protocol Version:</Text>
-                  <Text>{selectedAgent.protocolVersion}</Text>
-                </div>
-                <div>
-                  <Text className="font-medium">URL:</Text>
-                  <div className="flex items-center space-x-2">
-                    <Text className="truncate">{selectedAgent.url}</Text>
-                    <CopyOutlined
-                      onClick={() => copyToClipboard(selectedAgent.url)}
-                      className="cursor-pointer text-gray-500 hover:text-blue-500"
-                    />
+        <DialogContent className="max-w-[1000px] max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>{selectedAgent?.name || "Agent Details"}</DialogTitle>
+          </DialogHeader>
+          {selectedAgent && (
+            <div className="space-y-6">
+              {/* Agent Overview */}
+              <div>
+                <p className="text-lg font-semibold mb-4">Agent Overview</p>
+                <div className="grid grid-cols-2 gap-4 mb-4">
+                  <div>
+                    <p className="font-medium">Name:</p>
+                    <p>{selectedAgent.name}</p>
                   </div>
-                </div>
-              </div>
-              <div>
-                <Text className="font-medium">Description:</Text>
-                <Text className="mt-1">{selectedAgent.description}</Text>
-              </div>
-            </div>
-
-            {/* Capabilities */}
-            {selectedAgent.capabilities && Object.keys(selectedAgent.capabilities).length > 0 && (
-              <div>
-                <Text className="text-lg font-semibold mb-4">Capabilities</Text>
-                <div className="flex flex-wrap gap-2">
-                  {Object.entries(selectedAgent.capabilities)
-                    .filter(([_, value]) => value === true)
-                    .map(([key]) => (
-                      <Badge key={key} color="green">
-                        {key}
-                      </Badge>
-                    ))}
-                </div>
-              </div>
-            )}
-
-            {/* Input/Output Modes */}
-            <div>
-              <Text className="text-lg font-semibold mb-4">Input/Output Modes</Text>
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <Text className="font-medium">Input Modes:</Text>
-                  <div className="flex flex-wrap gap-1 mt-1">
-                    {selectedAgent.defaultInputModes?.map((mode) => (
-                      <Badge key={mode} color="blue">
-                        {mode}
-                      </Badge>
-                    )) || <Text>Not specified</Text>}
+                  <div>
+                    <p className="font-medium">Version:</p>
+                    <Badge className={colorBadge("blue")}>v{selectedAgent.version}</Badge>
+                  </div>
+                  <div>
+                    <p className="font-medium">Protocol Version:</p>
+                    <p>{selectedAgent.protocolVersion}</p>
+                  </div>
+                  <div>
+                    <p className="font-medium">URL:</p>
+                    <div className="flex items-center space-x-2">
+                      <span className="truncate">{selectedAgent.url}</span>
+                      <Copy
+                        size={14}
+                        onClick={() => copyToClipboard(selectedAgent.url)}
+                        className="cursor-pointer text-muted-foreground hover:text-primary"
+                      />
+                    </div>
                   </div>
                 </div>
                 <div>
-                  <Text className="font-medium">Output Modes:</Text>
-                  <div className="flex flex-wrap gap-1 mt-1">
-                    {selectedAgent.defaultOutputModes?.map((mode) => (
-                      <Badge key={mode} color="purple">
-                        {mode}
-                      </Badge>
-                    )) || <Text>Not specified</Text>}
+                  <p className="font-medium">Description:</p>
+                  <p className="mt-1">{selectedAgent.description}</p>
+                </div>
+              </div>
+
+              {/* Capabilities */}
+              {selectedAgent.capabilities && Object.keys(selectedAgent.capabilities).length > 0 && (
+                <div>
+                  <p className="text-lg font-semibold mb-4">Capabilities</p>
+                  <div className="flex flex-wrap gap-2">
+                    {Object.entries(selectedAgent.capabilities)
+                      .filter(([_, value]) => value === true)
+                      .map(([key]) => (
+                        <Badge key={key} className={colorBadge("green")}>
+                          {key}
+                        </Badge>
+                      ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Input/Output Modes */}
+              <div>
+                <p className="text-lg font-semibold mb-4">Input/Output Modes</p>
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <p className="font-medium">Input Modes:</p>
+                    <div className="flex flex-wrap gap-1 mt-1">
+                      {selectedAgent.defaultInputModes?.map((mode) => (
+                        <Badge key={mode} className={colorBadge("blue")}>
+                          {mode}
+                        </Badge>
+                      )) || <p>Not specified</p>}
+                    </div>
+                  </div>
+                  <div>
+                    <p className="font-medium">Output Modes:</p>
+                    <div className="flex flex-wrap gap-1 mt-1">
+                      {selectedAgent.defaultOutputModes?.map((mode) => (
+                        <Badge key={mode} className={colorBadge("purple")}>
+                          {mode}
+                        </Badge>
+                      )) || <p>Not specified</p>}
+                    </div>
                   </div>
                 </div>
               </div>
-            </div>
 
-            {/* Skills */}
-            {selectedAgent.skills && selectedAgent.skills.length > 0 && (
-              <div>
-                <Text className="text-lg font-semibold mb-4">Skills</Text>
-                <div className="space-y-4">
-                  {selectedAgent.skills.map((skill) => (
-                    <div key={skill.id} className="border border-gray-200 rounded p-4">
-                      <div className="flex justify-between items-start mb-2">
-                        <div>
-                          <Text className="font-medium text-base">{skill.name}</Text>
-                          <Text className="text-xs text-gray-500">ID: {skill.id}</Text>
+              {/* Skills */}
+              {selectedAgent.skills && selectedAgent.skills.length > 0 && (
+                <div>
+                  <p className="text-lg font-semibold mb-4">Skills</p>
+                  <div className="space-y-4">
+                    {selectedAgent.skills.map((skill) => (
+                      <div key={skill.id} className="border border-border rounded p-4">
+                        <div className="flex justify-between items-start mb-2">
+                          <div>
+                            <p className="font-medium text-base">{skill.name}</p>
+                            <p className="text-xs text-muted-foreground">ID: {skill.id}</p>
+                          </div>
+                          {skill.tags && skill.tags.length > 0 && (
+                            <div className="flex flex-wrap gap-1">
+                              {skill.tags.map((tag) => (
+                                <Badge key={tag} className={colorBadge("purple", "text-[10px]")}>
+                                  {tag}
+                                </Badge>
+                              ))}
+                            </div>
+                          )}
                         </div>
-                        {skill.tags && skill.tags.length > 0 && (
-                          <div className="flex flex-wrap gap-1">
-                            {skill.tags.map((tag) => (
-                              <Badge key={tag} color="purple" size="xs">
-                                {tag}
-                              </Badge>
-                            ))}
+                        <p className="text-sm mb-2">{skill.description}</p>
+                        {skill.examples && skill.examples.length > 0 && (
+                          <div>
+                            <p className="text-xs font-medium text-foreground">Examples:</p>
+                            <div className="flex flex-wrap gap-1 mt-1">
+                              {skill.examples.map((example, idx) => (
+                                <Badge key={idx} className={colorBadge("gray", "text-[10px]")}>
+                                  {example}
+                                </Badge>
+                              ))}
+                            </div>
                           </div>
                         )}
                       </div>
-                      <Text className="text-sm mb-2">{skill.description}</Text>
-                      {skill.examples && skill.examples.length > 0 && (
-                        <div>
-                          <Text className="text-xs font-medium text-gray-700">Examples:</Text>
-                          <div className="flex flex-wrap gap-1 mt-1">
-                            {skill.examples.map((example, idx) => (
-                              <Badge key={idx} color="gray" size="xs">
-                                {example}
-                              </Badge>
-                            ))}
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  ))}
+                    ))}
+                  </div>
                 </div>
-              </div>
-            )}
+              )}
 
-            {/* Additional Properties */}
-            {selectedAgent.supportsAuthenticatedExtendedCard && (
-              <div>
-                <Text className="text-lg font-semibold mb-4">Additional Features</Text>
-                <Badge color="green">Supports Authenticated Extended Card</Badge>
-              </div>
-            )}
-          </div>
-        )}
-      </Modal>
+              {/* Additional Properties */}
+              {selectedAgent.supportsAuthenticatedExtendedCard && (
+                <div>
+                  <p className="text-lg font-semibold mb-4">Additional Features</p>
+                  <Badge className={colorBadge("green")}>Supports Authenticated Extended Card</Badge>
+                </div>
+              )}
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
 
       {/* MCP Server Details Modal */}
-      <Modal
-        title={selectedMcpServer?.server_name || "MCP Server Details"}
-        width={1000}
+      <Dialog
         open={isMcpModalVisible}
-        footer={null}
-        onOk={handleOk}
-        onCancel={handleCancel}
+        onOpenChange={(o) => (!o ? closeDetailDialogs() : undefined)}
       >
-        {selectedMcpServer && (
-          <div className="space-y-6">
-            {/* Server Overview */}
-            <div>
-              <Text className="text-lg font-semibold mb-4">Server Overview</Text>
-              <div className="grid grid-cols-2 gap-4 mb-4">
-                <div>
-                  <Text className="font-medium">Server Name:</Text>
-                  <Text>{selectedMcpServer.server_name}</Text>
-                </div>
-                <div>
-                  <Text className="font-medium">Server ID:</Text>
-                  <div className="flex items-center space-x-2">
-                    <Text className="text-xs truncate">{selectedMcpServer.server_id}</Text>
-                    <CopyOutlined
-                      onClick={() => copyToClipboard(selectedMcpServer.server_id)}
-                      className="cursor-pointer text-gray-500 hover:text-blue-500"
-                    />
+        <DialogContent className="max-w-[1000px] max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>{selectedMcpServer?.server_name || "MCP Server Details"}</DialogTitle>
+          </DialogHeader>
+          {selectedMcpServer && (
+            <div className="space-y-6">
+              {/* Server Overview */}
+              <div>
+                <p className="text-lg font-semibold mb-4">Server Overview</p>
+                <div className="grid grid-cols-2 gap-4 mb-4">
+                  <div>
+                    <p className="font-medium">Server Name:</p>
+                    <p>{selectedMcpServer.server_name}</p>
+                  </div>
+                  <div>
+                    <p className="font-medium">Server ID:</p>
+                    <div className="flex items-center space-x-2">
+                      <span className="text-xs truncate">{selectedMcpServer.server_id}</span>
+                      <Copy
+                        size={14}
+                        onClick={() => copyToClipboard(selectedMcpServer.server_id)}
+                        className="cursor-pointer text-muted-foreground hover:text-primary"
+                      />
+                    </div>
+                  </div>
+                  {selectedMcpServer.alias && (
+                    <div>
+                      <p className="font-medium">Alias:</p>
+                      <p>{selectedMcpServer.alias}</p>
+                    </div>
+                  )}
+                  <div>
+                    <p className="font-medium">Transport:</p>
+                    <Badge className={colorBadge("blue")}>{selectedMcpServer.transport}</Badge>
+                  </div>
+                  <div>
+                    <p className="font-medium">Auth Type:</p>
+                    <Badge
+                      className={colorBadge(
+                        selectedMcpServer.auth_type === "none" ? "gray" : "green",
+                      )}
+                    >
+                      {selectedMcpServer.auth_type}
+                    </Badge>
+                  </div>
+                  <div>
+                    <p className="font-medium">Status:</p>
+                    <Badge
+                      className={colorBadge(
+                        selectedMcpServer.status === "active" || selectedMcpServer.status === "healthy"
+                          ? "green"
+                          : selectedMcpServer.status === "inactive" || selectedMcpServer.status === "unhealthy"
+                            ? "red"
+                            : "gray",
+                      )}
+                    >
+                      {selectedMcpServer.status || "unknown"}
+                    </Badge>
                   </div>
                 </div>
-                {selectedMcpServer.alias && (
-                  <div>
-                    <Text className="font-medium">Alias:</Text>
-                    <Text>{selectedMcpServer.alias}</Text>
+                {selectedMcpServer.description && (
+                  <div className="mt-2">
+                    <p className="font-medium">Description:</p>
+                    <p className="mt-1">{selectedMcpServer.description}</p>
                   </div>
                 )}
-                <div>
-                  <Text className="font-medium">Transport:</Text>
-                  <Badge color="blue">{selectedMcpServer.transport}</Badge>
-                </div>
-                <div>
-                  <Text className="font-medium">Auth Type:</Text>
-                  <Badge color={selectedMcpServer.auth_type === "none" ? "gray" : "green"}>
-                    {selectedMcpServer.auth_type}
-                  </Badge>
-                </div>
-                <div>
-                  <Text className="font-medium">Status:</Text>
-                  <Badge
-                    color={
-                      selectedMcpServer.status === "active" || selectedMcpServer.status === "healthy"
-                        ? "green"
-                        : selectedMcpServer.status === "inactive" || selectedMcpServer.status === "unhealthy"
-                          ? "red"
-                          : "gray"
-                    }
-                  >
-                    {selectedMcpServer.status || "unknown"}
-                  </Badge>
+              </div>
+
+              {/* Connection Details */}
+              <div>
+                <p className="text-lg font-semibold mb-4">Connection Details</p>
+                <div className="space-y-2">
+                  <div>
+                    <p className="font-medium">URL:</p>
+                    <div className="flex items-center space-x-2 mt-1">
+                      <span className="text-sm break-all bg-muted p-2 rounded flex-1">{selectedMcpServer.url}</span>
+                      <Copy
+                        size={14}
+                        onClick={() => copyToClipboard(selectedMcpServer.url)}
+                        className="cursor-pointer text-muted-foreground hover:text-primary flex-shrink-0"
+                      />
+                    </div>
+                  </div>
+                  {selectedMcpServer.command && (
+                    <div>
+                      <p className="font-medium">Command:</p>
+                      <p className="text-sm bg-muted p-2 rounded mt-1 font-mono">{selectedMcpServer.command}</p>
+                    </div>
+                  )}
                 </div>
               </div>
-              {selectedMcpServer.description && (
-                <div className="mt-2">
-                  <Text className="font-medium">Description:</Text>
-                  <Text className="mt-1">{selectedMcpServer.description}</Text>
+
+              {/* Tools */}
+              {selectedMcpServer.allowed_tools && selectedMcpServer.allowed_tools.length > 0 && (
+                <div>
+                  <p className="text-lg font-semibold mb-4">Allowed Tools</p>
+                  <div className="flex flex-wrap gap-2">
+                    {selectedMcpServer.allowed_tools.map((tool, idx) => (
+                      <Badge key={idx} className={colorBadge("purple")}>
+                        {tool}
+                      </Badge>
+                    ))}
+                  </div>
                 </div>
               )}
-            </div>
 
-            {/* Connection Details */}
-            <div>
-              <Text className="text-lg font-semibold mb-4">Connection Details</Text>
-              <div className="space-y-2">
+              {/* Teams */}
+              {selectedMcpServer.teams && selectedMcpServer.teams.length > 0 && (
                 <div>
-                  <Text className="font-medium">URL:</Text>
-                  <div className="flex items-center space-x-2 mt-1">
-                    <Text className="text-sm break-all bg-gray-100 p-2 rounded flex-1">{selectedMcpServer.url}</Text>
-                    <CopyOutlined
-                      onClick={() => copyToClipboard(selectedMcpServer.url)}
-                      className="cursor-pointer text-gray-500 hover:text-blue-500 flex-shrink-0"
-                    />
+                  <p className="text-lg font-semibold mb-4">Teams</p>
+                  <div className="flex flex-wrap gap-2">
+                    {selectedMcpServer.teams.map((team, idx) => (
+                      <Badge key={idx} className={colorBadge("blue")}>
+                        {team}
+                      </Badge>
+                    ))}
                   </div>
-                </div>
-                {selectedMcpServer.command && (
-                  <div>
-                    <Text className="font-medium">Command:</Text>
-                    <Text className="text-sm bg-gray-100 p-2 rounded mt-1 font-mono">{selectedMcpServer.command}</Text>
-                  </div>
-                )}
-              </div>
-            </div>
-
-            {/* Tools */}
-            {selectedMcpServer.allowed_tools && selectedMcpServer.allowed_tools.length > 0 && (
-              <div>
-                <Text className="text-lg font-semibold mb-4">Allowed Tools</Text>
-                <div className="flex flex-wrap gap-2">
-                  {selectedMcpServer.allowed_tools.map((tool, idx) => (
-                    <Badge key={idx} color="purple">
-                      {tool}
-                    </Badge>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* Teams */}
-            {selectedMcpServer.teams && selectedMcpServer.teams.length > 0 && (
-              <div>
-                <Text className="text-lg font-semibold mb-4">Teams</Text>
-                <div className="flex flex-wrap gap-2">
-                  {selectedMcpServer.teams.map((team, idx) => (
-                    <Badge key={idx} color="blue">
-                      {team}
-                    </Badge>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* Access Groups */}
-            {selectedMcpServer.mcp_access_groups && selectedMcpServer.mcp_access_groups.length > 0 && (
-              <div>
-                <Text className="text-lg font-semibold mb-4">Access Groups</Text>
-                <div className="flex flex-wrap gap-2">
-                  {selectedMcpServer.mcp_access_groups.map((group, idx) => (
-                    <Badge key={idx} color="green">
-                      {group}
-                    </Badge>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* Metadata */}
-            <div>
-              <Text className="text-lg font-semibold mb-4">Metadata</Text>
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <Text className="font-medium">Created By:</Text>
-                  <Text>{selectedMcpServer.created_by}</Text>
-                </div>
-                <div>
-                  <Text className="font-medium">Updated By:</Text>
-                  <Text>{selectedMcpServer.updated_by}</Text>
-                </div>
-                <div>
-                  <Text className="font-medium">Created At:</Text>
-                  <Text className="text-sm">{new Date(selectedMcpServer.created_at).toLocaleString()}</Text>
-                </div>
-                <div>
-                  <Text className="font-medium">Updated At:</Text>
-                  <Text className="text-sm">{new Date(selectedMcpServer.updated_at).toLocaleString()}</Text>
-                </div>
-                {selectedMcpServer.last_health_check && (
-                  <div>
-                    <Text className="font-medium">Last Health Check:</Text>
-                    <Text className="text-sm">{new Date(selectedMcpServer.last_health_check).toLocaleString()}</Text>
-                  </div>
-                )}
-              </div>
-              {selectedMcpServer.health_check_error && (
-                <div className="mt-2 p-2 bg-red-50 rounded">
-                  <Text className="font-medium text-red-700">Health Check Error:</Text>
-                  <Text className="text-sm text-red-600 mt-1">{selectedMcpServer.health_check_error}</Text>
                 </div>
               )}
-            </div>
 
-            {/* Usage Example */}
-            <div>
-              <Text className="text-lg font-semibold mb-4">Usage Example</Text>
-              <SyntaxHighlighter language="python" className="text-sm">
-                {`from fastmcp import Client
+              {/* Access Groups */}
+              {selectedMcpServer.mcp_access_groups && selectedMcpServer.mcp_access_groups.length > 0 && (
+                <div>
+                  <p className="text-lg font-semibold mb-4">Access Groups</p>
+                  <div className="flex flex-wrap gap-2">
+                    {selectedMcpServer.mcp_access_groups.map((group, idx) => (
+                      <Badge key={idx} className={colorBadge("green")}>
+                        {group}
+                      </Badge>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Metadata */}
+              <div>
+                <p className="text-lg font-semibold mb-4">Metadata</p>
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <p className="font-medium">Created By:</p>
+                    <p>{selectedMcpServer.created_by}</p>
+                  </div>
+                  <div>
+                    <p className="font-medium">Updated By:</p>
+                    <p>{selectedMcpServer.updated_by}</p>
+                  </div>
+                  <div>
+                    <p className="font-medium">Created At:</p>
+                    <p className="text-sm">{new Date(selectedMcpServer.created_at).toLocaleString()}</p>
+                  </div>
+                  <div>
+                    <p className="font-medium">Updated At:</p>
+                    <p className="text-sm">{new Date(selectedMcpServer.updated_at).toLocaleString()}</p>
+                  </div>
+                  {selectedMcpServer.last_health_check && (
+                    <div>
+                      <p className="font-medium">Last Health Check:</p>
+                      <p className="text-sm">{new Date(selectedMcpServer.last_health_check).toLocaleString()}</p>
+                    </div>
+                  )}
+                </div>
+                {selectedMcpServer.health_check_error && (
+                  <div className="mt-2 p-2 bg-red-50 dark:bg-red-950/30 rounded">
+                    <p className="font-medium text-red-700 dark:text-red-300">Health Check Error:</p>
+                    <p className="text-sm text-red-600 dark:text-red-400 mt-1">{selectedMcpServer.health_check_error}</p>
+                  </div>
+                )}
+              </div>
+
+              {/* Usage Example */}
+              <div>
+                <p className="text-lg font-semibold mb-4">Usage Example</p>
+                <SyntaxHighlighter language="python" className="text-sm">
+                  {`from fastmcp import Client
 import asyncio
 
 # Standard MCP configuration
@@ -1067,11 +1075,12 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())`}
-              </SyntaxHighlighter>
+                </SyntaxHighlighter>
+              </div>
             </div>
-          </div>
-        )}
-      </Modal>
+          )}
+        </DialogContent>
+      </Dialog>
 
       {/* Make Model Public Form */}
       <MakeModelPublicForm

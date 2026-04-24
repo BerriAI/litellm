@@ -86,6 +86,7 @@
         "src/components/AIHub/forms/MakeAgentPublicForm.tsx",
         "src/components/AIHub/forms/MakeMCPPublicForm.tsx",
         "src/components/AIHub/forms/MakeModelPublicForm.tsx",
+        "src/components/AIHub/ModelHubTable.tsx",
         "src/components/policies/policy_test_panel.tsx",
         "src/components/mcp_tools/McpCrudPermissionPanel.tsx",
         "src/components/mcp_tools/OAuthFormFields.tsx",

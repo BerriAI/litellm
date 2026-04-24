@@ -1,5 +1,4 @@
 import React, { useState, useCallback, useEffect } from "react";
-import { Form, Steps } from "antd";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -9,11 +8,11 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { cn } from "@/lib/utils";
+import { Check } from "lucide-react";
 import { makeModelGroupPublic } from "../../networking";
 import ModelFilters from "../../model_filters";
 import NotificationsManager from "../../molecules/notifications_manager";
-
-const { Step } = Steps;
 
 interface ModelGroupInfo {
   model_group: string;
@@ -42,6 +41,49 @@ interface MakeModelPublicFormProps {
   onSuccess: () => void;
 }
 
+function Stepper({ current, steps }: { current: number; steps: string[] }) {
+  return (
+    <ol className="flex items-center gap-2 mb-6">
+      {steps.map((label, i) => {
+        const active = i === current;
+        const completed = i < current;
+        return (
+          <li
+            key={label}
+            className="flex items-center gap-2 flex-1 min-w-0"
+          >
+            <div
+              className={cn(
+                "flex h-6 w-6 items-center justify-center rounded-full border text-xs font-medium",
+                completed
+                  ? "bg-primary text-primary-foreground border-primary"
+                  : active
+                    ? "border-primary text-primary"
+                    : "border-border text-muted-foreground",
+              )}
+            >
+              {completed ? <Check className="h-3 w-3" /> : i + 1}
+            </div>
+            <span
+              className={cn(
+                "text-sm truncate",
+                active || completed
+                  ? "text-foreground"
+                  : "text-muted-foreground",
+              )}
+            >
+              {label}
+            </span>
+            {i < steps.length - 1 && (
+              <div className="h-px flex-1 bg-border" />
+            )}
+          </li>
+        );
+      })}
+    </ol>
+  );
+}
+
 const MakeModelPublicForm: React.FC<MakeModelPublicFormProps> = ({
   visible,
   onClose,
@@ -53,13 +95,11 @@ const MakeModelPublicForm: React.FC<MakeModelPublicFormProps> = ({
   const [selectedModels, setSelectedModels] = useState<Set<string>>(new Set());
   const [filteredData, setFilteredData] = useState<ModelGroupInfo[]>([]);
   const [loading, setLoading] = useState(false);
-  const [form] = Form.useForm();
 
   const handleClose = () => {
     setCurrentStep(0);
     setSelectedModels(new Set());
     setFilteredData([]);
-    form.resetFields();
     onClose();
   };
 
@@ -181,7 +221,6 @@ const MakeModelPublicForm: React.FC<MakeModelPublicFormProps> = ({
           Users will still require a valid Virtual Key to use these models.
         </p>
 
-        {/* Filters */}
         <ModelFilters
           modelHubData={modelHubData}
           onFilteredDataChange={handleFilteredDataChange}
@@ -332,7 +371,11 @@ const MakeModelPublicForm: React.FC<MakeModelPublicFormProps> = ({
           )}
 
           {currentStep === 1 && (
-            <Button onClick={handleSubmit} disabled={loading}>
+            <Button
+              onClick={handleSubmit}
+              disabled={loading}
+              data-loading={loading ? "true" : undefined}
+            >
               {loading ? "Making Public..." : "Make Public"}
             </Button>
           )}
@@ -350,15 +393,9 @@ const MakeModelPublicForm: React.FC<MakeModelPublicFormProps> = ({
         <DialogHeader>
           <DialogTitle>Make Models Public</DialogTitle>
         </DialogHeader>
-        <Form form={form} layout="vertical">
-          <Steps current={currentStep} className="mb-6">
-            <Step title="Select Models" />
-            <Step title="Confirm" />
-          </Steps>
-
-          {renderStepContent()}
-          {renderStepButtons()}
-        </Form>
+        <Stepper current={currentStep} steps={["Select Models", "Confirm"]} />
+        {renderStepContent()}
+        {renderStepButtons()}
       </DialogContent>
     </Dialog>
   );
