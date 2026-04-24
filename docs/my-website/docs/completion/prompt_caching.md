@@ -260,7 +260,7 @@ Anthropic charges for cache writes.
 
 Specify the content to cache with `"cache_control": {"type": "ephemeral"}`.
 
-This same format also works for [Gemini / Vertex AI](#google-ai-studio--vertex-ai-gemini-example). For other providers, it will be ignored.
+This same format also works for [Gemini / Vertex AI](#google-ai-studio--vertex-ai-gemini-example) and [Bedrock](#bedrock-example). For other providers, it will be ignored.
 
 <Tabs>
 <TabItem value="sdk" label="SDK">
@@ -533,6 +533,115 @@ client = OpenAI(
 
 response = client.chat.completions.create(
     model="gemini-2.5-flash",
+    messages=[
+        {
+            "role": "system",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "You are an AI assistant tasked with analyzing legal documents.",
+                },
+                {
+                    "type": "text",
+                    "text": "Here is the full text of a complex legal agreement" * 400,
+                    "cache_control": {"type": "ephemeral"},
+                },
+            ],
+        },
+        {
+            "role": "user",
+            "content": "what are the key terms and conditions in this agreement?",
+        },
+    ],
+)
+
+print(response.usage)
+```
+
+</TabItem>
+</Tabs>
+
+### Bedrock Example
+
+Use the same Anthropic-style `cache_control` format for both Converse and Invoke API — LiteLLM automatically routes to the right Bedrock API and handles the translation.
+
+**How it works under the hood:**
+1. **Converse API** — `cache_control` is translated to Bedrock's native `cachePoint` block
+2. **Invoke API** — `cache_control` is forwarded as-is in Anthropic's message format
+
+See [all models Bedrock supports prompt caching on](https://docs.aws.amazon.com/bedrock/latest/userguide/prompt-caching.html)
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import completion
+import os
+
+os.environ["AWS_ACCESS_KEY_ID"] = ""
+os.environ["AWS_SECRET_ACCESS_KEY"] = ""
+os.environ["AWS_REGION_NAME"] = ""
+
+response = completion(
+    model="bedrock/anthropic.claude-3-7-sonnet-20250219-v1:0",
+    messages=[
+        {
+            "role": "system",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "You are an AI assistant tasked with analyzing legal documents.",
+                },
+                {
+                    "type": "text",
+                    "text": "Here is the full text of a complex legal agreement" * 400,
+                    "cache_control": {"type": "ephemeral"},
+                },
+            ],
+        },
+        {
+            "role": "user",
+            "content": "what are the key terms and conditions in this agreement?",
+        },
+    ],
+)
+
+print(response.usage)
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+1. Setup config.yaml
+
+```yaml
+model_list:
+    - model_name: bedrock-claude-3-7
+      litellm_params:
+        model: bedrock/anthropic.claude-3-7-sonnet-20250219-v1:0
+        aws_access_key_id: os.environ/AWS_ACCESS_KEY_ID
+        aws_secret_access_key: os.environ/AWS_SECRET_ACCESS_KEY
+        aws_region_name: os.environ/AWS_REGION_NAME
+```
+
+2. Start proxy
+
+```bash
+litellm --config /path/to/config.yaml
+```
+
+3. Test it!
+
+```python
+from openai import OpenAI
+
+client = OpenAI(
+    api_key="LITELLM_PROXY_KEY",  # sk-1234
+    base_url="LITELLM_PROXY_BASE",  # http://0.0.0.0:4000
+)
+
+response = client.chat.completions.create(
+    model="bedrock-claude-3-7",
     messages=[
         {
             "role": "system",
