@@ -468,6 +468,9 @@ async def invoke_agent_a2a(  # noqa: PLR0915
                 id=request_id,
                 params=MessageSendParams(**params),
             )
+            # Defer spend-log until after post_call_success_hook so guardrail
+            # results written by the unified_guardrail hook are captured.
+            logging_obj._defer_async_logging = True  # type: ignore[union-attr]
             response = await asend_message(
                 request=a2a_request,
                 api_base=agent_url,
@@ -479,11 +482,18 @@ async def invoke_agent_a2a(  # noqa: PLR0915
                 agent_extra_headers=agent_extra_headers,
             )
 
-            response = await proxy_logging_obj.post_call_success_hook(
-                user_api_key_dict=user_api_key_dict,
-                data=data,
-                response=response,
-            )
+            try:
+                response = await proxy_logging_obj.post_call_success_hook(
+                    user_api_key_dict=user_api_key_dict,
+                    data=data,
+                    response=response,
+                )
+            finally:
+                _enqueue_fn = getattr(logging_obj, "_enqueue_deferred_logging", None)
+                if _enqueue_fn is not None:
+                    logging_obj._enqueue_deferred_logging = None  # type: ignore[union-attr]
+                    _enqueue_fn()
+
             return JSONResponse(
                 content=(
                     response.model_dump(mode="json", exclude_none=True)  # type: ignore
