@@ -80,7 +80,7 @@ class UserAPIKeyAuthExceptionHandler:
             # flooding error logs with routine access-control events.
             # All other exceptions are unexpected and logged at ERROR with traceback.
             _is_expected_auth_failure = (
-                isinstance(e, ProxyException) and e.code in (401, 403)
+                isinstance(e, ProxyException) and int(e.code) in (401, 403)
             ) or (
                 isinstance(e, HTTPException) and e.status_code in (401, 403)
             )
