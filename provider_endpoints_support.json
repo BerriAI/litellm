@@ -1853,6 +1853,23 @@
         "rerank": false
       }
     },
+    "reducto": {
+      "display_name": "Reducto (`reducto`)",
+      "url": "https://docs.litellm.ai/docs/providers/reducto",
+      "endpoints": {
+        "chat_completions": false,
+        "messages": false,
+        "responses": false,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "ocr": true
+      }
+    },
     "replicate": {
       "display_name": "Replicate (`replicate`)",
       "url": "https://docs.litellm.ai/docs/providers/replicate",
