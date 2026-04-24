@@ -11,13 +11,14 @@ gpt-image-1 uses token-based pricing:
 
 gpt-image-2 uses token-based pricing:
 - Image Input: $8.00/1M tokens
-- Image Output: $32.00/1M tokens
+- Image Output: $30.00/1M tokens
 """
 
 import os
 import sys
 
 sys.path.insert(0, os.path.abspath("../.."))
+os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
 
 import pytest
 
@@ -316,7 +317,7 @@ class TestGPTImage2CostCalculator:
 
     gpt-image-2 pricing (https://openai.com/api/pricing/):
     - Image Input:  $8.00 / 1M tokens  (8e-6 per token)
-    - Image Output: $32.00 / 1M tokens (3.2e-5 per token)
+    - Image Output: $30.00 / 1M tokens (3e-5 per token)
     """
 
     def test_gpt_image_2_token_cost(self):
@@ -347,9 +348,9 @@ class TestGPTImage2CostCalculator:
 
         # Expected cost:
         # Image input:  1000 * $8/1M  = 0.008
-        # Image output: 5000 * $32/1M = 0.16
-        # Total: 0.168
-        expected_cost = 1000 * 8e-6 + 5000 * 3.2e-5
+        # Image output: 5000 * $30/1M = 0.15
+        # Total: 0.158
+        expected_cost = 1000 * 8e-6 + 5000 * 3e-5
         assert abs(cost - expected_cost) < 1e-6, f"Expected {expected_cost}, got {cost}"
 
     def test_gpt_image_2_in_model_prices(self):
@@ -359,7 +360,7 @@ class TestGPTImage2CostCalculator:
         assert model_info.get("litellm_provider") == "openai"
         assert model_info.get("mode") == "image_generation"
         assert model_info.get("input_cost_per_image_token") == 8e-6
-        assert model_info.get("output_cost_per_image_token") == 3.2e-5
+        assert model_info.get("output_cost_per_image_token") == 3e-5
 
     def test_gpt_image_2_per_quality_entries(self):
         """Test that per-quality per-size entries exist for gpt-image-2."""
