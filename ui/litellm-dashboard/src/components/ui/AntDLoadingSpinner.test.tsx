@@ -1,61 +1,43 @@
-import { render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
-
-// Mock antd Spin component
-vi.mock("antd", () => ({
-  Spin: ({ indicator, size, ...props }: any) => (
-    <div data-testid="spin" data-size={size} {...props}>
-      {indicator}
-    </div>
-  ),
-}));
-
-// Mock the icon
-vi.mock("@ant-design/icons", () => ({
-  LoadingOutlined: ({ style, spin, ...props }: any) => (
-    <span
-      data-testid="loading-icon"
-      data-spin={spin}
-      style={style}
-      {...props}
-    />
-  ),
-}));
+import { render } from "@testing-library/react";
+import { describe, expect, it } from "vitest";
 
 import { AntDLoadingSpinner } from "./AntDLoadingSpinner";
 
 describe("AntDLoadingSpinner", () => {
-  it("renders without props", () => {
-    render(<AntDLoadingSpinner />);
-    expect(screen.getByTestId("spin")).toBeInTheDocument();
-    expect(screen.getByTestId("loading-icon")).toBeInTheDocument();
+  it("should render a lucide spinner svg", () => {
+    const { container } = render(<AntDLoadingSpinner />);
+    const svg = container.querySelector("svg");
+    expect(svg).toBeInTheDocument();
+    expect(svg).toHaveClass("animate-spin");
   });
 
-  it("passes size prop to Spin", () => {
-    render(<AntDLoadingSpinner size="large" />);
-    expect(screen.getByTestId("spin")).toHaveAttribute("data-size", "large");
+  it("should use large size class when size=large", () => {
+    const { container } = render(<AntDLoadingSpinner size="large" />);
+    const svg = container.querySelector("svg");
+    expect(svg).toHaveClass("h-6", "w-6");
   });
 
-  it("passes small size to Spin", () => {
-    render(<AntDLoadingSpinner size="small" />);
-    expect(screen.getByTestId("spin")).toHaveAttribute("data-size", "small");
+  it("should use small size class when size=small", () => {
+    const { container } = render(<AntDLoadingSpinner size="small" />);
+    const svg = container.querySelector("svg");
+    expect(svg).toHaveClass("h-3", "w-3");
   });
 
-  it("applies custom fontSize to the icon", () => {
-    render(<AntDLoadingSpinner fontSize={32} />);
-    const icon = screen.getByTestId("loading-icon");
-    expect(icon).toHaveStyle({ fontSize: "32px" });
+  it("should default to size 4 when no size prop is provided", () => {
+    const { container } = render(<AntDLoadingSpinner />);
+    const svg = container.querySelector("svg");
+    expect(svg).toHaveClass("h-4", "w-4");
   });
 
-  it("does not set style when fontSize is not provided", () => {
-    render(<AntDLoadingSpinner />);
-    const icon = screen.getByTestId("loading-icon");
-    expect(icon.style.fontSize).toBe("");
+  it("should apply custom fontSize to the svg style", () => {
+    const { container } = render(<AntDLoadingSpinner fontSize={32} />);
+    const svg = container.querySelector("svg");
+    expect(svg).toHaveStyle({ fontSize: "32px" });
   });
 
-  it("sets spin attribute on icon", () => {
-    render(<AntDLoadingSpinner />);
-    const icon = screen.getByTestId("loading-icon");
-    expect(icon).toHaveAttribute("data-spin", "true");
+  it("should not set an inline fontSize when not provided", () => {
+    const { container } = render(<AntDLoadingSpinner />);
+    const svg = container.querySelector("svg") as SVGElement;
+    expect(svg.style.fontSize).toBe("");
   });
 });

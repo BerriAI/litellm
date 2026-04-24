@@ -50,10 +50,6 @@ vi.mock("@/app/(dashboard)/hooks/keys/useKeys", () => ({
   },
 }));
 
-vi.mock("@ant-design/icons", () => ({
-  InfoCircleOutlined: () => null,
-}));
-
 vi.mock("react-copy-to-clipboard", () => ({
   CopyToClipboard: ({ children }: { children: any }) => children,
 }));

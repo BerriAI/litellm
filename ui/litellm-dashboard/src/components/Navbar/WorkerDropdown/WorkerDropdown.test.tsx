@@ -1,33 +1,10 @@
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 
-// Mock the useWorker hook
 const mockUseWorker = vi.fn();
 vi.mock("@/hooks/useWorker", () => ({
   useWorker: () => mockUseWorker(),
-}));
-
-// Mock antd Select
-vi.mock("antd", () => ({
-  Select: ({ value, options, onChange, style, disabled, ...props }: any) => (
-    <select
-      data-testid="worker-select"
-      value={value}
-      style={style}
-      onChange={(e) => onChange?.(e.target.value)}
-    >
-      {options?.map((opt: any) => (
-        <option key={opt.value} value={opt.value} disabled={opt.disabled}>
-          {opt.label}
-        </option>
-      ))}
-    </select>
-  ),
-}));
-
-// Mock icon
-vi.mock("@ant-design/icons", () => ({
-  CloudServerOutlined: () => <span data-testid="cloud-icon" />,
 }));
 
 import WorkerDropdown from "./WorkerDropdown";
@@ -44,7 +21,7 @@ describe("WorkerDropdown", () => {
     vi.clearAllMocks();
   });
 
-  it("renders null when isControlPlane is false", () => {
+  it("should render nothing when isControlPlane is false", () => {
     mockUseWorker.mockReturnValue({
       isControlPlane: false,
       selectedWorker: workers[0],
@@ -55,7 +32,7 @@ describe("WorkerDropdown", () => {
     expect(container).toBeEmptyDOMElement();
   });
 
-  it("renders null when selectedWorker is null", () => {
+  it("should render nothing when selectedWorker is null", () => {
     mockUseWorker.mockReturnValue({
       isControlPlane: true,
       selectedWorker: null,
@@ -66,7 +43,7 @@ describe("WorkerDropdown", () => {
     expect(container).toBeEmptyDOMElement();
   });
 
-  it("renders the select when isControlPlane and selectedWorker exist", () => {
+  it("should render the select trigger when isControlPlane and selectedWorker exist", () => {
     mockUseWorker.mockReturnValue({
       isControlPlane: true,
       selectedWorker: workers[0],
@@ -74,23 +51,10 @@ describe("WorkerDropdown", () => {
     });
 
     render(<WorkerDropdown onWorkerSwitch={mockOnWorkerSwitch} />);
-    expect(screen.getByTestId("worker-select")).toBeInTheDocument();
+    expect(screen.getByRole("combobox")).toBeInTheDocument();
   });
 
-  it("renders all worker options", () => {
-    mockUseWorker.mockReturnValue({
-      isControlPlane: true,
-      selectedWorker: workers[0],
-      workers,
-    });
-
-    render(<WorkerDropdown onWorkerSwitch={mockOnWorkerSwitch} />);
-    expect(screen.getByText("Worker 1")).toBeInTheDocument();
-    expect(screen.getByText("Worker 2")).toBeInTheDocument();
-    expect(screen.getByText("Worker 3")).toBeInTheDocument();
-  });
-
-  it("sets current worker as selected value", () => {
+  it("should display the currently selected worker name in the trigger", () => {
     mockUseWorker.mockReturnValue({
       isControlPlane: true,
       selectedWorker: workers[1],
@@ -98,36 +62,53 @@ describe("WorkerDropdown", () => {
     });
 
     render(<WorkerDropdown onWorkerSwitch={mockOnWorkerSwitch} />);
-    const select = screen.getByTestId("worker-select") as HTMLSelectElement;
-    expect(select.value).toBe("w2");
+    expect(screen.getByRole("combobox")).toHaveTextContent("Worker 2");
   });
 
-  it("disables the currently selected worker in options", () => {
+  it("should render all worker options when opened", async () => {
     mockUseWorker.mockReturnValue({
       isControlPlane: true,
       selectedWorker: workers[0],
       workers,
     });
 
-    render(<WorkerDropdown onWorkerSwitch={mockOnWorkerSwitch} />);
-    const options = screen.getAllByRole("option");
-    const selectedOption = options.find((opt) => (opt as HTMLOptionElement).value === "w1");
-    expect(selectedOption).toBeDisabled();
-  });
-
-  it("calls onWorkerSwitch when selection changes", async () => {
-    mockUseWorker.mockReturnValue({
-      isControlPlane: true,
-      selectedWorker: workers[0],
-      workers,
-    });
-
-    render(<WorkerDropdown onWorkerSwitch={mockOnWorkerSwitch} />);
-    const select = screen.getByTestId("worker-select");
-
-    const { default: userEvent } = await import("@testing-library/user-event");
     const user = userEvent.setup();
-    await user.selectOptions(select, "w2");
+    render(<WorkerDropdown onWorkerSwitch={mockOnWorkerSwitch} />);
+    await user.click(screen.getByRole("combobox"));
+
+    expect(await screen.findByRole("option", { name: "Worker 1" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "Worker 2" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "Worker 3" })).toBeInTheDocument();
+  });
+
+  it("should disable the currently selected worker in the options list", async () => {
+    mockUseWorker.mockReturnValue({
+      isControlPlane: true,
+      selectedWorker: workers[0],
+      workers,
+    });
+
+    const user = userEvent.setup();
+    render(<WorkerDropdown onWorkerSwitch={mockOnWorkerSwitch} />);
+    await user.click(screen.getByRole("combobox"));
+
+    const selectedOption = await screen.findByRole("option", { name: "Worker 1" });
+    expect(selectedOption).toHaveAttribute("data-disabled");
+  });
+
+  it("should call onWorkerSwitch when a different worker is picked", async () => {
+    mockUseWorker.mockReturnValue({
+      isControlPlane: true,
+      selectedWorker: workers[0],
+      workers,
+    });
+
+    const user = userEvent.setup();
+    render(<WorkerDropdown onWorkerSwitch={mockOnWorkerSwitch} />);
+    await user.click(screen.getByRole("combobox"));
+
+    const option = await screen.findByRole("option", { name: "Worker 2" });
+    await user.click(option);
 
     expect(mockOnWorkerSwitch).toHaveBeenCalledWith("w2");
   });

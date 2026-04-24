@@ -37,10 +37,6 @@ vi.mock("antd", () => {
   };
 });
 
-vi.mock("@ant-design/icons", () => ({
-  InfoCircleOutlined: () => <span data-testid="info-icon">ℹ</span>,
-}));
-
 vi.mock("@tremor/react", () => ({
   TextInput: ({ value, onValueChange, onChange, placeholder, name, className }: any) => {
     const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {

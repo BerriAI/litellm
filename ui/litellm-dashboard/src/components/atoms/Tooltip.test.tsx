@@ -1,41 +1,49 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Tooltip } from "./Tooltip";
 
-vi.mock("@ant-design/icons", () => ({
-  QuestionCircleOutlined: (props: any) => <span data-testid="question-icon" {...props} />,
-}));
+const getTriggerIcon = (container: HTMLElement) => {
+  const svg = container.querySelector("svg.lucide-circle-help, svg.lucide-help-circle");
+  if (!svg) throw new Error("Default HelpCircle icon not rendered");
+  return svg as SVGElement;
+};
 
 describe("Tooltip", () => {
   it("should render", () => {
-    render(<Tooltip content="Help text" />);
-    expect(screen.getByTestId("question-icon")).toBeInTheDocument();
+    const { container } = render(<Tooltip content="Help text" />);
+    expect(getTriggerIcon(container)).toBeInTheDocument();
   });
 
   it("should render children instead of the default icon when provided", () => {
-    render(<Tooltip content="Help text"><button>Info</button></Tooltip>);
+    const { container } = render(
+      <Tooltip content="Help text">
+        <button>Info</button>
+      </Tooltip>,
+    );
     expect(screen.getByRole("button", { name: /info/i })).toBeInTheDocument();
-    expect(screen.queryByTestId("question-icon")).not.toBeInTheDocument();
+    expect(
+      container.querySelector("svg.lucide-circle-help, svg.lucide-help-circle"),
+    ).not.toBeInTheDocument();
   });
 
   it("should show tooltip content on mouse enter", async () => {
     const user = userEvent.setup();
-    render(<Tooltip content="Help text" />);
+    const { container } = render(<Tooltip content="Help text" />);
 
-    await user.hover(screen.getByTestId("question-icon"));
+    await user.hover(getTriggerIcon(container));
 
     expect(screen.getByText("Help text")).toBeInTheDocument();
   });
 
   it("should hide tooltip content on mouse leave", async () => {
     const user = userEvent.setup();
-    render(<Tooltip content="Help text" />);
+    const { container } = render(<Tooltip content="Help text" />);
 
-    await user.hover(screen.getByTestId("question-icon"));
+    await user.hover(getTriggerIcon(container));
     expect(screen.getByText("Help text")).toBeInTheDocument();
 
-    await user.unhover(screen.getByTestId("question-icon"));
+    await user.unhover(getTriggerIcon(container));
     expect(screen.queryByText("Help text")).not.toBeInTheDocument();
   });
 

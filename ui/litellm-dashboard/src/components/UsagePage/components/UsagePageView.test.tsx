@@ -225,37 +225,6 @@ vi.mock("antd", async (importOriginal) => {
   };
 });
 
-vi.mock("@ant-design/icons", async () => {
-  const React = await import("react");
-
-  function Icon() {
-    return React.createElement("span");
-  }
-
-  function LoadingOutlined(props: any) {
-    return React.createElement("span", { "data-testid": "loading-icon", ...props });
-  }
-
-  return {
-    GlobalOutlined: Icon,
-    BankOutlined: Icon,
-    TeamOutlined: Icon,
-    ShoppingCartOutlined: Icon,
-    TagsOutlined: Icon,
-    RobotOutlined: Icon,
-    LineChartOutlined: Icon,
-    BarChartOutlined: Icon,
-    ClockCircleOutlined: Icon,
-    CalendarOutlined: Icon,
-    InfoCircleOutlined: Icon,
-    UserOutlined: Icon,
-    DownOutlined: Icon,
-    RightOutlined: Icon,
-    ExportOutlined: Icon,
-    LoadingOutlined,
-  };
-});
-
 // Mock Tremor components
 vi.mock("@tremor/react", async () => {
   const React = await import("react");
