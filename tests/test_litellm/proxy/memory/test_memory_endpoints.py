@@ -139,10 +139,38 @@ class _InMemoryMemoryTable:
         raise Exception("Not found")
 
 
+class _InMemoryTeamTable:
+    """
+    Tiny fake of `prisma_client.db.litellm_teamtable` — only `find_unique`
+    is exercised by the memory router (for team-admin checks).
+    """
+
+    def __init__(self):
+        self.teams: List[Any] = []
+
+    async def find_unique(self, where: Dict[str, Any]) -> Optional[Any]:
+        team_id = where["team_id"]
+        for t in self.teams:
+            if getattr(t, "team_id", None) == team_id:
+                return t
+        return None
+
+
+def _make_team(team_id: str, *, admin_user_ids: List[str]) -> MagicMock:
+    """Build a team-row stub with `members_with_roles` shaped like Prisma."""
+    members = [MagicMock(user_id=uid, role="admin") for uid in admin_user_ids]
+    team = MagicMock()
+    team.team_id = team_id
+    team.organization_id = None  # skip org-admin path in tests
+    team.members_with_roles = members
+    return team
+
+
 def _make_prisma() -> MagicMock:
     client = MagicMock()
     client.db = MagicMock()
     client.db.litellm_memorytable = _InMemoryMemoryTable()
+    client.db.litellm_teamtable = _InMemoryTeamTable()
     return client
 
 
@@ -521,10 +549,10 @@ class TestMemoryEndpoints:
         assert resp.status_code == 403, resp.text
         assert len(table.rows) == 1
 
-    def test_put_memory_teammate_can_modify_pure_team_row(self):
+    def test_put_memory_team_admin_can_modify_pure_team_row(self):
         """
-        A "pure" team row (no user_id stamped, only team_id) is intended to be
-        shared — any team member can modify it.
+        Pure team row (no user_id stamped) — only team admins (or org admins)
+        may modify it, matching the auth pattern in team_endpoints.py.
         """
         table = self.prisma.db.litellm_memorytable
         table.rows.append(
@@ -536,11 +564,60 @@ class TestMemoryEndpoints:
                 team_id="team-shared",
             )
         )
-        client = _make_client(_user_auth("user-b", "team-shared"))
+        # user-admin is registered as a team admin of team-shared.
+        self.prisma.db.litellm_teamtable.teams.append(
+            _make_team("team-shared", admin_user_ids=["user-admin"])
+        )
+        client = _make_client(_user_auth("user-admin", "team-shared"))
         with _patch_prisma(self.prisma):
             resp = client.put("/v1/memory/team_playbook", json={"value": "v2"})
         assert resp.status_code == 200, resp.text
         assert table.rows[0].value == "v2"
+
+    def test_put_memory_team_member_cannot_modify_pure_team_row(self):
+        """
+        Plain team members can READ team rows (visibility OR-filter), but they
+        cannot WRITE — only team admins can.
+        """
+        table = self.prisma.db.litellm_memorytable
+        table.rows.append(
+            _make_row(
+                memory_id="m1",
+                key="team_playbook",
+                value="v1",
+                user_id=None,
+                team_id="team-shared",
+            )
+        )
+        # team-shared exists, but user-b is NOT in members_with_roles as admin.
+        self.prisma.db.litellm_teamtable.teams.append(
+            _make_team("team-shared", admin_user_ids=["someone-else"])
+        )
+        client = _make_client(_user_auth("user-b", "team-shared"))
+        with _patch_prisma(self.prisma):
+            resp = client.put("/v1/memory/team_playbook", json={"value": "v2"})
+        assert resp.status_code == 403, resp.text
+        assert table.rows[0].value == "v1"
+
+    def test_delete_memory_team_member_cannot_delete_pure_team_row(self):
+        """Same as above, for DELETE."""
+        table = self.prisma.db.litellm_memorytable
+        table.rows.append(
+            _make_row(
+                memory_id="m1",
+                key="team_playbook",
+                user_id=None,
+                team_id="team-shared",
+            )
+        )
+        self.prisma.db.litellm_teamtable.teams.append(
+            _make_team("team-shared", admin_user_ids=["user-admin"])
+        )
+        client = _make_client(_user_auth("user-b", "team-shared"))
+        with _patch_prisma(self.prisma):
+            resp = client.delete("/v1/memory/team_playbook")
+        assert resp.status_code == 403
+        assert len(table.rows) == 1
 
     def test_admin_can_modify_any_row(self):
         """Admin bypasses write-authorization."""

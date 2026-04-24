@@ -98,7 +98,9 @@ def _internal_error(
     return HTTPException(status_code=500, detail=default_detail)
 
 
-def _assert_write_access(row: Any, user_api_key_dict: UserAPIKeyAuth) -> None:
+async def _assert_write_access(
+    prisma_client: Any, row: Any, user_api_key_dict: UserAPIKeyAuth
+) -> None:
     """
     Enforce ownership for mutations (PUT/DELETE).
 
@@ -108,29 +110,81 @@ def _assert_write_access(row: Any, user_api_key_dict: UserAPIKeyAuth) -> None:
     this check, any team member could overwrite or delete a teammate's
     personal row whenever both `user_id` and `team_id` are stamped on it.
 
-    Rule (non-admin): the row must be authored by the caller's user_id, or be
-    a "pure team row" (no user_id stamped) within the caller's team.
-    Admins may modify any row.
+    Rules (mirroring how key/team management endpoints gate team-scoped writes):
+    - PROXY_ADMIN: always allowed.
+    - Personal ownership (`row.user_id == caller.user_id`): allowed.
+    - Pure team row (`row.user_id is None`, `row.team_id` set):
+      caller must be a team admin of `row.team_id` (members_with_roles entry
+      with `role == "admin"`), or an org admin for that team's organization.
+      Plain team members can only READ team rows, not modify them — same
+      pattern as `_validate_team_member_add_permissions` etc.
+    - Anything else: 403.
     """
     if _is_admin(user_api_key_dict):
         return
     row_user_id = getattr(row, "user_id", None)
     row_team_id = getattr(row, "team_id", None)
 
-    # Personal ownership: caller authored this row.
+    # Personal ownership.
     if row_user_id and row_user_id == user_api_key_dict.user_id:
         return
-    # Pure team row (no user_id stamped) inside the caller's team.
-    if (
-        row_user_id is None
-        and row_team_id is not None
-        and row_team_id == user_api_key_dict.team_id
-    ):
-        return
+
+    # Pure team row — only team admins (or org admins) may write.
+    if row_user_id is None and row_team_id is not None:
+        if await _is_team_admin_for(prisma_client, user_api_key_dict, row_team_id):
+            return
+
     raise HTTPException(
         status_code=403,
         detail="You do not have permission to modify this memory entry.",
     )
+
+
+async def _is_team_admin_for(
+    prisma_client: Any, user_api_key_dict: UserAPIKeyAuth, team_id: str
+) -> bool:
+    """
+    True if the caller is a team admin of `team_id`, or an org admin for the
+    team's organization. Mirrors the auth pattern used by team-management
+    endpoints (`_is_user_team_admin` + `_is_user_org_admin_for_team`).
+
+    Imported lazily to avoid a circular import with proxy_server during the
+    memory router's module load.
+    """
+    from litellm.proxy.management_endpoints.common_utils import (
+        _is_user_org_admin_for_team,
+        _is_user_team_admin,
+    )
+
+    try:
+        team_obj = await prisma_client.db.litellm_teamtable.find_unique(
+            where={"team_id": team_id}
+        )
+    except Exception as e:
+        verbose_proxy_logger.exception(
+            "Error loading team for write-auth check (team_id=%s): %s", team_id, e
+        )
+        return False
+    if team_obj is None:
+        return False
+
+    if _is_user_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team_obj):
+        return True
+
+    # Org-admin path is best-effort: it pulls from the user cache via
+    # `get_user_object` which depends on the proxy_server module being
+    # initialized. In tests / non-proxy contexts that import path may fail —
+    # treat any error as "not an org admin" rather than crashing the request.
+    try:
+        if await _is_user_org_admin_for_team(
+            user_api_key_dict=user_api_key_dict, team_obj=team_obj
+        ):
+            return True
+    except Exception as e:
+        verbose_proxy_logger.debug(
+            "Org-admin check skipped during write-auth (team_id=%s): %s", team_id, e
+        )
+    return False
 
 
 def _is_unique_violation(exc: Exception) -> bool:
@@ -398,7 +452,7 @@ async def upsert_memory(
             # owns this row (their user_id matches, or it's a pure team row in
             # their team) — otherwise a teammate could overwrite a personal
             # entry through the OR-based visibility filter.
-            _assert_write_access(existing, user_api_key_dict)
+            await _assert_write_access(prisma_client, existing, user_api_key_dict)
             row = await prisma_client.db.litellm_memorytable.update(
                 where={"memory_id": existing.memory_id},
                 data=data,
@@ -443,7 +497,9 @@ async def upsert_memory(
                         detail=f"Memory with key '{key}' already exists.",
                     )
                 # Same write-authorization check as the non-race path.
-                _assert_write_access(existing_after_race, user_api_key_dict)
+                await _assert_write_access(
+                    prisma_client, existing_after_race, user_api_key_dict
+                )
                 row = await prisma_client.db.litellm_memorytable.update(
                     where={"memory_id": existing_after_race.memory_id},
                     data=data,
@@ -472,7 +528,7 @@ async def delete_memory(
     prisma_client = _require_prisma()
     row = await _find_memory_for_caller(prisma_client, key, user_api_key_dict)
     # Visibility != write authority — see the upsert handler for the rationale.
-    _assert_write_access(row, user_api_key_dict)
+    await _assert_write_access(prisma_client, row, user_api_key_dict)
     try:
         await prisma_client.db.litellm_memorytable.delete(
             where={"memory_id": row.memory_id}
