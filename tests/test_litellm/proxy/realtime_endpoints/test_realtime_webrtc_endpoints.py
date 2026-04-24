@@ -116,8 +116,16 @@ def test_decode_realtime_token_payload_ephemeral_key_not_string():
 def proxy_app():
     from litellm.proxy import proxy_server
 
+    # master_key is a module-global — restore it on teardown so this fixture
+    # doesn't leak state into unrelated tests that share the same xdist worker
+    # (e.g. tests that assume master_key is None and send unauthenticated
+    # requests to the shared FastAPI app).
+    original_master_key = proxy_server.master_key
     proxy_server.master_key = "sk-test-master-key"
-    return proxy_server.app
+    try:
+        yield proxy_server.app
+    finally:
+        proxy_server.master_key = original_master_key
 
 
 @pytest.fixture

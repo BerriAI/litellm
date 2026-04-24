@@ -74,6 +74,34 @@ def test_prepare_fake_stream_request():
     assert result_data["messages"] == [{"role": "user", "content": "Hello"}]
 
 
+def test_get_agentic_loop_settings_defaults_and_overrides():
+    handler = BaseLLMHTTPHandler()
+
+    depth, max_loops, fingerprints = handler._get_agentic_loop_settings(kwargs={})
+    assert depth == 0
+    assert max_loops == 3
+    assert fingerprints == []
+
+    depth, max_loops, fingerprints = handler._get_agentic_loop_settings(
+        kwargs={
+            "_agentic_loop_depth": 2,
+            "max_agentic_loops": 7,
+            "_agentic_loop_fingerprints": ["fp-1", "fp-2"],
+        }
+    )
+    assert depth == 2
+    assert max_loops == 7
+    assert fingerprints == ["fp-1", "fp-2"]
+
+
+def test_fingerprint_agentic_tools_is_deterministic():
+    handler = BaseLLMHTTPHandler()
+    tools_a = {"tool_calls": [{"id": "1", "input": {"q": "abc"}, "name": "web_search"}]}
+    tools_b = {"tool_calls": [{"name": "web_search", "input": {"q": "abc"}, "id": "1"}]}
+
+    assert handler._fingerprint_agentic_tools(tools_a) == handler._fingerprint_agentic_tools(tools_b)
+
+
 @pytest.mark.asyncio
 async def test_async_anthropic_messages_handler_extra_headers():
     """

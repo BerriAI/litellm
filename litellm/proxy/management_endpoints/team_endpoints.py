@@ -43,6 +43,7 @@ from litellm.proxy._types import (
     LitellmUserRoles,
     Member,
     NewTeamRequest,
+    OrgMember,
     ProxyErrorTypes,
     ProxyException,
     SpecialManagementEndpointEnums,
@@ -77,6 +78,9 @@ from litellm.proxy.management_endpoints.common_utils import (
     _update_metadata_fields,
     _upsert_budget_and_membership,
     _user_has_admin_view,
+)
+from litellm.proxy.management_endpoints.organization_endpoints import (
+    add_member_to_organization,
 )
 from litellm.proxy.management_endpoints.tag_management_endpoints import (
     get_daily_activity,
@@ -302,14 +306,15 @@ class TeamMemberBudgetHandler:
         prisma_client: PrismaClient,
     ) -> None:
         """
-        Create team_memberships entries for existing members that don't have one.
+        Ensure every team member has a TeamMembership row linked to the
+        team_member_budget.
 
-        Called after team_member_budget is set/updated on a team to ensure
-        members who joined before the budget was configured also get budget
-        enforcement.
-
-        Only creates missing entries — does not touch existing memberships
-        (which may carry individual per-member budgets).
+        Called after team_member_budget is set/updated on a team. Creates
+        rows for members who don't have one, and populates budget_id on
+        existing rows where it is NULL. Rows with a non-NULL budget_id
+        are left untouched, which preserves per-member overrides but also
+        means rows pointing to a prior team-default budget_id are not
+        migrated to the new one.
         """
         if not members_with_roles:
             return
@@ -343,6 +348,21 @@ class TeamMemberBudgetHandler:
             verbose_proxy_logger.info(
                 "Backfilled %d team_memberships for team %s with budget %s",
                 len(missing),
+                _sanitize_for_log(team_id),
+                _sanitize_for_log(team_member_budget_id),
+            )
+
+        # Heal existing membership rows that predate the team_member_budget
+        # configuration: populate budget_id where it is currently NULL.
+        # Rows with an explicit budget_id (per-member override) are left alone.
+        updated = await prisma_client.db.litellm_teammembership.update_many(
+            where={"team_id": team_id, "budget_id": None},
+            data={"budget_id": team_member_budget_id},
+        )
+        if updated:
+            verbose_proxy_logger.info(
+                "Populated budget_id on %d existing team_memberships for team %s with budget %s",
+                updated,
                 _sanitize_for_log(team_id),
                 _sanitize_for_log(team_member_budget_id),
             )
@@ -1239,11 +1259,53 @@ async def _update_model_table(
     return _model_id
 
 
+async def _auto_add_team_members_to_organization(
+    team: LiteLLM_TeamTable,
+    organization: LiteLLM_OrganizationTableWithMembers,
+    prisma_client: Any,
+) -> None:
+    """
+    When moving a team to an org, ensure all team members are also org members.
+
+    For SSO/Entra setups without SCIM, users join teams automatically on login but
+    are never explicitly added to organizations. This silently upserts missing members
+    rather than blocking the team move.
+    """
+    org_member_ids = (
+        {m.user_id for m in organization.members} if organization.members else set()
+    )
+    for member in team.members_with_roles:
+        if member.user_id is None:
+            continue
+        if member.user_id == SpecialProxyStrings.default_user_id.value:
+            continue
+        if member.user_id in org_member_ids:
+            continue
+        if organization.organization_id is None:
+            continue
+        try:
+            await add_member_to_organization(
+                member=OrgMember(
+                    user_id=member.user_id,
+                    role=LitellmUserRoles.INTERNAL_USER,
+                ),
+                organization_id=organization.organization_id,
+                prisma_client=prisma_client,
+            )
+        except Exception as e:
+            verbose_proxy_logger.debug(
+                "_auto_add_team_members_to_organization: skipping user_id=%s - %s",
+                member.user_id,
+                e,
+            )
+
+
 async def fetch_and_validate_organization(
     organization_id: str,
     existing_team_row: Any,
     llm_router: Optional[Router],
     prisma_client: Any,
+    user_api_key_dict: Optional[UserAPIKeyAuth] = None,
 ) -> Any:
     """
     Fetch and validate an organization for team update operations.
@@ -1278,13 +1340,24 @@ async def fetch_and_validate_organization(
             },
         )
 
+    is_proxy_admin = (
+        user_api_key_dict is not None
+        and user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
+    )
+    organization = LiteLLM_OrganizationTableWithMembers(**organization_row.model_dump())
     validate_team_org_change(
         team=LiteLLM_TeamTable(**existing_team_row.model_dump()),
-        organization=LiteLLM_OrganizationTableWithMembers(
-            **organization_row.model_dump()
-        ),
+        organization=organization,
         llm_router=llm_router,
+        is_proxy_admin=is_proxy_admin,
     )
+
+    if is_proxy_admin:
+        await _auto_add_team_members_to_organization(
+            team=LiteLLM_TeamTable(**existing_team_row.model_dump()),
+            organization=organization,
+            prisma_client=prisma_client,
+        )
 
     return organization_row
 
@@ -1293,14 +1366,20 @@ def validate_team_org_change(
     team: LiteLLM_TeamTable,
     organization: LiteLLM_OrganizationTableWithMembers,
     llm_router: Router,
+    is_proxy_admin: bool = False,
 ) -> bool:
     """
     Validate that a team can be moved to an organization.
 
     - The org must have access to the team's models
     - The team budget cannot be greater than the org max_budget
-    - The team's user_id must be a member of the org
+    - For non-proxy-admins: all team members must already be org members
     - The team's tpm/rpm limit must be less than the org's tpm/rpm limit
+
+    Proxy admins bypass the membership check and instead trigger auto-add of
+    missing members (handled by the caller). This supports SSO/Entra setups
+    where org membership tables are empty but proxy admins still need to group
+    teams under orgs for budget/model governance.
     """
 
     # If the team's organization is the same as the new organization, return True
@@ -1341,23 +1420,26 @@ def validate_team_org_change(
             },
         )
 
-    # Check if the team's user_id is a member of the org
-    team_members = [m.user_id for m in team.members_with_roles]
-    org_members = (
-        [m.user_id for m in organization.members] if organization.members else []
-    )
-    not_in_org = [
-        m
-        for m in team_members
-        if m not in org_members and m != SpecialProxyStrings.default_user_id.value
-    ]
-    if len(not_in_org) > 0:
-        raise HTTPException(
-            status_code=403,
-            detail={
-                "error": f"Cannot move team to organization. Team has user_id {not_in_org} that is not a member of the organization."
-            },
+    # For non-proxy-admins, require all team members to already be org members.
+    # This prevents a team admin from moving their team into an arbitrary org and
+    # thereby injecting members into that org without org admin approval.
+    if not is_proxy_admin:
+        team_members = [m.user_id for m in team.members_with_roles]
+        org_members = (
+            [m.user_id for m in organization.members] if organization.members else []
         )
+        not_in_org = [
+            m
+            for m in team_members
+            if m not in org_members and m != SpecialProxyStrings.default_user_id.value
+        ]
+        if len(not_in_org) > 0:
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "error": f"Cannot move team to organization. Team has user_id {not_in_org} that is not a member of the organization."
+                },
+            )
 
     # Check if the team's tpm/rpm limit is less than the org's tpm/rpm limit
     if (
@@ -1561,11 +1643,47 @@ async def update_team(  # noqa: PLR0915
         if (
             data.organization_id is not None and len(data.organization_id) > 0
         ):  # allow unsetting the organization_id
+            # If the caller is relocating the team to a different org, they
+            # must also be PROXY_ADMIN or an org-admin of the DESTINATION org.
+            # _verify_team_access above only checked the team's CURRENT org,
+            # so without this gate an org-admin could hand their team to any
+            # other org (or capture a team from another org they once
+            # administered into a new destination).
+            current_org_id = getattr(existing_team_row, "organization_id", None)
+            if (
+                data.organization_id != current_org_id
+                and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value
+            ):
+                # Is the caller org_admin of the destination org?
+                caller_memberships = (
+                    await prisma_client.db.litellm_organizationmembership.find_many(
+                        where={
+                            "user_id": user_api_key_dict.user_id,
+                            "organization_id": data.organization_id,
+                            "user_role": LitellmUserRoles.ORG_ADMIN.value,
+                        }
+                    )
+                    if user_api_key_dict.user_id
+                    else []
+                )
+                if not caller_memberships:
+                    raise HTTPException(
+                        status_code=403,
+                        detail={
+                            "error": (
+                                "Relocating a team to a different organization "
+                                "requires PROXY_ADMIN or org-admin of the "
+                                "destination org."
+                            )
+                        },
+                    )
+
             await fetch_and_validate_organization(
                 organization_id=data.organization_id,
                 existing_team_row=existing_team_row,
                 llm_router=llm_router,
                 prisma_client=prisma_client,
+                user_api_key_dict=user_api_key_dict,
             )
         elif data.organization_id is not None and len(data.organization_id) == 0:
             # unsetting the organization_id
@@ -2573,6 +2691,15 @@ async def team_member_update(
             identified_budget_id = tm.budget_id
             break
 
+    # If this membership still points at the team's shared default member
+    # budget, _upsert_budget_and_membership will clone-on-write so that the
+    # update only touches this user (not every member sharing the default).
+    team_default_budget_id: Optional[str] = None
+    if team_table.metadata is not None:
+        raw_default_budget_id = team_table.metadata.get("team_member_budget_id")
+        if isinstance(raw_default_budget_id, str):
+            team_default_budget_id = raw_default_budget_id
+
     ### upsert new budget
     async with prisma_client.db.tx() as tx:
         await _upsert_budget_and_membership(
@@ -2585,6 +2712,7 @@ async def team_member_update(
             tpm_limit=data.tpm_limit,
             rpm_limit=data.rpm_limit,
             allowed_models=data.allowed_models,
+            team_default_budget_id=team_default_budget_id,
         )
 
     ### update team member role
@@ -2720,6 +2848,20 @@ async def bulk_team_member_add(
         )
 
     if data.all_users:
+        # `all_users=True` pulls every user in the database into this team,
+        # regardless of org. Any team admin could use it to capture every
+        # user across every org into a team they control. Restrict to
+        # PROXY_ADMIN.
+        if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value:
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "error": (
+                        "`all_users=true` is restricted to PROXY_ADMIN. "
+                        "Org/team admins must specify explicit member lists."
+                    )
+                },
+            )
         # get all users from the database
         all_users_in_db = await prisma_client.db.litellm_usertable.find_many(
             order={"created_at": "desc"}
@@ -3448,6 +3590,7 @@ async def _get_org_admin_org_ids(
         m.organization_id
         for m in (caller_user.organization_memberships or [])
         if m.user_role == LitellmUserRoles.ORG_ADMIN.value
+        and m.organization_id is not None
     ]
     return org_ids if org_ids else None
 
@@ -3482,13 +3625,8 @@ async def _build_team_list_where_conditions(
 
     if organization_id:
         where_conditions["organization_id"] = organization_id
-    elif org_admin_org_ids is not None and not user_id:
-        # Org admin without explicit org or user filter: scope to their orgs.
-        # NOTE: when user_id is provided, no org filter is applied — the
-        # query returns all teams the target user belongs to across all
-        # organisations.  This matches the legacy /team/list behaviour in
-        # _authorize_and_filter_teams which fetches direct-membership teams
-        # without an org constraint.
+    elif org_admin_org_ids is not None:
+        # Org admin: always scope to their orgs, even when filtering by user_id.
         where_conditions["organization_id"] = {"in": org_admin_org_ids}
 
     if user_id:
@@ -3858,7 +3996,7 @@ async def _authorize_and_filter_teams(
     Authorize the /team/list request and return filtered teams.
 
     - Proxy admins: all teams (or filtered by user_id if provided).
-    - Org admins: teams from their orgs + teams they are direct members of.
+    - Org admins: teams from their orgs (scoped to user_id if provided).
     - Own query (user_id matches caller): teams the user is a member of.
     - Others: 401.
     """
@@ -3886,6 +4024,7 @@ async def _authorize_and_filter_teams(
                     m.organization_id
                     for m in (caller_user.organization_memberships or [])
                     if m.user_role == LitellmUserRoles.ORG_ADMIN.value
+                    and m.organization_id is not None
                 ]
                 if not allowed_org_ids:
                     allowed_org_ids = None
@@ -3908,20 +4047,13 @@ async def _authorize_and_filter_teams(
         )
         if not user_id:
             return list(org_teams)
-        # Also include teams the user is a direct member of (outside their orgs)
-        seen_team_ids = {team.team_id for team in org_teams}
-        all_teams = list(org_teams)
-        # Prisma doesn't support filtering JSON array fields, so we fetch by membership separately
-        member_teams = await prisma_client.db.litellm_teamtable.find_many(
-            where={"team_id": {"not_in": list(seen_team_ids)}} if seen_team_ids else {},
-            include={"litellm_model_table": True},
-        )
-        for team in member_teams:
-            if team.members_with_roles and any(
-                m.get("user_id") == user_id for m in team.members_with_roles
-            ):
-                all_teams.append(team)
-        return all_teams
+        # Filter org teams to only those where the target user is a member
+        return [
+            team
+            for team in org_teams
+            if team.members_with_roles
+            and any(m.get("user_id") == user_id for m in team.members_with_roles)
+        ]
     elif user_id:
         # Regular user: fetch all and filter by membership (Prisma can't filter JSON arrays)
         response = await prisma_client.db.litellm_teamtable.find_many(

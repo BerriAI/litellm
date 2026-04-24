@@ -1727,7 +1727,7 @@ def test_openai_chat_completion_complete_response_call():
     "model",
     [
         "gpt-3.5-turbo",
-        "claude-3-haiku-20240307",
+        "claude-haiku-4-5-20251001",
         "o1",
     ],
 )
@@ -2247,7 +2247,7 @@ def streaming_and_function_calling_format_tests(idx, chunk):
     [
         # "gpt-3.5-turbo",
         # "anthropic.claude-3-sonnet-20240229-v1:0",
-        "claude-3-haiku-20240307",
+        "claude-haiku-4-5-20251001",
     ],
 )
 def test_streaming_and_function_calling(model):

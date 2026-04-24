@@ -143,6 +143,51 @@ def test_azure_provider_fields_include_entra_id():
     assert fields_by_key["client_secret"]["required"] is False
 
 
+def test_anthropic_provider_fields_support_byok():
+    """
+    The Anthropic provider form must allow BYOK:
+    - api_key is optional (not required) so admins can create models without a key
+    - api_key has a non-null tooltip explaining the BYOK use case
+    """
+    app_instance = FastAPI()
+    app_instance.include_router(router)
+    test_client = TestClient(app_instance)
+
+    response = test_client.get("/public/providers/fields")
+    assert response.status_code == 200
+    providers = response.json()
+
+    anthropic = next((p for p in providers if p["provider"] == "Anthropic"), None)
+    assert anthropic is not None, "Anthropic provider entry not found"
+
+    fields_by_key = {f["key"]: f for f in anthropic["credential_fields"]}
+    assert "api_key" in fields_by_key
+    assert fields_by_key["api_key"]["required"] is False, (
+        "Anthropic api_key must be optional so admins can configure BYOK models "
+        "without entering a key. See BYOK tutorial."
+    )
+    assert fields_by_key["api_key"].get("tooltip"), (
+        "Anthropic api_key must have a tooltip explaining the BYOK use case."
+    )
+    assert "api_base" in fields_by_key, (
+        "Anthropic provider form must expose api_base so cloud customers "
+        "can override the upstream URL without env var access."
+    )
+    api_base_field = fields_by_key["api_base"]
+    assert api_base_field["required"] is False
+    assert api_base_field["field_type"] == "text"
+    assert api_base_field.get("tooltip"), (
+        "api_base should have a tooltip explaining it is optional."
+    )
+
+    # UI forms render fields in credential_fields order; api_base should come first
+    # so an admin sees the URL override before the key field.
+    field_order = [f["key"] for f in anthropic["credential_fields"]]
+    assert field_order.index("api_base") < field_order.index("api_key"), (
+        "api_base must appear before api_key in credential_fields (matches AI21 and ANTHROPIC_TEXT convention)."
+    )
+
+
 def test_public_model_hub_with_healthy_model():
     """Test that health information is populated for a healthy model"""
     app = FastAPI()

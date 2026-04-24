@@ -1021,6 +1021,83 @@ class TestProxySettingEndpoints:
         assert "unsupported_flag" not in stored_settings
         assert stored_settings["disable_model_add_for_internal_users"] is False
 
+    def test_update_ui_settings_persists_forward_llm_provider_auth_headers(
+        self, mock_auth, monkeypatch
+    ):
+        """BYOK flag must be allowlisted and persisted to litellm_uisettings."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        from litellm.proxy._types import UserAPIKeyAuth
+        from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+        mock_user_auth = UserAPIKeyAuth(
+            user_id="test-user-123",
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+        )
+        app.dependency_overrides[user_api_key_auth] = lambda: mock_user_auth
+
+        monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+        mock_prisma = MagicMock()
+        mock_prisma.db.litellm_uisettings.upsert = AsyncMock()
+        mock_prisma.db.litellm_uisettings.find_unique = AsyncMock(return_value=None)
+        monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+
+        payload = {"forward_llm_provider_auth_headers": True}
+
+        try:
+            response = client.patch("/update/ui_settings", json=payload)
+        finally:
+            app.dependency_overrides.clear()
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "success"
+        assert data["settings"]["forward_llm_provider_auth_headers"] is True
+
+        assert mock_prisma.db.litellm_uisettings.upsert.called
+        call_args = mock_prisma.db.litellm_uisettings.upsert.call_args
+        create_data = call_args.kwargs["data"]["create"]
+        stored_settings = json.loads(create_data["ui_settings"])
+        assert stored_settings["forward_llm_provider_auth_headers"] is True
+
+    def test_update_ui_settings_syncs_forward_llm_provider_auth_headers_to_general_settings(
+        self, mock_auth, monkeypatch
+    ):
+        """BYOK flag must be synced into general_settings dict so the request path sees it."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        from litellm.proxy._types import UserAPIKeyAuth
+        from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+        mock_user_auth = UserAPIKeyAuth(
+            user_id="test-user-123",
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+        )
+        app.dependency_overrides[user_api_key_auth] = lambda: mock_user_auth
+
+        monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+
+        # Reset general_settings so the test is hermetic
+        general_settings: dict = {}
+        monkeypatch.setattr(
+            "litellm.proxy.proxy_server.general_settings", general_settings
+        )
+
+        mock_prisma = MagicMock()
+        mock_prisma.db.litellm_uisettings.upsert = AsyncMock()
+        mock_prisma.db.litellm_uisettings.find_unique = AsyncMock(return_value=None)
+        monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+
+        payload = {"forward_llm_provider_auth_headers": True}
+
+        try:
+            response = client.patch("/update/ui_settings", json=payload)
+        finally:
+            app.dependency_overrides.clear()
+
+        assert response.status_code == 200
+        assert general_settings.get("forward_llm_provider_auth_headers") is True
+
     def test_get_sso_settings_from_database(
         self, mock_proxy_config, mock_auth, monkeypatch
     ):

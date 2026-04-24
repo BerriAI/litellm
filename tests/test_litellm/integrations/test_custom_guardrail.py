@@ -173,17 +173,16 @@ class TestCustomGuardrailShouldRunGuardrail:
         assert result is False
 
     def test_should_run_guardrail_with_disable_global_guardrail(self):
-        """Test that disable_global_guardrail disables a global guardrail when set to True"""
+        """Test that disable_global_guardrails only works from admin metadata"""
         from litellm.types.guardrails import GuardrailEventHooks
 
-        # Create a guardrail with default_on=True (global guardrail)
         custom_guardrail = CustomGuardrail(
             guardrail_name="global_guardrail",
             default_on=True,
             event_hook=GuardrailEventHooks.pre_call,
         )
 
-        # Test 1: Global guardrail runs by default when default_on=True
+        # Test 1: Global guardrail runs by default
         data = {
             "model": "gpt-3.5-turbo",
             "messages": [{"role": "user", "content": "test"}],
@@ -193,7 +192,7 @@ class TestCustomGuardrailShouldRunGuardrail:
         )
         assert result is True, "Global guardrail should run when default_on=True"
 
-        # Test 2: Global guardrail is disabled when disable_global_guardrail=True at root level
+        # Test 2: User-injected disable at root level is IGNORED
         data_with_disable_root = {
             "model": "gpt-3.5-turbo",
             "messages": [{"role": "user", "content": "test"}],
@@ -203,23 +202,10 @@ class TestCustomGuardrailShouldRunGuardrail:
             data=data_with_disable_root, event_type=GuardrailEventHooks.pre_call
         )
         assert (
-            result is False
-        ), "Global guardrail should be disabled when disable_global_guardrail=True"
+            result is True
+        ), "User-injected disable_global_guardrails should be ignored"
 
-        # Test 3: Global guardrail is disabled when disable_global_guardrail=True in litellm_metadata
-        data_with_disable_litellm = {
-            "model": "gpt-3.5-turbo",
-            "messages": [{"role": "user", "content": "test"}],
-            "litellm_metadata": {"disable_global_guardrails": True},
-        }
-        result = custom_guardrail.should_run_guardrail(
-            data=data_with_disable_litellm, event_type=GuardrailEventHooks.pre_call
-        )
-        assert (
-            result is False
-        ), "Global guardrail should be disabled when disable_global_guardrail=True in litellm_metadata"
-
-        # Test 4: Global guardrail is disabled when disable_global_guardrail=True in metadata
+        # Test 3: User-injected disable in metadata is IGNORED
         data_with_disable_metadata = {
             "model": "gpt-3.5-turbo",
             "messages": [{"role": "user", "content": "test"}],
@@ -228,25 +214,51 @@ class TestCustomGuardrailShouldRunGuardrail:
         result = custom_guardrail.should_run_guardrail(
             data=data_with_disable_metadata, event_type=GuardrailEventHooks.pre_call
         )
-        assert (
-            result is False
-        ), "Global guardrail should be disabled when disable_global_guardrail=True in metadata"
+        assert result is True, "User-injected metadata disable should be ignored"
 
-        # Test 5: Global guardrail runs when disable_global_guardrail=False
-        data_with_disable_false = {
+        # Test 4: Admin-configured disable via user_api_key_metadata IS respected
+        data_with_admin_disable = {
             "model": "gpt-3.5-turbo",
             "messages": [{"role": "user", "content": "test"}],
-            "disable_global_guardrails": False,
+            "metadata": {"user_api_key_metadata": {"disable_global_guardrails": True}},
         }
         result = custom_guardrail.should_run_guardrail(
-            data=data_with_disable_false, event_type=GuardrailEventHooks.pre_call
+            data=data_with_admin_disable, event_type=GuardrailEventHooks.pre_call
+        )
+        assert result is False, "Admin-configured disable should be respected"
+
+        # Test 5: Admin config in metadata isn't shadowed by user-supplied litellm_metadata
+        data_cross_key = {
+            "model": "gpt-3.5-turbo",
+            "messages": [{"role": "user", "content": "test"}],
+            "metadata": {"user_api_key_metadata": {"disable_global_guardrails": True}},
+            "litellm_metadata": {"request_tags": ["user-supplied"]},
+        }
+        result = custom_guardrail.should_run_guardrail(
+            data=data_cross_key, event_type=GuardrailEventHooks.pre_call
         )
         assert (
-            result is True
-        ), "Global guardrail should still run when disable_global_guardrail=False"
+            result is False
+        ), "Admin config in metadata must not be shadowed by user-supplied litellm_metadata"
+
+        # Test 6: After the pre-call strip runs, user-injected
+        # user_api_key_metadata in the non-authoritative metadata key is gone.
+        # _get_admin_metadata must then surface admin config unchanged.
+        data_post_strip = {
+            "model": "gpt-3.5-turbo",
+            "messages": [{"role": "user", "content": "test"}],
+            "metadata": {"user_api_key_metadata": {"disable_global_guardrails": True}},
+            "litellm_metadata": {},  # post-strip: attacker payload removed
+        }
+        result = custom_guardrail.should_run_guardrail(
+            data=data_post_strip, event_type=GuardrailEventHooks.pre_call
+        )
+        assert (
+            result is False
+        ), "Admin config in metadata must be respected when other metadata key is empty"
 
     def test_should_run_guardrail_with_opted_out_global_guardrails(self):
-        """Test the per-guardrail opt-out list for global (default_on=True) guardrails"""
+        """Test that per-guardrail opt-out only works from admin metadata"""
         from litellm.types.guardrails import GuardrailEventHooks
 
         custom_guardrail = CustomGuardrail(
@@ -255,7 +267,7 @@ class TestCustomGuardrailShouldRunGuardrail:
             event_hook=GuardrailEventHooks.pre_call,
         )
 
-        # Test 1: guardrail in the opt-out list at root level → skipped
+        # Test 1: User-injected opt-out at root level is IGNORED
         data_root = {
             "model": "gpt-3.5-turbo",
             "messages": [{"role": "user", "content": "test"}],
@@ -265,23 +277,10 @@ class TestCustomGuardrailShouldRunGuardrail:
             custom_guardrail.should_run_guardrail(
                 data=data_root, event_type=GuardrailEventHooks.pre_call
             )
-            is False
+            is True
         )
 
-        # Test 2: guardrail in the opt-out list inside litellm_metadata → skipped
-        data_litellm = {
-            "model": "gpt-3.5-turbo",
-            "messages": [{"role": "user", "content": "test"}],
-            "litellm_metadata": {"opted_out_global_guardrails": ["global_guardrail"]},
-        }
-        assert (
-            custom_guardrail.should_run_guardrail(
-                data=data_litellm, event_type=GuardrailEventHooks.pre_call
-            )
-            is False
-        )
-
-        # Test 3: guardrail in the opt-out list inside metadata → skipped
+        # Test 2: User-injected opt-out in metadata is IGNORED
         data_metadata = {
             "model": "gpt-3.5-turbo",
             "messages": [{"role": "user", "content": "test"}],
@@ -291,7 +290,7 @@ class TestCustomGuardrailShouldRunGuardrail:
             custom_guardrail.should_run_guardrail(
                 data=data_metadata, event_type=GuardrailEventHooks.pre_call
             )
-            is False
+            is True
         )
 
         # Test 4: a different guardrail in the opt-out list → still runs
@@ -1056,3 +1055,50 @@ class TestTracingFieldsPopulation:
         assert slg["classification"] == classification
         assert slg["detection_method"] == "llm-judge"
         assert slg["confidence_score"] == 0.94
+
+
+class TestCustomGuardrailSpendLogMatchRedaction:
+    """Guardrail JSON persisted via standard_logging must not contain raw match spans."""
+
+    def test_add_standard_logging_redacts_nested_match(self):
+        cg = CustomGuardrail(guardrail_name="test-rail")
+        raw = {
+            "assessments": [
+                {
+                    "sensitiveInformationPolicy": {
+                        "piiEntities": [
+                            {"type": "NAME", "match": "GG", "action": "BLOCKED"}
+                        ]
+                    }
+                }
+            ]
+        }
+        request_data: dict = {"metadata": {}}
+        cg.add_standard_logging_guardrail_information_to_request_data(
+            guardrail_json_response=raw,
+            request_data=request_data,
+            guardrail_status="guardrail_intervened",
+        )
+        slg = request_data["metadata"]["standard_logging_guardrail_information"][0]
+        assert (
+            slg["guardrail_response"]["assessments"][0]["sensitiveInformationPolicy"][
+                "piiEntities"
+            ][0]["match"]
+            == "[REDACTED]"
+        )
+        assert raw["assessments"][0]["sensitiveInformationPolicy"]["piiEntities"][0][
+            "match"
+        ] == "GG"
+
+    def test_add_standard_logging_redacts_regex_field(self):
+        cg = CustomGuardrail(guardrail_name="test-rail")
+        raw = {"filters": [{"regex": r"\d{3}-\d{2}-\d{4}", "action": "BLOCKED"}]}
+        request_data: dict = {"metadata": {}}
+        cg.add_standard_logging_guardrail_information_to_request_data(
+            guardrail_json_response=raw,
+            request_data=request_data,
+            guardrail_status="success",
+        )
+        slg = request_data["metadata"]["standard_logging_guardrail_information"][0]
+        assert slg["guardrail_response"]["filters"][0]["regex"] == "[REDACTED]"
+        assert raw["filters"][0]["regex"] == r"\d{3}-\d{2}-\d{4}"

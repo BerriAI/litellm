@@ -1795,6 +1795,7 @@ async def test_backfill_team_member_budget_entries_creates_missing_memberships()
         return_value=[existing_membership]
     )
     mock_prisma.db.litellm_teammembership.create_many = AsyncMock(return_value=None)
+    mock_prisma.db.litellm_teammembership.update_many = AsyncMock(return_value=0)
 
     # Test with Member instances
     members = [
@@ -1823,6 +1824,7 @@ async def test_backfill_team_member_budget_entries_creates_missing_memberships()
     # Also test with raw dicts (members_with_roles may be dicts when deserialized from DB)
     mock_prisma.db.litellm_teammembership.find_many.reset_mock()
     mock_prisma.db.litellm_teammembership.create_many.reset_mock()
+    mock_prisma.db.litellm_teammembership.update_many.reset_mock()
 
     members_as_dicts = [
         {"user_id": "user-A", "role": "user"},
@@ -1868,6 +1870,7 @@ async def test_backfill_team_member_budget_entries_no_op_when_all_exist():
         return_value=[existing_a, existing_b]
     )
     mock_prisma.db.litellm_teammembership.create_many = AsyncMock(return_value=None)
+    mock_prisma.db.litellm_teammembership.update_many = AsyncMock(return_value=0)
 
     members = [
         Member(user_id="user-A", role="user"),
@@ -1882,6 +1885,55 @@ async def test_backfill_team_member_budget_entries_no_op_when_all_exist():
     )
 
     mock_prisma.db.litellm_teammembership.create_many.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_backfill_team_member_budget_entries_populates_null_budget_id_on_existing_rows():
+    """
+    backfill_team_member_budget_entries should populate budget_id on
+    existing TeamMembership rows where it is currently NULL, so admins
+    can configure a team member budget after members have already joined
+    and have enforcement apply to those pre-existing members.
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.proxy._types import Member
+    from litellm.proxy.management_endpoints.team_endpoints import (
+        TeamMemberBudgetHandler,
+    )
+
+    team_id = "team-abc"
+    budget_id = "budget-xyz"
+
+    # Both members already have rows, so create_many must not fire;
+    # update_many must fire with the NULL-budget_id filter.
+    existing_a = MagicMock()
+    existing_a.user_id = "user-A"
+    existing_b = MagicMock()
+    existing_b.user_id = "user-B"
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_teammembership.find_many = AsyncMock(
+        return_value=[existing_a, existing_b]
+    )
+    mock_prisma.db.litellm_teammembership.create_many = AsyncMock(return_value=None)
+    mock_prisma.db.litellm_teammembership.update_many = AsyncMock(return_value=2)
+
+    await TeamMemberBudgetHandler.backfill_team_member_budget_entries(
+        team_id=team_id,
+        members_with_roles=[
+            Member(user_id="user-A", role="user"),
+            Member(user_id="user-B", role="user"),
+        ],
+        team_member_budget_id=budget_id,
+        prisma_client=mock_prisma,
+    )
+
+    mock_prisma.db.litellm_teammembership.create_many.assert_not_awaited()
+    mock_prisma.db.litellm_teammembership.update_many.assert_awaited_once_with(
+        where={"team_id": team_id, "budget_id": None},
+        data={"budget_id": budget_id},
+    )
 
 
 @pytest.mark.asyncio
@@ -2742,10 +2794,10 @@ async def test_list_team_v2_org_admin_with_user_id_returns_user_teams():
 
         assert result["total"] == 1
 
-        # Verify the where clause filters by user's teams, not org scope
+        # Verify the where clause filters by user's teams AND org scope
         where = mock_db.litellm_teamtable.find_many.call_args.kwargs["where"]
         assert where["team_id"] == {"in": ["team_X", "team_Y"]}
-        assert "organization_id" not in where
+        assert where["organization_id"] == {"in": ["org_A"]}
 
 
 @pytest.mark.asyncio
@@ -5132,6 +5184,16 @@ async def test_update_team_guardrails_with_org_id():
         # The fix ensures 'teams: True' is in the include clause
         mock_prisma.db.litellm_organizationtable.find_unique = AsyncMock(
             return_value=mock_org
+        )
+
+        # Destination-org guard in update_team queries for the caller's
+        # ORG_ADMIN membership on the destination org. Return a match so
+        # the guardrails-update path (the subject under test) proceeds.
+        mock_org_admin_membership = MagicMock()
+        mock_org_admin_membership.user_id = "org-admin-guardrails-test"
+        mock_org_admin_membership.organization_id = "test-org-guardrails"
+        mock_prisma.db.litellm_organizationmembership.find_many = AsyncMock(
+            return_value=[mock_org_admin_membership]
         )
 
         # Mock team update

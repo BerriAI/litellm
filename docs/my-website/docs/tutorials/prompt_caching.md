@@ -8,6 +8,22 @@ Reduce costs by up to 90% by using LiteLLM to auto-inject prompt caching checkpo
 
 <Image img={require('../../img/auto_prompt_caching.png')}  style={{ width: '800px', height: 'auto' }} />
 
+Supported Providers (`cache_control` marker):
+- Anthropic API (`anthropic/`)
+- AWS Bedrock - Claude (`bedrock/`)
+- Vertex AI - Claude and Gemini (`vertex_ai/`)
+- Google AI Studio - Gemini (`gemini/`)
+- Azure AI - Claude (`azure_ai/`)
+- OpenRouter - Claude, Gemini, MiniMax, GLM, z-ai routes (`openrouter/`)
+- Databricks - Claude (`databricks/`)
+- DashScope / Qwen (`dashscope/`)
+- MiniMax (`minimax/`)
+- Z.ai / GLM (`zai/`)
+
+Provider Managed (automatic, no marker needed):
+- OpenAI (`openai/`)
+- DeepSeek (`deepseek/`)
+- xAI (`xai/`)
 
 ## How it works
 
