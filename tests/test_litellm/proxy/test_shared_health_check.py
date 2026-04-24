@@ -481,6 +481,37 @@ class TestSharedHealthCheckManager:
         assert unhealthy == []
 
     @pytest.mark.asyncio
+    async def test_perform_shared_health_check_no_redis_skips_polling(self):
+        """Test that polling is skipped entirely when redis_cache is None"""
+        manager = SharedHealthCheckManager(redis_cache=None)
+
+        model_list = [
+            {"model_name": "test-model", "litellm_params": {"model": "test-model"}}
+        ]
+        expected_healthy = [{"model": "test-model", "status": "healthy"}]
+        expected_unhealthy = []
+
+        with (
+            patch("asyncio.sleep") as mock_sleep,
+            patch(
+                "litellm.proxy.health_check_utils.shared_health_check_manager.perform_health_check"
+            ) as mock_perform,
+        ):
+            mock_perform.return_value = (expected_healthy, expected_unhealthy, {})
+
+            healthy, unhealthy, _ = await manager.perform_shared_health_check(
+                model_list, details=True
+            )
+
+        # Should NOT sleep at all — falls back to local health check immediately
+        mock_sleep.assert_not_called()
+        mock_perform.assert_called_once_with(
+            model_list=model_list, details=True, max_concurrency=None
+        )
+        assert healthy == expected_healthy
+        assert unhealthy == expected_unhealthy
+
+    @pytest.mark.asyncio
     async def test_is_health_check_in_progress_true(
         self, shared_health_manager, mock_redis_cache
     ):

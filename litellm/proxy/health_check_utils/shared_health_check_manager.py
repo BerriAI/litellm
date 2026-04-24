@@ -253,6 +253,15 @@ class SharedHealthCheckManager:
                 # Always release the lock
                 await self.release_health_check_lock()
         else:
+            # If Redis is not configured, skip polling — there is no cache
+            # to wait for.
+            if self.redis_cache is None:
+                return await perform_health_check(
+                    model_list=model_list,
+                    details=details,
+                    max_concurrency=max_concurrency,
+                )
+
             # Lock not acquired — poll for cached results until the lock
             # holder finishes or the lock expires, rather than falling back
             # to a redundant local health check after only 2 seconds.
