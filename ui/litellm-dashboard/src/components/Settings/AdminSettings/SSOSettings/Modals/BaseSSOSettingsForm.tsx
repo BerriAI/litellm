@@ -1,23 +1,66 @@
 "use client";
 
-import {
-  Checkbox,
-  Form,
-  Input as AntInput,
-  Select,
-} from "antd";
-import { Input } from "@/components/ui/input";
 import React from "react";
-import { ssoProviderLogoMap, ssoProviderDisplayNames } from "../constants";
+import { useFormContext, useWatch } from "react-hook-form";
 
-export interface BaseSSOSettingsFormProps {
+import {
+  FormControl,
+  FormField,
+  FormItem,
+  FormLabel,
+  FormMessage,
+} from "@/components/ui/form";
+import { Input } from "@/components/ui/input";
+import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+
+import { ssoProviderDisplayNames, ssoProviderLogoMap } from "../constants";
+
+export interface SSOSettingsFormValues {
+  sso_provider?: string | null;
+  google_client_id?: string | null;
+  google_client_secret?: string | null;
+  microsoft_client_id?: string | null;
+  microsoft_client_secret?: string | null;
+  microsoft_tenant?: string | null;
+  generic_client_id?: string | null;
+  generic_client_secret?: string | null;
+  generic_authorization_endpoint?: string | null;
+  generic_token_endpoint?: string | null;
+  generic_userinfo_endpoint?: string | null;
+  user_email?: string | null;
+  proxy_base_url?: string | null;
+  use_role_mappings?: boolean;
+  group_claim?: string | null;
+  default_role?: string | null;
+  proxy_admin_teams?: string | null;
+  admin_viewer_teams?: string | null;
+  internal_user_teams?: string | null;
+  internal_viewer_teams?: string | null;
+  use_team_mappings?: boolean;
+  team_ids_jwt_field?: string | null;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  form: any;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  onFormSubmit: (formValues: Record<string, any>) => Promise<void>;
+  [key: string]: any;
 }
 
-// Define the SSO provider configuration type
+export interface BaseSSOSettingsFormProps {
+  /**
+   * Retained for API compatibility with previous antd-based callers. The
+   * shadcn/RHF migration reads the form via `useFormContext`; callers now
+   * wrap children in `FormProvider` and do not need to thread `form` down.
+   */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  form?: any;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  onFormSubmit?: (formValues: Record<string, any>) => Promise<void>;
+}
+
 export interface SSOProviderConfig {
   envVarMap: Record<string, string>;
   fields: Array<{
@@ -27,7 +70,6 @@ export interface SSOProviderConfig {
   }>;
 }
 
-// Define configurations for each SSO provider
 export const ssoProviderConfigs: Record<string, SSOProviderConfig> = {
   google: {
     envVarMap: {
@@ -67,7 +109,11 @@ export const ssoProviderConfigs: Record<string, SSOProviderConfig> = {
         name: "generic_authorization_endpoint",
         placeholder: "https://your-domain/authorize",
       },
-      { label: "Token Endpoint", name: "generic_token_endpoint", placeholder: "https://your-domain/token" },
+      {
+        label: "Token Endpoint",
+        name: "generic_token_endpoint",
+        placeholder: "https://your-domain/token",
+      },
       {
         label: "Userinfo Endpoint",
         name: "generic_userinfo_endpoint",
@@ -93,214 +139,312 @@ export const ssoProviderConfigs: Record<string, SSOProviderConfig> = {
   },
 };
 
-// Helper function to render provider fields
+/**
+ * Pure helper kept for call sites that render provider fields outside of
+ * the full base form (e.g. `SSOModals.tsx`). The returned elements assume
+ * an ambient `FormProvider` context, matching the parent form's RHF wiring.
+ */
 export const renderProviderFields = (provider: string) => {
   const config = ssoProviderConfigs[provider];
   if (!config) return null;
 
   return config.fields.map((field) => (
-    <Form.Item
+    <ProviderField
       key={field.name}
       label={field.label}
       name={field.name}
-      rules={[{ required: true, message: `Please enter the ${field.label.toLowerCase()}` }]}
-    >
-      {field.name.includes("client") ? (
-        <AntInput.Password />
-      ) : (
-        <Input placeholder={field.placeholder} />
-      )}
-    </Form.Item>
+      placeholder={field.placeholder}
+    />
   ));
 };
 
-const BaseSSOSettingsForm: React.FC<BaseSSOSettingsFormProps> = ({ form, onFormSubmit }) => {
+const ProviderField: React.FC<{
+  label: string;
+  name: string;
+  placeholder?: string;
+}> = ({ label, name, placeholder }) => {
+  const { control } = useFormContext();
+  const isSecret = name.includes("client_secret");
   return (
-    <div>
-      <Form form={form} onFinish={onFormSubmit} labelCol={{ span: 8 }} wrapperCol={{ span: 16 }} labelAlign="left">
-        <Form.Item
-          label="SSO Provider"
-          name="sso_provider"
-          rules={[{ required: true, message: "Please select an SSO provider" }]}
-        >
-          <Select>
-            {Object.entries(ssoProviderLogoMap).map(([value, logo]) => (
-              <Select.Option key={value} value={value}>
-                <div className="flex items-center py-1">
-                  {logo && (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img
-                      src={logo}
-                      alt={value}
-                      className="h-6 w-6 mr-3 object-contain"
-                    />
-                  )}
-                  <span>
-                    {ssoProviderDisplayNames[value] || value.charAt(0).toUpperCase() + value.slice(1) + " SSO"}
-                  </span>
+    <FormField
+      control={control}
+      name={name}
+      rules={{ required: `Please enter the ${label.toLowerCase()}` }}
+      render={({ field }) => (
+        <FormItem className="grid grid-cols-[8rem_1fr] items-start gap-4 space-y-0">
+          <FormLabel className="pt-2">{label}</FormLabel>
+          <div className="space-y-1">
+            <FormControl>
+              <Input
+                type={isSecret ? "password" : "text"}
+                placeholder={placeholder}
+                {...field}
+                value={field.value ?? ""}
+              />
+            </FormControl>
+            <FormMessage />
+          </div>
+        </FormItem>
+      )}
+    />
+  );
+};
+
+const BaseSSOSettingsForm: React.FC<BaseSSOSettingsFormProps> = () => {
+  const { control } = useFormContext<SSOSettingsFormValues>();
+  const provider = useWatch({ control, name: "sso_provider" });
+  const useRoleMappings = useWatch({ control, name: "use_role_mappings" });
+  const useTeamMappings = useWatch({ control, name: "use_team_mappings" });
+  const supportsRoleMappings = provider === "okta" || provider === "generic";
+  const supportsTeamMappings = provider === "okta" || provider === "generic";
+
+  return (
+    <div className="space-y-4">
+      <FormField
+        control={control}
+        name="sso_provider"
+        rules={{ required: "Please select an SSO provider" }}
+        render={({ field }) => (
+          <FormItem className="grid grid-cols-[8rem_1fr] items-start gap-4 space-y-0">
+            <FormLabel className="pt-2">SSO Provider</FormLabel>
+            <div className="space-y-1">
+              <Select value={field.value ?? ""} onValueChange={field.onChange}>
+                <FormControl>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select a provider" />
+                  </SelectTrigger>
+                </FormControl>
+                <SelectContent>
+                  {Object.entries(ssoProviderLogoMap).map(([value, logo]) => (
+                    <SelectItem key={value} value={value}>
+                      <div className="flex items-center py-1">
+                        {logo && (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img
+                            src={logo}
+                            alt={value}
+                            className="h-6 w-6 mr-3 object-contain"
+                          />
+                        )}
+                        <span>
+                          {ssoProviderDisplayNames[value] ||
+                            value.charAt(0).toUpperCase() + value.slice(1) + " SSO"}
+                        </span>
+                      </div>
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <FormMessage />
+            </div>
+          </FormItem>
+        )}
+      />
+
+      {provider ? renderProviderFields(provider) : null}
+
+      <FormField
+        control={control}
+        name="user_email"
+        rules={{ required: "Please enter the email of the proxy admin" }}
+        render={({ field }) => (
+          <FormItem className="grid grid-cols-[8rem_1fr] items-start gap-4 space-y-0">
+            <FormLabel className="pt-2">Proxy Admin Email</FormLabel>
+            <div className="space-y-1">
+              <FormControl>
+                <Input {...field} value={field.value ?? ""} />
+              </FormControl>
+              <FormMessage />
+            </div>
+          </FormItem>
+        )}
+      />
+
+      <FormField
+        control={control}
+        name="proxy_base_url"
+        rules={{
+          required: "Please enter the proxy base url",
+          validate: (value) => {
+            const trimmed = (value ?? "").trim();
+            if (!trimmed) return "Please enter the proxy base url";
+            if (!/^https?:\/\/.+/.test(trimmed)) {
+              return "URL must start with http:// or https://";
+            }
+            if (trimmed.endsWith("/")) {
+              return "URL must not end with a trailing slash";
+            }
+            return true;
+          },
+        }}
+        render={({ field }) => (
+          <FormItem className="grid grid-cols-[8rem_1fr] items-start gap-4 space-y-0">
+            <FormLabel className="pt-2">Proxy Base URL</FormLabel>
+            <div className="space-y-1">
+              <FormControl>
+                <Input
+                  placeholder="https://example.com"
+                  {...field}
+                  value={field.value ?? ""}
+                  onBlur={(e) => {
+                    field.onChange(e.target.value.trim());
+                    field.onBlur();
+                  }}
+                />
+              </FormControl>
+              <FormMessage />
+            </div>
+          </FormItem>
+        )}
+      />
+
+      {supportsRoleMappings && (
+        <FormField
+          control={control}
+          name="use_role_mappings"
+          render={({ field }) => (
+            <FormItem className="grid grid-cols-[8rem_1fr] items-center gap-4 space-y-0">
+              <FormLabel htmlFor="use_role_mappings">Use Role Mappings</FormLabel>
+              <FormControl>
+                <Checkbox
+                  id="use_role_mappings"
+                  checked={!!field.value}
+                  onCheckedChange={(checked) => field.onChange(checked === true)}
+                />
+              </FormControl>
+            </FormItem>
+          )}
+        />
+      )}
+
+      {useRoleMappings && supportsRoleMappings && (
+        <>
+          <FormField
+            control={control}
+            name="group_claim"
+            rules={{ required: "Please enter the group claim" }}
+            render={({ field }) => (
+              <FormItem className="grid grid-cols-[8rem_1fr] items-start gap-4 space-y-0">
+                <FormLabel className="pt-2">Group Claim</FormLabel>
+                <div className="space-y-1">
+                  <FormControl>
+                    <Input {...field} value={field.value ?? ""} />
+                  </FormControl>
+                  <FormMessage />
                 </div>
-              </Select.Option>
-            ))}
-          </Select>
-        </Form.Item>
+              </FormItem>
+            )}
+          />
+          <FormField
+            control={control}
+            name="default_role"
+            render={({ field }) => (
+              <FormItem className="grid grid-cols-[8rem_1fr] items-start gap-4 space-y-0">
+                <FormLabel className="pt-2">Default Role</FormLabel>
+                <Select value={field.value ?? ""} onValueChange={field.onChange}>
+                  <FormControl>
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select a default role" />
+                    </SelectTrigger>
+                  </FormControl>
+                  <SelectContent>
+                    <SelectItem value="internal_user_viewer">Internal Viewer</SelectItem>
+                    <SelectItem value="internal_user">Internal User</SelectItem>
+                    <SelectItem value="proxy_admin_viewer">Admin Viewer</SelectItem>
+                    <SelectItem value="proxy_admin">Proxy Admin</SelectItem>
+                  </SelectContent>
+                </Select>
+              </FormItem>
+            )}
+          />
+          <FormField
+            control={control}
+            name="proxy_admin_teams"
+            render={({ field }) => (
+              <FormItem className="grid grid-cols-[8rem_1fr] items-start gap-4 space-y-0">
+                <FormLabel className="pt-2">Proxy Admin Teams</FormLabel>
+                <FormControl>
+                  <Input {...field} value={field.value ?? ""} />
+                </FormControl>
+              </FormItem>
+            )}
+          />
+          <FormField
+            control={control}
+            name="admin_viewer_teams"
+            render={({ field }) => (
+              <FormItem className="grid grid-cols-[8rem_1fr] items-start gap-4 space-y-0">
+                <FormLabel className="pt-2">Admin Viewer Teams</FormLabel>
+                <FormControl>
+                  <Input {...field} value={field.value ?? ""} />
+                </FormControl>
+              </FormItem>
+            )}
+          />
+          <FormField
+            control={control}
+            name="internal_user_teams"
+            render={({ field }) => (
+              <FormItem className="grid grid-cols-[8rem_1fr] items-start gap-4 space-y-0">
+                <FormLabel className="pt-2">Internal User Teams</FormLabel>
+                <FormControl>
+                  <Input {...field} value={field.value ?? ""} />
+                </FormControl>
+              </FormItem>
+            )}
+          />
+          <FormField
+            control={control}
+            name="internal_viewer_teams"
+            render={({ field }) => (
+              <FormItem className="grid grid-cols-[8rem_1fr] items-start gap-4 space-y-0">
+                <FormLabel className="pt-2">Internal Viewer Teams</FormLabel>
+                <FormControl>
+                  <Input {...field} value={field.value ?? ""} />
+                </FormControl>
+              </FormItem>
+            )}
+          />
+        </>
+      )}
 
-        <Form.Item
-          noStyle
-          shouldUpdate={(prevValues, currentValues) => prevValues.sso_provider !== currentValues.sso_provider}
-        >
-          {({ getFieldValue }) => {
-            const provider = getFieldValue("sso_provider");
-            return provider ? renderProviderFields(provider) : null;
-          }}
-        </Form.Item>
+      {supportsTeamMappings && (
+        <FormField
+          control={control}
+          name="use_team_mappings"
+          render={({ field }) => (
+            <FormItem className="grid grid-cols-[8rem_1fr] items-center gap-4 space-y-0">
+              <FormLabel htmlFor="use_team_mappings">Use Team Mappings</FormLabel>
+              <FormControl>
+                <Checkbox
+                  id="use_team_mappings"
+                  checked={!!field.value}
+                  onCheckedChange={(checked) => field.onChange(checked === true)}
+                />
+              </FormControl>
+            </FormItem>
+          )}
+        />
+      )}
 
-        <Form.Item
-          label="Proxy Admin Email"
-          name="user_email"
-          rules={[{ required: true, message: "Please enter the email of the proxy admin" }]}
-        >
-          <Input />
-        </Form.Item>
-        <Form.Item
-          label="Proxy Base URL"
-          name="proxy_base_url"
-          normalize={(value) => value?.trim()}
-          rules={[
-            { required: true, message: "Please enter the proxy base url" },
-            {
-              pattern: /^https?:\/\/.+/,
-              message: "URL must start with http:// or https://",
-            },
-            {
-              validator: (_, value) => {
-                // Only check for trailing slash if the URL starts with http:// or https://
-                if (value && /^https?:\/\/.+/.test(value) && value.endsWith("/")) {
-                  return Promise.reject("URL must not end with a trailing slash");
-                }
-                return Promise.resolve();
-              },
-            },
-          ]}
-        >
-          <Input placeholder="https://example.com" />
-        </Form.Item>
-
-        <Form.Item
-          noStyle
-          shouldUpdate={(prevValues, currentValues) => prevValues.sso_provider !== currentValues.sso_provider}
-        >
-          {({ getFieldValue }) => {
-            const provider = getFieldValue("sso_provider");
-            return provider === "okta" || provider === "generic" ? (
-              <Form.Item label="Use Role Mappings" name="use_role_mappings" valuePropName="checked">
-                <Checkbox />
-              </Form.Item>
-            ) : null;
-          }}
-        </Form.Item>
-
-        <Form.Item
-          noStyle
-          shouldUpdate={(prevValues, currentValues) =>
-            prevValues.use_role_mappings !== currentValues.use_role_mappings ||
-            prevValues.sso_provider !== currentValues.sso_provider
-          }
-        >
-          {({ getFieldValue }) => {
-            const useRoleMappings = getFieldValue("use_role_mappings");
-            const provider = getFieldValue("sso_provider");
-            const supportsRoleMappings = provider === "okta" || provider === "generic";
-            return useRoleMappings && supportsRoleMappings ? (
-              <Form.Item
-                label="Group Claim"
-                name="group_claim"
-                rules={[{ required: true, message: "Please enter the group claim" }]}
-              >
-                <Input />
-              </Form.Item>
-            ) : null;
-          }}
-        </Form.Item>
-
-        <Form.Item
-          noStyle
-          shouldUpdate={(prevValues, currentValues) =>
-            prevValues.use_role_mappings !== currentValues.use_role_mappings ||
-            prevValues.sso_provider !== currentValues.sso_provider
-          }
-        >
-          {({ getFieldValue }) => {
-            const useRoleMappings = getFieldValue("use_role_mappings");
-            const provider = getFieldValue("sso_provider");
-            const supportsRoleMappings = provider === "okta" || provider === "generic";
-            return useRoleMappings && supportsRoleMappings ? (
-              <>
-                <Form.Item label="Default Role" name="default_role" initialValue="Internal User">
-                  <Select>
-                    <Select.Option value="internal_user_viewer">Internal Viewer</Select.Option>
-                    <Select.Option value="internal_user">Internal User</Select.Option>
-                    <Select.Option value="proxy_admin_viewer">Admin Viewer</Select.Option>
-                    <Select.Option value="proxy_admin">Proxy Admin</Select.Option>
-                  </Select>
-                </Form.Item>
-
-                <Form.Item label="Proxy Admin Teams" name="proxy_admin_teams">
-                  <Input />
-                </Form.Item>
-
-                <Form.Item label="Admin Viewer Teams" name="admin_viewer_teams">
-                  <Input />
-                </Form.Item>
-
-                <Form.Item label="Internal User Teams" name="internal_user_teams">
-                  <Input />
-                </Form.Item>
-
-                <Form.Item label="Internal Viewer Teams" name="internal_viewer_teams">
-                  <Input />
-                </Form.Item>
-              </>
-            ) : null;
-          }}
-        </Form.Item>
-
-        <Form.Item
-          noStyle
-          shouldUpdate={(prevValues, currentValues) => prevValues.sso_provider !== currentValues.sso_provider}
-        >
-          {({ getFieldValue }) => {
-            const provider = getFieldValue("sso_provider");
-            return provider === "okta" || provider === "generic" ? (
-              <Form.Item label="Use Team Mappings" name="use_team_mappings" valuePropName="checked">
-                <Checkbox />
-              </Form.Item>
-            ) : null;
-          }}
-        </Form.Item>
-
-        <Form.Item
-          noStyle
-          shouldUpdate={(prevValues, currentValues) =>
-            prevValues.use_team_mappings !== currentValues.use_team_mappings ||
-            prevValues.sso_provider !== currentValues.sso_provider
-          }
-        >
-          {({ getFieldValue }) => {
-            const useTeamMappings = getFieldValue("use_team_mappings");
-            const provider = getFieldValue("sso_provider");
-            const supportsTeamMappings = provider === "okta" || provider === "generic";
-            return useTeamMappings && supportsTeamMappings ? (
-              <Form.Item
-                label="Team IDs JWT Field"
-                name="team_ids_jwt_field"
-                rules={[{ required: true, message: "Please enter the team IDs JWT field" }]}
-              >
-                <Input />
-              </Form.Item>
-            ) : null;
-          }}
-        </Form.Item>
-      </Form>
+      {useTeamMappings && supportsTeamMappings && (
+        <FormField
+          control={control}
+          name="team_ids_jwt_field"
+          rules={{ required: "Please enter the team IDs JWT field" }}
+          render={({ field }) => (
+            <FormItem className="grid grid-cols-[8rem_1fr] items-start gap-4 space-y-0">
+              <FormLabel className="pt-2">Team IDs JWT Field</FormLabel>
+              <div className="space-y-1">
+                <FormControl>
+                  <Input {...field} value={field.value ?? ""} />
+                </FormControl>
+                <FormMessage />
+              </div>
+            </FormItem>
+          )}
+        />
+      )}
     </div>
   );
 };

@@ -1,5 +1,8 @@
 "use client";
 
+import React from "react";
+import { FormProvider, useForm } from "react-hook-form";
+
 import NotificationsManager from "@/components/molecules/notifications_manager";
 import { parseErrorMessage } from "@/components/shared/errorUtils";
 import { Button } from "@/components/ui/button";
@@ -10,10 +13,9 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Form } from "antd";
-import React from "react";
-import BaseSSOSettingsForm from "./BaseSSOSettingsForm";
 import { useEditSSOSettings } from "@/app/(dashboard)/hooks/sso/useEditSSOSettings";
+
+import BaseSSOSettingsForm, { SSOSettingsFormValues } from "./BaseSSOSettingsForm";
 import { processSSOSettingsPayload } from "../utils";
 
 interface AddSSOSettingsModalProps {
@@ -22,16 +24,24 @@ interface AddSSOSettingsModalProps {
   onSuccess: () => void;
 }
 
+const emptyValues: SSOSettingsFormValues = {
+  sso_provider: undefined,
+  user_email: "",
+  proxy_base_url: "",
+};
+
 const AddSSOSettingsModal: React.FC<AddSSOSettingsModalProps> = ({
   isVisible,
   onCancel,
   onSuccess,
 }) => {
-  const [form] = Form.useForm();
+  const form = useForm<SSOSettingsFormValues>({
+    defaultValues: emptyValues,
+    mode: "onSubmit",
+  });
   const { mutateAsync, isPending } = useEditSSOSettings();
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const handleFormSubmit = async (formValues: Record<string, any>) => {
+  const onSubmit = form.handleSubmit(async (formValues) => {
     const payload = processSSOSettingsPayload(formValues);
 
     await mutateAsync(payload, {
@@ -45,10 +55,10 @@ const AddSSOSettingsModal: React.FC<AddSSOSettingsModalProps> = ({
         );
       },
     });
-  };
+  });
 
   const handleCancel = () => {
-    form.resetFields();
+    form.reset(emptyValues);
     onCancel();
   };
 
@@ -61,15 +71,24 @@ const AddSSOSettingsModal: React.FC<AddSSOSettingsModalProps> = ({
         <DialogHeader>
           <DialogTitle>Add SSO</DialogTitle>
         </DialogHeader>
-        <BaseSSOSettingsForm form={form} onFormSubmit={handleFormSubmit} />
-        <DialogFooter>
-          <Button variant="outline" onClick={handleCancel} disabled={isPending}>
-            Cancel
-          </Button>
-          <Button onClick={() => form.submit()} disabled={isPending}>
-            {isPending ? "Adding..." : "Add SSO"}
-          </Button>
-        </DialogFooter>
+        <FormProvider {...form}>
+          <form onSubmit={onSubmit}>
+            <BaseSSOSettingsForm />
+            <DialogFooter className="mt-6">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={handleCancel}
+                disabled={isPending}
+              >
+                Cancel
+              </Button>
+              <Button type="submit" disabled={isPending}>
+                {isPending ? "Adding..." : "Add SSO"}
+              </Button>
+            </DialogFooter>
+          </form>
+        </FormProvider>
       </DialogContent>
     </Dialog>
   );

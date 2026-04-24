@@ -1,5 +1,10 @@
 "use client";
 
+import React, { useEffect } from "react";
+import { FormProvider, useForm } from "react-hook-form";
+
+import NotificationsManager from "@/components/molecules/notifications_manager";
+import { parseErrorMessage } from "@/components/shared/errorUtils";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -8,14 +13,11 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Form } from "antd";
-import React, { useEffect } from "react";
-import BaseSSOSettingsForm from "./BaseSSOSettingsForm";
-import NotificationsManager from "@/components/molecules/notifications_manager";
-import { parseErrorMessage } from "@/components/shared/errorUtils";
-import { processSSOSettingsPayload } from "../utils";
-import { useSSOSettings } from "@/app/(dashboard)/hooks/sso/useSSOSettings";
 import { useEditSSOSettings } from "@/app/(dashboard)/hooks/sso/useEditSSOSettings";
+import { useSSOSettings } from "@/app/(dashboard)/hooks/sso/useSSOSettings";
+
+import BaseSSOSettingsForm, { SSOSettingsFormValues } from "./BaseSSOSettingsForm";
+import { processSSOSettingsPayload } from "../utils";
 
 interface EditSSOSettingsModalProps {
   isVisible: boolean;
@@ -23,24 +25,31 @@ interface EditSSOSettingsModalProps {
   onSuccess: () => void;
 }
 
-const EditSSOSettingsModal: React.FC<EditSSOSettingsModalProps> = ({ isVisible, onCancel, onSuccess }) => {
-  const [form] = Form.useForm();
+const emptyValues: SSOSettingsFormValues = {};
 
-  // Use react-query hooks for SSO settings
+const EditSSOSettingsModal: React.FC<EditSSOSettingsModalProps> = ({
+  isVisible,
+  onCancel,
+  onSuccess,
+}) => {
+  const form = useForm<SSOSettingsFormValues>({
+    defaultValues: emptyValues,
+    mode: "onSubmit",
+  });
+
   const ssoSettings = useSSOSettings();
   const { mutateAsync, isPending } = useEditSSOSettings();
+
   useEffect(() => {
     if (isVisible && ssoSettings.data && ssoSettings.data.values) {
       const ssoData = ssoSettings.data;
 
-      // Determine which SSO provider is configured
-      let selectedProvider = null;
+      let selectedProvider: string | undefined = undefined;
       if (ssoData.values.google_client_id) {
         selectedProvider = "google";
       } else if (ssoData.values.microsoft_client_id) {
         selectedProvider = "microsoft";
       } else if (ssoData.values.generic_client_id) {
-        // Check if it looks like Okta based on endpoints
         if (
           ssoData.values.generic_authorization_endpoint?.includes("okta") ||
           ssoData.values.generic_authorization_endpoint?.includes("auth0")
@@ -51,12 +60,10 @@ const EditSSOSettingsModal: React.FC<EditSSOSettingsModalProps> = ({ isVisible, 
         }
       }
 
-      // Extract role mappings if they exist
-      let roleMappingFields = {};
+      let roleMappingFields: Partial<SSOSettingsFormValues> = {};
       if (ssoData.values.role_mappings) {
         const roleMappings = ssoData.values.role_mappings;
 
-        // Helper function to join arrays into comma-separated strings
         const joinTeams = (teams: string[] | undefined): string => {
           if (!teams || teams.length === 0) return "";
           return teams.join(", ");
@@ -73,8 +80,7 @@ const EditSSOSettingsModal: React.FC<EditSSOSettingsModalProps> = ({ isVisible, 
         };
       }
 
-      // Extract team mappings if they exist
-      let teamMappingFields = {};
+      let teamMappingFields: Partial<SSOSettingsFormValues> = {};
       if (ssoData.values.team_mappings) {
         const teamMappings = ssoData.values.team_mappings;
         teamMappingFields = {
@@ -83,25 +89,19 @@ const EditSSOSettingsModal: React.FC<EditSSOSettingsModalProps> = ({ isVisible, 
         };
       }
 
-      // Set form values with existing data (excluding UI access control fields)
-      const formValues = {
+      const formValues: SSOSettingsFormValues = {
         sso_provider: selectedProvider,
         ...ssoData.values,
         ...roleMappingFields,
         ...teamMappingFields,
       };
 
-      // Clear form first, then set values with a small delay to ensure proper initialization
-      form.resetFields();
-      setTimeout(() => {
-        form.setFieldsValue(formValues);
-      }, 100);
+      form.reset(formValues);
     }
-  }, [isVisible, ssoSettings.data, form]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isVisible, ssoSettings.data]);
 
-  // Enhanced form submission handler
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const handleFormSubmit = async (formValues: Record<string, any>) => {
+  const onSubmit = form.handleSubmit(async (formValues) => {
     try {
       const payload = processSSOSettingsPayload(formValues);
 
@@ -111,17 +111,20 @@ const EditSSOSettingsModal: React.FC<EditSSOSettingsModalProps> = ({ isVisible, 
           onSuccess();
         },
         onError: (error) => {
-          NotificationsManager.fromBackend("Failed to save SSO settings: " + parseErrorMessage(error));
+          NotificationsManager.fromBackend(
+            "Failed to save SSO settings: " + parseErrorMessage(error),
+          );
         },
       });
     } catch (error) {
-      // Handle processing errors gracefully
-      NotificationsManager.fromBackend("Failed to process SSO settings: " + parseErrorMessage(error));
+      NotificationsManager.fromBackend(
+        "Failed to process SSO settings: " + parseErrorMessage(error),
+      );
     }
-  };
+  });
 
   const handleCancel = () => {
-    form.resetFields();
+    form.reset(emptyValues);
     onCancel();
   };
 
@@ -134,15 +137,24 @@ const EditSSOSettingsModal: React.FC<EditSSOSettingsModalProps> = ({ isVisible, 
         <DialogHeader>
           <DialogTitle>Edit SSO Settings</DialogTitle>
         </DialogHeader>
-        <BaseSSOSettingsForm form={form} onFormSubmit={handleFormSubmit} />
-        <DialogFooter>
-          <Button variant="outline" onClick={handleCancel} disabled={isPending}>
-            Cancel
-          </Button>
-          <Button onClick={() => form.submit()} disabled={isPending}>
-            {isPending ? "Saving..." : "Save"}
-          </Button>
-        </DialogFooter>
+        <FormProvider {...form}>
+          <form onSubmit={onSubmit}>
+            <BaseSSOSettingsForm />
+            <DialogFooter className="mt-6">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={handleCancel}
+                disabled={isPending}
+              >
+                Cancel
+              </Button>
+              <Button type="submit" disabled={isPending}>
+                {isPending ? "Saving..." : "Save"}
+              </Button>
+            </DialogFooter>
+          </form>
+        </FormProvider>
       </DialogContent>
     </Dialog>
   );

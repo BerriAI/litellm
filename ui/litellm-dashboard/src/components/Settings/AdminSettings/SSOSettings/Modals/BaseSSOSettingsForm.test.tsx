@@ -1,22 +1,50 @@
-import { Form } from "antd";
+import React from "react";
 import { act, fireEvent, screen, waitFor } from "@testing-library/react";
-import { renderWithProviders } from "../../../../../../tests/test-utils";
+import userEvent from "@testing-library/user-event";
+import { FormProvider, useForm } from "react-hook-form";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import BaseSSOSettingsForm, { renderProviderFields } from "./BaseSSOSettingsForm";
+
+import { renderWithProviders } from "../../../../../../tests/test-utils";
+import BaseSSOSettingsForm, {
+  renderProviderFields,
+  SSOSettingsFormValues,
+} from "./BaseSSOSettingsForm";
+
+const TestWrapper: React.FC<{
+  defaultValues?: Partial<SSOSettingsFormValues>;
+  onSubmit?: (values: SSOSettingsFormValues) => void;
+}> = ({ defaultValues, onSubmit }) => {
+  const form = useForm<SSOSettingsFormValues>({
+    defaultValues: { ...defaultValues },
+    mode: "onSubmit",
+  });
+  const handleSubmit = form.handleSubmit((values) => {
+    onSubmit?.(values);
+  });
+  return (
+    <FormProvider {...form}>
+      <form onSubmit={handleSubmit}>
+        <BaseSSOSettingsForm />
+        <button type="submit">submit</button>
+      </form>
+    </FormProvider>
+  );
+};
+
+const selectProvider = async (providerText: RegExp) => {
+  const user = userEvent.setup();
+  const trigger = screen.getByRole("combobox", { name: /sso provider/i });
+  await user.click(trigger);
+  const option = await screen.findByRole("option", { name: providerText });
+  await user.click(option);
+};
 
 describe("BaseSSOSettingsForm", () => {
   afterEach(() => {
     vi.clearAllMocks();
   });
 
-  it("should render", () => {
-    const TestWrapper = () => {
-      const [form] = Form.useForm();
-      const handleSubmit = vi.fn();
-
-      return <BaseSSOSettingsForm form={form} onFormSubmit={handleSubmit} />;
-    };
-
+  it("should render top-level fields", () => {
     renderWithProviders(<TestWrapper />);
 
     expect(screen.getByText("SSO Provider")).toBeInTheDocument();
@@ -25,24 +53,9 @@ describe("BaseSSOSettingsForm", () => {
   });
 
   it("should render provider fields when provider is selected", async () => {
-    const TestWrapper = () => {
-      const [form] = Form.useForm();
-      const handleSubmit = vi.fn();
-
-      return <BaseSSOSettingsForm form={form} onFormSubmit={handleSubmit} />;
-    };
-
     renderWithProviders(<TestWrapper />);
 
-    const providerSelect = screen.getByLabelText("SSO Provider");
-    await act(async () => {
-      fireEvent.mouseDown(providerSelect);
-    });
-
-    await waitFor(() => {
-      const googleOption = screen.getByText(/google sso/i);
-      fireEvent.click(googleOption);
-    });
+    await selectProvider(/google sso/i);
 
     await waitFor(() => {
       expect(screen.getByText("Google Client ID")).toBeInTheDocument();
@@ -50,25 +63,10 @@ describe("BaseSSOSettingsForm", () => {
     });
   });
 
-  it("should show role mappings fields for okta provider", async () => {
-    const TestWrapper = () => {
-      const [form] = Form.useForm();
-      const handleSubmit = vi.fn();
-
-      return <BaseSSOSettingsForm form={form} onFormSubmit={handleSubmit} />;
-    };
-
+  it("should show role mappings checkbox for okta provider", async () => {
     renderWithProviders(<TestWrapper />);
 
-    const providerSelect = screen.getByLabelText("SSO Provider");
-    await act(async () => {
-      fireEvent.mouseDown(providerSelect);
-    });
-
-    await waitFor(() => {
-      const oktaOption = screen.getByText(/okta/i);
-      fireEvent.click(oktaOption);
-    });
+    await selectProvider(/okta/i);
 
     await waitFor(() => {
       expect(screen.getByText("Use Role Mappings")).toBeInTheDocument();
@@ -76,75 +74,53 @@ describe("BaseSSOSettingsForm", () => {
   });
 
   it("should validate proxy base url format", async () => {
-    const TestWrapper = () => {
-      const [form] = Form.useForm();
-      const handleSubmit = vi.fn();
-
-      return <BaseSSOSettingsForm form={form} onFormSubmit={handleSubmit} />;
-    };
-
     renderWithProviders(<TestWrapper />);
 
     const urlInput = screen.getByPlaceholderText("https://example.com");
     await act(async () => {
       fireEvent.change(urlInput, { target: { value: "invalid-url" } });
-      fireEvent.blur(urlInput);
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /submit/i }));
     });
 
     await waitFor(() => {
-      expect(screen.getByText(/URL must start with http:\/\/ or https:\/\//i)).toBeInTheDocument();
+      expect(
+        screen.getByText(/URL must start with http:\/\/ or https:\/\//i),
+      ).toBeInTheDocument();
     });
   });
 
   it("should validate proxy base url trailing slash", async () => {
-    const TestWrapper = () => {
-      const [form] = Form.useForm();
-      const handleSubmit = vi.fn();
-
-      return <BaseSSOSettingsForm form={form} onFormSubmit={handleSubmit} />;
-    };
-
     renderWithProviders(<TestWrapper />);
 
     const urlInput = screen.getByPlaceholderText("https://example.com");
     await act(async () => {
       fireEvent.change(urlInput, { target: { value: "https://example.com/" } });
-      fireEvent.blur(urlInput);
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /submit/i }));
     });
 
     await waitFor(() => {
-      expect(screen.getByText(/URL must not end with a trailing slash/i)).toBeInTheDocument();
+      expect(
+        screen.getByText(/URL must not end with a trailing slash/i),
+      ).toBeInTheDocument();
     });
   });
 
   it("should show role mappings fields when use_role_mappings is checked for generic provider", async () => {
-    const TestWrapper = () => {
-      const [form] = Form.useForm();
-      const handleSubmit = vi.fn();
-
-      return <BaseSSOSettingsForm form={form} onFormSubmit={handleSubmit} />;
-    };
-
+    const user = userEvent.setup();
     renderWithProviders(<TestWrapper />);
 
-    const providerSelect = screen.getByLabelText("SSO Provider");
-    await act(async () => {
-      fireEvent.mouseDown(providerSelect);
-    });
-
-    await waitFor(() => {
-      const genericOption = screen.getByText(/generic sso/i);
-      fireEvent.click(genericOption);
-    });
+    await selectProvider(/generic sso/i);
 
     await waitFor(() => {
       expect(screen.getByText("Use Role Mappings")).toBeInTheDocument();
     });
 
     const checkbox = screen.getByLabelText("Use Role Mappings");
-    await act(async () => {
-      fireEvent.click(checkbox);
-    });
+    await user.click(checkbox);
 
     await waitFor(() => {
       expect(screen.getByText("Group Claim")).toBeInTheDocument();
@@ -153,24 +129,9 @@ describe("BaseSSOSettingsForm", () => {
   });
 
   it("should show team mappings checkbox for okta provider", async () => {
-    const TestWrapper = () => {
-      const [form] = Form.useForm();
-      const handleSubmit = vi.fn();
-
-      return <BaseSSOSettingsForm form={form} onFormSubmit={handleSubmit} />;
-    };
-
     renderWithProviders(<TestWrapper />);
 
-    const providerSelect = screen.getByLabelText("SSO Provider");
-    await act(async () => {
-      fireEvent.mouseDown(providerSelect);
-    });
-
-    await waitFor(() => {
-      const oktaOption = screen.getByText(/okta/i);
-      fireEvent.click(oktaOption);
-    });
+    await selectProvider(/okta/i);
 
     await waitFor(() => {
       expect(screen.getByText("Use Team Mappings")).toBeInTheDocument();
@@ -178,24 +139,9 @@ describe("BaseSSOSettingsForm", () => {
   });
 
   it("should show team mappings checkbox for generic provider", async () => {
-    const TestWrapper = () => {
-      const [form] = Form.useForm();
-      const handleSubmit = vi.fn();
-
-      return <BaseSSOSettingsForm form={form} onFormSubmit={handleSubmit} />;
-    };
-
     renderWithProviders(<TestWrapper />);
 
-    const providerSelect = screen.getByLabelText("SSO Provider");
-    await act(async () => {
-      fireEvent.mouseDown(providerSelect);
-    });
-
-    await waitFor(() => {
-      const genericOption = screen.getByText(/generic sso/i);
-      fireEvent.click(genericOption);
-    });
+    await selectProvider(/generic sso/i);
 
     await waitFor(() => {
       expect(screen.getByText("Use Team Mappings")).toBeInTheDocument();
@@ -203,33 +149,17 @@ describe("BaseSSOSettingsForm", () => {
   });
 
   it("should show team IDs JWT field when use_team_mappings is checked for okta provider", async () => {
-    const TestWrapper = () => {
-      const [form] = Form.useForm();
-      const handleSubmit = vi.fn();
-
-      return <BaseSSOSettingsForm form={form} onFormSubmit={handleSubmit} />;
-    };
-
+    const user = userEvent.setup();
     renderWithProviders(<TestWrapper />);
 
-    const providerSelect = screen.getByLabelText("SSO Provider");
-    await act(async () => {
-      fireEvent.mouseDown(providerSelect);
-    });
-
-    await waitFor(() => {
-      const oktaOption = screen.getByText(/okta/i);
-      fireEvent.click(oktaOption);
-    });
+    await selectProvider(/okta/i);
 
     await waitFor(() => {
       expect(screen.getByText("Use Team Mappings")).toBeInTheDocument();
     });
 
     const checkbox = screen.getByLabelText("Use Team Mappings");
-    await act(async () => {
-      fireEvent.click(checkbox);
-    });
+    await user.click(checkbox);
 
     await waitFor(() => {
       expect(screen.getByText("Team IDs JWT Field")).toBeInTheDocument();
@@ -237,24 +167,9 @@ describe("BaseSSOSettingsForm", () => {
   });
 
   it("should not show team mappings checkbox for google provider", async () => {
-    const TestWrapper = () => {
-      const [form] = Form.useForm();
-      const handleSubmit = vi.fn();
-
-      return <BaseSSOSettingsForm form={form} onFormSubmit={handleSubmit} />;
-    };
-
     renderWithProviders(<TestWrapper />);
 
-    const providerSelect = screen.getByLabelText("SSO Provider");
-    await act(async () => {
-      fireEvent.mouseDown(providerSelect);
-    });
-
-    await waitFor(() => {
-      const googleOption = screen.getByText(/google sso/i);
-      fireEvent.click(googleOption);
-    });
+    await selectProvider(/google sso/i);
 
     await waitFor(() => {
       expect(screen.getByText("Google Client ID")).toBeInTheDocument();
