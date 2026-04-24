@@ -54,6 +54,7 @@ class GeminiImageEditConfig(BaseImageEditConfig):
         headers: dict,
         model: str,
         api_key: Optional[str] = None,
+        litellm_params: Optional[dict] = None,
     ) -> dict:
         final_api_key: Optional[str] = api_key or get_secret_str("GEMINI_API_KEY")
         if not final_api_key:

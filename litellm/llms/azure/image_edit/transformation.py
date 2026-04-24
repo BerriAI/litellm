@@ -14,6 +14,7 @@ class AzureImageEditConfig(OpenAIImageEditConfig):
         headers: dict,
         model: str,
         api_key: Optional[str] = None,
+        litellm_params: Optional[dict] = None,
     ) -> dict:
         api_key = (
             api_key

@@ -28,7 +28,7 @@ class MockImageEditConfig(BaseImageEditConfig):
         return "https://example.com/api"
 
     def validate_environment(
-        self, headers: dict, model: str, api_key: str = None
+        self, headers: dict, model: str, api_key: str = None, litellm_params: dict = None,
     ) -> dict:
         return headers
 

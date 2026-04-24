@@ -25,6 +25,7 @@ class AzureFoundryFluxImageEditConfig(OpenAIImageEditConfig):
         headers: dict,
         model: str,
         api_key: Optional[str] = None,
+        litellm_params: Optional[dict] = None
     ) -> dict:
         """
         Validate Azure AI Foundry environment and set up authentication

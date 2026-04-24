@@ -149,6 +149,7 @@ class StabilityImageEditConfig(BaseImageEditConfig):
         headers: dict,
         model: str,
         api_key: Optional[str] = None,
+        litellm_params: Optional[dict] = None,
     ) -> dict:
         """
         Validate environment and set up headers for Stability AI.
