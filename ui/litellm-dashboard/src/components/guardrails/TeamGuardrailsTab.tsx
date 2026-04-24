@@ -14,7 +14,25 @@ import {
   AlertCircleIcon,
   InfoIcon,
 } from "lucide-react";
-import { Modal, Form, Input, Select } from "antd";
+import { Controller, FormProvider, useForm, useFormContext } from "react-hook-form";
+import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Textarea } from "@/components/ui/textarea";
 import {
   listGuardrailSubmissions,
   approveGuardrailSubmission,
@@ -824,7 +842,6 @@ export function TeamGuardrailsTab({ accessToken }: TeamGuardrailsTabProps) {
   const [error, setError] = useState<string | null>(null);
   const [searchDebounced, setSearchDebounced] = useState("");
   const [isSubmitModalOpen, setIsSubmitModalOpen] = useState(false);
-  const [submitForm] = Form.useForm();
   const registerGuardrail = useRegisterGuardrail();
 
   useEffect(() => {
@@ -1084,133 +1101,273 @@ export function TeamGuardrailsTab({ accessToken }: TeamGuardrailsTabProps) {
         />
       )}
 
-      <Modal
-        title="Submit Guardrail for Review"
+      <SubmitGuardrailDialog
         open={isSubmitModalOpen}
-        onCancel={() => {
-          setIsSubmitModalOpen(false);
-          submitForm.resetFields();
+        onOpenChange={setIsSubmitModalOpen}
+        onSubmit={async (values) => {
+          const litellm_params: Record<string, unknown> = {
+            ...(values.extra_litellm_params
+              ? JSON.parse(values.extra_litellm_params)
+              : {}),
+            guardrail: "generic_guardrail_api",
+            mode: values.mode,
+            api_base: values.api_base,
+          };
+          try {
+            await registerGuardrail.mutateAsync({
+              team_id: values.team_id,
+              guardrail_name: values.guardrail_name,
+              litellm_params,
+              guardrail_info: values.guardrail_info
+                ? JSON.parse(values.guardrail_info)
+                : undefined,
+            });
+            NotificationsManager.success("Guardrail submitted for review");
+            setIsSubmitModalOpen(false);
+            fetchSubmissions();
+          } catch {
+            // error already handled by networking layer
+          }
         }}
-        onOk={() => submitForm.submit()}
-        okText="Submit for Review"
-      >
-        <div className="rounded-md bg-blue-50 border border-blue-200 px-4 py-3 text-sm text-blue-800 mb-4">
-          Your guardrail will be sent for admin review before it becomes active.
-        </div>
-        <Form
-          form={submitForm}
-          layout="vertical"
-          initialValues={{ mode: "pre_call" }}
-          onFinish={async (values) => {
-            const litellm_params: Record<string, unknown> = {
-              ...(values.extra_litellm_params ? JSON.parse(values.extra_litellm_params) : {}),
-              guardrail: "generic_guardrail_api",
-              mode: values.mode,
-              api_base: values.api_base,
-            };
-            try {
-              await registerGuardrail.mutateAsync({
-                team_id: values.team_id,
-                guardrail_name: values.guardrail_name,
-                litellm_params,
-                guardrail_info: values.guardrail_info ? JSON.parse(values.guardrail_info) : undefined,
-              });
-              NotificationsManager.success("Guardrail submitted for review");
-              setIsSubmitModalOpen(false);
-              submitForm.resetFields();
-              fetchSubmissions();
-            } catch {
-              // error already handled by networking layer
-            }
-          }}
-        >
-          <Form.Item
-            label="Team"
-            name="team_id"
-            rules={[{ required: true, message: "Select a team" }]}
-          >
-            <TeamDropdown />
-          </Form.Item>
-          <Form.Item
-            label="Guardrail Name"
-            name="guardrail_name"
-            rules={[{ required: true, message: "Enter a guardrail name" }]}
-          >
-            <Input placeholder="e.g. pii-detection" />
-          </Form.Item>
-          <Form.Item
-            label="Mode"
-            name="mode"
-            rules={[{ required: true, message: "Select a mode" }]}
-          >
-            <Select>
-              <Select.Option value="pre_call">Pre Call</Select.Option>
-              <Select.Option value="post_call">Post Call</Select.Option>
-              <Select.Option value="during_call">During Call</Select.Option>
-            </Select>
-          </Form.Item>
-          <Form.Item
-            label="API Base URL"
-            name="api_base"
-            rules={[
-              { required: true, message: "Enter the API base URL" },
-              { type: "url", message: "Must be a valid URL" },
-            ]}
-          >
-            <Input placeholder="https://your-guardrail-api.com/v1/check" className="font-mono" />
-          </Form.Item>
-          <Form.Item
-            label="Additional litellm_params (optional)"
-            name="extra_litellm_params"
-            tooltip="JSON object merged into litellm_params. e.g. forward_api_key, headers, model, unreachable_fallback"
-            rules={[
-              {
-                validator: (_, value) => {
-                  if (!value) return Promise.resolve();
-                  try {
-                    const parsed = JSON.parse(value);
-                    if (typeof parsed !== "object" || Array.isArray(parsed)) {
-                      return Promise.reject("Must be a JSON object");
-                    }
-                    return Promise.resolve();
-                  } catch {
-                    return Promise.reject("Invalid JSON");
-                  }
-                },
-              },
-            ]}
-          >
-            <Input.TextArea
-              rows={3}
-              className="font-mono text-xs"
-              placeholder='{"forward_api_key": true, "headers": {"X-Custom": "value"}}'
-            />
-          </Form.Item>
-          <Form.Item
-            label="Guardrail Info (optional)"
-            name="guardrail_info"
-            rules={[
-              {
-                validator: (_, value) => {
-                  if (!value) return Promise.resolve();
-                  try {
-                    JSON.parse(value);
-                    return Promise.resolve();
-                  } catch {
-                    return Promise.reject("Invalid JSON");
-                  }
-                },
-              },
-            ]}
-          >
-            <Input.TextArea
-              rows={3}
-              className="font-mono text-xs"
-              placeholder='{"description": "Detects PII in requests"}'
-            />
-          </Form.Item>
-        </Form>
-      </Modal>
+      />
     </div>
+  );
+}
+
+interface SubmitGuardrailFormValues {
+  team_id: string;
+  guardrail_name: string;
+  mode: string;
+  api_base: string;
+  extra_litellm_params?: string;
+  guardrail_info?: string;
+}
+
+function SubmitGuardrailDialog({
+  open,
+  onOpenChange,
+  onSubmit,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onSubmit: (values: SubmitGuardrailFormValues) => Promise<void> | void;
+}) {
+  const form = useForm<SubmitGuardrailFormValues>({
+    defaultValues: {
+      team_id: "",
+      guardrail_name: "",
+      mode: "pre_call",
+      api_base: "",
+      extra_litellm_params: "",
+      guardrail_info: "",
+    },
+  });
+
+  const handleClose = (nextOpen: boolean) => {
+    if (!nextOpen) {
+      form.reset();
+    }
+    onOpenChange(nextOpen);
+  };
+
+  const handleSubmit = form.handleSubmit(async (values) => {
+    await onSubmit(values);
+    form.reset();
+  });
+
+  return (
+    <Dialog open={open} onOpenChange={handleClose}>
+      <DialogContent className="max-w-xl">
+        <DialogHeader>
+          <DialogTitle>Submit Guardrail for Review</DialogTitle>
+        </DialogHeader>
+        {/* eslint-disable-next-line litellm-ui/no-raw-tailwind-colors */}
+        <div className="rounded-md bg-blue-50 border border-blue-200 px-4 py-3 text-sm text-blue-800 mb-4 dark:bg-blue-950/30 dark:border-blue-900 dark:text-blue-200">
+          Your guardrail will be sent for admin review before it becomes
+          active.
+        </div>
+        <FormProvider {...form}>
+          <form onSubmit={handleSubmit} className="space-y-4">
+            <SubmitGuardrailFields />
+            <DialogFooter>
+              <Button
+                variant="outline"
+                type="button"
+                onClick={() => handleClose(false)}
+              >
+                Cancel
+              </Button>
+              <Button type="submit">Submit for Review</Button>
+            </DialogFooter>
+          </form>
+        </FormProvider>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function SubmitGuardrailFields() {
+  const { register, control, formState } =
+    useFormContext<SubmitGuardrailFormValues>();
+
+  const validateJsonObject = (value?: string) => {
+    if (!value) return true;
+    try {
+      const parsed = JSON.parse(value);
+      if (typeof parsed !== "object" || Array.isArray(parsed)) {
+        return "Must be a JSON object";
+      }
+      return true;
+    } catch {
+      return "Invalid JSON";
+    }
+  };
+
+  const validateJson = (value?: string) => {
+    if (!value) return true;
+    try {
+      JSON.parse(value);
+      return true;
+    } catch {
+      return "Invalid JSON";
+    }
+  };
+
+  const validateUrl = (value: string) => {
+    if (!value) return "Enter the API base URL";
+    try {
+      new URL(value);
+      return true;
+    } catch {
+      return "Must be a valid URL";
+    }
+  };
+
+  return (
+    <>
+      <div className="space-y-2">
+        <Label>
+          Team <span className="text-destructive">*</span>
+        </Label>
+        <Controller
+          control={control}
+          name="team_id"
+          rules={{ required: "Select a team" }}
+          render={({ field }) => (
+            <TeamDropdown value={field.value} onChange={field.onChange} />
+          )}
+        />
+        {formState.errors.team_id && (
+          <p className="text-sm text-destructive">
+            {formState.errors.team_id.message as string}
+          </p>
+        )}
+      </div>
+
+      <div className="space-y-2">
+        <Label htmlFor="submit-guardrail-name">
+          Guardrail Name <span className="text-destructive">*</span>
+        </Label>
+        <Input
+          id="submit-guardrail-name"
+          placeholder="e.g. pii-detection"
+          {...register("guardrail_name", {
+            required: "Enter a guardrail name",
+          })}
+        />
+        {formState.errors.guardrail_name && (
+          <p className="text-sm text-destructive">
+            {formState.errors.guardrail_name.message as string}
+          </p>
+        )}
+      </div>
+
+      <div className="space-y-2">
+        <Label>
+          Mode <span className="text-destructive">*</span>
+        </Label>
+        <Controller
+          control={control}
+          name="mode"
+          rules={{ required: "Select a mode" }}
+          render={({ field }) => (
+            <Select value={field.value} onValueChange={field.onChange}>
+              <SelectTrigger>
+                <SelectValue placeholder="Select mode" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="pre_call">Pre Call</SelectItem>
+                <SelectItem value="post_call">Post Call</SelectItem>
+                <SelectItem value="during_call">During Call</SelectItem>
+              </SelectContent>
+            </Select>
+          )}
+        />
+        {formState.errors.mode && (
+          <p className="text-sm text-destructive">
+            {formState.errors.mode.message as string}
+          </p>
+        )}
+      </div>
+
+      <div className="space-y-2">
+        <Label htmlFor="submit-guardrail-api-base">
+          API Base URL <span className="text-destructive">*</span>
+        </Label>
+        <Input
+          id="submit-guardrail-api-base"
+          placeholder="https://your-guardrail-api.com/v1/check"
+          className="font-mono"
+          {...register("api_base", { validate: validateUrl })}
+        />
+        {formState.errors.api_base && (
+          <p className="text-sm text-destructive">
+            {formState.errors.api_base.message as string}
+          </p>
+        )}
+      </div>
+
+      <div className="space-y-2">
+        <Label htmlFor="submit-guardrail-extra-params">
+          Additional litellm_params (optional)
+        </Label>
+        <Textarea
+          id="submit-guardrail-extra-params"
+          rows={3}
+          className="font-mono text-xs"
+          placeholder='{"forward_api_key": true, "headers": {"X-Custom": "value"}}'
+          {...register("extra_litellm_params", {
+            validate: validateJsonObject,
+          })}
+        />
+        <p className="text-xs text-muted-foreground">
+          JSON object merged into litellm_params. e.g. forward_api_key,
+          headers, model, unreachable_fallback.
+        </p>
+        {formState.errors.extra_litellm_params && (
+          <p className="text-sm text-destructive">
+            {formState.errors.extra_litellm_params.message as string}
+          </p>
+        )}
+      </div>
+
+      <div className="space-y-2">
+        <Label htmlFor="submit-guardrail-info">
+          Guardrail Info (optional)
+        </Label>
+        <Textarea
+          id="submit-guardrail-info"
+          rows={3}
+          className="font-mono text-xs"
+          placeholder='{"description": "Detects PII in requests"}'
+          {...register("guardrail_info", { validate: validateJson })}
+        />
+        {formState.errors.guardrail_info && (
+          <p className="text-sm text-destructive">
+            {formState.errors.guardrail_info.message as string}
+          </p>
+        )}
+      </div>
+    </>
   );
 }

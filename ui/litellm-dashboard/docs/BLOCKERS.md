@@ -40,3 +40,32 @@ stay on antd for phase 1 and will be addressed in a targeted follow-up.
   exceeds the two-attempt budget for this batch. Defer until Tremor
   `Accordion` has a shadcn replacement adopted and the antd Form surface
   can be broken into sub-forms.
+- `src/components/guardrails/add_guardrail_form.tsx` (1202 LoC): multi-step
+  wizard driven by antd `Form.useForm` with provider-specific dynamic
+  fields (Presidio PII, PromptGuard, content filter, custom code, tool
+  permission, Azure Text Moderation). Uses `form.validateFields` per step,
+  `form.setFieldsValue` to apply presets, `form.resetFields`, antd
+  `Select` with children `Option` rendering provider logos, `Tag`,
+  `Typography.Title/Text/Link`. The step navigation and provider-param
+  validation are tightly coupled to antd's validation API.
+- `src/components/guardrails/edit_guardrail_form.tsx` (451 LoC): mirrors
+  add_guardrail_form's provider-switching logic for edit flow. Defer with
+  it.
+- `src/components/guardrails/guardrail_info.tsx` (888 LoC): guardrail
+  detail/edit page with Tremor `TabGroup`/`TabList`/`Card`/`Grid` (still
+  required by overview), a large antd `Form` settings panel
+  (`Form.useForm` + `Form.Item` rules, `Input.TextArea`, antd `Select`,
+  `Divider orientation="left"` section headers) that reuses
+  `GuardrailProviderFields` and `GuardrailOptionalParams`. Settings-panel
+  migration requires migrating both child components in tandem.
+- `src/components/guardrails/guardrail_provider_fields.tsx` (240 LoC):
+  renders antd `Form.Item` elements keyed to the parent's antd Form
+  context (including nested `optional_params` + antd `Slider` with marks
+  for percentage fields). Cannot be migrated independently of its two
+  callers (`add_guardrail_form.tsx` + `guardrail_info.tsx`) without
+  breaking the form wiring. Defer with them.
+- `src/components/guardrails/guardrail_optional_params.tsx` (256 LoC):
+  renders antd `Form.Item` for provider-specific optional params including
+  a dict-field builder with dynamic antd `Select.Option` lists. Same
+  dependency on the parent antd Form context as the above. Defer with the
+  parent forms.

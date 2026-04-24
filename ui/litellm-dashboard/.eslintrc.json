@@ -106,6 +106,7 @@
         "src/components/guardrails/content_filter/CategoryTable.tsx",
         "src/components/guardrails/content_filter/ContentCategoryConfiguration.tsx",
         "src/components/guardrails/custom_code/CustomCodeModal.tsx",
+        "src/components/guardrails/TeamGuardrailsTab.tsx",
         "src/components/Settings/RouterSettings/Fallbacks/FallbackGroupConfig.tsx",
         "src/components/prompts/variable_textarea.tsx",
         "src/components/chat/MCPCredentialsTab.tsx",
