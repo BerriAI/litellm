@@ -229,11 +229,20 @@ def get_vertex_base_url(
 ) -> str:
     """
     Get the base URL for Vertex AI API calls.
+
+    - ``global`` uses the global control plane host.
+    - Multi-region geographies (e.g. ``us``, ``eu``) use ``aiplatform.{geo}.rep.googleapis.com``.
+    - Regional locations (e.g. ``us-central1``) use ``{region}-aiplatform.googleapis.com``.
     """
     if vertex_location == "global":
         return "https://aiplatform.googleapis.com"
-    else:
-        return f"https://{vertex_location}-aiplatform.googleapis.com"
+    if vertex_location is None:
+        raise ValueError("vertex_location is required")
+    if not re.match(r"^[a-z][a-z0-9-]*$", vertex_location):
+        raise ValueError("Invalid vertex_location format")
+    if "-" not in vertex_location:
+        return f"https://aiplatform.{vertex_location}.rep.googleapis.com"
+    return f"https://{vertex_location}-aiplatform.googleapis.com"
 
 
 def _get_embedding_url(
@@ -337,8 +346,13 @@ def _get_gemini_url(
     mode: all_gemini_url_modes,
     model: str,
     stream: Optional[bool],
-    gemini_api_key: Optional[str],
 ) -> Tuple[str, str]:
+    """Build the Gemini API URL for the given mode.
+
+    The API key is NOT included in the URL. Callers must pass it via the
+    ``x-goog-api-key`` header instead to avoid leaking credentials in
+    error tracebacks.
+    """
     from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
         VertexGeminiConfig,
     )
@@ -352,27 +366,27 @@ def _get_gemini_url(
         endpoint = "generateContent"
         if stream is True:
             endpoint = "streamGenerateContent"
-            url = "https://generativelanguage.googleapis.com/{}/{}:{}?key={}&alt=sse".format(
-                api_version, _gemini_model_name, endpoint, gemini_api_key
+            url = "https://generativelanguage.googleapis.com/{}/{}:{}?alt=sse".format(
+                api_version, _gemini_model_name, endpoint
             )
         else:
-            url = "https://generativelanguage.googleapis.com/{}/{}:{}?key={}".format(
-                api_version, _gemini_model_name, endpoint, gemini_api_key
+            url = "https://generativelanguage.googleapis.com/{}/{}:{}".format(
+                api_version, _gemini_model_name, endpoint
             )
     elif mode == "embedding":
         endpoint = "embedContent"
-        url = "https://generativelanguage.googleapis.com/v1beta/{}:{}?key={}".format(
-            _gemini_model_name, endpoint, gemini_api_key
+        url = "https://generativelanguage.googleapis.com/v1beta/{}:{}".format(
+            _gemini_model_name, endpoint
         )
     elif mode == "batch_embedding":
         endpoint = "batchEmbedContents"
-        url = "https://generativelanguage.googleapis.com/v1beta/{}:{}?key={}".format(
-            _gemini_model_name, endpoint, gemini_api_key
+        url = "https://generativelanguage.googleapis.com/v1beta/{}:{}".format(
+            _gemini_model_name, endpoint
         )
     elif mode == "count_tokens":
         endpoint = "countTokens"
-        url = "https://generativelanguage.googleapis.com/v1beta/{}:{}?key={}".format(
-            _gemini_model_name, endpoint, gemini_api_key
+        url = "https://generativelanguage.googleapis.com/v1beta/{}:{}".format(
+            _gemini_model_name, endpoint
         )
     elif mode == "image_generation":
         raise ValueError(

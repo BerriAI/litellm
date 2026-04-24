@@ -317,6 +317,7 @@ class LiteLLMAnthropicMessagesAdapter:
             "tools",
             "thinking",
             "output_format",
+            "output_config",
         ]
 
     def _is_web_search_tool(self, tool: Dict[str, Any]) -> bool:
@@ -550,9 +551,9 @@ class LiteLLMAnthropicMessagesAdapter:
 
             ## ASSISTANT MESSAGE ##
             assistant_message_str: Optional[str] = None
-            assistant_content_list: List[
-                Dict[str, Any]
-            ] = []  # For content blocks with cache_control
+            assistant_content_list: List[Dict[str, Any]] = (
+                []
+            )  # For content blocks with cache_control
             has_cache_control_in_text = False
             tool_calls: List[ChatCompletionAssistantToolCall] = []
             thinking_blocks: List[
@@ -595,12 +596,12 @@ class LiteLLMAnthropicMessagesAdapter:
                                         function_chunk.get("provider_specific_fields")
                                         or {}
                                     )
-                                    provider_specific_fields[
-                                        "thought_signature"
-                                    ] = signature
-                                    function_chunk[
-                                        "provider_specific_fields"
-                                    ] = provider_specific_fields
+                                    provider_specific_fields["thought_signature"] = (
+                                        signature
+                                    )
+                                    function_chunk["provider_specific_fields"] = (
+                                        provider_specific_fields
+                                    )
 
                                 tool_call = ChatCompletionAssistantToolCall(
                                     id=content.get("id", ""),
@@ -694,6 +695,11 @@ class LiteLLMAnthropicMessagesAdapter:
                 return "low"
             else:
                 return "minimal"
+        elif thinking_type == "adaptive":
+            # Adaptive thinking: effort is controlled by output_config.effort,
+            # not budget_tokens. Return a default; caller should override with
+            # output_config.effort when available.
+            return "medium"
 
         return None
 
@@ -776,6 +782,8 @@ class LiteLLMAnthropicMessagesAdapter:
             return ChatCompletionToolChoiceObjectParam(
                 type="function", function=tc_function_param
             )
+        elif tool_choice["type"] == "none":
+            return "none"
         else:
             raise ValueError(
                 "Incompatible tool choice param submitted - {}".format(tool_choice)
@@ -1040,6 +1048,12 @@ class LiteLLMAnthropicMessagesAdapter:
         )
         if not reasoning_effort:
             return
+
+        # For adaptive thinking, override with output_config.effort if available
+        if isinstance(thinking, dict) and thinking.get("type") == "adaptive":
+            output_config = anthropic_message_request.get("output_config")
+            if isinstance(output_config, dict) and output_config.get("effort"):
+                reasoning_effort = output_config["effort"]
 
         summary = thinking.get("summary") if isinstance(thinking, dict) else None
         auto_summary = is_reasoning_auto_summary_enabled()
@@ -1340,9 +1354,9 @@ class LiteLLMAnthropicMessagesAdapter:
             hasattr(usage, "_cache_creation_input_tokens")
             and usage._cache_creation_input_tokens > 0
         ):
-            anthropic_usage[
-                "cache_creation_input_tokens"
-            ] = usage._cache_creation_input_tokens
+            anthropic_usage["cache_creation_input_tokens"] = (
+                usage._cache_creation_input_tokens
+            )
         if cached_tokens > 0:
             anthropic_usage["cache_read_input_tokens"] = cached_tokens
 
@@ -1519,9 +1533,9 @@ class LiteLLMAnthropicMessagesAdapter:
                     hasattr(litellm_usage_chunk, "_cache_creation_input_tokens")
                     and litellm_usage_chunk._cache_creation_input_tokens > 0
                 ):
-                    usage_delta[
-                        "cache_creation_input_tokens"
-                    ] = litellm_usage_chunk._cache_creation_input_tokens
+                    usage_delta["cache_creation_input_tokens"] = (
+                        litellm_usage_chunk._cache_creation_input_tokens
+                    )
                 if cached_tokens > 0:
                     usage_delta["cache_read_input_tokens"] = cached_tokens
             else:
