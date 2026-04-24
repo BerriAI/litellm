@@ -239,6 +239,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
         float
     ]  # video_generation tier: key output_cost_per_second_<resolution> (e.g. 1080p, 720p)
     ocr_cost_per_page: Optional[float]  # for OCR models
+    ocr_cost_per_credit: Optional[float]  # for OCR models priced by credit
     annotation_cost_per_page: Optional[float]  # for OCR models
     search_context_cost_per_query: Optional[
         SearchContextCostPerQuery
@@ -256,6 +257,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
             "chat",
             "audio_transcription",
             "responses",
+            "ocr",
         ]
     ]
     tpm: Optional[int]
@@ -3214,6 +3216,7 @@ class LlmProviders(str, Enum):
     ANTHROPIC_TEXT = "anthropic_text"
     BYTEZ = "bytez"
     REPLICATE = "replicate"
+    REDUCTO = "reducto"
     RUNWAYML = "runwayml"
     AWS_POLLY = "aws_polly"
     HUGGINGFACE = "huggingface"
