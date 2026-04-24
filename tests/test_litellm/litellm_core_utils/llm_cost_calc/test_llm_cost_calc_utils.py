@@ -412,6 +412,46 @@ def test_generic_cost_per_token_gpt55_pro():
 
 
 @pytest.mark.parametrize(
+    "model,expected_none,expected_xhigh,expected_minimal",
+    [
+        # Verified against OpenAI's live API on 2026-04-24:
+        #   gpt-5.5   -> supports: none, low, medium, high, xhigh
+        #   gpt-5.5-pro -> supports: medium, high, xhigh
+        # Neither supports "minimal"; gpt-5.5-pro additionally does not support "none".
+        # The JSON must reflect this so LiteLLM rejects unsupported values locally
+        # (or drops them with drop_params=True) instead of round-tripping to OpenAI
+        # for a 400.
+        ("gpt-5.5", True, True, False),
+        ("gpt-5.5-2026-04-23", True, True, False),
+        ("gpt-5.5-pro", False, True, False),
+        ("gpt-5.5-pro-2026-04-23", False, True, False),
+    ],
+)
+def test_gpt55_reasoning_effort_flags_match_live_openai_api(
+    model, expected_none, expected_xhigh, expected_minimal
+):
+    """Pin reasoning_effort capability flags to OpenAI's actual API contract.
+
+    Observed via `POST /v1/chat/completions` with reasoning_effort=minimal:
+    ``Unsupported value: 'reasoning_effort' does not support 'minimal' with
+    this model``. gpt-5.5-pro additionally rejects 'none' and 'low'.
+    """
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    m = litellm.model_cost[model]
+    assert (
+        m.get("supports_none_reasoning_effort") is expected_none
+    ), f"{model}: supports_none_reasoning_effort expected {expected_none}"
+    assert (
+        m.get("supports_xhigh_reasoning_effort") is expected_xhigh
+    ), f"{model}: supports_xhigh_reasoning_effort expected {expected_xhigh}"
+    assert (
+        m.get("supports_minimal_reasoning_effort") is expected_minimal
+    ), f"{model}: supports_minimal_reasoning_effort expected {expected_minimal}"
+
+
+@pytest.mark.parametrize(
     "base_model,dated_model",
     [
         ("gpt-5.5", "gpt-5.5-2026-04-23"),
