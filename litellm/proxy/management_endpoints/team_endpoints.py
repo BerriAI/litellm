@@ -70,6 +70,7 @@ from litellm.proxy.auth.auth_checks import (
     get_user_object,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.rbac_utils import check_org_admin_feature_access
 from litellm.proxy.management_endpoints.common_utils import (
     _is_user_org_admin_for_team,
     _is_user_team_admin,
@@ -895,6 +896,10 @@ async def new_team(  # noqa: PLR0915
 
         if prisma_client is None:
             raise HTTPException(status_code=500, detail={"error": "No db connected"})
+
+        await check_org_admin_feature_access(
+            user_api_key_dict=user_api_key_dict, feature_name="team_create"
+        )
 
         # Validate budget values are not negative
         if data.max_budget is not None and data.max_budget < 0:
