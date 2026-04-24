@@ -120,9 +120,9 @@ def _get_a2a_model_info(a2a_client: Any, kwargs: Dict[str, Any]) -> str:
         litellm_logging_obj.model = model
         litellm_logging_obj.custom_llm_provider = custom_llm_provider
         litellm_logging_obj.model_call_details["model"] = model
-        litellm_logging_obj.model_call_details[
-            "custom_llm_provider"
-        ] = custom_llm_provider
+        litellm_logging_obj.model_call_details["custom_llm_provider"] = (
+            custom_llm_provider
+        )
 
     return agent_name
 
@@ -615,7 +615,7 @@ async def asend_message_streaming(  # noqa: PLR0915
 
 async def create_a2a_client(
     base_url: str,
-    timeout: float = 60.0,
+    timeout: float = DEFAULT_A2A_AGENT_TIMEOUT,
     extra_headers: Optional[Dict[str, str]] = None,
 ) -> "A2AClientType":
     """
@@ -626,7 +626,7 @@ async def create_a2a_client(
 
     Args:
         base_url: The base URL of the A2A agent (e.g., "http://localhost:10001")
-        timeout: Request timeout in seconds (default: 60.0)
+        timeout: Request timeout in seconds (default: ``DEFAULT_A2A_AGENT_TIMEOUT`` / env ``DEFAULT_A2A_AGENT_TIMEOUT``)
         extra_headers: Optional additional headers to include in requests
 
     Returns:
@@ -711,7 +711,7 @@ async def aget_agent_card(
 
     Args:
         base_url: The base URL of the A2A agent (e.g., "http://localhost:10001")
-        timeout: Request timeout in seconds (default: 60.0)
+        timeout: Request timeout in seconds (default: ``DEFAULT_A2A_AGENT_TIMEOUT`` / env ``DEFAULT_A2A_AGENT_TIMEOUT``)
         extra_headers: Optional additional headers to include in requests
 
     Returns:

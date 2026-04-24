@@ -13,7 +13,7 @@ join our [discord](https://discord.gg/wuPM9dRgDw)
 
 ### Step 1
 ```shell
-pip install litellm
+uv add litellm
 ```
 
 ### Step 2

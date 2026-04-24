@@ -517,11 +517,11 @@ curl -X POST http://0.0.0.0:4000/chat/completions \
 </Tabs>
 
 
-## (Deprecated) for `vllm pip package` 
+## (Deprecated) for packaged `vllm` installs
 ### Using - `litellm.completion`
 
 ```
-pip install litellm vllm
+uv add litellm vllm
 ```
 ```python
 import litellm 
@@ -616,4 +616,3 @@ test_vllm_custom_model()
 ```
 
 [Implementation Code](https://github.com/BerriAI/litellm/blob/6b3cb1898382f2e4e80fd372308ea232868c78d1/litellm/utils.py#L1414)
-

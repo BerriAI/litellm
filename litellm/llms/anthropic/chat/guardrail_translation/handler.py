@@ -21,6 +21,10 @@ from litellm.llms.anthropic.experimental_pass_through.adapters.transformation im
     LiteLLMAnthropicMessagesAdapter,
 )
 from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
+from litellm.llms.base_llm.guardrail_translation.utils import (
+    effective_skip_system_message_for_guardrail,
+    openai_messages_without_system,
+)
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler import (
     AnthropicPassthroughLoggingHandler,
 )
@@ -29,6 +33,8 @@ from litellm.types.llms.anthropic import (
     AnthropicMessagesRequest,
 )
 from litellm.types.llms.openai import (
+    AllMessageValues,
+    ChatCompletionRequest,
     ChatCompletionToolCallChunk,
     ChatCompletionToolParam,
 )
@@ -62,6 +68,32 @@ class AnthropicMessagesHandler(BaseTranslation):
         super().__init__()
         self.adapter = LiteLLMAnthropicMessagesAdapter()
 
+    def _translate_to_openai(self, data: dict) -> ChatCompletionRequest:
+        """Translate Anthropic request to OpenAI chat completion format."""
+        (
+            chat_completion_compatible_request,
+            _tool_name_mapping,
+        ) = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(
+            anthropic_message_request=cast(AnthropicMessagesRequest, data.copy())
+        )
+        return chat_completion_compatible_request
+
+    def get_structured_messages(self, data: dict) -> Optional[List[AllMessageValues]]:
+        """
+        Convert Anthropic messages request data to OpenAI-spec structured messages.
+
+        Uses the Anthropic-to-OpenAI adapter to translate message format.
+        """
+        messages = data.get("messages")
+        if messages is None:
+            return None
+        chat_completion_compatible_request = self._translate_to_openai(data)
+        result = cast(
+            List[AllMessageValues],
+            chat_completion_compatible_request.get("messages", []),
+        )
+        return result if result else None
+
     async def process_input_messages(
         self,
         data: dict,
@@ -75,24 +107,23 @@ class AnthropicMessagesHandler(BaseTranslation):
         if messages is None:
             return data
 
-        (
-            chat_completion_compatible_request,
-            _tool_name_mapping,
-        ) = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(
-            # Use a shallow copy to avoid mutating request data (pop on litellm_metadata).
-            anthropic_message_request=cast(AnthropicMessagesRequest, data.copy())
-        )
+        skip_system = effective_skip_system_message_for_guardrail(guardrail_to_apply)
 
-        structured_messages = chat_completion_compatible_request.get("messages", [])
+        chat_completion_compatible_request = self._translate_to_openai(data)
+
+        structured_messages = cast(
+            List[AllMessageValues],
+            chat_completion_compatible_request.get("messages", []),
+        )
+        if skip_system:
+            structured_messages = openai_messages_without_system(structured_messages)
 
         texts_to_check: List[str] = []
         images_to_check: List[str] = []
-        tools_to_check: List[
-            ChatCompletionToolParam
-        ] = chat_completion_compatible_request.get("tools", [])
+        tools_to_check: List[ChatCompletionToolParam] = (
+            chat_completion_compatible_request.get("tools", [])
+        )
         task_mappings: List[Tuple[int, Optional[int]]] = []
-        # Track (message_index, content_index) for each text
-        # content_index is None for string content, int for list content
 
         # Step 1: Extract all text content and images
         for msg_idx, message in enumerate(messages):
@@ -102,6 +133,7 @@ class AnthropicMessagesHandler(BaseTranslation):
                 texts_to_check=texts_to_check,
                 images_to_check=images_to_check,
                 task_mappings=task_mappings,
+                skip_system_message=skip_system,
             )
 
         # Step 2: Apply guardrail to all texts in batch
@@ -165,12 +197,16 @@ class AnthropicMessagesHandler(BaseTranslation):
         texts_to_check: List[str],
         images_to_check: List[str],
         task_mappings: List[Tuple[int, Optional[int]]],
+        skip_system_message: bool = False,
     ) -> None:
         """
         Extract text content and images from a message.
 
         Override this method to customize text/image extraction logic.
         """
+        if skip_system_message and str(message.get("role") or "").lower() == "system":
+            return
+
         content = message.get("content", None)
         tools = message.get("tools", None)
         if content is None and tools is None:

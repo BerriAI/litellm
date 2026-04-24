@@ -351,7 +351,7 @@ We will use the `--config` to set `litellm.success_callback = ["langfuse"]` this
 **Step 1** Install langfuse
 
 ```shell
-pip install langfuse>=2.0.0
+uv add langfuse>=2.0.0
 ```
 
 **Step 2**: Create a `config.yaml` file and set `litellm_settings`: `success_callback`
@@ -982,7 +982,7 @@ OTEL_ENDPOINT="http:/0.0.0.0:4317"
 OTEL_HEADERS="x-honeycomb-team=<your-api-key>" # Optional
 ```
 
-> Note: OTLP gRPC requires `grpcio`. Install via `pip install "litellm[grpc]"` (or `grpcio`).
+> Note: OTLP gRPC requires `grpcio`. Install via `uv add "litellm[grpc]"` (or `grpcio`).
 
 Add `otel` as a callback on your `litellm_config.yaml`
 
@@ -1587,7 +1587,7 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 #### Step1: Install dependencies and set your environment variables 
 Install the dependencies
 ```shell
-pip install litellm lunary
+uv add litellm lunary
 ```
 
 Get you Lunary public key from from https://app.lunary.ai/settings 
@@ -2516,7 +2516,7 @@ If api calls fail (llm/database) you can log those to Sentry:
 **Step 1** Install Sentry
 
 ```shell
-pip install --upgrade sentry-sdk
+uv add --upgrade sentry-sdk
 ```
 
 **Step 2**: Save your Sentry_DSN and add `litellm_settings`: `failure_callback`

@@ -87,7 +87,12 @@ class BaseEvalsAPITest(ABC):
                 api_key=api_key,
                 api_base=api_base,
             )
-        except (litellm.InternalServerError, litellm.APIConnectionError, litellm.Timeout, litellm.ServiceUnavailableError):
+        except (
+            litellm.InternalServerError,
+            litellm.APIConnectionError,
+            litellm.Timeout,
+            litellm.ServiceUnavailableError,
+        ):
             pytest.skip("Provider service unavailable")
         except litellm.RateLimitError:
             pytest.skip("Rate limit exceeded")

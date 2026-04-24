@@ -184,6 +184,16 @@ class MCPServerManager:
             "gmail_send_email": "zapier_mcp_server",
         }
         """
+        self._upstream_initialize_instructions_by_server_id: Dict[str, str] = {}
+
+    def _remember_upstream_initialize_instructions(
+        self, server: MCPServer, client: MCPClient
+    ) -> None:
+        raw = getattr(client, "_last_initialize_instructions", None)
+        if raw and str(raw).strip():
+            self._upstream_initialize_instructions_by_server_id[server.server_id] = str(
+                raw
+            ).strip()
 
     def get_registry(self) -> Dict[str, MCPServer]:
         """
@@ -204,6 +214,7 @@ class MCPServerManager:
             mcp_aliases: Optional dictionary mapping aliases to server names from litellm_settings
         """
         verbose_logger.debug("Loading MCP Servers from config-----")
+        self._upstream_initialize_instructions_by_server_id.clear()
 
         # Track which aliases have been used to ensure only first occurrence is used
         used_aliases = set()
@@ -351,6 +362,7 @@ class MCPServerManager:
                 aws_service_name=server_config.get("aws_service_name", None),
                 aws_role_name=server_config.get("aws_role_name", None),
                 aws_session_name=server_config.get("aws_session_name", None),
+                instructions=server_config.get("instructions", None),
             )
             self.config_mcp_servers[server_id] = new_server
 
@@ -693,6 +705,7 @@ class MCPServerManager:
             aws_service_name=aws_creds.get("aws_service_name"),
             aws_role_name=aws_creds.get("aws_role_name"),
             aws_session_name=aws_creds.get("aws_session_name"),
+            instructions=mcp_server.instructions,
         )
         return new_server
 
@@ -1247,6 +1260,7 @@ class MCPServerManager:
                 return tools
             else:
                 tools = await self._fetch_tools_with_timeout(client, server.name)
+                self._remember_upstream_initialize_instructions(server, client)
 
             prefixed_or_original_tools = self._create_prefixed_tools(
                 tools, server, add_prefix=add_prefix
@@ -2383,6 +2397,7 @@ class MCPServerManager:
         # If proxy_logging_obj is not None, the tool call result is at index 1 (after the during hook task)
         result_index = 1 if proxy_logging_obj else 0
         result = mcp_responses[result_index]
+        self._remember_upstream_initialize_instructions(mcp_server, client)
 
         return cast(CallToolResult, result)
 
@@ -2596,7 +2611,12 @@ class MCPServerManager:
                     return server
 
         # If not found and tool name is prefixed, try extracting server name from prefix
-        if is_tool_name_prefixed(tool_name):
+        known_prefixes = {
+            normalize_server_name(get_server_prefix(s))
+            for s in self.get_registry().values()
+            if get_server_prefix(s)
+        }
+        if is_tool_name_prefixed(tool_name, known_server_prefixes=known_prefixes):
             (
                 original_tool_name,
                 server_name_from_prefix,
@@ -2622,6 +2642,7 @@ class MCPServerManager:
         )
 
         verbose_logger.debug("Loading MCP servers from database into registry...")
+        self._upstream_initialize_instructions_by_server_id.clear()
 
         # perform authz check to filter the mcp servers user has access to
         prisma_client = get_prisma_client_or_throw(
@@ -2905,6 +2926,7 @@ class MCPServerManager:
                 await asyncio.wait_for(
                     client.run_with_session(_noop), timeout=MCP_HEALTH_CHECK_TIMEOUT
                 )
+                self._remember_upstream_initialize_instructions(server, client)
                 status = "healthy"
             except asyncio.TimeoutError:
                 health_check_error = (
@@ -2946,6 +2968,7 @@ class MCPServerManager:
             token_url=server.token_url,
             registration_url=server.registration_url,
             allow_all_keys=server.allow_all_keys,
+            instructions=server.instructions,
         )
 
     async def get_all_mcp_servers_with_health_and_teams(
@@ -3041,6 +3064,7 @@ class MCPServerManager:
             is_byok=server.is_byok,
             byok_description=server.byok_description,
             byok_api_key_help_url=server.byok_api_key_help_url,
+            instructions=server.instructions,
         )
 
     async def get_all_mcp_servers_unfiltered(self) -> List[LiteLLM_MCPServerTable]:

@@ -61,10 +61,15 @@ test.describe("Proxy Admin - Keys", () => {
     await expect(page.getByText("Back to Keys")).toBeVisible({ timeout: 10_000 });
 
     await page.getByRole("button", { name: "Regenerate Key" }).click();
-    await page.getByRole("button", { name: "Regenerate", exact: true }).click();
 
-    // Success shows "Copy Virtual Key" button in the regenerated key dialog
-    await expect(page.getByText("Copy Virtual Key")).toBeVisible({ timeout: 10_000 });
+    // Scope to the modal — the Regenerate button has an icon whose aria-label
+    // ("sync") is concatenated into the button's accessible name, and the
+    // "Regenerate Key" button is still in the DOM behind the modal.
+    const modal = page.locator(".ant-modal:visible");
+    await modal.getByRole("button", { name: /Regenerate/ }).click();
+
+    // Success view shows a Copy button in the footer (text varies between modal versions)
+    await expect(modal.getByRole("button", { name: /Copy.*Key/ })).toBeVisible({ timeout: 20_000 });
   });
 
   test("Update key TPM and RPM limits", async ({ page }) => {

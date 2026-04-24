@@ -14,6 +14,10 @@ Provider-specific cost tracking (e.g., [Vertex AI PayGo / priority pricing](../p
 [Sync model pricing data from GitHub](./sync_models_github.md) to ensure accurate cost tracking.
 :::
 
+:::info Cost does not match your provider bill?
+Use the step-by-step workflow in [Debugging a cost discrepancy](../troubleshoot/cost_discrepancy): align time ranges, compare token categories (including cache), then decide whether the gap is ingestion, formula, or model-map pricing.
+:::
+
 ### How to Track Spend with LiteLLM
 
 **Step 1**

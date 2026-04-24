@@ -231,7 +231,7 @@ Model Name                  | Function Call                                     
 See all litellm.completion supported params [here](https://docs.litellm.ai/docs/completion/input)
 
 ```python
-# !pip install litellm
+# !uv add litellm
 from litellm import completion
 import os
 ## set ENV variables
@@ -264,7 +264,7 @@ Send params [not supported by `litellm.completion()`](https://docs.litellm.ai/do
 Example `seed`, `min_tokens` are Replicate specific param
 
 ```python
-# !pip install litellm
+# !uv add litellm
 from litellm import completion
 import os
 ## set ENV variables

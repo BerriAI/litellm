@@ -54,7 +54,7 @@ from litellm.constants import (
     LITELLM_SETTINGS_SAFE_DB_OVERRIDES,
     LITELLM_UI_ALLOW_HEADERS,
     LITELLM_UI_SESSION_DURATION,
-    DAILY_TAG_SPEND_BATCH_MULTIPLIER
+    DAILY_TAG_SPEND_BATCH_MULTIPLIER,
 )
 from litellm.litellm_core_utils.litellm_logging import (
     _init_custom_logger_compatible_class,
@@ -493,6 +493,7 @@ from litellm.proxy.utils import (
     ProxyUpdateSpend,
     _cache_user_row,
     _get_docs_url,
+    _get_openapi_url,
     _get_projected_spend_over_limit,
     _get_redoc_url,
     _is_projected_spend_over_limit,
@@ -667,9 +668,6 @@ ui_message = f"👉 [```LiteLLM Admin Panel on /ui```]({ui_link}). Create, Edit 
 ui_message += "\n\n💸 [```LiteLLM Model Cost Map```](https://models.litellm.ai/)."
 
 ui_message += f"\n\n🔎 [```LiteLLM Model Hub```]({model_hub_link}). See available models on the proxy. [**Docs**](https://docs.litellm.ai/docs/proxy/ai_hub)"
-
-chat_link = f"{server_root_path}/ui/chat"
-ui_message += f"\n\n💬 [```LiteLLM Chat UI```]({chat_link}). ChatGPT-like interface for your users to chat with AI models and MCP tools."
 
 custom_swagger_message = "[**Customize Swagger Docs**](https://docs.litellm.ai/docs/proxy/enterprise#swagger-docs---custom-routes--branding)"
 
@@ -954,6 +952,17 @@ async def proxy_startup_event(app: FastAPI):  # noqa: PLR0915
             _run_background_health_check()
         )  # start the background health check coroutine.
 
+    # Start adaptive-router queue flusher unconditionally — adaptive routers
+    # may be added later via `/config/reload`, and the flusher is a no-op when
+    # `llm_router.adaptive_routers` is empty. Per-router DB state is loaded
+    # lazily by the flusher on first tick (see `_state_loaded` flag) so
+    # hot-reloaded routers also get their persisted priors.
+    if llm_router is not None and getattr(llm_router, "adaptive_routers", None):
+        for _ar in llm_router.adaptive_routers.values():
+            await _ar.load_state_from_db(prisma_client)
+            _ar._state_loaded = True
+    asyncio.create_task(_adaptive_router_flusher_loop())
+
     ## [Optional] Initialize dd tracer
     ProxyStartupEvent._init_dd_tracer()
 
@@ -1000,6 +1009,7 @@ async def proxy_startup_event(app: FastAPI):  # noqa: PLR0915
 app = FastAPI(
     docs_url=_get_docs_url(),
     redoc_url=_get_redoc_url(),
+    openapi_url=_get_openapi_url(),
     title=_title,
     description=_description,
     version=version,
@@ -1140,7 +1150,54 @@ async def openai_exception_handler(request: Request, exc: ProxyException):
 
 
 router = APIRouter()
-origins = ["*"]
+
+
+def _get_cors_config(
+    cors_origins_env: Optional[str] = None,
+    cors_credentials_env: Optional[str] = None,
+):
+    """
+    Compute CORS allowed origins and credentials flag from environment variables.
+
+    Extracted into a function so it can be unit-tested without reloading the module.
+
+    Args:
+        cors_origins_env: Value of LITELLM_CORS_ORIGINS (defaults to os.getenv).
+        cors_credentials_env: Value of LITELLM_CORS_ALLOW_CREDENTIALS (defaults to os.getenv).
+
+    Returns:
+        Tuple[List[str], bool]: (origins, allow_credentials)
+    """
+    _origins_raw = (
+        cors_origins_env
+        if cors_origins_env is not None
+        else os.getenv("LITELLM_CORS_ORIGINS")
+    )
+    if _origins_raw is None or _origins_raw.strip() == "":
+        computed_origins = ["*"]
+    else:
+        computed_origins = [o.strip() for o in _origins_raw.split(",") if o.strip()]
+
+    # Disable credentials by default when wildcard origins are used — combining
+    # allow_origins=["*"] with allow_credentials=True causes Starlette to reflect
+    # the incoming Origin header, allowing any site to make credentialed requests.
+    # Set LITELLM_CORS_ALLOW_CREDENTIALS=true to explicitly restore the old behaviour
+    # (e.g. for non-browser clients that relied on the Access-Control-Allow-Credentials
+    # header being present regardless of origin).
+    _credentials_raw = (
+        cors_credentials_env
+        if cors_credentials_env is not None
+        else os.getenv("LITELLM_CORS_ALLOW_CREDENTIALS")
+    )
+    if _credentials_raw is not None:
+        computed_credentials = _credentials_raw.strip().lower() == "true"
+    else:
+        computed_credentials = "*" not in computed_origins
+
+    return computed_origins, computed_credentials
+
+
+origins, allow_cors_credentials = _get_cors_config()
 
 
 # get current directory
@@ -1467,7 +1524,7 @@ current_dir = os.path.dirname(os.path.abspath(__file__))
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
-    allow_credentials=True,
+    allow_credentials=allow_cors_credentials,
     allow_methods=["*"],
     allow_headers=["*"],
     expose_headers=LITELLM_UI_ALLOW_HEADERS,
@@ -1749,6 +1806,7 @@ async def increment_spend_counters(
     team_id: Optional[str],
     user_id: Optional[str],
     response_cost: Optional[float],
+    org_id: Optional[str] = None,
 ):
     """
     Atomically increment spend counters for budget enforcement.
@@ -1781,12 +1839,52 @@ async def increment_spend_counters(
             increment=response_cost,
         )
 
+        # Increment per-window budget counters for multi-budget keys
+        key_obj = await user_api_key_cache.async_get_cache(key=hashed_token)
+        if key_obj is not None:
+            key_budget_limits = getattr(key_obj, "budget_limits", None) or (
+                key_obj.get("budget_limits") if isinstance(key_obj, dict) else None
+            )
+            if isinstance(key_budget_limits, str):
+                key_budget_limits = json.loads(key_budget_limits)
+            if isinstance(key_budget_limits, list):
+                for window in key_budget_limits:
+                    duration = (
+                        window["budget_duration"]
+                        if isinstance(window, dict)
+                        else window.budget_duration
+                    )
+                    await spend_counter_cache.async_increment_cache(
+                        key=f"spend:key:{hashed_token}:window:{duration}",
+                        value=response_cost,
+                    )
+
     if team_id is not None:
         await _init_and_increment_spend_counter(
             counter_key=f"spend:team:{team_id}",
             source_cache_key=f"team_id:{team_id}",
             increment=response_cost,
         )
+
+        # Increment per-window budget counters for multi-budget teams
+        team_obj = await user_api_key_cache.async_get_cache(key=f"team_id:{team_id}")
+        if team_obj is not None:
+            team_budget_limits = getattr(team_obj, "budget_limits", None) or (
+                team_obj.get("budget_limits") if isinstance(team_obj, dict) else None
+            )
+            if isinstance(team_budget_limits, str):
+                team_budget_limits = json.loads(team_budget_limits)
+            if isinstance(team_budget_limits, list):
+                for window in team_budget_limits:
+                    duration = (
+                        window["budget_duration"]
+                        if isinstance(window, dict)
+                        else window.budget_duration
+                    )
+                    await spend_counter_cache.async_increment_cache(
+                        key=f"spend:team:{team_id}:window:{duration}",
+                        value=response_cost,
+                    )
 
     if user_id is not None and team_id is not None:
         await _init_and_increment_spend_counter(
@@ -1795,6 +1893,83 @@ async def increment_spend_counters(
             increment=response_cost,
         )
 
+    if user_id is not None:
+        await _init_and_increment_spend_counter(
+            counter_key=f"spend:user:{user_id}",
+            source_cache_key=user_id,
+            increment=response_cost,
+        )
+
+    if org_id is not None:
+        await _init_and_increment_spend_counter(
+            counter_key=f"spend:org:{org_id}",
+            source_cache_key=f"org_id:{org_id}",
+            increment=response_cost,
+        )
+
+
+async def _reseed_spend_from_db(counter_key: str) -> float:
+    """
+    Read the authoritative spend for a missing counter from the DB. The
+    counter_key prefix encodes the table to query:
+
+        spend:key:{token}                 -> LiteLLM_VerificationToken.spend
+        spend:team:{team_id}              -> LiteLLM_TeamTable.spend
+        spend:team_member:{uid}:{tid}     -> LiteLLM_TeamMembership.spend
+        spend:user:{user_id}              -> LiteLLM_UserTable.spend
+        spend:org:{org_id}                -> LiteLLM_OrganizationTable.spend
+
+    Returns 0.0 if prisma is unavailable, the row is missing, or the
+    key format is unrecognized. On failure, logs and returns 0.0 rather
+    than raising so the caller can still record the current increment.
+    """
+    if prisma_client is None:
+        return 0.0
+    # Per-window counters (spend:*:window:{duration}) share prefixes with
+    # primary counters but don't correspond to a DB row; their ambiguity
+    # would otherwise be silently parsed as a regular counter and miss.
+    if ":window:" in counter_key:
+        return 0.0
+    try:
+        if counter_key.startswith("spend:key:"):
+            token = counter_key[len("spend:key:") :]
+            row = await prisma_client.db.litellm_verificationtoken.find_unique(
+                where={"token": token}
+            )
+        elif counter_key.startswith("spend:team_member:"):
+            suffix = counter_key[len("spend:team_member:") :]
+            if ":" not in suffix:
+                return 0.0
+            user_id, team_id = suffix.rsplit(":", 1)
+            row = await prisma_client.db.litellm_teammembership.find_unique(
+                where={"user_id_team_id": {"user_id": user_id, "team_id": team_id}}
+            )
+        elif counter_key.startswith("spend:team:"):
+            team_id = counter_key[len("spend:team:") :]
+            row = await prisma_client.db.litellm_teamtable.find_unique(
+                where={"team_id": team_id}
+            )
+        elif counter_key.startswith("spend:user:"):
+            user_id = counter_key[len("spend:user:") :]
+            row = await prisma_client.db.litellm_usertable.find_unique(
+                where={"user_id": user_id}
+            )
+        elif counter_key.startswith("spend:org:"):
+            org_id = counter_key[len("spend:org:") :]
+            row = await prisma_client.db.litellm_organizationtable.find_unique(
+                where={"organization_id": org_id}
+            )
+        else:
+            return 0.0
+    except Exception:
+        verbose_proxy_logger.exception(
+            "Failed to reseed spend counter %s from DB", counter_key
+        )
+        return 0.0
+    if row is None:
+        return 0.0
+    return float(getattr(row, "spend", 0.0) or 0.0)
+
 
 async def _init_and_increment_spend_counter(
     counter_key: str,
@@ -1802,28 +1977,33 @@ async def _init_and_increment_spend_counter(
     increment: float,
 ):
     """
-    Initialize counter from cached object's DB-loaded spend if not yet set,
-    then atomically increment in both in-memory and Redis.
+    Initialize counter from the authoritative DB spend value if not yet
+    set, then atomically increment in both in-memory and Redis.
 
     On first access per pod:
-    1. Check spend_counter_cache (in-memory -> Redis via DualCache for init check)
-    2. If not found anywhere, read base spend from user_api_key_cache (DB-loaded object)
+    1. Check spend_counter_cache (in-memory -> Redis via DualCache)
+    2. If not found, reseed from the DB (`_reseed_spend_from_db`). Falls
+       back to the cached object's `.spend` via user_api_key_cache only
+       if prisma is unavailable, since that value can lag the flusher.
     3. Seed counter via async_increment_cache (not async_set_cache) to avoid a
        check-then-set race: if two pods cold-start simultaneously, both may see
-       the counter as absent and seed it. Using increment instead of set means
-       the worst case is over-counting (conservative — blocks slightly early)
-       rather than under-counting (would allow overspend).
+       the counter as absent and seed it. Using increment means the worst case
+       is over-counting (conservative, blocks slightly early) rather than
+       under-counting (would allow overspend).
     4. Increment atomically (both in-memory + Redis)
     """
     current = await spend_counter_cache.async_get_cache(key=counter_key)
     if current is None:
-        source = await user_api_key_cache.async_get_cache(key=source_cache_key)
-        base_spend = 0.0
-        if source is not None:
-            if isinstance(source, dict):
-                base_spend = source.get("spend", 0.0) or 0.0
-            else:
-                base_spend = getattr(source, "spend", 0.0) or 0.0
+        base_spend = await _reseed_spend_from_db(counter_key)
+        if prisma_client is None:
+            # Best-effort fallback when prisma is unavailable (tests or
+            # early-startup paths). May be stale but avoids resetting to 0.
+            source = await user_api_key_cache.async_get_cache(key=source_cache_key)
+            if source is not None:
+                if isinstance(source, dict):
+                    base_spend = source.get("spend", 0.0) or 0.0
+                else:
+                    base_spend = getattr(source, "spend", 0.0) or 0.0
         if base_spend > 0:
             await spend_counter_cache.async_increment_cache(
                 key=counter_key, value=base_spend
@@ -1871,26 +2051,20 @@ async def update_cache(  # noqa: PLR0915
         ## CHECK IF USER PROJECTED SPEND > SOFT LIMIT
         if (
             existing_spend_obj.soft_budget_cooldown is False
-            and existing_spend_obj.litellm_budget_table is not None
+            and existing_spend_obj.soft_budget is not None
             and (
                 _is_projected_spend_over_limit(
                     current_spend=new_spend,
-                    soft_budget_limit=existing_spend_obj.litellm_budget_table[
-                        "soft_budget"
-                    ],
+                    soft_budget_limit=existing_spend_obj.soft_budget,
                 )
                 is True
             )
         ):
             projected_spend, projected_exceeded_date = _get_projected_spend_over_limit(
                 current_spend=new_spend,
-                soft_budget_limit=existing_spend_obj.litellm_budget_table.get(
-                    "soft_budget", None
-                ),
+                soft_budget_limit=existing_spend_obj.soft_budget,
             )  # type: ignore
-            soft_limit = existing_spend_obj.litellm_budget_table.get(
-                "soft_budget", float("inf")
-            )
+            soft_limit = existing_spend_obj.soft_budget
             call_info = CallInfo(
                 token=existing_spend_obj.token or "",
                 spend=new_spend,
@@ -1898,7 +2072,7 @@ async def update_cache(  # noqa: PLR0915
                 max_budget=soft_limit,
                 user_id=existing_spend_obj.user_id,
                 projected_spend=projected_spend,
-                projected_exceeded_date=projected_exceeded_date,
+                projected_exceeded_date=str(projected_exceeded_date),
                 event_group=Litellm_EntityType.KEY,
             )
             # alert user
@@ -2161,9 +2335,11 @@ def run_ollama_serve():
         with open(os.devnull, "w") as devnull:
             subprocess.Popen(command, stdout=devnull, stderr=devnull)
     except Exception as e:
-        verbose_proxy_logger.debug(f"""
+        verbose_proxy_logger.debug(
+            f"""
             LiteLLM Warning: proxy started with `ollama` model\n`ollama serve` failed with Exception{e}. \nEnsure you run `ollama serve`
-        """)
+        """
+        )
 
 
 def _get_process_rss_mb() -> Optional[float]:
@@ -2316,9 +2492,13 @@ def _write_health_state_to_router_cache(
 
             exception_status = getattr(original_exception, "status_code", 500)
 
-            if llm_router.health_check_ignore_transient_errors and exception_status in (
-                429,
-                408,
+            if (
+                llm_router.health_check_ignore_transient_errors
+                and exception_status
+                in (
+                    429,
+                    408,
+                )
             ):
                 continue
 
@@ -2339,6 +2519,38 @@ def _write_health_state_to_router_cache(
         verbose_proxy_logger.warning(
             "Failed to write health state to router cache: %s", str(e)
         )
+
+
+_ADAPTIVE_ROUTER_FLUSH_INTERVAL_SECONDS = 10
+
+
+async def _adaptive_router_flusher_loop():
+    """
+    Drain every AdaptiveRouter's in-memory state + session aggregators into
+    Postgres on a fixed cadence. Hot-path writes go to memory; this loop is
+    the only writer to the adaptive router DB tables.
+    """
+    global llm_router, prisma_client
+    while True:
+        try:
+            await asyncio.sleep(_ADAPTIVE_ROUTER_FLUSH_INTERVAL_SECONDS)
+            adaptive_routers = getattr(llm_router, "adaptive_routers", None) or {}
+            if not adaptive_routers or prisma_client is None:
+                continue
+            for ar in adaptive_routers.values():
+                # Lazy state load: covers adaptive routers registered via
+                # `/config/reload` after proxy boot.
+                if not getattr(ar, "_state_loaded", False):
+                    try:
+                        await ar.load_state_from_db(prisma_client)
+                    finally:
+                        ar._state_loaded = True
+                await ar.queue.flush_state_to_db(prisma_client)
+                await ar.queue.flush_session_to_db(prisma_client)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            verbose_proxy_logger.exception("adaptive_router flusher iteration failed")
 
 
 async def _run_background_health_check():
@@ -6287,7 +6499,9 @@ class ProxyStartupEvent:
 
         ### UPDATE DAILY TAG SPEND (separate scheduler job with longer interval) ###
         ## Reduces QPS as there are more tags for a single request
-        tag_spend_update_interval = int(batch_writing_interval * DAILY_TAG_SPEND_BATCH_MULTIPLIER)
+        tag_spend_update_interval = int(
+            batch_writing_interval * DAILY_TAG_SPEND_BATCH_MULTIPLIER
+        )
         from litellm.proxy.utils import update_daily_tag_spend
 
         scheduler.add_job(
@@ -7111,7 +7325,10 @@ async def chat_completion(  # noqa: PLR0915
     global user_temperature, user_request_timeout, user_max_tokens, user_api_base
     data = await _read_request_body(request=request)
     if user_api_key_dict is not None:
-        if data.get("metadata") is None:
+        if not isinstance(data.get("metadata"), dict):
+            # Covers both missing and JSON-string metadata (multipart /
+            # extra_body); otherwise `data["metadata"][k] = v` below raises
+            # TypeError on a string value and 500s the request.
             data["metadata"] = {}
         if (
             hasattr(user_api_key_dict, "user_id")
@@ -7132,14 +7349,15 @@ async def chat_completion(  # noqa: PLR0915
             hasattr(user_api_key_dict, "organization_alias")
             and user_api_key_dict.organization_alias is not None
         ):
-            data["metadata"]["user_api_key_org_alias"] = (
-                user_api_key_dict.organization_alias
-            )
+            data["metadata"][
+                "user_api_key_org_alias"
+            ] = user_api_key_dict.organization_alias
         if (
             hasattr(user_api_key_dict, "agent_id")
             and user_api_key_dict.agent_id is not None
         ):
             data["metadata"]["agent_id"] = user_api_key_dict.agent_id
+
     base_llm_response_processor = ProxyBaseLLMRequestProcessing(data=data)
     try:
         result = await base_llm_response_processor.base_process_llm_request(
@@ -7313,9 +7531,9 @@ async def completion(  # noqa: PLR0915
                 hasattr(user_api_key_dict, "organization_alias")
                 and user_api_key_dict.organization_alias is not None
             ):
-                data["metadata"]["user_api_key_org_alias"] = (
-                    user_api_key_dict.organization_alias
-                )
+                data["metadata"][
+                    "user_api_key_org_alias"
+                ] = user_api_key_dict.organization_alias
             if (
                 hasattr(user_api_key_dict, "agent_id")
                 and user_api_key_dict.agent_id is not None
@@ -7562,9 +7780,9 @@ async def embeddings(  # noqa: PLR0915
                 hasattr(user_api_key_dict, "organization_alias")
                 and user_api_key_dict.organization_alias is not None
             ):
-                data["metadata"]["user_api_key_org_alias"] = (
-                    user_api_key_dict.organization_alias
-                )
+                data["metadata"][
+                    "user_api_key_org_alias"
+                ] = user_api_key_dict.organization_alias
             if (
                 hasattr(user_api_key_dict, "agent_id")
                 and user_api_key_dict.agent_id is not None
@@ -9060,6 +9278,57 @@ def _get_provider_token_counter(
     return None, None, None
 
 
+async def _try_provider_token_count(
+    provider_counter: "BaseTokenCounter",
+    custom_llm_provider: Optional[str],
+    model_to_use: str,
+    messages: Optional[list],
+    contents: Optional[list],
+    deployment: Optional[Dict[str, Any]],
+    request_model: str,
+    tools: Optional[list] = None,
+    system: Optional[str] = None,
+) -> Optional["TokenCountResponse"]:
+    """Attempt provider-specific token counting. Returns result on success, None to fall through to local counting."""
+    if not provider_counter.should_use_token_counting_api(
+        custom_llm_provider=custom_llm_provider
+    ):
+        return None
+    try:
+        result = await provider_counter.count_tokens(
+            model_to_use=model_to_use or "",
+            messages=messages,  # type: ignore
+            contents=contents,
+            deployment=deployment,
+            request_model=request_model,
+            tools=tools,
+            system=system,
+        )
+    except httpx.HTTPStatusError as e:
+        error_message = getattr(e, "message", None) or str(e)
+        status_code = getattr(e, "status_code", None) or e.response.status_code
+        raise ProxyException(
+            message=error_message,
+            type="token_counting_error",
+            param="model",
+            code=status_code,
+        )
+    if result is not None and result.error is True:
+        if litellm.disable_token_counter is True:
+            raise ProxyException(
+                message=result.error_message or "Token counting failed",
+                type="token_counting_error",
+                param="model",
+                code=result.status_code or 500,
+            )
+        verbose_proxy_logger.warning(
+            f"Provider token counting failed ({result.status_code}): {result.error_message}. "
+            "Falling back to local tokenizer."
+        )
+        return None
+    return result
+
+
 @router.post(
     "/utils/token_counter",
     tags=["llm utils"],
@@ -9132,41 +9401,19 @@ async def token_counter(request: TokenCountRequest, call_endpoint: bool = False)
             model_to_use = _model
 
     if provider_counter is not None:
-        if (
-            provider_counter.should_use_token_counting_api(
-                custom_llm_provider=custom_llm_provider
-            )
-            is True
-        ):
-            result = await provider_counter.count_tokens(
-                model_to_use=model_to_use or "",
-                messages=messages,  # type: ignore
-                contents=contents,
-                deployment=deployment,
-                request_model=request.model,
-                tools=tools,
-                system=system,
-            )
-            #########################################################
-            # Transfrom the Response to the well known format
-            #########################################################
-            if result is not None and result.error is True:
-                # If disable_token_counter is enabled, raise HTTP error
-                if litellm.disable_token_counter is True:
-                    raise ProxyException(
-                        message=result.error_message or "Token counting failed",
-                        type="token_counting_error",
-                        param="model",
-                        code=result.status_code or 500,
-                    )
-                # Otherwise, log warning and fall back to local counter
-                verbose_proxy_logger.warning(
-                    f"Provider token counting failed ({result.status_code}): {result.error_message}. "
-                    "Falling back to local tokenizer."
-                )
-            elif result is not None:
-                # Success - return the result (only if not None)
-                return result
+        result = await _try_provider_token_count(
+            provider_counter=provider_counter,
+            custom_llm_provider=custom_llm_provider,
+            model_to_use=model_to_use,
+            messages=messages,
+            contents=contents,
+            deployment=deployment,
+            request_model=request.model,
+            tools=tools,
+            system=system,
+        )
+        if result is not None:
+            return result
 
     # Check if token counter is disabled before fallback
     if litellm.disable_token_counter is True:
@@ -11326,7 +11573,9 @@ async def async_queue_request(
             # if users are using user_api_key_auth, set `user` in `data`
             data["user"] = user_api_key_dict.user_id
 
-        if "metadata" not in data:
+        if not isinstance(data.get("metadata"), dict):
+            # Covers both missing and JSON-string metadata (multipart /
+            # extra_body); see above for the same guard upstream.
             data["metadata"] = {}
         data["metadata"]["user_api_key"] = user_api_key_dict.api_key
         data["metadata"]["user_api_key_metadata"] = user_api_key_dict.metadata
@@ -11527,8 +11776,11 @@ async def login_v2(request: Request):  # noqa: PLR0915
             litellm_dashboard_ui += "/ui/"
         litellm_dashboard_ui += "?login=success"
 
+        # Token is included in the response body so the UI can set a JS-accessible
+        # cookie even when a reverse proxy (e.g. nginx-ingress) adds HttpOnly to the
+        # server-set cookie, which would otherwise cause an infinite login redirect.
         json_response = JSONResponse(
-            content={"redirect_url": litellm_dashboard_ui},
+            content={"redirect_url": litellm_dashboard_ui, "token": jwt_token},
             status_code=status.HTTP_200_OK,
         )
         json_response.set_cookie(key="token", value=jwt_token)
@@ -13826,6 +14078,38 @@ async def get_anthropic_beta_headers_reload_status(
 @router.get("/", dependencies=[Depends(user_api_key_auth)])
 async def home(request: Request):
     return "LiteLLM: RUNNING"
+
+
+@router.get(
+    "/adaptive_router/state",
+    tags=["adaptive_router"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def get_adaptive_router_state(
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """Return live bandit posteriors + queue depth for every configured adaptive router.
+
+    Admin-only. Returns 404 if no adaptive router is configured.
+
+    Response shape: `{"routers": [<snapshot>, ...]}` — one snapshot per
+    adaptive-router deployment. Each snapshot's `router_name` field identifies
+    which deployment it came from.
+    """
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+        raise HTTPException(
+            status_code=403,
+            detail={"error": CommonProxyErrors.not_allowed_access.value},
+        )
+    if llm_router is None or not llm_router.adaptive_routers:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": "No adaptive_router is configured on this proxy."},
+        )
+    snapshots = [
+        await ar.get_state_snapshot() for ar in llm_router.adaptive_routers.values()
+    ]
+    return {"routers": snapshots}
 
 
 @router.get("/routes", dependencies=[Depends(user_api_key_auth)])

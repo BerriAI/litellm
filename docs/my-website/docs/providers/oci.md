@@ -80,7 +80,7 @@ Use an OCI SDK `Signer` object for authentication. This method:
 
 To use this method, install the OCI SDK:
 ```bash
-pip install oci
+uv add oci
 ```
 
 This method is an alternative when using the LiteLLM SDK on Oracle Cloud Infrastructure (instances or Oracle Kubernetes Engine).

@@ -1,6 +1,0 @@
-litellm[proxy]==1.83.0
-prometheus_client==0.20.0
-langfuse==2.59.7
-prisma==0.11.0
-openai==2.24.0
-ddtrace==2.19.0 # for advanced DD tracing / profiling
