@@ -9,7 +9,7 @@ interceptor detection, loop logic, and message assembly all run for real.
 """
 
 from typing import Dict
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -51,7 +51,7 @@ def _advisor_call_resp(
             {
                 "type": "tool_use",
                 "id": tool_id,
-                "name": "advisor",
+                "name": "consult_advisor",
                 "input": {"question": question},
             }
         ],
@@ -76,20 +76,22 @@ async def test_full_dispatch_interceptor_fires_and_loop_completes():
         anthropic_messages,
     )
 
-    call_count = 0
+    executor_call_count = 0
 
-    async def mock_handler(model, messages, tools, stream, max_tokens, **kwargs):
-        nonlocal call_count
-        call_count += 1
-        if call_count == 1:
-            return _advisor_call_resp()  # executor: calls advisor
-        if call_count == 2:
-            return _text_resp("Use trial division.", model="claude-opus-4-6")  # advisor
-        return _text_resp("def is_prime(n): ...")  # executor: final
+    async def mock_messages(model, messages, tools, stream, max_tokens, **kwargs):
+        nonlocal executor_call_count
+        executor_call_count += 1
+        if executor_call_count == 1:
+            return _advisor_call_resp()
+        return _text_resp("def is_prime(n): ...")
 
     with patch(
         "litellm.llms.anthropic.experimental_pass_through.messages.interceptors.advisor._call_messages_handler",
-        side_effect=mock_handler,
+        side_effect=mock_messages,
+    ), patch(
+        "litellm.llms.anthropic.experimental_pass_through.messages.interceptors.advisor._call_advisor_with_router",
+        new_callable=AsyncMock,
+        return_value=_text_resp("Use trial division.", model="claude-opus-4-6"),
     ):
         result = await anthropic_messages(
             model="openai/gpt-4o-mini",
@@ -100,14 +102,13 @@ async def test_full_dispatch_interceptor_fires_and_loop_completes():
             custom_llm_provider="openai",
         )
 
-    # 3 internal calls: executor → advisor → executor-final
-    assert call_count == 3
+    assert executor_call_count == 2
 
     assert isinstance(result, dict)
     content = result.get("content", [])
     text_blocks = [b for b in content if b.get("type") == "text"]
     advisor_uses = [
-        b for b in content if b.get("type") == "tool_use" and b.get("name") == "advisor"
+        b for b in content if b.get("type") == "tool_use" and b.get("name") == "consult_advisor"
     ]
 
     assert len(text_blocks) >= 1, "Final response must have text"
@@ -136,15 +137,16 @@ async def test_max_uses_enforced_through_full_handler():
 
     advisor_tool_capped = {**ADVISOR_TOOL, "max_uses": 1}
 
-    async def mock_handler(model, messages, tools, stream, max_tokens, **kwargs):
-        # Advisor always returns text; executor always calls advisor
-        if tools is None:
-            return _text_resp("Some advice.", model="claude-opus-4-6")
+    async def mock_messages(model, messages, tools, stream, max_tokens, **kwargs):
         return _advisor_call_resp()
 
     with patch(
         "litellm.llms.anthropic.experimental_pass_through.messages.interceptors.advisor._call_messages_handler",
-        side_effect=mock_handler,
+        side_effect=mock_messages,
+    ), patch(
+        "litellm.llms.anthropic.experimental_pass_through.messages.interceptors.advisor._call_advisor_with_router",
+        new_callable=AsyncMock,
+        return_value=_text_resp("Some advice.", model="claude-opus-4-6"),
     ):
         with pytest.raises(AdvisorMaxIterationsError):
             await anthropic_messages(

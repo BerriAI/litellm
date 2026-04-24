@@ -1,0 +1,28 @@
+model_list:
+  # The advisor model — model_name here is what you reference in advisor_interception_params
+  - model_name: advisor-model
+    litellm_params:
+      model: anthropic/claude-sonnet-4-20250514
+      api_key: os.environ/ANTHROPIC_API_KEY
+
+  # Executor models — the models your users call with the advisor tool
+  - model_name: gpt-4o
+    litellm_params:
+      model: openai/gpt-4o
+      api_key: os.environ/OPENAI_API_KEY
+
+  - model_name: gemini-flash
+    litellm_params:
+      model: vertex_ai/gemini-2.5-flash
+      vertex_project: my-project
+      vertex_location: us-central1
+
+litellm_settings:
+  callbacks: ["advisor_interception"]
+  advisor_interception_params:
+    # Must match a model_name from model_list above so the router resolves
+    # the correct deployment and credentials.
+    default_advisor_model: "advisor-model"
+    # Optional: restrict which executor providers trigger advisor interception.
+    # Omit to enable for all non-Anthropic providers.
+    # enabled_providers: ["openai", "vertex_ai"]

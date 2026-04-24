@@ -1,17 +1,34 @@
+---
+slug: advisor-tool-chat-completions
+title: "[Beta] Advisor Tool (SDK + Proxy)"
+date: 2026-04-14T19:30:00
+authors:
+  - sameer
+  - krrish
+  - ishaan-alt
+description: "Use Anthropic advisor-style orchestration across LiteLLM chat completions providers, including OpenAI, Azure, and Gemini."
+tags: [advisor, anthropic, proxy, chat-completions, tools]
+hide_table_of_contents: false
+---
+
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
 # Advisor Tool (Beta)
 
-LiteLLM supports the Anthropic advisor tool across `chat/completions` and `messages` APIs (SDK + proxy).
+LiteLLM now supports the Anthropic advisor tool across `chat/completions` and `messages` APIs (SDK + proxy).
 
-Use the advisor tool to let an executor model call a stronger advisor model during generation. For non-Anthropic providers, LiteLLM runs the advisor orchestration loop automatically.
+Use the advisor tool to let an executor model call a stronger advisor model during generation. For non-Anthropic providers, LiteLLM runs the advisor orchestration loop automatically. 
+
+For updates after this post see the [latest Advisor Tool docs](/docs/completion/anthropic_advisor_tool).
 
 :::info Beta
 
 The advisor tool is in beta. LiteLLM adds the required `anthropic-beta: advisor-tool-2026-03-01` header automatically when it detects the advisor tool in your `tools` array.
 
 :::
+
+---
 
 ## Two tool formats
 
@@ -28,9 +45,8 @@ There are two ways to specify the advisor tool. Which one to use depends on your
 ```
 
 The `model` field is **required** and specifies the advisor. Use this format when:
-
-- Your executor is an Anthropic model and the advisor is `claude-opus-4-6` — Anthropic handles the advisor call natively, server-side.
-- Your executor is any non-Anthropic model (OpenAI, Gemini, etc.) via the **Messages API** — LiteLLM's built-in interception converts this automatically.
+- Your executor is an Anthropic model and the advisor is `claude-opus-4-6` - Anthropic handles the advisor call natively, server-side.
+- Your executor is any non-Anthropic model (OpenAI, Gemini, etc.) via the **Messages API** - LiteLLM's built-in interception converts this automatically.
 
 ### 2. OpenAI function format (`litellm_advisor`)
 
@@ -57,6 +73,8 @@ Sending `litellm_advisor` as a bare function tool without setting up `AdvisorInt
 
 :::
 
+---
+
 ## Supported providers
 
 | Provider | Chat Completions API | Messages API | Mode |
@@ -71,37 +89,6 @@ Sending `litellm_advisor` as a bare function tool without setting up `AdvisorInt
 **Native path:** Executor is Anthropic and advisor is `claude-opus-4-6` → Anthropic runs the advisor inference server-side. No LiteLLM orchestration involved.
 
 **Orchestration path:** Everything else → LiteLLM intercepts the executor's tool call, runs the advisor as a sub-call using the credentials you configured, injects the advice, and continues. The advisor can be any provider.
-
-For non-Anthropic providers, LiteLLM implements the advisor loop itself.
-
-- **Messages API** (`litellm.anthropic.messages.create/acreate`): built-in interception in the messages handler
-- **Chat Completions API** (`litellm.completion/acompletion`): enable `AdvisorInterceptionLogger` to convert advisor tools + run the loop
-
-When a request arrives with an `advisor_20260301` tool and a non-Anthropic provider, LiteLLM translates the advisor tool into a regular function tool the provider understands, then runs an orchestration loop:
-
-![Advisor Orchestration Flow](/img/advisor_orchestration_flow.svg)
-
-**What LiteLLM does for you:**
-
-- Strips `advisor_20260301` from the outgoing request — the provider only sees a standard function tool named `advisor`
-- When the executor calls it, intercepts before the result reaches you, runs the advisor sub-call, and injects the advice
-- Strips any `advisor_tool_result` / `server_tool_use` blocks from message history on re-send so non-Anthropic providers never see Anthropic-specific types
-- Wraps the final response in an SSE stream if you requested `stream=True`
-- Enforces `max_uses` as a hard cap — `AdvisorMaxIterationsError` is raised if exceeded; `max_uses=0` disables the advisor entirely
-
-## Model compatibility
-
-The advisor model is fully configurable for orchestrated (non-native) paths — use any model deployed in your proxy.
-
-For **Anthropic-native** requests (Anthropic runs the advisor server-side), the executor and advisor must form a valid Anthropic pair:
-
-| Executor | Advisor |
-|----------|---------|
-| `claude-haiku-4-5-20251001` | `claude-opus-4-6` |
-| `claude-sonnet-4-6` | `claude-opus-4-6` |
-| `claude-opus-4-6` | `claude-opus-4-6` |
-
-For **non-Anthropic** executors (LiteLLM orchestrates the advisor loop), you can use any model as the advisor — OpenAI, Vertex AI, Bedrock, etc.
 
 ---
 
@@ -219,71 +206,6 @@ The advisor sub-inference does not stream. When the executor calls the advisor t
 
 :::
 
-#### Anthropic-native executor (`advisor_20260301`)
-
-```python showLineNumbers title="Advisor Tool — litellm.completion() with native tool type"
-import litellm
-
-response = litellm.completion(
-    model="anthropic/claude-sonnet-4-6",
-    messages=[
-        {"role": "user", "content": "Build a REST API with authentication in Python."}
-    ],
-    tools=[
-        {
-            "type": "advisor_20260301",
-            "name": "advisor",
-            "model": "claude-opus-4-6",
-            "max_uses": 3,
-            "caching": {"type": "ephemeral", "ttl": "5m"},
-        }
-    ],
-    max_tokens=4096,
-)
-print(response.choices[0].message.content)
-```
-
-#### Multi-turn conversation
-
-```python showLineNumbers title="Multi-turn with advisor tool"
-import litellm
-
-tools = [
-    {
-        "type": "advisor_20260301",
-        "name": "advisor",
-        "model": "claude-opus-4-6",
-    }
-]
-
-messages = [
-    {"role": "user", "content": "Build a concurrent worker pool in Go with graceful shutdown."}
-]
-
-response = litellm.completion(
-    model="anthropic/claude-sonnet-4-6",
-    messages=messages,
-    tools=tools,
-    max_tokens=4096,
-)
-
-messages.append({"role": "assistant", "content": response.choices[0].message.content})
-messages.append({"role": "user", "content": "Now add a max-in-flight limit of 10."})
-
-response2 = litellm.completion(
-    model="anthropic/claude-sonnet-4-6",
-    messages=messages,
-    tools=tools,
-    max_tokens=4096,
-)
-```
-
-:::tip Auto-strip on follow-up turns
-
-LiteLLM automatically strips `advisor_tool_result` blocks from message history when the advisor tool is not present in the current request. This prevents the Anthropic 400 error that would otherwise occur.
-
-:::
-
 </TabItem>
 <TabItem value="chat-completions-proxy" label="Proxy">
 
@@ -293,17 +215,11 @@ Add the advisor as a named deployment in `model_list` and reference it in `advis
 
 ```yaml showLineNumbers title="config.yaml"
 model_list:
-  # Advisor — use a stronger model than your executor (example: o3 as advisor)
+  # Advisor model — can be any provider
   - model_name: my-advisor
     litellm_params:
       model: openai/o3
       api_key: os.environ/OPENAI_API_KEY
-
-  # Or use Anthropic Opus as advisor
-  # - model_name: my-advisor
-  #   litellm_params:
-  #     model: anthropic/claude-opus-4-6
-  #     api_key: os.environ/ANTHROPIC_API_KEY
 
   # Executor models
   - model_name: claude-sonnet
@@ -338,9 +254,10 @@ litellm_settings:
 
 :::
 
-### Client request (`litellm_advisor`)
+---
 
-```python showLineNumbers title="Advisor via proxy (OpenAI-compatible client)"
+### Client request 
+```python showLineNumbers title="Advisor via proxy"
 from openai import OpenAI
 
 client = OpenAI(
@@ -372,68 +289,97 @@ response = client.chat.completions.create(
 print(response.choices[0].message.content)
 ```
 
-### Client request (`advisor_20260301`)
+### Response Structure
 
-```python showLineNumbers title="Proxy chat completions with native advisor tool type"
-from openai import OpenAI
 
-client = OpenAI(
-    api_key="your-litellm-proxy-key",
-    base_url="http://0.0.0.0:4000/v1",
-)
+- **`advisor_tool_results`** : `server_tool_use` / `advisor_tool_result` pairs mirroring Anthropic’s shape (what the UI and logs can use).
+- **`advisor_iterations`** : per-sub-call token usage (`message` vs `advisor_message`), aligned with aggregated `usage` on the completion.
 
-response = client.chat.completions.create(
-    model="claude-sonnet",
-    messages=[
-        {"role": "user", "content": "Implement a distributed rate limiter in Python."}
-    ],
-    tools=[
-        {
-            "type": "advisor_20260301",
-            "name": "advisor",
-            "model": "my-advisor",
-        }
-    ],
-    max_tokens=4096,
-)
-print(response.choices[0].message.content)
-```
-
-### Client request (non-Anthropic executor)
-
-Use OpenAI-style `litellm_advisor` when the executor is not Anthropic. The advisor comes from `default_advisor_model`.
-
-```python showLineNumbers title="Proxy with Gemini executor + configured advisor"
-from openai import OpenAI
-
-client = OpenAI(
-    api_key="your-litellm-proxy-key",
-    base_url="http://0.0.0.0:4000/v1",
-)
-
-response = client.chat.completions.create(
-    model="gemini-flash",
-    messages=[
-        {"role": "user", "content": "Call advisor once, then answer in one line: integration ok."}
-    ],
-    tools=[
-        {
-            "type": "function",
-            "function": {
-                "name": "litellm_advisor",
-                "description": "Consult a stronger advisor model.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {"question": {"type": "string"}},
-                    "required": ["question"],
-                },
+```json title="chat.completion — gpt-4o-mini + claude-opus-4-6 advisor (excerpt)"
+{
+  "id": "chatcmpl-DVak9H9P1COkJNZMpz8IQWd4mqv7Y",
+  "created": 1776421781,
+  "model": "gpt-4o-mini",
+  "object": "chat.completion",
+  "system_fingerprint": "fp_2f65f9541c",
+  "choices": [
+    {
+      "finish_reason": "stop",
+      "index": 0,
+      "message": {
+        "content": "Here's the Python function that checks if a number is prime using the efficient approach as advised:\n\n```python\nimport math\n\ndef is_prime(n: int) -> bool:\n    \"\"\"…\"\"\"\n    …\n```\n\n### Explanation …\n\nFeel free to run this code in your Python environment to see the output!",
+        "role": "assistant",
+        "provider_specific_fields": {
+          "refusal": null,
+          "advisor_tool_results": [
+            {
+              "type": "server_tool_use",
+              "id": "call_fxYpOvEL5PAUEpjNYw2PU99C",
+              "name": "advisor"
             },
-        }
-    ],
-    max_tokens=512,
-)
-print(response.choices[0].message.content)
+            {
+              "type": "advisor_tool_result",
+              "tool_use_id": "call_fxYpOvEL5PAUEpjNYw2PU99C",
+              "content": {
+                "type": "advisor_result",
+                "text": "# Prime Number Checker in Python\n\n… full advisor markdown (implementation, tests, 6k±1 explanation) …"
+              }
+            }
+          ],
+          "advisor_iterations": [
+            {
+              "type": "message",
+              "input_tokens": 113,
+              "cache_read_input_tokens": 0,
+              "cache_creation_input_tokens": 0,
+              "output_tokens": 31
+            },
+            {
+              "type": "advisor_message",
+              "input_tokens": 47,
+              "cache_read_input_tokens": 0,
+              "cache_creation_input_tokens": 0,
+              "output_tokens": 1024,
+              "model": "claude-opus-4-6"
+            },
+            {
+              "type": "message",
+              "input_tokens": 1075,
+              "cache_read_input_tokens": 0,
+              "cache_creation_input_tokens": 0,
+              "output_tokens": 649
+            }
+          ]
+        },
+        "annotations": []
+      },
+      "provider_specific_fields": {}
+    }
+  ],
+  "usage": {
+    "completion_tokens": 649,
+    "prompt_tokens": 1075,
+    "total_tokens": 1724,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": 0,
+      "audio_tokens": 0,
+      "reasoning_tokens": 0,
+      "rejected_prediction_tokens": 0
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": 0,
+      "cached_tokens": 0
+    }
+  },
+  "service_tier": "default"
+}
 ```
+
+:::tip
+
+Top-level `usage` reflects the **final** executor turn after injection. Use `advisor_iterations` for the full breakdown (executor → advisor → executor follow-up).
+
+:::
 
 </TabItem>
 </Tabs>
@@ -441,6 +387,10 @@ print(response.choices[0].message.content)
 ---
 
 ## Messages API
+
+Working demo: calling the LiteLLM proxy **`/v1/messages`** with the advisor tool (same flow as Anthropic’s Messages API).
+
+<iframe width="840" height="500" src="https://www.loom.com/embed/ee10a816184042d09634fbd9dbfe1d79" frameborder="0" webkitallowfullscreen mozallowfullscreen allowfullscreen></iframe>
 
 <Tabs>
 <TabItem value="messages-sdk" label="SDK">
@@ -504,7 +454,7 @@ asyncio.run(main())
 
 #### Streaming
 
-```python showLineNumbers title="Messages API streaming with advisor tool"
+```python showLineNumbers title="Messages API Streaming with Advisor Tool"
 import asyncio
 import json
 import litellm
@@ -534,34 +484,6 @@ async def main():
                         print(json.loads(line[6:]))
                     except json.JSONDecodeError:
                         pass
-
-asyncio.run(main())
-```
-
-#### Non-Anthropic provider (explicit)
-
-```python showLineNumbers title="Advisor Tool with OpenAI executor (custom_llm_provider)"
-import asyncio
-import litellm
-
-async def main():
-    response = await litellm.anthropic.messages.acreate(
-        model="openai/gpt-4.1-mini",
-        messages=[
-            {"role": "user", "content": "Implement a Python LRU cache with O(1) get and put."}
-        ],
-        tools=[
-            {
-                "type": "advisor_20260301",
-                "name": "advisor",
-                "model": "claude-opus-4-6",
-                "max_uses": 3,
-            }
-        ],
-        max_tokens=1024,
-        custom_llm_provider="openai",
-    )
-    print(response["content"][0]["text"])
 
 asyncio.run(main())
 ```
@@ -612,69 +534,65 @@ Both native and orchestration paths return `server_tool_use` and `advisor_tool_r
 
 ```json title="Messages API response"
 {
+  "id": "msg_6889286f94074716a142cf8edbc233c8",
+  "type": "message",
   "role": "assistant",
+  "model": "gpt-4o-mini",
+  "stop_sequence": null,
+  "usage": {
+    "input_tokens": 1554,
+    "output_tokens": 2659,
+    "cache_read_input_tokens": 0,
+    "cache_creation_input_tokens": 0,
+    "iterations": [
+      {
+        "type": "message",
+        "input_tokens": 90,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "output_tokens": 41
+      },
+      {
+        "type": "advisor_message",
+        "input_tokens": 37,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "output_tokens": 2494,
+        "model": "gemini-3.1-pro-preview"
+      },
+      {
+        "type": "message",
+        "input_tokens": 1427,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "output_tokens": 124
+      }
+    ]
+  },
   "content": [
     {
       "type": "text",
-      "text": "Here is the implementation:"
+      "text": "To .."
     },
     {
       "type": "server_tool_use",
-      "id": "srvtoolu_abc123",
-      "name": "advisor"
+      "id": "call_vjS9XeTVVysRstjeG3prGJz5",
+      "name": "advisor",
+      "input": {}
     },
     {
       "type": "advisor_tool_result",
-      "tool_use_id": "srvtoolu_abc123",
+      "tool_use_id": "call_vjS9XeTVVysRstjeG3prGJz5",
       "content": {
         "type": "advisor_result",
-        "text": "Use a channel-based coordination pattern..."
-      }
-    },
-    {
-      "type": "text",
-      "text": "Here's the full implementation..."
-    }
-  ]
-}
-```
-
-Pass the full assistant content, including advisor blocks, back on subsequent turns. LiteLLM handles stripping and `provider_specific_fields` where applicable.
-
-### Chat Completions API
-
-For chat completions, the advisor blocks are in `provider_specific_fields` on the response message:
-
-```python title="Accessing advisor results from chat completions"
-response = await litellm.acompletion(...)
-
-message = response.choices[0].message
-print(message.content)  # final answer
-
-# Advisor trace — available when the advisor was called
-psf = message.provider_specific_fields or {}
-for block in psf.get("advisor_tool_results", []):
-    if block["type"] == "advisor_tool_result":
-        print("Advisor said:", block["content"]["text"])
-```
-
-```json title="provider_specific_fields structure"
-{
-  "advisor_tool_results": [
-    {
-      "type": "server_tool_use",
-      "id": "call_abc123",
-      "name": "advisor"
-    },
-    {
-      "type": "advisor_tool_result",
-      "tool_use_id": "call_abc123",
-      "content": {
-        "type": "advisor_result",
-        "text": "Use a channel-based coordination pattern..."
+        "text": "Welcome to the project room. As your Technical Advisor, I will help you conceptualize, design, and plan a mini router. … _(full advisor markdown in live responses: phases for use case, hardware, connectivity, OpenWrt stack, thermal/power, and next-step questions — truncated here for docs length.)_"
       }
     }
-  ]
+  ],
+  "stop_reason": "end_turn",
+  "_hidden_params": {
+    "response_cost": 0.030328550000000003
+  }
 }
 ```
 
@@ -682,7 +600,7 @@ for block in psf.get("advisor_tool_results", []):
 
 ## Cost control
 
-Advisor calls run as separate sub-inferences billed at the advisor model's rates. Usage is reported in `usage.iterations[]` (Messages API) or accumulated in `usage` (Chat Completions):
+Advisor calls run as separate sub-inferences billed at the advisor model's rates. Usage is reported in `usage.iterations[]` in both messages endpoint and chat completion endpoint
 
 ```json title="Messages API usage with advisor sub-inference"
 {
@@ -711,8 +629,6 @@ Advisor calls run as separate sub-inferences billed at the advisor model's rates
 }
 ```
 
-Top-level `usage` reflects executor tokens; advisor tokens appear in `iterations` with `type: "advisor_message"`.
-
 Use `max_uses` in the tool definition to cap how many times the advisor can be called per request:
 
 ```python
@@ -728,99 +644,11 @@ tools=[
 
 ---
 
-## Remapping the advisor model
+## Logging
 
-Some clients (e.g. Claude Code) hardcode the advisor tool's `model` field — you cannot change what the client sends. If you still want the advisor sub-call to hit a different model (for cost, availability, or routing reasons), remap the advisor model using `model_group_alias` on the router.
+In the proxy **Logs** UI you can open a single orchestrated row and see the aggregated cost, token usage, and **cost breakdown** for advisor calls.
 
-When the advisor tool's `model` resolves through `model_group_alias` to a **non-native Anthropic advisor model**, LiteLLM automatically takes over the orchestration loop — even when the executor is direct Anthropic — and routes the advisor sub-call through the router. The client keeps seeing the original alias in every response surface (`iterations[].model`), so the remap stays opaque to the caller.
-
-```yaml showLineNumbers title="config.yaml — remap claude-opus-4-7 advisor to o3"
-model_list:
-  - model_name: o3
-    litellm_params:
-      model: openai/o3
-      api_key: os.environ/OPENAI_API_KEY
-
-  - model_name: claude-sonnet
-    litellm_params:
-      model: anthropic/claude-sonnet-4-6
-      api_key: os.environ/ANTHROPIC_API_KEY
-
-router_settings:
-  model_group_alias:
-    claude-opus-4-7: o3
-```
-
-With the config above, a client request that includes:
-
-```json
-{
-  "type": "advisor_20260301",
-  "name": "advisor",
-  "model": "claude-opus-4-7"
-}
-```
-
-will:
-
-1. Run the executor against Anthropic as usual.
-2. When the executor calls the advisor, route the sub-call through the router to `openai/o3` using the `o3` deployment's credentials.
-3. Emit `iterations[].model == "claude-opus-4-7"` in the response so the client never sees `o3`.
-
-:::info When does the remap trigger?
-
-Only when the resolved model is **not** a native Anthropic advisor (currently `claude-opus-4-6` and `claude-opus-4-7`). If you alias one native advisor model to another (e.g. `claude-opus-4-7 -> claude-opus-4-6`), Anthropic's server-side advisor still handles the request.
-
-:::
-
-### Claude Code quickstart: use any advisor model
-
-If you are using Claude Code and want to run the advisor on a non-Claude model (for example `openai/o3`, Gemini, Bedrock, etc.), use this pattern:
-
-1. Keep Claude Code's advisor tool unchanged:
-
-```json
-{
-  "type": "advisor_20260301",
-  "name": "advisor",
-  "model": "claude-opus-4-7"
-}
-```
-
-2. Map that model name to your actual advisor deployment in LiteLLM:
-
-```yaml showLineNumbers title="config.yaml — Claude Code advisor alias"
-model_list:
-  - model_name: my-real-advisor
-    litellm_params:
-      model: openai/o3
-      api_key: os.environ/OPENAI_API_KEY
-
-  - model_name: claude-sonnet
-    litellm_params:
-      model: anthropic/claude-sonnet-4-6
-      api_key: os.environ/ANTHROPIC_API_KEY
-
-router_settings:
-  model_group_alias:
-    claude-opus-4-7: my-real-advisor
-```
-
-3. Send requests through `/v1/messages` as usual from Claude Code.
-
-What happens at runtime:
-
-- Claude Code sends `model: "claude-opus-4-7"` in the advisor tool.
-- LiteLLM resolves it to `my-real-advisor` and routes the sub-call to `openai/o3`.
-- Claude Code still sees `claude-opus-4-7` in response-visible fields (alias stays opaque).
-
-:::tip Troubleshooting (Claude Code + non-native advisor)
-
-- If you see `Invalid value: 'thinking'` from OpenAI, upgrade to a LiteLLM build that includes advisor sub-call message translation for non-Anthropic providers.
-- If advisor output appears blank in streamed UI, use a build with `advisor_tool_result` text included in `content_block_start` for fake-streamed advisor responses.
-- If spend logs are missing for streamed advisor calls, use a build with deferred logging support for non-`CustomStreamWrapper` anthropic streams.
-
-:::
+![LiteLLM proxy logs: advisor orchestration cost breakdown and usage](/img/blog/advisor-tool-logging-ui.png)
 
 ---
 

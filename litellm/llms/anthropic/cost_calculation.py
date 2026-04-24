@@ -110,11 +110,21 @@ def get_cost_for_anthropic_web_search(
     if model_info is None:
         return 0.0
 
-    if (
-        usage is None
-        or usage.server_tool_use is None
-        or usage.server_tool_use.web_search_requests is None
-    ):
+    if usage is None or usage.server_tool_use is None:
+        return 0.0
+
+    server_tool_use = usage.server_tool_use
+    web_search_requests: Optional[int] = None
+    if isinstance(server_tool_use, dict):
+        raw_value = server_tool_use.get("web_search_requests")
+        if isinstance(raw_value, int):
+            web_search_requests = raw_value
+    else:
+        raw_value = getattr(server_tool_use, "web_search_requests", None)
+        if isinstance(raw_value, int):
+            web_search_requests = raw_value
+
+    if web_search_requests is None:
         return 0.0
 
     ## Get the cost per web search request
@@ -128,5 +138,5 @@ def get_cost_for_anthropic_web_search(
         return 0.0
 
     ## Calculate the total cost
-    total_cost = cost_per_web_search_request * usage.server_tool_use.web_search_requests
+    total_cost = cost_per_web_search_request * web_search_requests
     return total_cost

@@ -1478,6 +1478,21 @@ class Logging(LiteLLMLoggingBaseClass):
         if cache_hit is True:
             return 0.0
 
+        # If an orchestrator (e.g. advisor tool loop in /v1/messages) has
+        # already aggregated cost into self.cost_breakdown before this path
+        # runs again (typically on the streaming @client wrapper's
+        # update_response_metadata pass with a FakeAnthropicMessagesStream
+        # iterator), preserve the breakdown and return the aggregated total.
+        # Falling through to litellm.response_cost_calculator would recompute
+        # with zero usage (stream not yet consumed) and call
+        # _store_cost_breakdown_in_logging_obj, wiping additional_costs.
+        if (
+            self.cost_breakdown is not None
+            and self.cost_breakdown.get("total_cost") is not None
+            and self.cost_breakdown["total_cost"] > 0
+        ):
+            return self.cost_breakdown["total_cost"]
+
         if isinstance(result, BaseModel) and hasattr(result, "_hidden_params"):
             hidden_params = getattr(result, "_hidden_params", {})
             if (
@@ -1489,6 +1504,20 @@ class Logging(LiteLLMLoggingBaseClass):
                 router_model_id is None and "model_id" in hidden_params
             ):  # use model_id if not already set
                 router_model_id = hidden_params["model_id"]
+        elif isinstance(result, dict):
+            # Dict-shaped responses (e.g. AnthropicMessagesResponse returned by
+            # ``/v1/messages``) can carry a pre-computed ``response_cost`` on
+            # ``_hidden_params`` — most commonly when an orchestrator (advisor
+            # tool loop) has already aggregated cost across multiple sub-calls.
+            # Returning it early avoids ``litellm.response_cost_calculator``
+            # recomputing from per-request usage and overwriting the
+            # ``cost_breakdown`` the orchestrator set via ``set_cost_breakdown``.
+            dict_hidden_params = result.get("_hidden_params") or {}
+            if (
+                isinstance(dict_hidden_params, dict)
+                and dict_hidden_params.get("response_cost") is not None
+            ):
+                return dict_hidden_params["response_cost"]
 
         # Fallback: extract router_model_id from litellm_params when not available
         # from the result object. ResponsesAPIResponse objects (used by /v1/responses
@@ -3445,13 +3474,19 @@ class Logging(LiteLLMLoggingBaseClass):
                 litellm_params={},
             )
         else:
-            from litellm.types.llms.anthropic import AnthropicResponse
-
-            pydantic_result = AnthropicResponse.model_validate(result)
-            import httpx
-
+            # NOTE: we intentionally pass the raw dict directly to
+            # ``transform_parsed_response`` instead of going through
+            # ``AnthropicResponse.model_validate(...).model_dump()``. The
+            # strict schema only allows ``text``/``tool_use``/``thinking``/
+            # ``redacted_thinking`` content blocks, which breaks logging for
+            # any response that carries provider-specific blocks like
+            # ``server_tool_use``, ``*_tool_result`` (web search, code
+            # execution, advisor tool, etc.). ``transform_parsed_response``
+            # and its ``extract_response_content`` helper already handle
+            # these natively, so validation adds no value here.
+            completion_response = result if isinstance(result, dict) else {}
             result = litellm.AnthropicConfig().transform_parsed_response(
-                completion_response=pydantic_result.model_dump(),
+                completion_response=completion_response,
                 raw_response=httpx.Response(
                     status_code=200,
                     headers={},

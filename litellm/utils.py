@@ -2738,6 +2738,46 @@ def supports_reasoning(model: str, custom_llm_provider: Optional[str] = None) ->
     )
 
 
+def resolve_proxy_model_alias_to_litellm_model(model: str) -> str:
+    """Resolve a proxy ``model_name`` alias to configured ``litellm_params.model``."""
+    try:
+        from litellm.proxy.proxy_server import llm_router
+    except Exception:
+        return ""
+
+    if llm_router is None:
+        return ""
+
+    try:
+        model_list = llm_router.get_model_list(model_name=model) or []
+    except Exception:
+        model_list = getattr(llm_router, "model_list", None) or []
+
+    for deployment in model_list:
+        if not isinstance(deployment, dict):
+            continue
+        litellm_params = deployment.get("litellm_params") or {}
+        configured_model = litellm_params.get("model")
+        if isinstance(configured_model, str):
+            return configured_model
+    return ""
+
+
+def supports_native_advisor_tool(
+    model: str, custom_llm_provider: Optional[str] = None
+) -> bool:
+    """
+    Check if the given model supports Anthropic's native advisor tool.
+    """
+    resolved_model = resolve_proxy_model_alias_to_litellm_model(model)
+    model_to_check = resolved_model or model
+    return _supports_factory(
+        model=model_to_check,
+        custom_llm_provider=custom_llm_provider,
+        key="supports_native_advisor_tool",
+    )
+
+
 def supports_native_structured_output(
     model: str, custom_llm_provider: Optional[str] = None
 ) -> bool:

@@ -1,0 +1,88 @@
+<svg width="1200" height="760" viewBox="0 0 1200 760" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
+  <title id="title">LiteLLM Advisor Orchestration Flow</title>
+  <desc id="desc">Flow for non-Anthropic providers: request conversion, executor call, advisor loop, and final response.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
+      <path d="M0,0 L12,6 L0,12 Z" fill="#475467" />
+    </marker>
+    <style>
+      .title { font: 700 30px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #111827; }
+      .subtitle { font: 500 16px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #475467; }
+      .box-title { font: 700 17px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #111827; }
+      .box-text { font: 500 14px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #344054; }
+      .decision-text { font: 700 15px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #111827; text-anchor: middle; }
+      .label { font: 600 13px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #475467; }
+      .stroke { stroke: #98A2B3; stroke-width: 2; }
+      .flow { fill: none; stroke: #475467; stroke-width: 2.5; marker-end: url(#arrow); }
+    </style>
+  </defs>
+
+  <rect x="0" y="0" width="1200" height="760" fill="#F8FAFC" />
+  <text x="52" y="58" class="title">Advisor Tool Orchestration (Non-Anthropic Providers)</text>
+  <text x="52" y="84" class="subtitle">LiteLLM converts advisor tools and runs the advisor loop server-side.</text>
+
+  <!-- Request -->
+  <rect x="70" y="130" width="300" height="110" rx="14" fill="#FFFFFF" class="stroke" />
+  <text x="92" y="164" class="box-title">Incoming Request</text>
+  <text x="92" y="190" class="box-text">tools: advisor_20260301</text>
+  <text x="92" y="212" class="box-text">model: openai/gpt-4.1-mini (example)</text>
+
+  <!-- Conversion -->
+  <rect x="470" y="130" width="360" height="130" rx="14" fill="#ECF3FF" class="stroke" />
+  <text x="492" y="164" class="box-title">AdvisorInterceptionLogger</text>
+  <text x="492" y="190" class="box-text">Converts advisor tool -&gt; standard function tool</text>
+  <text x="492" y="212" class="box-text">Stores advisor config (model, max_uses, creds)</text>
+  <text x="492" y="234" class="box-text">Disables raw provider stream while loop runs</text>
+
+  <!-- Executor call -->
+  <rect x="900" y="130" width="240" height="110" rx="14" fill="#FFFFFF" class="stroke" />
+  <text x="922" y="164" class="box-title">Executor Call</text>
+  <text x="922" y="190" class="box-text">OpenAI / Gemini / Bedrock / etc.</text>
+  <text x="922" y="212" class="box-text">Returns tool call or final text</text>
+
+  <!-- Decision 1 -->
+  <polygon points="1020,300 1120,380 1020,460 920,380" fill="#FFF7E6" class="stroke" />
+  <text x="1020" y="374" class="decision-text">Advisor</text>
+  <text x="1020" y="394" class="decision-text">tool called?</text>
+
+  <!-- Decision 2 -->
+  <polygon points="720,300 820,380 720,460 620,380" fill="#FFF7E6" class="stroke" />
+  <text x="720" y="374" class="decision-text">max_uses</text>
+  <text x="720" y="394" class="decision-text">exceeded?</text>
+
+  <!-- Advisor sub-call -->
+  <rect x="550" y="530" width="340" height="100" rx="14" fill="#ECFDF3" class="stroke" />
+  <text x="572" y="562" class="box-title">Advisor Sub-call</text>
+  <text x="572" y="586" class="box-text">model: claude-opus-4-6</text>
+  <text x="572" y="608" class="box-text">advisor response injected as tool result</text>
+
+  <!-- Error -->
+  <rect x="125" y="530" width="250" height="100" rx="14" fill="#FEF3F2" class="stroke" />
+  <text x="147" y="564" class="box-title">AdvisorMaxIterationsError</text>
+  <text x="147" y="588" class="box-text">Hard cap when max_uses is reached</text>
+
+  <!-- Final -->
+  <rect x="895" y="530" width="250" height="100" rx="14" fill="#EEF4FF" class="stroke" />
+  <text x="917" y="564" class="box-title">Final Response</text>
+  <text x="917" y="588" class="box-text">Clean assistant output</text>
+  <text x="917" y="610" class="box-text">No advisor-only blocks leaked</text>
+
+  <!-- Arrows -->
+  <path d="M370 185 L470 185" class="flow" />
+  <path d="M830 185 L900 185" class="flow" />
+  <path d="M1020 240 L1020 298" class="flow" />
+
+  <path d="M920 380 L822 380" class="flow" />
+  <text x="865" y="366" class="label">yes</text>
+
+  <path d="M620 380 L250 380 L250 528" class="flow" />
+  <text x="430" y="366" class="label">yes</text>
+
+  <path d="M720 460 L720 530" class="flow" />
+  <text x="734" y="496" class="label">no</text>
+
+  <path d="M720 630 L720 690 L860 690 L860 380 L920 380" class="flow" />
+
+  <path d="M1020 460 L1020 530" class="flow" />
+  <text x="1034" y="496" class="label">no</text>
+</svg>

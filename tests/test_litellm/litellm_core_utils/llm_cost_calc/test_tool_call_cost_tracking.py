@@ -139,6 +139,106 @@ def test_get_cost_for_anthropic_web_search():
     assert cost > 0.0
 
 
+def test_get_cost_for_anthropic_web_search_with_dict_server_tool_use():
+    """
+    Regression test for Anthropic passthrough streaming reconstruction where
+    usage.server_tool_use may be a raw dict instead of ServerToolUse.
+    """
+    from litellm.types.utils import Usage
+
+    model = "claude-3-7-sonnet-20250219"
+    usage = Usage(prompt_tokens=1, completion_tokens=1, total_tokens=2)
+    usage.server_tool_use = {"web_search_requests": 1, "tool_search_requests": None}
+
+    cost = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
+        model=model,
+        usage=usage,
+        response_object=None,
+        standard_built_in_tools_params=None,
+        custom_llm_provider="anthropic",
+    )
+    assert cost > 0.0
+
+
+def test_completion_cost_anthropic_web_search_with_dict_server_tool_use():
+    """
+    Regression test for completion_cost() when usage.server_tool_use is a dict.
+    This mirrors Anthropic passthrough streaming reconstruction behavior.
+    """
+    from litellm.types.utils import Choices, Message, Usage
+
+    model = "claude-3-7-sonnet-20250219"
+
+    baseline_response = ModelResponse(
+        id="test-id-baseline",
+        choices=[
+            Choices(
+                finish_reason="stop",
+                index=0,
+                message=Message(content="test response", role="assistant"),
+            )
+        ],
+        created=1234567890,
+        model=model,
+        object="chat.completion",
+        system_fingerprint=None,
+    )
+    baseline_response.usage = Usage(
+        prompt_tokens=100,
+        completion_tokens=50,
+        total_tokens=150,
+    )
+
+    response_with_search = ModelResponse(
+        id="test-id-search",
+        choices=[
+            Choices(
+                finish_reason="stop",
+                index=0,
+                message=Message(content="test response", role="assistant"),
+            )
+        ],
+        created=1234567890,
+        model=model,
+        object="chat.completion",
+        system_fingerprint=None,
+    )
+    usage_with_search = Usage(
+        prompt_tokens=100,
+        completion_tokens=50,
+        total_tokens=150,
+    )
+    usage_with_search.server_tool_use = {
+        "web_search_requests": 1,
+        "tool_search_requests": None,
+    }
+    response_with_search.usage = usage_with_search
+
+    baseline_cost = litellm.completion_cost(
+        completion_response=baseline_response,
+        model=model,
+        custom_llm_provider="anthropic",
+        standard_built_in_tools_params=None,
+    )
+    search_cost = litellm.completion_cost(
+        completion_response=response_with_search,
+        model=model,
+        custom_llm_provider="anthropic",
+        standard_built_in_tools_params=None,
+    )
+
+    built_in_tool_cost = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
+        model=model,
+        usage=usage_with_search,
+        response_object=response_with_search,
+        standard_built_in_tools_params=None,
+        custom_llm_provider="anthropic",
+    )
+
+    assert built_in_tool_cost > 0.0
+    assert search_cost == pytest.approx(baseline_cost + built_in_tool_cost)
+
+
 @pytest.mark.parametrize(
     "model", ["gemini/gemini-2.0-flash-001", "gemini-2.0-flash-001"]
 )

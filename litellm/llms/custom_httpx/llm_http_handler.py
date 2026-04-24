@@ -452,6 +452,12 @@ class BaseLLMHTTPHandler:
                 "websearch_interception_converted_stream"
             ] = True
 
+        # Check if stream was converted for Advisor interception
+        if litellm_params.get("_advisor_interception_converted_stream", False):
+            logging_obj.model_call_details["_advisor_interception_converted_stream"] = (
+                True
+            )
+
         if acompletion is True:
             if stream is True:
                 data = self._add_stream_param_to_request_body(
@@ -4963,6 +4969,40 @@ class BaseLLMHTTPHandler:
                         kwargs=kwargs_with_provider,
                     )
 
+                    if should_run:
+                        # Second: Execute agentic loop
+                        # Add custom_llm_provider to kwargs so the agentic loop can reconstruct the full model name
+                        kwargs_with_provider = kwargs.copy() if kwargs else {}
+                        kwargs_with_provider["custom_llm_provider"] = (
+                            custom_llm_provider
+                        )
+                        agentic_response = (
+                            await callback.async_run_chat_completion_agentic_loop(
+                                tools=tool_calls,
+                                model=model,
+                                messages=messages,
+                                response=response,
+                                optional_params=optional_params,
+                                logging_obj=logging_obj,
+                                stream=stream,
+                                kwargs=kwargs_with_provider,
+                            )
+                        )
+                        # Convert back to streaming if stream was converted for interception.
+                        _converted_stream = (
+                            logging_obj.model_call_details.get(
+                                "_advisor_interception_converted_stream", False
+                            )
+                            if logging_obj is not None
+                            else False
+                        )
+                        if _converted_stream and hasattr(agentic_response, "choices"):
+                            from litellm.llms.base_llm.base_model_iterator import (
+                                convert_model_response_to_streaming,
+                            )
+
+                            return convert_model_response_to_streaming(agentic_response)
+                        return agentic_response
                 plan = await callback.async_build_chat_completion_agentic_loop_plan(
                     tools=tool_calls,
                     model=model,
@@ -5005,7 +5045,7 @@ class BaseLLMHTTPHandler:
 
         # Check if we need to convert response to fake stream for chat completions
         # This happens when:
-        # 1. Stream was originally True but converted to False for WebSearch interception
+        # 1. Stream was originally True but converted to False for interception
         # 2. No agentic loop ran (LLM didn't use the tool)
         # 3. We have a non-streaming response that needs to be converted to streaming
         websearch_converted_stream = (
@@ -5015,20 +5055,26 @@ class BaseLLMHTTPHandler:
             if logging_obj is not None
             else False
         )
+        advisor_converted_stream = (
+            logging_obj.model_call_details.get(
+                "_advisor_interception_converted_stream", False
+            )
+            if logging_obj is not None
+            else False
+        )
 
-        if websearch_converted_stream:
+        if websearch_converted_stream or advisor_converted_stream:
             from litellm._logging import verbose_logger
             from litellm.llms.base_llm.base_model_iterator import (
                 convert_model_response_to_streaming,
             )
 
             verbose_logger.debug(
-                "WebSearchInterception: No tool call made, converting non-streaming chat completion to fake stream"
+                "Interception: No tool call made, converting non-streaming chat completion to fake stream"
             )
 
             # Convert the non-streaming ModelResponse to a fake stream
             if hasattr(response, "choices"):
-                # Use the existing converter for ModelResponse
                 fake_stream = convert_model_response_to_streaming(response)
                 return fake_stream
 

@@ -17,6 +17,10 @@ from litellm.types.llms.anthropic_messages.anthropic_response import (
 )
 from litellm.types.llms.anthropic_tool_search import get_tool_search_beta_header
 from litellm.types.router import GenericLiteLLMParams
+from litellm.utils import (
+    resolve_proxy_model_alias_to_litellm_model,
+    supports_native_advisor_tool,
+)
 
 from ...common_utils import (
     AnthropicError,
@@ -26,6 +30,53 @@ from ...common_utils import (
 )
 
 DEFAULT_ANTHROPIC_API_VERSION = "2023-06-01"
+
+
+def _normalize_anthropic_advisor_tool_models(tools: List[Dict]) -> List[Dict]:
+    """
+    Normalize advisor tool model names for Anthropic native /v1/messages calls.
+
+    Anthropic expects advisor tool model values like ``claude-opus-4-6``.
+    Proxy alias names (e.g. ``claude_opus``) and provider-prefixed values
+    (e.g. ``anthropic/claude-opus-4-6``) are converted.
+
+    Defensive guard: if the alias resolves to a model Anthropic's native
+    advisor tool does not support (e.g. ``claude-opus-4-7`` -> ``o3`` via
+    ``model_group_alias``), leave the original alias string in place rather
+    than forwarding the unsupported model to Anthropic. In that case
+    ``AdvisorOrchestrationHandler`` is responsible for intercepting the
+    request and running the loop through litellm; this branch only runs if
+    the interceptor was somehow bypassed.
+    """
+    normalized_tools: List[Dict] = []
+    for tool in tools:
+        if not isinstance(tool, dict):
+            normalized_tools.append(tool)
+            continue
+        if tool.get("type") != ANTHROPIC_ADVISOR_TOOL_TYPE:
+            normalized_tools.append(tool)
+            continue
+
+        updated_tool = dict(tool)
+        advisor_model = updated_tool.get("model")
+        if isinstance(advisor_model, str) and advisor_model.strip():
+            original_model = advisor_model.strip()
+            resolved = resolve_proxy_model_alias_to_litellm_model(original_model)
+            canonical_model = resolved or original_model
+            if canonical_model.startswith("anthropic/"):
+                canonical_model = canonical_model.split("/", 1)[1]
+            # Only substitute the resolved/canonical value if Anthropic
+            # natively supports it as an advisor model. Otherwise keep the
+            # caller's original alias so we never leak a non-Anthropic model
+            # name (e.g. ``o3``) into the Anthropic request body.
+            if supports_native_advisor_tool(
+                model=canonical_model, custom_llm_provider="anthropic"
+            ):
+                updated_tool["model"] = canonical_model
+            else:
+                updated_tool["model"] = original_model
+        normalized_tools.append(updated_tool)
+    return normalized_tools
 
 
 class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
@@ -255,6 +306,10 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         # Auto-strip advisor blocks from history if advisor tool is absent.
         # Prevents Anthropic 400: advisor_tool_result in history requires advisor tool.
         _tools = anthropic_messages_optional_request_params.get("tools") or []
+        if _tools:
+            normalized_tools = _normalize_anthropic_advisor_tool_models(_tools)
+            anthropic_messages_optional_request_params["tools"] = normalized_tools
+            _tools = normalized_tools
         _has_advisor = any(
             isinstance(t, dict) and t.get("type") == ANTHROPIC_ADVISOR_TOOL_TYPE
             for t in _tools

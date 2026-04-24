@@ -1171,6 +1171,37 @@ class ProxyBaseLLMRequestProcessing:
 
                     logging_obj._on_deferred_stream_complete = _on_deferred_stream_complete  # type: ignore[union-attr]
 
+                # Fallback for streaming responses that are NOT CustomStreamWrapper
+                # (e.g. FakeAnthropicMessagesStreamIterator used by advisor
+                # orchestration). These responses bypass CSW's internal deferred
+                # callback wiring, so without this fallback the outer proxy log row
+                # is never emitted.
+                if (
+                    self._is_streaming_response(response)
+                    and not isinstance(response, CustomStreamWrapper)
+                    and getattr(logging_obj, "_on_deferred_stream_complete", None)
+                    is None
+                ):
+                    _captured_data = self.data
+                    _captured_user_api_key_dict = user_api_key_dict
+                    _captured_logging_obj = logging_obj
+
+                    async def _on_deferred_stream_complete_non_csw(
+                        assembled_response, cache_hit
+                    ):
+                        await ProxyBaseLLMRequestProcessing._run_deferred_stream_guardrails(
+                            captured_data=_captured_data,
+                            captured_user_api_key_dict=_captured_user_api_key_dict,
+                            captured_logging_obj=_captured_logging_obj,
+                            assembled_response=assembled_response,
+                            cache_hit=cache_hit,
+                        )
+
+                    logging_obj._on_deferred_stream_complete = _on_deferred_stream_complete_non_csw  # type: ignore[union-attr]
+                    # _fire_deferred_stream_logging only fires when args are present.
+                    # Non-CSW iterators never set these, so seed default args here.
+                    logging_obj._deferred_stream_complete_args = (None, None)  # type: ignore[union-attr]
+
                 if route_type == "allm_passthrough_route":
                     # Check if response is an async generator
                     if self._is_streaming_response(response):

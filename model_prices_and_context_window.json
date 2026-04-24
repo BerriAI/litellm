@@ -9133,6 +9133,7 @@
         "supports_function_calling": true,
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
+        "supports_native_advisor_tool": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
@@ -9166,6 +9167,7 @@
         "supports_function_calling": true,
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
+        "supports_native_advisor_tool": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
@@ -9197,6 +9199,7 @@
         "supports_assistant_prefill": false,
         "supports_computer_use": true,
         "supports_function_calling": true,
+        "supports_native_advisor_tool": true,
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
@@ -9231,6 +9234,7 @@
         "supports_assistant_prefill": false,
         "supports_computer_use": true,
         "supports_function_calling": true,
+        "supports_native_advisor_tool": true,
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
@@ -38754,6 +38758,7 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "tool_use_system_prompt_tokens": 346,
+        "supports_native_advisor_tool": true,
         "supports_native_structured_output": true,
         "supports_pdf_input": true
     },
@@ -38777,6 +38782,7 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "tool_use_system_prompt_tokens": 346,
+        "supports_native_advisor_tool": true,
         "supports_native_structured_output": true,
         "supports_pdf_input": true
     }
