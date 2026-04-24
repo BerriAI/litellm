@@ -197,7 +197,7 @@ class QdrantSemanticCache(BaseCache):
         # get the embedding
         embedding = embedding_response["data"][0]["embedding"]
 
-        value = json.dumps(value)
+        value = json.dumps(value, default=str)
         assert isinstance(value, str)
 
         data = {
@@ -329,7 +329,7 @@ class QdrantSemanticCache(BaseCache):
         # get the embedding
         embedding = embedding_response["data"][0]["embedding"]
 
-        value = json.dumps(value)
+        value = json.dumps(value, default=str)
         assert isinstance(value, str)
 
         data = {
