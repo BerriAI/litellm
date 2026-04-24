@@ -383,21 +383,27 @@ class VertexPassthroughLoggingHandler:
                 response_json=response_json,
             )
 
+        custom_llm_provider = (
+            VertexPassthroughLoggingHandler._get_custom_llm_provider_from_url(
+                url_route
+            )
+        )
+
         litellm_embedding_response.model = model
         logging_obj.model = model
         logging_obj.model_call_details["model"] = model
-        logging_obj.model_call_details["custom_llm_provider"] = "vertex_ai"
-        logging_obj.custom_llm_provider = "vertex_ai"
+        logging_obj.model_call_details["custom_llm_provider"] = custom_llm_provider
+        logging_obj.custom_llm_provider = custom_llm_provider
 
         response_cost = litellm.completion_cost(
             completion_response=litellm_embedding_response,
             model=model,
-            custom_llm_provider="vertex_ai",
+            custom_llm_provider=custom_llm_provider,
         )
 
         kwargs["response_cost"] = response_cost
         kwargs["model"] = model
-        kwargs["custom_llm_provider"] = "vertex_ai"
+        kwargs["custom_llm_provider"] = custom_llm_provider
         logging_obj.model_call_details["response_cost"] = response_cost
 
         return {
