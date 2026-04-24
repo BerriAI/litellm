@@ -223,17 +223,25 @@ async def list_memory(
     """List memory entries visible to the caller."""
     prisma_client = _require_prisma()
 
-    where: dict = {}
-    vis = _visibility_filter(user_api_key_dict)
-    if vis is not None:
-        where.update(vis)
-    # key_prefix takes precedence over exact `key` if both are passed.
-    # Both sit under the visibility filter (ANDed), so prefix scans can
-    # never leak across user/team scopes.
+    # Build the key filter first (prefix wins if both `key` and `key_prefix`
+    # are passed). Then AND it with the visibility filter via an explicit
+    # top-level "AND" — safer than `dict.update` since future visibility
+    # filters could grow an "OR" key that would clobber this one if merged
+    # by key.
+    key_filter: dict = {}
     if key_prefix is not None:
-        where["key"] = {"startsWith": key_prefix}
+        key_filter["key"] = {"startsWith": key_prefix}
     elif key is not None:
-        where["key"] = key
+        key_filter["key"] = key
+
+    vis = _visibility_filter(user_api_key_dict)
+    where: dict
+    if vis is None:
+        where = key_filter
+    elif not key_filter:
+        where = vis
+    else:
+        where = {"AND": [key_filter, vis]}
 
     try:
         total = await prisma_client.db.litellm_memorytable.count(where=where)
@@ -254,10 +262,9 @@ async def _find_memory_for_caller(
     prisma_client: Any, key: str, user_api_key_dict: UserAPIKeyAuth
 ) -> Any:
     """Look up a memory row by key, scoped to the caller's visibility."""
-    where: dict = {"key": key}
+    key_filter = {"key": key}
     vis = _visibility_filter(user_api_key_dict)
-    if vis is not None:
-        where.update(vis)
+    where = key_filter if vis is None else {"AND": [key_filter, vis]}
     rows = await prisma_client.db.litellm_memorytable.find_many(
         where=where, take=1, order={"updated_at": "desc"}
     )

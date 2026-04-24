@@ -55,6 +55,10 @@ class _InMemoryMemoryTable:
 
     def _matches(self, row: MagicMock, where: Dict[str, Any]) -> bool:
         for k, v in where.items():
+            if k == "AND":
+                if not all(self._matches(row, clause) for clause in v):
+                    return False
+                continue
             if k == "OR":
                 if not any(self._matches(row, clause) for clause in v):
                     return False
