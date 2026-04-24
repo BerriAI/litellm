@@ -12,10 +12,6 @@ vi.mock("@tremor/react", () => ({
   Icon: ({ onClick, ...props }: any) => <button data-testid="refresh-icon" onClick={onClick} />,
 }));
 
-vi.mock("@heroicons/react/outline", () => ({
-  RefreshIcon: () => <svg data-testid="refresh-svg" />,
-}));
-
 const renderTabs = (props: Partial<Parameters<typeof TeamsHeaderTabs>[0]> = {}) => {
   const defaults = {
     lastRefreshed: "",

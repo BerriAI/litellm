@@ -6,26 +6,12 @@ import { Team } from "@/components/key_team_helpers/key_list";
 import TeamsTable from "./TeamsTable";
 
 vi.mock("@tremor/react", () => ({
-  Button: React.forwardRef<HTMLButtonElement, any>(({ children, ...props }, ref) =>
-    React.createElement("button", { ...props, ref }, children),
-  ),
-  Icon: ({ onClick, ...props }: any) => <button data-testid={props["data-testid"] || "icon-btn"} onClick={onClick} aria-label={props["aria-label"]} />,
   Table: ({ children }: any) => <table>{children}</table>,
   TableHead: ({ children }: any) => <thead>{children}</thead>,
   TableBody: ({ children }: any) => <tbody>{children}</tbody>,
   TableRow: ({ children }: any) => <tr>{children}</tr>,
   TableHeaderCell: ({ children }: any) => <th>{children}</th>,
   TableCell: ({ children, ...props }: any) => <td {...props}>{children}</td>,
-  Text: ({ children }: any) => <span>{children}</span>,
-}));
-
-vi.mock("antd", () => ({
-  Tooltip: ({ children }: any) => <>{children}</>,
-}));
-
-vi.mock("@heroicons/react/outline", () => ({
-  PencilAltIcon: () => <svg data-testid="pencil-icon" />,
-  TrashIcon: () => <svg data-testid="trash-icon" />,
 }));
 
 vi.mock("@/utils/dataUtils", () => ({
@@ -103,18 +89,26 @@ describe("TeamsTable", () => {
     expect(screen.getByText("org-1")).toBeInTheDocument();
   });
 
-  it("should show edit and delete icons for Admin users", () => {
+  it("should show edit and delete buttons for Admin users", () => {
     renderTable({ userRole: "Admin" });
 
-    expect(screen.getAllByTestId("icon-btn").length).toBeGreaterThanOrEqual(2);
+    expect(
+      screen.getByRole("button", { name: /edit team/i }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /delete team/i }),
+    ).toBeInTheDocument();
   });
 
-  it("should not show edit and delete icons for non-Admin users", () => {
+  it("should not show edit and delete buttons for non-Admin users", () => {
     renderTable({ userRole: "Internal User" });
 
-    // Only the team ID button should be present, no icon-btn for edit/delete
-    const iconBtns = screen.queryAllByTestId("icon-btn");
-    expect(iconBtns).toHaveLength(0);
+    expect(
+      screen.queryByRole("button", { name: /edit team/i }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /delete team/i }),
+    ).not.toBeInTheDocument();
   });
 
   it("should call setSelectedTeamId when team ID button is clicked", async () => {
@@ -122,7 +116,7 @@ describe("TeamsTable", () => {
     const setSelectedTeamId = vi.fn();
     renderTable({ setSelectedTeamId });
 
-    await user.click(screen.getByText("team-ab..."));
+    await user.click(screen.getByTestId("team-id-cell"));
 
     expect(setSelectedTeamId).toHaveBeenCalledWith("team-abc1234");
   });

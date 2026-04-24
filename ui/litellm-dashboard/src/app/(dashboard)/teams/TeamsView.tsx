@@ -3,12 +3,13 @@ import { useQueryClient } from "@tanstack/react-query";
 import { organizationKeys } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 import { teamDeleteCall, Organization } from "@/components/networking";
 import { fetchTeams } from "@/components/common_components/fetch_teams";
-import { Form } from "antd";
 import TeamInfoView from "@/components/team/TeamInfo";
 import TeamSSOSettings from "@/components/TeamSSOSettings";
-// eslint-disable-next-line litellm-ui/no-banned-ui-imports
 import { isAdminRole } from "@/utils/roles";
-import { Card, Button, Col, Text, Grid, TabPanel } from "@tremor/react";
+// eslint-disable-next-line litellm-ui/no-banned-ui-imports
+import { TabPanel } from "@tremor/react";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
 import AvailableTeamsPanel from "@/components/team/available_teams";
 import type { KeyResponse, Team } from "@/components/key_team_helpers/key_list";
 
@@ -68,15 +69,10 @@ const TeamsView: React.FC<TeamProps> = ({
     sort_order: "desc",
   });
 
-  const [form] = Form.useForm();
-  const [memberForm] = Form.useForm();
-
   const [selectedTeamId, setSelectedTeamId] = useState<string | null>(null);
   const [editTeam, setEditTeam] = useState<boolean>(false);
 
   const [isTeamModalVisible, setIsTeamModalVisible] = useState(false);
-  const [isAddMemberModalVisible, setIsAddMemberModalVisible] = useState(false);
-  const [isEditMemberModalVisible, setIsEditMemberModalVisible] = useState(false);
   const [userModels, setUserModels] = useState<string[]>([]);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [teamToDelete, setTeamToDelete] = useState<string | null>(null);
@@ -111,26 +107,17 @@ const TeamsView: React.FC<TeamProps> = ({
 
   const handleOk = () => {
     setIsTeamModalVisible(false);
-    form.resetFields();
     setLoggingSettings([]);
     setModelAliases({});
   };
 
-  const handleMemberOk = () => {
-    setIsAddMemberModalVisible(false);
-    setIsEditMemberModalVisible(false);
-    memberForm.resetFields();
-  };
-
   const handleCancel = () => {
     setIsTeamModalVisible(false);
-    form.resetFields();
     setLoggingSettings([]);
     setModelAliases({});
   };
 
   const handleDelete = async (team_id: string) => {
-    // Set the team to delete and open the confirmation modal
     setTeamToDelete(team_id);
     setIsDeleteModalOpen(true);
   };
@@ -143,20 +130,16 @@ const TeamsView: React.FC<TeamProps> = ({
     try {
       await teamDeleteCall(accessToken, teamToDelete);
       queryClient.invalidateQueries({ queryKey: organizationKeys.all });
-      // Successfully completed the deletion. Update the state to trigger a rerender.
       fetchTeams(accessToken, userID, userRole, currentOrg, setTeams);
     } catch (error) {
       console.error("Error deleting the team:", error);
-      // Handle any error situations, such as displaying an error message to the user.
     }
 
-    // Close the confirmation modal and reset the teamToDelete
     setIsDeleteModalOpen(false);
     setTeamToDelete(null);
   };
 
   const cancelDelete = () => {
-    // Close the confirmation modal and reset the teamToDelete
     setIsDeleteModalOpen(false);
     setTeamToDelete(null);
   };
@@ -177,7 +160,6 @@ const TeamsView: React.FC<TeamProps> = ({
   const handleFilterChange = (key: keyof FilterState, value: string) => {
     const newFilters = { ...filters, [key]: value };
     setFilters(newFilters);
-    // Call teamListCall with the new filters
     if (accessToken) {
       v2TeamListCall(
         accessToken,
@@ -204,7 +186,6 @@ const TeamsView: React.FC<TeamProps> = ({
       sort_order: sortOrder,
     };
     setFilters(newFilters);
-    // Call teamListCall with the new sort parameters
     if (accessToken) {
       v2TeamListCall(
         accessToken,
@@ -232,7 +213,6 @@ const TeamsView: React.FC<TeamProps> = ({
       sort_by: "created_at",
       sort_order: "desc",
     });
-    // Reset teams list
     if (accessToken) {
       v2TeamListCall(accessToken, null, userID || null, null, null)
         .then((response) => {
@@ -248,8 +228,8 @@ const TeamsView: React.FC<TeamProps> = ({
 
   return (
     <div className="w-full mx-4 h-[75vh]">
-      <Grid numItems={1} className="gap-2 p-8 w-full mt-2">
-        <Col numColSpan={1} className="flex flex-col gap-2">
+      <div className="grid grid-cols-1 gap-2 p-8 w-full mt-2">
+        <div className="flex flex-col gap-2">
           {(userRole == "Admin" || userRole == "Org Admin") && (
             <Button className="w-fit" onClick={() => setIsTeamModalVisible(true)}>
               + Create New Team
@@ -269,7 +249,6 @@ const TeamsView: React.FC<TeamProps> = ({
                     }
                     return team;
                   });
-                  // Minimal fix: refresh the full team list after an update
                   if (accessToken) {
                     fetchTeams(accessToken, userID, userRole, currentOrg, setTeams);
                   }
@@ -296,11 +275,11 @@ const TeamsView: React.FC<TeamProps> = ({
           ) : (
             <TeamsHeaderTabs lastRefreshed={lastRefreshed} onRefresh={handleRefreshClick} userRole={userRole}>
               <TabPanel>
-                <Text>
+                <p className="text-sm">
                   Click on &ldquo;Team ID&rdquo; to view team details <b>and</b> manage team members.
-                </Text>
-                <Grid numItems={1} className="gap-2 pt-2 pb-2 h-[75vh] w-full mt-2">
-                  <Col numColSpan={1}>
+                </p>
+                <div className="grid grid-cols-1 gap-2 pt-2 pb-2 h-[75vh] w-full mt-2">
+                  <div>
                     <Card className="w-full mx-auto flex-auto overflow-hidden overflow-y-auto max-h-[50vh]">
                       <div className="border-b px-6 py-4">
                         <div className="flex flex-col space-y-4">
@@ -333,8 +312,8 @@ const TeamsView: React.FC<TeamProps> = ({
                         />
                       )}
                     </Card>
-                  </Col>
-                </Grid>
+                  </div>
+                </div>
               </TabPanel>
               <TabPanel>
                 <AvailableTeamsPanel accessToken={accessToken} userID={userID} />
@@ -362,8 +341,8 @@ const TeamsView: React.FC<TeamProps> = ({
               setIsTeamModalVisible={setIsTeamModalVisible}
             />
           )}
-        </Col>
-      </Grid>
+        </div>
+      </div>
     </div>
   );
 };
