@@ -545,10 +545,9 @@ def cost_per_token(  # noqa: PLR0915
             model=model, custom_llm_provider=custom_llm_provider
         )
 
-        if (
-            (model_info.get("input_cost_per_token") or 0.0) > 0
-            or (model_info.get("output_cost_per_token") or 0.0) > 0
-        ):
+        if (model_info.get("input_cost_per_token") or 0.0) > 0 or (
+            model_info.get("output_cost_per_token") or 0.0
+        ) > 0:
             return generic_cost_per_token(
                 model=model,
                 usage=usage_block,
@@ -966,6 +965,8 @@ def _store_cost_breakdown_in_logging_obj(
     margin_percent: Optional[float] = None,
     margin_fixed_amount: Optional[float] = None,
     margin_total_amount: Optional[float] = None,
+    cache_read_cost: Optional[float] = None,
+    cache_creation_cost: Optional[float] = None,
 ) -> None:
     """
     Helper function to store cost breakdown in the logging object.
@@ -1001,6 +1002,8 @@ def _store_cost_breakdown_in_logging_obj(
             margin_percent=margin_percent,
             margin_fixed_amount=margin_fixed_amount,
             margin_total_amount=margin_total_amount,
+            cache_read_cost=cache_read_cost,
+            cache_creation_cost=cache_creation_cost,
         )
 
     except Exception as breakdown_error:
@@ -1137,9 +1140,9 @@ def completion_cost(  # noqa: PLR0915
                     or isinstance(completion_response, dict)
                 ):  # tts returns a custom class
                     if isinstance(completion_response, dict):
-                        usage_obj: Optional[
-                            Union[dict, Usage]
-                        ] = completion_response.get("usage", {})
+                        usage_obj: Optional[Union[dict, Usage]] = (
+                            completion_response.get("usage", {})
+                        )
                     else:
                         usage_obj = getattr(completion_response, "usage", {})
                     if isinstance(usage_obj, BaseModel) and not _is_known_usage_objects(
@@ -1599,6 +1602,34 @@ def completion_cost(  # noqa: PLR0915
 
                 # Store cost breakdown in logging object if available
                 if litellm_logging_obj is not None:
+                    _cache_read_cost: Optional[float] = None
+                    _cache_creation_cost: Optional[float] = None
+                    if cost_per_token_usage_object is not None:
+                        _cr = getattr(
+                            cost_per_token_usage_object, "cache_read_input_tokens", None
+                        ) or (cost_per_token_usage_object.model_extra or {}).get(
+                            "cache_read_input_tokens"
+                        )
+                        _cc = getattr(
+                            cost_per_token_usage_object,
+                            "cache_creation_input_tokens",
+                            None,
+                        ) or (cost_per_token_usage_object.model_extra or {}).get(
+                            "cache_creation_input_tokens"
+                        )
+                        if (_cr or _cc) and model:
+                            try:
+                                _mi = litellm.get_model_info(
+                                    model=model, custom_llm_provider=custom_llm_provider
+                                )
+                                _cr_rate = _mi.get("cache_read_input_token_cost")
+                                if _cr and _cr_rate is not None:
+                                    _cache_read_cost = float(_cr) * float(_cr_rate)
+                                _cc_rate = _mi.get("cache_creation_input_token_cost")
+                                if _cc and _cc_rate is not None:
+                                    _cache_creation_cost = float(_cc) * float(_cc_rate)
+                            except Exception:
+                                pass
                     _store_cost_breakdown_in_logging_obj(
                         litellm_logging_obj=litellm_logging_obj,
                         prompt_tokens_cost_usd_dollar=prompt_tokens_cost_usd_dollar,
@@ -1612,6 +1643,8 @@ def completion_cost(  # noqa: PLR0915
                         margin_percent=margin_percent,
                         margin_fixed_amount=margin_fixed_amount,
                         margin_total_amount=margin_total_amount,
+                        cache_read_cost=_cache_read_cost,
+                        cache_creation_cost=_cache_creation_cost,
                     )
 
                 return _final_cost

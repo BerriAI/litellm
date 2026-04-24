@@ -40,6 +40,7 @@ from typing import (
     get_args,
 )
 
+from litellm._logging import _redact_string
 from litellm._uuid import uuid
 
 if TYPE_CHECKING:
@@ -76,6 +77,7 @@ from litellm.litellm_core_utils.audio_utils.utils import (
     calculate_request_duration,
     get_audio_file_for_health_check,
 )
+from litellm.litellm_core_utils.completion_timeout import CompletionTimeout
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.get_provider_specific_headers import (
     ProviderSpecificHeaderUtils,
@@ -939,6 +941,14 @@ def responses_api_bridge_check(
     reasoning_effort: Optional[Any] = None,
 ) -> Tuple[dict, str]:
     model_info: Dict[str, Any] = {}
+
+    # Global flag: route ALL OpenAI chat completions through Responses API.
+    # Returns early with minimal model_info; callers only inspect the "mode" key.
+    if litellm.route_all_chat_openai_to_responses and custom_llm_provider == "openai":
+        model = model.replace("responses/", "")
+        model_info["mode"] = "responses"
+        return model_info, model
+
     try:
         model_info = cast(
             dict,
@@ -1400,14 +1410,13 @@ def completion(  # type: ignore # noqa: PLR0915
             )  # support region-based pricing for bedrock
 
         ### TIMEOUT LOGIC ###
-        timeout = timeout or kwargs.get("request_timeout", 600) or 600
-        # set timeout for 10 minutes by default
-        if isinstance(timeout, httpx.Timeout) and not supports_httpx_timeout(
-            custom_llm_provider
-        ):
-            timeout = timeout.read or 600  # default 10 min timeout
-        elif not isinstance(timeout, httpx.Timeout):
-            timeout = float(timeout)  # type: ignore
+        timeout = CompletionTimeout.resolve(
+            timeout,
+            kwargs,
+            custom_llm_provider,
+            global_timeout=getattr(litellm, "request_timeout", None),
+            supports_httpx_timeout=supports_httpx_timeout,
+        )
 
         ### REGISTER CUSTOM MODEL PRICING -- IF GIVEN ###
         if (
@@ -7244,7 +7253,7 @@ async def ahealth_check(
                 f"Mode {mode} not supported. See modes here: https://docs.litellm.ai/docs/proxy/health"
             )
     except Exception as e:
-        stack_trace = traceback.format_exc()
+        stack_trace = _redact_string(traceback.format_exc())
         if isinstance(stack_trace, str):
             stack_trace = stack_trace[:1000]
 
@@ -7388,8 +7397,9 @@ def stream_chunk_builder(  # noqa: PLR0915
         if len(chunks) == 0:
             return None
         ## Route to the text completion logic
-        if isinstance(
-            chunks[0]["choices"][0], litellm.utils.TextChoices
+        first_chunk_with_choices = next((c for c in chunks if c["choices"]), None)
+        if first_chunk_with_choices is not None and isinstance(
+            first_chunk_with_choices["choices"][0], litellm.utils.TextChoices
         ):  # route to the text completion logic
             return stream_chunk_builder_text_completion(
                 chunks=chunks, messages=messages

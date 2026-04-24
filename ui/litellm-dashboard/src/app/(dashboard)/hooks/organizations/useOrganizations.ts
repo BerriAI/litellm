@@ -3,7 +3,7 @@ import { Organization, organizationInfoCall, organizationListCall } from "@/comp
 import { useQuery, useQueryClient, UseQueryResult } from "@tanstack/react-query";
 import { createQueryKeys } from "../common/queryKeysFactory";
 
-const organizationKeys = createQueryKeys("organizations");
+export const organizationKeys = createQueryKeys("organizations");
 export const useOrganizations = (): UseQueryResult<Organization[]> => {
   const { accessToken, userId, userRole } = useAuthorized();
   return useQuery<Organization[]>({

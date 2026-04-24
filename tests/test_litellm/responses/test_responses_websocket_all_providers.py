@@ -1000,7 +1000,9 @@ class TestNativeWebSocketUrlConstruction:
 
         mock_config = MagicMock(spec=OpenAIResponsesAPIConfig)
         mock_config.supports_native_websocket.return_value = True
-        mock_config.get_complete_url.return_value = "https://api.openai.com/v1/responses"
+        mock_config.get_complete_url.return_value = (
+            "https://api.openai.com/v1/responses"
+        )
         mock_config.validate_environment.return_value = {}
 
         mock_logging = MagicMock()
@@ -1024,8 +1026,11 @@ class TestNativeWebSocketUrlConstruction:
 
         assert len(captured_urls) == 1
         from urllib.parse import parse_qs, urlparse
+
         qs = parse_qs(urlparse(captured_urls[0]).query)
-        assert qs.get("model") == ["gpt-4o-mini"], f"Expected model in URL, got: {captured_urls[0]}"
+        assert qs.get("model") == [
+            "gpt-4o-mini"
+        ], f"Expected model in URL, got: {captured_urls[0]}"
 
     @pytest.mark.asyncio
     async def test_ws_url_preserves_existing_params_and_adds_model(self):
@@ -1071,6 +1076,11 @@ class TestNativeWebSocketUrlConstruction:
 
         assert len(captured_urls) == 1
         from urllib.parse import parse_qs, urlparse
+
         qs = parse_qs(urlparse(captured_urls[0]).query)
-        assert qs.get("model") == ["gpt-4o"], f"model missing from URL: {captured_urls[0]}"
-        assert qs.get("api-version") == ["2024-05-01"], f"existing param lost: {captured_urls[0]}"
+        assert qs.get("model") == [
+            "gpt-4o"
+        ], f"model missing from URL: {captured_urls[0]}"
+        assert qs.get("api-version") == [
+            "2024-05-01"
+        ], f"existing param lost: {captured_urls[0]}"

@@ -24,13 +24,14 @@ class MockPrismaClient:
         self.db = AsyncMock()
         self.db.litellm_spendlogs = AsyncMock()
         self.db.litellm_spendlogs.create_many = AsyncMock()
-        
+
         # Initialize transaction lists
         self.spend_log_transactions = []
         self.daily_user_spend_transactions = {}
-        
+
         # Add lock for spend_log_transactions (matches real PrismaClient)
         import asyncio
+
         self._spend_log_transactions_lock = asyncio.Lock()
 
     def jsonify_object(self, obj):
@@ -46,7 +47,9 @@ def create_mock_proxy_logging():
     proxy_logging_obj = MagicMock()
     proxy_logging_obj.failure_handler = AsyncMock()
     proxy_logging_obj.db_spend_update_writer = AsyncMock()
-    proxy_logging_obj.db_spend_update_writer.db_update_spend_transaction_handler = AsyncMock()
+    proxy_logging_obj.db_spend_update_writer.db_update_spend_transaction_handler = (
+        AsyncMock()
+    )
     print("returning proxy logging obj")
     return proxy_logging_obj
 
@@ -65,10 +68,12 @@ async def test_update_spend_logs_connection_errors(error_type):
     # Setup
     prisma_client = MockPrismaClient()
     proxy_logging_obj = create_mock_proxy_logging()
-    
+
     # Create AsyncMock for db_spend_update_writer
     proxy_logging_obj.db_spend_update_writer = AsyncMock()
-    proxy_logging_obj.db_spend_update_writer.db_update_spend_transaction_handler = AsyncMock()
+    proxy_logging_obj.db_spend_update_writer.db_update_spend_transaction_handler = (
+        AsyncMock()
+    )
 
     # Add test spend logs
     prisma_client.spend_log_transactions = [
@@ -202,8 +207,12 @@ async def test_update_spend_logs_exponential_backoff():
 
     # Verify exponential backoff
     assert len(sleep_times) == 2  # Should have slept twice
-    assert sleep_times[0] >= 1 and sleep_times[0] <= 2  # First retry after 2^0~2^1 seconds
-    assert sleep_times[1] >= 2 and sleep_times[1] <= 4 # Second retry after 2^1~2^2 seconds
+    assert (
+        sleep_times[0] >= 1 and sleep_times[0] <= 2
+    )  # First retry after 2^0~2^1 seconds
+    assert (
+        sleep_times[1] >= 2 and sleep_times[1] <= 4
+    )  # Second retry after 2^1~2^2 seconds
 
 
 @pytest.mark.asyncio

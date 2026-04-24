@@ -1,6 +1,7 @@
 """
 Unit tests for OpenRouter embedding transformation logic.
 """
+
 from litellm.llms.openrouter.embedding.transformation import (
     OpenrouterEmbeddingConfig,
 )

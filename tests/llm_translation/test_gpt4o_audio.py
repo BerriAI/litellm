@@ -34,8 +34,10 @@ async def check_streaming_response(completion):
     _audio_id = None
     async for chunk in completion:
         print(chunk)
+        if len(chunk.choices) == 0:
+            continue
         _choice: StreamingChoices = chunk.choices[0]
-        if _choice.delta.audio is not None:
+        if _choice.delta is not None and _choice.delta.audio is not None:
             if _choice.delta.audio.get("data") is not None:
                 _audio_bytes = _choice.delta.audio["data"]
             if _choice.delta.audio.get("transcript") is not None:
@@ -84,7 +86,7 @@ async def test_audio_output_from_model(stream):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("stream", [True, False])
-@pytest.mark.parametrize("model", ["gpt-4o-audio-preview"]) # "gpt-4o-audio-preview", 
+@pytest.mark.parametrize("model", ["gpt-4o-audio-preview"])  # "gpt-4o-audio-preview",
 async def test_audio_input_to_model(stream, model):
     # Fetch the audio file and convert it to a base64 encoded string
     audio_format = "pcm16"

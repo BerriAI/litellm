@@ -197,6 +197,7 @@ router_settings:
 | key_generation_settings | object | Restricts who can generate keys. [Further docs](./virtual_keys.md#restricting-key-generation) |
 | disable_add_transform_inline_image_block | boolean | For Fireworks AI models - if true, turns off the auto-add of `#transform=inline` to the url of the image_url, if the model is not a vision model. |
 | use_chat_completions_url_for_anthropic_messages | boolean | If true, routes OpenAI `/v1/messages` requests through chat/completions instead of the Responses API. Can also be set via env var `LITELLM_USE_CHAT_COMPLETIONS_URL_FOR_ANTHROPIC_MESSAGES=true`. |
+| route_all_chat_openai_to_responses | boolean | If true, routes all OpenAI `/chat/completions` requests through the Responses API bridge. Recommended for OpenAI models. Can also be set via env var `LITELLM_ROUTE_ALL_CHAT_OPENAI_TO_RESPONSES=true`. |
 | skip_system_message_in_guardrail | boolean | If true, unified guardrails omit `role: system` from scanned input on **chat completions** and **Anthropic `/v1/messages`** only; the LLM still receives full messages. Per-guardrail override: `litellm_params.skip_system_message_in_guardrail` on each guardrail. [Guardrails quick start](./guardrails/quick_start#skip-system-messages-in-guardrail-evaluation) |
 | disable_hf_tokenizer_download | boolean | If true, it defaults to using the openai tokenizer for all models (including huggingface models). |
 | enable_json_schema_validation | boolean | If true, enables json schema validation for all requests. |
@@ -487,6 +488,8 @@ router_settings:
 | AZURE_STORAGE_CLIENT_ID | The Application Client ID to use for Authentication to Azure Blob Storage logging
 | AZURE_STORAGE_CLIENT_SECRET | The Application Client Secret to use for Authentication to Azure Blob Storage logging
 | AZURE_VECTOR_STORE_COST_PER_GB_PER_DAY | Cost per GB per day for Azure Vector Store service
+| BACKGROUND_HEALTH_CHECK_MAX_TOKENS | Optional global default for `max_tokens` on proxy background health checks when a model has no `health_check_max_tokens`. If unset, non-wildcard models default to 5. Applies to wildcard routes when set. Default is unset
+| BACKGROUND_HEALTH_CHECK_MAX_TOKENS_REASONING | For **non-wildcard** reasoning models (`supports_reasoning(model)=true`), this takes precedence over `BACKGROUND_HEALTH_CHECK_MAX_TOKENS` when set. If unset, reasoning models fall back to `BACKGROUND_HEALTH_CHECK_MAX_TOKENS` (if set) or default behavior. Wildcard routes ignore this. Default is unset
 | BATCH_STATUS_POLL_INTERVAL_SECONDS | Interval in seconds for polling batch status. Default is 3600 (1 hour)
 | BATCH_STATUS_POLL_MAX_ATTEMPTS | Maximum number of attempts for polling batch status. Default is 24 (for 24 hours)
 | BEDROCK_MAX_POLICY_SIZE | Maximum size for Bedrock policy. Default is 75
@@ -719,6 +722,11 @@ router_settings:
 | GITHUB_COPILOT_TOKEN_DIR | Directory to store GitHub Copilot token for `github_copilot` llm provider
 | GITHUB_COPILOT_API_KEY_FILE | File to store GitHub Copilot API key for `github_copilot` llm provider
 | GITHUB_COPILOT_ACCESS_TOKEN_FILE | File to store GitHub Copilot access token for `github_copilot` llm provider
+| GITHUB_COPILOT_API_BASE | Base URL for GitHub Copilot API. For GitHub Enterprise subscriptions with custom host, it is similar to https://copilot-api.my-company.ghe.com. Default is https://api.githubcopilot.com
+| GITHUB_COPILOT_DEVICE_CODE_URL | URL for GitHub Copilot device code authentication. For GitHub Enterprise subscriptions with custom host, it is similar to https://my-company.ghe.com/login/device/code. Default is https://github.com/login/device/code
+| GITHUB_COPILOT_ACCESS_TOKEN_URL | URL for GitHub Copilot access token retrieval. For GitHub Enterprise subscriptions with custom host, it is similar to https://my-company.ghe.com/login/oauth/access_token. Default is https://github.com/login/oauth/access_token
+| GITHUB_COPILOT_API_KEY_URL | URL for GitHub Copilot API key retrieval. For GitHub Enterprise subscriptions with custom host, it is similar to https://my-company.ghe.com/api/v3/copilot_internal/v2/token. Default is https://api.github.com/copilot_internal/v2/token
+| GITHUB_COPILOT_CLIENT_ID | Client ID for GitHub Copilot device flow authentication. This is used by the `github_copilot` provider for device code authentication. Default is "Iv1.b507a08c87ecfe98"
 | GREENSCALE_API_KEY | API key for Greenscale service
 | GREENSCALE_ENDPOINT | Endpoint URL for Greenscale service
 | GRAYSWAN_API_BASE | Base URL for GraySwan API. Default is https://api.grayswan.ai
@@ -804,6 +812,8 @@ router_settings:
 | LITELLM_ASSETS_PATH | Path to directory for UI assets and logos. Used when running with read-only filesystem (e.g., Kubernetes). Default is `/var/lib/litellm/assets` in Docker.
 | LITELLM_BLOG_POSTS_URL | Custom URL for fetching LiteLLM blog posts JSON. Default is the GitHub main branch URL
 | LITELLM_CLI_JWT_EXPIRATION_HOURS | Expiration time in hours for CLI-generated JWT tokens. Default is 24 hours
+| LITELLM_CORS_ALLOW_CREDENTIALS | Set to `true` to explicitly allow credentials in CORS responses. When not set, credentials are disabled automatically if `LITELLM_CORS_ORIGINS` is `*` (wildcard) to prevent the browser security misconfiguration of reflecting any origin with credentials
+| LITELLM_CORS_ORIGINS | Comma-separated list of allowed CORS origins (e.g. `https://app.example.com,https://admin.example.com`). Defaults to `*` (all origins) when not set
 | LITELLM_DD_AGENT_HOST | Hostname or IP of DataDog agent for LiteLLM-specific logging. When set, logs are sent to agent instead of direct API
 | LITELLM_DEPLOYMENT_ENVIRONMENT | Environment name for the deployment (e.g., "production", "staging"). Used as a fallback when OTEL_ENVIRONMENT_NAME is not set. Sets the `environment` tag in telemetry data
 | LITELLM_DETAILED_TIMING | When true, adds detailed per-phase timing headers to responses (`x-litellm-timing-{pre-processing,llm-api,post-processing,message-copy}-ms`). Default is false. See [latency overhead docs](../troubleshoot/latency_overhead.md)
@@ -859,6 +869,7 @@ router_settings:
 | LITELLM_SECRET_AWS_KMS_LITELLM_LICENSE | AWS KMS encrypted license for LiteLLM
 | LITELLM_TOKEN | Access token for LiteLLM integration
 | LITELLM_USE_CHAT_COMPLETIONS_URL_FOR_ANTHROPIC_MESSAGES | When set to "true", routes OpenAI /v1/messages requests through chat/completions instead of the Responses API for Anthropic models. Can also be set via `litellm_settings.use_chat_completions_url_for_anthropic_messages`
+| LITELLM_ROUTE_ALL_CHAT_OPENAI_TO_RESPONSES | When set to "true", routes all OpenAI /chat/completions requests through the Responses API bridge. Recommended for OpenAI models. Can also be set via `litellm_settings.route_all_chat_openai_to_responses`
 | LITELLM_USER_AGENT | Custom user agent string for LiteLLM API requests. Used for partner telemetry attribution
 | LITELLM_WORKER_STARTUP_HOOKS | Comma-separated list of `module.path:function_name` callables to run in each worker process during startup. Runs early in the worker lifecycle (before config/DB loading). Useful for re-initializing per-process state like [gflags](https://github.com/google/python-gflags). See [Worker Startup Hooks](/proxy/worker_startup_hooks) for details
 | LITELLM_PRINT_STANDARD_LOGGING_PAYLOAD | If true, prints the standard logging payload to the console - useful for debugging
@@ -925,6 +936,7 @@ router_settings:
 | OPENAI_CHATGPT_API_BASE | Alternative to CHATGPT_API_BASE. Base URL for ChatGPT API
 | OPENAI_FILE_SEARCH_COST_PER_1K_CALLS | Cost per 1000 calls for OpenAI file search. Default is 0.0025
 | OPENAI_ORGANIZATION | Organization identifier for OpenAI
+| OPENAPI_URL | The path to the OpenAPI JSON endpoint. **By default this is "/openapi.json"**
 | OPENID_BASE_URL | Base URL for OpenID Connect services
 | OPENID_CLIENT_ID | Client ID for OpenID Connect authentication
 | OPENID_CLIENT_SECRET | Client secret for OpenID Connect authentication

@@ -347,9 +347,9 @@ class BlockCodeExecutionGuardrail(CustomGuardrail):
         **kwargs: Any,
     ) -> None:
         # Normalize to type expected by CustomGuardrail
-        _event_hook: Optional[
-            Union[GuardrailEventHooks, List[GuardrailEventHooks]]
-        ] = None
+        _event_hook: Optional[Union[GuardrailEventHooks, List[GuardrailEventHooks]]] = (
+            None
+        )
         if event_hook is not None:
             if isinstance(event_hook, list):
                 _event_hook = [

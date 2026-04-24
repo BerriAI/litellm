@@ -596,3 +596,87 @@ Expected Response
 
 </TabItem>
 </Tabs>
+
+## Web Search Cost Tracking
+
+LiteLLM tracks web search costs automatically based on provider-specific billing models. The cost is added on top of the standard token-based pricing.
+
+### How providers charge for web search
+
+| Provider | Billing Unit | How it works |
+|----------|-------------|--------------|
+| **Gemini 3.x** (3-flash, 3-pro, 3.1-*) | Per search query | Each internal search query is billed individually. One prompt may trigger multiple queries. |
+| **Gemini 2.x** (2.0-flash, 2.5-flash, 2.5-pro) | Per grounded prompt | Flat fee per API call that uses grounding, regardless of how many queries are executed internally. |
+| **OpenAI** (gpt-4o-search, gpt-5-search) | Per search context size | Cost varies by `search_context_size` (`low`, `medium`, `high`). |
+| **Anthropic** (Claude with web search) | Per search request | Fixed cost per web search tool invocation. |
+| **Perplexity** (sonar, sonar-pro) | Per search context size | Cost varies by `search_context_size`. |
+
+### Pricing configuration
+
+Web search costs are defined in `model_prices_and_context_window.json` using two fields:
+
+- **`search_context_cost_per_query`**: the cost per billable unit (per search context size tier).
+- **`web_search_billing_unit`** *(on Gemini models)*: `"per_query"` (each search query is billed individually) or `"per_prompt"` (default — flat fee per API call that uses search).
+
+```json
+{
+    "gemini/gemini-3-flash-preview": {
+        "web_search_billing_unit": "per_query",
+        "search_context_cost_per_query": {
+            "search_context_size_low": 0.014,
+            "search_context_size_medium": 0.014,
+            "search_context_size_high": 0.014
+        }
+    },
+    "gemini/gemini-2.5-flash": {
+        "search_context_cost_per_query": {
+            "search_context_size_low": 0.035,
+            "search_context_size_medium": 0.035,
+            "search_context_size_high": 0.035
+        }
+    }
+}
+```
+
+:::info
+Models without `web_search_billing_unit` default to `"per_prompt"` — one flat charge per API call that uses web search, regardless of how many internal queries the model executes.
+:::
+
+You can override these in your proxy config using `model_info`:
+
+```yaml
+model_list:
+  - model_name: gemini-3-flash
+    litellm_params:
+      model: gemini/gemini-3-flash-preview
+    model_info:
+      web_search_billing_unit: per_query
+      search_context_cost_per_query:
+        search_context_size_low: 0.014
+        search_context_size_medium: 0.014
+        search_context_size_high: 0.014
+```
+
+### How LiteLLM tracks search usage
+
+The number of web search requests is stored in `usage.prompt_tokens_details.web_search_requests`. LiteLLM extracts this from each provider's response:
+
+- **Gemini**: Extracted from `groundingMetadata.webSearchQueries` in the response. For Gemini 2.x, clamped to 1 (per-prompt billing).
+- **OpenAI**: Reported directly in the usage metadata.
+- **Anthropic**: Reported via `server_tool_use.web_search_requests`.
+- **xAI**: Mapped from `num_sources_used` in the response.
+
+```python
+response = litellm.completion(
+    model="gemini/gemini-3-flash-preview",
+    messages=[{"role": "user", "content": "Latest tech news?"}],
+    web_search_options={"search_context_size": "medium"},
+)
+
+# Check web search usage
+print(response.usage.prompt_tokens_details.web_search_requests)  # e.g., 3
+
+# Get total cost (includes token cost + web search cost)
+cost = litellm.completion_cost(completion_response=response)
+print(f"Total cost: ${cost}")
+```
