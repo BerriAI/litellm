@@ -13,7 +13,7 @@ from litellm.types.llms.vertex_ai import VertexPartnerProvider
 from litellm.types.router import GenericLiteLLMParams
 
 from ....vertex_llm_base import VertexBase
-from ..transformation import _sanitize_vertex_anthropic_output_params
+from ..output_params_utils import sanitize_vertex_anthropic_output_params
 
 
 class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, VertexBase):
@@ -163,6 +163,6 @@ class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, Vert
         # and ``output_format``, but rejects ``output_config.effort`` with 400
         # "Extra inputs are not permitted". Sanitize in place so the supported
         # bits flow through.
-        _sanitize_vertex_anthropic_output_params(anthropic_messages_request)
+        sanitize_vertex_anthropic_output_params(anthropic_messages_request)
 
         return anthropic_messages_request

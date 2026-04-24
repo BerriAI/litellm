@@ -254,7 +254,8 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         # ``AnthropicMessagesRequestOptionalParams``, also extend
         # ``ANTHROPIC_ONLY_REQUEST_KEYS`` here so it doesn't silently leak.
         excluded_keys = ANTHROPIC_ONLY_REQUEST_KEYS | {"anthropic_messages"}
-        extra_kwargs = extra_kwargs if extra_kwargs is not None else {}
+        # NOTE: extra_kwargs was already coerced from None to {} at the top of
+        # this method (line ~220). It is guaranteed to be a dict here.
         for key, value in extra_kwargs.items():
             if (
                 key == "litellm_logging_obj"
