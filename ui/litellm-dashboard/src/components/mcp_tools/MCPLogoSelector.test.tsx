@@ -29,7 +29,7 @@ describe("MCPLogoSelector", () => {
     const user = userEvent.setup();
     render(<MCPLogoSelector value="/ui/assets/logos/github.svg" onChange={onChange} />);
 
-    await user.click(screen.getByRole("button", { name: /✕/ }));
+    await user.click(screen.getByRole("button", { name: /clear selected logo/i }));
     expect(onChange).toHaveBeenCalledWith(undefined);
   });
 

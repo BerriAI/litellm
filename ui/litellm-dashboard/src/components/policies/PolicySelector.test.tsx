@@ -83,7 +83,7 @@ describe("PolicySelector", () => {
     renderWithProviders(
       <PolicySelector accessToken="tok" onChange={mockOnChange} />
     );
-    expect(screen.getByRole("combobox")).toBeInTheDocument();
+    expect(screen.getByRole("button")).toBeInTheDocument();
   });
 
   it("should fetch policies on mount with the given access token", async () => {
@@ -111,7 +111,7 @@ describe("PolicySelector", () => {
     renderWithProviders(
       <PolicySelector accessToken="tok" onChange={mockOnChange} disabled />
     );
-    expect(screen.getByRole("combobox")).toBeDisabled();
+    expect(screen.getByRole("button")).toBeDisabled();
   });
 
   it("should not fetch policies when accessToken is empty", () => {

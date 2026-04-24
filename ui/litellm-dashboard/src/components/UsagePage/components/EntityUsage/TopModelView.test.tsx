@@ -55,7 +55,7 @@ describe("TopModelView", () => {
     expect(screen.getByText("100")).toBeInTheDocument();
     const failedRequestsCell = screen
       .getAllByText("5")
-      .find((el) => el.closest("span")?.classList.contains("text-red-600"));
+      .find((el) => el.closest("span")?.classList.contains("text-destructive"));
     expect(failedRequestsCell).toBeDefined();
     expect(screen.getByText("50,000")).toBeInTheDocument();
   });
@@ -87,15 +87,8 @@ describe("TopModelView", () => {
     const user = userEvent.setup();
     render(<TopModelView topModels={[]} topModelsLimit={5} setTopModelsLimit={mockSetTopModelsLimit} />);
 
-    const limit10Radio = screen.getByRole("radio", { name: "10" });
-    const limit10Label = limit10Radio.closest("label");
-    if (limit10Label) {
-      await user.click(limit10Label);
-    } else {
-      // Fallback: click the div with title="10"
-      const limit10Div = screen.getByTitle("10");
-      await user.click(limit10Div);
-    }
+    const limit10Button = screen.getByRole("radio", { name: "10" });
+    await user.click(limit10Button);
 
     expect(mockSetTopModelsLimit).toHaveBeenCalledWith(10);
   });
@@ -197,7 +190,7 @@ describe("TopModelView", () => {
     );
     const successfulCell = screen
       .getAllByText("50")
-      .find((el) => el.closest("span")?.classList.contains("text-green-600"));
+      .find((el) => el.closest("span")?.classList.contains("text-emerald-600"));
     expect(successfulCell).toBeDefined();
   });
 
@@ -217,7 +210,7 @@ describe("TopModelView", () => {
         setTopModelsLimit={mockSetTopModelsLimit}
       />,
     );
-    const failedCell = screen.getAllByText("5").find((el) => el.closest("span")?.classList.contains("text-red-600"));
+    const failedCell = screen.getAllByText("5").find((el) => el.closest("span")?.classList.contains("text-destructive"));
     expect(failedCell).toBeDefined();
   });
 
