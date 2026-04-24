@@ -258,8 +258,8 @@ def initialize_guardrail(
     if not criteria:
         raise ValueError("llm_as_a_judge guardrail requires at least one criterion")
 
-    weight_total = sum(int(c.get("weight", 0)) for c in criteria)
-    if weight_total != 100:
+    weight_total = sum(float(c.get("weight", 0)) for c in criteria)
+    if abs(weight_total - 100) > 0.5:
         raise ValueError(
             f"llm_as_a_judge criterion weights must sum to 100 (got {weight_total})"
         )
