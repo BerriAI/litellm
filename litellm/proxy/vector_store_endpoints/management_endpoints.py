@@ -40,12 +40,7 @@ from litellm.vector_stores.vector_store_registry import VectorStoreRegistry
 
 router = APIRouter()
 
-# Inherit the default sensitive-key heuristics and add the plural
-# ``credentials`` so segment-exact matching catches Vertex's
-# ``vertex_credentials`` (the singular ``credential`` pattern misses it).
-_LITELLM_PARAMS_MASKER = SensitiveDataMasker(
-    sensitive_patterns={*SensitiveDataMasker().sensitive_patterns, "credentials"},
-)
+_LITELLM_PARAMS_MASKER = SensitiveDataMasker()
 
 
 def _redact_sensitive_litellm_params(
@@ -812,6 +807,25 @@ async def update_vector_store(
         update_data = data.model_dump(exclude_unset=True)
         vector_store_id = update_data.pop("vector_store_id")
 
+        # Per-store access control: anyone authenticated who passes the
+        # premium-feature gate could otherwise update *any* vector store —
+        # including stores belonging to other teams. Mirror the check
+        # ``/vector_store/info`` already performs.
+        existing = await prisma_client.db.litellm_managedvectorstorestable.find_unique(
+            where={"vector_store_id": vector_store_id}
+        )
+        if existing is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Vector store with ID {vector_store_id} not found",
+            )
+        existing_typed = LiteLLM_ManagedVectorStore(**existing.model_dump())
+        if not await _check_vector_store_access(existing_typed, user_api_key_dict):
+            raise HTTPException(
+                status_code=403,
+                detail="Access denied: You do not have permission to update this vector store",
+            )
+
         # Handle metadata serialization
         if update_data.get("vector_store_metadata") is not None:
             update_data["vector_store_metadata"] = safe_dumps(
@@ -859,11 +873,24 @@ async def update_vector_store(
                 f"Updated vector store {vector_store_id} in both database and in-memory registry"
             )
 
+        # The DB row is returned in full, so the response would otherwise
+        # echo the persisted ``litellm_params`` (including provider
+        # credentials) back to the caller — even when the caller only
+        # changed unrelated fields like ``vector_store_description``.
+        response_vs = LiteLLM_ManagedVectorStore(**updated_vs)
+        response_vs["litellm_params"] = _redact_sensitive_litellm_params(
+            updated_vs.get("litellm_params")
+        )
         return {
             "status": "success",
             "message": f"Vector store {vector_store_id} updated successfully",
-            "vector_store": updated_vs,
+            "vector_store": response_vs,
         }
+    except HTTPException:
+        # Preserve 403/404 responses from the access-control / not-found
+        # checks above; the catch-all below would otherwise rewrite them
+        # as 500 with the original status code embedded in the detail.
+        raise
     except Exception as e:
         verbose_proxy_logger.exception(f"Error updating vector store: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))

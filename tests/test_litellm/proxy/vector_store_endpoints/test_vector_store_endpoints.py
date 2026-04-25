@@ -1950,3 +1950,134 @@ class TestRedactSensitiveLitellmParams:
         snapshot = dict(original)
         _redact_sensitive_litellm_params(original)
         assert original == snapshot, "input dict must not be mutated"
+
+
+class TestUpdateVectorStoreAccessControlAndRedaction:
+    """
+    ``/vector_store/update`` previously skipped per-store access control
+    (only the premium-feature gate ran), letting any authenticated
+    premium principal mutate *any* vector store. It also returned the
+    full DB row including ``litellm_params``, leaking provider
+    credentials to the caller. Both are fixed at the endpoint level.
+    """
+
+    @pytest.mark.asyncio
+    async def test_update_denied_when_caller_cannot_access_store(self):
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from litellm.proxy._types import UserAPIKeyAuth
+        from litellm.proxy.vector_store_endpoints.management_endpoints import (
+            update_vector_store,
+        )
+        from litellm.types.vector_stores import VectorStoreUpdateRequest
+
+        existing_row = MagicMock()
+        existing_row.model_dump = MagicMock(
+            return_value={
+                "vector_store_id": "vs_other_team",
+                "team_id": "team-A",
+                "litellm_params": {"api_key": "sk-team-A-secret"},
+            }
+        )
+
+        mock_prisma_client = MagicMock()
+        mock_prisma_client.db.litellm_managedvectorstorestable.find_unique = AsyncMock(
+            return_value=existing_row
+        )
+
+        with (
+            patch(
+                "litellm.proxy.vector_store_endpoints.management_endpoints.check_feature_access_for_user",
+                new_callable=AsyncMock,
+            ),
+            patch(
+                "litellm.proxy.vector_store_endpoints.management_endpoints._check_vector_store_access",
+                new_callable=AsyncMock,
+                return_value=False,
+            ),
+            patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client),
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await update_vector_store(
+                    data=VectorStoreUpdateRequest(
+                        vector_store_id="vs_other_team",
+                        vector_store_description="hijacked",
+                    ),
+                    user_api_key_dict=UserAPIKeyAuth(
+                        user_id="attacker", team_id="team-B"
+                    ),
+                )
+        assert exc_info.value.status_code == 403
+        # The attacker must NOT see the existing credential in the
+        # error message either.
+        assert "sk-team-A-secret" not in str(exc_info.value.detail)
+        # And the DB update must not have been called.
+        mock_prisma_client.db.litellm_managedvectorstorestable.update.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_update_response_redacts_litellm_params(self):
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from litellm.constants import REDACTED_BY_LITELM_STRING
+        from litellm.proxy._types import UserAPIKeyAuth
+        from litellm.proxy.vector_store_endpoints.management_endpoints import (
+            update_vector_store,
+        )
+        from litellm.types.vector_stores import VectorStoreUpdateRequest
+
+        existing_row = MagicMock()
+        existing_row.model_dump = MagicMock(
+            return_value={
+                "vector_store_id": "vs_owned",
+                "team_id": "team-A",
+                "litellm_params": {
+                    "api_key": "sk-real-openai-key-123",
+                    "api_base": "https://api.openai.com/v1",
+                },
+            }
+        )
+        updated_row = MagicMock()
+        updated_row.model_dump = MagicMock(
+            return_value={
+                "vector_store_id": "vs_owned",
+                "team_id": "team-A",
+                "vector_store_description": "new desc",
+                "litellm_params": {
+                    "api_key": "sk-real-openai-key-123",
+                    "api_base": "https://api.openai.com/v1",
+                },
+            }
+        )
+
+        mock_prisma_client = MagicMock()
+        mock_prisma_client.db.litellm_managedvectorstorestable.find_unique = AsyncMock(
+            return_value=existing_row
+        )
+        mock_prisma_client.db.litellm_managedvectorstorestable.update = AsyncMock(
+            return_value=updated_row
+        )
+
+        with (
+            patch(
+                "litellm.proxy.vector_store_endpoints.management_endpoints.check_feature_access_for_user",
+                new_callable=AsyncMock,
+            ),
+            patch(
+                "litellm.proxy.vector_store_endpoints.management_endpoints._check_vector_store_access",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client),
+            patch("litellm.vector_store_registry", None),
+        ):
+            response = await update_vector_store(
+                data=VectorStoreUpdateRequest(
+                    vector_store_id="vs_owned",
+                    vector_store_description="new desc",
+                ),
+                user_api_key_dict=UserAPIKeyAuth(user_id="owner", team_id="team-A"),
+            )
+
+        params = response["vector_store"]["litellm_params"]
+        assert params["api_key"] == REDACTED_BY_LITELM_STRING
+        assert params["api_base"] == "https://api.openai.com/v1"
