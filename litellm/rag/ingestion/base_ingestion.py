@@ -92,10 +92,7 @@ class BaseRAGIngestion(ABC):
                 "aws_sts_endpoint",
                 "aws_web_identity_token",
             ):
-                if (
-                    key in self.vector_store_config
-                    and key not in credential_values
-                ):
+                if key in self.vector_store_config and key not in credential_values:
                     del self.vector_store_config[key]
 
     @property
