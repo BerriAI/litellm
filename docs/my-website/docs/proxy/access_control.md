@@ -2,6 +2,8 @@ import Image from '@theme/IdealImage';
 
 # Role-based Access Controls (RBAC)
 
+<iframe src="https://www.loom.com/embed/a980e25027ad4ecc9e8db1af2777b2a2" frameborder="0" webkitallowfullscreen mozallowfullscreen allowfullscreen style={{ width: '100%', height: '400px' }}></iframe>
+
 Role-based access control (RBAC) is based on Organizations, Teams and Internal User Roles
 
 <Image img={require('../../img/litellm_user_heirarchy.png')} style={{ width: '100%', maxWidth: '4000px' }} />
