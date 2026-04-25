@@ -343,7 +343,10 @@ def test_generic_cost_per_token_gpt55():
     assert model_cost_map["cache_read_input_token_cost"] == 5e-7
     assert model_cost_map["litellm_provider"] == "openai"
     assert model_cost_map["mode"] == "chat"
-    assert model_cost_map["max_input_tokens"] == 272000
+    # gpt-5.5 inherits GPT-5.4's long-context window + tiered pricing.
+    assert model_cost_map["max_input_tokens"] == 1050000
+    assert model_cost_map["input_cost_per_token_above_272k_tokens"] == 1e-5
+    assert model_cost_map["output_cost_per_token_above_272k_tokens"] == 4.5e-5
 
     prompt_tokens = 1000
     completion_tokens = 500
@@ -363,6 +366,87 @@ def test_generic_cost_per_token_gpt55():
     assert round(completion_cost, 10) == round(
         model_cost_map["output_cost_per_token"] * completion_tokens, 10
     )
+
+
+def test_generic_cost_per_token_gpt55_pro():
+    """gpt-5.5-pro: responses-only model — $60/1M input, $360/1M output, $6/1M cached input."""
+    model = "gpt-5.5-pro"
+    custom_llm_provider = "openai"
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    model_cost_map = litellm.model_cost[model]
+
+    # Sanity-check the map values match OpenAI's published pricing.
+    assert model_cost_map["input_cost_per_token"] == 6e-5
+    assert model_cost_map["output_cost_per_token"] == 3.6e-4
+    assert model_cost_map["cache_read_input_token_cost"] == 6e-6
+    assert model_cost_map["litellm_provider"] == "openai"
+    # gpt-5.5-pro is a responses-only model (no /v1/chat/completions endpoint).
+    assert model_cost_map["mode"] == "responses"
+    assert "/v1/chat/completions" not in model_cost_map["supported_endpoints"]
+    assert "/v1/responses" in model_cost_map["supported_endpoints"]
+    # Inherits GPT-5.4-pro's long-context window + tiered pricing (scaled 2x).
+    assert model_cost_map["max_input_tokens"] == 1050000
+    assert model_cost_map["input_cost_per_token_above_272k_tokens"] == 1.2e-4
+    assert model_cost_map["output_cost_per_token_above_272k_tokens"] == 5.4e-4
+
+    prompt_tokens = 1000
+    completion_tokens = 500
+    usage = Usage(
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        total_tokens=prompt_tokens + completion_tokens,
+    )
+    prompt_cost, completion_cost = generic_cost_per_token(
+        model=model,
+        usage=usage,
+        custom_llm_provider=custom_llm_provider,
+    )
+    assert round(prompt_cost, 10) == round(
+        model_cost_map["input_cost_per_token"] * prompt_tokens, 10
+    )
+    assert round(completion_cost, 10) == round(
+        model_cost_map["output_cost_per_token"] * completion_tokens, 10
+    )
+
+
+@pytest.mark.parametrize(
+    "base_model,dated_model",
+    [
+        ("gpt-5.5", "gpt-5.5-2026-04-23"),
+        ("gpt-5.5-pro", "gpt-5.5-pro-2026-04-23"),
+    ],
+)
+def test_gpt55_dated_variants_match_base_reasoning_effort_capabilities(
+    base_model, dated_model
+):
+    """Dated snapshots must carry the same reasoning_effort capability flags as
+    their non-dated counterparts.
+
+    Regression guard: ``supports_{none,minimal,xhigh}_reasoning_effort`` gate
+    downstream routing in ``OpenAIGPT5Config`` — a missing flag is treated as
+    ``False`` for opt-in levels (e.g. ``xhigh``), which silently diverges
+    behavior between ``gpt-5.5`` and ``gpt-5.5-2026-04-23``. Pinning to a
+    dated variant must never lose capabilities relative to the base alias.
+    """
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    base = litellm.model_cost[base_model]
+    dated = litellm.model_cost[dated_model]
+
+    for flag in (
+        "supports_none_reasoning_effort",
+        "supports_minimal_reasoning_effort",
+        "supports_xhigh_reasoning_effort",
+    ):
+        assert dated.get(flag) == base.get(flag), (
+            f"{dated_model} has {flag}={dated.get(flag)!r}, "
+            f"but {base_model} has {flag}={base.get(flag)!r}. "
+            f"Dated snapshots must inherit the base model's reasoning_effort "
+            f"capability profile."
+        )
 
 
 def test_generic_cost_per_token_anthropic_prompt_caching():
