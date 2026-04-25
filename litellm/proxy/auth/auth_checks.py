@@ -3354,6 +3354,7 @@ async def _check_team_member_model_budget(
     """
     if (
         team_object is None
+        or team_object.team_id is None
         or valid_token is None
         or valid_token.user_id is None
         or model is None
