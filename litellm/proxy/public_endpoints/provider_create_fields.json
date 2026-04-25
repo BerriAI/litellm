@@ -215,11 +215,21 @@
     "litellm_provider": "anthropic",
     "credential_fields": [
       {
+        "key": "api_base",
+        "label": "Upstream API Base",
+        "placeholder": "https://api.anthropic.com",
+        "tooltip": "Optional. Where the proxy forwards requests upstream. Leave blank to use Anthropic's public API. Set this only for private Anthropic deployments or reverse proxies. Do NOT set this to your LiteLLM proxy URL — that causes a recursive loop.",
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
         "key": "api_key",
         "label": "API Key",
         "placeholder": "sk-",
-        "tooltip": null,
-        "required": true,
+        "tooltip": "Leave empty for BYOK (bring-your-own-key) flows, where clients forward their own Anthropic key via the x-api-key header. Requires the 'Forward LLM provider auth headers' UI setting to be enabled.",
+        "required": false,
         "field_type": "password",
         "options": null,
         "default_value": null

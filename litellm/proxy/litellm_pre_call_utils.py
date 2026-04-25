@@ -1,5 +1,6 @@
 import asyncio
 import copy
+import re
 import time
 from collections import OrderedDict
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
@@ -27,6 +28,14 @@ from litellm.proxy.common_utils.http_parsing_utils import _safe_get_request_head
 _SPECIAL_HEADERS_CACHE = frozenset(
     v.value.lower() for v in SpecialHeaders._member_map_.values()
 )
+
+# Matches any header of the form x-<something>-session-id (case-insensitive).
+# Excludes the two explicit litellm headers which are handled with higher priority.
+_GENERIC_SESSION_ID_HEADER_RE = re.compile(r"^x-.+-session-id$", re.IGNORECASE)
+_EXPLICIT_SESSION_HEADERS = frozenset({"x-litellm-trace-id", "x-litellm-session-id"})
+# Session-id values must be non-empty strings of alphanumerics, hyphens, or underscores
+# (covers UUIDs and most common session-id formats).
+_SESSION_ID_VALUE_RE = re.compile(r"^[a-zA-Z0-9_\-]{8,}$")
 
 
 def _sanitize_for_log(value: Any) -> str:
@@ -115,13 +124,43 @@ def _get_metadata_variable_name(request: Request) -> str:
     return "metadata"
 
 
+def _extract_generic_session_id_from_headers(
+    normalized: Dict[str, str],
+) -> Optional[str]:
+    """
+    Scan a normalised (lower-cased keys) header dict for any header that looks
+    like ``x-<vendor>-session-id`` and whose value is a plausible session/trace
+    identifier (alphanumeric + hyphens/underscores, at least 8 chars).
+
+    The two explicit LiteLLM headers (``x-litellm-trace-id`` /
+    ``x-litellm-session-id``) are excluded here because they are handled with
+    higher priority by the caller.
+
+    Example: ``x-claude-code-session-id: e96634a3-fa28-4083-b354-55542e2dca01``
+    """
+    for key, value in normalized.items():
+        if (
+            key not in _EXPLICIT_SESSION_HEADERS
+            and _GENERIC_SESSION_ID_HEADER_RE.match(key)
+            and isinstance(value, str)
+            and _SESSION_ID_VALUE_RE.match(value)
+        ):
+            return value
+    return None
+
+
 def get_chain_id_from_headers(headers: Optional[Dict[str, str]]) -> Optional[str]:
     """
     Extract chain id for call chaining from request headers.
 
-    x-litellm-trace-id and x-litellm-session-id are interchangeable; when both
-    are present, x-litellm-trace-id takes precedence. Header keys are matched
-    case-insensitively so this works with raw header dicts from any transport.
+    Priority order:
+    1. ``x-litellm-trace-id`` (explicit, highest priority)
+    2. ``x-litellm-session-id`` (explicit)
+    3. Any ``x-<vendor>-session-id`` header whose value looks like a session id
+       (alphanumeric / UUID, at least 8 chars).  E.g. ``x-claude-code-session-id``.
+
+    Header keys are matched case-insensitively so this works with raw header
+    dicts from any transport.
 
     Used by MCP (and other paths that have raw_headers but no Request) to set
     litellm_trace_id/litellm_session_id for spend logs and logging consistency.
@@ -129,8 +168,10 @@ def get_chain_id_from_headers(headers: Optional[Dict[str, str]]) -> Optional[str
     if not headers:
         return None
     normalized = {k.lower(): v for k, v in headers.items() if isinstance(k, str)}
-    return normalized.get("x-litellm-trace-id") or normalized.get(
-        "x-litellm-session-id"
+    return (
+        normalized.get("x-litellm-trace-id")
+        or normalized.get("x-litellm-session-id")
+        or _extract_generic_session_id_from_headers(normalized)
     )
 
 
@@ -649,10 +690,8 @@ class LiteLLMProxyRequestSetup:
         #########################################################################################
 
         agent_id_from_header = headers.get("x-litellm-agent-id")
-        # x-litellm-trace-id and x-litellm-session-id are interchangeable for call chaining
-        chain_id = headers.get("x-litellm-trace-id") or headers.get(
-            "x-litellm-session-id"
-        )
+        # Explicit litellm headers take precedence; fall back to any x-*-session-id header.
+        chain_id = get_chain_id_from_headers(dict(headers))
 
         if agent_id_from_header:
             metadata_from_headers["agent_id"] = agent_id_from_header
@@ -981,13 +1020,16 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
     # Init - Proxy Server Request
     # we do this as soon as entering so we track the original request
     ##########################################################
-    # Track arrival time for queue time metric
+    # Track arrival time for queue time metric. The body snapshot is filled
+    # in after the admin-injection strip below so the audit / spend-tracking
+    # consumers of proxy_server_request["body"] see the cleaned metadata
+    # rather than attacker-forged user_api_key_* fields.
     arrival_time = time.time()
     data["proxy_server_request"] = {
         "url": str(request.url),
         "method": request.method,
         "headers": _headers,
-        "body": copy.copy(data),  # use copy instead of deepcopy
+        "body": None,  # filled in post-strip; see below
         "arrival_time": arrival_time,  # Track when request arrived at proxy
     }
 
@@ -1069,9 +1111,10 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
                 verbose_proxy_logger.warning(
                     f"Failed to parse 'metadata' as JSON dict. Received value: {data['metadata']}"
                 )
-        data[_metadata_variable_name]["requester_metadata"] = copy.deepcopy(
-            data["metadata"]
-        )
+        # requester_metadata is snapshotted AFTER the strip below so
+        # downstream consumers (e.g. PANW guardrail reading user_ip /
+        # profile_id) don't see attacker-injected admin slots preserved in
+        # the deepcopy.
 
     # Parse litellm_metadata if it's a string (e.g., from multipart/form-data or extra_body)
     if "litellm_metadata" in data and data["litellm_metadata"] is not None:
@@ -1083,11 +1126,89 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
                 )
             else:
                 data["litellm_metadata"] = parsed_litellm_metadata
-        # Merge litellm_metadata into the metadata variable (preserving existing values)
-        if isinstance(data["litellm_metadata"], dict):
-            for key, value in data["litellm_metadata"].items():
-                if key not in data[_metadata_variable_name]:
-                    data[_metadata_variable_name][key] = value
+
+    # Strip internal pipeline state and admin-injection slots from user input.
+    # Runs AFTER the string-to-dict parse above so JSON-string metadata (sent
+    # via multipart/form-data or extra_body) cannot smuggle admin fields past
+    # the isinstance(dict) guard.
+    #
+    # The proxy populates a family of ``user_api_key_*`` fields below
+    # (user_api_key_metadata, user_api_key_user_id, user_api_key_alias,
+    # user_api_key_spend, user_api_key_team_metadata, …) into
+    # data[_metadata_variable_name]. Because the proxy only writes to ONE of
+    # the two metadata dicts, a caller pre-populating any of these keys on
+    # the OTHER metadata dict would have their forged values surface in
+    # guardrails, spend tracking, audit logs, and identity resolution. Strip
+    # by prefix so new ``user_api_key_*`` fields added in the future are
+    # covered without per-key maintenance.
+    for _meta_key in ("metadata", "litellm_metadata"):
+        _user_meta = data.get(_meta_key)
+        if isinstance(_user_meta, dict):
+            _user_meta.pop("_pipeline_managed_guardrails", None)
+            for _k in [k for k in _user_meta if k.startswith("user_api_key_")]:
+                _user_meta.pop(_k, None)
+
+    # Strip caller-supplied routing/budget tags unless the admin has opted
+    # this key or team in via metadata.allow_client_tags=True. Tags drive
+    # tag-based routing and tag budget attribution — accepting them from
+    # untrusted callers lets an attacker reach restricted deployments or
+    # misattribute spend to a victim team's tag.
+    _admin_allow_client_tags = False
+    for _admin_meta in (
+        user_api_key_dict.metadata,
+        user_api_key_dict.team_metadata,
+    ):
+        if (
+            isinstance(_admin_meta, dict)
+            and _admin_meta.get("allow_client_tags") is True
+        ):
+            _admin_allow_client_tags = True
+            break
+    if not _admin_allow_client_tags:
+        _stripped_from: List[str] = []
+        for _meta_key in ("metadata", "litellm_metadata"):
+            _user_meta = data.get(_meta_key)
+            if isinstance(_user_meta, dict) and "tags" in _user_meta:
+                _user_meta.pop("tags", None)
+                _stripped_from.append(_meta_key)
+        # Also strip the root-level `tags` field. get_tags_from_request_body
+        # reads request_body["tags"] directly and feeds it to the policy
+        # engine, so leaving it in place here would let the strip-in-metadata
+        # above be trivially bypassed by moving the tags to the body root.
+        if "tags" in data:
+            data.pop("tags", None)
+            _stripped_from.append("tags (root)")
+        if _stripped_from:
+            verbose_proxy_logger.warning(
+                "Stripped caller-supplied tags from %s: this key/team does "
+                "not have `allow_client_tags: true` in its metadata. Set it "
+                "to opt into client-supplied routing/budget tags.",
+                ", ".join(_stripped_from),
+            )
+
+    # Fill in the proxy_server_request body snapshot now that metadata has
+    # been parsed and stripped. Consumers (standard_logging_payload, lago,
+    # spend_tracking_utils, streaming_iterator) read `body` to audit the
+    # request; taking the snapshot here ensures they see cleaned metadata.
+    data["proxy_server_request"]["body"] = copy.copy(data)
+
+    # Snapshot the (now-cleaned) requester-supplied metadata for downstream
+    # consumers. Taking the deepcopy AFTER the strip prevents attacker-
+    # injected admin slots (user_api_key_*, tags without opt-in,
+    # _pipeline_managed_guardrails) from surviving in requester_metadata
+    # where guardrails and audit paths may read from it.
+    if "metadata" in data and isinstance(data["metadata"], dict):
+        data[_metadata_variable_name]["requester_metadata"] = copy.deepcopy(
+            data["metadata"]
+        )
+
+    # Now merge litellm_metadata into the metadata variable (preserving existing
+    # values) — runs AFTER the strip so attacker injections in litellm_metadata
+    # cannot cross-contaminate the admin-authoritative metadata dict.
+    if "litellm_metadata" in data and isinstance(data["litellm_metadata"], dict):
+        for key, value in data["litellm_metadata"].items():
+            if key not in data[_metadata_variable_name]:
+                data[_metadata_variable_name][key] = value
 
     data = LiteLLMProxyRequestSetup.add_user_api_key_auth_to_request_metadata(
         data=data,
@@ -1250,15 +1371,24 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
         user_agent = request.headers["user-agent"]
     data[_metadata_variable_name]["user_agent"] = user_agent
 
-    # Check if using tag based routing
+    # Check if using tag based routing. The helper reads caller-controlled
+    # sources (x-litellm-tags header, data["tags"] root-level), so its result
+    # is still gated by the same allow_client_tags flag that gated the
+    # body-metadata tag strip above. Otherwise the strip is trivially
+    # bypassed by sending tags via header or at the root of the body.
     tags = LiteLLMProxyRequestSetup.add_request_tag_to_metadata(
         llm_router=llm_router,
         headers=_headers,
         data=data,
     )
 
-    if tags is not None:
+    if tags is not None and _admin_allow_client_tags:
         data[_metadata_variable_name]["tags"] = tags
+    elif tags is not None:
+        verbose_proxy_logger.warning(
+            "Ignored caller-supplied tags from header/root body: this "
+            "key/team does not have `allow_client_tags: true` in its metadata."
+        )
 
     # Team Callbacks controls
     callback_settings_obj = _get_dynamic_logging_metadata(
