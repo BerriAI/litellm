@@ -1,11 +1,12 @@
 import { useState } from "react";
 import { ColumnDef } from "@tanstack/react-table";
-import { MCPServer } from "./types";
+import { AUTH_TYPE, MCPServer } from "./types";
 import { Icon } from "@tremor/react";
 import { PencilAltIcon, TrashIcon } from "@heroicons/react/outline";
 import { getMaskedAndFullUrl } from "./utils";
 import { Tooltip } from "antd";
 import { CheckOutlined } from "@ant-design/icons";
+import OAuth2ConnectButton from "./OAuth2ConnectButton";
 
 const HealthStatusBadge: React.FC<{
   server: MCPServer;
@@ -93,6 +94,9 @@ export const mcpServerColumns = (
   onRecheckHealth?: (serverId: string) => void,
   recheckingServerIds?: Set<string>,
   onByokDisconnect?: (server: MCPServer) => void,
+  accessToken?: string,
+  onOAuthDisconnect?: (server: MCPServer) => void,
+  onRefreshServers?: () => void,
 ): ColumnDef<MCPServer>[] => [
   {
     accessorKey: "server_id",
@@ -267,11 +271,44 @@ export const mcpServerColumns = (
     header: "Credential",
     cell: ({ row }) => {
       const server = row.original;
+      const isInternalUser = userRole === "Internal User";
+
+      // OAuth2 servers: show OAuth2 connect/disconnect UI
+      if (server.auth_type === AUTH_TYPE.OAUTH2 && !server.is_byok) {
+        if (server.has_user_credential) {
+          return (
+            <div className="flex items-center gap-2">
+              <span className="inline-flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded-full bg-green-50 text-green-700 border border-green-200">
+                <CheckOutlined style={{ fontSize: 10 }} /> Connected
+              </span>
+              {onOAuthDisconnect && (
+                <button
+                  className="text-xs text-gray-400 hover:text-red-600 transition-colors"
+                  onClick={() => onOAuthDisconnect(server)}
+                >
+                  Disconnect
+                </button>
+              )}
+            </div>
+          );
+        }
+        if (accessToken && onRefreshServers) {
+          return (
+            <OAuth2ConnectButton
+              server={server}
+              accessToken={accessToken}
+              onSuccess={onRefreshServers}
+            />
+          );
+        }
+        return null;
+      }
+
+      // BYOK servers: show API key connect/disconnect UI
       if (!server.is_byok) {
         return <span className="text-gray-300 text-xs">—</span>;
       }
       if (server.has_user_credential) {
-        const isInternalUser = userRole === "Internal User";
         return (
           <div className="flex items-center gap-2">
             <span className="inline-flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded-full bg-green-50 text-green-700 border border-green-200">
