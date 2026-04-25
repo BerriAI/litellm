@@ -2289,3 +2289,190 @@ async def test_centralized_common_checks_http_exception_without_team_id():
     finally:
         for k, v in originals.items():
             setattr(_proxy_server_mod, k, v)
+
+
+@pytest.mark.asyncio
+async def test_centralized_common_checks_team_404_does_not_zero_other_contexts():
+    """Per-fetch isolation: an HTTPException(404) from get_team_object
+    (token references a deleted team) must reconstruct the team from the
+    token but leave user_object / end_user_object / project_object intact.
+    Pre-fix a bare ``except HTTPException`` over ``asyncio.gather`` zeroed
+    every context, silently skipping user-budget, end-user-budget, and
+    project enforcement whenever the token's team_id was stale."""
+    import litellm.proxy.proxy_server as _proxy_server_mod
+    from fastapi import HTTPException, Request
+    from starlette.datastructures import URL
+
+    from litellm.proxy._types import (
+        LiteLLM_EndUserTable,
+        LiteLLM_ProjectTableCachedObj,
+    )
+
+    token = UserAPIKeyAuth(
+        api_key="sk-test",
+        user_id="u",
+        team_id="deleted-team",
+        team_max_budget=5.0,
+        team_models=["gpt-4o"],
+        project_id="proj-1",
+        end_user_id="alice",
+    )
+    request = Request(scope={"type": "http"})
+    request._url = URL(url="/chat/completions")
+    request._body = json.dumps({"user": "alice", "model": "gpt-4o"}).encode()
+
+    fetched_user = LiteLLM_UserTable(
+        user_id="u",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+        max_budget=10.0,
+        spend=2.0,
+    )
+    fetched_end_user = LiteLLM_EndUserTable(user_id="alice", blocked=False, spend=1.0)
+    fetched_project = LiteLLM_ProjectTableCachedObj(
+        project_id="proj-1",
+        project_alias="Proj 1",
+        metadata={},
+        created_by="admin",
+        updated_by="admin",
+    )
+
+    attrs = _proxy_attrs_for_centralized_checks(user_custom_auth=None)
+    originals = {a: getattr(_proxy_server_mod, a, None) for a in attrs}
+    try:
+        for k, v in attrs.items():
+            setattr(_proxy_server_mod, k, v)
+        with (
+            patch(
+                "litellm.proxy.auth.user_api_key_auth.get_team_object",
+                new_callable=AsyncMock,
+                side_effect=HTTPException(status_code=404, detail="team-not-found"),
+            ),
+            patch(
+                "litellm.proxy.auth.user_api_key_auth.get_user_object",
+                new_callable=AsyncMock,
+                return_value=fetched_user,
+            ),
+            patch(
+                "litellm.proxy.auth.user_api_key_auth.get_project_object",
+                new_callable=AsyncMock,
+                return_value=fetched_project,
+            ),
+            patch(
+                "litellm.proxy.auth.user_api_key_auth.get_end_user_object",
+                new_callable=AsyncMock,
+                return_value=fetched_end_user,
+            ),
+            patch(
+                "litellm.proxy.auth.user_api_key_auth.common_checks",
+                new_callable=AsyncMock,
+            ) as mock_checks,
+        ):
+            await _run_centralized_common_checks(
+                user_api_key_auth_obj=token,
+                request=request,
+                request_data={"user": "alice", "model": "gpt-4o"},
+                route="/chat/completions",
+            )
+
+        mock_checks.assert_awaited_once()
+        kwargs = mock_checks.call_args.kwargs
+        # team reconstructed from the token
+        assert kwargs["team_object"] is not None
+        assert kwargs["team_object"].team_id == "deleted-team"
+        assert kwargs["team_object"].max_budget == 5.0
+        # other contexts must NOT be zeroed by the team fetch failure
+        assert kwargs["user_object"] is fetched_user
+        assert kwargs["end_user_object"] is fetched_end_user
+        assert kwargs["project_object"] is fetched_project
+    finally:
+        for k, v in originals.items():
+            setattr(_proxy_server_mod, k, v)
+
+
+@pytest.mark.asyncio
+async def test_centralized_common_checks_user_http_exception_isolates_to_user_only():
+    """Per-fetch isolation, mirror of the team case: an HTTPException
+    from get_user_object must zero only ``user_object``. The successfully
+    fetched team / end_user / project / global_spend must reach
+    common_checks intact so their enforcement still runs."""
+    import litellm.proxy.proxy_server as _proxy_server_mod
+    from fastapi import HTTPException, Request
+    from starlette.datastructures import URL
+
+    from litellm.proxy._types import (
+        LiteLLM_EndUserTable,
+        LiteLLM_ProjectTableCachedObj,
+        LiteLLM_TeamTableCachedObj,
+    )
+
+    token = UserAPIKeyAuth(
+        api_key="sk-test",
+        user_id="u",
+        team_id="t1",
+        project_id="proj-1",
+        end_user_id="alice",
+    )
+    request = Request(scope={"type": "http"})
+    request._url = URL(url="/chat/completions")
+    request._body = json.dumps({"user": "alice", "model": "gpt-4o"}).encode()
+
+    fetched_team = LiteLLM_TeamTableCachedObj(
+        team_id="t1", max_budget=20.0, models=["gpt-4o"]
+    )
+    fetched_end_user = LiteLLM_EndUserTable(user_id="alice", blocked=False, spend=1.0)
+    fetched_project = LiteLLM_ProjectTableCachedObj(
+        project_id="proj-1",
+        project_alias="Proj 1",
+        metadata={},
+        created_by="admin",
+        updated_by="admin",
+    )
+
+    attrs = _proxy_attrs_for_centralized_checks(user_custom_auth=None)
+    originals = {a: getattr(_proxy_server_mod, a, None) for a in attrs}
+    try:
+        for k, v in attrs.items():
+            setattr(_proxy_server_mod, k, v)
+        with (
+            patch(
+                "litellm.proxy.auth.user_api_key_auth.get_team_object",
+                new_callable=AsyncMock,
+                return_value=fetched_team,
+            ),
+            patch(
+                "litellm.proxy.auth.user_api_key_auth.get_user_object",
+                new_callable=AsyncMock,
+                side_effect=HTTPException(status_code=404, detail="user-not-found"),
+            ),
+            patch(
+                "litellm.proxy.auth.user_api_key_auth.get_project_object",
+                new_callable=AsyncMock,
+                return_value=fetched_project,
+            ),
+            patch(
+                "litellm.proxy.auth.user_api_key_auth.get_end_user_object",
+                new_callable=AsyncMock,
+                return_value=fetched_end_user,
+            ),
+            patch(
+                "litellm.proxy.auth.user_api_key_auth.common_checks",
+                new_callable=AsyncMock,
+            ) as mock_checks,
+        ):
+            await _run_centralized_common_checks(
+                user_api_key_auth_obj=token,
+                request=request,
+                request_data={"user": "alice", "model": "gpt-4o"},
+                route="/chat/completions",
+            )
+
+        mock_checks.assert_awaited_once()
+        kwargs = mock_checks.call_args.kwargs
+        assert kwargs["team_object"] is fetched_team
+        assert kwargs["end_user_object"] is fetched_end_user
+        assert kwargs["project_object"] is fetched_project
+        # only the user_object is zeroed by its own fetch failing
+        assert kwargs["user_object"] is None
+    finally:
+        for k, v in originals.items():
+            setattr(_proxy_server_mod, k, v)

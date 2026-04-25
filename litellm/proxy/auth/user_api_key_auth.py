@@ -1609,13 +1609,15 @@ async def _run_centralized_common_checks(
     model-access, budgets, guardrails, org, and vector-store checks.
 
     Invariants:
-    - ``PROXY_ADMIN`` tokens short-circuit (admins bypass these checks
-      today; preserving that preserves behavior and avoids five DB
-      fetches per admin request).
     - ``user_custom_auth`` with ``custom_auth_run_common_checks`` unset
       skips the gate — matches the existing custom-auth RPS guarantee.
       Custom-auth deployments don't use OAuth2 / DB-fallback paths, so
       the skip does not re-open any bypass.
+    - ``PROXY_ADMIN`` tokens still run through ``common_checks`` so
+      team-blocked / team-budget / end-user-budget / tag-budget /
+      vector-store / tool-allowlist enforcement applies to admin keys
+      too. Admin status is honored where the underlying check exempts it
+      (``_is_api_route_allowed``, ``organization_role_based_access_check``).
     """
     from litellm.proxy.proxy_server import (
         general_settings,
@@ -1756,27 +1758,56 @@ async def _run_centralized_common_checks(
         )
     )
 
-    try:
-        (
-            team_object,
-            user_object,
-            project_object,
-            end_user_object,
-            global_proxy_spend,
-        ) = await asyncio.gather(*fetch_coros, return_exceptions=False)
-    except HTTPException:
-        # Any of the five gathered fetches can raise HTTPException. Only
-        # reconstruct from the token when a team_id is known — otherwise
-        # the exception came from a different fetch and the assert in
-        # _team_obj_from_token would fire.
-        if user_api_key_auth_obj.team_id is not None:
-            team_object = _team_obj_from_token(user_api_key_auth_obj)
-        else:
-            team_object = None
-        user_object = None
-        project_object = None
-        end_user_object = None
-        global_proxy_spend = None
+    # Per-fetch error isolation. ``_safe_fetch`` lets HTTPException,
+    # ProxyException, and BudgetExceededError escape (everything else is
+    # already swallowed to None). A bare ``except`` over ``gather`` would
+    # let one fetch's HTTPException null out every other context — e.g.
+    # a 404 from ``get_team_object`` (token references a deleted team)
+    # would silently skip the user, end-user, project, and global-spend
+    # checks. Use ``return_exceptions=True`` and apply per-fetch fallback
+    # so a missing team only zeros out the team object.
+    (
+        team_result,
+        user_result,
+        project_result,
+        end_user_result,
+        global_spend_result,
+    ) = await asyncio.gather(*fetch_coros, return_exceptions=True)
+
+    # ProxyException / BudgetExceededError are authorization failures —
+    # propagate so the wrapper renders them. HTTPException is fallback
+    # material (404 from get_team_object is the only known producer).
+    for r in (
+        team_result,
+        user_result,
+        project_result,
+        end_user_result,
+        global_spend_result,
+    ):
+        if isinstance(r, (ProxyException, litellm.BudgetExceededError)):
+            raise r
+
+    if isinstance(team_result, HTTPException):
+        # Token-derived fallback only valid when a team_id is set;
+        # _team_obj_from_token asserts that precondition.
+        team_object = (
+            _team_obj_from_token(user_api_key_auth_obj)
+            if user_api_key_auth_obj.team_id is not None
+            else None
+        )
+    else:
+        team_object = team_result
+
+    user_object = None if isinstance(user_result, HTTPException) else user_result
+    project_object = (
+        None if isinstance(project_result, HTTPException) else project_result
+    )
+    end_user_object = (
+        None if isinstance(end_user_result, HTTPException) else end_user_result
+    )
+    global_proxy_spend = (
+        None if isinstance(global_spend_result, HTTPException) else global_spend_result
+    )
 
     # common_checks identifies admin via user_object, not the token
     # (non_proxy_admin_allowed_routes_check). JWT admin shortcut and
