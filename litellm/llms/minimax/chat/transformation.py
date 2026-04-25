@@ -1,6 +1,7 @@
 """
 MiniMax OpenAI transformation config - extends OpenAI chat config for MiniMax's OpenAI-compatible API
 """
+
 from typing import List, Optional, Tuple
 
 import litellm

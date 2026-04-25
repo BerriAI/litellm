@@ -274,7 +274,7 @@ async def test_async_router_afile_content_uses_deployment_custom_llm_provider():
     """
     Regression test: Ensure afile_content preserves deployment custom_llm_provider
     when model name lacks provider prefix (e.g., "gpt-4.1-mini" instead of "azure/gpt-4.1-mini").
-    
+
     This prevents "None is not a valid LlmProviders" errors when calling file content operations.
     """
     from unittest.mock import AsyncMock, MagicMock, patch
@@ -297,9 +297,11 @@ async def test_async_router_afile_content_uses_deployment_custom_llm_provider():
     # Mock the Azure file handler's afile_content method
     mock_response = MagicMock(spec=HttpxBinaryResponseContent)
     mock_response.response = MagicMock()
-    
-    with patch("litellm.llms.azure.files.handler.AzureOpenAIFilesAPI.afile_content", 
-               return_value=mock_response) as mock_afile_content:
+
+    with patch(
+        "litellm.llms.azure.files.handler.AzureOpenAIFilesAPI.afile_content",
+        return_value=mock_response,
+    ) as mock_afile_content:
         result = await router.afile_content(
             model="team-azure-batch",
             file_id="file-123",
@@ -1074,6 +1076,69 @@ def test_cached_get_model_group_info():
     # Verify cache still works after invalidation
     result6 = router._cached_get_model_group_info("gpt-4")
     assert result5 is result6
+
+
+def test_model_group_info_cost_from_db_model_info():
+    """
+    When get_deployment_model_info fails (model_info is None fallback),
+    input_cost_per_token and output_cost_per_token should be read from db model_info.
+    """
+    from unittest.mock import patch
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "my-custom-model",
+                "litellm_params": {
+                    "model": "openai/my-custom-model",
+                    "api_key": "fake",
+                    "api_base": "https://my-custom-endpoint.com",
+                },
+                "model_info": {
+                    "input_cost_per_token": 0.0001,
+                    "output_cost_per_token": 0.0002,
+                },
+            },
+        ]
+    )
+
+    with patch.object(
+        router, "get_deployment_model_info", side_effect=Exception("not found")
+    ):
+        result = router._cached_get_model_group_info("my-custom-model")
+        assert result is not None
+        assert result.input_cost_per_token == 0.0001
+        assert result.output_cost_per_token == 0.0002
+
+
+def test_model_group_info_cost_none_when_db_model_info_has_no_cost():
+    """
+    When get_deployment_model_info fails and db model_info has no cost fields,
+    input/output_cost_per_token should be None.
+    """
+    from unittest.mock import patch
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "my-custom-model-no-cost",
+                "litellm_params": {
+                    "model": "openai/my-custom-model-no-cost",
+                    "api_key": "fake",
+                    "api_base": "https://my-custom-endpoint.com",
+                },
+                "model_info": {},
+            },
+        ]
+    )
+
+    with patch.object(
+        router, "get_deployment_model_info", side_effect=Exception("not found")
+    ):
+        result = router._cached_get_model_group_info("my-custom-model-no-cost")
+        assert result is not None
+        assert result.input_cost_per_token is None
+        assert result.output_cost_per_token is None
 
 
 def test_get_model_access_groups_caching():
@@ -3132,7 +3197,9 @@ def test_multiregion_team_deployments_unique_model_names():
 
     # Each deployment has a unique ID (critical for cooldown/retry to work)
     deployment_ids = {d["model_info"]["id"] for d in deployments}
-    assert len(deployment_ids) == 2, "Each deployment must have a unique ID for cooldown tracking"
+    assert (
+        len(deployment_ids) == 2
+    ), "Each deployment must have a unique ID for cooldown tracking"
 
     # Wrong team: returns nothing
     deployments = router._get_all_deployments(
@@ -3185,9 +3252,9 @@ async def test_multiregion_team_failover_between_regions():
     deployments = router._get_all_deployments(
         model_name="claude-sonnet", team_id="metis-team"
     )
-    assert len(deployments) == 2, (
-        "Router must find both regional deployments by team_public_model_name"
-    )
+    assert (
+        len(deployments) == 2
+    ), "Router must find both regional deployments by team_public_model_name"
 
     # Make a normal request — should succeed from one of the regions
     response = await router.acompletion(
