@@ -905,20 +905,26 @@ if MCP_AVAILABLE:
 
         user_id = user_api_key_dict.user_id or ""
         if user_id and _byok_prisma_client is not None:
-            byok_server_ids = [
+            credentialed_server_ids = [
                 s.server_id
                 for s in redacted_mcp_servers
                 if getattr(s, "is_byok", False)
+                or getattr(s, "auth_type", None) == "oauth2"
             ]
-            if byok_server_ids:
+            if credentialed_server_ids:
                 cred_rows = (
                     await _byok_prisma_client.db.litellm_mcpusercredentials.find_many(
-                        where={"user_id": user_id, "server_id": {"in": byok_server_ids}}
+                        where={
+                            "user_id": user_id,
+                            "server_id": {"in": credentialed_server_ids},
+                        }
                     )
                 )
                 cred_set = {r.server_id for r in cred_rows}
                 for server in redacted_mcp_servers:
-                    if getattr(server, "is_byok", False):
+                    if getattr(server, "is_byok", False) or getattr(
+                        server, "auth_type", None
+                    ) == "oauth2":
                         server.has_user_credential = server.server_id in cred_set
 
         # Virtual keys only get a sanitized discovery view.
