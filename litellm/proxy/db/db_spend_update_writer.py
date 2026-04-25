@@ -1816,13 +1816,11 @@ class DBSpendUpdateWriter:
         team_member_model_list_transactions: Dict[str, float],
     ) -> None:
         """
-        Persist per-model spend increments to LiteLLM_TeamMembership.model_spend so that
-        the spend counter cache can be seeded from the DB after a restart.
+        Persist per-model spend increments to LiteLLM_TeamMemberModelSpend using
+        atomic upsert+increment — no read-modify-write race condition.
 
         Key format: "team_id::<tid>::user_id::<uid>::model::<model>"
         """
-        import json as _json
-
         from litellm.proxy.utils import _raise_failed_update_spend_exception
 
         for key, cost in team_member_model_list_transactions.items():
@@ -1843,25 +1841,23 @@ class DBSpendUpdateWriter:
             for attempt in range(n_retry_times + 1):
                 start_time = time.time()
                 try:
-                    row = await prisma_client.db.litellm_teammembership.find_unique(
+                    await prisma_client.db.litellm_teammembermodeispend.upsert(
                         where={
-                            "user_id_team_id": {"user_id": user_id, "team_id": team_id}
-                        }
-                    )
-                    if row is None:
-                        break
-                    existing: dict = {}
-                    raw = getattr(row, "model_spend", None)
-                    if isinstance(raw, str):
-                        existing = _json.loads(raw)
-                    elif isinstance(raw, dict):
-                        existing = raw
-                    existing[model_name] = float(existing.get(model_name) or 0.0) + cost
-                    await prisma_client.db.litellm_teammembership.update(
-                        where={
-                            "user_id_team_id": {"user_id": user_id, "team_id": team_id}
+                            "user_id_team_id_model": {
+                                "user_id": user_id,
+                                "team_id": team_id,
+                                "model": model_name,
+                            }
                         },
-                        data={"model_spend": _json.dumps(existing)},
+                        data={
+                            "create": {
+                                "user_id": user_id,
+                                "team_id": team_id,
+                                "model": model_name,
+                                "spend": cost,
+                            },
+                            "update": {"spend": {"increment": cost}},
+                        },
                     )
                     break
                 except DB_CONNECTION_ERROR_TYPES as e:
