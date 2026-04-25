@@ -387,6 +387,7 @@ from litellm.llms.base_llm.completion.transformation import BaseTextCompletionCo
 from litellm.llms.base_llm.evals.transformation import BaseEvalsAPIConfig
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.llms.base_llm.skills.transformation import BaseSkillsAPIConfig
+from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 
 from ._logging import _is_debugging_on, verbose_logger
 from .caching.caching import (
@@ -4759,12 +4760,17 @@ def add_provider_specific_params_to_optional_params(
     Add provider specific params to optional_params
     """
 
-    if (
+    if custom_llm_provider in [
+        "openai",
+        "azure",
+        "text-completion-openai",
+    ] + litellm.openai_compatible_providers or JSONProviderRegistry.exists(
         custom_llm_provider
-        in ["openai", "azure", "text-completion-openai"]
-        + litellm.openai_compatible_providers
     ):
         # for openai, azure we should pass the extra/passed params within `extra_body` https://github.com/openai/openai-python/blob/ac33853ba10d13ac149b1fa3ca6dba7d613065c9/src/openai/resources/models.py#L46
+        # JSON-configured providers route through the OpenAI client (see main.py
+        # routing branch), so they need the same extra_body wrapping to keep the
+        # provider SDK from receiving unknown top-level kwargs.
         if (
             _should_drop_param(
                 k="extra_body", additional_drop_params=additional_drop_params

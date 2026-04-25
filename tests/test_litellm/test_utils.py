@@ -3542,6 +3542,81 @@ class TestAdditionalDropParamsForNonOpenAIProviders:
         assert result.get("custom_param") == "value"
 
 
+class TestExtraBodyWrappingForJSONProviders:
+    """
+    Test that JSON-configured providers (registered via providers.json) get the
+    same extra_body wrapping as providers in litellm.openai_compatible_providers.
+
+    Fixes https://github.com/BerriAI/litellm/issues/26443
+
+    JSON-configured providers (e.g. Scaleway) route through the OpenAI client
+    path in main.py, but `add_provider_specific_params_to_optional_params` was
+    only treating providers in `openai_compatible_providers` as OpenAI-compatible
+    for parameter formatting. Non-OpenAI params like `chat_template_kwargs`
+    therefore landed as top-level kwargs on the OpenAI SDK call and were
+    rejected with `unexpected keyword argument`.
+    """
+
+    def test_json_provider_wraps_unknown_param_in_extra_body(self):
+        """Test that a JSON-registered provider (scaleway) has unknown params
+        wrapped in extra_body instead of promoted to top-level optional_params.
+        """
+        from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+        from litellm.utils import add_provider_specific_params_to_optional_params
+
+        # Pre-condition: scaleway is a JSON-registered provider but is not in
+        # litellm.openai_compatible_providers.
+        assert JSONProviderRegistry.exists("scaleway")
+        assert "scaleway" not in litellm.openai_compatible_providers
+
+        optional_params: dict = {}
+        passed_params = {
+            "chat_template_kwargs": {"enable_thinking": True},
+            "temperature": 0.7,
+        }
+        openai_params = ["temperature", "max_tokens", "top_p"]
+
+        result = add_provider_specific_params_to_optional_params(
+            optional_params=optional_params,
+            passed_params=passed_params,
+            custom_llm_provider="scaleway",
+            openai_params=openai_params,
+        )
+
+        # The provider-specific param should be inside extra_body, not at the
+        # top level (where the OpenAI SDK would reject it).
+        assert "chat_template_kwargs" not in result
+        assert isinstance(result.get("extra_body"), dict)
+        assert result["extra_body"].get("chat_template_kwargs") == {
+            "enable_thinking": True
+        }
+
+    def test_native_non_openai_provider_still_top_level(self):
+        """Test that providers which are neither OpenAI-compatible nor
+        JSON-registered (e.g. bedrock) keep getting unknown params at the top
+        level, since their handlers consume them directly.
+        """
+        from litellm.utils import add_provider_specific_params_to_optional_params
+
+        optional_params: dict = {}
+        passed_params = {
+            "some_bedrock_param": "value",
+            "temperature": 0.7,
+        }
+        openai_params = ["temperature", "max_tokens"]
+
+        result = add_provider_specific_params_to_optional_params(
+            optional_params=optional_params,
+            passed_params=passed_params,
+            custom_llm_provider="bedrock",
+            openai_params=openai_params,
+        )
+
+        # Non-OpenAI-compatible providers stay on the top-level path.
+        assert result.get("some_bedrock_param") == "value"
+        assert "extra_body" not in result
+
+
 class TestDropParamsWithPromptCacheKey:
     """
     Test that drop_params: true correctly drops prompt_cache_key for non-OpenAI providers.
