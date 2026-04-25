@@ -139,8 +139,7 @@ async def test_azure_sentinel_batch_splitting():
 @pytest.mark.asyncio
 async def test_azure_sentinel_split_into_batches_single_oversized_entry():
     """Test that a single entry larger than MAX_BATCH_SIZE_BYTES is sent alone"""
-    with patch.dict(os.environ, {"AZURE_SENTINEL_TRUNCATE_CONTENT": "false"}):
-        logger = _make_logger()
+    logger = _make_logger()
 
     # One very large payload that exceeds the batch size on its own.
     # Use varied content so JSON serialization keeps it large.
@@ -177,11 +176,11 @@ async def test_azure_sentinel_split_into_batches_single_oversized_entry():
 
 
 def test_column_limit_truncates_large_fields():
-    """Test that fields exceeding 262,144 chars are truncated (keeping the tail)"""
-    with patch.dict(os.environ, {"AZURE_SENTINEL_TRUNCATE_CONTENT": "true"}):
+    """Test that fields exceeding the configured limit are truncated (keeping the tail)"""
+    with patch.dict(os.environ, {"AZURE_SENTINEL_TRUNCATE_BYTES": "262144"}):
         logger = _make_logger()
 
-    # Content larger than 256 KB column limit
+    # Content larger than the configured limit
     big_messages = "A" * 300_000
     big_response = "B" * 300_000
 
@@ -199,12 +198,12 @@ def test_column_limit_truncates_large_fields():
     # Messages field should be truncated, keeping tail
     msg_str = str(result["messages"])
     assert msg_str.startswith("[truncated by litellm]...")
-    assert len(msg_str) <= logger.MAX_COLUMN_CHARS
+    assert len(msg_str) <= logger.truncate_max_chars
 
     # Response field should be truncated, keeping tail
     resp_str = str(result["response"])
     assert resp_str.startswith("[truncated by litellm]...")
-    assert len(resp_str) <= logger.MAX_COLUMN_CHARS
+    assert len(resp_str) <= logger.truncate_max_chars
 
     # Truncation metadata present
     metadata = result.get("metadata", {})
@@ -217,15 +216,15 @@ def test_column_limit_truncates_large_fields():
     assert "messages" in trunc_info["truncated_fields"]
     assert "response" in trunc_info["truncated_fields"]
     assert trunc_info["original_messages_chars"] == len(str(payload["messages"]))
-    assert trunc_info["max_column_chars"] == 262_144
+    assert trunc_info["max_column_chars"] == 262144
 
     # Original payload not mutated
-    assert len(str(payload["messages"])) > 262_144
+    assert len(str(payload["messages"])) > 262144
 
 
 def test_column_limit_preserves_small_payloads():
-    """Test that payloads under the column limit are returned unchanged"""
-    with patch.dict(os.environ, {"AZURE_SENTINEL_TRUNCATE_CONTENT": "true"}):
+    """Test that payloads under the configured limit are returned unchanged"""
+    with patch.dict(os.environ, {"AZURE_SENTINEL_TRUNCATE_BYTES": "262144"}):
         logger = _make_logger()
 
     payload = _make_payload(
@@ -242,13 +241,15 @@ def test_column_limit_preserves_small_payloads():
         assert "litellm_content_truncated" not in metadata
 
 
-def test_truncate_disabled_via_env_var():
-    """Test that truncation is skipped when AZURE_SENTINEL_TRUNCATE_CONTENT=false"""
-    with patch.dict(os.environ, {"AZURE_SENTINEL_TRUNCATE_CONTENT": "false"}):
+def test_truncate_disabled_when_env_unset():
+    """Test that truncation is skipped when AZURE_SENTINEL_TRUNCATE_BYTES is not set"""
+    with patch.dict(os.environ, {}, clear=False):
+        # Ensure the env var is absent
+        os.environ.pop("AZURE_SENTINEL_TRUNCATE_BYTES", None)
         logger = _make_logger()
     assert logger.truncate_content is False
 
-    # Create payload with content exceeding 256 KB column limit
+    # Create payload with content exceeding 256 KB
     huge_content = "z" * 300_000
     payloads = [
         _make_payload(
@@ -270,11 +271,12 @@ def test_truncate_disabled_via_env_var():
 
 def test_truncate_enabled_in_split_batches():
     """Test that _split_into_batches truncates large fields when enabled"""
-    with patch.dict(os.environ, {"AZURE_SENTINEL_TRUNCATE_CONTENT": "true"}):
+    with patch.dict(os.environ, {"AZURE_SENTINEL_TRUNCATE_BYTES": "262144"}):
         logger = _make_logger()
     assert logger.truncate_content is True
+    assert logger.truncate_max_chars == 262144
 
-    # Content exceeding 256 KB column limit
+    # Content exceeding the configured limit
     huge_content = "X" * 400_000
     payloads = [
         _make_payload(

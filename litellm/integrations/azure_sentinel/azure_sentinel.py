@@ -121,13 +121,18 @@ class AzureSentinelLogger(CustomBatchLogger):
         asyncio.create_task(self.periodic_flush())
         self.log_queue: List[StandardLoggingPayload] = []
 
-        # When True, string fields (messages, response) are truncated to the
-        # Azure Log Analytics column limit (256 KB / 262,144 chars). Azure
-        # silently truncates at this limit anyway; doing it ourselves lets us
-        # keep the tail (most recent content) and record metadata.
-        # Controlled by AZURE_SENTINEL_TRUNCATE_CONTENT env var (default: false).
-        truncate_env = os.getenv("AZURE_SENTINEL_TRUNCATE_CONTENT", "false")
-        self.truncate_content = truncate_env.lower() in ("true", "1", "yes")
+        # When set to a positive integer, string fields (messages, response)
+        # are truncated to that many characters. Azure Log Analytics silently
+        # truncates string columns when over the limits doing it here
+        # ourselves lets us keep the tail (most recent content) and record
+        # metadata.  Set AZURE_SENTINEL_TRUNCATE_BYTES to the desired char
+        # limit (e.g. "262144").  When unset or "0", truncation is disabled.
+        truncate_bytes_env = os.getenv("AZURE_SENTINEL_TRUNCATE_BYTES", "0")
+        try:
+            self.truncate_max_chars = int(truncate_bytes_env)
+        except ValueError:
+            self.truncate_max_chars = 0
+        self.truncate_content = self.truncate_max_chars > 0
 
     async def _get_oauth_token(self) -> str:
         """
@@ -253,18 +258,13 @@ class AzureSentinelLogger(CustomBatchLogger):
     # We target a conservative threshold to stay safely under the limit.
     MAX_BATCH_SIZE_BYTES = 950_000  # ~950KB uncompressed target per batch
 
-    # Azure Log Analytics silently truncates string column values at 256 KB.
-    # We enforce this limit ourselves so we can keep the tail (most recent
-    # content) and record truncation metadata.
-    MAX_COLUMN_CHARS = 262_144  # 256 KB Azure Log Analytics column limit
-
     def _enforce_column_limits(
         self, payload: StandardLoggingPayload
     ) -> StandardLoggingPayload:
         """
-        Truncate messages/response string fields to the Azure Log Analytics
-        column limit (262,144 chars). Keeps the *tail* of each field so that
-        the most recent conversation turns and response text are preserved.
+        Truncate messages/response string fields to ``self.truncate_max_chars``
+        characters.  Keeps the *tail* of each field so that the most recent
+        conversation turns and response text are preserved.
 
         Only called when ``self.truncate_content`` is True.
 
@@ -272,7 +272,7 @@ class AzureSentinelLogger(CustomBatchLogger):
         limit, otherwise returns a deep copy with truncated fields and
         truncation metadata added.
         """
-        limit = self.MAX_COLUMN_CHARS
+        limit = self.truncate_max_chars
         messages = payload.get("messages")
         response = payload.get("response")
         msg_str = str(messages) if messages is not None else ""
@@ -328,8 +328,8 @@ class AzureSentinelLogger(CustomBatchLogger):
         Splits payloads into gzip-compressed batches that stay under
         MAX_BATCH_SIZE_BYTES (uncompressed) per batch.
 
-        When truncate_content is enabled, enforces the Azure Log Analytics
-        column limit (256 KB) on messages/response fields before batching.
+        When truncate_content is enabled, enforces the configured character
+        limit on messages/response fields before batching.
 
         Returns a list of gzip-compressed byte strings, each representing
         a JSON array of log entries.
