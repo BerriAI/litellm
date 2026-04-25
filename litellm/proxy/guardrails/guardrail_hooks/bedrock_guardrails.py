@@ -398,6 +398,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         response: Optional[Union[Any, litellm.ModelResponse]] = None,
         request_data: Optional[dict] = None,
         logging_event_type: Optional[GuardrailEventHooks] = None,
+        skip_logging: bool = False,
     ) -> BedrockGuardrailResponse:
         from datetime import datetime
 
@@ -466,16 +467,17 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                         status_code,
                         detail_message,
                     ) = self._parse_bedrock_guardrail_error_response(response)
-                    self.add_standard_logging_guardrail_information_to_request_data(
-                        guardrail_provider=self.guardrail_provider,
-                        guardrail_json_response={"error": detail_message},
-                        request_data=request_data or {},
-                        guardrail_status="guardrail_failed_to_respond",
-                        start_time=start_time.timestamp(),
-                        end_time=datetime.now().timestamp(),
-                        duration=(datetime.now() - start_time).total_seconds(),
-                        event_type=event_type,
-                    )
+                    if not skip_logging:
+                        self.add_standard_logging_guardrail_information_to_request_data(
+                            guardrail_provider=self.guardrail_provider,
+                            guardrail_json_response={"error": detail_message},
+                            request_data=request_data or {},
+                            guardrail_status="guardrail_failed_to_respond",
+                            start_time=start_time.timestamp(),
+                            end_time=datetime.now().timestamp(),
+                            duration=(datetime.now() - start_time).total_seconds(),
+                            event_type=event_type,
+                        )
                     raise HTTPException(
                         status_code=status_code, detail=detail_message
                     ) from e
@@ -485,16 +487,17 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             verbose_proxy_logger.error(
                 "Bedrock AI: failed to make guardrail request: %s", str(e)
             )
-            self.add_standard_logging_guardrail_information_to_request_data(
-                guardrail_provider=self.guardrail_provider,
-                guardrail_json_response={"error": str(e)},
-                request_data=request_data or {},
-                guardrail_status="guardrail_failed_to_respond",
-                start_time=start_time.timestamp(),
-                end_time=datetime.now().timestamp(),
-                duration=(datetime.now() - start_time).total_seconds(),
-                event_type=event_type,
-            )
+            if not skip_logging:
+                self.add_standard_logging_guardrail_information_to_request_data(
+                    guardrail_provider=self.guardrail_provider,
+                    guardrail_json_response={"error": str(e)},
+                    request_data=request_data or {},
+                    guardrail_status="guardrail_failed_to_respond",
+                    start_time=start_time.timestamp(),
+                    end_time=datetime.now().timestamp(),
+                    duration=(datetime.now() - start_time).total_seconds(),
+                    event_type=event_type,
+                )
             raise
 
         #########################################################
@@ -503,18 +506,19 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         _json_response = httpx_response.json()
         # Raw Bedrock JSON is passed here; match/regex redaction runs once inside
         # CustomGuardrail.add_standard_logging_guardrail_information_to_request_data.
-        self.add_standard_logging_guardrail_information_to_request_data(
-            guardrail_provider=self.guardrail_provider,
-            guardrail_json_response=_json_response,
-            request_data=request_data or {},
-            guardrail_status=self._get_bedrock_guardrail_response_status(
-                response=httpx_response
-            ),
-            start_time=start_time.timestamp(),
-            end_time=datetime.now().timestamp(),
-            duration=(datetime.now() - start_time).total_seconds(),
-            event_type=event_type,
-        )
+        if not skip_logging:
+            self.add_standard_logging_guardrail_information_to_request_data(
+                guardrail_provider=self.guardrail_provider,
+                guardrail_json_response=_json_response,
+                request_data=request_data or {},
+                guardrail_status=self._get_bedrock_guardrail_response_status(
+                    response=httpx_response
+                ),
+                start_time=start_time.timestamp(),
+                end_time=datetime.now().timestamp(),
+                duration=(datetime.now() - start_time).total_seconds(),
+                event_type=event_type,
+            )
         #########################################################
         if httpx_response.status_code == 200:
             # check if the response was flagged
@@ -1118,12 +1122,16 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             )
             input_messages = input_filter.payload_messages or new_messages
 
-            # Create tasks for parallel execution of both INPUT and OUTPUT validation
+            # Create tasks for parallel execution of both INPUT and OUTPUT validation.
+            # The OUTPUT scan is the canonical post_call log entry; suppress the
+            # INPUT scan's log to avoid two duplicate post-call entries for the
+            # same guardrail. INPUT exceptions still propagate so blocking works.
             input_task = self.make_bedrock_api_request(
                 source="INPUT",
                 messages=input_messages,
                 request_data=data,
                 logging_event_type=GuardrailEventHooks.post_call,
+                skip_logging=True,
             )
             output_task = self.make_bedrock_api_request(
                 source="OUTPUT",
@@ -1269,11 +1277,16 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                 input_messages = input_filter.payload_messages or request_data.get(
                     "messages"
                 )
+                # OUTPUT scan is the canonical post_call log entry; suppress the
+                # INPUT scan's log to avoid two duplicate post-call entries for
+                # the same guardrail. INPUT exceptions still propagate so
+                # blocking works.
                 input_task = self.make_bedrock_api_request(
                     source="INPUT",
                     messages=input_messages,
                     request_data=request_data,
                     logging_event_type=GuardrailEventHooks.post_call,
+                    skip_logging=True,
                 )  # Only input messages
                 output_task = self.make_bedrock_api_request(
                     source="OUTPUT",

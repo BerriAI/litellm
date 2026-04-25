@@ -1810,14 +1810,19 @@ async def test_make_bedrock_api_request_logging_event_type_for_spend_logs():
         "messages": [{"role": "user", "content": "hi"}],
     }
 
-    with patch.object(
-        guardrail.async_handler, "post", new_callable=AsyncMock
-    ) as mock_post, patch.object(
-        guardrail, "_load_credentials", return_value=(mock_credentials, "us-east-1")
-    ), patch.object(guardrail, "_prepare_request", return_value=MagicMock()), patch.object(
-        guardrail,
-        "add_standard_logging_guardrail_information_to_request_data",
-    ) as mock_log:
+    with (
+        patch.object(
+            guardrail.async_handler, "post", new_callable=AsyncMock
+        ) as mock_post,
+        patch.object(
+            guardrail, "_load_credentials", return_value=(mock_credentials, "us-east-1")
+        ),
+        patch.object(guardrail, "_prepare_request", return_value=MagicMock()),
+        patch.object(
+            guardrail,
+            "add_standard_logging_guardrail_information_to_request_data",
+        ) as mock_log,
+    ):
         mock_post.return_value = mock_bedrock_response
 
         await guardrail.make_bedrock_api_request(
@@ -1826,7 +1831,9 @@ async def test_make_bedrock_api_request_logging_event_type_for_spend_logs():
             request_data=request_data,
             logging_event_type=GuardrailEventHooks.during_call,
         )
-        assert mock_log.call_args.kwargs["event_type"] == GuardrailEventHooks.during_call
+        assert (
+            mock_log.call_args.kwargs["event_type"] == GuardrailEventHooks.during_call
+        )
         # Raw Bedrock JSON is forwarded; redaction runs once in
         # CustomGuardrail.add_standard_logging_guardrail_information_to_request_data.
         assert (
@@ -2164,3 +2171,172 @@ async def test_streaming_post_call_output_only_path_passes_request_data_to_make_
     c = mock_make.call_args
     assert c.kwargs.get("source") == "OUTPUT"
     assert c.kwargs.get("request_data") is request_data
+
+
+# ---------------------------------------------------------------------------
+# Regression: post_call must emit one log entry per guardrail (not two).
+# When only post_call is configured, the hook scans both INPUT and OUTPUT in
+# parallel — the INPUT scan must skip logging so the trace shows a single
+# post-call entry instead of duplicates.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_post_call_combined_input_output_emits_single_log_entry():
+    """
+    With only `post_call` configured, async_post_call_success_hook validates
+    both INPUT and OUTPUT. Only the OUTPUT scan should append a log entry; the
+    INPUT scan must pass skip_logging=True so the post-call section in the
+    trace shows the guardrail once, not twice.
+    """
+    guardrail = BedrockGuardrail(
+        guardrail_name="bedrock-post-pii",
+        guardrailIdentifier="gid",
+        guardrailVersion="1",
+        event_hook=GuardrailEventHooks.post_call,
+        default_on=True,
+    )
+
+    request_data = {
+        "model": "gpt-4o-mini",
+        "messages": [{"role": "user", "content": "hi"}],
+        "metadata": {},
+    }
+    response = ModelResponse(
+        choices=[
+            litellm.Choices(
+                message=litellm.Message(role="assistant", content="hello"),
+                index=0,
+                finish_reason="stop",
+            )
+        ],
+        model="gpt-4o-mini",
+    )
+
+    minimal = {"action": "NONE", "assessments": [], "outputs": []}
+    with patch.object(
+        guardrail, "make_bedrock_api_request", AsyncMock(return_value=minimal)
+    ) as mock_make:
+        await guardrail.async_post_call_success_hook(
+            data=request_data,
+            user_api_key_dict=UserAPIKeyAuth(),
+            response=response,
+        )
+
+    sources = [c.kwargs.get("source") for c in mock_make.call_args_list]
+    assert sources.count("INPUT") == 1
+    assert sources.count("OUTPUT") == 1
+
+    input_call = next(
+        c for c in mock_make.call_args_list if c.kwargs.get("source") == "INPUT"
+    )
+    output_call = next(
+        c for c in mock_make.call_args_list if c.kwargs.get("source") == "OUTPUT"
+    )
+    assert input_call.kwargs.get("skip_logging") is True
+    assert output_call.kwargs.get("skip_logging", False) is False
+
+
+@pytest.mark.asyncio
+async def test_post_call_combined_streaming_input_skips_logging():
+    """
+    Same dedupe applies to the streaming post_call path: INPUT scan suppresses
+    its log entry, OUTPUT remains the canonical post_call log.
+    """
+    guardrail = BedrockGuardrail(
+        guardrail_name="bedrock-post-pii-stream",
+        guardrailIdentifier="gid",
+        guardrailVersion="1",
+        event_hook=GuardrailEventHooks.post_call,
+        default_on=True,
+    )
+
+    request_data = {
+        "model": "gpt-4o-mini",
+        "messages": [{"role": "user", "content": "hi"}],
+    }
+    chunks = [
+        litellm.ModelResponseStream(
+            id="tid",
+            choices=[
+                litellm.types.utils.StreamingChoices(
+                    delta=litellm.types.utils.Delta(content="hi", role="assistant"),
+                    finish_reason="stop",
+                    index=0,
+                )
+            ],
+            created=1,
+            model="gpt-4o-mini",
+            object="chat.completion.chunk",
+        )
+    ]
+
+    async def stream():
+        for c in chunks:
+            yield c
+
+    minimal = {"action": "NONE", "assessments": [], "outputs": []}
+    with patch.object(
+        guardrail, "make_bedrock_api_request", AsyncMock(return_value=minimal)
+    ) as mock_make:
+        async for _ in guardrail.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=UserAPIKeyAuth(),
+            response=stream(),
+            request_data=request_data,
+        ):
+            pass
+
+    input_call = next(
+        c for c in mock_make.call_args_list if c.kwargs.get("source") == "INPUT"
+    )
+    output_call = next(
+        c for c in mock_make.call_args_list if c.kwargs.get("source") == "OUTPUT"
+    )
+    assert input_call.kwargs.get("skip_logging") is True
+    assert output_call.kwargs.get("skip_logging", False) is False
+
+
+@pytest.mark.asyncio
+async def test_make_bedrock_api_request_skip_logging_suppresses_standard_log():
+    """
+    skip_logging=True must suppress the call into
+    add_standard_logging_guardrail_information_to_request_data even on the
+    success path so the post_call combined run produces one log entry, not two.
+    """
+    guardrail = BedrockGuardrail(
+        guardrailIdentifier="test-guardrail", guardrailVersion="DRAFT"
+    )
+    mock_credentials = MagicMock()
+    mock_credentials.access_key = "k"
+    mock_credentials.secret_key = "s"
+    mock_credentials.token = None
+
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {"action": "NONE", "assessments": []}
+
+    request_data = {"model": "gpt-4o", "messages": [{"role": "user", "content": "hi"}]}
+
+    with (
+        patch.object(
+            guardrail.async_handler,
+            "post",
+            new_callable=AsyncMock,
+            return_value=mock_response,
+        ),
+        patch.object(
+            guardrail, "_load_credentials", return_value=(mock_credentials, "us-east-1")
+        ),
+        patch.object(guardrail, "_prepare_request", return_value=MagicMock()),
+        patch.object(
+            guardrail, "add_standard_logging_guardrail_information_to_request_data"
+        ) as mock_log,
+    ):
+        await guardrail.make_bedrock_api_request(
+            source="INPUT",
+            messages=request_data["messages"],
+            request_data=request_data,
+            logging_event_type=GuardrailEventHooks.post_call,
+            skip_logging=True,
+        )
+        assert mock_log.call_count == 0
