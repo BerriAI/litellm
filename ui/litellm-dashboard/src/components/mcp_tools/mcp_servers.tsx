@@ -141,7 +141,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
       return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
     });
     setFilteredServers(sorted);
-  }, [serversWithHealth]);
+  }, [serversWithHealth, isInternalUser]);
 
   // Handle team filter change
   const handleTeamChange = (teamId: string) => {
