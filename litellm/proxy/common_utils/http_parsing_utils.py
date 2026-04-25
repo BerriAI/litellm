@@ -119,7 +119,11 @@ def strip_internal_control_fields(data: dict) -> None:
             except (json.JSONDecodeError, ValueError):
                 continue
             if isinstance(parsed, dict) and _strip_internal_metadata_keys(parsed):
-                data[container_key] = json.dumps(parsed)
+                # ensure_ascii=False keeps non-ASCII characters in their
+                # original UTF-8 form rather than \uXXXX-escaping them, so
+                # the re-serialized string stays as close to the original
+                # representation as possible.
+                data[container_key] = json.dumps(parsed, ensure_ascii=False)
 
 
 async def _read_request_body(request: Optional[Request]) -> Dict:

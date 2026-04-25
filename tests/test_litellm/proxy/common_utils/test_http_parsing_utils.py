@@ -1006,6 +1006,26 @@ class TestStripInternalControlFields:
         parsed = json.loads(data["metadata"])
         assert parsed == {"tag": "ok"}
 
+    def test_json_string_metadata_preserves_unicode_when_stripped(self):
+        """When the JSON-string metadata is re-serialized after stripping,
+        non-ASCII characters survive as UTF-8 instead of being
+        \\uXXXX-escaped (ensure_ascii=False)."""
+        from litellm.proxy.common_utils.http_parsing_utils import (
+            strip_internal_control_fields,
+        )
+
+        data = {
+            "metadata": json.dumps(
+                {"applied_guardrails": ["caller"], "tag": "café"},
+                ensure_ascii=False,
+            )
+        }
+        strip_internal_control_fields(data)
+        # The literal "é" survives in the re-serialized output.
+        assert "é" in data["metadata"]
+        assert "\\u00e9" not in data["metadata"]
+        assert json.loads(data["metadata"]) == {"tag": "café"}
+
     def test_clean_json_string_metadata_not_reserialized(self):
         """When nothing is removed from a JSON-string metadata, the
         original byte representation is preserved (no ordering / whitespace /
