@@ -5291,7 +5291,9 @@ def default_response_schema_prompt(response_schema: dict) -> str:
     prompt_str = """Use this JSON schema: 
     ```json 
     {}
-    ```""".format(response_schema)
+    ```""".format(
+        response_schema
+    )
     return prompt_str
 
 
