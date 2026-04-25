@@ -1608,7 +1608,9 @@ class Usage(SafeAttributeModel, CompletionUsage):
                     **completion_tokens_details
                 )
             elif isinstance(completion_tokens_details, CompletionTokensDetails):
-                _completion_tokens_details = completion_tokens_details
+                _completion_tokens_details = CompletionTokensDetailsWrapper(
+                    **completion_tokens_details.model_dump()
+                )
 
         # Handle reasoning_tokens and auto-calculate text_tokens if needed
         if reasoning_tokens:
