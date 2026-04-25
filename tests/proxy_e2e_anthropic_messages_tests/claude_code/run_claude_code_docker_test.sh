@@ -193,18 +193,38 @@ curl -fsS --connect-timeout 5 --max-time 20 \
   -H "Authorization: Bearer ${LITELLM_MASTER_KEY}" "${PROXY_URL}/v1/models" | grep -q "\"${MODEL_NAME}\""
 
 echo "[4/5] Running back-to-back Claude Code requests in an isolated non-root container..."
+run_claude_request() {
+  local prompt="$1"
+  local output_file="$2"
+  local run_output
+
+  if ! run_output="$(
+    docker compose -p "${COMPOSE_PROJECT_NAME}" -f "${COMPOSE_FILE}" run --rm -T \
+      -e CLAUDE_CODE_PROMPT="${prompt}" \
+      -e CLAUDE_CODE_OUTPUT_FILE="${output_file}" \
+      claude-code 2>&1
+  )"; then
+    echo "Claude Code container run failed."
+    echo "---- claude-code container output ----"
+    printf '%s\n' "${run_output}" | sed -n '1,200p'
+    echo "---- litellm logs tail ----"
+    docker compose -p "${COMPOSE_PROJECT_NAME}" -f "${COMPOSE_FILE}" logs --tail=200 litellm || true
+    return 1
+  fi
+
+  printf '%s\n' "${run_output}"
+}
+
 FIRST_RESPONSE="$(
-docker compose -p "${COMPOSE_PROJECT_NAME}" -f "${COMPOSE_FILE}" run --rm \
-  -e CLAUDE_CODE_PROMPT="Respond with exactly this text and nothing else: Hello from LiteLLM Claude Code request one." \
-  -e CLAUDE_CODE_OUTPUT_FILE="/tmp/claude-output-1.txt" \
-  claude-code
+  run_claude_request \
+    "Respond with exactly this text and nothing else: Hello from LiteLLM Claude Code request one." \
+    "/tmp/claude-output-1.txt"
 )"
 
 SECOND_RESPONSE="$(
-docker compose -p "${COMPOSE_PROJECT_NAME}" -f "${COMPOSE_FILE}" run --rm \
-  -e CLAUDE_CODE_PROMPT="Respond with exactly this text and nothing else: Hello from LiteLLM Claude Code request two." \
-  -e CLAUDE_CODE_OUTPUT_FILE="/tmp/claude-output-2.txt" \
-  claude-code
+  run_claude_request \
+    "Respond with exactly this text and nothing else: Hello from LiteLLM Claude Code request two." \
+    "/tmp/claude-output-2.txt"
 )"
 
 [[ -n "${FIRST_RESPONSE}" ]] || {
