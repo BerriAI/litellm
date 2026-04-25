@@ -15,7 +15,10 @@ from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.litellm_logging import _get_masked_values
 from litellm.proxy._types import CommonProxyErrors, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
+from litellm.proxy.common_utils.encrypt_decrypt_utils import (
+    decrypt_value_helper,
+    encrypt_value_helper,
+)
 from litellm.proxy.utils import handle_exception_on_proxy, jsonify_object
 from litellm.types.utils import CreateCredentialItem, CredentialItem
 
@@ -39,6 +42,23 @@ class CredentialHelperUtils:
         return CredentialItem(
             credential_name=credential.credential_name,
             credential_values=encrypted_credential_values,
+            credential_info=credential.credential_info or {},
+        )
+
+    @staticmethod
+    def decrypt_credential_values(credential: CredentialItem) -> CredentialItem:
+        """Decrypt values so in-memory credentials stay usable after DB updates."""
+        decrypted_credential_values = {}
+        for key, value in (credential.credential_values or {}).items():
+            decrypted_credential_values[key] = decrypt_value_helper(
+                value=value,
+                key=key,
+                return_original_value=True,
+            )
+
+        return CredentialItem(
+            credential_name=credential.credential_name,
+            credential_values=decrypted_credential_values,
             credential_info=credential.credential_info or {},
         )
 
@@ -388,6 +408,19 @@ async def update_credential(
                 **credential_object_jsonified,
                 "updated_by": user_api_key_dict.user_id,
             },
+        )
+        if merged_credential.credential_name != credential_name:
+            litellm.credential_list = [
+                cred
+                for cred in litellm.credential_list
+                if cred.credential_name != credential_name
+            ]
+        CredentialAccessor.upsert_credentials(
+            [
+                CredentialHelperUtils.decrypt_credential_values(
+                    CredentialItem(**merged_credential.model_dump())
+                )
+            ]
         )
         return {"success": True, "message": "Credential updated successfully"}
     except Exception as e:

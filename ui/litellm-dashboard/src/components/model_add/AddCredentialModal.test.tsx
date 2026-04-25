@@ -1,14 +1,18 @@
+// @vitest-environment jsdom
+
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { Providers } from "../provider_info_helpers";
 import AddCredentialModal from "./AddCredentialModal";
 
-vi.mock("../networking", async () => {
-  const actual = await vi.importActual("../networking");
-  return {
-    ...actual,
-    getProviderCreateMetadata: vi.fn().mockResolvedValue([
+vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
+  default: () => ({ accessToken: "test-token" }),
+}));
+
+vi.mock("@/app/(dashboard)/hooks/providers/useProviderFields", () => ({
+  useProviderFields: () => ({
+    data: [
       {
         provider: "OpenAI",
         provider_display_name: Providers.OpenAI,
@@ -43,9 +47,24 @@ vi.mock("../networking", async () => {
           },
         ],
       },
-    ]),
-  };
-});
+    ],
+    isLoading: false,
+    error: null,
+  }),
+}));
+
+vi.mock("@/hooks/useDeviceCodeFlow", () => ({
+  useDeviceCodeFlow: () => ({
+    state: { phase: "idle" },
+    start: vi.fn(),
+    reset: vi.fn(),
+    renderUI: () => null,
+  }),
+}));
+
+vi.mock("@/components/networking", () => ({
+  credentialCreateCall: vi.fn(),
+}));
 
 const createQueryClient = () =>
   new QueryClient({

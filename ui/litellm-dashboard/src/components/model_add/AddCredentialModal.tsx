@@ -3,7 +3,6 @@ import { Select as AntdSelect, Button, Form, Modal, Tooltip, Typography } from "
 import type { UploadProps } from "antd/es/upload";
 import React, { useCallback, useMemo, useState } from "react";
 import { credentialCreateCall } from "@/components/networking";
-import NotificationsManager from "../molecules/notifications_manager";
 import ProviderSpecificFields from "../add_model/provider_specific_fields";
 import { Providers, providerLogoMap } from "../provider_info_helpers";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
@@ -16,11 +15,14 @@ interface AddCredentialsModalProps {
   onCancel: () => void;
   onAddCredential: (values: any) => void;
   uploadProps: UploadProps;
-  initialCredentialName?: string;
-  initialProvider?: string;
 }
 
-const AddCredentialsModal: React.FC<AddCredentialsModalProps> = ({ open, onCancel, onAddCredential, uploadProps, initialCredentialName, initialProvider }) => {
+const AddCredentialsModal: React.FC<AddCredentialsModalProps> = ({
+  open,
+  onCancel,
+  onAddCredential,
+  uploadProps,
+}) => {
   const [form] = Form.useForm();
   const [selectedProvider, setSelectedProvider] = useState<Providers>(Providers.OpenAI);
   const { accessToken } = useAuthorized();

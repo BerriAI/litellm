@@ -342,13 +342,14 @@ def get_rbac_role(jwt_handler: JWTHandler, scopes: List[str]) -> str:
 def get_api_key(
     custom_litellm_key_header: Optional[str],
     api_key: str,
-    azure_api_key_header: Optional[str],
-    anthropic_api_key_header: Optional[str],
-    google_ai_studio_api_key_header: Optional[str],
-    azure_apim_header: Optional[str],
-    pass_through_endpoints: Optional[List[dict]],
-    route: str,
-    request: Request,
+    azure_api_key_header: Optional[str] = None,
+    anthropic_api_key_header: Optional[str] = None,
+    google_ai_studio_api_key_header: Optional[str] = None,
+    azure_apim_header: Optional[str] = None,
+    pass_through_endpoints: Optional[List[dict]] = None,
+    route: str = "",
+    request: Optional[Request] = None,
+    AZURE_AI_API_KEY_header: Optional[str] = None,
 ) -> Tuple[str, Optional[str]]:
     """
     Returns:
@@ -360,6 +361,8 @@ def get_api_key(
     )
 
     api_key = api_key
+    if azure_api_key_header is None and AZURE_AI_API_KEY_header is not None:
+        azure_api_key_header = AZURE_AI_API_KEY_header
     passed_in_key: Optional[str] = None
     if isinstance(custom_litellm_key_header, str):
         passed_in_key = custom_litellm_key_header
@@ -519,12 +522,13 @@ async def _resolve_jwt_to_virtual_key(
 async def _user_api_key_auth_builder(  # noqa: PLR0915
     request: Request,
     api_key: str,
-    azure_api_key_header: str,
-    anthropic_api_key_header: Optional[str],
-    google_ai_studio_api_key_header: Optional[str],
-    azure_apim_header: Optional[str],
-    request_data: dict,
+    azure_api_key_header: Optional[str] = None,
+    anthropic_api_key_header: Optional[str] = None,
+    google_ai_studio_api_key_header: Optional[str] = None,
+    azure_apim_header: Optional[str] = None,
+    request_data: Optional[dict] = None,
     custom_litellm_key_header: Optional[str] = None,
+    AZURE_AI_API_KEY_header: Optional[str] = None,
 ) -> UserAPIKeyAuth:
     from litellm.proxy.proxy_server import (
         general_settings,
@@ -557,6 +561,11 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
         pass_through_endpoints: Optional[List[dict]] = general_settings.get(
             "pass_through_endpoints", None
         )
+        if azure_api_key_header is None and AZURE_AI_API_KEY_header is not None:
+            azure_api_key_header = AZURE_AI_API_KEY_header
+        if request_data is None:
+            request_data = {}
+
         ## CHECK IF X-LITELM-API-KEY IS PASSED IN - supercedes Authorization header
         api_key, passed_in_key = get_api_key(
             custom_litellm_key_header=custom_litellm_key_header,
