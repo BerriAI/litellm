@@ -659,7 +659,6 @@ async def common_checks(  # noqa: PLR0915
                 valid_token=valid_token,
                 model=_model,
                 llm_router=llm_router,
-                prisma_client=prisma_client,
                 user_api_key_cache=user_api_key_cache,
             )
 
@@ -1297,32 +1296,17 @@ async def get_team_membership(
         return None
 
 
-@log_db_metrics
 async def get_team_member_model_spend(
     user_id: str,
     team_id: str,
     model: str,
-    prisma_client: Optional[PrismaClient],
     user_api_key_cache: DualCache,
 ) -> float:
-    if prisma_client is None:
-        return 0.0
     _key = f"team_member_model_spend:{user_id}:{team_id}:{model}"
     cached_spend = await user_api_key_cache.async_get_cache(key=_key)
     if cached_spend is not None:
         return float(cached_spend)
-    row = await prisma_client.db.litellm_teammembermodelspend.find_unique(
-        where={
-            "user_id_team_id_model": {
-                "user_id": user_id,
-                "team_id": team_id,
-                "model": model,
-            }
-        }
-    )
-    spend = float(row.spend if row is not None else 0.0)
-    await user_api_key_cache.async_set_cache(key=_key, value=spend, ttl=5)
-    return spend
+    return 0.0
 
 
 def model_in_access_group(
@@ -3381,7 +3365,6 @@ async def _check_team_member_model_budget(
     valid_token: Optional[UserAPIKeyAuth],
     model: Optional[Union[str, List[str]]],
     llm_router: Optional[Router],
-    prisma_client: Optional[PrismaClient] = None,
     user_api_key_cache: Optional[DualCache] = None,
 ):
     """
@@ -3458,12 +3441,11 @@ async def _check_team_member_model_budget(
             model=counter_model,
         )
         fallback_spend = 0.0
-        if prisma_client is not None and user_api_key_cache is not None:
+        if user_api_key_cache is not None:
             fallback_spend = await get_team_member_model_spend(
                 user_id=valid_token.user_id,
                 team_id=team_object.team_id,
                 model=counter_model,
-                prisma_client=prisma_client,
                 user_api_key_cache=user_api_key_cache,
             )
         model_spend = await get_current_spend(

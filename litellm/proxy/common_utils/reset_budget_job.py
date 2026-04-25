@@ -73,6 +73,7 @@ class ResetBudgetJob:
                 _get_team_member_counter_key,
                 _get_team_member_model_counter_key,
                 spend_counter_cache,
+                user_api_key_cache,
             )
 
             memberships = await self.prisma_client.db.litellm_teammembership.find_many(
@@ -116,8 +117,12 @@ class ResetBudgetJob:
                         team_id=row.team_id,
                         model=row.model,
                     )
+                    model_spend_cache_key = f"team_member_model_spend:{row.user_id}:{row.team_id}:{row.model}"
                     spend_counter_cache.in_memory_cache.set_cache(
                         key=model_counter_key, value=0.0
+                    )
+                    await user_api_key_cache.async_set_cache(
+                        key=model_spend_cache_key, value=0.0, ttl=5
                     )
                     if spend_counter_cache.redis_cache is not None:
                         try:

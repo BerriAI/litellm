@@ -859,7 +859,10 @@ def test_reset_budget_for_team_members_resets_new_counter_key_format():
     spend_counter_cache = MagicMock()
     spend_counter_cache.in_memory_cache.set_cache = MagicMock()
     spend_counter_cache.redis_cache = None
+    user_api_key_cache = MagicMock()
+    user_api_key_cache.async_set_cache = AsyncMock(return_value=None)
     fake_module.spend_counter_cache = spend_counter_cache
+    fake_module.user_api_key_cache = user_api_key_cache
     fake_module._get_team_member_counter_key = (
         lambda user_id, team_id: f"spend:team_member:team_id::{team_id}::user_id::{user_id}"
     )
@@ -884,6 +887,11 @@ def test_reset_budget_for_team_members_resets_new_counter_key_format():
     mock_prisma_client.db.litellm_teammembermodelspend.update_many.assert_awaited_once_with(
         where={"OR": [{"user_id": "user-1", "team_id": "team-1"}]},
         data={"spend": 0},
+    )
+    user_api_key_cache.async_set_cache.assert_awaited_once_with(
+        key="team_member_model_spend:user-1:team-1:gpt-4o",
+        value=0.0,
+        ttl=5,
     )
 
 
