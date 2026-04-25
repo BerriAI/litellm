@@ -1839,7 +1839,10 @@ async def test_team_metadata_refreshed_from_team_object_during_auth():
 
     finally:
         for k, v in _originals.items():
+            setattr(_proxy_server_mod, k, v)
+            
 # ---------------------------------------------------------------------------
+            
 # _run_centralized_common_checks — centralized authz gate
 # ---------------------------------------------------------------------------
 
