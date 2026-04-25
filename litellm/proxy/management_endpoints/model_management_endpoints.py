@@ -37,7 +37,6 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
-from litellm.proxy.common_utils.rbac_utils import check_org_admin_feature_access
 from litellm.proxy.management_endpoints.common_utils import _is_user_team_admin
 from litellm.proxy.management_endpoints.team_endpoints import (
     team_model_add,
@@ -974,10 +973,6 @@ async def add_new_model(
                     "error": "No DB Connected. Here's how to do it - https://docs.litellm.ai/docs/proxy/virtual_keys"
                 },
             )
-
-        await check_org_admin_feature_access(
-            user_api_key_dict=user_api_key_dict, feature_name="model_add"
-        )
 
         ## Auth check
         await ModelManagementAuthChecks.can_user_make_model_call(
