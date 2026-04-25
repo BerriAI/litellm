@@ -71,7 +71,10 @@ class BaseRAGIngestion(ABC):
         Load credentials from litellm_credential_name if provided in vector_store config.
 
         This allows users to specify a credential name in the vector_store config
-        which will be resolved from litellm.credential_list.
+        which will be resolved from litellm.credential_list. When a stored
+        credential is used, its values take precedence over caller-supplied
+        equivalents so the api_key / api_base pair stays consistent with the
+        credential definition.
         """
         from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 
@@ -80,10 +83,13 @@ class BaseRAGIngestion(ABC):
             credential_values = CredentialAccessor.get_credential_values(
                 credential_name
             )
-            # Merge credentials into vector_store_config (don't overwrite existing values)
             for key, value in credential_values.items():
-                if key not in self.vector_store_config:
-                    self.vector_store_config[key] = value
+                self.vector_store_config[key] = value
+            if (
+                "api_base" in self.vector_store_config
+                and "api_base" not in credential_values
+            ):
+                del self.vector_store_config["api_base"]
 
     @property
     def custom_llm_provider(self) -> str:
