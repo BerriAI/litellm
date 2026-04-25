@@ -487,6 +487,88 @@ class TestClearCache:
             )
 
 
+class TestUpdateModel:
+    """
+    Tests for the update_model (POST /model/update) handler.
+    """
+
+    @pytest.mark.asyncio
+    async def test_update_model_clears_cache_after_db_write(self):
+        """
+        Regression test for the stale-router bug: POST /model/update must refresh
+        the in-memory router after persisting to LiteLLM_ProxyModelTable, otherwise
+        model-level guardrails (and any other litellm_params change) silently no-op
+        until the APScheduler reload tick fires ~30 s later.
+        """
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            update_model,
+        )
+        from litellm.types.router import (
+            ModelInfo,
+            updateDeployment,
+            updateLiteLLMParams,
+        )
+
+        model_id = "db-model-under-test"
+
+        existing_row = MagicMock()
+        existing_row.litellm_params = {
+            "model": "openai/gpt-4o-mini",
+            "api_key": "sk-existing",
+        }
+        existing_row.model_dump.return_value = {
+            "model_name": "gpt-4o-mini",
+            "litellm_params": existing_row.litellm_params,
+            "model_info": {"id": model_id},
+        }
+        existing_row.model_dump_json.return_value = "{}"
+
+        updated_row = MagicMock()
+        updated_row.model_dump_json.return_value = "{}"
+
+        mock_prisma = MagicMock()
+        mock_prisma.db.litellm_proxymodeltable.find_unique = AsyncMock(
+            return_value=existing_row
+        )
+        mock_prisma.db.litellm_proxymodeltable.update = AsyncMock(
+            return_value=updated_row
+        )
+
+        mock_router = MagicMock()
+        admin_user = UserAPIKeyAuth(
+            user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN
+        )
+
+        with (
+            patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
+            patch("litellm.proxy.proxy_server.llm_router", mock_router),
+            patch("litellm.proxy.proxy_server.store_model_in_db", True),
+            patch("litellm.proxy.proxy_server.premium_user", True),
+            patch(
+                "litellm.proxy.management_endpoints.model_management_endpoints.ModelManagementAuthChecks.can_user_make_model_call",
+                new=AsyncMock(return_value=None),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.model_management_endpoints.encrypt_value_helper",
+                side_effect=lambda value: value,
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.model_management_endpoints.clear_cache",
+                new=AsyncMock(return_value=None),
+            ) as mock_clear_cache,
+        ):
+            await update_model(
+                model_params=updateDeployment(
+                    litellm_params=updateLiteLLMParams(guardrails=["g1"]),
+                    model_info=ModelInfo(id=model_id),
+                ),
+                user_api_key_dict=admin_user,
+            )
+
+            mock_prisma.db.litellm_proxymodeltable.update.assert_awaited_once()
+            mock_clear_cache.assert_awaited_once_with()
+
+
 class TestUpdatePublicModelGroups:
     """Test that update_public_model_groups correctly sets litellm.public_model_groups
     even when get_config() overwrites it with stale DB values."""
