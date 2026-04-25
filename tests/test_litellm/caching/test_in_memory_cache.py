@@ -90,6 +90,17 @@ def test_in_memory_cache_ttl_allow_override():
     assert new_ttl_time != initial_ttl_time
 
 
+def test_in_memory_cache_set_cache_respects_nx():
+    in_memory_cache = InMemoryCache(default_ttl=60)
+    in_memory_cache.set_cache(key="nx-key", value="first", ttl=60)
+    first_ttl = in_memory_cache.ttl_dict["nx-key"]
+
+    in_memory_cache.set_cache(key="nx-key", value="second", ttl=1, nx=True)
+
+    assert in_memory_cache.get_cache(key="nx-key") == "first"
+    assert in_memory_cache.ttl_dict["nx-key"] == first_ttl
+
+
 def test_in_memory_cache_max_size_with_ttl():
     """
     Test that max_size_in_memory is respected even when all items have long TTLs.

@@ -361,6 +361,7 @@ class DBSpendUpdateWriter:
                 response_cost=response_cost,
                 team_id=team_id,
                 user_id=user_id,
+                model=payload_copy.get("model_group") or payload_copy.get("model"),
                 prisma_client=prisma_client,
             )
         except Exception:
@@ -556,6 +557,7 @@ class DBSpendUpdateWriter:
         team_id: Optional[str],
         user_id: Optional[str],
         prisma_client: Optional[PrismaClient],
+        model: Optional[str] = None,
     ):
         try:
             if team_id is None or prisma_client is None:
@@ -584,6 +586,19 @@ class DBSpendUpdateWriter:
                             response_cost=response_cost,
                         )
                     )
+                    # Track per-model spend for per-model budget enforcement
+                    if model is not None:
+                        # key is "team_id::<value>::user_id::<value>::model::<value>"
+                        team_member_model_key = (
+                            f"team_id::{team_id}::user_id::{user_id}::model::{model}"
+                        )
+                        await self.spend_update_queue.add_update(
+                            update=SpendUpdateQueueItem(
+                                entity_type=Litellm_EntityType.TEAM_MEMBER_MODEL,
+                                entity_id=team_member_model_key,
+                                response_cost=response_cost,
+                            )
+                        )
             except Exception as e:
                 verbose_proxy_logger.error(
                     "Spend tracking - failed to enqueue team member spend update. "
@@ -1337,6 +1352,21 @@ class DBSpendUpdateWriter:
                             f"Invalidated team membership cache for user_id={user_id}, team_id={team_id}"
                         )
 
+        ### UPDATE TEAM MEMBER MODEL SPEND ###
+        team_member_model_list_transactions = db_spend_update_transactions.get(
+            "team_member_model_list_transactions"
+        )
+        if (
+            team_member_model_list_transactions is not None
+            and len(team_member_model_list_transactions) > 0
+        ):
+            await self._commit_team_member_model_spend_to_db(
+                prisma_client=prisma_client,
+                n_retry_times=n_retry_times,
+                proxy_logging_obj=proxy_logging_obj,
+                team_member_model_list_transactions=team_member_model_list_transactions,
+            )
+
         ### UPDATE ORG TABLE ###
         org_list_transactions = db_spend_update_transactions["org_list_transactions"]
         verbose_proxy_logger.debug(
@@ -1777,6 +1807,75 @@ class DBSpendUpdateWriter:
             _raise_failed_update_spend_exception(
                 e=e, start_time=start_time, proxy_logging_obj=proxy_logging_obj
             )
+
+    async def _commit_team_member_model_spend_to_db(
+        self,
+        prisma_client: PrismaClient,
+        n_retry_times: int,
+        proxy_logging_obj: ProxyLogging,
+        team_member_model_list_transactions: Dict[str, float],
+    ) -> None:
+        """
+        Persist per-model spend increments to LiteLLM_TeamMemberModelSpend using
+        atomic upsert+increment — no read-modify-write race condition.
+
+        Key format: "team_id::<tid>::user_id::<uid>::model::<model>"
+        """
+        from litellm.proxy.utils import _raise_failed_update_spend_exception
+
+        for key, cost in team_member_model_list_transactions.items():
+            if (
+                not key.startswith("team_id::")
+                or "::user_id::" not in key
+                or "::model::" not in key
+            ):
+                verbose_proxy_logger.debug(
+                    "Skipping malformed team_member_model key: %s", key
+                )
+                continue
+            membership_part, model_name = key.split("::model::", 1)
+            team_and_user = membership_part[len("team_id::") :]
+            team_id, user_id = team_and_user.split("::user_id::", 1)
+            if not team_id or not user_id or not model_name:
+                verbose_proxy_logger.debug(
+                    "Skipping malformed team_member_model key: %s", key
+                )
+                continue
+
+            for attempt in range(n_retry_times + 1):
+                start_time = time.time()
+                try:
+                    await prisma_client.db.litellm_teammembermodelspend.upsert(
+                        where={
+                            "user_id_team_id_model": {
+                                "user_id": user_id,
+                                "team_id": team_id,
+                                "model": model_name,
+                            }
+                        },
+                        data={
+                            "create": {
+                                "user_id": user_id,
+                                "team_id": team_id,
+                                "model": model_name,
+                                "spend": cost,
+                            },
+                            "update": {"spend": {"increment": cost}},
+                        },
+                    )
+                    break
+                except DB_CONNECTION_ERROR_TYPES as e:
+                    if attempt >= n_retry_times:
+                        _raise_failed_update_spend_exception(
+                            e=e,
+                            start_time=start_time,
+                            proxy_logging_obj=proxy_logging_obj,
+                        )
+                    await asyncio.sleep(2**attempt)
+                except Exception as e:
+                    _raise_failed_update_spend_exception(
+                        e=e, start_time=start_time, proxy_logging_obj=proxy_logging_obj
+                    )
 
     @staticmethod
     async def update_daily_user_spend(

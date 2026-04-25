@@ -8,7 +8,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from unittest import mock
-from unittest.mock import AsyncMock, MagicMock, mock_open, patch
+from unittest.mock import AsyncMock, MagicMock, call, mock_open, patch
 
 import click
 import httpx
@@ -4854,6 +4854,72 @@ async def test_get_current_spend_fallback_to_in_memory():
 
 
 @pytest.mark.asyncio
+async def test_get_current_spend_reads_legacy_team_member_counter_on_new_key_miss():
+    """Tagged team-member key reads should fall back to legacy key format."""
+    from litellm.caching.dual_cache import DualCache
+
+    counter_cache = DualCache()
+    mock_redis = AsyncMock()
+    mock_redis.async_get_cache = AsyncMock(side_effect=[None, 9.25])
+    counter_cache.redis_cache = mock_redis
+
+    import litellm.proxy.proxy_server as ps
+
+    original = ps.spend_counter_cache
+    ps.spend_counter_cache = counter_cache
+
+    try:
+        from litellm.proxy.proxy_server import get_current_spend
+
+        result = await get_current_spend(
+            counter_key="spend:team_member:team_id::team-1::user_id::user-1",
+            fallback_spend=0.0,
+        )
+        assert result == 9.25
+        assert mock_redis.async_get_cache.await_args_list == [
+            call(key="spend:team_member:team_id::team-1::user_id::user-1"),
+            call(key="spend:team_member:user-1:team-1"),
+        ]
+    finally:
+        ps.spend_counter_cache = original
+
+
+@pytest.mark.asyncio
+async def test_init_and_increment_spend_counter_seeds_from_legacy_team_member_counter():
+    from litellm.caching.dual_cache import DualCache
+
+    counter_cache = DualCache()
+    fake_redis = AsyncMock()
+    fake_redis.async_get_cache = AsyncMock(return_value=None)
+    fake_redis.async_increment = AsyncMock(return_value=6.0)
+    fake_redis.async_set_cache = AsyncMock(return_value=True)
+    counter_cache.redis_cache = fake_redis
+    counter_cache.in_memory_cache.set_cache(
+        key="spend:team_member:user-1:team-1", value=5.5
+    )
+
+    import litellm.proxy.proxy_server as ps
+    from litellm.proxy.proxy_server import _init_and_increment_spend_counter
+
+    orig_counter = ps.spend_counter_cache
+    ps.spend_counter_cache = counter_cache
+    try:
+        await _init_and_increment_spend_counter(
+            counter_key="spend:team_member:team_id::team-1::user_id::user-1",
+            source_cache_key="team_membership:user-1:team-1",
+            increment=0.5,
+        )
+
+        fake_redis.async_set_cache.assert_awaited_once_with(
+            "spend:team_member:team_id::team-1::user_id::user-1",
+            5.5,
+            nx=True,
+        )
+    finally:
+        ps.spend_counter_cache = orig_counter
+
+
+@pytest.mark.asyncio
 async def test_increment_spend_counters_initializes_and_increments():
     """Counter should initialize from cached object spend, then increment.
 
@@ -4921,7 +4987,7 @@ async def test_increment_spend_counters_initializes_and_increments():
 
 @pytest.mark.asyncio
 async def test_increment_spend_counters_team_and_member():
-    """Counter should track team and team member spend separately."""
+    """Counter should track team, team member, and team-member-model spend."""
     from litellm.caching.dual_cache import DualCache
     from litellm.proxy._types import LiteLLM_TeamTable
 
@@ -4953,15 +5019,25 @@ async def test_increment_spend_counters_team_and_member():
             team_id="team-1",
             user_id="user-1",
             response_cost=0.30,
+            model="gpt-4o",
         )
 
         team_counter = counter_cache.in_memory_cache.get_cache(key="spend:team:team-1")
         assert team_counter == 2.30
 
         member_counter = counter_cache.in_memory_cache.get_cache(
-            key="spend:team_member:user-1:team-1"
+            key="spend:team_member:team_id::team-1::user_id::user-1"
         )
         assert member_counter == 1.30
+
+        member_model_counter = counter_cache.in_memory_cache.get_cache(
+            key="spend:team_member:team_id::team-1::user_id::user-1::model::gpt-4o"
+        )
+        assert member_model_counter == 0.30
+        model_fallback_spend = key_cache.in_memory_cache.get_cache(
+            key="team_member_model_spend:user-1:team-1:gpt-4o"
+        )
+        assert model_fallback_spend == 0.30
     finally:
         ps.user_api_key_cache = original_key_cache
         ps.spend_counter_cache = original_counter_cache
@@ -4976,14 +5052,20 @@ async def test_init_and_increment_spend_counter_reseeds_from_db_on_counter_miss(
 
     counter_cache = DualCache()
     recorded_increments: list = []
+    recorded_sets: list = []
 
     async def record_increment(key, value, ttl=None, **kwargs):
         recorded_increments.append({"key": key, "value": value, "ttl": ttl})
         return value
 
+    async def record_set(key, value, **kwargs):
+        recorded_sets.append({"key": key, "value": value, **kwargs})
+        return True
+
     fake_redis = AsyncMock()
     fake_redis.async_increment = AsyncMock(side_effect=record_increment)
     fake_redis.async_get_cache = AsyncMock(return_value=None)  # counter missing
+    fake_redis.async_set_cache = AsyncMock(side_effect=record_set)
     counter_cache.redis_cache = fake_redis
 
     # Prisma returns spend=42.0 (authoritative) while the stale cached
@@ -5020,10 +5102,10 @@ async def test_init_and_increment_spend_counter_reseeds_from_db_on_counter_miss(
         fake_prisma.db.litellm_teamtable.find_unique.assert_awaited_once_with(
             where={"team_id": "team-9"}
         )
-        # Two increments keyed on the counter: seed ($42) then request ($1.50).
+        seed_writes = [(c["key"], c["value"]) for c in recorded_sets]
+        assert ("spend:team:team-9", 42.0) in seed_writes
         writes = [(c["key"], c["value"]) for c in recorded_increments]
-        assert ("spend:team:team-9", 42.0) in writes
-        assert ("spend:team:team-9", 1.5) in writes
+        assert writes == [("spend:team:team-9", 1.5)]
     finally:
         ps.user_api_key_cache = orig_user
         ps.spend_counter_cache = orig_counter
@@ -5059,6 +5141,39 @@ async def test_reseed_spend_from_db_user_and_org_prefixes():
         assert await _reseed_spend_from_db("spend:org:acme") == 305.0
         fake_prisma.db.litellm_organizationtable.find_unique.assert_awaited_once_with(
             where={"organization_id": "acme"}
+        )
+    finally:
+        ps.prisma_client = orig_prisma
+
+
+@pytest.mark.asyncio
+async def test_reseed_spend_from_db_team_member_model_counter_parses_tagged_key():
+    import litellm.proxy.proxy_server as ps
+    from litellm.proxy.proxy_server import _reseed_spend_from_db
+
+    model_row = MagicMock()
+    model_row.spend = 12.34
+
+    fake_prisma = MagicMock()
+    fake_prisma.db.litellm_teammembermodelspend.find_unique = AsyncMock(
+        return_value=model_row
+    )
+
+    orig_prisma = ps.prisma_client
+    ps.prisma_client = fake_prisma
+    try:
+        spend = await _reseed_spend_from_db(
+            "spend:team_member:team_id::org:team-1::user_id::google:12345::model::gpt-4o"
+        )
+        assert spend == 12.34
+        fake_prisma.db.litellm_teammembermodelspend.find_unique.assert_awaited_once_with(
+            where={
+                "user_id_team_id_model": {
+                    "user_id": "google:12345",
+                    "team_id": "org:team-1",
+                    "model": "gpt-4o",
+                }
+            }
         )
     finally:
         ps.prisma_client = orig_prisma

@@ -201,6 +201,7 @@ class Litellm_EntityType(enum.Enum):
     END_USER = "end_user"
     TEAM = "team"
     TEAM_MEMBER = "team_member"
+    TEAM_MEMBER_MODEL = "team_member_model"
     ORGANIZATION = "organization"
     PROJECT = "project"
     TAG = "tag"
@@ -1752,6 +1753,9 @@ class NewTeamRequest(TeamBase):
     )
     team_member_key_duration: Optional[str] = None  # e.g. "1d", "1w", "1m"
     team_member_budget_duration: Optional[str] = None  # e.g. "30d", "1mo"
+    team_member_model_max_budget: Optional[dict] = (
+        None  # e.g. {"gpt-4": {"max_budget": 10.0}}
+    )
     allowed_vector_store_indexes: Optional[List[AllowedVectorStoreIndexItem]] = None
     enforced_batch_output_expires_after: Optional[dict] = None
     enforced_file_expires_after: Optional[dict] = None
@@ -1819,6 +1823,9 @@ class UpdateTeamRequest(LiteLLMPydanticObjectBase):
     )
     default_team_member_models: Optional[List[str]] = (
         None  # default allowed_models seeded onto new team members
+    )
+    team_member_model_max_budget: Optional[dict] = (
+        None  # e.g. {"gpt-4": {"max_budget": 10.0}}
     )
 
 
@@ -4112,6 +4119,7 @@ LiteLLM_ManagementEndpoint_MetadataFields = [
     "allowed_vector_store_indexes",
     "enforced_batch_output_expires_after",
     "enforced_file_expires_after",
+    "team_member_model_max_budget",
 ]
 
 LiteLLM_ManagementEndpoint_MetadataFields_Premium = [
@@ -4504,6 +4512,7 @@ class DBSpendUpdateTransactions(TypedDict):
     key_list_transactions: Optional[Dict[str, float]]
     team_list_transactions: Optional[Dict[str, float]]
     team_member_list_transactions: Optional[Dict[str, float]]
+    team_member_model_list_transactions: Optional[Dict[str, float]]
     org_list_transactions: Optional[Dict[str, float]]
     tag_list_transactions: Optional[Dict[str, float]]
     agent_list_transactions: Optional[Dict[str, float]]

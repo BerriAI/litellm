@@ -823,6 +823,78 @@ def test_reset_budget_for_team_members_preserves_total_spend():
     assert "total_spend" not in call_kwargs["data"]
 
 
+def test_reset_budget_for_team_members_resets_new_counter_key_format():
+    from unittest.mock import patch
+
+    expired_budget = type(
+        "LiteLLM_BudgetTableFull",
+        (),
+        {"budget_id": "budget-1"},
+    )
+
+    membership = MagicMock()
+    membership.user_id = "user-1"
+    membership.team_id = "team-1"
+
+    model_spend_row = MagicMock()
+    model_spend_row.user_id = "user-1"
+    model_spend_row.team_id = "team-1"
+    model_spend_row.model = "gpt-4o"
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_teammembership.find_many = AsyncMock(
+        return_value=[membership]
+    )
+    mock_prisma_client.db.litellm_teammembership.update_many = AsyncMock(
+        return_value={"count": 1}
+    )
+    mock_prisma_client.db.litellm_teammembermodelspend.find_many = AsyncMock(
+        return_value=[model_spend_row]
+    )
+    mock_prisma_client.db.litellm_teammembermodelspend.update_many = AsyncMock(
+        return_value={"count": 1}
+    )
+
+    fake_module = types.ModuleType("litellm.proxy.proxy_server")
+    spend_counter_cache = MagicMock()
+    spend_counter_cache.in_memory_cache.set_cache = MagicMock()
+    spend_counter_cache.redis_cache = None
+    user_api_key_cache = MagicMock()
+    user_api_key_cache.async_set_cache = AsyncMock(return_value=None)
+    fake_module.spend_counter_cache = spend_counter_cache
+    fake_module.user_api_key_cache = user_api_key_cache
+    fake_module._get_team_member_counter_key = (
+        lambda user_id, team_id: f"spend:team_member:team_id::{team_id}::user_id::{user_id}"
+    )
+    fake_module._get_team_member_model_counter_key = (
+        lambda user_id, team_id, model: f"spend:team_member:team_id::{team_id}::user_id::{user_id}::model::{model}"
+    )
+
+    with patch.dict(sys.modules, {"litellm.proxy.proxy_server": fake_module}):
+        job = ResetBudgetJob(
+            proxy_logging_obj=MagicMock(), prisma_client=mock_prisma_client
+        )
+        asyncio.run(job.reset_budget_for_litellm_team_members([expired_budget]))
+
+    spend_counter_cache.in_memory_cache.set_cache.assert_any_call(
+        key="spend:team_member:team_id::team-1::user_id::user-1",
+        value=0.0,
+    )
+    spend_counter_cache.in_memory_cache.set_cache.assert_any_call(
+        key="spend:team_member:team_id::team-1::user_id::user-1::model::gpt-4o",
+        value=0.0,
+    )
+    mock_prisma_client.db.litellm_teammembermodelspend.update_many.assert_awaited_once_with(
+        where={"OR": [{"user_id": "user-1", "team_id": "team-1"}]},
+        data={"spend": 0},
+    )
+    user_api_key_cache.async_set_cache.assert_awaited_once_with(
+        key="team_member_model_spend:user-1:team-1:gpt-4o",
+        value=0.0,
+        ttl=5,
+    )
+
+
 # ---------------------------------------------------------------------------
 # reset_budget_windows (per-key / per-team concurrent window resets)
 # ---------------------------------------------------------------------------
