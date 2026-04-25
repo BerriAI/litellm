@@ -2091,6 +2091,96 @@ async def test_centralized_common_checks_skips_public_routes():
 
 
 @pytest.mark.asyncio
+async def test_centralized_common_checks_skips_passthrough_endpoint_with_auth_false():
+    """Regression: user-configured pass-through endpoints with
+    ``auth: false`` are explicitly unauthenticated. The builder
+    short-circuits and returns a fresh empty UserAPIKeyAuth(); running
+    common_checks on that empty token would reject the request as
+    admin-only. The "auth" flag on the endpoint config is the contract
+    — when it's anything other than True, skip the gate."""
+    import litellm.proxy.proxy_server as _proxy_server_mod
+    from fastapi import Request
+    from starlette.datastructures import URL
+
+    token = UserAPIKeyAuth()
+    request = Request(scope={"type": "http"})
+    request._url = URL(url="/api/public/ingestion")
+
+    attrs = _proxy_attrs_for_centralized_checks(user_custom_auth=None)
+    attrs["general_settings"] = {
+        "pass_through_endpoints": [
+            {
+                "path": "/api/public/ingestion",
+                "target": "https://us.cloud.langfuse.com/api/public/ingestion",
+                "auth": False,
+            }
+        ]
+    }
+    originals = {a: getattr(_proxy_server_mod, a, None) for a in attrs}
+    try:
+        for k, v in attrs.items():
+            setattr(_proxy_server_mod, k, v)
+        with patch(
+            "litellm.proxy.auth.user_api_key_auth.common_checks",
+            new_callable=AsyncMock,
+        ) as mock_checks:
+            await _run_centralized_common_checks(
+                user_api_key_auth_obj=token,
+                request=request,
+                request_data={},
+                route="/api/public/ingestion",
+            )
+            mock_checks.assert_not_awaited()
+    finally:
+        for k, v in originals.items():
+            setattr(_proxy_server_mod, k, v)
+
+
+@pytest.mark.asyncio
+async def test_centralized_common_checks_runs_for_passthrough_endpoint_with_auth_true():
+    """Companion to the auth=False test: when a pass-through endpoint
+    has ``auth: true``, the builder runs full authentication and the
+    centralized gate must run too. Skipping based on path-match alone
+    would re-open every ``auth: true`` pass-through endpoint."""
+    import litellm.proxy.proxy_server as _proxy_server_mod
+    from fastapi import Request
+    from starlette.datastructures import URL
+
+    token = UserAPIKeyAuth(api_key="sk-test", user_id="u1")
+    request = Request(scope={"type": "http"})
+    request._url = URL(url="/api/public/ingestion")
+
+    attrs = _proxy_attrs_for_centralized_checks(user_custom_auth=None)
+    attrs["general_settings"] = {
+        "pass_through_endpoints": [
+            {
+                "path": "/api/public/ingestion",
+                "target": "https://us.cloud.langfuse.com/api/public/ingestion",
+                "auth": True,
+            }
+        ]
+    }
+    originals = {a: getattr(_proxy_server_mod, a, None) for a in attrs}
+    try:
+        for k, v in attrs.items():
+            setattr(_proxy_server_mod, k, v)
+        with patch(
+            "litellm.proxy.auth.user_api_key_auth.common_checks",
+            new_callable=AsyncMock,
+        ) as mock_checks:
+            await _run_centralized_common_checks(
+                user_api_key_auth_obj=token,
+                request=request,
+                request_data={},
+                route="/api/public/ingestion",
+            )
+            mock_checks.assert_awaited_once()
+    finally:
+        for k, v in originals.items():
+            setattr(_proxy_server_mod, k, v)
+
+
+@pytest.mark.asyncio
 async def test_centralized_common_checks_master_key_admin_overrides_db_user_role():
     """Regression: master_key tokens have user_id=litellm_proxy_admin_name
     (default 'default_user_id') and user_role=PROXY_ADMIN. If a row with

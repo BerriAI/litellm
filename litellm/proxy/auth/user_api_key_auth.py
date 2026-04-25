@@ -1638,6 +1638,22 @@ async def _run_centralized_common_checks(
     ):
         return
 
+    # User-configured pass-through endpoints with ``auth: false`` are
+    # explicitly unauthenticated — the builder returns an empty
+    # UserAPIKeyAuth() and the request is forwarded as-is. Running
+    # common_checks on the empty token would reject the request as
+    # admin-only. The "auth" flag on the endpoint config is the
+    # contract; honor it.
+    pass_through_endpoints = general_settings.get("pass_through_endpoints", None)
+    if pass_through_endpoints is not None:
+        for endpoint in pass_through_endpoints:
+            if (
+                isinstance(endpoint, dict)
+                and endpoint.get("path", "") == route
+                and endpoint.get("auth") is not True
+            ):
+                return
+
     # No-auth dev mode: master_key unset AND no JWT/OAuth2 auth
     # configured. The builder returns an INTERNAL_USER token for any
     # api_key; the proxy is unauthenticated by configuration.
