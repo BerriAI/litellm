@@ -361,7 +361,7 @@ def process_response(
     has_nested = isinstance(input, list) and any(isinstance(e, list) for e in input)
     if _is_multimodal_input(input) or has_nested:
         input_list = input if isinstance(input, list) else [input]
-        text_elements = []
+        text_elements: List[str] = []
         for e in input_list:
             if isinstance(e, list):
                 text_elements.extend(

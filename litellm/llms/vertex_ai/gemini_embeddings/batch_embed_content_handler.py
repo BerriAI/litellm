@@ -48,7 +48,7 @@ class GoogleBatchEmbeddings(VertexLLM):
 
     def _resolve_file_references(
         self,
-        input: EmbeddingInput,
+        input: Union[EmbeddingInput, List[str]],
         api_key: str,
         sync_handler: HTTPHandler,
     ) -> Dict[str, Dict[str, str]]:
@@ -87,7 +87,7 @@ class GoogleBatchEmbeddings(VertexLLM):
 
     async def _async_resolve_file_references(
         self,
-        input: EmbeddingInput,
+        input: Union[EmbeddingInput, List[str]],
         api_key: str,
         async_handler: AsyncHTTPHandler,
     ) -> Dict[str, Dict[str, str]]:
