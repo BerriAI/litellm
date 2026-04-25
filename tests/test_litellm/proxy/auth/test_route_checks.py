@@ -1327,6 +1327,47 @@ def test_available_roles_accessible_to_non_admin_users(user_role):
     )
 
 
+@pytest.mark.parametrize(
+    "route",
+    ["/project/list", "/project/info"],
+)
+@pytest.mark.parametrize(
+    "user_role",
+    [
+        LitellmUserRoles.INTERNAL_USER.value,
+        LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value,
+        LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
+    ],
+)
+def test_project_routes_accessible_to_non_admin_users(route, user_role):
+    """
+    /project/list and /project/info should be reachable by non-admin users.
+    The endpoints themselves enforce team-membership access control, so the
+    route-check middleware must let non-admin callers through.
+    """
+    user_obj = LiteLLM_UserTable(
+        user_id="test_user",
+        user_email="test@example.com",
+        user_role=user_role,
+    )
+    valid_token = UserAPIKeyAuth(
+        user_id="test_user",
+        user_role=user_role,
+    )
+    request = MagicMock(spec=Request)
+    request.query_params = {}
+
+    # Should not raise — project list/info are in self_managed_routes
+    RouteChecks.non_proxy_admin_allowed_routes_check(
+        user_obj=user_obj,
+        _user_role=user_role,
+        route=route,
+        request=request,
+        valid_token=valid_token,
+        request_data={},
+    )
+
+
 # ── _user_is_org_admin tests ──────────────────────────────────────────────────
 
 from datetime import datetime
