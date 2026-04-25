@@ -1,0 +1,36 @@
+{
+  "schema_version": "1",
+  "generated_at": "2026-04-25T00:00:00Z",
+  "litellm_version": "v1.83.0-stable",
+  "claude_code_version": "2.1.120",
+  "providers": [
+    "anthropic",
+    "bedrock_invoke",
+    "bedrock_converse",
+    "vertex_ai",
+    "azure"
+  ],
+  "features": [
+    {
+      "id": "basic_messaging_non_streaming",
+      "name": "Basic messaging (non-streaming)",
+      "providers": {
+        "anthropic": {
+          "status": "pass"
+        },
+        "bedrock_invoke": {
+          "status": "not_tested"
+        },
+        "bedrock_converse": {
+          "status": "not_tested"
+        },
+        "vertex_ai": {
+          "status": "not_tested"
+        },
+        "azure": {
+          "status": "not_tested"
+        }
+      }
+    }
+  ]
+}

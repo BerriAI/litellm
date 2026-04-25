@@ -101,3 +101,6 @@ STABILIZATION_TODO.md
 **/*.storageState.json
 **/coverage
 test-config
+
+# Claude Code compatibility-matrix pytest artifact (CI-only output).
+compat-results.json
