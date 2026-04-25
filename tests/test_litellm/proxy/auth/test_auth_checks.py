@@ -1968,7 +1968,7 @@ async def test_team_member_budget_check_reads_from_spend_counter():
     proxy_logging_obj = ProxyLogging(user_api_key_cache=None)
 
     async def mock_get_current_spend(counter_key, fallback_spend):
-        if counter_key == "spend:team_member:test-user:test-team":
+        if counter_key == "spend:team_member:team_id::test-team::user_id::test-user":
             return 1.5
         return fallback_spend
 
@@ -2174,7 +2174,7 @@ async def test_team_member_budget_check_falls_back_to_team_default_budget_id():
     )
 
     async def mock_get_current_spend(counter_key, fallback_spend):
-        if counter_key == "spend:team_member:test-user:test-team":
+        if counter_key == "spend:team_member:team_id::test-team::user_id::test-user":
             return 70.0
         return fallback_spend
 
@@ -2271,7 +2271,7 @@ async def test_team_member_budget_check_per_member_override_wins_over_team_defau
     mocked_spend = 70.0
 
     async def mock_get_current_spend(counter_key, fallback_spend):
-        if counter_key == "spend:team_member:test-user:test-team":
+        if counter_key == "spend:team_member:team_id::test-team::user_id::test-user":
             return mocked_spend
         return fallback_spend
 
@@ -2352,6 +2352,38 @@ async def test_team_member_model_budget_uses_model_group_key_for_alias():
                 valid_token=valid_token,
                 model="alias-gpt4",
                 llm_router=llm_router,
+            )
+    assert exc_info.value.current_cost == 11.0
+    assert exc_info.value.max_budget == 10.0
+
+
+@pytest.mark.asyncio
+async def test_team_member_model_budget_accepts_numeric_string_max_budget():
+    team_object = LiteLLM_TeamTable(
+        team_id="test-team",
+        metadata={"team_member_model_max_budget": {"gpt-4o": {"max_budget": "10.0"}}},
+    )
+    valid_token = UserAPIKeyAuth(
+        token="test-token",
+        user_id="test-user",
+        team_id="test-team",
+    )
+
+    async def mock_get_current_spend(counter_key, fallback_spend):
+        if (
+            counter_key
+            == "spend:team_member:team_id::test-team::user_id::test-user::model::gpt-4o"
+        ):
+            return 11.0
+        return fallback_spend
+
+    with patch("litellm.proxy.proxy_server.get_current_spend", mock_get_current_spend):
+        with pytest.raises(litellm.BudgetExceededError) as exc_info:
+            await _check_team_member_model_budget(
+                team_object=team_object,
+                valid_token=valid_token,
+                model="gpt-4o",
+                llm_router=None,
             )
     assert exc_info.value.current_cost == 11.0
     assert exc_info.value.max_budget == 10.0

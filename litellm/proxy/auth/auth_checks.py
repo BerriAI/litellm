@@ -3325,10 +3325,16 @@ async def _check_team_member_budget(
             ) or 0.0
 
             # Read from cross-pod counter (Redis-first) if available
-            from litellm.proxy.proxy_server import get_current_spend
+            from litellm.proxy.proxy_server import (
+                _get_team_member_counter_key,
+                get_current_spend,
+            )
 
             team_member_spend = await get_current_spend(
-                counter_key=f"spend:team_member:{valid_token.user_id}:{team_object.team_id}",
+                counter_key=_get_team_member_counter_key(
+                    user_id=valid_token.user_id,
+                    team_id=team_object.team_id,
+                ),
                 fallback_spend=team_member_spend,
             )
 
@@ -3400,12 +3406,19 @@ async def _check_team_member_model_budget(
         if model_budget_config is None:
             continue
 
-        max_budget = (
+        raw_max_budget = (
             model_budget_config.get("max_budget")
             if isinstance(model_budget_config, dict)
             else None
         )
-        if max_budget is None:
+        if isinstance(raw_max_budget, (int, float)):
+            max_budget = float(raw_max_budget)
+        elif isinstance(raw_max_budget, str):
+            try:
+                max_budget = float(raw_max_budget)
+            except ValueError:
+                continue
+        else:
             continue
 
         counter_key = _get_team_member_model_counter_key(

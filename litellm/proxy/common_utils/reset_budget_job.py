@@ -68,13 +68,19 @@ class ResetBudgetJob:
         # Reset Redis directly so a transient failure doesn't leave stale
         # counters that get_current_spend would read as authoritative.
         try:
-            from litellm.proxy.proxy_server import spend_counter_cache
+            from litellm.proxy.proxy_server import (
+                _get_team_member_counter_key,
+                spend_counter_cache,
+            )
 
             memberships = await self.prisma_client.db.litellm_teammembership.find_many(
                 where={"budget_id": {"in": budget_ids}}
             )
             for m in memberships:
-                counter_key = f"spend:team_member:{m.user_id}:{m.team_id}"
+                counter_key = _get_team_member_counter_key(
+                    user_id=m.user_id,
+                    team_id=m.team_id,
+                )
                 # Always reset in-memory
                 spend_counter_cache.in_memory_cache.set_cache(
                     key=counter_key, value=0.0

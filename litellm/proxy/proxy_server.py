@@ -1949,7 +1949,8 @@ async def _reseed_spend_from_db(counter_key: str) -> float:
 
         spend:key:{token}                 -> LiteLLM_VerificationToken.spend
         spend:team:{team_id}              -> LiteLLM_TeamTable.spend
-        spend:team_member:{uid}:{tid}     -> LiteLLM_TeamMembership.spend
+        spend:team_member:team_id::{tid}::user_id::{uid}
+                                           -> LiteLLM_TeamMembership.spend
         spend:user:{user_id}              -> LiteLLM_UserTable.spend
         spend:org:{org_id}                -> LiteLLM_OrganizationTable.spend
 
