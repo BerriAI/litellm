@@ -3367,40 +3367,41 @@ async def _check_team_member_model_budget(
     if not team_member_model_max_budget:
         return
 
-    # resolve a single model string (skip list checks — model was already validated above)
-    model_str = model if isinstance(model, str) else (model[0] if model else None)
-    if model_str is None:
-        return
-
-    model_budget_config = team_member_model_max_budget.get(model_str)
-    if model_budget_config is None:
-        return
-
-    max_budget = (
-        model_budget_config.get("max_budget")
-        if isinstance(model_budget_config, dict)
-        else None
-    )
-    if max_budget is None:
+    # Build the list of candidate models to check
+    models_to_check: List[str] = [model] if isinstance(model, str) else list(model)
+    if not models_to_check:
         return
 
     from litellm.proxy.proxy_server import get_current_spend
 
-    model_spend = await get_current_spend(
-        counter_key=f"spend:team_member:{valid_token.user_id}:{team_object.team_id}:model:{model_str}",
-        fallback_spend=0.0,
-    )
+    for model_str in models_to_check:
+        model_budget_config = team_member_model_max_budget.get(model_str)
+        if model_budget_config is None:
+            continue
 
-    if model_spend >= max_budget:
-        raise litellm.BudgetExceededError(
-            current_cost=model_spend,
-            max_budget=max_budget,
-            message=(
-                f"ExceededBudget: Team member model budget exceeded. "
-                f"User={valid_token.user_id}, Team={team_object.team_id}, "
-                f"Model={model_str}. Spend=${model_spend:.6f}, Budget=${max_budget:.6f}"
-            ),
+        max_budget = (
+            model_budget_config.get("max_budget")
+            if isinstance(model_budget_config, dict)
+            else None
         )
+        if max_budget is None:
+            continue
+
+        model_spend = await get_current_spend(
+            counter_key=f"spend:team_member:{valid_token.user_id}:{team_object.team_id}:model:{model_str}",
+            fallback_spend=0.0,
+        )
+
+        if model_spend >= max_budget:
+            raise litellm.BudgetExceededError(
+                current_cost=model_spend,
+                max_budget=max_budget,
+                message=(
+                    f"ExceededBudget: Team member model budget exceeded. "
+                    f"User={valid_token.user_id}, Team={team_object.team_id}, "
+                    f"Model={model_str}. Spend=${model_spend:.6f}, Budget=${max_budget:.6f}"
+                ),
+            )
 
 
 async def _check_team_member_model_access(
