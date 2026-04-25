@@ -42,6 +42,11 @@ model_list:
      api_base: https://exampleopenaiendpoint-production.up.railway.app/
 
 
+general_settings:
+  # Test suite uses extra_body={"mock_response": ...} via the OpenAI client to
+  # short-circuit upstream calls. Test/dev only.
+  allow_client_side_mock_response: true
+
 litellm_settings:
   cache: true
   callbacks: ["otel", "prometheus"]
