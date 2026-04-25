@@ -1246,6 +1246,8 @@ model LiteLLM_MemoryTable {
 
   @@index([user_id])
   @@index([team_id])
+}
+
 // Per-(router, request_type, model) Beta posterior for the adaptive router.
 model LiteLLM_AdaptiveRouterState {
   router_name     String
