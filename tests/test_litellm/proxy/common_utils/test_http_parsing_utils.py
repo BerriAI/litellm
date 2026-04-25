@@ -1165,6 +1165,38 @@ class TestStripInternalControlFields:
         assert result["model"] == "whisper-1"
         assert result["file"] == "<binary>"
 
+    def test_extract_nested_form_metadata_strips_restricted_fields(self):
+        """File-upload endpoints reach extract_nested_form_metadata via
+        request.form() directly, bypassing _read_request_body /
+        get_form_data. Bracket-notation keys like
+        ``litellm_metadata[applied_guardrails]`` and
+        ``litellm_metadata[user_api_key_user_id]`` would otherwise survive
+        the assembly step and land in the request data unsanitized."""
+        from litellm.proxy.common_utils.http_parsing_utils import (
+            extract_nested_form_metadata,
+        )
+
+        form_data = {
+            "litellm_metadata[applied_guardrails]": "presidio-pii",
+            "litellm_metadata[user_api_key_user_id]": "caller-supplied",
+            "litellm_metadata[user_api_key_team_id]": "caller-supplied",
+            "litellm_metadata[pillar_response_headers]": "caller",
+            "litellm_metadata[spend_logs_metadata][owner]": "alice",
+            "litellm_metadata[tags]": "production",
+            "purpose": "fine-tune",  # outside the prefix, ignored
+        }
+        result = extract_nested_form_metadata(
+            form_data=form_data, prefix="litellm_metadata["
+        )
+        # Restricted keys (exact match and prefix) are removed.
+        assert "applied_guardrails" not in result
+        assert "user_api_key_user_id" not in result
+        assert "user_api_key_team_id" not in result
+        assert "pillar_response_headers" not in result
+        # Non-restricted keys (including nested ones) survive.
+        assert result["spend_logs_metadata"] == {"owner": "alice"}
+        assert result["tags"] == "production"
+
     @pytest.mark.asyncio
     async def test_get_request_body_dispatcher_strips_multipart(
         self, monkeypatch

@@ -539,6 +539,11 @@ def extract_nested_form_metadata(
             verbose_proxy_logger.error(f"Error parsing metadata key '{key}': {str(e)}")
             continue
 
+    # Same ingress sanitization as _read_request_body / get_form_data —
+    # this function is reached from endpoints that call request.form()
+    # directly (file uploads via files_endpoints.py), so without this the
+    # bracket-notation form path bypasses the strip applied elsewhere.
+    _strip_internal_metadata_keys(metadata)
     return metadata
 
 
