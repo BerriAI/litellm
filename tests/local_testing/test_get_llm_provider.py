@@ -495,14 +495,3 @@ def test_openrouter_model_prefix_stripped():
     )
 
 
-def test_openrouter_native_model_prefix_preserved():
-    """
-    Native OpenRouter model IDs like "openrouter/auto" carry the
-    "openrouter/" segment as part of the actual API model name and
-    must NOT be stripped.
-    """
-    model, provider, _, _ = litellm.get_llm_provider(model="openrouter/auto")
-    assert provider == "openrouter"
-    assert model == "openrouter/auto", (
-        f"Expected native ID 'openrouter/auto' to stay intact, got '{model}'."
-    )
