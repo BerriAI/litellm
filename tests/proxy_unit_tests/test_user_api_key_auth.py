@@ -1118,11 +1118,17 @@ async def test_jwt_non_admin_team_route_access(monkeypatch):
 @pytest.mark.asyncio
 async def test_x_litellm_api_key():
     """
-    Check if auth can pick up x-litellm-api-key header, even if Bearer token is provided
+    Check if auth can pick up x-litellm-api-key header, even if Bearer token is provided.
+
+    On a master-key match, ``UserAPIKeyAuth.api_key`` (and the derived
+    ``token``) are now the stable alias ``LITELLM_PROXY_MASTER_KEY_ALIAS``
+    rather than ``hash_token(master_key)`` — the master key (or its hash)
+    must not propagate into spend logs / metrics / audit trails.
     """
     from fastapi import Request
     from starlette.datastructures import URL
 
+    from litellm.constants import LITELLM_PROXY_MASTER_KEY_ALIAS
     from litellm.proxy._types import (
         LiteLLM_TeamTable,
         LiteLLM_TeamTableCachedObj,
@@ -1148,7 +1154,8 @@ async def test_x_litellm_api_key():
         api_key="Bearer " + ignored_key,
         custom_litellm_key_header=master_key,
     )
-    assert valid_token.token == hash_token(master_key)
+    assert valid_token.token == LITELLM_PROXY_MASTER_KEY_ALIAS
+    assert valid_token.token != hash_token(master_key)
 
 
 @pytest.mark.asyncio
