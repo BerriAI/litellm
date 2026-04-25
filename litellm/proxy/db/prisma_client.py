@@ -435,12 +435,15 @@ class PrismaManager:
 
                     prisma_dir = PrismaManager._get_prisma_dir()
 
-                    try:
+                    import inspect
+
+                    _sig = inspect.signature(ProxyExtrasDBManager.setup_database)
+                    if "use_v2_resolver" in _sig.parameters:
                         return ProxyExtrasDBManager.setup_database(
                             use_migrate=use_migrate,
                             use_v2_resolver=use_v2_resolver,
                         )
-                    except TypeError:
+                    else:
                         # Older proxy-extras doesn't support use_v2_resolver
                         return ProxyExtrasDBManager.setup_database(
                             use_migrate=use_migrate,
