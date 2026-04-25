@@ -1882,3 +1882,79 @@ async def test_create_vector_store_in_db_raises_when_no_db():
 
     assert exc_info.value.status_code == 500
     assert "database not connected" in exc_info.value.detail.lower()
+
+
+class TestRedactSensitiveLitellmParams:
+    """
+    ``litellm_params`` on a managed vector store carries the upstream
+    provider credential (OpenAI ``api_key``, AWS ``aws_secret_access_key``,
+    GCP ``vertex_credentials``, etc.). The list/info endpoints must redact
+    those values before returning them to any caller — including read-only
+    users and narrowly-scoped keys.
+    """
+
+    def test_redacts_well_known_credential_keys(self):
+        from litellm.constants import REDACTED_BY_LITELM_STRING
+        from litellm.proxy.vector_store_endpoints.management_endpoints import (
+            _redact_sensitive_litellm_params,
+        )
+
+        params = {
+            "api_key": "sk-real-openai-key-12345",
+            "aws_access_key_id": "AKIAIOSFODNN7EXAMPLE",
+            "aws_secret_access_key": "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+            "vertex_credentials": (
+                '{"type":"service_account","private_key":"-----BEGIN PRIVATE KEY-----..."}'
+            ),
+            "azure_authorization_token": "Bearer eyJhbGciOi...",
+        }
+        out = _redact_sensitive_litellm_params(params)
+        for k in params:
+            assert (
+                out[k] == REDACTED_BY_LITELM_STRING
+            ), f"{k} should be redacted, got {out[k]!r}"
+
+    def test_preserves_non_sensitive_keys(self):
+        from litellm.proxy.vector_store_endpoints.management_endpoints import (
+            _redact_sensitive_litellm_params,
+        )
+
+        params = {
+            "api_base": "https://api.openai.com/v1",
+            "model": "text-embedding-3-large",
+            "region": "us-east-1",
+            "vector_store_id": "vs_abc123",
+            "api_version": "2023-05-15",
+        }
+        out = _redact_sensitive_litellm_params(params)
+        for k, v in params.items():
+            assert out[k] == v, f"{k} should be preserved verbatim"
+
+    def test_handles_none_and_empty(self):
+        from litellm.proxy.vector_store_endpoints.management_endpoints import (
+            _redact_sensitive_litellm_params,
+        )
+
+        assert _redact_sensitive_litellm_params(None) is None
+        assert _redact_sensitive_litellm_params({}) == {}
+
+    def test_redact_vector_store_does_not_mutate_input(self):
+        from litellm.proxy.vector_store_endpoints.management_endpoints import (
+            _redact_vector_store,
+        )
+
+        original = {
+            "vector_store_id": "vs_abc123",
+            "vector_store_name": "prod-embeddings",
+            "litellm_params": {
+                "api_key": "sk-real-openai-key-12345",
+                "api_base": "https://api.openai.com/v1",
+            },
+        }
+        snapshot = {
+            "vector_store_id": original["vector_store_id"],
+            "vector_store_name": original["vector_store_name"],
+            "litellm_params": dict(original["litellm_params"]),
+        }
+        _redact_vector_store(original)
+        assert original == snapshot, "input vector store dict must not be mutated"
