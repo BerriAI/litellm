@@ -484,6 +484,66 @@ def _check_allowed_routes_caller_permission(
     )
 
 
+def _check_management_key_type_caller_permission(
+    key_type: Optional[str],
+    user_api_key_dict: UserAPIKeyAuth,
+) -> None:
+    """
+    Only proxy admins may mint a key with ``key_type='management'``.
+
+    ``key_type='management'`` is expanded into
+    ``allowed_routes=['management_routes']`` by ``handle_key_type`` *after*
+    ``_check_allowed_routes_caller_permission`` has already inspected the
+    raw request body. Without an independent check on ``key_type`` itself,
+    a non-admin can submit ``key_type='management'`` with empty
+    ``allowed_routes`` and end up with full management-route access.
+    """
+    if key_type != LiteLLMKeyType.MANAGEMENT:
+        return
+    if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
+        return
+    raise HTTPException(
+        status_code=403,
+        detail={
+            "error": (
+                "Only proxy admins can set `key_type='management'`. "
+                "Use `key_type='llm_api'` or `key_type='read_only'` instead."
+            )
+        },
+    )
+
+
+def _check_allowed_passthrough_routes_caller_permission(
+    metadata: Optional[dict],
+    user_api_key_dict: UserAPIKeyAuth,
+) -> None:
+    """
+    Only proxy admins may set ``metadata.allowed_passthrough_routes`` on a key.
+
+    ``RouteChecks.check_passthrough_route_access`` runs *before* the standard
+    role-based route gate and matches the request route against
+    ``metadata.allowed_passthrough_routes``. If a non-admin can set this
+    field, they can grant themselves access to any internal endpoint by
+    listing it as a "pass-through" route. Pass-through endpoints must be
+    configured by an admin.
+    """
+    if not metadata:
+        return
+    if not metadata.get("allowed_passthrough_routes"):
+        return
+    if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
+        return
+    raise HTTPException(
+        status_code=403,
+        detail={
+            "error": (
+                "Only proxy admins can set `metadata.allowed_passthrough_routes`. "
+                "An admin must configure pass-through endpoints separately."
+            )
+        },
+    )
+
+
 async def validate_team_id_used_in_service_account_request(
     team_id: Optional[str],
     prisma_client: Optional[PrismaClient],
@@ -1288,6 +1348,14 @@ async def generate_key_fn(
             allowed_routes=data.allowed_routes,
             user_api_key_dict=user_api_key_dict,
         )
+        _check_management_key_type_caller_permission(
+            key_type=data.key_type,
+            user_api_key_dict=user_api_key_dict,
+        )
+        _check_allowed_passthrough_routes_caller_permission(
+            metadata=data.metadata,
+            user_api_key_dict=user_api_key_dict,
+        )
 
         # For non-admin internal users: auto-assign caller's user_id if not provided
         # This prevents creating unbound keys with no user association (LIT-1884)
@@ -1938,6 +2006,10 @@ async def _validate_update_key_data(
 
     _check_allowed_routes_caller_permission(
         allowed_routes=data.allowed_routes,
+        user_api_key_dict=user_api_key_dict,
+    )
+    _check_allowed_passthrough_routes_caller_permission(
+        metadata=data.metadata,
         user_api_key_dict=user_api_key_dict,
     )
 
@@ -3914,6 +3986,25 @@ async def regenerate_key_fn(  # noqa: PLR0915
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail={"error": "DB not connected. prisma_client is None"},
+            )
+
+        # Mirror the route-grant gates from /key/generate and /key/update.
+        # Without these, any caller authorized to regenerate a key can also
+        # rewrite its grant fields (allowed_routes, key_type, allowed_passthrough_routes)
+        # at regeneration time, side-stepping the role check those endpoints
+        # already enforce.
+        if data is not None:
+            _check_allowed_routes_caller_permission(
+                allowed_routes=data.allowed_routes,
+                user_api_key_dict=user_api_key_dict,
+            )
+            _check_management_key_type_caller_permission(
+                key_type=data.key_type,
+                user_api_key_dict=user_api_key_dict,
+            )
+            _check_allowed_passthrough_routes_caller_permission(
+                metadata=data.metadata,
+                user_api_key_dict=user_api_key_dict,
             )
 
         _is_master_key_valid = _is_master_key(api_key=key, _master_key=master_key)
