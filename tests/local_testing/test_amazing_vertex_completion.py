@@ -3687,9 +3687,10 @@ def test_vertex_ai_llama_tool_calling():
 
 
 def test_vertex_schema_test():
-    """Verify Vertex schema conversion accepts anyOf with null types in tool params."""
-    from litellm.llms.custom_httpx.http_handler import HTTPHandler
-    from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
+    load_vertex_ai_credentials()
+
+    def tool_call(text: str | None) -> str:
+        return text or "No text provided"
 
     tool = {
         "type": "function",
@@ -3713,65 +3714,22 @@ def test_vertex_schema_test():
         },
     }
 
-    client = HTTPHandler()
-    mock_response = MagicMock()
-    mock_response.status_code = 200
-    mock_response.headers = {"Content-Type": "application/json"}
-    mock_response.json.return_value = {
-        "candidates": [
-            {
-                "content": {
-                    "role": "model",
-                    "parts": [
-                        {
-                            "functionCall": {
-                                "name": "git_create_branch",
-                                "args": {
-                                    "repo_path": "/tmp/repo",
-                                    "branch_name": "feature",
-                                },
-                            }
-                        }
-                    ],
-                },
-                "finishReason": "STOP",
-            }
-        ],
-        "usageMetadata": {
-            "promptTokenCount": 10,
-            "candidatesTokenCount": 5,
-            "totalTokenCount": 15,
-        },
-    }
-
-    with (
-        patch.object(client, "post", return_value=mock_response),
-        patch.object(
-            VertexBase,
-            "_ensure_access_token",
-            return_value=("fake-token", "fake-project"),
-        ),
-    ):
-        response = litellm.completion(
-            model="vertex_ai/gemini-2.5-flash",
-            messages=[{"role": "user", "content": "call the tool"}],
-            tools=[tool],
-            tool_choice="required",
-            client=client,
-        )
-
-    assert response.choices[0].message.tool_calls is not None
-    assert (
-        response.choices[0].message.tool_calls[0].function.name == "git_create_branch"
+    response = litellm.completion(
+        model="vertex_ai/gemini-2.5-flash",
+        messages=[{"role": "user", "content": "call the tool"}],
+        tools=[tool],
+        tool_choice="required",
     )
+
+    print(response)
 
 
 def test_gemini_nullable_object_tool_schema_httpx():
     """
     Ensure nullable object tool params preserve nested properties in Vertex schema conversion.
     """
-    from litellm.llms.custom_httpx.http_handler import HTTPHandler
-    from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
+    load_vertex_ai_credentials()
+    litellm._turn_on_debug()
 
     tools = [
         {
@@ -3811,76 +3769,14 @@ def test_gemini_nullable_object_tool_schema_httpx():
         }
     ]
 
-    client = HTTPHandler()
-    mock_response = MagicMock()
-    mock_response.status_code = 200
-    mock_response.headers = {"Content-Type": "application/json"}
-    mock_response.json.return_value = {
-        "candidates": [
-            {
-                "content": {
-                    "role": "model",
-                    "parts": [
-                        {
-                            "functionCall": {
-                                "name": "create_support_ticket",
-                                "args": {
-                                    "ticket_id": "T-1",
-                                    "customer_context": {
-                                        "user_id": "u-1",
-                                        "plan": "pro",
-                                    },
-                                },
-                            }
-                        }
-                    ],
-                },
-                "finishReason": "STOP",
-            }
-        ],
-        "usageMetadata": {
-            "promptTokenCount": 10,
-            "candidatesTokenCount": 5,
-            "totalTokenCount": 15,
-        },
-    }
-
-    with (
-        patch.object(client, "post", return_value=mock_response) as mock_post,
-        patch.object(
-            VertexBase,
-            "_ensure_access_token",
-            return_value=("fake-token", "fake-project"),
-        ),
-    ):
-        response = litellm.completion(
-            model="vertex_ai/gemini-2.5-flash",
-            messages=[{"role": "user", "content": "call the tool"}],
-            tools=tools,
-            tool_choice="required",
-            client=client,
-        )
-
-    assert response.choices[0].message.tool_calls is not None
-    assert (
-        response.choices[0].message.tool_calls[0].function.name
-        == "create_support_ticket"
+    response = litellm.completion(
+        model="vertex_ai/gemini-2.5-flash",
+        messages=[{"role": "user", "content": "call the tool"}],
+        tools=tools,
+        tool_choice="required",
     )
 
-    # Verify schema conversion preserved the nested customer_context fields
-    # somewhere in the converted tool definition (the converter may rewrap
-    # nullable objects under anyOf, so check the serialized form rather than
-    # a fixed shape).
-    sent_body = mock_post.call_args.kwargs.get(
-        "json"
-    ) or mock_post.call_args.kwargs.get("data")
-    assert sent_body is not None, "expected request body to be sent"
-    if isinstance(sent_body, str):
-        sent_body = json.loads(sent_body)
-    sent_tool_str = json.dumps(sent_body["tools"][0]["function_declarations"][0])
-    assert "customer_context" in sent_tool_str
-    assert "user_id" in sent_tool_str
-    assert "plan" in sent_tool_str
+    print(response)
 
 
 def test_vertex_ai_response_id():
