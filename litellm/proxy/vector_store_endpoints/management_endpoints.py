@@ -16,7 +16,9 @@ from fastapi import APIRouter, Depends, HTTPException
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.constants import REDACTED_BY_LITELM_STRING
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
 from litellm.proxy._types import (
     LiteLLM_ManagedVectorStoresTable,
     ResponseLiteLLM_ManagedVectorStore,
@@ -37,6 +39,68 @@ from litellm.types.vector_stores import (
 from litellm.vector_stores.vector_store_registry import VectorStoreRegistry
 
 router = APIRouter()
+
+# Module-level masker — extends the default sensitive-key heuristics with
+# plural forms used by some providers (e.g. Vertex's ``vertex_credentials``,
+# which would otherwise slip past the singular "credential" pattern).
+_LITELLM_PARAMS_MASKER = SensitiveDataMasker(
+    sensitive_patterns={
+        "password",
+        "secret",
+        "key",
+        "token",
+        "auth",
+        "authorization",
+        "credential",
+        "credentials",
+        "access",
+        "private",
+        "certificate",
+        "fingerprint",
+        "tenancy",
+    },
+)
+
+
+def _redact_sensitive_litellm_params(
+    litellm_params: Optional[Dict[str, Any]],
+) -> Optional[Dict[str, Any]]:
+    """
+    Replace credential-bearing values inside ``litellm_params`` with the
+    ``REDACTED_BY_LITELM`` sentinel while preserving non-secret keys
+    (``api_base``, ``region``, ``model``, etc.) so callers can still see
+    *which* upstream is configured.
+
+    Without this, ``/vector_store/list`` and ``/vector_store/info`` return
+    the raw provider credentials (OpenAI ``api_key``, AWS
+    ``aws_secret_access_key``, GCP ``vertex_credentials``, ...) to any
+    authenticated principal, including read-only users and narrowly-scoped
+    keys.
+    """
+    if not litellm_params or not isinstance(litellm_params, dict):
+        return litellm_params
+
+    redacted: Dict[str, Any] = {}
+    for k, v in litellm_params.items():
+        if _LITELLM_PARAMS_MASKER.is_sensitive_key(k):
+            redacted[k] = REDACTED_BY_LITELM_STRING
+        else:
+            redacted[k] = v
+    return redacted
+
+
+def _redact_vector_store(
+    vector_store: LiteLLM_ManagedVectorStore,
+) -> LiteLLM_ManagedVectorStore:
+    """
+    Return a copy of ``vector_store`` with credential-bearing fields
+    inside ``litellm_params`` replaced by the redaction sentinel.
+    """
+    redacted = LiteLLM_ManagedVectorStore(**vector_store)
+    redacted["litellm_params"] = _redact_sensitive_litellm_params(
+        vector_store.get("litellm_params")
+    )
+    return redacted
 
 
 def _resolve_embedding_config_from_router(
@@ -555,7 +619,7 @@ async def list_vector_stores(
         accessible_vector_stores = []
         for vs in vector_store_map.values():
             if await _check_vector_store_access(vs, user_api_key_dict):
-                accessible_vector_stores.append(vs)
+                accessible_vector_stores.append(_redact_vector_store(vs))
 
         total_count = len(accessible_vector_stores)
         total_pages = (total_count + page_size - 1) // page_size
@@ -716,7 +780,9 @@ async def get_vector_store_info(
                     created_at=vector_store.get("created_at") or None,
                     updated_at=vector_store.get("updated_at") or None,
                     litellm_credential_name=vector_store.get("litellm_credential_name"),
-                    litellm_params=vector_store.get("litellm_params") or None,
+                    litellm_params=_redact_sensitive_litellm_params(
+                        vector_store.get("litellm_params")
+                    ),
                     team_id=vector_store.get("team_id") or None,
                     user_id=vector_store.get("user_id") or None,
                 )
@@ -742,6 +808,10 @@ async def get_vector_store_info(
                 detail="Access denied: You do not have permission to access this vector store",
             )
 
+        if "litellm_params" in vector_store_dict:
+            vector_store_dict["litellm_params"] = _redact_sensitive_litellm_params(
+                vector_store_dict["litellm_params"]
+            )
         return {"vector_store": vector_store_dict}
     except Exception as e:
         verbose_proxy_logger.exception(f"Error getting vector store info: {str(e)}")
