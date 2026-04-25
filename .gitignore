@@ -101,3 +101,6 @@ STABILIZATION_TODO.md
 **/playwright-report
 **/*.storageState.json
 **/coverage
+
+# Claude Code compatibility-matrix pytest artifact (CI-only output).
+compat-results.json
