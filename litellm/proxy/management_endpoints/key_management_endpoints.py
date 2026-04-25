@@ -1523,6 +1523,22 @@ def prepare_metadata_fields(
 
     casted_metadata = cast(dict, non_default_values["metadata"])
 
+    # Reserved metadata fields are immutable once set. Preserve the existing value
+    # when omitted, reject any explicit attempt to change it (including null).
+    for reserved_field in LiteLLM_Reserved_Metadata_Fields:
+        existing_value = existing_metadata.get(reserved_field)
+        if existing_value is None:
+            continue
+        if casted_metadata is None or (
+            reserved_field in casted_metadata
+            and casted_metadata[reserved_field] != existing_value
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail=f"{reserved_field} is immutable once set and cannot be changed via update.",
+            )
+        casted_metadata[reserved_field] = existing_value
+
     data_json = data.model_dump(exclude_unset=True, exclude_none=True)
 
     try:
