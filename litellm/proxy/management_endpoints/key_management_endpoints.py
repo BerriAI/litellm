@@ -1454,6 +1454,8 @@ async def generate_service_account_key_fn(
             detail={"error": CommonProxyErrors.db_not_connected_error.value},
         )
 
+    await check_org_admin_can_generate_keys(user_api_key_dict=user_api_key_dict)
+
     await validate_team_id_used_in_service_account_request(
         team_id=data.team_id,
         prisma_client=prisma_client,
