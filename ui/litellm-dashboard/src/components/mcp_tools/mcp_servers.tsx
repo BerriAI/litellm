@@ -7,7 +7,7 @@ import React, { useEffect, useState, useMemo, useCallback } from "react";
 import { useMCPServers } from "../../app/(dashboard)/hooks/mcpServers/useMCPServers";
 import { useMCPServerHealth } from "../../app/(dashboard)/hooks/mcpServers/useMCPServerHealth";
 import NotificationsManager from "../molecules/notifications_manager";
-import { deleteMCPServer, deleteMCPUserCredential } from "../networking";
+import { deleteMCPOAuthUserCredential, deleteMCPServer, deleteMCPUserCredential } from "../networking";
 import { MCPSubmissionsTab } from "./MCPSubmissionsTab";
 import { MCPToolsetsTab } from "./MCPToolsetsTab";
 import { DataTable } from "../view_logs/table";
@@ -172,6 +172,18 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
     }
   }, [accessToken, refetch]);
 
+  const handleOAuthDisconnect = useCallback(async (server: MCPServer) => {
+    if (!accessToken) return;
+    try {
+      await deleteMCPOAuthUserCredential(accessToken, server.server_id);
+      NotificationsManager.success("Disconnected from " + (server.server_name ?? server.server_id));
+      refetch();
+    } catch (error) {
+      console.error("Error disconnecting OAuth credential:", error);
+      NotificationsManager.fromBackend("Failed to disconnect credential");
+    }
+  }, [accessToken, refetch]);
+
   const columns = React.useMemo(
     () =>
       mcpServerColumns(
@@ -190,8 +202,11 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
         recheckServerHealth,
         recheckingServerIds,
         handleByokDisconnect,
+        accessToken ?? undefined,
+        handleOAuthDisconnect,
+        refetch,
       ),
-    [userRole, isLoadingHealth, recheckServerHealth, recheckingServerIds, handleByokDisconnect],
+    [userRole, isLoadingHealth, recheckServerHealth, recheckingServerIds, handleByokDisconnect, accessToken, handleOAuthDisconnect, refetch],
   );
 
   function handleDelete(server_id: string) {
