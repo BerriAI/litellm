@@ -2,6 +2,7 @@ import ast
 import asyncio
 import copy
 import json
+import posixpath
 import traceback
 from base64 import b64encode
 from datetime import datetime
@@ -320,7 +321,20 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         litellm_call_id: Optional[str] = None,
         custom_headers: Optional[dict] = None,
     ) -> dict:
-        excluded_headers = {"transfer-encoding", "content-encoding"}
+        # Exclude headers that uvicorn writes itself (server, date) and
+        # encoding/length headers that don't survive re-serialization.
+        # If we forward the upstream's Server header, uvicorn adds its
+        # own and strict HTTP parsers (e.g. aiohttp) reject the
+        # response with "Duplicate 'Server' header found".
+        excluded_headers = {
+            "transfer-encoding",
+            "content-encoding",
+            "content-length",
+            "server",
+            "date",
+            "connection",
+            "keep-alive",
+        }
 
         return_headers = {
             key: value
@@ -586,7 +600,45 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         if subpath.startswith("/"):
             subpath = subpath[1:]
 
-        return base_target + subpath
+        # Resolve any '..' segments in the subpath so it cannot climb above
+        # the base_target prefix that the operator configured. Preserve a
+        # trailing slash on the original subpath since some upstreams treat
+        # `/foo` and `/foo/` as different resources.
+        trailing_slash = subpath.endswith("/")
+        safe_subpath = posixpath.normpath("/" + subpath).lstrip("/")
+        if safe_subpath == ".":
+            safe_subpath = ""
+        if trailing_slash and safe_subpath and not safe_subpath.endswith("/"):
+            safe_subpath += "/"
+
+        return base_target + safe_subpath
+
+    @staticmethod
+    def join_base_and_endpoint_path(base_url: httpx.URL, endpoint_path: str) -> str:
+        """
+        Combine the path component of ``base_url`` with ``endpoint_path``.
+
+        Preserves any path prefix configured on the base URL and resolves
+        ``..`` segments in the endpoint so the result stays within the base
+        path. A trailing slash on ``endpoint_path`` is preserved.
+        """
+        trailing_slash = endpoint_path.endswith("/")
+        base_path = base_url.path or ""
+        if not base_path or base_path == "/":
+            normalized_endpoint = posixpath.normpath("/" + endpoint_path.lstrip("/"))
+            if trailing_slash and normalized_endpoint != "/":
+                normalized_endpoint += "/"
+            return normalized_endpoint
+
+        base_path = base_path.rstrip("/")
+        clean_endpoint = endpoint_path.lstrip("/")
+        combined = posixpath.normpath(base_path + "/" + clean_endpoint)
+        # If normalization climbs out of the base path, fall back to base.
+        if combined != base_path and not combined.startswith(base_path + "/"):
+            return base_path + "/"
+        if trailing_slash and not combined.endswith("/"):
+            combined += "/"
+        return combined
 
     @staticmethod
     def _update_stream_param_based_on_request_body(

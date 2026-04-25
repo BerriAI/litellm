@@ -159,6 +159,18 @@ async def _verify_team_access(
 class TeamMemberBudgetHandler:
     """Helper class to handle team member budget, RPM, and TPM limit operations"""
 
+    # Metadata keys that are owned and set by the server. Callers must not be
+    # able to inject or overwrite these via request payloads.
+    SYSTEM_MANAGED_METADATA_KEYS = ("team_member_budget_id",)
+
+    @staticmethod
+    def strip_system_managed_metadata_keys(metadata: Optional[dict]) -> None:
+        """Remove server-owned metadata keys from a caller-supplied dict."""
+        if not isinstance(metadata, dict):
+            return
+        for key in TeamMemberBudgetHandler.SYSTEM_MANAGED_METADATA_KEYS:
+            metadata.pop(key, None)
+
     @staticmethod
     def should_create_budget(
         team_member_budget: Optional[float] = None,
@@ -1040,6 +1052,8 @@ async def new_team(  # noqa: PLR0915
             _model_id = model_dict.id
 
         ## Create Team Member Budget Table
+        if isinstance(data.metadata, dict):
+            TeamMemberBudgetHandler.strip_system_managed_metadata_keys(data.metadata)
         data_json = data.json()
 
         ## Handle Object Permission - MCP, Vector Stores etc.
@@ -1729,6 +1743,13 @@ async def update_team(  # noqa: PLR0915
                 )
 
         updated_kv = data.json(exclude_unset=True)
+
+        # Drop server-owned metadata keys from caller input so they can only
+        # be written by the same code path that creates the underlying rows.
+        if isinstance(updated_kv.get("metadata"), dict):
+            TeamMemberBudgetHandler.strip_system_managed_metadata_keys(
+                updated_kv["metadata"]
+            )
 
         # Check budget_duration and budget_reset_at
         _set_budget_reset_at(data, updated_kv)
