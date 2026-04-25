@@ -151,6 +151,11 @@ class UISettings(BaseModel):
         description="If true, users cannot specify custom key values. All keys must be auto-generated.",
     )
 
+    disable_key_generate_for_org_admin: bool = Field(
+        default=False,
+        description="If true, org admins cannot generate API keys via /key/generate.",
+    )
+
 
 class UISettingsResponse(SettingsResponse):
     """Response model for UI settings"""
@@ -172,6 +177,7 @@ ALLOWED_UI_SETTINGS_FIELDS = {
     "allow_vector_stores_for_team_admins",
     "scope_user_search_to_org",
     "disable_custom_api_keys",
+    "disable_key_generate_for_org_admin",
 }
 
 # Flags that must be synced from the persisted UISettings into
@@ -183,6 +189,7 @@ _RUNTIME_GENERAL_SETTINGS_FLAGS = [
     "allow_agents_for_team_admins",
     "disable_vector_stores_for_internal_users",
     "allow_vector_stores_for_team_admins",
+    "disable_key_generate_for_org_admin",
 ]
 
 # Extension point: packages outside OSS (e.g. litellm_enterprise) can
