@@ -1,9 +1,11 @@
 #### CRUD ENDPOINTS for UI Settings #####
 import json
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Set, Tuple, Type, Union
 from urllib.parse import urlparse
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, Body, Depends, File, HTTPException, UploadFile
+from pydantic import ConfigDict, ValidationError, create_model
+from pydantic.fields import FieldInfo
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -75,6 +77,8 @@ class UIThemeSettingsResponse(SettingsResponse):
 class UISettings(BaseModel):
     """Configuration for UI-specific flags"""
 
+    model_config = ConfigDict(extra="allow")
+
     disable_model_add_for_internal_users: bool = Field(
         default=False,
         description="If true, internal users cannot add models from the UI",
@@ -97,12 +101,24 @@ class UISettings(BaseModel):
 
     forward_client_headers_to_llm_api: bool = Field(
         default=False,
-        description="If enabled, forwards client headers (e.g. Authorization) to the LLM API. Required for Claude Code with Max subscription.",
+        description=(
+            "Forwards client headers (Authorization, anthropic-beta, and x-* "
+            "custom headers) to the upstream LLM. Enable for Claude Code with a "
+            "Max subscription (forwards the OAuth token) or to pass custom/tracing "
+            "headers through to the provider. Independent of the BYOK toggle — "
+            "enable only the one(s) you need."
+        ),
     )
 
-    enable_projects_ui: bool = Field(
+    forward_llm_provider_auth_headers: bool = Field(
         default=False,
-        description="If enabled, shows the Projects feature in the UI sidebar and the project field in key management.",
+        description=(
+            "Forwards provider auth headers (x-api-key, x-goog-api-key, api-key, "
+            "ocp-apim-subscription-key) to the upstream LLM, overriding any "
+            "deployment-configured key for that request. Enable for Claude Code "
+            "BYOK (clients bring their own API key). Independent of the "
+            "client-headers toggle — enable only the one(s) you need."
+        ),
     )
 
     disable_agents_for_internal_users: bool = Field(
@@ -149,7 +165,7 @@ ALLOWED_UI_SETTINGS_FIELDS = {
     "enabled_ui_pages_internal_users",
     "require_auth_for_public_ai_hub",
     "forward_client_headers_to_llm_api",
-    "enable_projects_ui",
+    "forward_llm_provider_auth_headers",
     "disable_agents_for_internal_users",
     "allow_agents_for_team_admins",
     "disable_vector_stores_for_internal_users",
@@ -162,11 +178,67 @@ ALLOWED_UI_SETTINGS_FIELDS = {
 # general_settings at runtime (on both read and write).
 _RUNTIME_GENERAL_SETTINGS_FLAGS = [
     "forward_client_headers_to_llm_api",
+    "forward_llm_provider_auth_headers",
     "disable_agents_for_internal_users",
     "allow_agents_for_team_admins",
     "disable_vector_stores_for_internal_users",
     "allow_vector_stores_for_team_admins",
 ]
+
+# Extension point: packages outside OSS (e.g. litellm_enterprise) can
+# contribute additional UI settings fields at import time. Each entry
+# maps a field name to a (annotation, FieldInfo) tuple in pydantic
+# create_model's field-definitions format. Registering a field also
+# appends it to ALLOWED_UI_SETTINGS_FIELDS so GET/PATCH pass it through.
+#
+# The annotation is typed ``Any`` because pydantic field annotations
+# include generics like ``Optional[int]`` / ``List[str]`` that are not
+# instances of ``type`` — so tightening this to ``type`` would reject
+# valid inputs.
+_EXTRA_UI_SETTINGS_FIELDS: Dict[str, Tuple[Any, FieldInfo]] = {}
+
+# Settings OSS knows about as enterprise-gated. If a caller sends one of
+# these keys and no extension package has registered it, the PATCH
+# endpoint returns 403 instead of silently dropping the value, so the
+# client gets a clear signal that the feature requires LiteLLM Enterprise.
+_ENTERPRISE_ONLY_UI_SETTINGS: Set[str] = {"enable_projects_ui"}
+
+# Memoized effective class; invalidated on registration.
+_EFFECTIVE_UI_SETTINGS_CLASS: Optional[Type[UISettings]] = None
+
+
+def register_extra_ui_setting(name: str, annotation: Any, field: FieldInfo) -> None:
+    """Register an additional UI settings field contributed by an extension package.
+
+    ``field`` must be a ``FieldInfo`` instance — construct it directly
+    (e.g. ``FieldInfo(default=..., description=...)``) rather than via
+    the ``pydantic.Field`` factory, whose stub reports the default's
+    type instead of ``FieldInfo`` and trips mypy at the call site.
+    """
+    global _EFFECTIVE_UI_SETTINGS_CLASS
+    _EXTRA_UI_SETTINGS_FIELDS[name] = (annotation, field)
+    ALLOWED_UI_SETTINGS_FIELDS.add(name)
+    _EFFECTIVE_UI_SETTINGS_CLASS = None
+
+
+def _get_effective_ui_settings_class() -> Type[UISettings]:
+    """Return UISettings with any extension-registered fields merged in.
+
+    Memoized — pydantic ``create_model`` runs metaclass + schema work
+    each call, so we cache until a new registration invalidates it.
+    """
+    global _EFFECTIVE_UI_SETTINGS_CLASS
+    if _EFFECTIVE_UI_SETTINGS_CLASS is not None:
+        return _EFFECTIVE_UI_SETTINGS_CLASS
+    if not _EXTRA_UI_SETTINGS_FIELDS:
+        return UISettings
+    _EFFECTIVE_UI_SETTINGS_CLASS = create_model(  # type: ignore[call-overload]
+        "EffectiveUISettings",
+        __base__=UISettings,
+        __doc__=UISettings.__doc__,
+        **_EXTRA_UI_SETTINGS_FIELDS,
+    )
+    return _EFFECTIVE_UI_SETTINGS_CLASS
 
 
 class MCPSemanticFilterSettings(BaseModel):
@@ -1136,7 +1208,7 @@ async def get_ui_settings():
 
     return await _get_settings_with_schema(
         settings_key="ui_settings",
-        settings_class=UISettings,
+        settings_class=_get_effective_ui_settings_class(),
         config=config,
     )
 
@@ -1147,7 +1219,8 @@ async def get_ui_settings():
     dependencies=[Depends(user_api_key_auth)],
 )
 async def update_ui_settings(
-    settings: UISettings, user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth)
+    settings_body: Dict[str, Any] = Body(...),
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
     Update UI-specific configuration flags.
@@ -1174,8 +1247,33 @@ async def update_ui_settings(
             },
         )
 
+    # Validate against the same effective class GET advertises, so
+    # enterprise-registered fields are typed consistently on both sides.
+    effective_cls = _get_effective_ui_settings_class()
+    try:
+        settings = effective_cls.model_validate(settings_body)
+    except ValidationError as e:
+        raise HTTPException(status_code=422, detail=e.errors())
+
     # Only include fields the caller actually sent (not Pydantic defaults).
     settings_dict = settings.model_dump(exclude_unset=True)
+
+    # Reject enterprise-only settings up front so the caller gets a clear
+    # signal instead of a silent drop.
+    blocked_enterprise_keys = sorted(
+        (settings_dict.keys() & _ENTERPRISE_ONLY_UI_SETTINGS)
+        - ALLOWED_UI_SETTINGS_FIELDS
+    )
+    if blocked_enterprise_keys:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": (
+                    f"Setting(s) {blocked_enterprise_keys} are a LiteLLM "
+                    "Enterprise feature and are not available on this build."
+                )
+            },
+        )
 
     # Enforce allowlist and drop anything unexpected
     incoming = {

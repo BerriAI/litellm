@@ -19,17 +19,16 @@ class TestFunctionToolParametersValidation:
     def test_should_add_type_object_when_parameters_empty(self):
         """Empty parameters should get type='object' and properties={}."""
         tool = FunctionTool(name="test_tool", parameters={})
-        
+
         assert tool.parameters.get("type") == "object"
         assert "properties" in tool.parameters
 
     def test_should_add_type_object_when_parameters_missing_type(self):
         """Parameters without type should get type='object' added."""
         tool = FunctionTool(
-            name="test_tool",
-            parameters={"properties": {"query": {"type": "string"}}}
+            name="test_tool", parameters={"properties": {"query": {"type": "string"}}}
         )
-        
+
         assert tool.parameters.get("type") == "object"
         assert tool.parameters.get("properties") == {"query": {"type": "string"}}
 
@@ -37,22 +36,16 @@ class TestFunctionToolParametersValidation:
         """Parameters with type='object' should be preserved."""
         tool = FunctionTool(
             name="test_tool",
-            parameters={
-                "type": "object",
-                "properties": {"query": {"type": "string"}}
-            }
+            parameters={"type": "object", "properties": {"query": {"type": "string"}}},
         )
-        
+
         assert tool.parameters.get("type") == "object"
         assert tool.parameters.get("properties") == {"query": {"type": "string"}}
 
     def test_should_add_properties_when_missing(self):
         """Parameters without properties should get properties={} added."""
-        tool = FunctionTool(
-            name="test_tool",
-            parameters={"type": "object"}
-        )
-        
+        tool = FunctionTool(name="test_tool", parameters={"type": "object"})
+
         assert tool.parameters.get("type") == "object"
         assert "properties" in tool.parameters
 
@@ -64,10 +57,10 @@ class TestFunctionToolParametersValidation:
                 "type": "object",
                 "properties": {"query": {"type": "string"}},
                 "required": ["query"],
-                "additionalProperties": False
-            }
+                "additionalProperties": False,
+            },
         )
-        
+
         assert tool.parameters.get("type") == "object"
         assert tool.parameters.get("required") == ["query"]
         assert tool.parameters.get("additionalProperties") is False
@@ -83,11 +76,11 @@ class TestChatCompletionToolValidation:
             "function": {
                 "name": "web_search",
                 "description": "Search the web",
-                "parameters": {}
-            }
+                "parameters": {},
+            },
         }
         completion_tool = ChatCompletionTool(**tool_dict)
-        
+
         assert completion_tool.function.parameters.get("type") == "object"
         assert "properties" in completion_tool.function.parameters
 
@@ -102,11 +95,11 @@ class TestChatCompletionToolValidation:
                     "properties": {
                         "query": {"type": "string", "description": "Search query"}
                     }
-                }
-            }
+                },
+            },
         }
         completion_tool = ChatCompletionTool(**tool_dict)
-        
+
         assert completion_tool.function.parameters.get("type") == "object"
 
 
@@ -116,27 +109,23 @@ class TestToolTransformationIntegration:
     def test_should_transform_openai_format_tool_correctly(self):
         """Simulate transformation.py tool validation flow."""
         from litellm.llms.sap.chat.transformation import validate_dict
-        
+
         # OpenAI format tool with empty parameters (common case that was failing)
         openai_tool = {
             "type": "function",
-            "function": {
-                "name": "web_search",
-                "description": "Perform a web search"
-            }
+            "function": {"name": "web_search", "description": "Perform a web search"},
         }
-        
+
         validated_tool = validate_dict(openai_tool, ChatCompletionTool)
 
         # After validation, parameters should have type='object'
         assert validated_tool["function"]["parameters"]["type"] == "object"
         assert "properties" in validated_tool["function"]["parameters"]
 
-
     def test_should_transform_tool_with_existing_parameters(self):
         """Tool with parameters should preserve them while ensuring type='object'."""
         from litellm.llms.sap.chat.transformation import validate_dict
-        
+
         openai_tool = {
             "type": "function",
             "function": {
@@ -144,18 +133,15 @@ class TestToolTransformationIntegration:
                 "description": "Get weather for a location",
                 "parameters": {
                     "properties": {
-                        "location": {
-                            "type": "string",
-                            "description": "City name"
-                        }
+                        "location": {"type": "string", "description": "City name"}
                     },
-                    "required": ["location"]
-                }
-            }
+                    "required": ["location"],
+                },
+            },
         }
-        
+
         validated_tool = validate_dict(openai_tool, ChatCompletionTool)
-        
+
         assert validated_tool["function"]["parameters"]["type"] == "object"
         assert "location" in validated_tool["function"]["parameters"]["properties"]
         assert validated_tool["function"]["parameters"]["required"] == ["location"]

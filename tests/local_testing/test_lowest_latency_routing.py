@@ -38,9 +38,7 @@ async def test_latency_memory_leak(sync_mode):
     - make 11th call -> no change in memory
     """
     test_cache = DualCache()
-    lowest_latency_logger = LowestLatencyLoggingHandler(
-        router_cache=test_cache
-    )
+    lowest_latency_logger = LowestLatencyLoggingHandler(router_cache=test_cache)
     model_group = "gpt-3.5-turbo"
     deployment_id = "1234"
     kwargs = {
@@ -119,9 +117,7 @@ def get_size(obj, seen=None):
 
 def test_latency_updated():
     test_cache = DualCache()
-    lowest_latency_logger = LowestLatencyLoggingHandler(
-        router_cache=test_cache
-    )
+    lowest_latency_logger = LowestLatencyLoggingHandler(router_cache=test_cache)
     model_group = "gpt-3.5-turbo"
     deployment_id = "1234"
     kwargs = {
@@ -207,9 +203,7 @@ def test_get_available_deployments():
             "model_info": {"id": "5678"},
         },
     ]
-    lowest_latency_logger = LowestLatencyLoggingHandler(
-        router_cache=test_cache
-    )
+    lowest_latency_logger = LowestLatencyLoggingHandler(router_cache=test_cache)
     model_group = "gpt-3.5-turbo"
     ## DEPLOYMENT 1 ##
     deployment_id = "1234"
@@ -324,9 +318,7 @@ def test_get_available_endpoints_tpm_rpm_check_async(ans_rpm):
             "model_info": {"id": "5678", "rpm": non_ans_rpm},
         },
     ]
-    lowest_latency_logger = LowestLatencyLoggingHandler(
-        router_cache=test_cache
-    )
+    lowest_latency_logger = LowestLatencyLoggingHandler(router_cache=test_cache)
     model_group = "gpt-3.5-turbo"
     d1 = [(lowest_latency_logger, "1234", 50, 0.01)] * non_ans_rpm
     d2 = [(lowest_latency_logger, "5678", 50, 0.01)] * non_ans_rpm
@@ -373,9 +365,7 @@ def test_get_available_endpoints_tpm_rpm_check(ans_rpm):
             "model_info": {"id": "5678", "rpm": non_ans_rpm},
         },
     ]
-    lowest_latency_logger = LowestLatencyLoggingHandler(
-        router_cache=test_cache
-    )
+    lowest_latency_logger = LowestLatencyLoggingHandler(router_cache=test_cache)
     model_group = "gpt-3.5-turbo"
     ## DEPLOYMENT 1 ##
     deployment_id = "1234"

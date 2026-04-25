@@ -118,18 +118,17 @@ def test_openrouter_cache_control_flag_removal():
     assert transformed_request["messages"][0].get("cache_control") is None
 
 
-
 def test_openrouter_transform_request_with_cache_control():
     """
     Test transform_request moves cache_control from message level to content blocks (string content).
-    
+
     Input:
     {
         "role": "user",
         "content": "what are the key terms...",
         "cache_control": {"type": "ephemeral"}
     }
-    
+
     Expected Output:
     {
         "role": "user",
@@ -143,29 +142,30 @@ def test_openrouter_transform_request_with_cache_control():
     }
     """
     import json
+
     config = OpenrouterConfig()
-    
+
     messages = [
         {
             "role": "system",
             "content": [
                 {
                     "type": "text",
-                    "text": "You are an AI assistant tasked with analyzing legal documents."
+                    "text": "You are an AI assistant tasked with analyzing legal documents.",
                 },
                 {
                     "type": "text",
-                    "text": "Here is the full text of a complex legal agreement"
-                }
-            ]
+                    "text": "Here is the full text of a complex legal agreement",
+                },
+            ],
         },
         {
             "role": "user",
             "content": "what are the key terms and conditions in this agreement?",
-            "cache_control": {"type": "ephemeral"}
-        }
+            "cache_control": {"type": "ephemeral"},
+        },
     ]
-    
+
     transformed_request = config.transform_request(
         model="openrouter/anthropic/claude-3-5-sonnet-20240620",
         messages=messages,
@@ -173,13 +173,13 @@ def test_openrouter_transform_request_with_cache_control():
         litellm_params={},
         headers={},
     )
-    
+
     print("\n=== Transformed Request ===")
     print(json.dumps(transformed_request, indent=4, default=str))
-    
+
     assert "messages" in transformed_request
     assert len(transformed_request["messages"]) == 2
-    
+
     user_message = transformed_request["messages"][1]
     assert user_message["role"] == "user"
     assert isinstance(user_message["content"], list)
@@ -191,7 +191,7 @@ def test_openrouter_transform_request_with_cache_control_list_content():
     """
     Test transform_request moves cache_control only to the last content block when content is already a list.
     This prevents exceeding Anthropic's limit of 4 cache breakpoints.
-    
+
     Input:
     {
         "role": "system",
@@ -201,7 +201,7 @@ def test_openrouter_transform_request_with_cache_control_list_content():
         ],
         "cache_control": {"type": "ephemeral"}
     }
-    
+
     Expected Output:
     {
         "role": "system",
@@ -219,29 +219,24 @@ def test_openrouter_transform_request_with_cache_control_list_content():
     }
     """
     import json
+
     config = OpenrouterConfig()
-    
+
     messages = [
         {
             "role": "system",
             "content": [
                 {
                     "type": "text",
-                    "text": "You are a historian studying the fall of the Roman Empire."
+                    "text": "You are a historian studying the fall of the Roman Empire.",
                 },
-                {
-                    "type": "text",
-                    "text": "HUGE TEXT BODY"
-                }
+                {"type": "text", "text": "HUGE TEXT BODY"},
             ],
-            "cache_control": {"type": "ephemeral"}
+            "cache_control": {"type": "ephemeral"},
         },
-        {
-            "role": "user",
-            "content": "What triggered the collapse?"
-        }
+        {"role": "user", "content": "What triggered the collapse?"},
     ]
-    
+
     transformed_request = config.transform_request(
         model="openrouter/anthropic/claude-3-5-sonnet-20240620",
         messages=messages,
@@ -249,13 +244,13 @@ def test_openrouter_transform_request_with_cache_control_list_content():
         litellm_params={},
         headers={},
     )
-    
+
     print("\n=== Transformed Request (List Content) ===")
     print(json.dumps(transformed_request, indent=4, default=str))
-    
+
     assert "messages" in transformed_request
     assert len(transformed_request["messages"]) == 2
-    
+
     system_message = transformed_request["messages"][0]
     assert system_message["role"] == "system"
     assert isinstance(system_message["content"], list)
@@ -269,14 +264,14 @@ def test_openrouter_transform_request_with_cache_control_list_content():
 def test_openrouter_transform_request_with_cache_control_gemini():
     """
     Test transform_request moves cache_control to content blocks for Gemini models.
-    
+
     Input:
     {
         "role": "user",
         "content": "Analyze this data",
         "cache_control": {"type": "ephemeral"}
     }
-    
+
     Expected Output:
     {
         "role": "user",
@@ -290,16 +285,17 @@ def test_openrouter_transform_request_with_cache_control_gemini():
     }
     """
     import json
+
     config = OpenrouterConfig()
-    
+
     messages = [
         {
             "role": "user",
             "content": "Analyze this data",
-            "cache_control": {"type": "ephemeral"}
+            "cache_control": {"type": "ephemeral"},
         }
     ]
-    
+
     transformed_request = config.transform_request(
         model="openrouter/google/gemini-2.0-flash-exp:free",
         messages=messages,
@@ -307,13 +303,13 @@ def test_openrouter_transform_request_with_cache_control_gemini():
         litellm_params={},
         headers={},
     )
-    
+
     print("\n=== Transformed Request (Gemini) ===")
     print(json.dumps(transformed_request, indent=4, default=str))
-    
+
     assert "messages" in transformed_request
     assert len(transformed_request["messages"]) == 1
-    
+
     user_message = transformed_request["messages"][0]
     assert user_message["role"] == "user"
     assert isinstance(user_message["content"], list)
@@ -325,13 +321,14 @@ def test_openrouter_transform_request_multiple_cache_controls():
     """
     Test that cache_control is only added to the last content block per message.
     This prevents exceeding Anthropic's limit of 4 cache breakpoints.
-    
+
     When a message has 5 content blocks with cache_control at message level,
     only the 5th block should have cache_control, not all 5 blocks.
     """
     import json
+
     config = OpenrouterConfig()
-    
+
     messages = [
         {
             "role": "system",
@@ -340,12 +337,12 @@ def test_openrouter_transform_request_multiple_cache_controls():
                 {"type": "text", "text": "Block 2"},
                 {"type": "text", "text": "Block 3"},
                 {"type": "text", "text": "Block 4"},
-                {"type": "text", "text": "Block 5"}
+                {"type": "text", "text": "Block 5"},
             ],
-            "cache_control": {"type": "ephemeral"}
+            "cache_control": {"type": "ephemeral"},
         }
     ]
-    
+
     transformed_request = config.transform_request(
         model="openrouter/anthropic/claude-3-5-sonnet-20240620",
         messages=messages,
@@ -353,17 +350,19 @@ def test_openrouter_transform_request_multiple_cache_controls():
         litellm_params={},
         headers={},
     )
-    
+
     print("\n=== Transformed Request (Multiple Blocks) ===")
     print(json.dumps(transformed_request, indent=4, default=str))
-    
+
     system_message = transformed_request["messages"][0]
     assert len(system_message["content"]) == 5
-    
+
     # Only the last block should have cache_control
     for i in range(4):
-        assert "cache_control" not in system_message["content"][i], f"Block {i} should not have cache_control"
-    
+        assert (
+            "cache_control" not in system_message["content"][i]
+        ), f"Block {i} should not have cache_control"
+
     assert system_message["content"][4]["cache_control"] == {"type": "ephemeral"}
     assert "cache_control" not in system_message
 
@@ -397,21 +396,40 @@ def test_openrouter_cost_tracking_non_streaming():
     mock_response.json.return_value = {
         "id": "gen-123",
         "model": "openrouter/anthropic/claude-sonnet-4.5",
-        "choices": [{"message": {"role": "assistant", "content": "Hello!"}, "finish_reason": "stop", "index": 0}],
-        "usage": {"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30, "cost": 0.00015}
+        "choices": [
+            {
+                "message": {"role": "assistant", "content": "Hello!"},
+                "finish_reason": "stop",
+                "index": 0,
+            }
+        ],
+        "usage": {
+            "prompt_tokens": 10,
+            "completion_tokens": 20,
+            "total_tokens": 30,
+            "cost": 0.00015,
+        },
     }
     mock_response.headers = {}
 
     model_response = ModelResponse(
         id="gen-123",
-        choices=[Choices(finish_reason="stop", index=0, message=Message(content="Hello!", role="assistant"))],
+        choices=[
+            Choices(
+                finish_reason="stop",
+                index=0,
+                message=Message(content="Hello!", role="assistant"),
+            )
+        ],
         created=1234567890,
         model="openrouter/anthropic/claude-sonnet-4.5",
         object="chat.completion",
-        usage=Usage(prompt_tokens=10, completion_tokens=20, total_tokens=30)
+        usage=Usage(prompt_tokens=10, completion_tokens=20, total_tokens=30),
     )
 
-    with patch.object(OpenAIGPTConfig, 'transform_response', return_value=model_response):
+    with patch.object(
+        OpenAIGPTConfig, "transform_response", return_value=model_response
+    ):
         result = config.transform_response(
             model="openrouter/anthropic/claude-sonnet-4.5",
             raw_response=mock_response,
@@ -425,8 +443,16 @@ def test_openrouter_cost_tracking_non_streaming():
         )
 
     assert hasattr(result, "_hidden_params")
-    assert "llm_provider-x-litellm-response-cost" in result._hidden_params["additional_headers"]
-    assert result._hidden_params["additional_headers"]["llm_provider-x-litellm-response-cost"] == 0.00015
+    assert (
+        "llm_provider-x-litellm-response-cost"
+        in result._hidden_params["additional_headers"]
+    )
+    assert (
+        result._hidden_params["additional_headers"][
+            "llm_provider-x-litellm-response-cost"
+        ]
+        == 0.00015
+    )
 
 
 def test_openrouter_cost_tracking_streaming():
@@ -469,8 +495,19 @@ def test_openrouter_cost_tracking_streaming():
         "id": "gen-stream-456",
         "created": 1234567890,
         "model": "openrouter/anthropic/claude-sonnet-4.5",
-        "usage": {"prompt_tokens": 5, "completion_tokens": 10, "total_tokens": 15, "cost": 0.0001},
-        "choices": [{"delta": {"content": "", "reasoning": None}, "finish_reason": "stop", "index": 0}],
+        "usage": {
+            "prompt_tokens": 5,
+            "completion_tokens": 10,
+            "total_tokens": 15,
+            "cost": 0.0001,
+        },
+        "choices": [
+            {
+                "delta": {"content": "", "reasoning": None},
+                "finish_reason": "stop",
+                "index": 0,
+            }
+        ],
     }
 
     result1 = handler.chunk_parser(chunk1)

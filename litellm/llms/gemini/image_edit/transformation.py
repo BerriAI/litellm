@@ -54,6 +54,8 @@ class GeminiImageEditConfig(BaseImageEditConfig):
         headers: dict,
         model: str,
         api_key: Optional[str] = None,
+        litellm_params: Optional[dict] = None,
+        api_base: Optional[str] = None,
     ) -> dict:
         final_api_key: Optional[str] = api_key or get_secret_str("GEMINI_API_KEY")
         if not final_api_key:
@@ -111,9 +113,9 @@ class GeminiImageEditConfig(BaseImageEditConfig):
             # Move aspectRatio into imageConfig inside generationConfig
             if "imageConfig" not in generation_config:
                 generation_config["imageConfig"] = {}
-            generation_config["imageConfig"][
-                "aspectRatio"
-            ] = image_edit_optional_request_params["aspectRatio"]
+            generation_config["imageConfig"]["aspectRatio"] = (
+                image_edit_optional_request_params["aspectRatio"]
+            )
 
         if generation_config:
             request_body["generationConfig"] = generation_config

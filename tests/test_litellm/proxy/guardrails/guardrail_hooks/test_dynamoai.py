@@ -61,9 +61,7 @@ class TestDynamoAIGuardrailRegistration:
             "guardrail_name": "test-dynamoai-guard",
         }
 
-        with patch(
-            "litellm.logging_callback_manager.add_litellm_callback"
-        ) as mock_add:
+        with patch("litellm.logging_callback_manager.add_litellm_callback") as mock_add:
             result = initialize_guardrail(litellm_params, guardrail)
 
             assert isinstance(result, DynamoAIGuardrails)

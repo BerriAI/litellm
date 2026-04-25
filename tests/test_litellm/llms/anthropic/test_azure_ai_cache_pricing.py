@@ -38,5 +38,8 @@ def test_azure_ai_claude_cache_pricing(
 
     assert model_info.get("cache_creation_input_token_cost") is not None
     assert model_info.get("cache_read_input_token_cost") is not None
-    assert model_info.get("cache_creation_input_token_cost") == expected_cache_creation_cost
+    assert (
+        model_info.get("cache_creation_input_token_cost")
+        == expected_cache_creation_cost
+    )
     assert model_info.get("cache_read_input_token_cost") == expected_cache_read_cost

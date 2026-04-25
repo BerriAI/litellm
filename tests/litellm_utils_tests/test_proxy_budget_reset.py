@@ -250,15 +250,18 @@ async def test_reset_budget_endusers_partial_failure():
     async def fake_reset_team_members(budgets_to_reset):
         return 1
 
-    with patch.object(
-        ResetBudgetJob,
-        "_reset_budget_for_enduser",
-        side_effect=fake_reset_enduser,
-    ) as mock_reset_enduser, patch.object(
-        ResetBudgetJob,
-        "reset_budget_for_litellm_team_members",
-        side_effect=fake_reset_team_members,
-    ) as mock_reset_team_members:
+    with (
+        patch.object(
+            ResetBudgetJob,
+            "_reset_budget_for_enduser",
+            side_effect=fake_reset_enduser,
+        ) as mock_reset_enduser,
+        patch.object(
+            ResetBudgetJob,
+            "reset_budget_for_litellm_team_members",
+            side_effect=fake_reset_team_members,
+        ) as mock_reset_team_members,
+    ):
         await job.reset_budget_for_litellm_budget_table()
         await asyncio.sleep(0.1)
 
@@ -435,19 +438,25 @@ async def test_reset_budget_continues_other_categories_on_failure():
     async def fake_reset_team_members(budgets_to_reset):
         return 1
 
-    with patch.object(
-        ResetBudgetJob, "_reset_budget_for_key", side_effect=fake_reset_key
-    ) as mock_reset_key, patch.object(
-        ResetBudgetJob, "_reset_budget_for_user", side_effect=fake_reset_user
-    ) as mock_reset_user, patch.object(
-        ResetBudgetJob, "_reset_budget_for_team", side_effect=fake_reset_team
-    ) as mock_reset_team, patch.object(
-        ResetBudgetJob, "_reset_budget_for_enduser", side_effect=fake_reset_enduser
-    ) as mock_reset_enduser, patch.object(
-        ResetBudgetJob,
-        "reset_budget_for_litellm_team_members",
-        side_effect=fake_reset_team_members,
-    ) as mock_reset_team_members:
+    with (
+        patch.object(
+            ResetBudgetJob, "_reset_budget_for_key", side_effect=fake_reset_key
+        ) as mock_reset_key,
+        patch.object(
+            ResetBudgetJob, "_reset_budget_for_user", side_effect=fake_reset_user
+        ) as mock_reset_user,
+        patch.object(
+            ResetBudgetJob, "_reset_budget_for_team", side_effect=fake_reset_team
+        ) as mock_reset_team,
+        patch.object(
+            ResetBudgetJob, "_reset_budget_for_enduser", side_effect=fake_reset_enduser
+        ) as mock_reset_enduser,
+        patch.object(
+            ResetBudgetJob,
+            "reset_budget_for_litellm_team_members",
+            side_effect=fake_reset_team_members,
+        ) as mock_reset_team_members,
+    ):
         # Call the overall reset_budget method.
         await job.reset_budget()
         await asyncio.sleep(0.1)
@@ -890,15 +899,18 @@ async def test_service_logger_endusers_success():
     async def fake_reset_team_members(budgets_to_reset):
         return 1
 
-    with patch.object(
-        ResetBudgetJob,
-        "_reset_budget_for_enduser",
-        side_effect=fake_reset_enduser,
-    ) as mock_reset_enduser, patch.object(
-        ResetBudgetJob,
-        "reset_budget_for_litellm_team_members",
-        side_effect=fake_reset_team_members,
-    ) as mock_reset_team_members:
+    with (
+        patch.object(
+            ResetBudgetJob,
+            "_reset_budget_for_enduser",
+            side_effect=fake_reset_enduser,
+        ) as mock_reset_enduser,
+        patch.object(
+            ResetBudgetJob,
+            "reset_budget_for_litellm_team_members",
+            side_effect=fake_reset_team_members,
+        ) as mock_reset_team_members,
+    ):
         with patch(
             "litellm.proxy.common_utils.reset_budget_job.verbose_proxy_logger.exception"
         ) as mock_verbose_exc:
@@ -971,15 +983,18 @@ async def test_service_logger_endusers_failure():
     async def fake_reset_team_members(budgets_to_reset):
         return 1
 
-    with patch.object(
-        ResetBudgetJob,
-        "_reset_budget_for_enduser",
-        side_effect=fake_reset_enduser,
-    ) as mock_reset_enduser, patch.object(
-        ResetBudgetJob,
-        "reset_budget_for_litellm_team_members",
-        side_effect=fake_reset_team_members,
-    ) as mock_reset_team_members:
+    with (
+        patch.object(
+            ResetBudgetJob,
+            "_reset_budget_for_enduser",
+            side_effect=fake_reset_enduser,
+        ) as mock_reset_enduser,
+        patch.object(
+            ResetBudgetJob,
+            "reset_budget_for_litellm_team_members",
+            side_effect=fake_reset_team_members,
+        ) as mock_reset_team_members,
+    ):
         with patch(
             "litellm.proxy.common_utils.reset_budget_job.verbose_proxy_logger.exception"
         ) as mock_verbose_exc:
