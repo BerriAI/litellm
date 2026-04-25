@@ -1,0 +1,41 @@
+ARG CLAUDE_CODE_BASE_IMAGE=cgr.dev/chainguard/wolfi-base@sha256:f26d42a15d09d9a643b231df929fa3cf609bedc58a728eb445be89a9d8d1da9f
+FROM ${CLAUDE_CODE_BASE_IMAGE}
+
+ARG CLAUDE_CODE_VERSION=latest
+
+USER root
+
+COPY resolve_claude_code_version.js /tmp/resolve_claude_code_version.js
+
+RUN apk add --no-cache \
+    bash \
+    ca-certificates \
+    curl \
+    nodejs \
+    npm \
+    shadow && \
+    if [ "${CLAUDE_CODE_VERSION}" = "latest" ]; then \
+      CLAUDE_CODE_RESOLVED_VERSION="$(node /tmp/resolve_claude_code_version.js)"; \
+    else \
+      CLAUDE_CODE_RESOLVED_VERSION="${CLAUDE_CODE_VERSION}"; \
+    fi && \
+    echo "Installing @anthropic-ai/claude-code@${CLAUDE_CODE_RESOLVED_VERSION}" && \
+    npm install -g --ignore-scripts "@anthropic-ai/claude-code@${CLAUDE_CODE_RESOLVED_VERSION}" && \
+    CLAUDE_CODE_GLOBAL_ROOT="$(npm root -g)" && \
+    node "${CLAUDE_CODE_GLOBAL_ROOT}/@anthropic-ai/claude-code/install.cjs" && \
+    npm cache clean --force && \
+    groupadd --system claude && \
+    useradd --system --create-home --gid claude --shell /bin/bash claude && \
+    mkdir -p /workspace /home/claude/.claude && \
+    chown -R claude:claude /workspace /home/claude
+
+COPY --chown=claude:claude run_claude_code_check.sh /usr/local/bin/run_claude_code_check.sh
+RUN chmod 0755 /usr/local/bin/run_claude_code_check.sh
+
+USER claude
+WORKDIR /workspace
+
+ENV CI=true \
+    HOME=/home/claude
+
+ENTRYPOINT ["/usr/local/bin/run_claude_code_check.sh"]

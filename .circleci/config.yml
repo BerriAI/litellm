@@ -2006,6 +2006,70 @@ jobs:
       - store_test_results:
           path: test-results
 
+  proxy_e2e_claude_code_tests:
+    machine:
+      image: ubuntu-2204:2024.04.1
+    resource_class: large
+    working_directory: ~/project
+    steps:
+      - checkout
+      - setup_google_dns
+      - attach_workspace:
+          at: ~/project
+      - run:
+          name: Load Docker Database Image
+          command: |
+            zstd -d litellm-docker-database.tar.zst --stdout | docker load
+            docker images | grep litellm-docker-database
+      - run:
+          name: Load Claude Code client image
+          command: |
+            zstd -d claude-code-client.tar.zst --stdout | docker load
+            docker images | grep claude-code-client
+      - run:
+          name: Verify required container images stage
+          command: |
+            docker image inspect litellm-docker-database:ci >/dev/null
+            docker image inspect claude-code-client:ci >/dev/null
+            echo "LiteLLM and Claude Code images are ready"
+      - run:
+          name: Run Dockerized Claude Code E2E Tests
+          command: |
+            mkdir -p test-results
+            : "${LITELLM_MASTER_KEY:?Set LITELLM_MASTER_KEY in CircleCI project env vars.}"
+            : "${ANTHROPIC_API_KEY:?Set ANTHROPIC_API_KEY in CircleCI project env vars.}"
+            set +e
+            LITELLM_IMAGE=litellm-docker-database:ci \
+              CLAUDE_CODE_IMAGE=claude-code-client:ci \
+              LITELLM_SKIP_BUILD=true \
+              CLAUDE_CODE_SKIP_BUILD=true \
+              LITELLM_MASTER_KEY="${LITELLM_MASTER_KEY}" \
+              tests/proxy_e2e_anthropic_messages_tests/claude_code/run_claude_code_docker_test.sh
+            status=$?
+            if [ "$status" -eq 0 ]; then
+              printf '%s\n' \
+                '<?xml version="1.0" encoding="UTF-8"?>' \
+                '<testsuite name="proxy_e2e_anthropic_messages_tests" tests="1" failures="0">' \
+                '  <testcase classname="claude_code_docker" name="claude_code_through_litellm"/>' \
+                '</testsuite>' \
+                > test-results/junit.xml
+            else
+              printf '%s\n' \
+                '<?xml version="1.0" encoding="UTF-8"?>' \
+                '<testsuite name="proxy_e2e_anthropic_messages_tests" tests="1" failures="1">' \
+                '  <testcase classname="claude_code_docker" name="claude_code_through_litellm">' \
+                '    <failure message="Dockerized Claude Code E2E test failed">See CircleCI job output for Docker and LiteLLM logs.</failure>' \
+                '  </testcase>' \
+                '</testsuite>' \
+                > test-results/junit.xml
+            fi
+            exit "$status"
+          no_output_timeout: 15m
+
+      # Store test results
+      - store_test_results:
+          path: test-results
+
   upload-coverage:
     docker:
       - *python312_image
@@ -2247,6 +2311,29 @@ jobs:
           paths:
             - litellm-docker-database.tar.zst
 
+  build_claude_code_client_image:
+    machine:
+      image: ubuntu-2204:2024.04.1
+    resource_class: medium
+    working_directory: ~/project
+    steps:
+      - checkout
+      - run:
+          name: Build Claude Code client image
+          command: |
+            docker build \
+              -t claude-code-client:ci \
+              -f tests/proxy_e2e_anthropic_messages_tests/claude_code/Dockerfile.claude-code \
+              tests/proxy_e2e_anthropic_messages_tests/claude_code
+      - run:
+          name: Save Claude Code image to workspace root
+          command: |
+            docker save claude-code-client:ci | zstd -1 -T0 > claude-code-client.tar.zst
+      - persist_to_workspace:
+          root: .
+          paths:
+            - claude-code-client.tar.zst
+
 
   test_bad_database_url:
     machine:
@@ -2320,6 +2407,8 @@ workflows:
           filters: *main_branches
       - build_docker_database_image:
           filters: *main_branches
+      - build_claude_code_client_image:
+          filters: *main_branches
       - e2e_ui_testing:
           filters: *main_branches
       - build_and_test:
@@ -2355,6 +2444,11 @@ workflows:
       - proxy_e2e_anthropic_messages_tests:
           requires:
             - build_docker_database_image
+          filters: *main_branches
+      - proxy_e2e_claude_code_tests:
+          requires:
+            - build_docker_database_image
+            - build_claude_code_client_image
           filters: *main_branches
       - llm_translation_testing:
           filters: *main_branches
@@ -2426,3 +2520,4 @@ workflows:
           requires:
             - build_docker_database_image
           filters: *main_branches
+
