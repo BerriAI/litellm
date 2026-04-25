@@ -2,10 +2,25 @@
 Utils used for litellm.ahealth_check()
 """
 
+from typing import Iterable, Optional
 
-def _filter_model_params(model_params: dict) -> dict:
-    """Remove 'messages' param from model params."""
-    return {k: v for k, v in model_params.items() if k != "messages"}
+
+def _filter_model_params(
+    model_params: dict, additional_keys_to_remove: Optional[Iterable[str]] = None
+) -> dict:
+    """Remove 'messages' (and any additional caller-supplied keys) from model params.
+
+    `_update_litellm_params_for_health_check` injects chat-completion-only fields
+    (`messages`, `max_tokens`) into every deployment's params before dispatch. Most
+    handlers only need `messages` stripped, but non-chat handlers (image/video
+    generation, embedding, transcription, etc.) need `max_tokens` stripped too —
+    OpenAI's image endpoints reject it with 400, breaking health checks for
+    `dall-e-*` / `gpt-image-1`.
+    """
+    keys_to_remove = {"messages"}
+    if additional_keys_to_remove:
+        keys_to_remove.update(additional_keys_to_remove)
+    return {k: v for k, v in model_params.items() if k not in keys_to_remove}
 
 
 def _create_health_check_response(response_headers: dict) -> dict:

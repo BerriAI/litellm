@@ -140,3 +140,71 @@ async def test_ahealth_check_failure_masks_raw_request_headers():
         assert headers["Content-Type"] == "application/json"
 
     print(f"Masked Authorization header: {headers.get('Authorization', 'NOT FOUND')}")
+
+
+def test_filter_model_params_strips_messages_only_by_default():
+    """Default behavior: only `messages` is stripped (chat-completion-shaped handlers)."""
+    from litellm.litellm_core_utils.health_check_utils import _filter_model_params
+
+    params = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "x"}],
+        "max_tokens": 50,
+        "api_key": "sk-test",
+    }
+    out = _filter_model_params(model_params=params)
+    assert "messages" not in out
+    assert out["max_tokens"] == 50
+    assert out["model"] == "gpt-4"
+    assert out["api_key"] == "sk-test"
+
+
+def test_filter_model_params_strips_additional_keys_for_non_chat():
+    """Non-chat handlers pass `additional_keys_to_remove={"max_tokens"}` so OpenAI image
+    endpoints don't reject the request with 400 Unknown parameter (issue #26406)."""
+    from litellm.litellm_core_utils.health_check_utils import _filter_model_params
+
+    params = {
+        "model": "openai/dall-e-3",
+        "messages": [{"role": "user", "content": "x"}],
+        "max_tokens": 50,
+        "api_key": "sk-test",
+    }
+    out = _filter_model_params(
+        model_params=params, additional_keys_to_remove={"max_tokens"}
+    )
+    assert "messages" not in out
+    assert "max_tokens" not in out
+    assert out["model"] == "openai/dall-e-3"
+    assert out["api_key"] == "sk-test"
+
+
+def test_image_generation_handler_does_not_forward_max_tokens():
+    """Regression for #26406: image_generation handler must not pass max_tokens."""
+    captured: dict = {}
+
+    async def fake_aimage_generation(**kwargs):
+        captured.update(kwargs)
+        return MagicMock()
+
+    model_params = {
+        "model": "openai/dall-e-3",
+        "messages": [{"role": "user", "content": "x"}],
+        "max_tokens": 50,
+        "api_key": "sk-test",
+    }
+    with patch("litellm.aimage_generation", new=fake_aimage_generation):
+        handlers = HealthCheckHelpers.get_mode_handlers(
+            model="openai/dall-e-3",
+            custom_llm_provider="openai",
+            model_params=model_params,
+            prompt="test",
+        )
+        import asyncio
+
+        asyncio.run(handlers["image_generation"]())
+
+    assert "max_tokens" not in captured
+    assert "messages" not in captured
+    assert captured["prompt"] == "test"
+    assert captured["model"] == "openai/dall-e-3"

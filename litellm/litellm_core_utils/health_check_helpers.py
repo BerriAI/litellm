@@ -152,6 +152,16 @@ class HealthCheckHelpers:
         from litellm.litellm_core_utils.health_check_utils import _filter_model_params
         from litellm.realtime_api.main import _realtime_health_check
 
+        # Non-chat endpoints (image/video/audio/embedding/rerank/ocr) reject
+        # `max_tokens` — see _filter_model_params docstring.
+        non_chat_extra_keys = {"max_tokens"}
+
+        def _non_chat_filter() -> dict:
+            return _filter_model_params(
+                model_params=model_params,
+                additional_keys_to_remove=non_chat_extra_keys,
+            )
+
         return {
             "chat": lambda: litellm.acompletion(
                 **model_params,
@@ -161,35 +171,30 @@ class HealthCheckHelpers:
                 prompt=prompt or "test",
             ),
             "embedding": lambda: litellm.aembedding(
-                **_filter_model_params(model_params=model_params),
+                **_non_chat_filter(),
                 input=input or ["test"],
             ),
             "audio_speech": lambda: litellm.aspeech(
                 **{
-                    **_filter_model_params(model_params=model_params),
-                    **(
-                        {"voice": "alloy"}
-                        if "voice"
-                        not in _filter_model_params(model_params=model_params)
-                        else {}
-                    ),
+                    **_non_chat_filter(),
+                    **({"voice": "alloy"} if "voice" not in _non_chat_filter() else {}),
                 },
                 input=prompt or "test",
             ),
             "audio_transcription": lambda: litellm.atranscription(
-                **_filter_model_params(model_params=model_params),
+                **_non_chat_filter(),
                 file=get_audio_file_for_health_check(),
             ),
             "image_generation": lambda: litellm.aimage_generation(
-                **_filter_model_params(model_params=model_params),
+                **_non_chat_filter(),
                 prompt=prompt,
             ),
             "video_generation": lambda: litellm.avideo_generation(
-                **_filter_model_params(model_params=model_params),
+                **_non_chat_filter(),
                 prompt=prompt or "test video generation",
             ),
             "rerank": lambda: litellm.arerank(
-                **_filter_model_params(model_params=model_params),
+                **_non_chat_filter(),
                 query=prompt or "",
                 documents=["my sample text"],
             ),
@@ -203,14 +208,14 @@ class HealthCheckHelpers:
             "batch": lambda: HealthCheckHelpers._batch_health_check(
                 custom_llm_provider=custom_llm_provider,
                 model_params=model_params,
-                filtered_model_params=_filter_model_params(model_params=model_params),
+                filtered_model_params=_non_chat_filter(),
             ),
             "responses": lambda: litellm.aresponses(
                 **_filter_model_params(model_params=model_params),
                 input=prompt or "test",
             ),
             "ocr": lambda: litellm.aocr(
-                **_filter_model_params(model_params=model_params),
+                **_non_chat_filter(),
                 document={
                     "type": "document_url",
                     "document_url": TEST_PDF_URL,
