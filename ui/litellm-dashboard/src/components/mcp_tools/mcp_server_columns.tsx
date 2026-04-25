@@ -92,6 +92,7 @@ export const mcpServerColumns = (
   onByokConnect?: (server: MCPServer) => void,
   onRecheckHealth?: (serverId: string) => void,
   recheckingServerIds?: Set<string>,
+  onByokDisconnect?: (server: MCPServer) => void,
 ): ColumnDef<MCPServer>[] => [
   {
     accessorKey: "server_id",
@@ -270,19 +271,27 @@ export const mcpServerColumns = (
         return <span className="text-gray-300 text-xs">—</span>;
       }
       if (server.has_user_credential) {
+        const isInternalUser = userRole === "Internal User";
         return (
           <div className="flex items-center gap-2">
             <span className="inline-flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded-full bg-green-50 text-green-700 border border-green-200">
               <CheckOutlined style={{ fontSize: 10 }} /> Connected
             </span>
-            {onByokConnect && (
+            {isInternalUser && onByokDisconnect ? (
+              <button
+                className="text-xs text-gray-400 hover:text-red-600 transition-colors"
+                onClick={() => onByokDisconnect(server)}
+              >
+                Disconnect
+              </button>
+            ) : onByokConnect ? (
               <button
                 className="text-xs text-gray-400 hover:text-blue-600 transition-colors"
                 onClick={() => onByokConnect(server)}
               >
                 Update
               </button>
-            )}
+            ) : null}
           </div>
         );
       }
