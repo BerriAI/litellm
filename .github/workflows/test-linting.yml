@@ -2,7 +2,11 @@ name: LiteLLM Linting
 
 on:
   pull_request:
-    branches: [main]
+    branches:
+      - main
+      - litellm_internal_staging
+      - litellm_oss_branch
+      - "litellm_**"
 
 permissions:
   contents: read
@@ -24,26 +28,28 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install Poetry
-        run: pip install 'poetry==2.3.2'
+      - name: Set up uv
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
+        with:
+          version: "0.10.9"
 
       - name: Clean Python cache
         run: |
           find . -type d -name "__pycache__" -exec rm -rf {} + || true
           find . -name "*.pyc" -delete || true
 
-      - name: Check poetry.lock is up to date
+      - name: Check uv.lock is up to date
         run: |
-          poetry check --lock || (echo "❌ poetry.lock is out of sync with pyproject.toml. Run 'poetry lock' locally and commit the result." && exit 1)
+          uv lock --check || (echo "❌ uv.lock is out of sync with pyproject.toml. Run 'uv lock' locally and commit the result." && exit 1)
 
       - name: Install dependencies
         run: |
-          poetry install --with dev
+          uv sync --frozen
 
       - name: Check Black formatting
         run: |
           cd litellm
-          poetry run black --check --exclude '/enterprise/' .
+          uv run --no-sync black --check --exclude '/enterprise/' .
           cd ..
 
       - name: Debug - Check file state
@@ -58,28 +64,28 @@ jobs:
       - name: Run Ruff linting
         run: |
           cd litellm
-          poetry run ruff check .
+          uv run --no-sync ruff check .
           cd ..
 
       - name: Print OpenAI version
         run: |
-          poetry run python -c "import openai; print(f'OpenAI version: {openai.__version__}')"
+          uv run --no-sync python -c "import openai; print(f'OpenAI version: {openai.__version__}')"
 
       - name: Run MyPy type checking
         run: |
           cd litellm
-          poetry run mypy . 
+          uv run --no-sync mypy .
           cd ..
 
       - name: Check for circular imports
         run: |
           cd litellm
-          poetry run python ../tests/documentation_tests/test_circular_imports.py
+          uv run --no-sync python ../tests/documentation_tests/test_circular_imports.py
           cd ..
 
       - name: Check import safety
         run: |
-          poetry run python -c "from litellm import *" || (echo '🚨 import failed, this means you introduced unprotected imports! 🚨'; exit 1)
+          uv run --no-sync python -c "from litellm import *" || (echo '🚨 import failed, this means you introduced unprotected imports! 🚨'; exit 1)
 
   secret-scan:
     runs-on: ubuntu-latest
@@ -98,18 +104,21 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Set up uv
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
+        with:
+          version: "0.10.9"
+
       - name: Run secret scan test
         run: |
-          pip install 'pytest==9.0.2'
-          pytest tests/litellm/test_no_hardcoded_secrets.py -v
+          uv run --frozen --with 'pytest==9.0.2' pytest tests/litellm/test_no_hardcoded_secrets.py -v
 
       - name: Run ggshield secret scan
         env:
           GITGUARDIAN_API_KEY: ${{ secrets.GITGUARDIAN_API_KEY }}
         run: |
           if [ -n "$GITGUARDIAN_API_KEY" ]; then
-            pip install 'ggshield==1.48.0'
-            ggshield secret scan repo .
+            uv tool run --from 'ggshield==1.48.0' ggshield secret scan repo .
           else
             echo "GITGUARDIAN_API_KEY not set, skipping ggshield scan"
           fi
