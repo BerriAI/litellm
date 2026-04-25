@@ -65,12 +65,13 @@ def test_excluded_keys_exact_match():
     # Non-sensitive keys should remain unchanged
     assert masked["port"] == 6379
 
-    # Test case sensitivity - excluded_keys should be exact match
+    # Test case sensitivity - excluded_keys should be exact match. Supplying an
+    # uppercase variant must NOT exclude the lowercase key, so the field falls
+    # back to pattern matching ("credentials" is in the sensitive pattern set)
+    # and is masked.
     masked = masker.mask_dict(data, excluded_keys={"LITELLM_CREDENTIALS_NAME"})
-    # Should still be masked because case doesn't match (exact match required)
-    assert (
-        masked["litellm_credentials_name"] == "my-credential-name"
-    )  # Not masked because it doesn't match patterns anyway
+    assert masked["litellm_credentials_name"] != "my-credential-name"
+    assert "*" in masked["litellm_credentials_name"]
 
     # Test with api_key in excluded_keys to verify it works for keys that would be masked
     masked = masker.mask_dict(data, excluded_keys={"api_key"})
