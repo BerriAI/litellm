@@ -1951,6 +1951,78 @@ class TestRedactSensitiveLitellmParams:
         _redact_sensitive_litellm_params(original)
         assert original == snapshot, "input dict must not be mutated"
 
+    def test_redacts_nested_credentials_in_embedding_config(self):
+        """
+        ``/vector_store/new`` and ``/vector_store/update`` auto-resolve
+        ``litellm_embedding_config`` from the model registry and store it
+        as a nested dict inside ``litellm_params``. The nested dict carries
+        its own ``api_key`` / ``aws_*`` / ``vertex_credentials``, and a
+        non-recursive redactor would leak them.
+        """
+        from litellm.constants import REDACTED_BY_LITELM_STRING
+        from litellm.proxy.vector_store_endpoints.management_endpoints import (
+            _redact_sensitive_litellm_params,
+        )
+
+        params = {
+            "model": "openai/text-embedding-3-large",
+            "api_base": "https://api.openai.com/v1",
+            "litellm_embedding_config": {
+                "api_key": "sk-nested-secret",
+                "api_base": "https://nested.example.com",
+                "vertex_credentials": '{"private_key":"-----BEGIN..."}',
+            },
+        }
+        out = _redact_sensitive_litellm_params(params)
+        nested = out["litellm_embedding_config"]
+        assert nested["api_key"] == REDACTED_BY_LITELM_STRING
+        assert nested["vertex_credentials"] == REDACTED_BY_LITELM_STRING
+        assert nested["api_base"] == "https://nested.example.com"
+        # Top-level non-secrets preserved
+        assert out["api_base"] == "https://api.openai.com/v1"
+        assert out["model"] == "openai/text-embedding-3-large"
+
+    def test_redacts_json_string_litellm_params(self):
+        """
+        The in-memory registry occasionally holds ``litellm_params`` as a
+        JSON-serialized string rather than a dict. The redactor must parse,
+        redact, and re-serialize so callers don't get the raw string back.
+        """
+        import json as _json
+
+        from litellm.constants import REDACTED_BY_LITELM_STRING
+        from litellm.proxy.vector_store_endpoints.management_endpoints import (
+            _redact_sensitive_litellm_params,
+        )
+
+        params_json = _json.dumps(
+            {
+                "api_key": "sk-secret-from-json-string",
+                "api_base": "https://api.openai.com/v1",
+            }
+        )
+        out = _redact_sensitive_litellm_params(params_json)
+        assert isinstance(out, str)
+        parsed = _json.loads(out)
+        assert parsed["api_key"] == REDACTED_BY_LITELM_STRING
+        assert parsed["api_base"] == "https://api.openai.com/v1"
+
+    def test_redacts_unparseable_string_litellm_params(self):
+        """
+        If ``litellm_params`` is a string that isn't valid JSON, the
+        redactor must NOT echo the value back verbatim — it could contain
+        opaque credential material.
+        """
+        from litellm.constants import REDACTED_BY_LITELM_STRING
+        from litellm.proxy.vector_store_endpoints.management_endpoints import (
+            _redact_sensitive_litellm_params,
+        )
+
+        out = _redact_sensitive_litellm_params(
+            "this is not json but might contain a secret"
+        )
+        assert out == REDACTED_BY_LITELM_STRING
+
 
 class TestUpdateVectorStoreAccessControlAndRedaction:
     """
