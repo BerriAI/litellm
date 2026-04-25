@@ -2110,7 +2110,8 @@ async def test_streaming_post_call_output_passes_request_data_to_make_bedrock():
     input_calls = [
         c for c in mock_make.call_args_list if c.kwargs.get("source") == "INPUT"
     ]
-    assert len(input_calls) == 0
+    assert len(input_calls) == 1
+    assert input_calls[0].kwargs.get("request_data") is request_data
 
 
 @pytest.mark.asyncio

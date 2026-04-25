@@ -1247,19 +1247,58 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
 
             # Bedrock will raise an exception if this violates the guardrail policy
             ###################################################################
+            import asyncio
+
             output_guardrail_response: Optional[
                 Union[BedrockGuardrailResponse, str]
             ] = None
 
-            try:
-                output_guardrail_response = await self.make_bedrock_api_request(
+            # Mirror the non-streaming logic: only validate INPUT here if pre_call /
+            # during_call hasn't already done so.
+            should_validate_input = not (
+                self._event_hook_is_event_type(GuardrailEventHooks.pre_call)
+                or self._event_hook_is_event_type(GuardrailEventHooks.during_call)
+            )
+
+            new_messages: Optional[List[AllMessageValues]] = request_data.get(
+                "messages"
+            )
+
+            if should_validate_input and new_messages is not None:
+                input_filter = self._prepare_guardrail_messages_for_role(
+                    messages=new_messages
+                )
+                input_messages = input_filter.payload_messages or new_messages
+
+                input_task = self.make_bedrock_api_request(
+                    source="INPUT",
+                    messages=input_messages,
+                    request_data=request_data,
+                    logging_event_type=GuardrailEventHooks.post_call,
+                )
+                output_task = self.make_bedrock_api_request(
                     source="OUTPUT",
                     response=assembled_model_response,
                     request_data=request_data,
                     logging_event_type=GuardrailEventHooks.post_call,
                 )
-            except GuardrailInterventionNormalStringError as e:
-                output_guardrail_response = e.message
+
+                try:
+                    _, output_guardrail_response = await asyncio.gather(
+                        input_task, output_task
+                    )
+                except GuardrailInterventionNormalStringError as e:
+                    output_guardrail_response = e.message
+            else:
+                try:
+                    output_guardrail_response = await self.make_bedrock_api_request(
+                        source="OUTPUT",
+                        response=assembled_model_response,
+                        request_data=request_data,
+                        logging_event_type=GuardrailEventHooks.post_call,
+                    )
+                except GuardrailInterventionNormalStringError as e:
+                    output_guardrail_response = e.message
 
             #########################################################################
             ########## 2. Apply masking to response with output guardrail response ##########
