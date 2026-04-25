@@ -130,7 +130,9 @@ def _is_multimodal_input(input: EmbeddingInput) -> bool:
 
     for element in input:
         if isinstance(element, list):
-            if any(_is_multimodal_element(sub) for sub in element if isinstance(sub, str)):
+            if any(
+                _is_multimodal_element(sub) for sub in element if isinstance(sub, str)
+            ):
                 return True
         elif isinstance(element, str) and _is_multimodal_element(element):
             return True
@@ -363,13 +365,16 @@ def process_response(
         for e in input_list:
             if isinstance(e, list):
                 text_elements.extend(
-                    sub for sub in e
+                    sub
+                    for sub in e
                     if isinstance(sub, str) and not _is_multimodal_element(sub)
                 )
             elif isinstance(e, str) and not _is_multimodal_element(e):
                 text_elements.append(e)
         if text_elements:
-            input_text = get_formatted_prompt(data={"input": text_elements}, call_type="embedding")
+            input_text = get_formatted_prompt(
+                data={"input": text_elements}, call_type="embedding"
+            )
             prompt_tokens = token_counter(model=model, text=input_text)
         else:
             prompt_tokens = 0
