@@ -175,17 +175,19 @@ def test_load_results_rejects_missing_results_key(tmp_path):
         load_results(bad)
 
 
-def test_build_matrix_1x5_grid_matches_published_sample():
-    """Slice 2 acceptance: feeding the per-model results that the four
-    new provider tests produce reproduces the hand-authored 1x5 sample
-    that the docs page renders.
+def test_build_matrix_6x5_grid_matches_published_sample():
+    """Slice 5 acceptance: feeding the per-model results the full v0
+    row set produces reproduces the hand-authored 6x5 sample that the
+    docs page renders.
 
     Inputs mirror the structure of `compat-results.json` after a real
-    run with the proxy configured for all five columns:
+    run with the proxy configured for all five columns and all six
+    feature directories:
       - anthropic, bedrock_invoke, bedrock_converse, vertex_ai: three
-        per-model `pass` results each (Haiku, Sonnet, Opus).
-      - azure: three `not_applicable` results — Azure does not host
-        Claude, so the column is gray on every row.
+        per-model `pass` results each (Haiku, Sonnet, Opus) for every
+        feature.
+      - azure: three `not_applicable` results per feature; Azure does
+        not host Claude, so the column is gray on every row.
 
     The aggregated matrix must equal the checked-in
     `sample_compatibility-matrix.json` byte-for-byte (after JSON load),
@@ -194,6 +196,7 @@ def test_build_matrix_1x5_grid_matches_published_sample():
     repo_root = Path(__file__).resolve().parents[1]
     manifest = load_manifest(repo_root / "manifest.yaml")
 
+    feature_ids = [feature["id"] for feature in manifest["features"]]
     pass_providers = ["anthropic", "bedrock_invoke", "bedrock_converse", "vertex_ai"]
     models = ["claude-haiku-4-5", "claude-sonnet-4-6", "claude-opus-4-7"]
     azure_reason = (
@@ -202,31 +205,32 @@ def test_build_matrix_1x5_grid_matches_published_sample():
     )
 
     results = []
-    for provider in pass_providers:
+    for feature_id in feature_ids:
+        for provider in pass_providers:
+            for model in models:
+                results.append(
+                    {
+                        "feature_id": feature_id,
+                        "provider": provider,
+                        "nodeid": (
+                            f"tests/claude_code/{feature_id}/test_{provider}.py"
+                            f"::test[{model}]"
+                        ),
+                        "result": {"status": "pass"},
+                    }
+                )
         for model in models:
             results.append(
                 {
-                    "feature_id": "basic_messaging_non_streaming",
-                    "provider": provider,
+                    "feature_id": feature_id,
+                    "provider": "azure",
                     "nodeid": (
-                        f"tests/claude_code/basic_messaging_non_streaming/test_{provider}.py"
+                        f"tests/claude_code/{feature_id}/test_azure.py"
                         f"::test[{model}]"
                     ),
-                    "result": {"status": "pass"},
+                    "result": {"status": "not_applicable", "reason": azure_reason},
                 }
             )
-    for model in models:
-        results.append(
-            {
-                "feature_id": "basic_messaging_non_streaming",
-                "provider": "azure",
-                "nodeid": (
-                    "tests/claude_code/basic_messaging_non_streaming/test_azure.py"
-                    f"::test[{model}]"
-                ),
-                "result": {"status": "not_applicable", "reason": azure_reason},
-            }
-        )
 
     matrix = build_matrix(
         manifest=manifest,

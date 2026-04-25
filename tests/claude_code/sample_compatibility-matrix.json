@@ -32,6 +32,116 @@
           "reason": "Azure OpenAI Service does not host Anthropic Claude models. Route Claude requests through Anthropic, AWS Bedrock, or GCP Vertex AI."
         }
       }
+    },
+    {
+      "id": "basic_messaging_streaming",
+      "name": "Basic messaging (streaming)",
+      "providers": {
+        "anthropic": {
+          "status": "pass"
+        },
+        "bedrock_invoke": {
+          "status": "pass"
+        },
+        "bedrock_converse": {
+          "status": "pass"
+        },
+        "vertex_ai": {
+          "status": "pass"
+        },
+        "azure": {
+          "status": "not_applicable",
+          "reason": "Azure OpenAI Service does not host Anthropic Claude models. Route Claude requests through Anthropic, AWS Bedrock, or GCP Vertex AI."
+        }
+      }
+    },
+    {
+      "id": "tool_use",
+      "name": "Tool use",
+      "providers": {
+        "anthropic": {
+          "status": "pass"
+        },
+        "bedrock_invoke": {
+          "status": "pass"
+        },
+        "bedrock_converse": {
+          "status": "pass"
+        },
+        "vertex_ai": {
+          "status": "pass"
+        },
+        "azure": {
+          "status": "not_applicable",
+          "reason": "Azure OpenAI Service does not host Anthropic Claude models. Route Claude requests through Anthropic, AWS Bedrock, or GCP Vertex AI."
+        }
+      }
+    },
+    {
+      "id": "prompt_caching_5m",
+      "name": "Prompt caching (5m TTL)",
+      "providers": {
+        "anthropic": {
+          "status": "pass"
+        },
+        "bedrock_invoke": {
+          "status": "pass"
+        },
+        "bedrock_converse": {
+          "status": "pass"
+        },
+        "vertex_ai": {
+          "status": "pass"
+        },
+        "azure": {
+          "status": "not_applicable",
+          "reason": "Azure OpenAI Service does not host Anthropic Claude models. Route Claude requests through Anthropic, AWS Bedrock, or GCP Vertex AI."
+        }
+      }
+    },
+    {
+      "id": "vision",
+      "name": "Vision",
+      "providers": {
+        "anthropic": {
+          "status": "pass"
+        },
+        "bedrock_invoke": {
+          "status": "pass"
+        },
+        "bedrock_converse": {
+          "status": "pass"
+        },
+        "vertex_ai": {
+          "status": "pass"
+        },
+        "azure": {
+          "status": "not_applicable",
+          "reason": "Azure OpenAI Service does not host Anthropic Claude models. Route Claude requests through Anthropic, AWS Bedrock, or GCP Vertex AI."
+        }
+      }
+    },
+    {
+      "id": "extended_thinking",
+      "name": "Extended thinking",
+      "providers": {
+        "anthropic": {
+          "status": "pass"
+        },
+        "bedrock_invoke": {
+          "status": "pass"
+        },
+        "bedrock_converse": {
+          "status": "pass"
+        },
+        "vertex_ai": {
+          "status": "pass"
+        },
+        "azure": {
+          "status": "not_applicable",
+          "reason": "Azure OpenAI Service does not host Anthropic Claude models. Route Claude requests through Anthropic, AWS Bedrock, or GCP Vertex AI."
+        }
+      }
     }
   ]
 }
