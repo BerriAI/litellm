@@ -2041,6 +2041,7 @@ jobs:
             set +e
             LITELLM_IMAGE=litellm-docker-database:ci \
               CLAUDE_CODE_IMAGE=claude-code-client:ci \
+              UPSTREAM_PROVIDER=anthropic \
               LITELLM_SKIP_BUILD=true \
               CLAUDE_CODE_SKIP_BUILD=true \
               LITELLM_MASTER_KEY="${LITELLM_MASTER_KEY}" \
@@ -2059,6 +2060,78 @@ jobs:
                 '<testsuite name="proxy_e2e_anthropic_messages_tests" tests="1" failures="1">' \
                 '  <testcase classname="claude_code_docker" name="claude_code_through_litellm">' \
                 '    <failure message="Dockerized Claude Code E2E test failed">See CircleCI job output for Docker and LiteLLM logs.</failure>' \
+                '  </testcase>' \
+                '</testsuite>' \
+                > test-results/junit.xml
+            fi
+            exit "$status"
+          no_output_timeout: 15m
+
+      # Store test results
+      - store_test_results:
+          path: test-results
+
+  proxy_e2e_claude_code_bedrock_tests:
+    machine:
+      image: ubuntu-2204:2024.04.1
+    resource_class: large
+    working_directory: ~/project
+    steps:
+      - checkout
+      - setup_google_dns
+      - attach_workspace:
+          at: ~/project
+      - run:
+          name: Load Docker Database Image
+          command: |
+            zstd -d litellm-docker-database.tar.zst --stdout | docker load
+            docker images | grep litellm-docker-database
+      - run:
+          name: Load Claude Code client image
+          command: |
+            zstd -d claude-code-client.tar.zst --stdout | docker load
+            docker images | grep claude-code-client
+      - run:
+          name: Verify required container images stage
+          command: |
+            docker image inspect litellm-docker-database:ci >/dev/null
+            docker image inspect claude-code-client:ci >/dev/null
+            echo "LiteLLM and Claude Code images are ready"
+      - run:
+          name: Run Dockerized Claude Code Bedrock E2E Tests
+          command: |
+            mkdir -p test-results
+            : "${LITELLM_MASTER_KEY:?Set LITELLM_MASTER_KEY in CircleCI project env vars.}"
+            : "${AWS_ACCESS_KEY_ID:?Set AWS_ACCESS_KEY_ID in CircleCI project env vars.}"
+            : "${AWS_SECRET_ACCESS_KEY:?Set AWS_SECRET_ACCESS_KEY in CircleCI project env vars.}"
+            : "${AWS_REGION_NAME:?Set AWS_REGION_NAME in CircleCI project env vars.}"
+            set +e
+            LITELLM_IMAGE=litellm-docker-database:ci \
+              CLAUDE_CODE_IMAGE=claude-code-client:ci \
+              UPSTREAM_PROVIDER=bedrock \
+              MODEL_NAME=claude-bedrock-sonnet \
+              LITELLM_UPSTREAM_MODEL=bedrock/us.anthropic.claude-3-5-sonnet-20241022-v2:0 \
+              LITELLM_SKIP_BUILD=true \
+              CLAUDE_CODE_SKIP_BUILD=true \
+              LITELLM_MASTER_KEY="${LITELLM_MASTER_KEY}" \
+              AWS_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID}" \
+              AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY}" \
+              AWS_REGION_NAME="${AWS_REGION_NAME}" \
+              tests/proxy_e2e_anthropic_messages_tests/claude_code/run_claude_code_docker_test.sh
+            status=$?
+            if [ "$status" -eq 0 ]; then
+              printf '%s\n' \
+                '<?xml version="1.0" encoding="UTF-8"?>' \
+                '<testsuite name="proxy_e2e_claude_code_bedrock_tests" tests="1" failures="0">' \
+                '  <testcase classname="claude_code_docker" name="claude_code_through_litellm_bedrock"/>' \
+                '</testsuite>' \
+                > test-results/junit.xml
+            else
+              printf '%s\n' \
+                '<?xml version="1.0" encoding="UTF-8"?>' \
+                '<testsuite name="proxy_e2e_claude_code_bedrock_tests" tests="1" failures="1">' \
+                '  <testcase classname="claude_code_docker" name="claude_code_through_litellm_bedrock">' \
+                '    <failure message="Dockerized Claude Code Bedrock E2E test failed">See CircleCI job output for Docker and LiteLLM logs.</failure>' \
                 '  </testcase>' \
                 '</testsuite>' \
                 > test-results/junit.xml
@@ -2446,6 +2519,11 @@ workflows:
             - build_docker_database_image
           filters: *main_branches
       - proxy_e2e_claude_code_tests:
+          requires:
+            - build_docker_database_image
+            - build_claude_code_client_image
+          filters: *main_branches
+      - proxy_e2e_claude_code_bedrock_tests:
           requires:
             - build_docker_database_image
             - build_claude_code_client_image

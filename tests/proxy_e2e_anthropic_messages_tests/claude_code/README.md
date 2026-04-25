@@ -1,6 +1,6 @@
 # Claude Code LiteLLM E2E Test
 
-This V0 test validates the customer-critical Claude Code -> LiteLLM -> Anthropic path in CircleCI.
+This test validates the customer-critical Claude Code -> LiteLLM path in CircleCI for Anthropic and Bedrock upstream providers.
 
 ## What It Covers
 
@@ -9,13 +9,14 @@ This V0 test validates the customer-critical Claude Code -> LiteLLM -> Anthropic
 - Builds a separate Claude Code client container.
 - Runs Claude Code as a non-root user with only the LiteLLM proxy key.
 - Points Claude Code at LiteLLM via `ANTHROPIC_BASE_URL`.
-- Verifies the configured Anthropic model is visible from `/v1/models`.
+- Verifies the configured model alias is visible from `/v1/models`.
 - Sends back-to-back Claude Code prompts through LiteLLM and validates both responses.
 - Sends a direct Anthropic Messages API request through LiteLLM and checks proxy response headers:
   - `x-litellm-call-id`
   - `x-litellm-response-cost`
 
 The direct `/v1/messages` header check gives a clear proxy-side signal that LiteLLM handled and accounted for the request, instead of only proving the client printed text.
+For Bedrock, LiteLLM still exposes an Anthropic-compatible interface to Claude Code while routing upstream via Bedrock credentials.
 
 ## Claude Code Version Policy
 
@@ -27,7 +28,7 @@ Set `CLAUDE_CODE_VERSION=<version>` to test a specific version locally or in a f
 
 ## Running Locally
 
-Set `ANTHROPIC_API_KEY` in the environment or in `tests/proxy_e2e_anthropic_messages_tests/claude_code/.env`, then run:
+Set provider credentials in the environment or in `tests/proxy_e2e_anthropic_messages_tests/claude_code/.env`, then run:
 
 ```bash
 tests/proxy_e2e_anthropic_messages_tests/claude_code/run_claude_code_docker_test.sh
@@ -38,9 +39,22 @@ Useful overrides:
 ```bash
 MODEL_NAME=claude-sonnet-4-6
 LITELLM_UPSTREAM_MODEL=anthropic/claude-sonnet-4-6
+UPSTREAM_PROVIDER=anthropic
 CLAUDE_CODE_IMAGE=litellm-claude-code-client:local
 CLAUDE_CODE_VERSION=latest
 KEEP_CONTAINERS=1
+```
+
+Bedrock example:
+
+```bash
+UPSTREAM_PROVIDER=bedrock
+MODEL_NAME=claude-bedrock-sonnet
+LITELLM_UPSTREAM_MODEL=bedrock/us.anthropic.claude-3-5-sonnet-20241022-v2:0
+AWS_ACCESS_KEY_ID=...
+AWS_SECRET_ACCESS_KEY=...
+AWS_REGION_NAME=us-east-1
+tests/proxy_e2e_anthropic_messages_tests/claude_code/run_claude_code_docker_test.sh
 ```
 
 In CircleCI, the job sets `LITELLM_IMAGE=litellm-docker-database:ci` and `LITELLM_SKIP_BUILD=true` so the test uses the LiteLLM image already built from the checked-out commit.
@@ -52,8 +66,7 @@ The CircleCI job now has explicit component stages before test execution:
 
 ## Intentionally Left Out Of V0
 
-- Bedrock and other providers. Those belong in V1 after the Anthropic path is stable.
-- Back-to-back session behavior. V0 proves the request path works; V1 can add repeated requests and long-running session checks.
+- Vertex and Azure provider coverage. Those belong in a follow-up matrix after Anthropic + Bedrock.
 - Tool-use assertions. Claude Code can invoke tools in richer scenarios, but V0 keeps the signal focused on proxy compatibility and real Anthropic request success.
 - A Claude Code version matrix. The Dockerfile supports `CLAUDE_CODE_VERSION`, but the default CI path tests one recent version to keep cost and flake surface low.
 

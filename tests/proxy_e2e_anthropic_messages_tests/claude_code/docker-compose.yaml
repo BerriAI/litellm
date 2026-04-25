@@ -23,7 +23,11 @@ services:
     environment:
       DATABASE_URL: postgresql://litellm:litellm@postgres:5432/litellm
       LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:-sk-darcy-sf-onsite-interview}
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:?ANTHROPIC_API_KEY is required}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      AWS_REGION_NAME: ${AWS_REGION_NAME:-}
+      AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN:-}
       LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS: "True"
     volumes:
       - ${CLAUDE_CODE_LITELLM_CONFIG:?CLAUDE_CODE_LITELLM_CONFIG is required}:/app/config.yaml:ro

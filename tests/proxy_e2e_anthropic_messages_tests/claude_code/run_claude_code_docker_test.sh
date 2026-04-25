@@ -4,11 +4,13 @@ set -euo pipefail
 # Dockerized Claude Code + LiteLLM integration test.
 #
 # Required:
-#   ANTHROPIC_API_KEY or tests/proxy_e2e_anthropic_messages_tests/claude_code/.env
+#   For anthropic: ANTHROPIC_API_KEY or tests/proxy_e2e_anthropic_messages_tests/claude_code/.env
+#   For bedrock: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION_NAME
 #
 # Optional:
-#   MODEL_NAME=claude-sonnet-4-6
-#   LITELLM_UPSTREAM_MODEL=anthropic/${MODEL_NAME}
+#   UPSTREAM_PROVIDER=anthropic|bedrock (default anthropic)
+#   MODEL_NAME=<litellm model alias>
+#   LITELLM_UPSTREAM_MODEL=<provider upstream model>
 #   LITELLM_IMAGE=litellm-claude-code-e2e:local
 #   CLAUDE_CODE_IMAGE=litellm-claude-code-client:local
 #   LITELLM_SKIP_BUILD=true
@@ -19,8 +21,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 COMPOSE_FILE="${SCRIPT_DIR}/docker-compose.yaml"
 ENV_FILE="${SCRIPT_DIR}/.env"
+UPSTREAM_PROVIDER="${UPSTREAM_PROVIDER:-anthropic}"
 MODEL_NAME="${MODEL_NAME:-claude-sonnet-4-6}"
-LITELLM_UPSTREAM_MODEL="${LITELLM_UPSTREAM_MODEL:-anthropic/${MODEL_NAME}}"
 LITELLM_MASTER_KEY="${LITELLM_MASTER_KEY:-sk-darcy-sf-onsite-interview}"
 PROXY_PORT="${PROXY_PORT:-4000}"
 PROXY_URL="http://127.0.0.1:${PROXY_PORT}"
@@ -47,8 +49,17 @@ if [[ -f "${ENV_FILE}" ]]; then
   source "${ENV_FILE}"
 fi
 
-if [[ -z "${ANTHROPIC_API_KEY:-}" ]]; then
-  echo "ANTHROPIC_API_KEY is required in the environment or ${ENV_FILE}"
+if [[ "${UPSTREAM_PROVIDER}" == "anthropic" ]]; then
+  if [[ -z "${ANTHROPIC_API_KEY:-}" ]]; then
+    echo "ANTHROPIC_API_KEY is required for UPSTREAM_PROVIDER=anthropic (env or ${ENV_FILE})"
+    exit 1
+  fi
+elif [[ "${UPSTREAM_PROVIDER}" == "bedrock" ]]; then
+  : "${AWS_ACCESS_KEY_ID:?AWS_ACCESS_KEY_ID is required for UPSTREAM_PROVIDER=bedrock}"
+  : "${AWS_SECRET_ACCESS_KEY:?AWS_SECRET_ACCESS_KEY is required for UPSTREAM_PROVIDER=bedrock}"
+  : "${AWS_REGION_NAME:?AWS_REGION_NAME is required for UPSTREAM_PROVIDER=bedrock}"
+else
+  echo "Unsupported UPSTREAM_PROVIDER=${UPSTREAM_PROVIDER}. Use anthropic or bedrock."
   exit 1
 fi
 
@@ -102,12 +113,26 @@ if [[ "$(is_port_available "${PROXY_PORT}")" != "yes" ]]; then
   echo "Using fallback PROXY_PORT=${PROXY_PORT}"
 fi
 
-cat >"${CLAUDE_CODE_LITELLM_CONFIG}" <<EOF
+if [[ "${UPSTREAM_PROVIDER}" == "bedrock" ]]; then
+  LITELLM_UPSTREAM_MODEL="${LITELLM_UPSTREAM_MODEL:-bedrock/us.anthropic.claude-3-5-sonnet-20241022-v2:0}"
+  cat >"${CLAUDE_CODE_LITELLM_CONFIG}" <<EOF
+model_list:
+  - model_name: ${MODEL_NAME}
+    litellm_params:
+      model: ${LITELLM_UPSTREAM_MODEL}
+EOF
+else
+  LITELLM_UPSTREAM_MODEL="${LITELLM_UPSTREAM_MODEL:-anthropic/${MODEL_NAME}}"
+  cat >"${CLAUDE_CODE_LITELLM_CONFIG}" <<EOF
 model_list:
   - model_name: ${MODEL_NAME}
     litellm_params:
       model: ${LITELLM_UPSTREAM_MODEL}
       api_key: os.environ/ANTHROPIC_API_KEY
+EOF
+fi
+
+cat >>"${CLAUDE_CODE_LITELLM_CONFIG}" <<EOF
 
 general_settings:
   forward_client_headers_to_llm_api: true
@@ -118,13 +143,19 @@ litellm_settings:
   modify_params: true
 EOF
 
-export ANTHROPIC_API_KEY
+export ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-}"
+export AWS_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID:-}"
+export AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY:-}"
+export AWS_REGION_NAME="${AWS_REGION_NAME:-}"
+export AWS_SESSION_TOKEN="${AWS_SESSION_TOKEN:-}"
 export CLAUDE_CODE_LITELLM_CONFIG
 export LITELLM_IMAGE="${LITELLM_IMAGE:-litellm-claude-code-e2e:local}"
 export CLAUDE_CODE_IMAGE="${CLAUDE_CODE_IMAGE:-litellm-claude-code-client:local}"
 export LITELLM_MASTER_KEY
 export MODEL_NAME
+export LITELLM_UPSTREAM_MODEL
 export PROXY_PORT
+export UPSTREAM_PROVIDER
 
 echo "[0/5] Preparing Docker images..."
 if [[ "${LITELLM_SKIP_BUILD:-}" == "true" && "${CLAUDE_CODE_SKIP_BUILD:-}" == "true" ]]; then
