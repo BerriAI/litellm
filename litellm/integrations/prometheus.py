@@ -265,6 +265,20 @@ class PrometheusLogger(CustomLogger):
             ########################################
             # LiteLLM Virtual API KEY metrics
             ########################################
+
+            # Auth DB load diagnostic: count direct combined_view SQL queries.
+            # Each increment means a virtual-key cache miss that hit the DB.
+            # Useful for validating that enable_redis_auth_cache is working.
+            self.litellm_auth_combined_view_queries_total = self._counter_factory(
+                "litellm_auth_combined_view_queries_total",
+                "Number of times the combined_view SQL query was issued for virtual-key auth. "
+                "Each count is a cache miss that hit the database. Use to validate "
+                "enable_redis_auth_cache is reducing DB load.",
+                labelnames=self.get_labels_for_metric(
+                    "litellm_auth_combined_view_queries_total"
+                ),
+            )
+
             # Remaining MODEL RPM limit for API Key
             self.litellm_remaining_api_key_requests_for_model = self._gauge_factory(
                 "litellm_remaining_api_key_requests_for_model",
