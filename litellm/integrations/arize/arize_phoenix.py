@@ -5,6 +5,7 @@ from litellm._logging import verbose_logger
 from litellm.integrations.arize import _utils
 from litellm.integrations.arize._utils import ArizeOTELAttributes
 from litellm.types.integrations.arize_phoenix import ArizePhoenixConfig
+from opentelemetry import trace as _trace
 
 if TYPE_CHECKING:
     from opentelemetry.sdk.trace import TracerProvider
@@ -86,6 +87,18 @@ class ArizePhoenixLogger(OpenTelemetry):  # type: ignore
         primary ``otel`` callback which handles proxy-level parent spans.
         """
         pass
+
+    async def async_post_call_success_hook(
+        self,
+        data,
+        user_api_key_dict,
+        response,
+    ):
+        """
+        skipping this hook prevents both the orphan and the duplicate guardrail spans.
+        already handled in global tracer provider
+        """
+        return response
 
     def set_attributes(self, span: Span, kwargs, response_obj: Optional[Any]):
         ArizePhoenixLogger.set_arize_phoenix_attributes(span, kwargs, response_obj)
@@ -221,15 +234,26 @@ class ArizePhoenixLogger(OpenTelemetry):  # type: ignore
         # Raw-request sub-span (if enabled) — must be created before
         # ending the parent span so the hierarchy is valid.
         self._maybe_log_raw_request(kwargs, response_obj, start_time, end_time, span)
+
+        # Guardrail context: in proxy mode it's a sibling of litellm_request
+        # under litellm_proxy_request. In SDK mode there is no proxy parent,
+        # so we parent it to the litellm_request span to avoid an orphan.
+        guardrail_ctx = (
+            ctx if parent_span is not None else _trace.set_span_in_context(span)
+        )
+
         span.end(end_time=self._to_ns(end_time))
 
-        # Guardrail span
-        self._create_guardrail_span(kwargs=kwargs, context=ctx)
+        # Guardrail span (always parented — no orphan roots)
+        self._create_guardrail_span(kwargs=kwargs, context=guardrail_ctx)
 
-        # Annotate and close our proxy parent span
+        # Annotate and close our proxy parent span.
+        # Only session/request metadata goes on the parent — the child span
+        # already carries the full LLM payload (messages, tokens, response).
+        # Duplicating them here double-counts tokens.
         if parent_span is not None:
             parent_span.set_status(Status(StatusCode.OK))
-            self.set_attributes(parent_span, kwargs, response_obj)
+            _utils.set_parent_span_attributes(parent_span, kwargs, response_obj)
             parent_span.end(end_time=self._to_ns(end_time))
 
         # Metrics & cost recording
@@ -263,15 +287,22 @@ class ArizePhoenixLogger(OpenTelemetry):  # type: ignore
         span.set_status(Status(StatusCode.ERROR))
         self.set_attributes(span, kwargs, response_obj)
         self._record_exception_on_span(span=span, kwargs=kwargs)
+
+        # See _handle_success for guardrail context rationale.
+        guardrail_ctx = (
+            ctx if parent_span is not None else _trace.set_span_in_context(span)
+        )
+
         span.end(end_time=self._to_ns(end_time))
 
-        # Guardrail span
-        self._create_guardrail_span(kwargs=kwargs, context=ctx)
+        # Guardrail span (always parented, no orphan roots)
+        self._create_guardrail_span(kwargs=kwargs, context=guardrail_ctx)
 
-        # Annotate and close our proxy parent span
+        # Annotate and close our proxy parent span (see _handle_success for
+        # why only parent-scoped attributes go here).
         if parent_span is not None:
             parent_span.set_status(Status(StatusCode.ERROR))
-            self.set_attributes(parent_span, kwargs, response_obj)
+            _utils.set_parent_span_attributes(parent_span, kwargs, response_obj)
             self._record_exception_on_span(span=parent_span, kwargs=kwargs)
             parent_span.end(end_time=self._to_ns(end_time))
 
