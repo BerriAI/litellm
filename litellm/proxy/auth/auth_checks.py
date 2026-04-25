@@ -658,6 +658,7 @@ async def common_checks(  # noqa: PLR0915
                 team_object=team_object,
                 valid_token=valid_token,
                 model=_model,
+                llm_router=llm_router,
             )
 
         # 5. If end_user ('user' passed to /chat/completions, /embeddings endpoint) is in budget
@@ -3343,6 +3344,7 @@ async def _check_team_member_model_budget(
     team_object: Optional[LiteLLM_TeamTable],
     valid_token: Optional[UserAPIKeyAuth],
     model: Optional[Union[str, List[str]]],
+    llm_router: Optional[Router],
 ):
     """
     Check if a team member has exceeded their per-model budget for this team.
@@ -3350,7 +3352,7 @@ async def _check_team_member_model_budget(
     The per-model limits are set at the team level via team_member_model_max_budget
     (stored in team metadata) and apply to each member independently.
     Spend is tracked via the spend counter cache keyed by
-    spend:team_member:{user_id}:{team_id}:model:{model}.
+    spend:team_member:team_id::{team_id}::user_id::{user_id}::model::{model}.
     """
     if (
         team_object is None
@@ -3374,13 +3376,27 @@ async def _check_team_member_model_budget(
         return
 
     from litellm.proxy.proxy_server import (
+        _get_team_member_model_counter_key,
         _reseed_spend_from_db,
         get_current_spend,
-        spend_counter_cache,
     )
 
-    for model_str in models_to_check:
-        model_budget_config = team_member_model_max_budget.get(model_str)
+    for requested_model_str in models_to_check:
+        counter_model = requested_model_str
+        if requested_model_str in litellm.model_alias_map:
+            counter_model = litellm.model_alias_map[requested_model_str]
+        elif (
+            llm_router is not None
+            and isinstance(llm_router.model_group_alias, dict)
+            and requested_model_str in llm_router.model_group_alias
+        ):
+            resolved_model = llm_router._get_model_from_alias(requested_model_str)
+            if resolved_model:
+                counter_model = resolved_model
+
+        model_budget_config = team_member_model_max_budget.get(counter_model)
+        if model_budget_config is None:
+            model_budget_config = team_member_model_max_budget.get(requested_model_str)
         if model_budget_config is None:
             continue
 
@@ -3392,7 +3408,11 @@ async def _check_team_member_model_budget(
         if max_budget is None:
             continue
 
-        counter_key = f"spend:team_member:{valid_token.user_id}:{team_object.team_id}:model:{model_str}"
+        counter_key = _get_team_member_model_counter_key(
+            user_id=valid_token.user_id,
+            team_id=team_object.team_id,
+            model=counter_model,
+        )
         # -1.0 is the sentinel for "cache cold". Negative spend is impossible,
         # so this distinguishes "not cached yet" from a real zero balance.
         model_spend = await get_current_spend(
@@ -3401,15 +3421,8 @@ async def _check_team_member_model_budget(
         )
         if model_spend < 0:
             # Cache cold (pod restart / Redis flush) — fetch authoritative value from DB.
-            # Use async_set_cache (idempotent overwrite) not async_increment_cache:
-            # two concurrent requests that both see a miss would each call INCRBYFLOAT,
-            # doubling the seed value and producing false budget-exceeded 429s.
-            # Seed unconditionally (including zero spend) so new users don't hit DB
-            # on every auth request until their first request's cost callback fires.
+            # Do not write cache from auth path to avoid clobbering in-flight increments.
             model_spend = await _reseed_spend_from_db(counter_key)
-            await spend_counter_cache.async_set_cache(
-                key=counter_key, value=model_spend
-            )
 
         if model_spend >= max_budget:
             raise litellm.BudgetExceededError(
@@ -3418,7 +3431,7 @@ async def _check_team_member_model_budget(
                 message=(
                     f"ExceededBudget: Team member model budget exceeded. "
                     f"User={valid_token.user_id}, Team={team_object.team_id}, "
-                    f"Model={model_str}. Spend=${model_spend:.6f}, Budget=${max_budget:.6f}"
+                    f"Model={counter_model}. Spend=${model_spend:.6f}, Budget=${max_budget:.6f}"
                 ),
             )
 

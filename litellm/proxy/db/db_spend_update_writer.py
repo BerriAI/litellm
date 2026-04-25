@@ -1824,19 +1824,23 @@ class DBSpendUpdateWriter:
         from litellm.proxy.utils import _raise_failed_update_spend_exception
 
         for key, cost in team_member_model_list_transactions.items():
-            parts = key.split("::")
-            # Expected: ["team_id", "<tid>", "user_id", "<uid>", "model", "<model>"]
             if (
-                len(parts) != 6
-                or parts[0] != "team_id"
-                or parts[2] != "user_id"
-                or parts[4] != "model"
+                not key.startswith("team_id::")
+                or "::user_id::" not in key
+                or "::model::" not in key
             ):
                 verbose_proxy_logger.debug(
                     "Skipping malformed team_member_model key: %s", key
                 )
                 continue
-            team_id, user_id, model_name = parts[1], parts[3], parts[5]
+            membership_part, model_name = key.split("::model::", 1)
+            team_and_user = membership_part[len("team_id::") :]
+            team_id, user_id = team_and_user.split("::user_id::", 1)
+            if not team_id or not user_id or not model_name:
+                verbose_proxy_logger.debug(
+                    "Skipping malformed team_member_model key: %s", key
+                )
+                continue
 
             for attempt in range(n_retry_times + 1):
                 start_time = time.time()

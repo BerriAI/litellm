@@ -4921,7 +4921,7 @@ async def test_increment_spend_counters_initializes_and_increments():
 
 @pytest.mark.asyncio
 async def test_increment_spend_counters_team_and_member():
-    """Counter should track team and team member spend separately."""
+    """Counter should track team, team member, and team-member-model spend."""
     from litellm.caching.dual_cache import DualCache
     from litellm.proxy._types import LiteLLM_TeamTable
 
@@ -4953,15 +4953,21 @@ async def test_increment_spend_counters_team_and_member():
             team_id="team-1",
             user_id="user-1",
             response_cost=0.30,
+            model="gpt-4o",
         )
 
         team_counter = counter_cache.in_memory_cache.get_cache(key="spend:team:team-1")
         assert team_counter == 2.30
 
         member_counter = counter_cache.in_memory_cache.get_cache(
-            key="spend:team_member:user-1:team-1"
+            key="spend:team_member:team_id::team-1::user_id::user-1"
         )
         assert member_counter == 1.30
+
+        member_model_counter = counter_cache.in_memory_cache.get_cache(
+            key="spend:team_member:team_id::team-1::user_id::user-1::model::gpt-4o"
+        )
+        assert member_model_counter == 0.30
     finally:
         ps.user_api_key_cache = original_key_cache
         ps.spend_counter_cache = original_counter_cache
@@ -5059,6 +5065,39 @@ async def test_reseed_spend_from_db_user_and_org_prefixes():
         assert await _reseed_spend_from_db("spend:org:acme") == 305.0
         fake_prisma.db.litellm_organizationtable.find_unique.assert_awaited_once_with(
             where={"organization_id": "acme"}
+        )
+    finally:
+        ps.prisma_client = orig_prisma
+
+
+@pytest.mark.asyncio
+async def test_reseed_spend_from_db_team_member_model_counter_parses_tagged_key():
+    import litellm.proxy.proxy_server as ps
+    from litellm.proxy.proxy_server import _reseed_spend_from_db
+
+    model_row = MagicMock()
+    model_row.spend = 12.34
+
+    fake_prisma = MagicMock()
+    fake_prisma.db.litellm_teammembermodelspend.find_unique = AsyncMock(
+        return_value=model_row
+    )
+
+    orig_prisma = ps.prisma_client
+    ps.prisma_client = fake_prisma
+    try:
+        spend = await _reseed_spend_from_db(
+            "spend:team_member:team_id::org:team-1::user_id::google:12345::model::gpt-4o"
+        )
+        assert spend == 12.34
+        fake_prisma.db.litellm_teammembermodelspend.find_unique.assert_awaited_once_with(
+            where={
+                "user_id_team_id_model": {
+                    "user_id": "google:12345",
+                    "team_id": "org:team-1",
+                    "model": "gpt-4o",
+                }
+            }
         )
     finally:
         ps.prisma_client = orig_prisma

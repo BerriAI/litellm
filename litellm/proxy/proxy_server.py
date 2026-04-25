@@ -1801,6 +1801,29 @@ async def get_current_spend(counter_key: str, fallback_spend: float) -> float:
     return fallback_spend
 
 
+def _get_team_member_counter_key(user_id: str, team_id: str) -> str:
+    return f"spend:team_member:team_id::{team_id}::user_id::{user_id}"
+
+
+def _get_team_member_model_counter_key(user_id: str, team_id: str, model: str) -> str:
+    return f"spend:team_member:team_id::{team_id}::user_id::{user_id}::model::{model}"
+
+
+def _parse_team_member_counter_suffix(
+    suffix: str,
+) -> Optional[Tuple[str, str, Optional[str]]]:
+    if "::model::" in suffix:
+        membership_part, model_name = suffix.split("::model::", 1)
+    else:
+        membership_part, model_name = suffix, None
+    parts = membership_part.split("::")
+    if len(parts) != 4 or parts[0] != "team_id" or parts[2] != "user_id":
+        return None
+    team_id = parts[1]
+    user_id = parts[3]
+    return user_id, team_id, model_name
+
+
 async def increment_spend_counters(
     token: Optional[str],
     team_id: Optional[str],
@@ -1889,13 +1912,17 @@ async def increment_spend_counters(
 
     if user_id is not None and team_id is not None:
         await _init_and_increment_spend_counter(
-            counter_key=f"spend:team_member:{user_id}:{team_id}",
+            counter_key=_get_team_member_counter_key(user_id=user_id, team_id=team_id),
             source_cache_key=f"team_membership:{user_id}:{team_id}",
             increment=response_cost,
         )
         if model is not None:
             await _init_and_increment_spend_counter(
-                counter_key=f"spend:team_member:{user_id}:{team_id}:model:{model}",
+                counter_key=_get_team_member_model_counter_key(
+                    user_id=user_id,
+                    team_id=team_id,
+                    model=model,
+                ),
                 source_cache_key=None,
                 increment=response_cost,
             )
@@ -1945,13 +1972,11 @@ async def _reseed_spend_from_db(counter_key: str) -> float:
             )
         elif counter_key.startswith("spend:team_member:"):
             suffix = counter_key[len("spend:team_member:") :]
-            if ":model:" in suffix:
-                # format: {user_id}:{team_id}:model:{model_name}
-                # Read from dedicated atomic table — no read-modify-write race
-                membership_part, model_name = suffix.rsplit(":model:", 1)
-                if ":" not in membership_part:
-                    return 0.0
-                member_user_id, member_team_id = membership_part.rsplit(":", 1)
+            parsed_team_member_key = _parse_team_member_counter_suffix(suffix=suffix)
+            if parsed_team_member_key is None:
+                return 0.0
+            member_user_id, member_team_id, model_name = parsed_team_member_key
+            if model_name is not None:
                 model_row = (
                     await prisma_client.db.litellm_teammembermodelspend.find_unique(
                         where={
@@ -1964,19 +1989,14 @@ async def _reseed_spend_from_db(counter_key: str) -> float:
                     )
                 )
                 return float(model_row.spend if model_row is not None else 0.0)
-            else:
-                membership_part = suffix
-                if ":" not in membership_part:
-                    return 0.0
-                member_user_id, member_team_id = membership_part.rsplit(":", 1)
-                row = await prisma_client.db.litellm_teammembership.find_unique(
-                    where={
-                        "user_id_team_id": {
-                            "user_id": member_user_id,
-                            "team_id": member_team_id,
-                        }
+            row = await prisma_client.db.litellm_teammembership.find_unique(
+                where={
+                    "user_id_team_id": {
+                        "user_id": member_user_id,
+                        "team_id": member_team_id,
                     }
-                )
+                }
+            )
         elif counter_key.startswith("spend:team:"):
             team_id = counter_key[len("spend:team:") :]
             row = await prisma_client.db.litellm_teamtable.find_unique(
