@@ -601,10 +601,15 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
             subpath = subpath[1:]
 
         # Resolve any '..' segments in the subpath so it cannot climb above
-        # the base_target prefix that the operator configured.
+        # the base_target prefix that the operator configured. Preserve a
+        # trailing slash on the original subpath since some upstreams treat
+        # `/foo` and `/foo/` as different resources.
+        trailing_slash = subpath.endswith("/")
         safe_subpath = posixpath.normpath("/" + subpath).lstrip("/")
         if safe_subpath == ".":
             safe_subpath = ""
+        if trailing_slash and safe_subpath and not safe_subpath.endswith("/"):
+            safe_subpath += "/"
 
         return base_target + safe_subpath
 
@@ -615,11 +620,14 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
 
         Preserves any path prefix configured on the base URL and resolves
         ``..`` segments in the endpoint so the result stays within the base
-        path.
+        path. A trailing slash on ``endpoint_path`` is preserved.
         """
+        trailing_slash = endpoint_path.endswith("/")
         base_path = base_url.path or ""
         if not base_path or base_path == "/":
             normalized_endpoint = posixpath.normpath("/" + endpoint_path.lstrip("/"))
+            if trailing_slash and normalized_endpoint != "/":
+                normalized_endpoint += "/"
             return normalized_endpoint
 
         base_path = base_path.rstrip("/")
@@ -628,6 +636,8 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         # If normalization climbs out of the base path, fall back to base.
         if combined != base_path and not combined.startswith(base_path + "/"):
             return base_path + "/"
+        if trailing_slash and not combined.endswith("/"):
+            combined += "/"
         return combined
 
     @staticmethod
