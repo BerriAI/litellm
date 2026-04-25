@@ -3372,7 +3372,7 @@ async def _check_team_member_model_budget(
     if not models_to_check:
         return
 
-    from litellm.proxy.proxy_server import get_current_spend
+    from litellm.proxy.proxy_server import _reseed_spend_from_db, get_current_spend
 
     for model_str in models_to_check:
         model_budget_config = team_member_model_max_budget.get(model_str)
@@ -3387,10 +3387,17 @@ async def _check_team_member_model_budget(
         if max_budget is None:
             continue
 
+        counter_key = f"spend:team_member:{valid_token.user_id}:{team_object.team_id}:model:{model_str}"
+        # -1.0 is the sentinel for "cache cold". Negative spend is impossible,
+        # so this distinguishes "not cached yet" from a real zero balance.
         model_spend = await get_current_spend(
-            counter_key=f"spend:team_member:{valid_token.user_id}:{team_object.team_id}:model:{model_str}",
-            fallback_spend=0.0,
+            counter_key=counter_key,
+            fallback_spend=-1.0,
         )
+        if model_spend < 0:
+            # Pod restart or Redis flush — reseed from the authoritative DB row
+            # before evaluating the budget. Mirrors _init_and_increment_spend_counter.
+            model_spend = await _reseed_spend_from_db(counter_key)
 
         if model_spend >= max_budget:
             raise litellm.BudgetExceededError(
