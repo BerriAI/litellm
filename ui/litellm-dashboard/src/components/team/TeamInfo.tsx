@@ -11,6 +11,8 @@ import {
   teamInfoCall,
   teamMemberAddCall,
   teamMemberDeleteCall,
+  teamMemberMeCall,
+  TeamMemberInfo,
   teamMemberUpdateCall,
   teamUpdateCall,
 } from "@/components/networking";
@@ -46,6 +48,7 @@ import EditLoggingSettings from "./EditLoggingSettings";
 import RouterSettingsAccordion, { RouterSettingsAccordionRef } from "../common_components/RouterSettingsAccordion";
 import MemberModal from "./EditMembership";
 import MemberPermissions from "./member_permissions";
+import MyUserTab from "./MyUserTab";
 import {
   getTeamInfoDefaultTab,
   getTeamInfoVisibleTabs,
@@ -245,6 +248,35 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
 
   useEffect(() => {
     fetchTeamInfo();
+  }, [teamId, accessToken]);
+
+  const [myUserData, setMyUserData] = useState<TeamMemberInfo | null>(null);
+  const [myUserLoading, setMyUserLoading] = useState(false);
+  const [myUserError, setMyUserError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    const fetchMyUser = async () => {
+      if (!accessToken || !teamId) return;
+      try {
+        setMyUserLoading(true);
+        setMyUserError(null);
+        const response = await teamMemberMeCall(accessToken, teamId);
+        if (!cancelled) setMyUserData(response);
+      } catch (error: any) {
+        if (!cancelled) {
+          const message =
+            error?.message || "Failed to load your membership info for this team.";
+          setMyUserError(message);
+        }
+      } finally {
+        if (!cancelled) setMyUserLoading(false);
+      }
+    };
+    fetchMyUser();
+    return () => {
+      cancelled = true;
+    };
   }, [teamId, accessToken]);
 
   // Fetch organization data when team has organization_id
@@ -851,6 +883,17 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                   variant="card"
                 />
               </Grid>
+            ),
+          },
+          {
+            key: TEAM_INFO_TAB_KEYS.MY_USER,
+            label: TEAM_INFO_TAB_LABELS[TEAM_INFO_TAB_KEYS.MY_USER],
+            children: (
+              <MyUserTab
+                data={myUserData}
+                loading={myUserLoading}
+                error={myUserError}
+              />
             ),
           },
           {

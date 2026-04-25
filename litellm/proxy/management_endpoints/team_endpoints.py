@@ -110,6 +110,7 @@ from litellm.types.proxy.management_endpoints.team_endpoints import (
     TeamListItem,
     TeamListResponse,
     TeamMemberAddResult,
+    TeamMemberInfoResponse,
     UpdateTeamMemberPermissionsRequest,
 )
 
@@ -3418,6 +3419,125 @@ async def team_info(
             param=getattr(e, "param", "None"),
             code=status.HTTP_400_BAD_REQUEST,
         )
+
+
+@router.get(
+    "/team/{team_id}/members/me",
+    tags=["team management"],
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=TeamMemberInfoResponse,
+)
+@management_endpoint_wrapper
+async def team_member_me(
+    http_request: Request,
+    team_id: str,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Get the caller's own team-membership row for the given team.
+
+    Used by internal users to view their own spend, budget, budget reset
+    date, rate limits, and role within a team — without exposing other
+    members' data. The caller is resolved from their API key; the path
+    `/members/me` always refers to that caller.
+
+    Returns 404 if the caller is not a member of the team.
+
+    ```
+    curl --location 'http://localhost:4000/team/your_team_id/members/me' \
+    --header 'Authorization: Bearer your_api_key_here'
+    ```
+    """
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={
+                "error": "Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
+            },
+        )
+
+    caller_user_id = user_api_key_dict.user_id
+    if caller_user_id is None:
+        # Team keys / service-account keys without a user_id can't resolve "me".
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "error": "API key has no associated user_id; cannot resolve 'me' for team membership."
+            },
+        )
+
+    team_row = await prisma_client.db.litellm_teamtable.find_unique(
+        where={"team_id": team_id},
+    )
+    if team_row is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"error": f"Team not found, passed team_id={team_id}."},
+        )
+
+    team_table = LiteLLM_TeamTable(**team_row.model_dump())
+
+    member_role: Optional[str] = None
+    for m in team_table.members_with_roles:
+        if m.user_id == caller_user_id:
+            member_role = m.role
+            break
+
+    if member_role is None:
+        # Caller is not a member of this team. Even proxy admins get 404 here —
+        # they can use /team/info to view all members; "me" only resolves for
+        # actual members of the team.
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "error": f"User user_id={caller_user_id} is not a member of team_id={team_id}."
+            },
+        )
+
+    membership_row = await prisma_client.db.litellm_teammembership.find_unique(
+        where={
+            "user_id_team_id": {
+                "user_id": caller_user_id,
+                "team_id": team_id,
+            }
+        },
+        include={"litellm_budget_table": True},
+    )
+
+    user_row = await prisma_client.db.litellm_usertable.find_unique(
+        where={"user_id": caller_user_id}
+    )
+    user_email = getattr(user_row, "user_email", None) if user_row is not None else None
+
+    if membership_row is None:
+        # Member is in members_with_roles but has no membership row yet
+        # (no per-member budget/limits configured). Return defaults.
+        return TeamMemberInfoResponse(
+            user_id=caller_user_id,
+            team_id=team_id,
+            team_alias=team_table.team_alias,
+            role=member_role,
+            user_email=user_email,
+            spend=0.0,
+            total_spend=0.0,
+            budget_id=None,
+            litellm_budget_table=None,
+        )
+
+    membership_dict = membership_row.model_dump()
+    return TeamMemberInfoResponse(
+        user_id=caller_user_id,
+        team_id=team_id,
+        team_alias=team_table.team_alias,
+        role=member_role,
+        user_email=user_email,
+        spend=membership_dict.get("spend", 0.0),
+        total_spend=membership_dict.get("total_spend", 0.0),
+        budget_id=membership_dict.get("budget_id"),
+        litellm_budget_table=membership_dict.get("litellm_budget_table"),
+    )
 
 
 @router.post(
