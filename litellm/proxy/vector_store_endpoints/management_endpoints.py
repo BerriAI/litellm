@@ -63,6 +63,33 @@ def _redact_sensitive_litellm_params(
     }
 
 
+async def _fetch_and_authorize_vector_store(
+    vector_store_id: str,
+    user_api_key_dict: UserAPIKeyAuth,
+    prisma_client: Any,
+) -> "LiteLLM_ManagedVectorStore":
+    """
+    Look up a vector store by id and confirm the caller can access it.
+    Raises HTTPException(404) on miss and HTTPException(403) on access
+    denial.
+    """
+    row = await prisma_client.db.litellm_managedvectorstorestable.find_unique(
+        where={"vector_store_id": vector_store_id}
+    )
+    if row is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Vector store with ID {vector_store_id} not found",
+        )
+    typed = LiteLLM_ManagedVectorStore(**row.model_dump())
+    if not await _check_vector_store_access(typed, user_api_key_dict):
+        raise HTTPException(
+            status_code=403,
+            detail="Access denied: You do not have permission to access this vector store",
+        )
+    return typed
+
+
 def _resolve_embedding_config_from_router(
     embedding_model: str, llm_router
 ) -> Optional[Dict[str, Any]]:
@@ -752,26 +779,12 @@ async def get_vector_store_info(
                 )
                 return {"vector_store": vector_store_pydantic_obj}
 
-        vector_store = (
-            await prisma_client.db.litellm_managedvectorstorestable.find_unique(
-                where={"vector_store_id": data.vector_store_id}
-            )
+        vector_store_typed = await _fetch_and_authorize_vector_store(
+            vector_store_id=data.vector_store_id,
+            user_api_key_dict=user_api_key_dict,
+            prisma_client=prisma_client,
         )
-        if vector_store is None:
-            raise HTTPException(
-                status_code=404,
-                detail=f"Vector store with ID {data.vector_store_id} not found",
-            )
-
-        # Check access control for DB vector store
-        vector_store_dict = vector_store.model_dump()  # type: ignore[attr-defined]
-        vector_store_typed = LiteLLM_ManagedVectorStore(**vector_store_dict)
-        if not await _check_vector_store_access(vector_store_typed, user_api_key_dict):
-            raise HTTPException(
-                status_code=403,
-                detail="Access denied: You do not have permission to access this vector store",
-            )
-
+        vector_store_dict = dict(vector_store_typed)
         if "litellm_params" in vector_store_dict:
             vector_store_dict["litellm_params"] = _redact_sensitive_litellm_params(
                 vector_store_dict["litellm_params"]
@@ -809,22 +822,12 @@ async def update_vector_store(
 
         # Per-store access control: anyone authenticated who passes the
         # premium-feature gate could otherwise update *any* vector store —
-        # including stores belonging to other teams. Mirror the check
-        # ``/vector_store/info`` already performs.
-        existing = await prisma_client.db.litellm_managedvectorstorestable.find_unique(
-            where={"vector_store_id": vector_store_id}
+        # including stores belonging to other teams.
+        await _fetch_and_authorize_vector_store(
+            vector_store_id=vector_store_id,
+            user_api_key_dict=user_api_key_dict,
+            prisma_client=prisma_client,
         )
-        if existing is None:
-            raise HTTPException(
-                status_code=404,
-                detail=f"Vector store with ID {vector_store_id} not found",
-            )
-        existing_typed = LiteLLM_ManagedVectorStore(**existing.model_dump())
-        if not await _check_vector_store_access(existing_typed, user_api_key_dict):
-            raise HTTPException(
-                status_code=403,
-                detail="Access denied: You do not have permission to update this vector store",
-            )
 
         # Handle metadata serialization
         if update_data.get("vector_store_metadata") is not None:
