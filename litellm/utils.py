@@ -8956,6 +8956,12 @@ class ProviderConfigManager:
             )
 
             return get_openrouter_image_edit_config(model)
+        elif LlmProviders.FAL_AI == provider:
+            from litellm.llms.fal_ai.image_edit.transformation import (
+                FalAIImageEditConfig,
+            )
+
+            return FalAIImageEditConfig()
         return None
 
     @staticmethod
