@@ -1750,7 +1750,9 @@ class NewTeamRequest(TeamBase):
     )
     team_member_key_duration: Optional[str] = None  # e.g. "1d", "1w", "1m"
     team_member_budget_duration: Optional[str] = None  # e.g. "30d", "1mo"
-    team_member_model_max_budget: Optional[dict] = None  # e.g. {"gpt-4": {"max_budget": 10.0, "budget_duration": "30d"}}
+    team_member_model_max_budget: Optional[dict] = (
+        None  # e.g. {"gpt-4": {"max_budget": 10.0, "budget_duration": "30d"}}
+    )
     allowed_vector_store_indexes: Optional[List[AllowedVectorStoreIndexItem]] = None
     enforced_batch_output_expires_after: Optional[dict] = None
     enforced_file_expires_after: Optional[dict] = None
@@ -1819,7 +1821,9 @@ class UpdateTeamRequest(LiteLLMPydanticObjectBase):
     default_team_member_models: Optional[List[str]] = (
         None  # default allowed_models seeded onto new team members
     )
-    team_member_model_max_budget: Optional[dict] = None  # e.g. {"gpt-4": {"max_budget": 10.0, "budget_duration": "30d"}}
+    team_member_model_max_budget: Optional[dict] = (
+        None  # e.g. {"gpt-4": {"max_budget": 10.0, "budget_duration": "30d"}}
+    )
 
 
 class ResetTeamBudgetRequest(LiteLLMPydanticObjectBase):
