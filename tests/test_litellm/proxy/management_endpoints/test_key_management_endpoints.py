@@ -9109,14 +9109,18 @@ class TestKeyTypeAndPassthroughRoutesCallerPermission:
         assert str(exc_info.value.code) == "403"
         assert "key_type" in str(exc_info.value.message)
 
+    @pytest.mark.parametrize(
+        "field_kwargs",
+        [
+            {"metadata": {"allowed_passthrough_routes": ["/cache/settings"]}},
+            {"allowed_passthrough_routes": ["/cache/settings"]},
+        ],
+    )
     @pytest.mark.asyncio
     async def test_non_admin_generate_key_with_allowed_passthrough_routes_rejected(
-        self,
+        self, field_kwargs
     ):
-        data = GenerateKeyRequest(
-            key_alias="escalate-via-passthrough",
-            metadata={"allowed_passthrough_routes": ["/cache/settings"]},
-        )
+        data = GenerateKeyRequest(key_alias="escalate-via-passthrough", **field_kwargs)
         user_api_key_dict = UserAPIKeyAuth(
             user_id="internal-user-123",
             user_role=LitellmUserRoles.INTERNAL_USER,
@@ -9142,16 +9146,27 @@ class TestKeyTypeAndPassthroughRoutesCallerPermission:
         assert str(exc_info.value.code) == "403"
         assert "allowed_passthrough_routes" in str(exc_info.value.message)
 
+    @pytest.mark.parametrize(
+        "field_kwargs",
+        [
+            # Nested metadata path — historical
+            {"metadata": {"allowed_passthrough_routes": ["/cache/settings"]}},
+            # Top-level field — ``KeyRequestBase.allowed_passthrough_routes``
+            # is folded into metadata downstream by ``prepare_key_update_data``
+            # via ``_set_object_metadata_field``, so a non-admin who can set
+            # it bypasses any gate that only inspects ``data.metadata``.
+            {"allowed_passthrough_routes": ["/cache/settings"]},
+        ],
+    )
     @pytest.mark.asyncio
-    async def test_non_admin_update_key_with_allowed_passthrough_routes_rejected(self):
+    async def test_non_admin_update_key_with_allowed_passthrough_routes_rejected(
+        self, field_kwargs
+    ):
         from litellm.proxy.management_endpoints.key_management_endpoints import (
             update_key_fn,
         )
 
-        data = UpdateKeyRequest(
-            key="sk-test",
-            metadata={"allowed_passthrough_routes": ["/cache/settings"]},
-        )
+        data = UpdateKeyRequest(key="sk-test", **field_kwargs)
         user_api_key_dict = UserAPIKeyAuth(
             user_id="internal-user-123",
             user_role=LitellmUserRoles.INTERNAL_USER,
@@ -9187,6 +9202,13 @@ class TestKeyTypeAndPassthroughRoutesCallerPermission:
             ({"allowed_routes": ["/*"]}, "allowed_routes"),
             (
                 {"metadata": {"allowed_passthrough_routes": ["/cache/settings"]}},
+                "allowed_passthrough_routes",
+            ),
+            # Top-level ``allowed_passthrough_routes`` on KeyRequestBase —
+            # ``prepare_key_update_data`` later folds it into metadata via
+            # ``_set_object_metadata_field``, so it must be gated too.
+            (
+                {"allowed_passthrough_routes": ["/cache/settings"]},
                 "allowed_passthrough_routes",
             ),
             ({"key_type": LiteLLMKeyType.MANAGEMENT}, "key_type"),

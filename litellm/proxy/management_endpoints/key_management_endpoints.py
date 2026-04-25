@@ -515,21 +515,29 @@ def _check_management_key_type_caller_permission(
 
 def _check_allowed_passthrough_routes_caller_permission(
     metadata: Optional[dict],
+    top_level_allowed_passthrough_routes: Optional[list],
     user_api_key_dict: UserAPIKeyAuth,
 ) -> None:
     """
-    Only proxy admins may set ``metadata.allowed_passthrough_routes`` on a key.
+    Only proxy admins may set ``allowed_passthrough_routes`` on a key.
 
     ``RouteChecks.check_passthrough_route_access`` runs *before* the standard
     role-based route gate and matches the request route against
-    ``metadata.allowed_passthrough_routes``. If a non-admin can set this
-    field, they can grant themselves access to any internal endpoint by
-    listing it as a "pass-through" route. Pass-through endpoints must be
-    configured by an admin.
+    ``allowed_passthrough_routes``. If a non-admin can set this field, they
+    can grant themselves access to any internal endpoint by listing it as
+    a "pass-through" route.
+
+    The field exists in two places on the request schema:
+
+    * ``KeyRequestBase.allowed_passthrough_routes`` (top-level)
+    * ``metadata.allowed_passthrough_routes`` (nested)
+
+    Both end up at the same effective location on the persisted key —
+    ``prepare_key_update_data`` folds the top-level field into metadata via
+    ``_set_object_metadata_field`` — so both paths must be gated.
     """
-    if not metadata:
-        return
-    if not metadata.get("allowed_passthrough_routes"):
+    metadata_field = metadata.get("allowed_passthrough_routes") if metadata else None
+    if not metadata_field and not top_level_allowed_passthrough_routes:
         return
     if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
         return
@@ -537,7 +545,8 @@ def _check_allowed_passthrough_routes_caller_permission(
         status_code=403,
         detail={
             "error": (
-                "Only proxy admins can set `metadata.allowed_passthrough_routes`. "
+                "Only proxy admins can set `allowed_passthrough_routes` on a key "
+                "(top-level field or `metadata.allowed_passthrough_routes`). "
                 "An admin must configure pass-through endpoints separately."
             )
         },
@@ -749,9 +758,14 @@ async def _common_key_generation_helper(  # noqa: PLR0915
     # ``/key/regenerate``) gates this field at the request-body layer,
     # but ``/key/service-account/generate`` reaches this helper directly
     # without running those gates. Centralizing the check here means any
-    # caller of ``_common_key_generation_helper`` is covered.
+    # caller of ``_common_key_generation_helper`` is covered. Both the
+    # top-level ``KeyRequestBase.allowed_passthrough_routes`` field and
+    # the nested ``metadata.allowed_passthrough_routes`` are gated.
     _check_allowed_passthrough_routes_caller_permission(
         metadata=data_json.get("metadata"),
+        top_level_allowed_passthrough_routes=data_json.get(
+            "allowed_passthrough_routes"
+        ),
         user_api_key_dict=user_api_key_dict,
     )
 
@@ -1375,6 +1389,7 @@ async def generate_key_fn(
         )
         _check_allowed_passthrough_routes_caller_permission(
             metadata=data.metadata,
+            top_level_allowed_passthrough_routes=data.allowed_passthrough_routes,
             user_api_key_dict=user_api_key_dict,
         )
 
@@ -2031,6 +2046,7 @@ async def _validate_update_key_data(
     )
     _check_allowed_passthrough_routes_caller_permission(
         metadata=data.metadata,
+        top_level_allowed_passthrough_routes=data.allowed_passthrough_routes,
         user_api_key_dict=user_api_key_dict,
     )
 
@@ -4020,6 +4036,7 @@ async def regenerate_key_fn(  # noqa: PLR0915
             )
             _check_allowed_passthrough_routes_caller_permission(
                 metadata=data.metadata,
+                top_level_allowed_passthrough_routes=data.allowed_passthrough_routes,
                 user_api_key_dict=user_api_key_dict,
             )
 
