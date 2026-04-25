@@ -1,0 +1,57 @@
+services:
+  postgres:
+    image: postgres:14@sha256:6a70deda415ec296f977890e11aba04a0db9f632a362e3fce45e845e3db74f26
+    environment:
+      POSTGRES_DB: litellm
+      POSTGRES_USER: litellm
+      POSTGRES_PASSWORD: litellm
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -d litellm -U litellm"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+  litellm:
+    image: ${LITELLM_IMAGE:-litellm-claude-code-e2e:local}
+    build:
+      context: ../../..
+      dockerfile: Dockerfile
+      target: runtime
+    command: ["--config", "/app/config.yaml", "--port", "4000", "--detailed_debug"]
+    ports:
+      - "${PROXY_PORT:-4000}:4000"
+    environment:
+      DATABASE_URL: postgresql://litellm:litellm@postgres:5432/litellm
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:-sk-1234}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:?ANTHROPIC_API_KEY is required}
+      LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS: "True"
+    volumes:
+      - ${CLAUDE_CODE_LITELLM_CONFIG:?CLAUDE_CODE_LITELLM_CONFIG is required}:/app/config.yaml:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "python3 -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:4000/health/liveliness', timeout=5)\"",
+        ]
+      interval: 5s
+      timeout: 10s
+      retries: 60
+
+  claude-code:
+    image: ${CLAUDE_CODE_IMAGE:-litellm-claude-code-client:local}
+    build:
+      context: .
+      dockerfile: Dockerfile.claude-code
+      args:
+        CLAUDE_CODE_VERSION: ${CLAUDE_CODE_VERSION:-latest}
+    environment:
+      ANTHROPIC_BASE_URL: http://litellm:4000
+      ANTHROPIC_AUTH_TOKEN: ${LITELLM_MASTER_KEY:-sk-1234}
+      MODEL_NAME: ${MODEL_NAME:-claude-sonnet-4-6}
+      CLAUDE_CODE_PROMPT: "${CLAUDE_CODE_PROMPT:-Respond with exactly this text and nothing else: Hello from LiteLLM Claude Code.}"
+    depends_on:
+      litellm:
+        condition: service_healthy
