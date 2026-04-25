@@ -1787,7 +1787,13 @@ async def _run_centralized_common_checks(
         if isinstance(r, (ProxyException, litellm.BudgetExceededError)):
             raise r
 
-    if isinstance(team_result, HTTPException):
+    # Use BaseException (not HTTPException) in the narrowing checks so
+    # mypy can narrow ``Any | BaseException`` to the typed object in the
+    # else branch. After the for-loop above, the only BaseException that
+    # can still appear here is HTTPException (other listed re-raises were
+    # propagated; non-listed exceptions were already swallowed to None).
+    team_object: Optional[LiteLLM_TeamTableCachedObj]
+    if isinstance(team_result, BaseException):
         # Token-derived fallback only valid when a team_id is set;
         # _team_obj_from_token asserts that precondition.
         team_object = (
@@ -1798,15 +1804,17 @@ async def _run_centralized_common_checks(
     else:
         team_object = team_result
 
-    user_object = None if isinstance(user_result, HTTPException) else user_result
-    project_object = (
-        None if isinstance(project_result, HTTPException) else project_result
+    user_object: Optional[LiteLLM_UserTable] = (
+        None if isinstance(user_result, BaseException) else user_result
     )
-    end_user_object = (
-        None if isinstance(end_user_result, HTTPException) else end_user_result
+    project_object: Optional[LiteLLM_ProjectTableCachedObj] = (
+        None if isinstance(project_result, BaseException) else project_result
     )
-    global_proxy_spend = (
-        None if isinstance(global_spend_result, HTTPException) else global_spend_result
+    end_user_object: Optional[LiteLLM_EndUserTable] = (
+        None if isinstance(end_user_result, BaseException) else end_user_result
+    )
+    global_proxy_spend: Optional[float] = (
+        None if isinstance(global_spend_result, BaseException) else global_spend_result
     )
 
     # common_checks identifies admin via user_object, not the token
