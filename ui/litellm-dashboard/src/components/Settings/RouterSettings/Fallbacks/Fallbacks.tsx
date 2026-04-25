@@ -1,7 +1,7 @@
 import { useModelCostMap } from "@/app/(dashboard)/hooks/models/useModelCostMap";
 import { ArrowRightIcon, PlayIcon, TrashIcon } from "@heroicons/react/outline";
 import { Icon, Table, TableBody, TableCell, TableHead, TableHeaderCell, TableRow } from "@tremor/react";
-import { Tooltip, Typography } from "antd";
+import { Tag, Tooltip, Typography } from "antd";
 import openai from "openai";
 import React, { useEffect, useState } from "react";
 import DeleteResourceModal from "../../../common_components/DeleteResourceModal";
@@ -10,16 +10,45 @@ import NotificationsManager from "../../../molecules/notifications_manager";
 import { getCallbacksCall, setCallbacksCall } from "../../../networking";
 import AddFallbacks from "./AddFallbacks";
 
-type FallbackEntry = { [modelName: string]: string[] };
+// Router runtime accepts both shapes for fallback chain entries:
+//   - "fallback-model" (string)
+//   - { model: "fallback-model", api_key, extra_headers, ... } (dict, used to override
+//     request-level params like auth on the fallback attempt)
+// The UI must tolerate the dict shape — rendering it as a React child crashes (#31).
+type FallbackOverride = { model?: string; [key: string]: any };
+type FallbackChainItem = string | FallbackOverride;
+type FallbackEntry = { [modelName: string]: FallbackChainItem[] };
 type Fallbacks = FallbackEntry[];
+
+const SENSITIVE_OVERRIDE_KEY_PATTERN = /(api[_-]?key|authorization|token|secret|password)/i;
+
+function maskSensitiveOverrideValues(value: any): any {
+  if (value === null || value === undefined) return value;
+  if (Array.isArray(value)) return value.map(maskSensitiveOverrideValues);
+  if (typeof value !== "object") return value;
+  const masked: Record<string, any> = {};
+  for (const [key, v] of Object.entries(value)) {
+    if (SENSITIVE_OVERRIDE_KEY_PATTERN.test(key) && typeof v === "string" && v.length > 0) {
+      masked[key] = "••••••";
+    } else {
+      masked[key] = maskSensitiveOverrideValues(v);
+    }
+  }
+  return masked;
+}
+
+function getFallbackChainItemDisplayName(item: FallbackChainItem): string {
+  if (typeof item === "string") return item;
+  if (item && typeof item === "object" && typeof item.model === "string") return item.model;
+  // Dict override without a `model` field — stringify the masked form so secrets
+  // never reach the DOM via the display label.
+  return JSON.stringify(maskSensitiveOverrideValues(item));
+}
 
 const modelCardClass =
   "inline-flex items-center gap-2 px-2.5 py-1 rounded-md border border-gray-200 bg-gray-50 text-sm font-medium text-gray-800 shrink-0";
 
-function renderModelNameCell(
-  modelName: string,
-  getProviderFromModel?: (modelName: string) => string,
-): React.ReactNode {
+function renderModelNameCell(modelName: string, getProviderFromModel?: (modelName: string) => string): React.ReactNode {
   const provider = getProviderFromModel?.(modelName) ?? modelName;
   return (
     <span className={modelCardClass}>
@@ -29,38 +58,57 @@ function renderModelNameCell(
   );
 }
 
+interface ChainCardProps {
+  item: FallbackChainItem;
+  getProviderFromModel?: (modelName: string) => string;
+}
+
+// Top-level so React reconciles instances across renders instead of remounting
+// (which would reset Tooltip visibility / animation state on every parent render).
+function ChainCard({ item, getProviderFromModel }: ChainCardProps) {
+  const displayName = getFallbackChainItemDisplayName(item);
+  const provider = getProviderFromModel?.(displayName) ?? displayName;
+  const isOverride = typeof item === "object" && item !== null;
+  const card = (
+    <span className={modelCardClass}>
+      <ProviderLogo provider={provider} className="w-4 h-4 shrink-0" />
+      <span>{displayName}</span>
+      {isOverride && (
+        <Tag color="blue" className="!m-0 !text-[10px] !leading-4 !py-0 !px-1.5">
+          override
+        </Tag>
+      )}
+    </span>
+  );
+  if (!isOverride) return card;
+  const overrideJson = JSON.stringify(maskSensitiveOverrideValues(item), null, 2);
+  return (
+    <Tooltip
+      title={<pre className="m-0 whitespace-pre-wrap break-all text-[11px] leading-4">{overrideJson}</pre>}
+      styles={{ root: { maxWidth: 420 } }}
+    >
+      {card}
+    </Tooltip>
+  );
+}
+
 function renderFallbacksChain(
   _primaryModel: string,
-  fallbackModels: string[],
+  fallbackItems: FallbackChainItem[],
   getProviderFromModel?: (modelName: string) => string,
 ): React.ReactNode {
-  const list = Array.isArray(fallbackModels) ? fallbackModels : [];
+  const list = Array.isArray(fallbackItems) ? fallbackItems : [];
   if (list.length === 0) return null;
-
-  const ChainCard = ({ modelName }: { modelName: string }) => {
-    const provider = getProviderFromModel?.(modelName) ?? modelName;
-    return (
-      <span className={modelCardClass}>
-        <ProviderLogo provider={provider} className="w-4 h-4 shrink-0" />
-        <span>{modelName}</span>
-      </span>
-    );
-  };
   return (
     <span className="grid grid-cols-[auto_1fr] items-start gap-x-2 w-full min-w-0">
-      <span
-        className="inline-flex items-center justify-center w-8 h-8 shrink-0 self-start text-blue-600"
-        aria-hidden
-      >
+      <span className="inline-flex items-center justify-center w-8 h-8 shrink-0 self-start text-blue-600" aria-hidden>
         <ArrowRightIcon className="w-5 h-5 stroke-[2.5]" />
       </span>
       <span className="flex flex-wrap items-start gap-1 min-w-0">
-        {list.map((model, i) => (
-          <React.Fragment key={model}>
-            {i > 0 && (
-              <Icon icon={ArrowRightIcon} size="xs" className="shrink-0 text-gray-400" />
-            )}
-            <ChainCard modelName={model} />
+        {list.map((item, i) => (
+          <React.Fragment key={`${i}-${getFallbackChainItemDisplayName(item)}`}>
+            {i > 0 && <Icon icon={ArrowRightIcon} size="xs" className="shrink-0 text-gray-400" />}
+            <ChainCard item={item} getProviderFromModel={getProviderFromModel} />
           </React.Fragment>
         ))}
       </span>
@@ -78,7 +126,7 @@ interface FallbacksProps {
 async function testFallbackModelResponse(selectedModel: string, accessToken: string) {
   const isLocal = process.env.NODE_ENV === "development";
   if (isLocal != true) {
-    console.log = function () { };
+    console.log = function () {};
   }
   const proxyBaseUrl = isLocal ? "http://localhost:4000" : window.location.origin;
   const client = new openai.OpenAI({
@@ -255,8 +303,7 @@ const Fallbacks: React.FC<FallbacksProps> = ({ accessToken, userRole, userID, mo
       {!hasFallbacks ? (
         <div className="rounded-lg border border-gray-200 bg-gray-50 px-4 py-6 text-center">
           <Typography.Text type="secondary">
-            No fallbacks configured. Add fallbacks to automatically try another model when the primary
-            fails.
+            No fallbacks configured. Add fallbacks to automatically try another model when the primary fails.
           </Typography.Text>
         </div>
       ) : (
@@ -273,9 +320,7 @@ const Fallbacks: React.FC<FallbacksProps> = ({ accessToken, userRole, userID, mo
             {routerSettings["fallbacks"].map((item: FallbackEntry, index: number) =>
               Object.entries(item).map(([key, value]) => (
                 <TableRow key={index.toString() + key}>
-                  <TableCell className="align-top">
-                    {renderModelNameCell(key, getProviderFromModel)}
-                  </TableCell>
+                  <TableCell className="align-top">{renderModelNameCell(key, getProviderFromModel)}</TableCell>
                   <TableCell className="align-top">
                     {renderFallbacksChain(key, Array.isArray(value) ? value : [], getProviderFromModel)}
                   </TableCell>
@@ -297,11 +342,7 @@ const Fallbacks: React.FC<FallbacksProps> = ({ accessToken, userRole, userID, mo
                         onKeyDown={(e) => e.key === "Enter" && handleDeleteClick(item)}
                         className="cursor-pointer inline-flex"
                       >
-                        <Icon
-                          icon={TrashIcon}
-                          size="sm"
-                          className="hover:text-red-600"
-                        />
+                        <Icon icon={TrashIcon} size="sm" className="hover:text-red-600" />
                       </span>
                     </Tooltip>
                   </TableCell>

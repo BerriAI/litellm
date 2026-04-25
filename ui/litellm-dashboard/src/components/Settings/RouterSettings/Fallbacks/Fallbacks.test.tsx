@@ -80,18 +80,11 @@ describe("Fallbacks", () => {
   const mockUserRole = "Admin";
   const mockUserID = "user-123";
   const mockModelData = {
-    data: [
-      { model_name: "gpt-4" },
-      { model_name: "gpt-3.5-turbo" },
-      { model_name: "claude-3-opus" },
-    ],
+    data: [{ model_name: "gpt-4" }, { model_name: "gpt-3.5-turbo" }, { model_name: "claude-3-opus" }],
   };
 
   const mockRouterSettings = {
-    fallbacks: [
-      { "gpt-4": ["gpt-3.5-turbo", "claude-3-opus"] },
-      { "claude-3-opus": ["gpt-4"] },
-    ],
+    fallbacks: [{ "gpt-4": ["gpt-3.5-turbo", "claude-3-opus"] }, { "claude-3-opus": ["gpt-4"] }],
   };
 
   const defaultProps = {
@@ -136,11 +129,7 @@ describe("Fallbacks", () => {
     render(<Fallbacks {...defaultProps} />);
 
     await waitFor(() => {
-      expect(networkingModule.getCallbacksCall).toHaveBeenCalledWith(
-        mockAccessToken,
-        mockUserID,
-        mockUserRole,
-      );
+      expect(networkingModule.getCallbacksCall).toHaveBeenCalledWith(mockAccessToken, mockUserID, mockUserRole);
     });
   });
 
@@ -378,5 +367,166 @@ describe("Fallbacks", () => {
       },
       { timeout: 3000 },
     );
+  });
+
+  describe("dict-shaped fallback chain entries", () => {
+    // Router runtime accepts dict-shaped fallback entries (with `model` + override
+    // params like `api_key`, `extra_headers`). Rendering them as React children used
+    // to crash with React error #31. These tests lock in the fix.
+    const dictFallbackRouterSettings = {
+      fallbacks: [
+        {
+          "primary-model": [
+            {
+              model: "fallback-model",
+              api_key: "secret-key-123",
+              extra_headers: { Authorization: "Bearer secret" },
+            },
+          ],
+        },
+      ],
+    };
+
+    it("renders without crashing when a fallback chain entry is a dict", async () => {
+      vi.mocked(networkingModule.getCallbacksCall).mockResolvedValueOnce({
+        router_settings: dictFallbackRouterSettings,
+      });
+      render(<Fallbacks {...defaultProps} />);
+
+      // Display name is derived from the dict's `model` field
+      await waitFor(() => {
+        expect(screen.getByText("fallback-model")).toBeInTheDocument();
+      });
+    });
+
+    it("marks dict fallback entries with an override tag", async () => {
+      vi.mocked(networkingModule.getCallbacksCall).mockResolvedValueOnce({
+        router_settings: dictFallbackRouterSettings,
+      });
+      render(<Fallbacks {...defaultProps} />);
+
+      await waitFor(() => {
+        expect(screen.getByText("override")).toBeInTheDocument();
+      });
+    });
+
+    it("renders mixed string and dict entries in the same chain", async () => {
+      vi.mocked(networkingModule.getCallbacksCall).mockResolvedValueOnce({
+        router_settings: {
+          fallbacks: [
+            {
+              "primary-model": ["string-fallback", { model: "dict-fallback", api_key: "k" }],
+            },
+          ],
+        },
+      });
+      render(<Fallbacks {...defaultProps} />);
+
+      await waitFor(() => {
+        expect(screen.getByText("string-fallback")).toBeInTheDocument();
+        expect(screen.getByText("dict-fallback")).toBeInTheDocument();
+        // Only the dict entry gets the override tag — exactly one occurrence.
+        expect(screen.getAllByText("override")).toHaveLength(1);
+      });
+    });
+
+    it("preserves dict fallbacks when deleting a sibling fallback row", async () => {
+      const user = userEvent.setup();
+      const mixedRouterSettings = {
+        fallbacks: [
+          { "string-primary": ["plain-fallback"] },
+          {
+            "dict-primary": [{ model: "dict-fallback", api_key: "secret" }],
+          },
+        ],
+      };
+      vi.mocked(networkingModule.getCallbacksCall).mockResolvedValue({
+        router_settings: mixedRouterSettings,
+      });
+      render(<Fallbacks {...defaultProps} />);
+
+      await waitFor(() => {
+        expect(screen.getByText("string-primary")).toBeInTheDocument();
+        expect(screen.getByText("dict-primary")).toBeInTheDocument();
+      });
+
+      // Delete the first row (string-primary), and assert the dict entry survives intact.
+      const deleteButtons = screen.getAllByTestId("delete-fallback-button");
+      await user.click(deleteButtons[0]);
+
+      await waitFor(() => {
+        expect(screen.getByTestId("delete-modal")).toBeInTheDocument();
+      });
+
+      const confirmButton = screen.getByRole("button", { name: /delete/i });
+      await user.click(confirmButton);
+
+      await waitFor(() => {
+        expect(networkingModule.setCallbacksCall).toHaveBeenCalled();
+      });
+
+      const callArgs = (networkingModule.setCallbacksCall as any).mock.calls[0];
+      const savedFallbacks = callArgs[1].router_settings.fallbacks;
+      // Only the dict-primary entry remains, with the dict chain item untouched.
+      expect(savedFallbacks).toHaveLength(1);
+      expect(savedFallbacks[0]["dict-primary"]).toEqual([{ model: "dict-fallback", api_key: "secret" }]);
+    });
+
+    it("does not leak api_key into the rendered DOM", async () => {
+      vi.mocked(networkingModule.getCallbacksCall).mockResolvedValueOnce({
+        router_settings: dictFallbackRouterSettings,
+      });
+      const { container } = render(<Fallbacks {...defaultProps} />);
+
+      await waitFor(() => {
+        expect(screen.getByText("fallback-model")).toBeInTheDocument();
+      });
+      // The plain api_key value must never appear unmasked in the DOM.
+      expect(container.textContent).not.toContain("secret-key-123");
+    });
+
+    it("masks secrets in the display label when an override dict has no `model` field", async () => {
+      // FallbackOverride.model is optional. Without it, getFallbackChainItemDisplayName
+      // falls back to JSON.stringify, which would otherwise leak api_key into the label.
+      vi.mocked(networkingModule.getCallbacksCall).mockResolvedValueOnce({
+        router_settings: {
+          fallbacks: [
+            {
+              "primary-model": [{ api_key: "leaked-key-456", custom_param: "ok" }],
+            },
+          ],
+        },
+      });
+      const { container } = render(<Fallbacks {...defaultProps} />);
+
+      await waitFor(() => {
+        expect(screen.getByText("override")).toBeInTheDocument();
+      });
+      expect(container.textContent).not.toContain("leaked-key-456");
+      expect(container.textContent).toContain("custom_param");
+    });
+
+    it("masks secrets nested under arbitrary keys (not only extra_headers)", async () => {
+      vi.mocked(networkingModule.getCallbacksCall).mockResolvedValueOnce({
+        router_settings: {
+          fallbacks: [
+            {
+              "primary-model": [
+                {
+                  model: "fallback-model",
+                  vertex_credentials: { api_key: "deeply-nested-secret" },
+                },
+              ],
+            },
+          ],
+        },
+      });
+      const { container } = render(<Fallbacks {...defaultProps} />);
+
+      await waitFor(() => {
+        expect(screen.getByText("fallback-model")).toBeInTheDocument();
+      });
+      expect(container.textContent).not.toContain("deeply-nested-secret");
+    });
   });
 });
