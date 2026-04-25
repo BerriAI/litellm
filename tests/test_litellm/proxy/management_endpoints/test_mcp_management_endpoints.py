@@ -1341,12 +1341,15 @@ class TestTemporaryMCPSessionEndpoints:
         )
 
         server = generate_mock_mcp_server_config_record(server_id="cached")
+        admin_auth = generate_mock_user_api_key_auth(
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+        )
 
         with patch(
             "litellm.proxy.management_endpoints.mcp_management_endpoints.get_cached_temporary_mcp_server",
             return_value=server,
         ) as get_cached:
-            result = await _get_cached_temporary_mcp_server_or_404("cached")
+            result = await _get_cached_temporary_mcp_server_or_404("cached", admin_auth)
 
         assert result is server
         get_cached.assert_awaited_once_with("cached")
@@ -1356,9 +1359,94 @@ class TestTemporaryMCPSessionEndpoints:
             return_value=None,
         ):
             with pytest.raises(HTTPException) as exc_info:
-                await _get_cached_temporary_mcp_server_or_404("missing")
+                await _get_cached_temporary_mcp_server_or_404("missing", admin_auth)
 
         assert exc_info.value.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_get_cached_temporary_mcp_server_non_admin_denied(self):
+        """Non-admin without access to the server gets 403, not the server."""
+        from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+            _get_cached_temporary_mcp_server_or_404,
+        )
+
+        registry_server = generate_mock_mcp_server_config_record(server_id="server-x")
+        non_admin = generate_mock_user_api_key_auth(
+            user_role=LitellmUserRoles.INTERNAL_USER,
+        )
+        mock_manager = MagicMock()
+        mock_manager.get_mcp_server_by_id.return_value = registry_server
+        mock_manager.get_mcp_server_by_name.return_value = None
+        mock_manager.get_allowed_mcp_servers = AsyncMock(return_value=[])
+
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.get_cached_temporary_mcp_server",
+                return_value=None,
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager",
+                mock_manager,
+            ),
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await _get_cached_temporary_mcp_server_or_404("server-x", non_admin)
+
+        assert exc_info.value.status_code == 403
+        mock_manager.get_allowed_mcp_servers.assert_awaited_once_with(non_admin)
+
+    @pytest.mark.asyncio
+    async def test_get_cached_temporary_mcp_server_non_admin_allowed(self):
+        """Non-admin with the server in their allowed set gets the server."""
+        from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+            _get_cached_temporary_mcp_server_or_404,
+        )
+
+        registry_server = generate_mock_mcp_server_config_record(server_id="server-x")
+        non_admin = generate_mock_user_api_key_auth(
+            user_role=LitellmUserRoles.INTERNAL_USER,
+        )
+        mock_manager = MagicMock()
+        mock_manager.get_mcp_server_by_id.return_value = registry_server
+        mock_manager.get_mcp_server_by_name.return_value = None
+        mock_manager.get_allowed_mcp_servers = AsyncMock(return_value=["server-x"])
+
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.get_cached_temporary_mcp_server",
+                return_value=None,
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager",
+                mock_manager,
+            ),
+        ):
+            result = await _get_cached_temporary_mcp_server_or_404(
+                "server-x", non_admin
+            )
+
+        assert result is registry_server
+
+    @pytest.mark.asyncio
+    async def test_get_cached_temporary_mcp_server_temp_cache_non_admin_denied(self):
+        """Servers resolved from the admin-only temp cache reject non-admins."""
+        from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+            _get_cached_temporary_mcp_server_or_404,
+        )
+
+        temp_server = generate_mock_mcp_server_config_record(server_id="temp-cache")
+        non_admin = generate_mock_user_api_key_auth(
+            user_role=LitellmUserRoles.INTERNAL_USER,
+        )
+
+        with patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.get_cached_temporary_mcp_server",
+            return_value=temp_server,
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await _get_cached_temporary_mcp_server_or_404("temp-cache", non_admin)
+
+        assert exc_info.value.status_code == 403
 
     @pytest.mark.asyncio
     async def test_add_session_mcp_server_caches_and_redacts_credentials(self):
@@ -1472,6 +1560,9 @@ class TestTemporaryMCPSessionEndpoints:
         request = MagicMock()
         server = generate_mock_mcp_server_config_record(server_id="server-1")
         authorize_response = MagicMock()
+        admin_auth = generate_mock_user_api_key_auth(
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+        )
 
         with (
             patch(
@@ -1486,6 +1577,7 @@ class TestTemporaryMCPSessionEndpoints:
             result = await mcp_authorize(
                 request=request,
                 server_id="server-1",
+                user_api_key_dict=admin_auth,
                 client_id="client-id",
                 redirect_uri="https://example.com/callback",
                 state="state123",
@@ -1496,7 +1588,7 @@ class TestTemporaryMCPSessionEndpoints:
             )
 
         assert result is authorize_response
-        get_server.assert_awaited_once_with("server-1", request=request)
+        get_server.assert_awaited_once_with("server-1", admin_auth, request=request)
         authorize_mock.assert_awaited_once_with(
             request=request,
             mcp_server=server,
@@ -1518,6 +1610,9 @@ class TestTemporaryMCPSessionEndpoints:
         request = MagicMock()
         server = generate_mock_mcp_server_config_record(server_id="server-1")
         exchange_response = {"access_token": "token"}
+        admin_auth = generate_mock_user_api_key_auth(
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+        )
 
         with (
             patch(
@@ -1532,6 +1627,7 @@ class TestTemporaryMCPSessionEndpoints:
             result = await mcp_token(
                 request=request,
                 server_id="server-1",
+                user_api_key_dict=admin_auth,
                 grant_type="authorization_code",
                 code="code-123",
                 redirect_uri="https://example.com/callback",
@@ -1543,7 +1639,7 @@ class TestTemporaryMCPSessionEndpoints:
             )
 
         assert result is exchange_response
-        get_server.assert_awaited_once_with("server-1", request=request)
+        get_server.assert_awaited_once_with("server-1", admin_auth, request=request)
         exchange_mock.assert_awaited_once_with(
             request=request,
             mcp_server=server,
@@ -1566,6 +1662,9 @@ class TestTemporaryMCPSessionEndpoints:
         request = MagicMock()
         server = generate_mock_mcp_server_config_record(server_id="server-1")
         exchange_response = {"access_token": "new-token", "refresh_token": "new-rt"}
+        admin_auth = generate_mock_user_api_key_auth(
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+        )
 
         with (
             patch(
@@ -1580,6 +1679,7 @@ class TestTemporaryMCPSessionEndpoints:
             result = await mcp_token(
                 request=request,
                 server_id="server-1",
+                user_api_key_dict=admin_auth,
                 grant_type="refresh_token",
                 code=None,
                 redirect_uri=None,
@@ -1591,7 +1691,7 @@ class TestTemporaryMCPSessionEndpoints:
             )
 
         assert result is exchange_response
-        get_server.assert_awaited_once_with("server-1", request=request)
+        get_server.assert_awaited_once_with("server-1", admin_auth, request=request)
         exchange_mock.assert_awaited_once_with(
             request=request,
             mcp_server=server,
@@ -1620,6 +1720,9 @@ class TestTemporaryMCPSessionEndpoints:
             "response_types": ["code"],
             "token_endpoint_auth_method": "client_secret_basic",
         }
+        admin_auth = generate_mock_user_api_key_auth(
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+        )
 
         with (
             patch(
@@ -1635,10 +1738,14 @@ class TestTemporaryMCPSessionEndpoints:
                 AsyncMock(return_value=register_response),
             ) as register_mock,
         ):
-            result = await mcp_register(request=request, server_id="server-1")
+            result = await mcp_register(
+                request=request,
+                server_id="server-1",
+                user_api_key_dict=admin_auth,
+            )
 
         assert result is register_response
-        get_server.assert_awaited_once_with("server-1", request=request)
+        get_server.assert_awaited_once_with("server-1", admin_auth, request=request)
         read_body.assert_awaited_once_with(request=request)
         register_mock.assert_awaited_once_with(
             request=request,
@@ -1664,12 +1771,15 @@ class TestTemporaryMCPSessionEndpoints:
         original_cache = mgmt_endpoints.litellm.cache
         mgmt_endpoints.litellm.cache = SimpleNamespace(cache=mock_cache_backend)
         try:
-            with patch(
-                "litellm.proxy.management_endpoints.mcp_management_endpoints._temporary_mcp_servers",
-                {},
-            ), patch(
-                "litellm.proxy.management_endpoints.mcp_management_endpoints.decrypt_value_helper",
-                return_value=serialized,
+            with (
+                patch(
+                    "litellm.proxy.management_endpoints.mcp_management_endpoints._temporary_mcp_servers",
+                    {},
+                ),
+                patch(
+                    "litellm.proxy.management_endpoints.mcp_management_endpoints.decrypt_value_helper",
+                    return_value=serialized,
+                ),
             ):
                 result = await get_cached_temporary_mcp_server("from-redis")
         finally:
@@ -1734,7 +1844,9 @@ class TestTemporaryMCPSessionEndpoints:
             _get_temporary_mcp_server_from_redis,
         )
 
-        server = generate_mock_mcp_server_config_record(server_id="from-redis-encrypted")
+        server = generate_mock_mcp_server_config_record(
+            server_id="from-redis-encrypted"
+        )
         serialized = json.dumps(server.model_dump(mode="json"))
         mock_cache_backend = SimpleNamespace(
             async_get_cache=AsyncMock(return_value="encrypted-payload")
@@ -1808,7 +1920,9 @@ class TestTemporaryMCPSessionEndpoints:
             _get_temporary_mcp_server_from_redis,
         )
 
-        mock_cache_backend = SimpleNamespace(async_get_cache=AsyncMock(return_value="enc"))
+        mock_cache_backend = SimpleNamespace(
+            async_get_cache=AsyncMock(return_value="enc")
+        )
         original_cache = mgmt_endpoints.litellm.cache
         mgmt_endpoints.litellm.cache = SimpleNamespace(cache=mock_cache_backend)
         try:
@@ -1823,12 +1937,16 @@ class TestTemporaryMCPSessionEndpoints:
         assert result is None
 
     @pytest.mark.asyncio
-    async def test_get_temporary_mcp_server_from_redis_returns_none_on_decrypt_none(self):
+    async def test_get_temporary_mcp_server_from_redis_returns_none_on_decrypt_none(
+        self,
+    ):
         from litellm.proxy.management_endpoints.mcp_management_endpoints import (
             _get_temporary_mcp_server_from_redis,
         )
 
-        mock_cache_backend = SimpleNamespace(async_get_cache=AsyncMock(return_value="enc"))
+        mock_cache_backend = SimpleNamespace(
+            async_get_cache=AsyncMock(return_value="enc")
+        )
         original_cache = mgmt_endpoints.litellm.cache
         mgmt_endpoints.litellm.cache = SimpleNamespace(cache=mock_cache_backend)
         try:
