@@ -398,6 +398,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         response: Optional[Union[Any, litellm.ModelResponse]] = None,
         request_data: Optional[dict] = None,
         logging_event_type: Optional[GuardrailEventHooks] = None,
+        log_result: bool = True,
     ) -> BedrockGuardrailResponse:
         from datetime import datetime
 
@@ -466,16 +467,17 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                         status_code,
                         detail_message,
                     ) = self._parse_bedrock_guardrail_error_response(response)
-                    self.add_standard_logging_guardrail_information_to_request_data(
-                        guardrail_provider=self.guardrail_provider,
-                        guardrail_json_response={"error": detail_message},
-                        request_data=request_data or {},
-                        guardrail_status="guardrail_failed_to_respond",
-                        start_time=start_time.timestamp(),
-                        end_time=datetime.now().timestamp(),
-                        duration=(datetime.now() - start_time).total_seconds(),
-                        event_type=event_type,
-                    )
+                    if log_result:
+                        self.add_standard_logging_guardrail_information_to_request_data(
+                            guardrail_provider=self.guardrail_provider,
+                            guardrail_json_response={"error": detail_message},
+                            request_data=request_data or {},
+                            guardrail_status="guardrail_failed_to_respond",
+                            start_time=start_time.timestamp(),
+                            end_time=datetime.now().timestamp(),
+                            duration=(datetime.now() - start_time).total_seconds(),
+                            event_type=event_type,
+                        )
                     raise HTTPException(
                         status_code=status_code, detail=detail_message
                     ) from e
@@ -485,16 +487,17 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             verbose_proxy_logger.error(
                 "Bedrock AI: failed to make guardrail request: %s", str(e)
             )
-            self.add_standard_logging_guardrail_information_to_request_data(
-                guardrail_provider=self.guardrail_provider,
-                guardrail_json_response={"error": str(e)},
-                request_data=request_data or {},
-                guardrail_status="guardrail_failed_to_respond",
-                start_time=start_time.timestamp(),
-                end_time=datetime.now().timestamp(),
-                duration=(datetime.now() - start_time).total_seconds(),
-                event_type=event_type,
-            )
+            if log_result:
+                self.add_standard_logging_guardrail_information_to_request_data(
+                    guardrail_provider=self.guardrail_provider,
+                    guardrail_json_response={"error": str(e)},
+                    request_data=request_data or {},
+                    guardrail_status="guardrail_failed_to_respond",
+                    start_time=start_time.timestamp(),
+                    end_time=datetime.now().timestamp(),
+                    duration=(datetime.now() - start_time).total_seconds(),
+                    event_type=event_type,
+                )
             raise
 
         #########################################################
@@ -504,18 +507,19 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         _json_response = httpx_response.json()
         # Raw Bedrock JSON is passed here; match/regex redaction runs once inside
         # CustomGuardrail.add_standard_logging_guardrail_information_to_request_data.
-        self.add_standard_logging_guardrail_information_to_request_data(
-            guardrail_provider=self.guardrail_provider,
-            guardrail_json_response=_json_response,
-            request_data=request_data or {},
-            guardrail_status=self._get_bedrock_guardrail_response_status(
-                response=httpx_response
-            ),
-            start_time=start_time.timestamp(),
-            end_time=datetime.now().timestamp(),
-            duration=(datetime.now() - start_time).total_seconds(),
-            event_type=event_type,
-        )
+        if log_result:
+            self.add_standard_logging_guardrail_information_to_request_data(
+                guardrail_provider=self.guardrail_provider,
+                guardrail_json_response=_json_response,
+                request_data=request_data or {},
+                guardrail_status=self._get_bedrock_guardrail_response_status(
+                    response=httpx_response
+                ),
+                start_time=start_time.timestamp(),
+                end_time=datetime.now().timestamp(),
+                duration=(datetime.now() - start_time).total_seconds(),
+                event_type=event_type,
+            )
         #########################################################
         if httpx_response.status_code == 200:
             # check if the response was flagged
@@ -1270,25 +1274,14 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                 )
                 input_messages = input_filter.payload_messages or new_messages
 
-                # Route INPUT logging to a throwaway container so it doesn't
-                # create a second UI evaluation entry; the OUTPUT log is canonical.
-                _input_log_data: dict = {
-                    k: v
-                    for k, v in request_data.items()
-                    if k not in ("metadata", "litellm_metadata")
-                }
-                _input_meta = {
-                    k: v
-                    for k, v in (request_data.get("metadata") or {}).items()
-                    if k != "standard_logging_guardrail_information"
-                }
-                _input_log_data["metadata"] = _input_meta
-
+                # Skip INPUT logging so only the OUTPUT call creates a UI
+                # evaluation entry; blocking still works via the raised exception.
                 input_task = self.make_bedrock_api_request(
                     source="INPUT",
                     messages=input_messages,
-                    request_data=_input_log_data,
+                    request_data=request_data,
                     logging_event_type=GuardrailEventHooks.post_call,
+                    log_result=False,
                 )
                 output_task = self.make_bedrock_api_request(
                     source="OUTPUT",
