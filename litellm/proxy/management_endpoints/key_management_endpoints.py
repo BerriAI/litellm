@@ -18,7 +18,7 @@ import re
 import secrets
 import traceback
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Literal, Optional, Tuple, cast
+from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, cast
 
 import fastapi
 import yaml
@@ -49,6 +49,7 @@ from litellm.proxy.auth.auth_checks import (
 )
 from litellm.proxy.auth.auth_utils import abbreviate_api_key
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.rbac_utils import check_org_admin_can_generate_keys
 from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 from litellm.proxy.hooks.key_management_event_hooks import KeyManagementEventHooks
 from litellm.proxy.management_endpoints.common_utils import (
@@ -456,6 +457,77 @@ def handle_key_type(data: GenerateKeyRequest, data_json: dict) -> dict:
     return data_json
 
 
+_NON_ADMIN_SAFE_ALLOWED_ROUTES_PRESETS = frozenset({"llm_api_routes", "info_routes"})
+
+
+def _check_allowed_routes_caller_permission(
+    allowed_routes: Optional[list],
+    user_api_key_dict: UserAPIKeyAuth,
+    *,
+    allow_safe_presets: bool = False,
+) -> None:
+    """
+    Only proxy admins may set `allowed_routes` on a key.
+
+    `allowed_routes` overrides the standard role-based route gate in
+    RouteChecks.non_proxy_admin_allowed_routes_check, so the field is
+    restricted to admins. Non-admins must instead use `key_type` to pick a
+    preset bucket — that path goes through `handle_key_type` and re-enters
+    this function with `allow_safe_presets=True`, which lets the derived
+    `llm_api_routes` / `info_routes` values through. Raw-body call sites
+    leave `allow_safe_presets=False` so non-admins can't write those values
+    directly.
+    """
+    # Empty list is the default on GenerateKeyRequest — treat as "not set".
+    if not allowed_routes:
+        return
+    if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
+        return
+    if allow_safe_presets and all(
+        r in _NON_ADMIN_SAFE_ALLOWED_ROUTES_PRESETS for r in allowed_routes
+    ):
+        return
+    raise HTTPException(
+        status_code=403,
+        detail={
+            "error": (
+                "Only proxy admins can set `allowed_routes` on a key. "
+                "Use `key_type` to pick a preset route bucket instead."
+            )
+        },
+    )
+
+
+def _check_passthrough_routes_caller_permission(
+    data: BaseModel,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> None:
+    """
+    Only proxy admins may set `allowed_passthrough_routes` on a key, either at
+    the top level of the request or nested under `metadata`.
+
+    The route gate evaluates passthrough access ahead of the standard role
+    gate, so the field is restricted to admins to keep that ordering safe.
+    """
+    if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
+        return
+    if getattr(data, "allowed_passthrough_routes", None):
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": "Only proxy admins can set `allowed_passthrough_routes` on a key."
+            },
+        )
+    metadata = getattr(data, "metadata", None)
+    if isinstance(metadata, dict) and metadata.get("allowed_passthrough_routes"):
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": "Only proxy admins can set `metadata.allowed_passthrough_routes` on a key."
+            },
+        )
+
+
 async def validate_team_id_used_in_service_account_request(
     team_id: Optional[str],
     prisma_client: Optional[PrismaClient],
@@ -485,6 +557,55 @@ async def validate_team_id_used_in_service_account_request(
             detail="team_id does not exist in the database. Please specify a valid `team_id` in the request body.",
         )
     return True
+
+
+def _enforce_upperbound_key_params(
+    data: Union[GenerateKeyRequest, UpdateKeyRequest],
+    fill_defaults: bool = True,
+) -> None:
+    """
+    Enforce upperbound limits on key parameters.
+
+    For key generation (fill_defaults=True): fills None values with upperbound defaults.
+    For key update (fill_defaults=False): only validates explicitly provided values.
+    """
+    if litellm.upperbound_key_generate_params is None:
+        return
+
+    for elem in data:
+        key, value = elem
+        upperbound_value = getattr(litellm.upperbound_key_generate_params, key, None)
+        if upperbound_value is not None:
+            if value is None:
+                if fill_defaults:
+                    setattr(data, key, upperbound_value)
+            else:
+                if key in [
+                    "max_budget",
+                    "max_parallel_requests",
+                    "tpm_limit",
+                    "rpm_limit",
+                ]:
+                    if value > upperbound_value:
+                        raise HTTPException(
+                            status_code=400,
+                            detail={
+                                "error": f"{key} is over max limit set in config - user_value={value}; max_value={upperbound_value}"
+                            },
+                        )
+                elif key in ["budget_duration", "duration"]:
+                    upperbound_duration = duration_in_seconds(duration=upperbound_value)
+                    if value == "-1":
+                        user_duration = float("inf")
+                    else:
+                        user_duration = duration_in_seconds(duration=value)
+                    if user_duration > upperbound_duration:
+                        raise HTTPException(
+                            status_code=400,
+                            detail={
+                                "error": f"{key} is over max limit set in config - user_value={value}; max_value={upperbound_value}"
+                            },
+                        )
 
 
 async def _common_key_generation_helper(  # noqa: PLR0915
@@ -537,49 +658,8 @@ async def _common_key_generation_helper(  # noqa: PLR0915
             elif key == "metadata" and value == {}:
                 setattr(data, key, litellm.default_key_generate_params.get(key, {}))
 
-    # check if user set default key/generate params on config.yaml
-    if litellm.upperbound_key_generate_params is not None:
-        for elem in data:
-            key, value = elem
-            upperbound_value = getattr(
-                litellm.upperbound_key_generate_params, key, None
-            )
-            if upperbound_value is not None:
-                if value is None:
-                    # Use the upperbound value if user didn't provide a value
-                    setattr(data, key, upperbound_value)
-                else:
-                    # Compare with upperbound for numeric fields
-                    if key in [
-                        "max_budget",
-                        "max_parallel_requests",
-                        "tpm_limit",
-                        "rpm_limit",
-                    ]:
-                        if value > upperbound_value:
-                            raise HTTPException(
-                                status_code=400,
-                                detail={
-                                    "error": f"{key} is over max limit set in config - user_value={value}; max_value={upperbound_value}"
-                                },
-                            )
-                    # Compare durations
-                    elif key in ["budget_duration", "duration"]:
-                        upperbound_duration = duration_in_seconds(
-                            duration=upperbound_value
-                        )
-                        # Handle special case where duration is None or "-1" (never expires)
-                        if value is None or value == "-1":
-                            user_duration = float("inf")  # Infinite duration
-                        else:
-                            user_duration = duration_in_seconds(duration=value)
-                        if user_duration > upperbound_duration:
-                            raise HTTPException(
-                                status_code=400,
-                                detail={
-                                    "error": f"{key} is over max limit set in config - user_value={value}; max_value={upperbound_value}"
-                                },
-                            )
+    # check if user set upperbound key/generate params on config.yaml
+    _enforce_upperbound_key_params(data, fill_defaults=True)
 
     # APPLY ENTERPRISE KEY MANAGEMENT PARAMS
     try:
@@ -637,6 +717,17 @@ async def _common_key_generation_helper(  # noqa: PLR0915
     data_json = data.model_dump(exclude_unset=True, exclude_none=True)  # type: ignore
 
     data_json = handle_key_type(data, data_json)
+
+    # Re-check allowed_routes after handle_key_type, since key_type can derive
+    # an elevated bucket (e.g. ["management_routes"]) that wasn't present in
+    # the original request body. The safe presets produced by handle_key_type
+    # for non-elevated buckets are accepted here; the raw-body pre-checks at
+    # the entry of each handler keep their default strictness.
+    _check_allowed_routes_caller_permission(
+        allowed_routes=data_json.get("allowed_routes"),
+        user_api_key_dict=user_api_key_dict,
+        allow_safe_presets=True,
+    )
 
     # if we get max_budget passed to /key/generate, then use it as key_max_budget. Since generate_key_helper_fn is used to make new users
     if "max_budget" in data_json:
@@ -732,9 +823,9 @@ async def _common_key_generation_helper(  # noqa: PLR0915
         request_type="key", **data_json, table_name="key"
     )
 
-    response[
-        "soft_budget"
-    ] = data.soft_budget  # include the user-input soft budget in the response
+    response["soft_budget"] = (
+        data.soft_budget
+    )  # include the user-input soft budget in the response
 
     response = GenerateKeyResponse(**response)
 
@@ -942,9 +1033,9 @@ async def _check_team_key_limits(
         where={"team_id": team_table.team_id},
     )
     # Exclude the key being updated to avoid double-counting its limits.
-    # key.token is the SHA-256 hash stored in DB; data.key is the raw key string.
+    # data.key may be a raw key (sk-...) or a pre-hashed token_id.
     if isinstance(data, UpdateKeyRequest):
-        hashed_key = hash_token(data.key)
+        hashed_key = _hash_token_if_needed(data.key)
         keys = [key for key in keys if key.token != hashed_key]
     check_team_key_model_specific_limits(
         keys=keys,
@@ -1101,9 +1192,9 @@ async def _check_org_key_limits(
         where={"organization_id": org_table.organization_id},
     )
     # Exclude the key being updated to avoid double-counting its limits.
-    # key.token is the SHA-256 hash stored in DB; data.key is the raw key string.
+    # data.key may be a raw key (sk-...) or a pre-hashed token_id.
     if isinstance(data, UpdateKeyRequest):
-        hashed_key = hash_token(data.key)
+        hashed_key = _hash_token_if_needed(data.key)
         keys = [key for key in keys if key.token != hashed_key]
     check_org_key_model_specific_limits(
         keys=keys,
@@ -1184,6 +1275,7 @@ async def generate_key_fn(
     - allowed_vector_store_indexes: Optional[List[dict]] - List of allowed vector store indexes for the key. Example - [{"index_name": "my-index", "index_permissions": ["write", "read"]}]. If specified, the key will only be able to use these specific vector store indexes. Create index, using `/v1/indexes` endpoint.
     - router_settings: Optional[UpdateRouterConfig] - key-specific router settings. Example - {"model_group_retry_policy": {"max_retries": 5}}. IF null or {} then no router settings.
     - access_group_ids: Optional[List[str]] - List of access group IDs to associate with the key. Access groups define which models a key can access. Example - ["access_group_1", "access_group_2"].
+    - budget_limits: Optional[list] - List of concurrent budget windows for the key. Each window specifies a budget_limit, time_period, and optional budget_duration. Example - [{"budget_limit": 10.0, "time_period": "1d"}, {"budget_limit": 50.0, "time_period": "7d"}].
 
     Examples:
 
@@ -1219,6 +1311,8 @@ async def generate_key_fn(
 
         verbose_proxy_logger.debug("entered /key/generate")
 
+        await check_org_admin_can_generate_keys(user_api_key_dict=user_api_key_dict)
+
         # Validate budget values are not negative
         if data.max_budget is not None and data.max_budget < 0:
             raise HTTPException(
@@ -1246,6 +1340,16 @@ async def generate_key_fn(
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN, detail=message
                 )
+
+        _check_allowed_routes_caller_permission(
+            allowed_routes=data.allowed_routes,
+            user_api_key_dict=user_api_key_dict,
+        )
+        _check_passthrough_routes_caller_permission(
+            data=data,
+            user_api_key_dict=user_api_key_dict,
+        )
+
         # For non-admin internal users: auto-assign caller's user_id if not provided
         # This prevents creating unbound keys with no user association (LIT-1884)
         _is_proxy_admin = (
@@ -1408,6 +1512,17 @@ async def generate_service_account_key_fn(
             detail={"error": CommonProxyErrors.db_not_connected_error.value},
         )
 
+    await check_org_admin_can_generate_keys(user_api_key_dict=user_api_key_dict)
+
+    _check_allowed_routes_caller_permission(
+        allowed_routes=data.allowed_routes,
+        user_api_key_dict=user_api_key_dict,
+    )
+    _check_passthrough_routes_caller_permission(
+        data=data,
+        user_api_key_dict=user_api_key_dict,
+    )
+
     await validate_team_id_used_in_service_account_request(
         team_id=data.team_id,
         prisma_client=prisma_client,
@@ -1474,6 +1589,22 @@ def prepare_metadata_fields(
         non_default_values["metadata"] = existing_metadata.copy()
 
     casted_metadata = cast(dict, non_default_values["metadata"])
+
+    # Reserved metadata fields are immutable once set. Preserve the existing value
+    # when omitted, reject any explicit attempt to change it (including null).
+    for reserved_field in LiteLLM_Reserved_Metadata_Fields:
+        existing_value = existing_metadata.get(reserved_field)
+        if existing_value is None:
+            continue
+        if casted_metadata is None or (
+            reserved_field in casted_metadata
+            and casted_metadata[reserved_field] != existing_value
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail=f"{reserved_field} is immutable once set and cannot be changed via update.",
+            )
+        casted_metadata[reserved_field] = existing_value
 
     data_json = data.model_dump(exclude_unset=True, exclude_none=True)
 
@@ -1558,6 +1689,19 @@ async def prepare_key_update_data(
             key_reset_at = get_budget_reset_time(budget_duration=budget_duration)
             non_default_values["budget_reset_at"] = key_reset_at
             non_default_values["budget_duration"] = budget_duration
+
+    if "budget_limits" in non_default_values and non_default_values["budget_limits"]:
+        from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
+
+        raw_windows = non_default_values["budget_limits"]
+        initialized_windows = []
+        for window in raw_windows:
+            w = window if isinstance(window, dict) else window.model_dump()
+            w["reset_at"] = get_budget_reset_time(
+                budget_duration=w["budget_duration"]
+            ).isoformat()
+            initialized_windows.append(w)
+        non_default_values["budget_limits"] = json.dumps(initialized_windows)
 
     if "object_permission" in non_default_values:
         non_default_values = await _handle_update_object_permission(
@@ -1687,6 +1831,7 @@ async def _process_single_key_update(
     user_api_key_cache: DualCache,
     proxy_logging_obj: Any,
     llm_router: Optional[Router],
+    user_custom_key_update: Optional[Callable] = None,
 ) -> Dict[str, Any]:
     """
     Process a single key update with all validations and checks.
@@ -1736,6 +1881,20 @@ async def _process_single_key_update(
         team_id=key_update_item.team_id,
         tags=key_update_item.tags,
     )
+
+    # Custom key update hook
+    if user_custom_key_update is not None:
+        if inspect.iscoroutinefunction(user_custom_key_update):
+            result = await user_custom_key_update(update_key_request)
+        else:
+            raise ValueError("user_custom_key_update must be a coroutine")
+        decision = result.get("decision", True)
+        message = result.get("message", "Authentication Failed - Custom Auth Rule")
+        if not decision:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=message)
+
+    # Enforce upperbound key params on update (don't fill defaults)
+    _enforce_upperbound_key_params(update_key_request, fill_defaults=False)
 
     # Get team object and check team limits if team_id is provided
     team_obj: Optional[LiteLLM_TeamTableCachedObj] = None
@@ -1792,7 +1951,7 @@ async def _process_single_key_update(
 
     # Delete cache
     await _delete_cache_key_object(
-        hashed_token=hash_token(key_update_item.key),
+        hashed_token=_hash_token_if_needed(key_update_item.key),
         user_api_key_cache=user_api_key_cache,
         proxy_logging_obj=proxy_logging_obj,
     )
@@ -1865,6 +2024,15 @@ async def _validate_update_key_data(
     """Validate permissions and constraints for key update."""
     _is_proxy_admin = user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
 
+    _check_allowed_routes_caller_permission(
+        allowed_routes=data.allowed_routes,
+        user_api_key_dict=user_api_key_dict,
+    )
+    _check_passthrough_routes_caller_permission(
+        data=data,
+        user_api_key_dict=user_api_key_dict,
+    )
+
     # Prevent non-admin from removing user_id (setting to empty string) (LIT-1884)
     if data.user_id is not None and data.user_id == "" and not _is_proxy_admin:
         raise HTTPException(
@@ -1899,17 +2067,57 @@ async def _validate_update_key_data(
         user_api_key_cache=user_api_key_cache,
     )
 
-    # Admin-only: only proxy admins, team admins, or org admins can modify max_budget
-    if data.max_budget is not None and data.max_budget != existing_key_row.max_budget:
-        if prisma_client is not None:
-            hashed_key = existing_key_row.token
-            await _check_key_admin_access(
-                user_api_key_dict=user_api_key_dict,
-                hashed_token=hashed_key,
-                prisma_client=prisma_client,
-                user_api_key_cache=user_api_key_cache,
-                route="/key/update (max_budget)",
-            )
+    # Cross-key authorization. Previously only gated on max_budget/spend
+    # changes, which let a non-admin blanket-rewrite any OTHER field on
+    # any key (models, alias, metadata, tpm_limit, rpm_limit,
+    # allowed_routes, guardrails, blocked, duration, permissions, …) as
+    # long as they avoided budget/spend.
+    #
+    # Policy:
+    # - Key owner (same user_id): may update non-budget fields on their
+    #   own key without the admin check.
+    # - Team member with /key/update grant (on a team key): may update
+    #   non-budget fields. Team membership + permission is already
+    #   enforced by can_team_member_execute_key_management_endpoint
+    #   above, which raises 401 for non-members or members without the
+    #   grant — so reaching this point on a team key means the caller
+    #   was authorized via member_permissions. This preserves the
+    #   documented member_permissions feature while still blocking the
+    #   cross-org attack (an outside org admin is not a member of the
+    #   victim team and gets rejected at the earlier check).
+    # - Anyone else (non-PROXY_ADMIN, not the owner, not a team member
+    #   on a team key): must pass _check_key_admin_access (PROXY_ADMIN
+    #   / key-owner / team-admin / org-admin of the key).
+    # - max_budget / spend: always require the admin check, even for the
+    #   key owner or a team member (matches the existing admin-only
+    #   budget semantics).
+    is_key_owner = (
+        user_api_key_dict.user_id is not None
+        and existing_key_row.user_id == user_api_key_dict.user_id
+    )
+    _is_budget_change = (
+        data.max_budget is not None and data.max_budget != existing_key_row.max_budget
+    ) or (
+        data.spend is not None
+        and data.spend != getattr(existing_key_row, "spend", None)
+    )
+    is_team_key = existing_key_row.team_id is not None
+    can_skip_admin_check_for_non_budget = is_key_owner or is_team_key
+    if (
+        (not _is_proxy_admin)
+        and prisma_client is not None
+        and (_is_budget_change or not can_skip_admin_check_for_non_budget)
+    ):
+        hashed_key = existing_key_row.token
+        await _check_key_admin_access(
+            user_api_key_dict=user_api_key_dict,
+            hashed_token=hashed_key,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            route=(
+                "/key/update (max_budget/spend)" if _is_budget_change else "/key/update"
+            ),
+        )
 
     # Check team limits if key has a team_id (from request or existing key)
     team_obj: Optional[LiteLLM_TeamTableCachedObj] = None
@@ -2014,7 +2222,7 @@ async def _validate_update_key_data(
     "/key/update", tags=["key management"], dependencies=[Depends(user_api_key_auth)]
 )
 @management_endpoint_wrapper
-async def update_key_fn(
+async def update_key_fn(  # noqa: PLR0915
     request: Request,
     data: UpdateKeyRequest,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
@@ -2073,6 +2281,7 @@ async def update_key_fn(
     - allowed_vector_store_indexes: Optional[List[dict]] - List of allowed vector store indexes for the key. Example - [{"index_name": "my-index", "index_permissions": ["write", "read"]}]. If specified, the key will only be able to use these specific vector store indexes. Create index, using `/v1/indexes` endpoint.
     - router_settings: Optional[UpdateRouterConfig] - key-specific router settings. Example - {"model_group_retry_policy": {"max_retries": 5}}. IF null or {} then no router settings.
     - access_group_ids: Optional[List[str]] - List of access group IDs to associate with the key. Access groups define which models a key can access. Example - ["access_group_1", "access_group_2"].
+    - budget_limits: Optional[list] - List of concurrent budget windows for the key. Each window specifies a budget_limit, time_period, and optional budget_duration. Example - [{"budget_limit": 10.0, "time_period": "1d"}, {"budget_limit": 50.0, "time_period": "7d"}].
 
     Example:
     ```bash
@@ -2095,6 +2304,7 @@ async def update_key_fn(
         prisma_client,
         proxy_logging_obj,
         user_api_key_cache,
+        user_custom_key_update,
     )
 
     try:
@@ -2126,6 +2336,21 @@ async def update_key_fn(
             user_api_key_cache=user_api_key_cache,
         )
 
+        # Custom key update hook
+        if user_custom_key_update is not None:
+            if inspect.iscoroutinefunction(user_custom_key_update):
+                result = await user_custom_key_update(data)
+            else:
+                raise ValueError("user_custom_key_update must be a coroutine")
+            decision = result.get("decision", True)
+            message = result.get("message", "Authentication Failed - Custom Auth Rule")
+            if not decision:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN, detail=message
+                )
+
+        # Enforce upperbound key params on update (don't fill defaults)
+        _enforce_upperbound_key_params(data, fill_defaults=False)
         non_default_values = await prepare_key_update_data(
             data=data, existing_key_row=existing_key_row
         )
@@ -2157,7 +2382,7 @@ async def update_key_fn(
         # Delete - key from cache, since it's been updated!
         # key updated - a new model could have been added to this key. it should not block requests after this is done
         await _delete_cache_key_object(
-            hashed_token=hash_token(key),
+            hashed_token=_hash_token_if_needed(key),
             user_api_key_cache=user_api_key_cache,
             proxy_logging_obj=proxy_logging_obj,
         )
@@ -2261,6 +2486,7 @@ async def bulk_update_keys(
         prisma_client,
         proxy_logging_obj,
         user_api_key_cache,
+        user_custom_key_update,
     )
 
     if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value:
@@ -2304,6 +2530,7 @@ async def bulk_update_keys(
                 user_api_key_cache=user_api_key_cache,
                 proxy_logging_obj=proxy_logging_obj,
                 llm_router=llm_router,
+                user_custom_key_update=user_custom_key_update,
             )
 
             successful_updates.append(
@@ -2591,22 +2818,39 @@ async def info_key_fn_v2(
                 detail={"message": "Malformed request. No keys passed in."},
             )
 
-        key_info = await prisma_client.get_data(
-            token=data.keys, table_name="key", query_type="find_all"
-        )
-        if key_info is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail={"message": "No keys found"},
+        # Resolve key_aliases to tokens so we never pass token=None (unbounded query)
+        tokens_to_query = list(data.keys) if data.keys else []
+        if data.key_aliases:
+            alias_rows = await prisma_client.db.litellm_verificationtoken.find_many(
+                where={"key_alias": {"in": data.key_aliases}},
+                include={"litellm_budget_table": True},
             )
+            alias_tokens = [row.token for row in alias_rows if row.token]
+            tokens_to_query.extend(alias_tokens)
+
+        if not tokens_to_query:
+            return {"key": data.keys, "info": []}
+
+        key_info = await prisma_client.get_data(
+            token=tokens_to_query, table_name="key", query_type="find_all"
+        )
+        if not key_info:
+            return {"key": data.keys, "info": []}
+
         filtered_key_info = []
         for k in key_info:
+            if not await _can_user_query_key_info(
+                user_api_key_dict=user_api_key_dict,
+                key=k.token,
+                key_info=k,
+            ):
+                continue
             try:
-                k = k.model_dump()  # noqa
+                k_dict = k.model_dump()
             except Exception:
-                # if using pydantic v1
-                k = k.dict()
-            filtered_key_info.append(k)
+                k_dict = k.dict()
+            k_dict.pop("token", None)
+            filtered_key_info.append(k_dict)
         return {"key": data.keys, "info": filtered_key_info}
 
     except Exception as e:
@@ -2785,6 +3029,7 @@ async def generate_key_helper_fn(  # noqa: PLR0915
     rotation_interval: Optional[str] = None,
     router_settings: Optional[dict] = None,
     access_group_ids: Optional[list] = None,
+    budget_limits: Optional[list] = None,  # multiple concurrent budget windows
 ):
     from litellm.proxy.proxy_server import premium_user, prisma_client
 
@@ -2815,6 +3060,18 @@ async def generate_key_helper_fn(  # noqa: PLR0915
         reset_at = None
     else:
         reset_at = get_budget_reset_time(budget_duration=budget_duration)
+
+    # Initialize reset_at for each budget window
+    budget_limits_json: Optional[str] = None
+    if budget_limits:
+        initialized_windows = []
+        for window in budget_limits:
+            w = dict(window) if not isinstance(window, dict) else {**window}
+            w["reset_at"] = get_budget_reset_time(
+                budget_duration=w["budget_duration"]
+            ).isoformat()
+            initialized_windows.append(w)
+        budget_limits_json = json.dumps(initialized_windows)
 
     aliases_json = json.dumps(aliases)
     config_json = json.dumps(config)
@@ -2898,6 +3155,7 @@ async def generate_key_helper_fn(  # noqa: PLR0915
             "organization_id": organization_id,
             "budget_id": budget_id,
             "blocked": blocked,
+            "budget_limits": budget_limits_json,
             "created_by": created_by,
             "updated_by": updated_by,
             "allowed_routes": allowed_routes or [],
@@ -3175,10 +3433,10 @@ async def delete_verification_tokens(
     try:
         if prisma_client:
             tokens = [_hash_token_if_needed(token=key) for key in tokens]
-            _keys_being_deleted: List[
-                LiteLLM_VerificationToken
-            ] = await prisma_client.db.litellm_verificationtoken.find_many(
-                where={"token": {"in": tokens}}
+            _keys_being_deleted: List[LiteLLM_VerificationToken] = (
+                await prisma_client.db.litellm_verificationtoken.find_many(
+                    where={"token": {"in": tokens}}
+                )
             )
 
             if len(_keys_being_deleted) == 0:
@@ -3298,6 +3556,7 @@ def _transform_verification_tokens_to_deleted_records(
             "litellm_organization_table",
             "object_permission",
             "id",
+            "budget_limits",
         ):
             record.pop(rel_key, None)
 
@@ -3378,9 +3637,9 @@ async def _rotate_master_key(  # noqa: PLR0915
     from litellm.proxy.proxy_server import proxy_config
 
     try:
-        models: Optional[
-            List
-        ] = await prisma_client.db.litellm_proxymodeltable.find_many()
+        models: Optional[List] = (
+            await prisma_client.db.litellm_proxymodeltable.find_many()
+        )
     except Exception:
         models = None
     # 2. process model table
@@ -3624,7 +3883,7 @@ async def _execute_virtual_key_regeneration(
 
     if hashed_api_key or key:
         await _delete_cache_key_object(
-            hashed_token=hash_token(key),
+            hashed_token=_hash_token_if_needed(key),
             user_api_key_cache=user_api_key_cache,
             proxy_logging_obj=proxy_logging_obj,
         )
@@ -3721,6 +3980,30 @@ async def regenerate_key_fn(  # noqa: PLR0915
             proxy_logging_obj,
             user_api_key_cache,
         )
+
+        if data is not None:
+            _check_allowed_routes_caller_permission(
+                allowed_routes=data.allowed_routes,
+                user_api_key_dict=user_api_key_dict,
+            )
+            _check_passthrough_routes_caller_permission(
+                data=data,
+                user_api_key_dict=user_api_key_dict,
+            )
+            # Mirror /key/generate's post-handle_key_type recheck so a
+            # non-admin can't elevate via a key_type preset that the
+            # regenerate flow would otherwise carry through unchecked.
+            # The empty dict is intentional — `handle_key_type` is reused
+            # purely as a side-effect-free lookup of the preset bucket, not
+            # to mutate an existing `data_json`. Do not pass a real
+            # `data_json` here; that path would write the derived routes
+            # into the DB update payload and is owned by
+            # `_common_key_generation_helper`.
+            _check_allowed_routes_caller_permission(
+                allowed_routes=handle_key_type(data, {}).get("allowed_routes"),
+                user_api_key_dict=user_api_key_dict,
+                allow_safe_presets=True,
+            )
 
         is_master_key_regeneration = data and data.new_master_key is not None
 
@@ -4020,11 +4303,11 @@ async def validate_key_list_check(
             param="user_id",
             code=status.HTTP_403_FORBIDDEN,
         )
-    complete_user_info_db_obj: Optional[
-        BaseModel
-    ] = await prisma_client.db.litellm_usertable.find_unique(
-        where={"user_id": user_api_key_dict.user_id},
-        include={"organization_memberships": True},
+    complete_user_info_db_obj: Optional[BaseModel] = (
+        await prisma_client.db.litellm_usertable.find_unique(
+            where={"user_id": user_api_key_dict.user_id},
+            include={"organization_memberships": True},
+        )
     )
 
     if complete_user_info_db_obj is None:
@@ -4107,10 +4390,10 @@ async def _fetch_user_team_objects(
     if complete_user_info is None or not complete_user_info.teams:
         return []
 
-    teams: Optional[
-        List[BaseModel]
-    ] = await prisma_client.db.litellm_teamtable.find_many(
-        where={"team_id": {"in": complete_user_info.teams}}
+    teams: Optional[List[BaseModel]] = (
+        await prisma_client.db.litellm_teamtable.find_many(
+            where={"team_id": {"in": complete_user_info.teams}}
+        )
     )
     if teams is None:
         return []
@@ -4181,13 +4464,19 @@ async def list_keys(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     page: int = Query(1, description="Page number", ge=1),
     size: int = Query(10, description="Page size", ge=1, le=100),
-    user_id: Optional[str] = Query(None, description="Filter keys by user ID"),
+    user_id: Optional[str] = Query(
+        None,
+        description="Filter keys by user ID. Supports partial matching (substring, case-insensitive).",
+    ),
     team_id: Optional[str] = Query(None, description="Filter keys by team ID"),
     organization_id: Optional[str] = Query(
         None, description="Filter keys by organization ID"
     ),
     key_hash: Optional[str] = Query(None, description="Filter keys by key hash"),
-    key_alias: Optional[str] = Query(None, description="Filter keys by key alias"),
+    key_alias: Optional[str] = Query(
+        None,
+        description="Filter keys by key alias. Supports partial matching (substring, case-insensitive).",
+    ),
     return_full_object: bool = Query(False, description="Return full key object"),
     include_team_keys: bool = Query(
         False, description="Include all keys for teams that user is an admin of."
@@ -4280,10 +4569,12 @@ async def list_keys(
         else:
             admin_team_ids = None
 
-        if not user_id and user_api_key_dict.user_role not in [
+        use_substring_matching = user_api_key_dict.user_role in [
             LitellmUserRoles.PROXY_ADMIN.value,
             LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
-        ]:
+        ]
+
+        if not user_id and not use_substring_matching:
             user_id = user_api_key_dict.user_id
 
         response = await _list_key_helper(
@@ -4305,6 +4596,7 @@ async def list_keys(
             status=status,
             project_id=project_id,
             access_group_id=access_group_id,
+            use_substring_matching=use_substring_matching,
         )
 
         verbose_proxy_logger.debug("Successfully prepared response")
@@ -4332,6 +4624,42 @@ async def list_keys(
         )
 
 
+async def _apply_non_admin_alias_scope(
+    user_api_key_dict: UserAPIKeyAuth,
+    prisma_client: Any,
+    query_params: List[Any],
+    where_parts: List[str],
+) -> None:
+    """Append SQL scope conditions so non-admin users only see aliases for
+    keys they own or keys belonging to teams they are members of."""
+    scope_conditions: List[str] = []
+    if user_api_key_dict.user_id:
+        query_params.append(user_api_key_dict.user_id)
+        scope_conditions.append(f"user_id = ${len(query_params)}")
+
+    # Look up the user's teams from the user table
+    user_teams: List[str] = []
+    if user_api_key_dict.user_id:
+        user_row = await prisma_client.db.litellm_usertable.find_unique(
+            where={"user_id": user_api_key_dict.user_id}
+        )
+        if user_row is not None:
+            user_teams = getattr(user_row, "teams", []) or []
+
+    if user_teams:
+        team_placeholders = ", ".join(
+            f"${len(query_params) + i + 1}" for i in range(len(user_teams))
+        )
+        query_params.extend(user_teams)
+        scope_conditions.append(f"team_id IN ({team_placeholders})")
+
+    if scope_conditions:
+        where_parts.append(f"({' OR '.join(scope_conditions)})")
+    else:
+        # No user_id and no teams — return nothing
+        where_parts.append("FALSE")
+
+
 @router.get(
     "/key/aliases",
     tags=["key management"],
@@ -4344,6 +4672,9 @@ async def key_aliases(
     size: int = Query(50, ge=1, le=100, description="Page size"),
     search: Optional[str] = Query(
         None, description="Search key aliases (case-insensitive partial match)"
+    ),
+    team_id: Optional[str] = Query(
+        None, description="Filter aliases to keys belonging to this team"
     ),
 ) -> Dict[str, Any]:
     """
@@ -4389,36 +4720,17 @@ async def key_aliases(
             LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
         ]
         if not is_proxy_admin:
-            scope_conditions: List[str] = []
-            if user_api_key_dict.user_id:
-                query_params.append(user_api_key_dict.user_id)
-                scope_conditions.append(f"user_id = ${len(query_params)}")
-
-            # Look up the user's teams from the user table
-            user_teams: List[str] = []
-            if user_api_key_dict.user_id:
-                user_row = await prisma_client.db.litellm_usertable.find_unique(
-                    where={"user_id": user_api_key_dict.user_id}
-                )
-                if user_row is not None:
-                    user_teams = getattr(user_row, "teams", []) or []
-
-            if user_teams:
-                team_placeholders = ", ".join(
-                    f"${len(query_params) + i + 1}" for i in range(len(user_teams))
-                )
-                query_params.extend(user_teams)
-                scope_conditions.append(f"team_id IN ({team_placeholders})")
-
-            if scope_conditions:
-                where_parts.append(f"({' OR '.join(scope_conditions)})")
-            else:
-                # No user_id and no teams — return nothing
-                where_parts.append("FALSE")
+            await _apply_non_admin_alias_scope(
+                user_api_key_dict, prisma_client, query_params, where_parts
+            )
 
         if search:
             query_params.append(f"%{search}%")
             where_parts.append(f"key_alias ILIKE ${len(query_params)}")
+
+        if team_id:
+            query_params.append(team_id)
+            where_parts.append(f"team_id = ${len(query_params)}")
 
         where_sql = " AND ".join(where_parts)
 
@@ -4522,6 +4834,7 @@ def _build_key_filter_conditions(
     include_created_by_keys: bool = False,
     project_id: Optional[str] = None,
     access_group_id: Optional[str] = None,
+    use_substring_matching: bool = False,
 ) -> Dict[str, Union[str, Dict[str, Any], List[Dict[str, Any]]]]:
     """Build filter conditions for key listing.
 
@@ -4543,9 +4856,21 @@ def _build_key_filter_conditions(
     # Base conditions for user's own keys
     user_condition: Dict[str, Any] = {}
     if user_id and isinstance(user_id, str):
-        user_condition["user_id"] = user_id
+        if use_substring_matching:
+            user_condition["user_id"] = {
+                "contains": user_id,
+                "mode": "insensitive",
+            }
+        else:
+            user_condition["user_id"] = user_id
     if key_alias and isinstance(key_alias, str):
-        user_condition["key_alias"] = key_alias
+        if use_substring_matching:
+            user_condition["key_alias"] = {
+                "contains": key_alias,
+                "mode": "insensitive",
+            }
+        else:
+            user_condition["key_alias"] = key_alias
     if exclude_team_id and isinstance(exclude_team_id, str):
         user_condition["team_id"] = {"not": exclude_team_id}
     if organization_id and isinstance(organization_id, str):
@@ -4648,6 +4973,7 @@ async def _list_key_helper(
     status: Optional[str] = None,
     project_id: Optional[str] = None,
     access_group_id: Optional[str] = None,
+    use_substring_matching: bool = False,
 ) -> KeyListResponseObject:
     """
     Helper function to list keys
@@ -4683,6 +5009,7 @@ async def _list_key_helper(
         include_created_by_keys=include_created_by_keys,
         project_id=project_id,
         access_group_id=access_group_id,
+        use_substring_matching=use_substring_matching,
     )
 
     # Calculate skip for pagination

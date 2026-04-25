@@ -2,10 +2,16 @@ name: "Unit Tests: Proxy API Endpoints"
 
 on:
   pull_request:
-    branches: [main]
+    branches:
+      - main
+      - litellm_internal_staging
+      - litellm_oss_branch
+      - "litellm_**"
 
 permissions:
   contents: read
+  id-token: write
+  pull-requests: write
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -30,6 +36,9 @@ jobs:
         tests/test_litellm/proxy/health_endpoints
         tests/test_litellm/proxy/public_endpoints
         tests/test_litellm/proxy/prompts
+        tests/test_litellm/proxy/rag_endpoints
+        tests/test_litellm/proxy/realtime_endpoints
         tests/test_litellm/proxy/ui_crud_endpoints
       workers: 2
       reruns: 2
+      artifact-name: proxy-endpoints

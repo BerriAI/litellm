@@ -48,7 +48,7 @@ class GeminiVectorStoreConfig(BaseVectorStoreConfig):
     def get_auth_credentials(
         self, litellm_params: dict
     ) -> BaseVectorStoreAuthCredentials:
-        """Gemini uses API key in query params, not headers."""
+        """Gemini uses x-goog-api-key header for authentication."""
         return {}
 
     def get_vector_store_endpoints_by_type(self) -> VectorStoreIndexEndpoints:
@@ -79,6 +79,7 @@ class GeminiVectorStoreConfig(BaseVectorStoreConfig):
             api_key = litellm_params.get("api_key") or get_api_key_from_env()
             if api_key:
                 self._cached_api_key = api_key
+                headers["x-goog-api-key"] = api_key
 
         return headers
 
@@ -133,13 +134,10 @@ class GeminiVectorStoreConfig(BaseVectorStoreConfig):
         if model and model.startswith("gemini/"):
             model = model.replace("gemini/", "")
 
-        # Get API key - Gemini requires it as a query parameter
         api_key = litellm_params.get("api_key") or GeminiModelInfo.get_api_key()
         if not api_key:
             raise ValueError("GEMINI_API_KEY or GOOGLE_API_KEY is required")
-
-        # Build the URL for generateContent with API key
-        url = f"{api_base}/models/{model}:generateContent?key={api_key}"
+        url = f"{api_base}/models/{model}:generateContent"
 
         # Build file_search tool configuration (using snake_case as per Gemini docs)
         file_search_config: Dict[str, Any] = {
@@ -286,10 +284,7 @@ class GeminiVectorStoreConfig(BaseVectorStoreConfig):
         """
         url = f"{api_base}/fileSearchStores"
 
-        # Append API key as query parameter (required by Gemini)
-        api_key = self._cached_api_key or get_api_key_from_env()
-        if api_key:
-            url = f"{url}?key={api_key}"
+        # API key is passed via x-goog-api-key header (set in validate_environment)
 
         request_body: Dict[str, Any] = {}
 

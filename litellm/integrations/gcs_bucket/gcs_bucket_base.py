@@ -70,7 +70,9 @@ class GCSBucketBase(CustomBatchLogger):
             custom_llm_provider="vertex_ai",
             api_base=None,
         )
-        verbose_logger.debug("constructed auth_header %s", auth_header)
+        verbose_logger.debug(
+            "constructed auth_header [set=%s]", auth_header is not None
+        )
         headers = {
             "Authorization": f"Bearer {auth_header}",  # auth_header
             "Content-Type": "application/json",
@@ -106,7 +108,9 @@ class GCSBucketBase(CustomBatchLogger):
             custom_llm_provider="vertex_ai",
             api_base=None,
         )
-        verbose_logger.debug("constructed auth_header %s", auth_header)
+        verbose_logger.debug(
+            "constructed auth_header [set=%s]", auth_header is not None
+        )
         headers = {
             "Authorization": f"Bearer {auth_header}",  # auth_header
             "Content-Type": "application/json",
@@ -146,9 +150,9 @@ class GCSBucketBase(CustomBatchLogger):
         if kwargs is None:
             kwargs = {}
 
-        standard_callback_dynamic_params: Optional[
-            StandardCallbackDynamicParams
-        ] = kwargs.get("standard_callback_dynamic_params", None)
+        standard_callback_dynamic_params: Optional[StandardCallbackDynamicParams] = (
+            kwargs.get("standard_callback_dynamic_params", None)
+        )
 
         bucket_name: str
         path_service_account: Optional[str]

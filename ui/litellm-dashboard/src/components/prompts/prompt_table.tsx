@@ -185,6 +185,36 @@ const PromptTable: React.FC<PromptTableProps> = ({
       },
     },
     {
+      header: "Environment",
+      accessorKey: "environment",
+      cell: ({ row }) => {
+        const prompt = row.original;
+        const env = prompt.environment || "development";
+        const colorMap: Record<string, string> = {
+          production: "text-red-600 bg-red-50",
+          staging: "text-yellow-600 bg-yellow-50",
+          development: "text-green-600 bg-green-50",
+        };
+        return (
+          <span className={`text-xs px-2 py-0.5 rounded ${colorMap[env] || "text-gray-600 bg-gray-50"}`}>
+            {env}
+          </span>
+        );
+      },
+    },
+    {
+      header: "Created By",
+      accessorKey: "created_by",
+      cell: ({ row }) => {
+        const prompt = row.original;
+        return (
+          <span className="text-xs text-gray-600">
+            {prompt.created_by || "-"}
+          </span>
+        );
+      },
+    },
+    {
       header: "Type",
       accessorKey: "prompt_info.prompt_type",
       cell: ({ row }) => {

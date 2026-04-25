@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import ToolModal from "../tool_modal";
 import NotificationsManager from "../../molecules/notifications_manager";
-import { createPromptCall, updatePromptCall } from "../../networking";
+import { createPromptCall, updatePromptCall, getPromptInfo } from "../../networking";
 import { PromptType, PromptEditorViewProps, Tool } from "./types";
 import { convertToDotPrompt, parseExistingPrompt } from "./utils";
 import PromptEditorHeader from "./PromptEditorHeader";
@@ -39,6 +39,7 @@ const PromptEditorView: React.FC<PromptEditorViewProps> = ({ onClose, onSuccess,
           content: "Enter task specifics. Use {{template_variables}} for dynamic inputs",
         },
       ],
+      environment: "development",
     };
   };
 
@@ -208,6 +209,7 @@ const PromptEditorView: React.FC<PromptEditorViewProps> = ({ onClose, onSuccess,
         },
         prompt_info: {
           prompt_type: "db",
+          environment: prompt.environment,
         },
       };
 
@@ -273,6 +275,23 @@ const PromptEditorView: React.FC<PromptEditorViewProps> = ({ onClose, onSuccess,
           promptModel={prompt.model}
           promptVariables={extractTemplateVariables()}
           accessToken={accessToken}
+          environment={prompt.environment}
+          onEnvironmentChange={async (env) => {
+            setPrompt({ ...prompt, environment: env });
+            if (editMode && accessToken && initialPromptData?.prompt_spec?.prompt_id) {
+              try {
+                const response = await getPromptInfo(accessToken, initialPromptData.prompt_spec.prompt_id, env);
+                if (response?.prompt_spec) {
+                  const loadedPrompt = parseExistingPrompt(response);
+                  setPrompt({ ...loadedPrompt, environment: env });
+                  const versionNum = response.prompt_spec.version || 1;
+                  setActiveVersionId(`${response.prompt_spec.prompt_id}.v${versionNum}`);
+                }
+              } catch {
+                // No version in this environment yet — keep current content, just change env
+              }
+            }
+          }}
         />
 
         <div className="flex-1 flex overflow-hidden">

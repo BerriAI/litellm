@@ -230,7 +230,7 @@ async def test_generic_api_callback_ndjson_format():
         endpoint=test_endpoint,
         headers=test_headers,
         flush_interval=1,
-        log_format="ndjson"  # Set NDJSON format
+        log_format="ndjson",  # Set NDJSON format
     )
     generic_logger.async_httpx_client.post = mock_post
     litellm.callbacks = [generic_logger]
@@ -252,7 +252,9 @@ async def test_generic_api_callback_ndjson_format():
 
     # Get the actual request body from the mock
     actual_url = mock_post.call_args[1]["url"]
-    assert actual_url == test_endpoint, f"Expected URL {test_endpoint}, got {actual_url}"
+    assert (
+        actual_url == test_endpoint
+    ), f"Expected URL {test_endpoint}, got {actual_url}"
 
     # Get the data sent
     ndjson_data = mock_post.call_args[1]["data"]
@@ -273,9 +275,13 @@ async def test_generic_api_callback_ndjson_format():
         payload_item = StandardLoggingPayload(**payload_item)
 
         # Basic assertions
-        assert payload_item["response_cost"] > 0, "Response cost should be greater than 0"
+        assert (
+            payload_item["response_cost"] > 0
+        ), "Response cost should be greater than 0"
         assert payload_item["model"] == "gpt-4o", "Model should be gpt-4o"
-        assert payload_item["model_parameters"]["user"] == "test_user", "User should be test_user"
+        assert (
+            payload_item["model_parameters"]["user"] == "test_user"
+        ), "User should be test_user"
 
 
 @pytest.mark.asyncio
@@ -299,7 +305,7 @@ async def test_generic_api_callback_single_format():
         endpoint=test_endpoint,
         headers=test_headers,
         flush_interval=1,  # Quick flush to trigger batch send
-        log_format="single"  # Set single format
+        log_format="single",  # Set single format
     )
     generic_logger.async_httpx_client.post = mock_post
     litellm.callbacks = [generic_logger]
@@ -329,11 +335,15 @@ async def test_generic_api_callback_single_format():
 
         # Parse and validate - should be a single object, not an array
         actual_request = json.loads(json_data)
-        assert isinstance(actual_request, dict), f"Call {call_idx}: Expected dict, got {type(actual_request)}"
+        assert isinstance(
+            actual_request, dict
+        ), f"Call {call_idx}: Expected dict, got {type(actual_request)}"
 
         # Validate it's a valid StandardLoggingPayload
         payload_item = StandardLoggingPayload(**actual_request)
-        assert payload_item["response_cost"] > 0, "Response cost should be greater than 0"
+        assert (
+            payload_item["response_cost"] > 0
+        ), "Response cost should be greater than 0"
         assert payload_item["model"] == "gpt-4o", "Model should be gpt-4o"
 
 
@@ -358,7 +368,7 @@ async def test_generic_api_callback_json_array_format_explicit():
         endpoint=test_endpoint,
         headers=test_headers,
         flush_interval=1,
-        log_format="json_array"  # Explicitly set json_array
+        log_format="json_array",  # Explicitly set json_array
     )
     generic_logger.async_httpx_client.post = mock_post
     litellm.callbacks = [generic_logger]
@@ -382,13 +392,17 @@ async def test_generic_api_callback_json_array_format_explicit():
     json_data = mock_post.call_args[1]["data"]
     actual_request = json.loads(json_data)
 
-    assert isinstance(actual_request, list), "Request body should be a list (JSON array)"
+    assert isinstance(
+        actual_request, list
+    ), "Request body should be a list (JSON array)"
     assert len(actual_request) == 5, f"Expected 5 items, got {len(actual_request)}"
 
     # Validate each item
     for payload_item in actual_request:
         payload_item = StandardLoggingPayload(**payload_item)
-        assert payload_item["response_cost"] > 0, "Response cost should be greater than 0"
+        assert (
+            payload_item["response_cost"] > 0
+        ), "Response cost should be greater than 0"
         assert payload_item["model"] == "gpt-4o", "Model should be gpt-4o"
 
 
@@ -404,13 +418,12 @@ async def test_generic_api_callback_sumologic_uses_ndjson():
     mock_post.return_value.text = "OK"
 
     # Set environment variable for sumologic
-    os.environ["SUMOLOGIC_WEBHOOK_URL"] = "https://collectors.sumologic.com/receiver/v1/http/test123"
+    os.environ["SUMOLOGIC_WEBHOOK_URL"] = (
+        "https://collectors.sumologic.com/receiver/v1/http/test123"
+    )
 
     # Initialize using callback_name (loads from JSON config)
-    generic_logger = GenericAPILogger(
-        callback_name="sumologic",
-        flush_interval=1
-    )
+    generic_logger = GenericAPILogger(callback_name="sumologic", flush_interval=1)
     generic_logger.async_httpx_client.post = mock_post
     litellm.callbacks = [generic_logger]
 
@@ -455,5 +468,5 @@ async def test_generic_api_callback_invalid_log_format():
     with pytest.raises(ValueError, match="Invalid log_format"):
         GenericAPILogger(
             endpoint=test_endpoint,
-            log_format="invalid_format"  # type: ignore  # Intentionally invalid for testing
+            log_format="invalid_format",  # type: ignore  # Intentionally invalid for testing
         )

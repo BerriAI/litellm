@@ -15,6 +15,7 @@ import litellm.types
 import litellm.types.llms
 from litellm import verbose_logger
 from litellm._uuid import uuid
+from litellm.litellm_core_utils.url_utils import async_safe_get, safe_get
 from litellm.llms.custom_httpx.http_handler import HTTPHandler, get_async_httpx_client
 from litellm.types.files import get_file_extension_from_mime_type
 from litellm.types.llms.anthropic import *
@@ -1393,10 +1394,10 @@ def convert_to_gemini_tool_call_invoke(
         if tool_calls is not None:
             for idx, tool in enumerate(tool_calls):
                 if "function" in tool:
-                    gemini_function_call: Optional[
-                        VertexFunctionCall
-                    ] = _gemini_tool_call_invoke_helper(
-                        function_call_params=tool["function"]
+                    gemini_function_call: Optional[VertexFunctionCall] = (
+                        _gemini_tool_call_invoke_helper(
+                            function_call_params=tool["function"]
+                        )
                     )
                     if gemini_function_call is not None:
                         part_dict: VertexPartType = {
@@ -1574,9 +1575,7 @@ def convert_to_gemini_tool_call_result(  # noqa: PLR0915
                         file_data = (
                             file_content.get("file_data", "")
                             if isinstance(file_content, dict)
-                            else file_content
-                            if isinstance(file_content, str)
-                            else ""
+                            else file_content if isinstance(file_content, str) else ""
                         )
 
                     if file_data:
@@ -2081,9 +2080,9 @@ def _sanitize_empty_text_content(
         if isinstance(content, str):
             if not content or not content.strip():
                 message = cast(AllMessageValues, dict(message))  # Make a copy
-                message[
-                    "content"
-                ] = "[System: Empty message content sanitised to satisfy protocol]"
+                message["content"] = (
+                    "[System: Empty message content sanitised to satisfy protocol]"
+                )
                 verbose_logger.debug(
                     f"_sanitize_empty_text_content: Replaced empty text content in {message.get('role')} message"
                 )
@@ -2423,9 +2422,9 @@ def anthropic_messages_pt(  # noqa: PLR0915
                             # Convert ChatCompletionImageUrlObject to dict if needed
                             image_url_value = m["image_url"]
                             if isinstance(image_url_value, str):
-                                image_url_input: Union[
-                                    str, dict[str, Any]
-                                ] = image_url_value
+                                image_url_input: Union[str, dict[str, Any]] = (
+                                    image_url_value
+                                )
                             else:
                                 # ChatCompletionImageUrlObject or dict case - convert to dict
                                 image_url_input = {
@@ -2452,9 +2451,9 @@ def anthropic_messages_pt(  # noqa: PLR0915
                             )
 
                             if "cache_control" in _content_element:
-                                _anthropic_content_element[
-                                    "cache_control"
-                                ] = _content_element["cache_control"]
+                                _anthropic_content_element["cache_control"] = (
+                                    _content_element["cache_control"]
+                                )
                             user_content.append(_anthropic_content_element)
                         elif m.get("type", "") == "text":
                             m = cast(ChatCompletionTextObject, m)
@@ -2514,9 +2513,9 @@ def anthropic_messages_pt(  # noqa: PLR0915
                     )
 
                     if "cache_control" in _content_element:
-                        _anthropic_content_text_element[
-                            "cache_control"
-                        ] = _content_element["cache_control"]
+                        _anthropic_content_text_element["cache_control"] = (
+                            _content_element["cache_control"]
+                        )
 
                     user_content.append(_anthropic_content_text_element)
 
@@ -2649,9 +2648,9 @@ def anthropic_messages_pt(  # noqa: PLR0915
                         original_content_element=dict(assistant_content_block),
                     )
                     if "cache_control" in _content_element:
-                        _anthropic_text_content_element[
-                            "cache_control"
-                        ] = _content_element["cache_control"]
+                        _anthropic_text_content_element["cache_control"] = (
+                            _content_element["cache_control"]
+                        )
                     text_element = _anthropic_text_content_element
 
                 # Interleave: each thinking block precedes its server tool group.
@@ -2811,9 +2810,9 @@ def anthropic_messages_pt(  # noqa: PLR0915
                     )
 
                     if "cache_control" in _content_element:
-                        _anthropic_text_content_element[
-                            "cache_control"
-                        ] = _content_element["cache_control"]
+                        _anthropic_text_content_element["cache_control"] = (
+                            _content_element["cache_control"]
+                        )
 
                     assistant_content.append(_anthropic_text_content_element)
 
@@ -3326,7 +3325,7 @@ def _load_image_from_url(image_url):
     try:
         # Send a GET request to the image URL
         client = HTTPHandler(concurrent_limit=1)
-        response = client.get(image_url)
+        response = safe_get(client, image_url)
         response.raise_for_status()  # Raise an exception for HTTP errors
 
         # Check the response's content type to ensure it is an image
@@ -3564,7 +3563,7 @@ class BedrockImageProcessor:
                 params={"concurrent_limit": 1},
             )
             # Send a GET request to the image URL
-            response = await client.get(image_url, follow_redirects=True)
+            response = await async_safe_get(client, image_url)
             response.raise_for_status()  # Raise an exception for HTTP errors
 
             return BedrockImageProcessor._post_call_image_processing(
@@ -3579,7 +3578,7 @@ class BedrockImageProcessor:
         try:
             client = HTTPHandler(concurrent_limit=1)
             # Send a GET request to the image URL
-            response = client.get(image_url, follow_redirects=True)
+            response = safe_get(client, image_url)
             response.raise_for_status()  # Raise an exception for HTTP errors
 
             return BedrockImageProcessor._post_call_image_processing(
@@ -4051,6 +4050,40 @@ def _deduplicate_bedrock_tool_content(
     return _deduplicate_bedrock_content_blocks(tool_content, "toolResult")
 
 
+def _sort_bedrock_assistant_content_blocks(
+    blocks: List[BedrockContentBlock],
+) -> List[BedrockContentBlock]:
+    """
+    Sort assistant content blocks so that ``text`` blocks appear before
+    ``toolUse`` blocks.
+
+    Bedrock requires all ``text`` blocks to precede any ``toolUse`` blocks
+    within an assistant message.  When the Responses API converts
+    function_call items before message items, the resulting ``toolUse``
+    blocks can end up before ``text`` blocks, causing Bedrock to reject
+    the request with a 400 error because the ``toolUse`` → ``toolResult``
+    pairing is broken by the intervening ``text`` block.
+
+    Sort order (stable):
+      0 - reasoningContent
+      1 - text / image / document / video / other non-tool blocks
+      2 - toolUse
+    """
+
+    def _sort_key(block: BedrockContentBlock) -> int:
+        if "reasoningContent" in block:
+            return 0
+        if "toolUse" in block:
+            return 2
+        if "cachePoint" in block:
+            # cachePoint blocks are paired with their preceding toolUse block.
+            # Same key as toolUse so Python's stable sort keeps them together.
+            return 2
+        return 1
+
+    return sorted(blocks, key=_sort_key)
+
+
 def _insert_assistant_continue_message(
     messages: List[BedrockMessageBlock],
     assistant_continue_message: Optional[
@@ -4371,17 +4404,19 @@ class BedrockConverseMessagesProcessor:
 
         # if initial message is assistant message
         if messages[0].get("role") is not None and messages[0]["role"] == "assistant":
-            if user_continue_message is not None:
-                messages.insert(0, user_continue_message)
-            elif litellm.modify_params:
-                messages.insert(0, DEFAULT_USER_CONTINUE_MESSAGE)
+            if not messages[0].get("prefix"):
+                if user_continue_message is not None:
+                    messages.insert(0, user_continue_message)
+                elif litellm.modify_params:
+                    messages.insert(0, DEFAULT_USER_CONTINUE_MESSAGE)
 
         # if final message is assistant message
         if messages[-1].get("role") is not None and messages[-1]["role"] == "assistant":
-            if user_continue_message is not None:
-                messages.append(user_continue_message)
-            elif litellm.modify_params:
-                messages.append(DEFAULT_USER_CONTINUE_MESSAGE)
+            if not messages[-1].get("prefix"):
+                if user_continue_message is not None:
+                    messages.append(user_continue_message)
+                elif litellm.modify_params:
+                    messages.append(DEFAULT_USER_CONTINUE_MESSAGE)
         return messages
 
     @staticmethod
@@ -4641,6 +4676,9 @@ class BedrockConverseMessagesProcessor:
 
             assistant_content = _deduplicate_bedrock_content_blocks(
                 assistant_content, "toolUse"
+            )
+            assistant_content = _sort_bedrock_assistant_content_blocks(
+                assistant_content
             )
 
             if assistant_content:
@@ -5007,6 +5045,7 @@ def _bedrock_converse_messages_pt(  # noqa: PLR0915
         assistant_content = _deduplicate_bedrock_content_blocks(
             assistant_content, "toolUse"
         )
+        assistant_content = _sort_bedrock_assistant_content_blocks(assistant_content)
 
         if assistant_content:
             contents.append(
@@ -5142,26 +5181,44 @@ def _bedrock_tools_pt(tools: List) -> List[BedrockToolBlock]:
         }
     ]
     """
+    from litellm.llms.bedrock.common_utils import (
+        normalize_json_schema_custom_types_to_object,
+    )
     from litellm.litellm_core_utils.prompt_templates.common_utils import unpack_defs
 
+    _valid_json_schema_root_types = frozenset(
+        ("array", "boolean", "integer", "null", "number", "object", "string")
+    )
     tool_block_list: List[BedrockToolBlock] = []
-    for tool in tools:
+    for tool_idx, tool in enumerate(tools):
         # Check if tool is already a BedrockToolBlock (e.g., systemTool for Nova grounding)
         if _is_bedrock_tool_block(tool):
             # Already a BedrockToolBlock, pass it through
             tool_block_list.append(tool)  # type: ignore
             continue
 
-        # Handle regular OpenAI-style function tools
-        parameters = tool.get("function", {}).get(
-            "parameters", {"type": "object", "properties": {}}
-        )
-        name = tool.get("function", {}).get("name", "")
+        # OpenAI function tools, or Anthropic Messages / Claude Code ({name, input_schema, type, ...})
+        if isinstance(tool, dict) and "input_schema" in tool and "function" not in tool:
+            parameters = copy.deepcopy(
+                tool.get("input_schema") or {"type": "object", "properties": {}}
+            )
+            raw_name = tool.get("name", "") or ""
+            _tool_description = tool.get("description", None)
+        else:
+            parameters = copy.deepcopy(
+                tool.get("function", {}).get(
+                    "parameters", {"type": "object", "properties": {}}
+                )
+            )
+            raw_name = tool.get("function", {}).get("name", "") or ""
+            _tool_description = tool.get("function", {}).get("description", None)
+
+        if not (raw_name and str(raw_name).strip()):
+            raw_name = f"litellm_unnamed_tool_{tool_idx}"
 
         # related issue: https://github.com/BerriAI/litellm/issues/5007
         # Bedrock tool names must satisfy regular expression pattern: [a-zA-Z][a-zA-Z0-9_]* ensure this is true
-        name = make_valid_bedrock_tool_name(input_tool_name=name)
-        _tool_description = tool.get("function", {}).get("description", None)
+        name = make_valid_bedrock_tool_name(input_tool_name=raw_name)
         if _tool_description:  # bedrock doesn't accept empty "" or None descriptions
             description = _tool_description
         else:
@@ -5174,9 +5231,12 @@ def _bedrock_tools_pt(tools: List) -> List[BedrockToolBlock]:
         # with circular references (see issue #19098). unpack_defs handles nested
         # refs recursively and correctly detects/skips circular references.
         unpack_defs(parameters, defs_copy)
+        normalize_json_schema_custom_types_to_object(parameters)
+        if parameters.get("type") not in _valid_json_schema_root_types:
+            parameters["type"] = "object"
         tool_input_schema = BedrockToolInputSchemaBlock(
             json=BedrockToolJsonSchemaBlock(
-                type=parameters.get("type", ""),
+                type=parameters["type"],
                 properties=parameters.get("properties", {}),
                 required=parameters.get("required", []),
             )

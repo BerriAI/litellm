@@ -31,10 +31,12 @@ class TestBedrockMantleProviderRegistration:
         assert "bedrock_mantle/openai.gpt-oss-120b" in litellm.bedrock_mantle_models
         assert "bedrock_mantle/openai.gpt-oss-20b" in litellm.bedrock_mantle_models
         assert (
-            "bedrock_mantle/openai.gpt-oss-safeguard-120b" in litellm.bedrock_mantle_models
+            "bedrock_mantle/openai.gpt-oss-safeguard-120b"
+            in litellm.bedrock_mantle_models
         )
         assert (
-            "bedrock_mantle/openai.gpt-oss-safeguard-20b" in litellm.bedrock_mantle_models
+            "bedrock_mantle/openai.gpt-oss-safeguard-20b"
+            in litellm.bedrock_mantle_models
         )
 
 

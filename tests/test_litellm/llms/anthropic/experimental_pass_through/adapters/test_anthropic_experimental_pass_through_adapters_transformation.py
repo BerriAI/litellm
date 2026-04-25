@@ -7,6 +7,9 @@ import pytest
 sys.path.insert(0, os.path.abspath("../../../../.."))
 
 
+from litellm.litellm_core_utils.prompt_templates.factory import (
+    THOUGHT_SIGNATURE_SEPARATOR,
+)
 from litellm.llms.anthropic.experimental_pass_through.adapters.transformation import (
     OPENAI_MAX_TOOL_NAME_LENGTH,
     LiteLLMAnthropicMessagesAdapter,
@@ -25,6 +28,7 @@ from litellm.types.utils import (
     Function,
     Message,
     ModelResponse,
+    ModelResponseStream,
     StreamingChoices,
     Usage,
 )
@@ -72,6 +76,50 @@ def test_translate_streaming_openai_chunk_to_anthropic_content_block():
         "name": "get_weather",
         "input": {},
     }
+
+
+def test_translate_streaming_openai_chunk_strips_gemini_thought_from_tool_call_id():
+    """Gemini embeds thought signatures in OpenAI tool ids; Anthropic SSE should expose a clean id."""
+    base = "call_3e9417b7925e49aca9a71dc1885e"
+    sig = "CiIBDDnWx"
+    combined = f"{base}{THOUGHT_SIGNATURE_SEPARATOR}{sig}"
+    choices = [
+        StreamingChoices(
+            finish_reason=None,
+            index=0,
+            delta=Delta(
+                provider_specific_fields=None,
+                content=None,
+                role="assistant",
+                function_call=None,
+                tool_calls=[
+                    ChatCompletionDeltaToolCall(
+                        id=combined,
+                        function=Function(
+                            arguments='{"a": 17, "b": 25}', name="add_numbers"
+                        ),
+                        type="function",
+                        index=0,
+                    )
+                ],
+                audio=None,
+            ),
+            logprobs=None,
+        )
+    ]
+
+    (
+        block_type,
+        content_block_start,
+    ) = LiteLLMAnthropicMessagesAdapter()._translate_streaming_openai_chunk_to_anthropic_content_block(
+        choices=choices
+    )
+
+    assert block_type == "tool_use"
+    assert content_block_start["id"] == base
+    assert content_block_start["name"] == "add_numbers"
+    assert content_block_start["input"] == {}
+    assert content_block_start["provider_specific_fields"]["signature"] == sig
 
 
 def test_translate_streaming_openai_chunk_to_anthropic_thinking_content_block():
@@ -344,7 +392,9 @@ def test_translate_openai_content_to_anthropic_empty_function_arguments():
     assert result[0]["type"] == "tool_use"
     assert result[0]["id"] == "call_empty_args"
     assert result[0]["name"] == "test_function"
-    assert result[0]["input"] == {}, "Empty function arguments should result in empty dict"
+    assert (
+        result[0]["input"] == {}
+    ), "Empty function arguments should result in empty dict"
 
 
 def test_translate_openai_content_to_anthropic_text_and_tool_calls():
@@ -1118,7 +1168,9 @@ def test_streaming_chunk_with_both_text_and_tool_calls_issue_18238():
 # ============================================================================
 
 # Model constant for cache control tests
-CACHE_CONTROL_BEDROCK_CONVERSE_MODEL = "bedrock/converse/global.anthropic.claude-opus-4-5-20251101-v1:0"
+CACHE_CONTROL_BEDROCK_CONVERSE_MODEL = (
+    "bedrock/converse/global.anthropic.claude-opus-4-5-20251101-v1:0"
+)
 CACHE_CONTROL_NON_ANTHROPIC_MODEL = "gpt-4"
 
 
@@ -1134,7 +1186,9 @@ def test_should_add_cache_control_for_anthropic_model():
         "vertex_ai/claude-3-sonnet@20240229",
     ]:
         target = {}
-        adapter._add_cache_control_if_applicable({"cache_control": cache_control}, target, model)
+        adapter._add_cache_control_if_applicable(
+            {"cache_control": cache_control}, target, model
+        )
         assert "cache_control" in target
         assert target["cache_control"] == cache_control
 
@@ -1144,9 +1198,15 @@ def test_should_not_add_cache_control_for_non_anthropic_model():
     adapter = LiteLLMAnthropicMessagesAdapter()
     cache_control = {"type": "ephemeral"}
 
-    for model in [CACHE_CONTROL_NON_ANTHROPIC_MODEL, "openai/gpt-4-turbo", "gemini-pro"]:
+    for model in [
+        CACHE_CONTROL_NON_ANTHROPIC_MODEL,
+        "openai/gpt-4-turbo",
+        "gemini-pro",
+    ]:
         target = {}
-        adapter._add_cache_control_if_applicable({"cache_control": cache_control}, target, model)
+        adapter._add_cache_control_if_applicable(
+            {"cache_control": cache_control}, target, model
+        )
         assert "cache_control" not in target
 
 
@@ -1154,9 +1214,16 @@ def test_should_not_add_cache_control_when_none():
     """Should not add cache_control when source has None or empty cache_control."""
     adapter = LiteLLMAnthropicMessagesAdapter()
 
-    for source in [{"cache_control": None}, {"cache_control": {}}, {"cache_control": ""}, {}]:
+    for source in [
+        {"cache_control": None},
+        {"cache_control": {}},
+        {"cache_control": ""},
+        {},
+    ]:
         target = {}
-        adapter._add_cache_control_if_applicable(source, target, CACHE_CONTROL_BEDROCK_CONVERSE_MODEL)
+        adapter._add_cache_control_if_applicable(
+            source, target, CACHE_CONTROL_BEDROCK_CONVERSE_MODEL
+        )
         assert "cache_control" not in target
 
 
@@ -1167,7 +1234,9 @@ def test_should_not_add_cache_control_when_model_none():
 
     for model in [None, ""]:
         target = {}
-        adapter._add_cache_control_if_applicable({"cache_control": cache_control}, target, model)
+        adapter._add_cache_control_if_applicable(
+            {"cache_control": cache_control}, target, model
+        )
         assert "cache_control" not in target
 
 
@@ -1385,7 +1454,10 @@ def test_cache_control_preserved_in_tools_for_claude():
         {
             "name": "get_weather",
             "description": "Get weather for a location",
-            "input_schema": {"type": "object", "properties": {"location": {"type": "string"}}},
+            "input_schema": {
+                "type": "object",
+                "properties": {"location": {"type": "string"}},
+            },
             "cache_control": {"type": "ephemeral"},
         }
     ]
@@ -1406,7 +1478,10 @@ def test_cache_control_not_preserved_in_tools_for_non_claude():
         {
             "name": "get_weather",
             "description": "Get weather for a location",
-            "input_schema": {"type": "object", "properties": {"location": {"type": "string"}}},
+            "input_schema": {
+                "type": "object",
+                "properties": {"location": {"type": "string"}},
+            },
             "cache_control": {"type": "ephemeral"},
         }
     ]
@@ -1420,11 +1495,29 @@ def test_cache_control_not_preserved_in_tools_for_non_claude():
     assert "cache_control" not in result[0]
 
 
+def test_translate_anthropic_tools_to_openai_fills_missing_tool_name():
+    """Schema-only tools (no ``name``) must not crash the Converse adapter path."""
+    tools = [
+        {
+            "input_schema": {
+                "type": "object",
+                "properties": {"q": {"type": "string"}},
+                "required": ["q"],
+            },
+        },
+        {"name": "", "input_schema": {"type": "object", "properties": {}}},
+    ]
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    result, _ = adapter.translate_anthropic_tools_to_openai(tools=tools, model=None)
+    assert result[0]["function"]["name"] == "litellm_unnamed_tool_0"
+    assert result[1]["function"]["name"] == "litellm_unnamed_tool_1"
+
+
 def test_translate_openai_content_to_anthropic_reasoning_content_without_thinking_blocks():
     """
     Test that reasoning_content is converted to thinking block when thinking_blocks is not present.
     This handles providers like OpenRouter that return reasoning_content instead of thinking_blocks.
-    
+
     Regression test for: OpenRouter models returning reasoning_content in /v1/messages endpoint
     should be converted to Anthropic's thinking block format.
     """
@@ -1432,7 +1525,7 @@ def test_translate_openai_content_to_anthropic_reasoning_content_without_thinkin
         Choices(
             message=Message(
                 role="assistant",
-                content="There are **3** \"r\"s in the word strawberry.",
+                content='There are **3** "r"s in the word strawberry.',
                 reasoning_content="**Considering Letter Frequency**\n\nI've homed in on the specifics: The task focuses on counting the letter 'r'. I've identified the target word, \"strawberry,\" and confirmed my understanding of the letter's location. The first 'r' follows 't', the second after 'e', and the third… well, I'm almost there.\n\n\n**Calculating the Count**\n\nMy analysis is complete! I've confirmed that the letter \"r\" appears three times in \"strawberry.\" The first follows \"t,\" the second \"e,\" and the third immediately follows the second. The count is definitively three.",
             )
         )
@@ -1449,15 +1542,15 @@ def test_translate_openai_content_to_anthropic_reasoning_content_without_thinkin
     assert result[0]["signature"] is None
     # Second block should be text block with content
     assert result[1]["type"] == "text"
-    assert result[1]["text"] == "There are **3** \"r\"s in the word strawberry."
+    assert result[1]["text"] == 'There are **3** "r"s in the word strawberry.'
 
 
 def test_translate_streaming_openai_chunk_to_anthropic_reasoning_content_without_thinking_blocks():
     """
-    Test that reasoning_content in streaming chunks is converted to thinking_delta 
+    Test that reasoning_content in streaming chunks is converted to thinking_delta
     when thinking_blocks is not present.
-    
-    This handles providers like OpenRouter that return reasoning_content in streaming 
+
+    This handles providers like OpenRouter that return reasoning_content in streaming
     responses without thinking_blocks.
     """
     choices = [
@@ -1490,9 +1583,9 @@ def test_translate_streaming_openai_chunk_to_anthropic_reasoning_content_without
 
 def test_translate_openai_response_to_anthropic_with_reasoning_content_only():
     """
-    Test the full response translation when only reasoning_content is present 
+    Test the full response translation when only reasoning_content is present
     (no thinking_blocks).
-    
+
     This simulates OpenRouter's response format being translated to Anthropic format
     through /v1/messages endpoint.
     """
@@ -1504,7 +1597,7 @@ def test_translate_openai_response_to_anthropic_with_reasoning_content_only():
                 finish_reason="stop",
                 message=Message(
                     role="assistant",
-                    content="There are **3** \"r\"s in the word strawberry.",
+                    content='There are **3** "r"s in the word strawberry.',
                     reasoning_content="**Considering Letter Frequency**\n\nI've homed in on the specifics: The task focuses on counting the letter 'r'.",
                 ),
             )
@@ -1520,16 +1613,18 @@ def test_translate_openai_response_to_anthropic_with_reasoning_content_only():
     anthropic_content = anthropic_response.get("content")
     assert anthropic_content is not None
     assert len(anthropic_content) == 2
-    
+
     # First block should be thinking
     assert anthropic_content[0]["type"] == "thinking"
     assert "Considering Letter Frequency" in anthropic_content[0]["thinking"]
     assert anthropic_content[0].get("signature") is None
-    
+
     # Second block should be text
     assert anthropic_content[1]["type"] == "text"
-    assert anthropic_content[1]["text"] == "There are **3** \"r\"s in the word strawberry."
-    
+    assert (
+        anthropic_content[1]["text"] == 'There are **3** "r"s in the word strawberry.'
+    )
+
     assert anthropic_response.get("stop_reason") == "end_turn"
 
 
@@ -1580,7 +1675,9 @@ def test_truncate_tool_name_deterministic():
 def test_truncate_tool_name_avoids_collisions():
     """Similar long names should produce different truncated names."""
     name1 = "process_user_data_with_validation_and_error_handling_for_production_environment"
-    name2 = "process_user_data_with_validation_and_error_handling_for_staging_environment"
+    name2 = (
+        "process_user_data_with_validation_and_error_handling_for_staging_environment"
+    )
 
     result1 = truncate_tool_name(name1)
     result2 = truncate_tool_name(name2)
@@ -1600,7 +1697,9 @@ def test_create_tool_name_mapping_no_long_names():
 
 def test_create_tool_name_mapping_with_long_names():
     """Mapping should contain entries for truncated names."""
-    long_name = "a_very_long_tool_name_that_exceeds_the_64_character_limit_imposed_by_openai"
+    long_name = (
+        "a_very_long_tool_name_that_exceeds_the_64_character_limit_imposed_by_openai"
+    )
     tools = [
         {"name": "short_name"},
         {"name": long_name},
@@ -1665,7 +1764,9 @@ def test_translate_anthropic_tools_mixed_names():
 
 def test_translate_openai_response_restores_tool_names():
     """Tool names in responses should be restored to original."""
-    original_name = "a_very_long_tool_name_that_needs_truncation_for_openai_api_compatibility"
+    original_name = (
+        "a_very_long_tool_name_that_needs_truncation_for_openai_api_compatibility"
+    )
     truncated_name = truncate_tool_name(original_name)
     tool_name_mapping = {truncated_name: original_name}
 
@@ -1711,18 +1812,18 @@ def test_translate_openai_response_restores_tool_names():
 def test_translate_openai_response_to_anthropic_input_tokens_excludes_cached_tokens():
     """
     Regression test: input_tokens in Anthropic format should NOT include cached tokens.
-    
+
     Issue: v1/messages API was returning incorrect input_token count when using prompt caching.
     The OpenAI format includes cached tokens in prompt_tokens, but Anthropic format should not.
-    
+
     According to Anthropic's spec:
     - input_tokens = uncached input tokens only
     - cache_read_input_tokens = tokens read from cache
-    
+
     In OpenAI format:
     - prompt_tokens = all input tokens (including cached)
     - prompt_tokens_details.cached_tokens = cached tokens
-    
+
     Expected: anthropic.input_tokens = openai.prompt_tokens - openai.prompt_tokens_details.cached_tokens
     """
     from litellm.types.utils import PromptTokensDetailsWrapper
@@ -1733,12 +1834,10 @@ def test_translate_openai_response_to_anthropic_input_tokens_excludes_cached_tok
         prompt_tokens=100,
         completion_tokens=50,
         total_tokens=150,
-        prompt_tokens_details=PromptTokensDetailsWrapper(
-            cached_tokens=30
-        ),
+        prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=30),
         cache_read_input_tokens=30,  # Anthropic format cache info
     )
-    
+
     response = ModelResponse(
         id="test-id",
         choices=[
@@ -1754,14 +1853,14 @@ def test_translate_openai_response_to_anthropic_input_tokens_excludes_cached_tok
         model="claude-3-sonnet-20240229",
         usage=usage,
     )
-    
+
     # Convert to Anthropic format
     adapter = LiteLLMAnthropicMessagesAdapter()
     anthropic_response = adapter.translate_openai_response_to_anthropic(
         response=response,
         tool_name_mapping=None,
     )
-    
+
     # Validate: input_tokens should be 70 (100 - 30 cached), not 100
     assert anthropic_response["usage"]["input_tokens"] == 70, (
         f"Expected input_tokens=70 (100 total - 30 cached), "
@@ -1784,7 +1883,7 @@ def test_translate_openai_response_to_anthropic_input_tokens_no_cache():
         completion_tokens=50,
         total_tokens=150,
     )
-    
+
     response = ModelResponse(
         id="test-id",
         choices=[
@@ -1800,14 +1899,14 @@ def test_translate_openai_response_to_anthropic_input_tokens_no_cache():
         model="claude-3-sonnet-20240229",
         usage=usage,
     )
-    
+
     # Convert to Anthropic format
     adapter = LiteLLMAnthropicMessagesAdapter()
     anthropic_response = adapter.translate_openai_response_to_anthropic(
         response=response,
         tool_name_mapping=None,
     )
-    
+
     # Validate: input_tokens should equal prompt_tokens when no caching
     assert anthropic_response["usage"]["input_tokens"] == 100
     assert anthropic_response["usage"]["output_tokens"] == 50
@@ -1826,9 +1925,7 @@ def test_translate_openai_response_to_anthropic_cache_tokens_from_prompt_tokens_
         prompt_tokens=100,
         completion_tokens=50,
         total_tokens=150,
-        prompt_tokens_details=PromptTokensDetailsWrapper(
-            cached_tokens=30
-        ),
+        prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=30),
     )
 
     response = ModelResponse(
@@ -1960,9 +2057,7 @@ def test_translate_anthropic_to_openai_with_mixed_tools():
                 "description": "Get weather information",
                 "input_schema": {
                     "type": "object",
-                    "properties": {
-                        "location": {"type": "string"}
-                    },
+                    "properties": {"location": {"type": "string"}},
                 },
             },
         ],
@@ -2032,8 +2127,15 @@ class TestTranslateAnthropicOutputFormatToOpenAI:
         assert schema["required"] == ["user"]
         assert schema["properties"]["user"]["additionalProperties"] is False
         assert schema["properties"]["user"]["required"] == ["name", "address"]
-        assert schema["properties"]["user"]["properties"]["address"]["additionalProperties"] is False
-        assert schema["properties"]["user"]["properties"]["address"]["required"] == ["city"]
+        assert (
+            schema["properties"]["user"]["properties"]["address"][
+                "additionalProperties"
+            ]
+            is False
+        )
+        assert schema["properties"]["user"]["properties"]["address"]["required"] == [
+            "city"
+        ]
 
     def test_array_items_object_adds_additional_properties_false(self):
         output_format = {
@@ -2108,6 +2210,180 @@ class TestTranslateAnthropicOutputFormatToOpenAI:
         assert sorted(schema["required"]) == ["age", "email", "name"]
 
     def test_invalid_output_format_returns_none(self):
-        assert self.adapter.translate_anthropic_output_format_to_openai("invalid") is None
-        assert self.adapter.translate_anthropic_output_format_to_openai({"type": "text"}) is None
-        assert self.adapter.translate_anthropic_output_format_to_openai({"type": "json_schema"}) is None
+        assert (
+            self.adapter.translate_anthropic_output_format_to_openai("invalid") is None
+        )
+        assert (
+            self.adapter.translate_anthropic_output_format_to_openai({"type": "text"})
+            is None
+        )
+        assert (
+            self.adapter.translate_anthropic_output_format_to_openai(
+                {"type": "json_schema"}
+            )
+            is None
+        )
+
+
+class TestAnthropicStreamWrapperToolArgs:
+    """
+    Regression test for https://github.com/BerriAI/litellm/issues/24134
+
+    When Gemini sends tool call args in the same streaming chunk as a content
+    block transition, the Anthropic adapter was discarding the processed_chunk
+    containing input_json_delta. This verifies the args are preserved.
+    """
+
+    def _build_chunks(self):
+        """Build mock OpenAI-format chunks simulating Gemini tool call response."""
+        # Chunk 1: text content
+        text_chunk = ModelResponseStream(
+            id="chatcmpl-123",
+            created=1700000000,
+            model="gemini-2.0-flash",
+            object="chat.completion.chunk",
+            choices=[
+                StreamingChoices(
+                    index=0,
+                    delta=Delta(content="Let me check", role="assistant"),
+                    finish_reason=None,
+                )
+            ],
+        )
+
+        # Chunk 2: tool call (triggers new content block + carries args)
+        tool_chunk = ModelResponseStream(
+            id="chatcmpl-123",
+            created=1700000000,
+            model="gemini-2.0-flash",
+            object="chat.completion.chunk",
+            choices=[
+                StreamingChoices(
+                    index=0,
+                    delta=Delta(
+                        tool_calls=[
+                            ChatCompletionDeltaToolCall(
+                                id="call_123",
+                                type="function",
+                                function=Function(
+                                    name="get_weather",
+                                    arguments='{"city": "Tokyo"}',
+                                ),
+                                index=0,
+                            )
+                        ]
+                    ),
+                    finish_reason=None,
+                )
+            ],
+        )
+
+        # Chunk 3: finish
+        finish_chunk = ModelResponseStream(
+            id="chatcmpl-123",
+            created=1700000000,
+            model="gemini-2.0-flash",
+            object="chat.completion.chunk",
+            choices=[
+                StreamingChoices(
+                    index=0,
+                    delta=Delta(),
+                    finish_reason="stop",
+                )
+            ],
+            usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15),
+        )
+
+        return [text_chunk, tool_chunk, finish_chunk]
+
+    def _make_stream_wrapper(self, chunks):
+        from litellm.llms.anthropic.experimental_pass_through.adapters.streaming_iterator import (
+            AnthropicStreamWrapper,
+        )
+
+        class SimpleIterator:
+            def __init__(self, items):
+                self._items = iter(items)
+
+            def __iter__(self):
+                return self
+
+            def __next__(self):
+                return next(self._items)
+
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                try:
+                    return next(self._items)
+                except StopIteration:
+                    raise StopAsyncIteration
+
+        return AnthropicStreamWrapper(
+            completion_stream=SimpleIterator(chunks),
+            model="gemini/gemini-2.0-flash",
+        )
+
+    def _find_tool_deltas(self, events):
+        return [
+            e for e in events
+            if isinstance(e, dict)
+            and e.get("type") == "content_block_delta"
+            and isinstance(e.get("delta"), dict)
+            and e["delta"].get("type") == "input_json_delta"
+        ]
+
+    def test_sync_tool_args_not_dropped(self):
+        import json
+
+        chunks = self._build_chunks()
+        wrapper = self._make_stream_wrapper(chunks)
+
+        events = list(wrapper)
+        tool_deltas = self._find_tool_deltas(events)
+
+        assert len(tool_deltas) > 0, (
+            f"No input_json_delta events found (issue #24134). "
+            f"Event types: {[e.get('type') for e in events if isinstance(e, dict)]}"
+        )
+
+        combined = "".join(d["delta"]["partial_json"] for d in tool_deltas)
+        parsed = json.loads(combined)
+        assert parsed == {"city": "Tokyo"}
+
+    @pytest.mark.asyncio
+    async def test_async_tool_args_not_dropped(self):
+        import json
+
+        chunks = self._build_chunks()
+        wrapper = self._make_stream_wrapper(chunks)
+
+        events = []
+        async for event in wrapper:
+            events.append(event)
+
+        tool_deltas = self._find_tool_deltas(events)
+
+        assert len(tool_deltas) > 0, (
+            f"No input_json_delta events found (issue #24134). "
+            f"Event types: {[e.get('type') for e in events if isinstance(e, dict)]}"
+        )
+
+        combined = "".join(d["delta"]["partial_json"] for d in tool_deltas)
+        parsed = json.loads(combined)
+        assert parsed == {"city": "Tokyo"}
+
+
+
+def test_translate_anthropic_tool_choice_none():
+    """
+    Regression test for issue #24443.
+
+    tool_choice={"type": "none"} should be translated to "none" for OpenAI format,
+    not raise a ValueError.
+    """
+    adapter = LiteLLMAnthropicMessagesAdapter()
+
+    result = adapter.translate_anthropic_tool_choice_to_openai({"type": "none"})
+    assert result == "none"

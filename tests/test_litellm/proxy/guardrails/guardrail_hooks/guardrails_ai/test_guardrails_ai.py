@@ -148,7 +148,10 @@ async def test_guardrails_ai_process_input():
 
         data = {
             "messages": [
-                {"role": "user", "content": "Somtimes I hav spelling errors in my vriting"}
+                {
+                    "role": "user",
+                    "content": "Somtimes I hav spelling errors in my vriting",
+                }
             ]
         }
 
@@ -159,7 +162,10 @@ async def test_guardrails_ai_process_input():
         )
 
         # Should use validatedOutput when available
-        assert result["messages"][0]["content"] == "Sometimes I have spelling errors in my writing"
+        assert (
+            result["messages"][0]["content"]
+            == "Sometimes I have spelling errors in my writing"
+        )
 
     # Test case 8: Test fallback to rawLlmOutput when validatedOutput is not present
     with patch.object(

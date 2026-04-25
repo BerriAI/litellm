@@ -19,12 +19,14 @@ class A2AProviderConfigManager:
     @staticmethod
     def get_provider_config(
         custom_llm_provider: Optional[str],
+        model: Optional[str] = None,
     ) -> Optional[BaseA2AProviderConfig]:
         """
         Get the provider configuration for a given custom_llm_provider.
 
         Args:
             custom_llm_provider: The provider identifier (e.g., "pydantic_ai_agents")
+            model: The model string (used to distinguish sub-providers, e.g. agentcore vs other bedrock)
 
         Returns:
             Provider configuration instance or None if not found
@@ -39,9 +41,11 @@ class A2AProviderConfigManager:
 
             return PydanticAIProviderConfig()
 
-        # Add more providers here as needed
-        # elif custom_llm_provider == "another_provider":
-        #     from litellm.a2a_protocol.providers.another_provider.config import AnotherProviderConfig
-        #     return AnotherProviderConfig()
+        if custom_llm_provider == "bedrock" and model and "agentcore" in model:
+            from litellm.a2a_protocol.providers.bedrock_agentcore.config import (
+                BedrockAgentCoreA2AConfig,
+            )
+
+            return BedrockAgentCoreA2AConfig()
 
         return None

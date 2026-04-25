@@ -20,6 +20,11 @@ from litellm.a2a_protocol.litellm_completion_bridge.transformation import (
 )
 from litellm.a2a_protocol.providers.config_manager import A2AProviderConfigManager
 
+# Agent metadata fields stored in litellm_params that are not valid litellm.acompletion() kwargs
+_AGENT_ONLY_PARAMS = frozenset(
+    {"is_public", "agent_name", "agent_id", "agent_card_params"}
+)
+
 
 class A2ACompletionBridgeHandler:
     """
@@ -48,20 +53,19 @@ class A2ACompletionBridgeHandler:
         # Get provider config for custom_llm_provider
         custom_llm_provider = litellm_params.get("custom_llm_provider")
         a2a_provider_config = A2AProviderConfigManager.get_provider_config(
-            custom_llm_provider=custom_llm_provider
+            custom_llm_provider=custom_llm_provider,
+            model=litellm_params.get("model"),
         )
 
         # If provider config exists, use it
         if a2a_provider_config is not None:
-            if api_base is None:
-                raise ValueError(f"api_base is required for {custom_llm_provider}")
-
             verbose_logger.info(f"A2A: Using provider config for {custom_llm_provider}")
 
             response_data = await a2a_provider_config.handle_non_streaming(
                 request_id=request_id,
                 params=params,
                 api_base=api_base,
+                litellm_params=litellm_params,
             )
 
             return response_data
@@ -100,7 +104,7 @@ class A2ACompletionBridgeHandler:
         litellm_params_to_add = {
             k: v
             for k, v in litellm_params.items()
-            if k not in ("model", "custom_llm_provider")
+            if k not in ("model", "custom_llm_provider") and k not in _AGENT_ONLY_PARAMS
         }
         completion_params.update(litellm_params_to_add)
 
@@ -147,14 +151,12 @@ class A2ACompletionBridgeHandler:
         # Get provider config for custom_llm_provider
         custom_llm_provider = litellm_params.get("custom_llm_provider")
         a2a_provider_config = A2AProviderConfigManager.get_provider_config(
-            custom_llm_provider=custom_llm_provider
+            custom_llm_provider=custom_llm_provider,
+            model=litellm_params.get("model"),
         )
 
         # If provider config exists, use it
         if a2a_provider_config is not None:
-            if api_base is None:
-                raise ValueError(f"api_base is required for {custom_llm_provider}")
-
             verbose_logger.info(
                 f"A2A: Using provider config for {custom_llm_provider} (streaming)"
             )
@@ -163,6 +165,7 @@ class A2ACompletionBridgeHandler:
                 request_id=request_id,
                 params=params,
                 api_base=api_base,
+                litellm_params=litellm_params,
             ):
                 yield chunk
 
@@ -208,7 +211,7 @@ class A2ACompletionBridgeHandler:
         litellm_params_to_add = {
             k: v
             for k, v in litellm_params.items()
-            if k not in ("model", "custom_llm_provider")
+            if k not in ("model", "custom_llm_provider") and k not in _AGENT_ONLY_PARAMS
         }
         completion_params.update(litellm_params_to_add)
 

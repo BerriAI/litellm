@@ -1,18 +1,51 @@
-import os
+import importlib
+import importlib.util
+from importlib.machinery import PathFinder
+import site
 import sys
 
 import pytest
 import requests
-
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
-
-
-import responses
-
 from litellm.proxy.client.chat import ChatClient
 from litellm.proxy.client.exceptions import UnauthorizedError
+
+
+def _load_http_mocking_responses():
+    """Load the third-party `responses` package even if test collection creates
+    a top-level `responses` namespace package from `tests/test_litellm/responses`.
+    """
+    module = importlib.import_module("responses")
+    if hasattr(module, "activate"):
+        return module
+
+    for module_name in list(sys.modules):
+        if module_name == "responses" or module_name.startswith("responses."):
+            sys.modules.pop(module_name, None)
+
+    search_paths = []
+    try:
+        search_paths.extend(site.getsitepackages())
+    except AttributeError:
+        pass
+    user_site = site.getusersitepackages()
+    if isinstance(user_site, str):
+        search_paths.append(user_site)
+    else:
+        search_paths.extend(user_site)
+
+    spec = PathFinder.find_spec("responses", search_paths)
+    if spec is None or spec.loader is None:
+        raise ImportError("Unable to load the third-party `responses` package")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["responses"] = module
+    spec.loader.exec_module(module)
+
+    if not hasattr(module, "activate"):
+        raise ImportError("Unable to load the third-party `responses` package")
+    return module
+
+
+responses = _load_http_mocking_responses()
 
 
 @pytest.fixture

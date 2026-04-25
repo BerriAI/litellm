@@ -72,6 +72,9 @@ from openai.types.chat.chat_completion_chunk import Choice as OpenAIStreamingCho
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     parse_tool_call_arguments,
 )
+from litellm.litellm_core_utils.prompt_templates.factory import (
+    THOUGHT_SIGNATURE_SEPARATOR,
+)
 from litellm.types.llms.anthropic import (
     ANTHROPIC_HOSTED_TOOLS,
     AllAnthropicToolsValues,
@@ -317,6 +320,7 @@ class LiteLLMAnthropicMessagesAdapter:
             "tools",
             "thinking",
             "output_format",
+            "output_config",
         ]
 
     def _is_web_search_tool(self, tool: Dict[str, Any]) -> bool:
@@ -550,9 +554,9 @@ class LiteLLMAnthropicMessagesAdapter:
 
             ## ASSISTANT MESSAGE ##
             assistant_message_str: Optional[str] = None
-            assistant_content_list: List[
-                Dict[str, Any]
-            ] = []  # For content blocks with cache_control
+            assistant_content_list: List[Dict[str, Any]] = (
+                []
+            )  # For content blocks with cache_control
             has_cache_control_in_text = False
             tool_calls: List[ChatCompletionAssistantToolCall] = []
             thinking_blocks: List[
@@ -595,12 +599,12 @@ class LiteLLMAnthropicMessagesAdapter:
                                         function_chunk.get("provider_specific_fields")
                                         or {}
                                     )
-                                    provider_specific_fields[
-                                        "thought_signature"
-                                    ] = signature
-                                    function_chunk[
-                                        "provider_specific_fields"
-                                    ] = provider_specific_fields
+                                    provider_specific_fields["thought_signature"] = (
+                                        signature
+                                    )
+                                    function_chunk["provider_specific_fields"] = (
+                                        provider_specific_fields
+                                    )
 
                                 tool_call = ChatCompletionAssistantToolCall(
                                     id=content.get("id", ""),
@@ -694,6 +698,11 @@ class LiteLLMAnthropicMessagesAdapter:
                 return "low"
             else:
                 return "minimal"
+        elif thinking_type == "adaptive":
+            # Adaptive thinking: effort is controlled by output_config.effort,
+            # not budget_tokens. Return a default; caller should override with
+            # output_config.effort when available.
+            return "medium"
 
         return None
 
@@ -776,6 +785,8 @@ class LiteLLMAnthropicMessagesAdapter:
             return ChatCompletionToolChoiceObjectParam(
                 type="function", function=tc_function_param
             )
+        elif tool_choice["type"] == "none":
+            return "none"
         else:
             raise ValueError(
                 "Incompatible tool choice param submitted - {}".format(tool_choice)
@@ -796,7 +807,7 @@ class LiteLLMAnthropicMessagesAdapter:
         tool_name_mapping: Dict[str, str] = {}
         mapped_tool_params = ["name", "input_schema", "description", "cache_control"]
 
-        for tool in tools:
+        for idx, tool in enumerate(tools):
             # Check if this is an Anthropic-native tool that should be kept as-is
             tool_type = tool.get("type", "")
             if any(tool_type.startswith(t.value) for t in ANTHROPIC_HOSTED_TOOLS):
@@ -804,7 +815,13 @@ class LiteLLMAnthropicMessagesAdapter:
                 new_tools.append(tool)  # type: ignore[arg-type]
                 continue
 
-            original_name = tool["name"]
+            raw_name = tool.get("name")
+            if raw_name is None or (
+                isinstance(raw_name, str) and not str(raw_name).strip()
+            ):
+                original_name = f"litellm_unnamed_tool_{idx}"
+            else:
+                original_name = str(raw_name)
             truncated_name = truncate_tool_name(original_name)
 
             # Store mapping if name was truncated
@@ -1034,6 +1051,12 @@ class LiteLLMAnthropicMessagesAdapter:
         )
         if not reasoning_effort:
             return
+
+        # For adaptive thinking, override with output_config.effort if available
+        if isinstance(thinking, dict) and thinking.get("type") == "adaptive":
+            output_config = anthropic_message_request.get("output_config")
+            if isinstance(output_config, dict) and output_config.get("effort"):
+                reasoning_effort = output_config["effort"]
 
         summary = thinking.get("summary") if isinstance(thinking, dict) else None
         auto_summary = is_reasoning_auto_summary_enabled()
@@ -1334,9 +1357,9 @@ class LiteLLMAnthropicMessagesAdapter:
             hasattr(usage, "_cache_creation_input_tokens")
             and usage._cache_creation_input_tokens > 0
         ):
-            anthropic_usage[
-                "cache_creation_input_tokens"
-            ] = usage._cache_creation_input_tokens
+            anthropic_usage["cache_creation_input_tokens"] = (
+                usage._cache_creation_input_tokens
+            )
         if cached_tokens > 0:
             anthropic_usage["cache_read_input_tokens"] = cached_tokens
 
@@ -1360,7 +1383,7 @@ class LiteLLMAnthropicMessagesAdapter:
         "ContentBlockContentBlockDict",
     ]:
         from litellm._uuid import uuid
-        from litellm.types.llms.anthropic import TextBlock, ToolUseBlock
+        from litellm.types.llms.anthropic import TextBlock
 
         for choice in choices:
             if (
@@ -1368,12 +1391,25 @@ class LiteLLMAnthropicMessagesAdapter:
                 and len(choice.delta.tool_calls) > 0
                 and choice.delta.tool_calls[0].function is not None
             ):
-                return "tool_use", ToolUseBlock(
-                    type="tool_use",
-                    id=choice.delta.tool_calls[0].id or str(uuid.uuid4()),
-                    name=choice.delta.tool_calls[0].function.name or "",
-                    input={},  # type: ignore[typeddict-item]
-                )
+                raw_id = choice.delta.tool_calls[0].id or str(uuid.uuid4())
+                tool_name = choice.delta.tool_calls[0].function.name or ""
+                base_id = raw_id
+                thought_sig: Optional[str] = None
+                if THOUGHT_SIGNATURE_SEPARATOR in raw_id:
+                    parts = raw_id.split(THOUGHT_SIGNATURE_SEPARATOR, 1)
+                    base_id = parts[0]
+                    thought_sig = parts[1] if len(parts) > 1 else None
+                tool_block: Dict[str, Any] = {
+                    "type": "tool_use",
+                    "id": base_id,
+                    "name": tool_name,
+                    "input": {},
+                }
+                if thought_sig:
+                    tool_block["provider_specific_fields"] = {
+                        "signature": thought_sig,
+                    }
+                return "tool_use", cast("ContentBlockContentBlockDict", tool_block)
             elif choice.delta.content is not None and len(choice.delta.content) > 0:
                 return "text", TextBlock(type="text", text="")
             elif isinstance(choice, StreamingChoices) and hasattr(
@@ -1513,9 +1549,9 @@ class LiteLLMAnthropicMessagesAdapter:
                     hasattr(litellm_usage_chunk, "_cache_creation_input_tokens")
                     and litellm_usage_chunk._cache_creation_input_tokens > 0
                 ):
-                    usage_delta[
-                        "cache_creation_input_tokens"
-                    ] = litellm_usage_chunk._cache_creation_input_tokens
+                    usage_delta["cache_creation_input_tokens"] = (
+                        litellm_usage_chunk._cache_creation_input_tokens
+                    )
                 if cached_tokens > 0:
                     usage_delta["cache_read_input_tokens"] = cached_tokens
             else:

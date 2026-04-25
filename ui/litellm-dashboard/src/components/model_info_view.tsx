@@ -253,10 +253,16 @@ export default function ModelInfoView({
         max_retries: values.max_retries,
         timeout: values.timeout,
         stream_timeout: values.stream_timeout,
-        input_cost_per_token: values.input_cost / 1_000_000,
-        output_cost_per_token: values.output_cost / 1_000_000,
         tags: values.tags,
       };
+
+      if (form.isFieldTouched("input_cost") && values.input_cost !== undefined && values.input_cost !== null) {
+        updatedLitellmParams.input_cost_per_token = Number(values.input_cost) / 1_000_000;
+      }
+      if (form.isFieldTouched("output_cost") && values.output_cost !== undefined && values.output_cost !== null) {
+        updatedLitellmParams.output_cost_per_token = Number(values.output_cost) / 1_000_000;
+      }
+
       if (values.litellm_credential_name) {
         updatedLitellmParams.litellm_credential_name = values.litellm_credential_name;
       } else {
@@ -265,10 +271,13 @@ export default function ModelInfoView({
       if (values.guardrails) {
         updatedLitellmParams.guardrails = values.guardrails;
       }
-      if (values.vector_store_ids !== undefined) {
-        updatedLitellmParams.vector_store_ids = Array.isArray(values.vector_store_ids)
-          ? values.vector_store_ids
-          : [];
+      if (values.vector_store_ids?.length > 0) {
+        updatedLitellmParams.vector_store_ids = values.vector_store_ids;
+      } else if (values.vector_store_ids !== undefined) {
+        // User explicitly cleared previously-set vector stores — send [] to clear on backend
+        updatedLitellmParams.vector_store_ids = [];
+      } else {
+        delete updatedLitellmParams.vector_store_ids;
       }
 
       // Handle cache control settings
@@ -631,9 +640,11 @@ export default function ModelInfoView({
                     guardrails: Array.isArray(localModelData.litellm_params?.guardrails)
                       ? localModelData.litellm_params.guardrails
                       : [],
-                    vector_store_ids: Array.isArray(localModelData.litellm_params?.vector_store_ids)
-                      ? localModelData.litellm_params.vector_store_ids
-                      : [],
+                    vector_store_ids:
+                      Array.isArray(localModelData.litellm_params?.vector_store_ids) &&
+                      localModelData.litellm_params.vector_store_ids.length > 0
+                        ? localModelData.litellm_params.vector_store_ids
+                        : undefined,
                     tags: Array.isArray(localModelData.litellm_params?.tags) ? localModelData.litellm_params.tags : [],
                     health_check_model: isWildcardModel ? localModelData.model_info?.health_check_model : null,
                     litellm_credential_name: localModelData.litellm_params?.litellm_credential_name || "",

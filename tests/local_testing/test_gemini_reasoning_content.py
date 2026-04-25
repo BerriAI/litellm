@@ -1,5 +1,9 @@
-from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexGeminiConfig
-from litellm.llms.vertex_ai.gemini.transformation import _gemini_convert_messages_with_history
+from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+    VertexGeminiConfig,
+)
+from litellm.llms.vertex_ai.gemini.transformation import (
+    _gemini_convert_messages_with_history,
+)
 
 
 def test_thought_true_creates_thinking_block():
@@ -46,11 +50,11 @@ def test_extract_thought_signatures_from_regular_parts():
     """
     parts = [{"text": "I am Gemini", "thoughtSignature": "sig-regular-123"}]
     config = VertexGeminiConfig()
-    
+
     # Should NOT create thinking block
     thinking_blocks = config._extract_thinking_blocks_from_parts(parts)
     assert thinking_blocks == []
-    
+
     # Should extract thought signature
     signatures = config._extract_thought_signatures_from_parts(parts)
     assert signatures is not None
@@ -65,11 +69,11 @@ def test_extract_multiple_thought_signatures():
     parts = [
         {"text": "Part 1", "thoughtSignature": "sig-1"},
         {"text": "Part 2", "thoughtSignature": "sig-2"},
-        {"text": "Part 3"}  # No signature
+        {"text": "Part 3"},  # No signature
     ]
     config = VertexGeminiConfig()
     signatures = config._extract_thought_signatures_from_parts(parts)
-    
+
     assert signatures is not None
     assert len(signatures) == 2
     assert signatures[0] == "sig-1"
@@ -86,25 +90,23 @@ def test_round_trip_thought_signature_in_conversation():
         {
             "role": "assistant",
             "content": "Hi there",
-            "provider_specific_fields": {
-                "thought_signatures": ["sig-round-trip-abc"]
-            }
+            "provider_specific_fields": {"thought_signatures": ["sig-round-trip-abc"]},
         },
-        {"role": "user", "content": "How are you?"}
+        {"role": "user", "content": "How are you?"},
     ]
-    
+
     gemini_contents = _gemini_convert_messages_with_history(messages)
-    
+
     # Find the assistant (model) message
     model_message = None
     for content in gemini_contents:
         if content.get("role") == "model":
             model_message = content
             break
-    
+
     assert model_message is not None
     assert len(model_message["parts"]) >= 1
-    
+
     # Check that the text part has the thoughtSignature
     text_part = model_message["parts"][0]
     assert text_part["text"] == "Hi there"
@@ -119,25 +121,22 @@ def test_round_trip_without_thought_signature_still_works():
     """
     messages = [
         {"role": "user", "content": "Hello"},
-        {
-            "role": "assistant",
-            "content": "Hi there"
-        },
-        {"role": "user", "content": "How are you?"}
+        {"role": "assistant", "content": "Hi there"},
+        {"role": "user", "content": "How are you?"},
     ]
-    
+
     gemini_contents = _gemini_convert_messages_with_history(messages)
-    
+
     # Find the assistant (model) message
     model_message = None
     for content in gemini_contents:
         if content.get("role") == "model":
             model_message = content
             break
-    
+
     assert model_message is not None
     assert len(model_message["parts"]) >= 1
-    
+
     # Check that the text part works without thoughtSignature
     text_part = model_message["parts"][0]
     assert text_part["text"] == "Hi there"

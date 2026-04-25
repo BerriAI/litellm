@@ -28,11 +28,7 @@ class TestCohereEmbeddingV1Transform:
                 [0.1, 0.2, 0.3],
                 [0.4, 0.5, 0.6],
             ],
-            "meta": {
-                "billed_units": {
-                    "input_tokens": 10
-                }
-            }
+            "meta": {"billed_units": {"input_tokens": 10}},
         }
         mock_response.json = MagicMock(return_value=response_json)
 
@@ -55,13 +51,13 @@ class TestCohereEmbeddingV1Transform:
         assert result.object == "list"
         assert result.model == self.model
         assert len(result.data) == 2
-        
+
         # Verify each embedding object
         assert result.data[0]["object"] == "embedding"
         assert result.data[0]["index"] == 0
         assert result.data[0]["embedding"] == [0.1, 0.2, 0.3]
         assert "type" not in result.data[0]
-        
+
         assert result.data[1]["object"] == "embedding"
         assert result.data[1]["index"] == 1
         assert result.data[1]["embedding"] == [0.4, 0.5, 0.6]
@@ -89,16 +85,16 @@ class TestCohereEmbeddingV1Transform:
                     [4, 5, 6],
                 ],
             },
-            "meta": {
-                "billed_units": {
-                    "input_tokens": 10
-                }
-            }
+            "meta": {"billed_units": {"input_tokens": 10}},
         }
         mock_response.json = MagicMock(return_value=response_json)
 
         input_data = ["test text 1", "test text 2"]
-        data = {"texts": input_data, "input_type": "search_query", "embedding_types": ["float", "int8"]}
+        data = {
+            "texts": input_data,
+            "input_type": "search_query",
+            "embedding_types": ["float", "int8"],
+        }
         model_response = EmbeddingResponse()
 
         result = self.config._transform_response(
@@ -116,13 +112,13 @@ class TestCohereEmbeddingV1Transform:
         assert result.object == "list"
         assert result.model == self.model
         assert len(result.data) == 4  # 2 texts * 2 embedding types
-        
+
         # Verify float embeddings
         assert result.data[0]["object"] == "embedding"
         assert result.data[0]["index"] == 0
         assert result.data[0]["embedding"] == [0.1, 0.2, 0.3]
         assert result.data[0]["type"] == "float"
-        
+
         assert result.data[1]["object"] == "embedding"
         assert result.data[1]["index"] == 1
         assert result.data[1]["embedding"] == [0.4, 0.5, 0.6]
@@ -133,7 +129,7 @@ class TestCohereEmbeddingV1Transform:
         assert result.data[2]["index"] == 0
         assert result.data[2]["embedding"] == [1, 2, 3]
         assert result.data[2]["type"] == "int8"
-        
+
         assert result.data[3]["object"] == "embedding"
         assert result.data[3]["index"] == 1
         assert result.data[3]["embedding"] == [4, 5, 6]
@@ -153,12 +149,7 @@ class TestCohereEmbeddingV1Transform:
             "embeddings": [
                 [0.1, 0.2, 0.3],
             ],
-            "meta": {
-                "billed_units": {
-                    "input_tokens": 5,
-                    "images": 100
-                }
-            }
+            "meta": {"billed_units": {"input_tokens": 5, "images": 100}},
         }
         mock_response.json = MagicMock(return_value=response_json)
 
@@ -194,7 +185,7 @@ class TestCohereEmbeddingV1Transform:
             "embeddings": [
                 [0.1, 0.2, 0.3],
             ],
-            "meta": {}  # No billed_units
+            "meta": {},  # No billed_units
         }
         mock_response.json = MagicMock(return_value=response_json)
 
@@ -219,7 +210,6 @@ class TestCohereEmbeddingV1Transform:
         assert result.usage.total_tokens == 5
         assert result.usage.completion_tokens == 0
         assert result.usage.prompt_tokens_details is None
-        
+
         # Verify encoding was called
         self.encoding.encode.assert_called()
-

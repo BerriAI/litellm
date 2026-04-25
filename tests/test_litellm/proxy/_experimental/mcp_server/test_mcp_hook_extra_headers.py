@@ -33,9 +33,7 @@ class TestConvertMcpHookResponseToKwargs:
 
     def test_returns_original_kwargs_when_response_is_none(self):
         original = {"arguments": {"key": "val"}, "name": "tool"}
-        result = self.proxy_logging._convert_mcp_hook_response_to_kwargs(
-            None, original
-        )
+        result = self.proxy_logging._convert_mcp_hook_response_to_kwargs(None, original)
         assert result == original
 
     def test_returns_original_kwargs_when_response_is_empty_dict(self):
@@ -348,7 +346,9 @@ class TestCallToolFlowsHookHeaders:
 
                         mock_call.assert_called_once()
                         call_kwargs = mock_call.call_args
-                        assert call_kwargs.kwargs.get("hook_extra_headers") == hook_headers
+                        assert (
+                            call_kwargs.kwargs.get("hook_extra_headers") == hook_headers
+                        )
 
     @pytest.mark.asyncio
     async def test_no_hook_headers_when_no_proxy_logging(self):
@@ -468,7 +468,10 @@ class TestCallToolFlowsHookHeaders:
                                 proxy_logging_obj=proxy_logging,
                             )
                             mock_logger.warning.assert_called_once()
-                            assert "header injection is not supported" in mock_logger.warning.call_args[0][0]
+                            assert (
+                                "header injection is not supported"
+                                in mock_logger.warning.call_args[0][0]
+                            )
 
     @pytest.mark.asyncio
     async def test_openapi_server_no_error_without_hook_headers(self):
@@ -581,9 +584,7 @@ class TestHookHeaderMergePriority:
     async def test_no_hook_headers_preserves_existing_behavior(self):
         """When hook_extra_headers is None, existing header logic is unchanged."""
         manager = MCPServerManager()
-        server = self._make_server(
-            static_headers={"X-Static": "static-value"}
-        )
+        server = self._make_server(static_headers={"X-Static": "static-value"})
 
         captured_extra_headers: Dict[str, Any] = {}
 

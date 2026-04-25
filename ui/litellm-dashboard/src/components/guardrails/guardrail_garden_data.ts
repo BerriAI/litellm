@@ -381,6 +381,23 @@ export const PARTNER_GUARDRAIL_CARDS: GuardrailCardInfo[] = [
     logo: `${ASSET_PREFIX}akto.svg`,
     tags: ["Security", "Safety", "Monitoring"],
   },
+  {
+    id: "promptguard",
+    name: "PromptGuard",
+    description:
+      "AI security gateway with prompt injection detection, PII redaction, topic filtering, entity blocklists, and hallucination detection. Self-hostable with drop-in proxy integration.",
+    category: "partner",
+    logo: `${ASSET_PREFIX}promptguard.svg`,
+    tags: ["Security", "Prompt Injection", "PII"],
+    providerKey: "Promptguard",
+    eval: {
+      f1: 94.9,
+      precision: 100.0,
+      recall: 90.4,
+      testCases: 5384,
+      latency: "~150ms",
+    },
+  },
 ];
 
 export const ALL_CARDS = [...LITELLM_CONTENT_FILTER_CARDS, ...PARTNER_GUARDRAIL_CARDS];
