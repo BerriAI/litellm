@@ -136,7 +136,10 @@ class VertexBase:
                             json_obj,
                             scopes=["https://www.googleapis.com/auth/cloud-platform"],
                         )
-                elif isinstance(credential_source, dict) and "executable" in credential_source:
+                elif (
+                    isinstance(credential_source, dict)
+                    and "executable" in credential_source
+                ):
                     creds = self._credentials_from_pluggable(
                         json_obj,
                         scopes=["https://www.googleapis.com/auth/cloud-platform"],

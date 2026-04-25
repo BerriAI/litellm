@@ -72,6 +72,10 @@ async def call_spend_logs_endpoint():
     response = requests.get(url, headers=headers)
     print("response from call_spend_logs_endpoint", response)
 
+    if response.status_code != 200:
+        print(f"spend logs endpoint returned {response.status_code}: {response.text}")
+        return None
+
     json_response = response.json()
 
     # get spend for today

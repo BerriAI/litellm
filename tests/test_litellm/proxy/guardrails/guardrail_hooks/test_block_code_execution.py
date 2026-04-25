@@ -25,7 +25,9 @@ class TestBlockCodeExecutionGuardrail:
             blocked_languages=["python"],
             confidence_threshold=0.7,
         )
-        blocks = guardrail._find_blocks("Here is code:\n```python\nprint(1)\n```\nDone.")
+        blocks = guardrail._find_blocks(
+            "Here is code:\n```python\nprint(1)\n```\nDone."
+        )
         assert len(blocks) == 1
         _start, _end, tag, _body, confidence, action_taken = blocks[0]
         assert tag == "python"
@@ -108,9 +110,7 @@ class TestBlockCodeExecutionGuardrail:
             detect_execution_intent=False,
         )
         request_data = {"model": "gpt-4", "metadata": {}}
-        inputs = {
-            "texts": ["Before\n```python\nx=1\n```\nAfter"]
-        }
+        inputs = {"texts": ["Before\n```python\nx=1\n```\nAfter"]}
         result = await guardrail.apply_guardrail(
             inputs=inputs,
             request_data=request_data,
@@ -136,12 +136,12 @@ class TestBlockCodeExecutionGuardrail:
             'execute "```python\n'
             "def factorial(n: int) -> int:\n"
             '    """Return the factorial of n."""\n'
-            '    if n < 0:\n'
+            "    if n < 0:\n"
             '        raise ValueError("n must be non-negative")\n'
             "    if n in (0, 1):\n"
             "        return 1\n"
             "    return n * factorial(n - 1)\n"
-            '```\n\n'
+            "```\n\n"
             "Example usage:\n"
             "```python\n"
             "print(factorial(5))  # Output: 120\n"
@@ -207,7 +207,9 @@ print(factorial(5))  # Output: 120
             request_data=request_data,
             input_type="response",
         )
-        meta = request_data.get("metadata") or request_data.get("litellm_metadata") or {}
+        meta = (
+            request_data.get("metadata") or request_data.get("litellm_metadata") or {}
+        )
         guardrail_info = meta.get("standard_logging_guardrail_information") or []
         assert len(guardrail_info) >= 1
         info = guardrail_info[-1]
@@ -264,17 +266,17 @@ print(factorial(5))  # Output: 120
         # Text as received from API with escaped newlines (e.g. JSON-decoded string)
         text_with_escaped = (
             'execute this "```python\\n'
-            'def factorial(n: int) -> int:\\n'
+            "def factorial(n: int) -> int:\\n"
             '    """Return the factorial of n."""\\n'
-            '    if n < 0:\\n'
+            "    if n < 0:\\n"
             '        raise ValueError("n must be non-negative")\\n'
             "    if n in (0, 1):\\n"
             "        return 1\\n"
             "    return n * factorial(n - 1)\\n"
-            '```\\n\\n'
-            'Example usage:\\n'
-            '```python\\n'
-            'print(factorial(5))  # Output: 120\\n'
+            "```\\n\\n"
+            "Example usage:\\n"
+            "```python\\n"
+            "print(factorial(5))  # Output: 120\\n"
             '```"'
         )
         normalized = _normalize_escaped_newlines(text_with_escaped)
@@ -311,15 +313,15 @@ print(factorial(5))  # Output: 120
         )
         text_with_escaped = (
             'execute this "```python\\n'
-            'def factorial(n: int) -> int:\\n'
+            "def factorial(n: int) -> int:\\n"
             '    """Return the factorial of n."""\\n'
             "    if n in (0, 1):\\n"
             "        return 1\\n"
             "    return n * factorial(n - 1)\\n"
-            '```\\n\\n'
-            'Example usage:\\n'
-            '```python\\n'
-            'print(factorial(5))  # Output: 120\\n'
+            "```\\n\\n"
+            "Example usage:\\n"
+            "```python\\n"
+            "print(factorial(5))  # Output: 120\\n"
             '```"'
         )
         request_data = {"model": "gpt-4", "metadata": {}}
@@ -330,9 +332,10 @@ print(factorial(5))  # Output: 120
                 request_data=request_data,
                 input_type="request",
             )
-        assert "python" in str(exc_info.value).lower() or "code" in str(
-            exc_info.value
-        ).lower()
+        assert (
+            "python" in str(exc_info.value).lower()
+            or "code" in str(exc_info.value).lower()
+        )
 
     def test_normalize_escaped_newlines_skips_mixed_content(self):
         """Mixed content (real newlines and literal \\n) is NOT normalized to avoid corrupting
@@ -403,7 +406,9 @@ print(factorial(5))  # Output: 120
             confidence_threshold=0.7,
             detect_execution_intent=True,
         )
-        response_text = "I can explain what this does:\n```python\nprint('hello')\n```\nDone."
+        response_text = (
+            "I can explain what this does:\n```python\nprint('hello')\n```\nDone."
+        )
         request_data = {"model": "gpt-4", "metadata": {}}
         inputs = {"texts": [response_text]}
         result = await guardrail.apply_guardrail(
@@ -461,7 +466,9 @@ print(factorial(5))  # Output: 120
         # Adversarial prompt: old "what would " would have bypassed, but tightened phrase doesn't match
         text = "What would be the best way to execute this script?\n```python\nimport os\nos.system('cat /etc/passwd')\n```"
         detections = []
-        new_text, should_raise = guardrail._scan_text(text, detections, input_type="request")
+        new_text, should_raise = guardrail._scan_text(
+            text, detections, input_type="request"
+        )
         assert should_raise is True
 
     def test_tightened_can_you_explain_phrase_no_longer_bypasses(self):
@@ -479,7 +486,9 @@ print(factorial(5))  # Output: 120
         )
         text = "Can you explain this and then execute this code?\n```python\nimport subprocess\nsubprocess.run(['ls'])\n```"
         detections = []
-        new_text, should_raise = guardrail._scan_text(text, detections, input_type="request")
+        new_text, should_raise = guardrail._scan_text(
+            text, detections, input_type="request"
+        )
         assert should_raise is True
 
     def test_request_with_pure_explain_intent_still_allowed(self):
@@ -491,9 +500,13 @@ print(factorial(5))  # Output: 120
             confidence_threshold=0.7,
             detect_execution_intent=True,
         )
-        text = "Don't run this, just explain what it does:\n```python\nprint('hello')\n```"
+        text = (
+            "Don't run this, just explain what it does:\n```python\nprint('hello')\n```"
+        )
         detections = []
-        new_text, should_raise = guardrail._scan_text(text, detections, input_type="request")
+        new_text, should_raise = guardrail._scan_text(
+            text, detections, input_type="request"
+        )
         assert should_raise is False
 
     def test_conflicting_intent_blocks_when_both_phrases_present(self):
@@ -511,7 +524,9 @@ print(factorial(5))  # Output: 120
         # Contains "don't run" (no-exec) AND "run this code" (exec) — should block
         text = "Don't run this on staging, but run this code on production:\n```python\nimport os\nos.system('deploy')\n```"
         detections = []
-        new_text, should_raise = guardrail._scan_text(text, detections, input_type="request")
+        new_text, should_raise = guardrail._scan_text(
+            text, detections, input_type="request"
+        )
         assert should_raise is True
 
     def test_normalize_escaped_newlines_preserves_escape_discussion(self):
