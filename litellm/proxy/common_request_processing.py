@@ -1242,19 +1242,24 @@ class ProxyBaseLLMRequestProcessing:
             raise
         finally:
             # Enqueue deferred logging after post-call guardrails have written
-            # guardrail_information to metadata.  The finally block ensures
-            # logging fires even if a guardrail raises.
+            # guardrail_information to metadata.
             # For streaming early-returns: no closure is stored (wrapper_async
             # returns before the deferred block), so _enqueue_fn is None — no-op.
+            # On exception (e.g. a post-call guardrail blocks the response),
+            # skip firing the success closure — the exception propagates to
+            # post_call_failure_hook which writes its own failure spend log.
+            # Firing both produced a duplicate (Success + Failure) entry per
+            # request, with the Success row exposing the blocked LLM response.
             _enqueue_fn = getattr(logging_obj, "_enqueue_deferred_logging", None)
             if _enqueue_fn is not None:
                 logging_obj._enqueue_deferred_logging = None  # type: ignore[union-attr]
-                try:
-                    _enqueue_fn()
-                except Exception as e:
-                    verbose_proxy_logger.exception(
-                        "Error firing deferred logging: %s", e
-                    )
+                if not _exception_raised:
+                    try:
+                        _enqueue_fn()
+                    except Exception as e:
+                        verbose_proxy_logger.exception(
+                            "Error firing deferred logging: %s", e
+                        )
 
             # Streaming cleanup: if an exception occurred AND the deferred
             # streaming closure is still set, no streaming route will

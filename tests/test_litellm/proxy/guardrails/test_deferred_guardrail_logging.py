@@ -225,15 +225,18 @@ async def test_no_flag_fires_create_task_normally():
 
 
 # ---------------------------------------------------------------------------
-# 4. Non-streaming: deferred logging fires even if guardrail raises
+# 4. Non-streaming: deferred success log is suppressed when guardrail raises
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_deferred_logging_fires_on_guardrail_exception():
+async def test_deferred_logging_suppressed_on_guardrail_exception():
     """
-    If post_call_success_hook raises (e.g., guardrail blocks content),
-    the deferred logging closure must still fire (via try/finally).
+    If post_call_success_hook raises (e.g. a post-call guardrail blocks the
+    response), the deferred async-success closure must NOT fire — the proxy's
+    error path runs post_call_failure_hook which writes its own failure spend
+    log. Firing both produced a duplicate (Success + Failure) entry per request,
+    with the Success row exposing the blocked LLM response.
     """
     from fastapi import HTTPException  # noqa: local import for test isolation
 
@@ -264,21 +267,32 @@ async def test_deferred_logging_fires_on_guardrail_exception():
     with patch("litellm.callbacks", [guardrail]):
         proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
 
+        # Mirrors the proxy's try / except / finally around post_call_success_hook
+        # in common_request_processing.py — _exception_raised gates the closure.
+        _exception_raised = False
         with pytest.raises(HTTPException):
             try:
-                await proxy_logging.post_call_success_hook(
-                    data={"model": "gpt-4", "metadata": {}},
-                    response=MagicMock(),
-                    user_api_key_dict=UserAPIKeyAuth(api_key="test"),
-                )
+                try:
+                    await proxy_logging.post_call_success_hook(
+                        data={"model": "gpt-4", "metadata": {}},
+                        response=MagicMock(),
+                        user_api_key_dict=UserAPIKeyAuth(api_key="test"),
+                    )
+                except Exception:
+                    _exception_raised = True
+                    raise
             finally:
-                # Mirrors the proxy's finally block
                 _enqueue_fn = getattr(logging_obj, "_enqueue_deferred_logging", None)
                 if _enqueue_fn is not None:
                     logging_obj._enqueue_deferred_logging = None
-                    _enqueue_fn()
+                    if not _exception_raised:
+                        _enqueue_fn()
 
-    assert enqueue_called is True
+    assert _exception_raised is True
+    assert enqueue_called is False, (
+        "Deferred success log must not fire when the post-call guardrail "
+        "raised — post_call_failure_hook writes its own failure log."
+    )
     assert logging_obj._enqueue_deferred_logging is None
 
 
