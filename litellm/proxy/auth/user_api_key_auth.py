@@ -1221,10 +1221,13 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
             valid_token.allowed_model_region = end_user_params.get(
                 "allowed_model_region"
             )
-            # update key budget with temp budget increase
-            valid_token = _update_key_budget_with_temp_budget_increase(
-                valid_token
-            )  # updating it here, allows all downstream reporting / checks to use the updated budget
+
+        # Apply temp_budget_increase on both cache-hit and DB-fetch paths.
+        # The DB-fetch branch above caches the token *before* the increase is
+        # applied, so cache hits (especially across replicas via Redis) would
+        # otherwise enforce the stale base max_budget.
+        if valid_token is not None:
+            valid_token = _update_key_budget_with_temp_budget_increase(valid_token)
 
         user_obj: Optional[LiteLLM_UserTable] = None
         valid_token_dict: dict = {}
@@ -1722,8 +1725,14 @@ def _update_key_budget_with_temp_budget_increase(
     if valid_token.max_budget is None:
         return valid_token
     temp_budget_increase = _get_temp_budget_increase(valid_token) or 0.0
-    valid_token.max_budget = valid_token.max_budget + temp_budget_increase
-    return valid_token
+    if temp_budget_increase == 0.0:
+        return valid_token
+    # Return a copy so we never mutate a cached token in place — otherwise the
+    # in-memory cache (which stores object references) would compound the
+    # increase across requests, and Redis-backed replicas would diverge.
+    return valid_token.model_copy(
+        update={"max_budget": valid_token.max_budget + temp_budget_increase}
+    )
 
 
 async def _lookup_end_user_and_apply_budget(
