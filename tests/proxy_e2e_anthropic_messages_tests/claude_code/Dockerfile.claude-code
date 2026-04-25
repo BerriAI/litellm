@@ -22,7 +22,12 @@ RUN apk add --no-cache \
     echo "Installing @anthropic-ai/claude-code@${CLAUDE_CODE_RESOLVED_VERSION}" && \
     npm install -g --ignore-scripts "@anthropic-ai/claude-code@${CLAUDE_CODE_RESOLVED_VERSION}" && \
     CLAUDE_CODE_GLOBAL_ROOT="$(npm root -g)" && \
-    node "${CLAUDE_CODE_GLOBAL_ROOT}/@anthropic-ai/claude-code/install.cjs" && \
+    if [ -f "${CLAUDE_CODE_GLOBAL_ROOT}/@anthropic-ai/claude-code/install.cjs" ]; then \
+      node "${CLAUDE_CODE_GLOBAL_ROOT}/@anthropic-ai/claude-code/install.cjs"; \
+    else \
+      echo "No install.cjs found for @anthropic-ai/claude-code@${CLAUDE_CODE_RESOLVED_VERSION}; using legacy CLI layout."; \
+    fi && \
+    command -v claude >/dev/null && \
     npm cache clean --force && \
     groupadd --system claude && \
     useradd --system --create-home --gid claude --shell /bin/bash claude && \
