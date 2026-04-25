@@ -157,16 +157,6 @@ class UISettings(BaseModel):
         description="If true, org admins cannot generate API keys via /key/generate.",
     )
 
-    disable_team_create_for_org_admin: bool = Field(
-        default=False,
-        description="If true, org admins cannot create teams via /team/new.",
-    )
-
-    disable_model_add_for_org_admin: bool = Field(
-        default=False,
-        description="If true, org admins cannot add models via /model/new.",
-    )
-
 
 class UISettingsResponse(SettingsResponse):
     """Response model for UI settings"""
@@ -190,8 +180,6 @@ ALLOWED_UI_SETTINGS_FIELDS = {
     "scope_user_search_to_org",
     "disable_custom_api_keys",
     "disable_key_generate_for_org_admin",
-    "disable_team_create_for_org_admin",
-    "disable_model_add_for_org_admin",
 }
 
 # Flags that must be synced from the persisted UISettings into
@@ -204,8 +192,6 @@ _RUNTIME_GENERAL_SETTINGS_FLAGS = [
     "disable_vector_stores_for_internal_users",
     "allow_vector_stores_for_team_admins",
     "disable_key_generate_for_org_admin",
-    "disable_team_create_for_org_admin",
-    "disable_model_add_for_org_admin",
 ]
 
 
