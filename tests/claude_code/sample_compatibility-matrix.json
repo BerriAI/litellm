@@ -19,16 +19,17 @@
           "status": "pass"
         },
         "bedrock_invoke": {
-          "status": "not_tested"
+          "status": "pass"
         },
         "bedrock_converse": {
-          "status": "not_tested"
+          "status": "pass"
         },
         "vertex_ai": {
-          "status": "not_tested"
+          "status": "pass"
         },
         "azure": {
-          "status": "not_tested"
+          "status": "not_applicable",
+          "reason": "Azure OpenAI Service does not host Anthropic Claude models. Route Claude requests through Anthropic, AWS Bedrock, or GCP Vertex AI."
         }
       }
     }

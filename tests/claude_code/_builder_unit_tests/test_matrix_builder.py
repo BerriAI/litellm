@@ -175,6 +175,110 @@ def test_load_results_rejects_missing_results_key(tmp_path):
         load_results(bad)
 
 
+def test_build_matrix_1x5_grid_matches_published_sample():
+    """Slice 2 acceptance: feeding the per-model results that the four
+    new provider tests produce reproduces the hand-authored 1x5 sample
+    that the docs page renders.
+
+    Inputs mirror the structure of `compat-results.json` after a real
+    run with the proxy configured for all five columns:
+      - anthropic, bedrock_invoke, bedrock_converse, vertex_ai: three
+        per-model `pass` results each (Haiku, Sonnet, Opus).
+      - azure: three `not_applicable` results — Azure does not host
+        Claude, so the column is gray on every row.
+
+    The aggregated matrix must equal the checked-in
+    `sample_compatibility-matrix.json` byte-for-byte (after JSON load),
+    so any future schema drift surfaces here in review.
+    """
+    repo_root = Path(__file__).resolve().parents[1]
+    manifest = load_manifest(repo_root / "manifest.yaml")
+
+    pass_providers = ["anthropic", "bedrock_invoke", "bedrock_converse", "vertex_ai"]
+    models = ["claude-haiku-4-5", "claude-sonnet-4-6", "claude-opus-4-7"]
+    azure_reason = (
+        "Azure OpenAI Service does not host Anthropic Claude models. "
+        "Route Claude requests through Anthropic, AWS Bedrock, or GCP Vertex AI."
+    )
+
+    results = []
+    for provider in pass_providers:
+        for model in models:
+            results.append(
+                {
+                    "feature_id": "basic_messaging_non_streaming",
+                    "provider": provider,
+                    "nodeid": (
+                        f"tests/claude_code/basic_messaging_non_streaming/test_{provider}.py"
+                        f"::test[{model}]"
+                    ),
+                    "result": {"status": "pass"},
+                }
+            )
+    for model in models:
+        results.append(
+            {
+                "feature_id": "basic_messaging_non_streaming",
+                "provider": "azure",
+                "nodeid": (
+                    "tests/claude_code/basic_messaging_non_streaming/test_azure.py"
+                    f"::test[{model}]"
+                ),
+                "result": {"status": "not_applicable", "reason": azure_reason},
+            }
+        )
+
+    matrix = build_matrix(
+        manifest=manifest,
+        results=results,
+        litellm_version="v1.83.0-stable",
+        claude_code_version="2.1.120",
+        generated_at="2026-04-25T00:00:00Z",
+    )
+    expected = json.loads((repo_root / "sample_compatibility-matrix.json").read_text())
+    assert matrix == expected
+
+
+def test_build_matrix_1x5_grid_one_failing_model_breaks_cell():
+    """If even one of three models fails on a provider, that cell is fail
+    and the error string carries the failing model id so the docs
+    tooltip can name the outlier."""
+    repo_root = Path(__file__).resolve().parents[1]
+    manifest = load_manifest(repo_root / "manifest.yaml")
+
+    results = [
+        {
+            "feature_id": "basic_messaging_non_streaming",
+            "provider": "bedrock_invoke",
+            "result": {"status": "pass"},
+        },
+        {
+            "feature_id": "basic_messaging_non_streaming",
+            "provider": "bedrock_invoke",
+            "result": {
+                "status": "fail",
+                "error": "[claude-opus-4-7-bedrock-invoke] claude CLI exited 1: throttled",
+            },
+        },
+        {
+            "feature_id": "basic_messaging_non_streaming",
+            "provider": "bedrock_invoke",
+            "result": {"status": "pass"},
+        },
+    ]
+
+    matrix = build_matrix(
+        manifest=manifest,
+        results=results,
+        litellm_version="v",
+        claude_code_version="c",
+        generated_at="t",
+    )
+    cell = matrix["features"][0]["providers"]["bedrock_invoke"]
+    assert cell["status"] == "fail"
+    assert "claude-opus-4-7-bedrock-invoke" in cell["error"]
+
+
 def test_build_from_paths_writes_output(tmp_path):
     out = tmp_path / "compatibility-matrix.json"
     matrix = build_from_paths(
