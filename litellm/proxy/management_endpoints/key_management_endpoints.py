@@ -456,22 +456,28 @@ def handle_key_type(data: GenerateKeyRequest, data_json: dict) -> dict:
     return data_json
 
 
+_NON_ADMIN_SAFE_ALLOWED_ROUTES_PRESETS = frozenset({"llm_api_routes", "info_routes"})
+
+
 def _check_allowed_routes_caller_permission(
     allowed_routes: Optional[list],
     user_api_key_dict: UserAPIKeyAuth,
 ) -> None:
     """
-    Only proxy admins may set `allowed_routes` on a key.
+    Only proxy admins may set `allowed_routes` on a key, except for the safe
+    presets produced by `handle_key_type` for non-elevated buckets
+    (`llm_api_routes`, `info_routes`).
 
-    `allowed_routes` bypasses the standard role-based route gate in
-    RouteChecks.non_proxy_admin_allowed_routes_check, so if a non-admin is
-    allowed to set it they can grant themselves access to any endpoint.
-    Non-admins should use `key_type` to pick a preset route bucket instead.
+    `allowed_routes` overrides the standard role-based route gate in
+    RouteChecks.non_proxy_admin_allowed_routes_check, so the field is
+    restricted to admins outside of those safe presets.
     """
     # Empty list is the default on GenerateKeyRequest — treat as "not set".
     if not allowed_routes:
         return
     if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
+        return
+    if all(r in _NON_ADMIN_SAFE_ALLOWED_ROUTES_PRESETS for r in allowed_routes):
         return
     raise HTTPException(
         status_code=403,
@@ -482,6 +488,36 @@ def _check_allowed_routes_caller_permission(
             )
         },
     )
+
+
+def _check_passthrough_routes_caller_permission(
+    data: BaseModel,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> None:
+    """
+    Only proxy admins may set `allowed_passthrough_routes` on a key, either at
+    the top level of the request or nested under `metadata`.
+
+    The route gate evaluates passthrough access ahead of the standard role
+    gate, so the field is restricted to admins to keep that ordering safe.
+    """
+    if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
+        return
+    if getattr(data, "allowed_passthrough_routes", None):
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": "Only proxy admins can set `allowed_passthrough_routes` on a key."
+            },
+        )
+    metadata = getattr(data, "metadata", None)
+    if isinstance(metadata, dict) and metadata.get("allowed_passthrough_routes"):
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": "Only proxy admins can set `metadata.allowed_passthrough_routes` on a key."
+            },
+        )
 
 
 async def validate_team_id_used_in_service_account_request(
@@ -673,6 +709,14 @@ async def _common_key_generation_helper(  # noqa: PLR0915
     data_json = data.model_dump(exclude_unset=True, exclude_none=True)  # type: ignore
 
     data_json = handle_key_type(data, data_json)
+
+    # Re-check allowed_routes after handle_key_type, since key_type can derive
+    # an elevated bucket (e.g. ["management_routes"]) that wasn't present in
+    # the original request body.
+    _check_allowed_routes_caller_permission(
+        allowed_routes=data_json.get("allowed_routes"),
+        user_api_key_dict=user_api_key_dict,
+    )
 
     # if we get max_budget passed to /key/generate, then use it as key_max_budget. Since generate_key_helper_fn is used to make new users
     if "max_budget" in data_json:
@@ -1286,6 +1330,10 @@ async def generate_key_fn(
 
         _check_allowed_routes_caller_permission(
             allowed_routes=data.allowed_routes,
+            user_api_key_dict=user_api_key_dict,
+        )
+        _check_passthrough_routes_caller_permission(
+            data=data,
             user_api_key_dict=user_api_key_dict,
         )
 
@@ -1938,6 +1986,10 @@ async def _validate_update_key_data(
 
     _check_allowed_routes_caller_permission(
         allowed_routes=data.allowed_routes,
+        user_api_key_dict=user_api_key_dict,
+    )
+    _check_passthrough_routes_caller_permission(
+        data=data,
         user_api_key_dict=user_api_key_dict,
     )
 
@@ -3888,6 +3940,16 @@ async def regenerate_key_fn(  # noqa: PLR0915
             proxy_logging_obj,
             user_api_key_cache,
         )
+
+        if data is not None:
+            _check_allowed_routes_caller_permission(
+                allowed_routes=data.allowed_routes,
+                user_api_key_dict=user_api_key_dict,
+            )
+            _check_passthrough_routes_caller_permission(
+                data=data,
+                user_api_key_dict=user_api_key_dict,
+            )
 
         is_master_key_regeneration = data and data.new_master_key is not None
 
