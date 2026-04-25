@@ -13,8 +13,8 @@ from litellm.llms.custom_httpx.http_handler import (
     HTTPHandler,
     get_async_httpx_client,
 )
-from litellm.types.llms.openai import EmbeddingInput
 from litellm.types.llms.vertex_ai import (
+    GeminiEmbeddingInput,
     VertexAIBatchEmbeddingsRequestBody,
     VertexAIBatchEmbeddingsResponseObject,
 )
@@ -33,7 +33,7 @@ from .batch_embed_content_transformation import (
 class GoogleBatchEmbeddings(VertexLLM):
     @staticmethod
     def _flatten_and_detect_file_refs(
-        input: EmbeddingInput,
+        input: GeminiEmbeddingInput,
     ) -> Tuple[List[str], bool]:
         """Flatten nested input lists and detect file references."""
         input_list = [input] if isinstance(input, str) else input
@@ -48,7 +48,7 @@ class GoogleBatchEmbeddings(VertexLLM):
 
     def _resolve_file_references(
         self,
-        input: Union[EmbeddingInput, List[str]],
+        input: GeminiEmbeddingInput,
         api_key: str,
         sync_handler: HTTPHandler,
     ) -> Dict[str, Dict[str, str]]:
@@ -56,7 +56,7 @@ class GoogleBatchEmbeddings(VertexLLM):
         Resolve Gemini file references (files/...) to get mime_type and uri.
 
         Args:
-            input: EmbeddingInput that may contain file references
+            input: GeminiEmbeddingInput that may contain file references
             api_key: Gemini API key
             sync_handler: HTTP client
 
@@ -87,7 +87,7 @@ class GoogleBatchEmbeddings(VertexLLM):
 
     async def _async_resolve_file_references(
         self,
-        input: Union[EmbeddingInput, List[str]],
+        input: GeminiEmbeddingInput,
         api_key: str,
         async_handler: AsyncHTTPHandler,
     ) -> Dict[str, Dict[str, str]]:
@@ -95,7 +95,7 @@ class GoogleBatchEmbeddings(VertexLLM):
         Async version of _resolve_file_references.
 
         Args:
-            input: EmbeddingInput that may contain file references
+            input: GeminiEmbeddingInput that may contain file references
             api_key: Gemini API key
             async_handler: Async HTTP client
 
@@ -127,7 +127,7 @@ class GoogleBatchEmbeddings(VertexLLM):
     def batch_embeddings(  # noqa: PLR0915
         self,
         model: str,
-        input: EmbeddingInput,
+        input: GeminiEmbeddingInput,
         print_verbose,
         model_response: EmbeddingResponse,
         custom_llm_provider: Literal["gemini", "vertex_ai"],
@@ -291,7 +291,7 @@ class GoogleBatchEmbeddings(VertexLLM):
         url: str,
         data: Optional[Union[VertexAIBatchEmbeddingsRequestBody, dict]],
         model_response: EmbeddingResponse,
-        input: EmbeddingInput,
+        input: GeminiEmbeddingInput,
         timeout: Optional[Union[float, httpx.Timeout]],
         headers={},
         client: Optional[AsyncHTTPHandler] = None,

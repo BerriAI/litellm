@@ -6,12 +6,12 @@ Why separate file? Make it easy to see how transformation works
 
 from typing import Dict, List, Optional, Tuple
 
-from litellm.types.llms.openai import EmbeddingInput
 from litellm.types.llms.vertex_ai import (
     BlobType,
     ContentType,
     EmbedContentRequest,
     FileDataType,
+    GeminiEmbeddingInput,
     PartType,
     VertexAIBatchEmbeddingsRequestBody,
     VertexAIBatchEmbeddingsResponseObject,
@@ -114,13 +114,13 @@ def _parse_data_url(data_url: str) -> Tuple[str, str]:
     return media_type, base64_data
 
 
-def _is_multimodal_input(input: EmbeddingInput) -> bool:
+def _is_multimodal_input(input: GeminiEmbeddingInput) -> bool:
     """
     Check if the input contains multimodal data (data URIs, file references,
     GCS URLs, or nested lists for combined embeddings).
 
     Args:
-        input: EmbeddingInput — str, List[str], or List[Union[str, List[str]]]
+        input: GeminiEmbeddingInput — str, List[str], or List[List[str]] for combined embeddings
 
     Returns:
         bool: True if any element is multimodal or a nested list
@@ -199,7 +199,7 @@ def _filter_embed_params(optional_params: dict) -> dict:
 
 
 def transform_openai_input_gemini_content(
-    input: EmbeddingInput,
+    input: GeminiEmbeddingInput,
     model: str,
     optional_params: dict,
     resolved_files: Optional[Dict[str, Dict[str, str]]] = None,
@@ -252,7 +252,7 @@ def transform_openai_input_gemini_content(
 
 
 def transform_openai_input_gemini_embed_content(
-    input: EmbeddingInput,
+    input: GeminiEmbeddingInput,
     model: str,
     optional_params: dict,
     resolved_files: Optional[Dict[str, Dict[str, str]]] = None,
@@ -261,7 +261,7 @@ def transform_openai_input_gemini_embed_content(
     Transform OpenAI embedding input to Gemini embedContent format (multimodal).
 
     Args:
-        input: EmbeddingInput (str or List[str]) with text, data URIs, or file references
+        input: GeminiEmbeddingInput with text, data URIs, or file references
         model: Model name
         optional_params: Additional parameters (taskType, outputDimensionality, etc.)
         resolved_files: Dict mapping file names (files/abc) to {mime_type, uri}
@@ -295,7 +295,7 @@ def transform_openai_input_gemini_embed_content(
 
 
 def process_embed_content_response(
-    input: EmbeddingInput,
+    input: GeminiEmbeddingInput,
     model_response: EmbeddingResponse,
     model: str,
     response_json: dict,
@@ -341,7 +341,7 @@ def process_embed_content_response(
 
 
 def process_response(
-    input: EmbeddingInput,
+    input: GeminiEmbeddingInput,
     model_response: EmbeddingResponse,
     model: str,
     _predictions: VertexAIBatchEmbeddingsResponseObject,
