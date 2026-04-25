@@ -242,7 +242,8 @@ import json
 files = []
 for root, dirs, filenames in os.walk('/sandbox'):
     for f in filenames:
-        if f.endswith(('.gif', '.png', '.jpg', '.jpeg', '.pdf', '.csv', '.json')):
+        if f.endswith(('.gif', '.png', '.jpg', '.jpeg', '.pdf', '.csv', '.json',
+                       '.webm', '.mp4', '.md')):
             files.append(os.path.join(root, f))
 print(json.dumps(files))
 """
@@ -317,4 +318,7 @@ print(json.dumps(files))
             "csv": "text/csv",
             "json": "application/json",
             "txt": "text/plain",
+            "webm": "video/webm",
+            "mp4": "video/mp4",
+            "md": "text/markdown",
         }.get(ext, "application/octet-stream")
