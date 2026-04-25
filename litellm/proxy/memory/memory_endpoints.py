@@ -367,9 +367,9 @@ async def _find_memory_for_caller(
     prisma_client: Any, key: str, user_api_key_dict: UserAPIKeyAuth
 ) -> Any:
     """Look up a memory row by key, scoped to the caller's visibility."""
-    key_filter = {"key": key}
+    key_filter: dict = {"key": key}
     vis = _visibility_filter(user_api_key_dict)
-    where = key_filter if vis is None else {"AND": [key_filter, vis]}
+    where: dict = key_filter if vis is None else {"AND": [key_filter, vis]}
     rows = await prisma_client.db.litellm_memorytable.find_many(
         where=where, take=1, order={"updated_at": "desc"}
     )
