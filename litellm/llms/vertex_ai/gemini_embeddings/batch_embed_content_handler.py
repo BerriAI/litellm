@@ -23,7 +23,6 @@ from litellm.types.utils import EmbeddingResponse
 from ..gemini.vertex_and_google_ai_studio_gemini import VertexLLM
 from .batch_embed_content_transformation import (
     _is_file_reference,
-    _is_multimodal_input,
     process_embed_content_response,
     process_response,
     transform_openai_input_gemini_content,
@@ -125,7 +124,7 @@ class GoogleBatchEmbeddings(VertexLLM):
 
         return resolved_files
 
-    def batch_embeddings(
+    def batch_embeddings(  # noqa: PLR0915
         self,
         model: str,
         input: EmbeddingInput,
