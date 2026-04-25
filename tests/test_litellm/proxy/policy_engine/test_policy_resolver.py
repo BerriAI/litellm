@@ -64,7 +64,9 @@ class TestPolicyResolverInheritance:
             ),
             "dev": Policy(
                 inherit="base",
-                guardrails=PolicyGuardrails(add=["toxicity_filter"], remove=["phi_blocker"]),
+                guardrails=PolicyGuardrails(
+                    add=["toxicity_filter"], remove=["phi_blocker"]
+                ),
             ),
         }
 
@@ -97,7 +99,11 @@ class TestPolicyResolverInheritance:
             policy_name="leaf", policies=policies
         )
 
-        assert set(resolved.guardrails) == {"root_guardrail", "middle_guardrail", "leaf_guardrail"}
+        assert set(resolved.guardrails) == {
+            "root_guardrail",
+            "middle_guardrail",
+            "leaf_guardrail",
+        }
         assert resolved.inheritance_chain == ["root", "middle", "leaf"]
 
 
@@ -183,7 +189,9 @@ class TestPolicyResolverWithConditions:
         assert "child_guardrail" in resolved_gpt4.guardrails
 
         # GPT-3.5 should only get base guardrails (child condition doesn't match)
-        context_gpt35 = PolicyMatchContext(team_alias="t", key_alias="k", model="gpt-3.5")
+        context_gpt35 = PolicyMatchContext(
+            team_alias="t", key_alias="k", model="gpt-3.5"
+        )
         resolved_gpt35 = PolicyResolver.resolve_policy_guardrails(
             policy_name="child",
             policies=policies,

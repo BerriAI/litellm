@@ -1,4 +1,5 @@
 """Tests for MCP OAuth discoverable endpoints"""
+
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -369,12 +370,15 @@ async def test_register_client_remote_registration_success():
     mock_async_client.post = AsyncMock(return_value=mock_response)
 
     try:
-        with patch(
-            "litellm.proxy._experimental.mcp_server.discoverable_endpoints._read_request_body",
-            new=AsyncMock(return_value=request_payload),
-        ), patch(
-            "litellm.proxy._experimental.mcp_server.discoverable_endpoints.get_async_httpx_client",
-            return_value=mock_async_client,
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.discoverable_endpoints._read_request_body",
+                new=AsyncMock(return_value=request_payload),
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.discoverable_endpoints.get_async_httpx_client",
+                return_value=mock_async_client,
+            ),
         ):
             response = await register_client(
                 request=mock_request, mcp_server_name=oauth2_server.server_name
@@ -598,7 +602,10 @@ async def test_oauth_protected_resource_standard_pattern():
 
     # Verify response uses standard MCP pattern: /mcp/{server_name}
     assert response["resource"] == "https://litellm.example.com/mcp/test_server"
-    assert response["authorization_servers"][0] == "https://litellm.example.com/test_server"
+    assert (
+        response["authorization_servers"][0]
+        == "https://litellm.example.com/test_server"
+    )
     assert response["scopes_supported"] == oauth2_server.scopes
 
 
@@ -651,7 +658,10 @@ async def test_oauth_protected_resource_legacy_pattern():
 
     # Verify response uses legacy pattern: /{server_name}/mcp
     assert response["resource"] == "https://litellm.example.com/test_server/mcp"
-    assert response["authorization_servers"][0] == "https://litellm.example.com/test_server"
+    assert (
+        response["authorization_servers"][0]
+        == "https://litellm.example.com/test_server"
+    )
     assert response["scopes_supported"] == oauth2_server.scopes
 
 

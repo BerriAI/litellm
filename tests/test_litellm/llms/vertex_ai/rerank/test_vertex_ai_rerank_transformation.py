@@ -2,6 +2,7 @@
 Tests for Vertex AI rerank transformation functionality.
 Based on the test patterns from other rerank providers and the current Vertex AI implementation.
 """
+
 import json
 import os
 from unittest.mock import MagicMock, patch
@@ -63,13 +64,16 @@ class TestVertexAIRerankTransform:
             import litellm
 
             # Set vertex_project attribute if it doesn't exist
-            if not hasattr(litellm, 'vertex_project'):
+            if not hasattr(litellm, "vertex_project"):
                 litellm.vertex_project = None
             original_project = litellm.vertex_project
             litellm.vertex_project = "litellm-project-456"
             # Reset mock call count
             mock_ensure_access_token.reset_mock()
-            mock_ensure_access_token.return_value = ("mock-token", "litellm-project-456")
+            mock_ensure_access_token.return_value = (
+                "mock-token",
+                "litellm-project-456",
+            )
             try:
                 url = self.config.get_complete_url(api_base=None, model=self.model)
                 expected_url = "https://discoveryengine.googleapis.com/v1/projects/litellm-project-456/locations/global/rankingConfigs/default_ranking_config:rank"
@@ -82,15 +86,19 @@ class TestVertexAIRerankTransform:
             import litellm
 
             # Set vertex_project to None to ensure no project ID is available
-            if not hasattr(litellm, 'vertex_project'):
+            if not hasattr(litellm, "vertex_project"):
                 litellm.vertex_project = None
             original_project = litellm.vertex_project
             litellm.vertex_project = None
             # Reset mock and set it to raise an error
             mock_ensure_access_token.reset_mock()
-            mock_ensure_access_token.side_effect = ValueError("Vertex AI project ID is required")
+            mock_ensure_access_token.side_effect = ValueError(
+                "Vertex AI project ID is required"
+            )
             try:
-                with pytest.raises(ValueError, match="Vertex AI project ID is required"):
+                with pytest.raises(
+                    ValueError, match="Vertex AI project ID is required"
+                ):
                     self.config.get_complete_url(api_base=None, model=self.model)
             finally:
                 litellm.vertex_project = original_project
@@ -109,15 +117,13 @@ class TestVertexAIRerankTransform:
         self.config._ensure_access_token = mock_ensure_access_token
 
         headers = self.config.validate_environment(
-            headers={},
-            model=self.model,
-            api_key=None
+            headers={}, model=self.model, api_key=None
         )
 
         expected_headers = {
             "Authorization": "Bearer test-access-token",
             "Content-Type": "application/json",
-            "X-Goog-User-Project": "test-project-123"
+            "X-Goog-User-Project": "test-project-123",
         }
         assert headers == expected_headers
 
@@ -127,24 +133,22 @@ class TestVertexAIRerankTransform:
             "query": "What is Google Gemini?",
             "documents": [
                 "Gemini is a cutting edge large language model created by Google.",
-                "The Gemini zodiac symbol often depicts two figures standing side-by-side."
+                "The Gemini zodiac symbol often depicts two figures standing side-by-side.",
             ],
-            "top_n": 2
+            "top_n": 2,
         }
-        
+
         request_data = self.config.transform_rerank_request(
-            model=self.model,
-            optional_rerank_params=optional_params,
-            headers={}
+            model=self.model, optional_rerank_params=optional_params, headers={}
         )
-        
+
         # Verify basic structure
         assert request_data["model"] == self.model
         assert request_data["query"] == "What is Google Gemini?"
         assert request_data["topN"] == 2
         assert "records" in request_data
         assert len(request_data["records"]) == 2
-        
+
         # Verify record structure
         for i, record in enumerate(request_data["records"]):
             assert "id" in record
@@ -158,20 +162,25 @@ class TestVertexAIRerankTransform:
         optional_params = {
             "query": "What is Google Gemini?",
             "documents": [
-                {"text": "Gemini is a cutting edge large language model created by Google.", "title": "Custom Title 1"},
-                {"text": "The Gemini zodiac symbol often depicts two figures standing side-by-side."}
-            ]
+                {
+                    "text": "Gemini is a cutting edge large language model created by Google.",
+                    "title": "Custom Title 1",
+                },
+                {
+                    "text": "The Gemini zodiac symbol often depicts two figures standing side-by-side."
+                },
+            ],
         }
-        
+
         request_data = self.config.transform_rerank_request(
-            model=self.model,
-            optional_rerank_params=optional_params,
-            headers={}
+            model=self.model, optional_rerank_params=optional_params, headers={}
         )
-        
+
         # Verify record structure with custom titles
         assert request_data["records"][0]["title"] == "Custom Title 1"
-        assert request_data["records"][1]["title"] == "The Gemini zodiac"  # First 3 words
+        assert (
+            request_data["records"][1]["title"] == "The Gemini zodiac"
+        )  # First 3 words
 
     def test_transform_rerank_request_return_documents_mapping(self):
         """Test return_documents to ignoreRecordDetailsInResponse mapping."""
@@ -179,40 +188,31 @@ class TestVertexAIRerankTransform:
         optional_params_true = {
             "query": "test query",
             "documents": ["doc1", "doc2"],
-            "return_documents": True
+            "return_documents": True,
         }
-        
+
         request_data_true = self.config.transform_rerank_request(
-            model=self.model,
-            optional_rerank_params=optional_params_true,
-            headers={}
+            model=self.model, optional_rerank_params=optional_params_true, headers={}
         )
         assert request_data_true["ignoreRecordDetailsInResponse"] == False
-        
+
         # Test return_documents=False
         optional_params_false = {
             "query": "test query",
             "documents": ["doc1", "doc2"],
-            "return_documents": False
+            "return_documents": False,
         }
-        
+
         request_data_false = self.config.transform_rerank_request(
-            model=self.model,
-            optional_rerank_params=optional_params_false,
-            headers={}
+            model=self.model, optional_rerank_params=optional_params_false, headers={}
         )
         assert request_data_false["ignoreRecordDetailsInResponse"] == True
-        
+
         # Test return_documents not specified (should default to True)
-        optional_params_default = {
-            "query": "test query",
-            "documents": ["doc1", "doc2"]
-        }
-        
+        optional_params_default = {"query": "test query", "documents": ["doc1", "doc2"]}
+
         request_data_default = self.config.transform_rerank_request(
-            model=self.model,
-            optional_rerank_params=optional_params_default,
-            headers={}
+            model=self.model, optional_rerank_params=optional_params_default, headers={}
         )
         assert request_data_default["ignoreRecordDetailsInResponse"] == False
 
@@ -223,15 +223,17 @@ class TestVertexAIRerankTransform:
             self.config.transform_rerank_request(
                 model=self.model,
                 optional_rerank_params={"documents": ["doc1"]},
-                headers={}
+                headers={},
             )
-        
+
         # Test missing documents
-        with pytest.raises(ValueError, match="documents is required for Vertex AI rerank"):
+        with pytest.raises(
+            ValueError, match="documents is required for Vertex AI rerank"
+        ):
             self.config.transform_rerank_request(
                 model=self.model,
                 optional_rerank_params={"query": "test query"},
-                headers={}
+                headers={},
             )
 
     def test_transform_rerank_response_success(self):
@@ -243,34 +245,34 @@ class TestVertexAIRerankTransform:
                     "id": "1",
                     "score": 0.98,
                     "title": "The Science of a Blue Sky",
-                    "content": "The sky appears blue due to a phenomenon called Rayleigh scattering."
+                    "content": "The sky appears blue due to a phenomenon called Rayleigh scattering.",
                 },
                 {
                     "id": "0",
                     "score": 0.64,
                     "title": "The Color of the Sky: A Poem",
-                    "content": "A canvas stretched across the day, Where sunlight learns to dance and play."
-                }
+                    "content": "A canvas stretched across the day, Where sunlight learns to dance and play.",
+                },
             ]
         }
-        
+
         # Create mock httpx response
         mock_response = MagicMock(spec=httpx.Response)
         mock_response.json.return_value = response_data
         mock_response.text = json.dumps(response_data)
-        
+
         # Create mock logging object
         mock_logging = MagicMock()
-        
+
         model_response = RerankResponse()
-        
+
         result = self.config.transform_rerank_response(
             model=self.model,
             raw_response=mock_response,
             model_response=model_response,
             logging_obj=mock_logging,
         )
-        
+
         # Verify response structure
         assert result.id == f"vertex_ai_rerank_{self.model}"
         assert len(result.results) == 2
@@ -278,34 +280,29 @@ class TestVertexAIRerankTransform:
         assert result.results[0]["relevance_score"] == 0.98
         assert result.results[1]["index"] == 0
         assert result.results[1]["relevance_score"] == 0.64
-        
+
         # Verify metadata
         assert result.meta["billed_units"]["search_units"] == 2
 
     def test_transform_rerank_response_with_ignore_record_details(self):
         """Test response transformation when ignoreRecordDetailsInResponse=true."""
         # Mock response with only IDs (when ignoreRecordDetailsInResponse=true)
-        response_data = {
-            "records": [
-                {"id": "1"},
-                {"id": "0"}
-            ]
-        }
-        
+        response_data = {"records": [{"id": "1"}, {"id": "0"}]}
+
         mock_response = MagicMock(spec=httpx.Response)
         mock_response.json.return_value = response_data
         mock_response.text = json.dumps(response_data)
-        
+
         mock_logging = MagicMock()
         model_response = RerankResponse()
-        
+
         result = self.config.transform_rerank_response(
             model=self.model,
             raw_response=mock_response,
             model_response=model_response,
             logging_obj=mock_logging,
         )
-        
+
         # Verify response structure with default scores
         assert len(result.results) == 2
         assert result.results[0]["index"] == 1  # 0-based index
@@ -318,10 +315,10 @@ class TestVertexAIRerankTransform:
         mock_response = MagicMock(spec=httpx.Response)
         mock_response.json.side_effect = json.JSONDecodeError("Invalid JSON", "doc", 0)
         mock_response.text = "Invalid JSON response"
-        
+
         mock_logging = MagicMock()
         model_response = RerankResponse()
-        
+
         with pytest.raises(ValueError, match="Failed to parse response"):
             self.config.transform_rerank_response(
                 model=self.model,
@@ -345,14 +342,14 @@ class TestVertexAIRerankTransform:
             query="test query",
             documents=["doc1", "doc2"],
             top_n=2,
-            return_documents=True
+            return_documents=True,
         )
-        
+
         expected_params = {
             "query": "test query",
             "documents": ["doc1", "doc2"],
             "top_n": 2,
-            "return_documents": True
+            "return_documents": True,
         }
         assert params == expected_params
 
@@ -363,34 +360,32 @@ class TestVertexAIRerankTransform:
             "documents": [
                 "This is a very long document with many words that should be truncated to only the first three words for the title",
                 "Short doc",
-                "Another document with multiple words here"
-            ]
+                "Another document with multiple words here",
+            ],
         }
-        
+
         request_data = self.config.transform_rerank_request(
-            model=self.model,
-            optional_rerank_params=optional_params,
-            headers={}
+            model=self.model, optional_rerank_params=optional_params, headers={}
         )
-        
+
         # Verify title generation
         assert request_data["records"][0]["title"] == "This is a"  # First 3 words
         assert request_data["records"][1]["title"] == "Short doc"  # Less than 3 words
-        assert request_data["records"][2]["title"] == "Another document with"  # First 3 words
+        assert (
+            request_data["records"][2]["title"] == "Another document with"
+        )  # First 3 words
 
     def test_record_id_generation(self):
         """Test that record IDs are generated correctly with 0-based indexing."""
         optional_params = {
             "query": "test query",
-            "documents": ["doc1", "doc2", "doc3", "doc4"]
+            "documents": ["doc1", "doc2", "doc3", "doc4"],
         }
-        
+
         request_data = self.config.transform_rerank_request(
-            model=self.model,
-            optional_rerank_params=optional_params,
-            headers={}
+            model=self.model, optional_rerank_params=optional_params, headers={}
         )
-        
+
         # Verify 0-based indexing
         for i, record in enumerate(request_data["records"]):
             assert record["id"] == str(i)
@@ -402,9 +397,9 @@ class TestVertexAIRerankTransform:
             "documents": ["doc1", "doc2"],
             "vertex_credentials": "path/to/credentials.json",
             "vertex_project": "my-project-id",
-            "vertex_location": "us-central1"
+            "vertex_location": "us-central1",
         }
-        
+
         params = self.config.map_cohere_rerank_params(
             non_default_params=non_default_params,
             model=self.model,
@@ -412,14 +407,14 @@ class TestVertexAIRerankTransform:
             query="test query",
             documents=["doc1", "doc2"],
             top_n=2,
-            return_documents=True
+            return_documents=True,
         )
-        
+
         # Verify vertex-specific parameters are preserved
         assert params["vertex_credentials"] == "path/to/credentials.json"
         assert params["vertex_project"] == "my-project-id"
         assert params["vertex_location"] == "us-central1"
-        
+
         # Verify standard params are still present
         assert params["query"] == "test query"
         assert params["documents"] == ["doc1", "doc2"]
@@ -428,10 +423,8 @@ class TestVertexAIRerankTransform:
 
     def test_map_cohere_rerank_params_without_vertex_credentials(self):
         """Test that map_cohere_rerank_params works when vertex credentials are not provided."""
-        non_default_params = {
-            "documents": ["doc1", "doc2"]
-        }
-        
+        non_default_params = {"documents": ["doc1", "doc2"]}
+
         params = self.config.map_cohere_rerank_params(
             non_default_params=non_default_params,
             model=self.model,
@@ -439,14 +432,14 @@ class TestVertexAIRerankTransform:
             query="test query",
             documents=["doc1", "doc2"],
             top_n=2,
-            return_documents=True
+            return_documents=True,
         )
-        
+
         # Verify no vertex-specific parameters are added when not provided
         assert "vertex_credentials" not in params
         assert "vertex_project" not in params
         assert "vertex_location" not in params
-        
+
         # Verify standard params are still present
         assert params["query"] == "test query"
         assert params["documents"] == ["doc1", "doc2"]
@@ -470,14 +463,11 @@ class TestVertexAIRerankTransform:
             "vertex_credentials": "path/to/credentials.json",
             "vertex_project": "custom-project-id",
             "query": "test query",
-            "documents": ["doc1"]
+            "documents": ["doc1"],
         }
 
         headers = self.config.validate_environment(
-            headers={},
-            model=self.model,
-            api_key=None,
-            optional_params=optional_params
+            headers={}, model=self.model, api_key=None, optional_params=optional_params
         )
 
         # Verify that _ensure_access_token was called with the credentials from optional_params
@@ -490,7 +480,7 @@ class TestVertexAIRerankTransform:
         expected_headers = {
             "Authorization": "Bearer test-access-token",
             "Content-Type": "application/json",
-            "X-Goog-User-Project": "test-project-123"
+            "X-Goog-User-Project": "test-project-123",
         }
         assert headers == expected_headers
 
@@ -527,7 +517,10 @@ class TestVertexAIRerankTransform:
         assert optional_params["vertex_project"] == "custom-project-id"
 
         # get_complete_url should still be able to access the vertex params
-        with patch('litellm.llms.vertex_ai.rerank.transformation.get_secret_str', return_value=None):
+        with patch(
+            "litellm.llms.vertex_ai.rerank.transformation.get_secret_str",
+            return_value=None,
+        ):
             url = self.config.get_complete_url(
                 api_base=None,
                 model=self.model,

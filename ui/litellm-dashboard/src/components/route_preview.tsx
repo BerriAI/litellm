@@ -1,6 +1,8 @@
 import React from "react";
-import { Card, Title, Subtitle } from "@tremor/react";
+import { Card, Typography } from "antd";
 import { RightOutlined, InfoCircleOutlined } from "@ant-design/icons";
+
+const { Title, Text } = Typography;
 import { getProxyBaseUrl } from "./networking";
 
 interface RoutePreviewProps {
@@ -23,8 +25,8 @@ const RoutePreview: React.FC<RoutePreviewProps> = ({ pathValue, targetValue, inc
 
   return (
     <Card className="p-5">
-      <Title className="text-lg font-semibold text-gray-900 mb-2">Route Preview</Title>
-      <Subtitle className="text-gray-600 mb-5">How your requests will be routed</Subtitle>
+      <Title level={5} className="text-lg font-semibold text-gray-900 mb-2">Route Preview</Title>
+      <Text type="secondary" className="text-gray-600 mb-5" style={{ display: "block" }}>How your requests will be routed</Text>
 
       <div className="space-y-5">
         {/* Basic routing */}

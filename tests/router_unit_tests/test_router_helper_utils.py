@@ -26,7 +26,7 @@ def model_list():
                 "model": "gpt-3.5-turbo",
                 "api_key": os.getenv("OPENAI_API_KEY"),
                 "tpm": 1000,  # Add TPM limit so async method doesn't return early
-                "rpm": 100,   # Add RPM limit so async method doesn't return early
+                "rpm": 100,  # Add RPM limit so async method doesn't return early
             },
             "model_info": {
                 "access_groups": ["group1", "group2"],
@@ -91,8 +91,7 @@ def test_routing_strategy_init_invalid_strategy(model_list):
     # Test common mistake: "simple" instead of "simple-shuffle"
     with pytest.raises(ValueError) as exc_info:
         router.routing_strategy_init(
-            routing_strategy="simple",
-            routing_strategy_args={}
+            routing_strategy="simple", routing_strategy_args={}
         )
 
     # Verify error message is helpful
@@ -108,8 +107,7 @@ def test_routing_strategy_init_invalid_strategy(model_list):
     # Test completely invalid strategy
     with pytest.raises(ValueError) as exc_info:
         router.routing_strategy_init(
-            routing_strategy="not-a-real-strategy",
-            routing_strategy_args={}
+            routing_strategy="not-a-real-strategy", routing_strategy_args={}
         )
     assert "Invalid routing_strategy" in str(exc_info.value)
 
@@ -487,9 +485,11 @@ async def test_deployment_callback_on_success(sync_mode):
     ]
     router = Router(model_list=model_list)
     # Get the actual deployment ID that was generated
-    gpt_deployment = router.get_deployment_by_model_group_name(model_group_name="gpt-3.5-turbo")
+    gpt_deployment = router.get_deployment_by_model_group_name(
+        model_group_name="gpt-3.5-turbo"
+    )
     deployment_id = gpt_deployment["model_info"]["id"]
-    
+
     standard_logging_payload = create_standard_logging_payload()
     standard_logging_payload["total_tokens"] = 100
     standard_logging_payload["model_id"] = "100"
@@ -1479,7 +1479,9 @@ def test_generate_model_id_with_deployment_model_name(model_list):
         )
     except TypeError as e:
         # After optimization, error message changed but still fails appropriately on None
-        assert "unsupported operand type(s) for +=" in str(e) or "expected str instance, NoneType found" in str(e)
+        assert "unsupported operand type(s) for +=" in str(
+            e
+        ) or "expected str instance, NoneType found" in str(e)
         print(f"✓ Correctly failed with None model_group (as expected): {e}")
     except Exception as e:
         pytest.fail(f"Unexpected error with None model_group: {e}")
@@ -1596,12 +1598,8 @@ def test_sync_generic_api_call_preserves_requested_model_group_in_logs():
         )
 
         assert response == {"status": "ok"}
-        assert (
-            captured_kwargs["model"] == "bedrock/global.anthropic.claude-sonnet-4-6"
-        )
-        assert (
-            captured_kwargs["litellm_metadata"]["model_group"] == "claude-sonnet-4-6"
-        )
+        assert captured_kwargs["model"] == "bedrock/global.anthropic.claude-sonnet-4-6"
+        assert captured_kwargs["litellm_metadata"]["model_group"] == "claude-sonnet-4-6"
         assert (
             captured_kwargs["litellm_metadata"]["deployment"]
             == "bedrock/global.anthropic.claude-sonnet-4-6"
@@ -1877,31 +1875,31 @@ def test_get_metadata_variable_name_from_kwargs(model_list):
     Test _get_metadata_variable_name_from_kwargs method returns correct metadata variable name based on kwargs content.
     """
     router = Router(model_list=model_list)
-    
+
     # Test case 1: kwargs contains litellm_metadata - should return "litellm_metadata"
     kwargs_with_litellm_metadata = {
         "litellm_metadata": {"user": "test"},
-        "metadata": {"other": "data"}
+        "metadata": {"other": "data"},
     }
-    result = router._get_metadata_variable_name_from_kwargs(kwargs_with_litellm_metadata)
+    result = router._get_metadata_variable_name_from_kwargs(
+        kwargs_with_litellm_metadata
+    )
     assert result == "litellm_metadata"
-    
+
     # Test case 2: kwargs only contains metadata - should return "metadata"
-    kwargs_with_metadata_only = {
-        "metadata": {"user": "test"}
-    }
+    kwargs_with_metadata_only = {"metadata": {"user": "test"}}
     result = router._get_metadata_variable_name_from_kwargs(kwargs_with_metadata_only)
     assert result == "metadata"
-    
+
     # Test case 3: kwargs contains neither - should return "metadata" (default)
     kwargs_empty = {}
     result = router._get_metadata_variable_name_from_kwargs(kwargs_empty)
     assert result == "metadata"
-    
+
     # Test case 4: kwargs contains other keys but no metadata keys - should return "metadata"
     kwargs_other = {
         "model": "gpt-4",
-        "messages": [{"role": "user", "content": "hello"}]
+        "messages": [{"role": "user", "content": "hello"}],
     }
     result = router._get_metadata_variable_name_from_kwargs(kwargs_other)
     assert result == "metadata"
@@ -1917,7 +1915,7 @@ def search_tools():
                 "search_provider": "perplexity",
                 "api_key": "test-api-key",
                 "api_base": "https://api.perplexity.ai",
-            }
+            },
         },
         {
             "search_tool_name": "test-search-tool",
@@ -1925,8 +1923,8 @@ def search_tools():
                 "search_provider": "perplexity",
                 "api_key": "test-api-key-2",
                 "api_base": "https://api.perplexity.ai",
-            }
-        }
+            },
+        },
     ]
 
 
@@ -1934,16 +1932,16 @@ def search_tools():
 async def test_asearch_with_fallbacks(search_tools):
     """
     Test _asearch_with_fallbacks method of Router.
-    
+
     Tests that the _asearch_with_fallbacks method correctly:
     - Accepts search parameters
     - Calls async_function_with_fallbacks with correct configuration
     - Returns SearchResponse
     """
     from litellm.llms.base_llm.search.transformation import SearchResponse, SearchResult
-    
+
     router = Router(search_tools=search_tools)
-    
+
     # Create a mock search response
     mock_response = SearchResponse(
         object="search",
@@ -1951,30 +1949,32 @@ async def test_asearch_with_fallbacks(search_tools):
             SearchResult(
                 title="Test Result",
                 url="https://example.com",
-                snippet="Test snippet content"
+                snippet="Test snippet content",
             )
-        ]
+        ],
     )
-    
+
     # Mock the async_function_with_fallbacks to return our mock response
-    with patch.object(router, 'async_function_with_fallbacks', new_callable=AsyncMock) as mock_fallbacks:
+    with patch.object(
+        router, "async_function_with_fallbacks", new_callable=AsyncMock
+    ) as mock_fallbacks:
         mock_fallbacks.return_value = mock_response
-        
+
         # Mock original function
         async def mock_asearch(**kwargs):
             return mock_response
-        
+
         # Call _asearch_with_fallbacks
         response = await router._asearch_with_fallbacks(
             original_function=mock_asearch,
             search_tool_name="test-search-tool",
             query="test query",
-            max_results=5
+            max_results=5,
         )
-        
+
         # Verify async_function_with_fallbacks was called
         assert mock_fallbacks.called
-        
+
         # Verify the response
         assert isinstance(response, SearchResponse)
         assert response.object == "search"
@@ -1986,16 +1986,16 @@ async def test_asearch_with_fallbacks(search_tools):
 async def test_asearch_with_fallbacks_helper(search_tools):
     """
     Test _asearch_with_fallbacks_helper method of Router.
-    
+
     Tests that the _asearch_with_fallbacks_helper method correctly:
     - Selects a search tool from available options
     - Calls the original search function with correct provider parameters
     - Returns SearchResponse
     """
     from litellm.llms.base_llm.search.transformation import SearchResponse, SearchResult
-    
+
     router = Router(search_tools=search_tools)
-    
+
     # Create a mock search response
     mock_response = SearchResponse(
         object="search",
@@ -2003,11 +2003,11 @@ async def test_asearch_with_fallbacks_helper(search_tools):
             SearchResult(
                 title="Helper Test Result",
                 url="https://example.com/helper",
-                snippet="Helper test snippet"
+                snippet="Helper test snippet",
             )
-        ]
+        ],
     )
-    
+
     # Mock the original generic function
     async def mock_original_function(**kwargs):
         # Verify correct parameters are passed
@@ -2016,15 +2016,15 @@ async def test_asearch_with_fallbacks_helper(search_tools):
         assert "api_key" in kwargs
         assert kwargs["query"] == "helper test query"
         return mock_response
-    
+
     # Call _asearch_with_fallbacks_helper
     response = await router._asearch_with_fallbacks_helper(
         model="test-search-tool",
         original_generic_function=mock_original_function,
         query="helper test query",
-        max_results=3
+        max_results=3,
     )
-    
+
     # Verify the response
     assert isinstance(response, SearchResponse)
     assert response.object == "search"
@@ -2037,22 +2037,22 @@ async def test_asearch_with_fallbacks_helper(search_tools):
 async def test_asearch_with_fallbacks_helper_missing_search_tool():
     """
     Test _asearch_with_fallbacks_helper raises error when search tool not found.
-    
+
     Tests that the helper method raises a ValueError when the requested
     search tool name doesn't exist in the router's search_tools configuration.
     """
     # Create router with no search tools
     router = Router(model_list=[])
-    
+
     async def mock_original_function(**kwargs):
         return None
-    
+
     # Should raise ValueError for missing search tool
     with pytest.raises(ValueError, match="Search tool 'nonexistent-tool' not found"):
         await router._asearch_with_fallbacks_helper(
             model="nonexistent-tool",
             original_generic_function=mock_original_function,
-            query="test query"
+            query="test query",
         )
 
 
@@ -2060,7 +2060,7 @@ async def test_asearch_with_fallbacks_helper_missing_search_tool():
 async def test_asearch_with_fallbacks_helper_missing_search_provider():
     """
     Test _asearch_with_fallbacks_helper raises error when search_provider not configured.
-    
+
     Tests that the helper method raises a ValueError when a search tool
     is found but doesn't have search_provider in its litellm_params.
     """
@@ -2071,21 +2071,21 @@ async def test_asearch_with_fallbacks_helper_missing_search_provider():
             "litellm_params": {
                 "api_key": "test-key"
                 # Missing search_provider
-            }
+            },
         }
     ]
-    
+
     router = Router(search_tools=search_tools_bad)
-    
+
     async def mock_original_function(**kwargs):
         return None
-    
+
     # Should raise ValueError for missing search_provider
     with pytest.raises(ValueError, match="search_provider not found in litellm_params"):
         await router._asearch_with_fallbacks_helper(
             model="bad-tool",
             original_generic_function=mock_original_function,
-            query="test query"
+            query="test query",
         )
 
 
@@ -2098,45 +2098,38 @@ def test_get_first_default_fallback():
             "litellm_params": {"model": "gpt-3.5-turbo", "api_key": "fake-key"},
         }
     ]
-    
-    router = Router(
-        model_list=model_list,
-        fallbacks=[{"*": ["gpt-3.5-turbo"]}]
-    )
-    
+
+    router = Router(model_list=model_list, fallbacks=[{"*": ["gpt-3.5-turbo"]}])
+
     result = router._get_first_default_fallback()
     assert result == "gpt-3.5-turbo"
-    
+
     # Test with no fallbacks
     router_no_fallbacks = Router(model_list=model_list)
     result = router_no_fallbacks._get_first_default_fallback()
     assert result is None
-    
+
     # Test with fallbacks but no default
     router_no_default = Router(
-        model_list=model_list,
-        fallbacks=[{"gpt-4": ["gpt-3.5-turbo"]}]
+        model_list=model_list, fallbacks=[{"gpt-4": ["gpt-3.5-turbo"]}]
     )
     result = router_no_default._get_first_default_fallback()
     assert result is None
-    
+
     # Test with empty default list
-    router_empty_list = Router(
-        model_list=model_list,
-        fallbacks=[{"*": []}]
-    )
+    router_empty_list = Router(model_list=model_list, fallbacks=[{"*": []}])
     result = router_empty_list._get_first_default_fallback()
     assert result is None
 
 
 def test_resolve_model_name_from_model_id():
     """Test resolve_model_name_from_model_id function with various scenarios"""
-    
+
     # Test case 1: model_id is None
     router = Router(model_list=[])
     result = router.resolve_model_name_from_model_id(None)
     assert result is None
-    
+
     # Test case 2: model_id directly matches a model_name
     model_list = [
         {
@@ -2150,7 +2143,7 @@ def test_resolve_model_name_from_model_id():
     router = Router(model_list=model_list)
     result = router.resolve_model_name_from_model_id("gpt-3.5-turbo")
     assert result == "gpt-3.5-turbo"
-    
+
     # Test case 3: model_id matches litellm_params.model exactly
     model_list = [
         {
@@ -2164,7 +2157,7 @@ def test_resolve_model_name_from_model_id():
     router = Router(model_list=model_list)
     result = router.resolve_model_name_from_model_id("vertex_ai/veo-2.0-generate-001")
     assert result == "vertex-ai-sora-2"
-    
+
     # Test case 4: model_id matches when actual_model ends with /model_id
     model_list = [
         {
@@ -2178,7 +2171,7 @@ def test_resolve_model_name_from_model_id():
     router = Router(model_list=model_list)
     result = router.resolve_model_name_from_model_id("veo-2.0-generate-001")
     assert result == "vertex-ai-sora-2"
-    
+
     # Test case 5: model_id matches when actual_model ends with :model_id
     # Note: We use a valid model format for router initialization, but test the function
     # with a model_id that would match the pattern vertex_ai:model_id
@@ -2198,7 +2191,7 @@ def test_resolve_model_name_from_model_id():
     # We'll test with a model_id that matches the end of the actual_model
     result = router.resolve_model_name_from_model_id("veo-2.0-generate-001")
     assert result == "vertex-ai-sora-2"
-    
+
     # Test case 6: model_id doesn't match anything
     model_list = [
         {
@@ -2212,12 +2205,12 @@ def test_resolve_model_name_from_model_id():
     router = Router(model_list=model_list)
     result = router.resolve_model_name_from_model_id("non-existent-model")
     assert result is None
-    
+
     # Test case 7: Empty model_list
     router = Router(model_list=[])
     result = router.resolve_model_name_from_model_id("some-model")
     assert result is None
-    
+
     # Test case 8: Multiple models, find the correct one
     model_list = [
         {
@@ -2238,7 +2231,7 @@ def test_resolve_model_name_from_model_id():
     router = Router(model_list=model_list)
     result = router.resolve_model_name_from_model_id("veo-2.0-generate-001")
     assert result == "vertex-ai-sora-2"
-    
+
     # Test case 9: model_id matches deployment ID (has_model_id check)
     # This tests the has_model_id path in Strategy 1
     model_list = [
@@ -2260,11 +2253,11 @@ def test_get_valid_args():
     """Test get_valid_args static method returns valid Router.__init__ arguments"""
     # Call the static method
     valid_args = Router.get_valid_args()
-    
+
     # Verify it returns a list
     assert isinstance(valid_args, list)
     assert len(valid_args) > 0
-    
+
     # Verify it contains expected Router.__init__ arguments
     expected_args = [
         "model_list",
@@ -2276,10 +2269,10 @@ def test_get_valid_args():
     ]
     for arg in expected_args:
         assert arg in valid_args, f"Expected argument '{arg}' not found in valid_args"
-    
+
     # Verify "self" is not in the list (since it's removed)
     assert "self" not in valid_args
-    
+
     # Verify it contains keyword-only arguments too
     # These are common Router.__init__ parameters
     assert "assistants_config" in valid_args or "search_tools" in valid_args

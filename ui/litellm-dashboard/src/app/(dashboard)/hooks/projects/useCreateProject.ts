@@ -17,6 +17,7 @@ export interface ProjectCreateParams {
   models?: string[];
   max_budget?: number;
   blocked?: boolean;
+  guardrails?: string[];
   metadata?: Record<string, unknown>;
   model_rpm_limit?: Record<string, number>;
   model_tpm_limit?: Record<string, number>;

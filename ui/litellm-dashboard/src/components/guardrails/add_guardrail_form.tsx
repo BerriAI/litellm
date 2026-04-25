@@ -1,19 +1,22 @@
 import { Form, Input, Modal, Select, Tag, Typography, Button } from "antd";
 import React, { useEffect, useMemo, useState } from "react";
 import NotificationsManager from "../molecules/notifications_manager";
-import { createGuardrailCall, getGuardrailProviderSpecificParams, getGuardrailUISettings } from "../networking";
+import { createGuardrailCall, getGuardrailProviderSpecificParams, getGuardrailUISettings, modelAvailableCall } from "../networking";
 import ContentFilterConfiguration from "./content_filter/ContentFilterConfiguration";
 import {
+  choiceToSkipSystemForCreate,
   getGuardrailProviders,
   guardrail_provider_map,
   guardrailLogoMap,
   populateGuardrailProviderMap,
   populateGuardrailProviders,
   shouldRenderContentFilterConfigSettings,
+  shouldRenderLLMJudgeFields,
   shouldRenderPIIConfigSettings,
 } from "./guardrail_info_helpers";
 import GuardrailOptionalParams from "./guardrail_optional_params";
 import GuardrailProviderFields from "./guardrail_provider_fields";
+import LLMJudgeFields from "./llm_judge/LLMJudgeFields";
 import PiiConfiguration from "./pii_configuration";
 import ToolPermissionRulesEditor, { ToolPermissionConfig } from "./tool_permission/ToolPermissionRulesEditor";
 
@@ -125,6 +128,7 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
   const [onViolation, setOnViolation] = useState<"warn" | "end_session">("warn");
   const [realtimeViolationMessage, setRealtimeViolationMessage] = useState<string>("");
   const [endpointSettingsOpen, setEndpointSettingsOpen] = useState<boolean>(false);
+  const [availableModels, setAvailableModels] = useState<string[]>([]);
 
   const [toolPermissionConfig, setToolPermissionConfig] = useState<ToolPermissionConfig>({
     rules: [],
@@ -148,13 +152,17 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
     const fetchData = async () => {
       try {
         // Parallel requests for speed
-        const [uiSettings, providerParamsResp] = await Promise.all([
+        const [uiSettings, providerParamsResp, modelsResp] = await Promise.all([
           getGuardrailUISettings(accessToken),
           getGuardrailProviderSpecificParams(accessToken),
+          modelAvailableCall(accessToken, "", "").catch(() => null),
         ]);
 
         setGuardrailSettings(uiSettings);
         setProviderParams(providerParamsResp);
+        if (modelsResp?.data) {
+          setAvailableModels(modelsResp.data.map((m: any) => m.id));
+        }
 
         // Populate dynamic providers from API response
         populateGuardrailProviders(providerParamsResp);
@@ -179,6 +187,7 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
       guardrail_name: preset.guardrailNameSuggestion,
       mode: preset.mode,
       default_on: preset.defaultOn,
+      skip_system_message_choice: "inherit",
     };
     if (preset.provider === "BlockCodeExecution") {
       baseValues.confidence_threshold = 0.5;
@@ -240,6 +249,11 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
       on_disallowed_action: "block",
       violation_message_template: "",
     });
+
+    // Default LLM-as-a-Judge to post_call mode
+    if (value === "LlmAsAJudge") {
+      form.setFieldsValue({ mode: "post_call" });
+    }
   };
 
   const handleEntitySelect = (entity: string) => {
@@ -414,6 +428,11 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
         guardrail_info: {},
       };
 
+      const skipForCreate = choiceToSkipSystemForCreate(values.skip_system_message_choice);
+      if (skipForCreate !== undefined) {
+        guardrailData.litellm_params.skip_system_message_in_guardrail = skipForCreate;
+      }
+
       // For Presidio PII, add the entity and action configurations
       if (values.provider === "PresidioPII" && selectedEntities.length > 0) {
         const piiEntitiesConfig: { [key: string]: string } = {};
@@ -503,6 +522,29 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
         }
       }
 
+      if (guardrailProvider === "llm_as_a_judge") {
+        const criteria: any[] = values.criteria || [];
+        if (criteria.length === 0) {
+          NotificationsManager.fromBackend("Add at least one evaluation criterion");
+          setLoading(false);
+          return;
+        }
+        const weightTotal = criteria.reduce((sum: number, c: any) => sum + (Number(c?.weight) || 0), 0);
+        if (weightTotal !== 100) {
+          NotificationsManager.fromBackend(`Criterion weights must sum to 100% (currently ${weightTotal}%)`);
+          setLoading(false);
+          return;
+        }
+        guardrailData.litellm_params.judge_model = values.judge_model;
+        guardrailData.litellm_params.overall_threshold = values.overall_threshold ?? 80;
+        guardrailData.litellm_params.on_failure = values.on_failure ?? "block";
+        guardrailData.litellm_params.criteria = criteria.map((c: any) => ({
+          name: c.name,
+          weight: Number(c.weight),
+          description: c.description || "",
+        }));
+      }
+
       if (guardrailProvider === "tool_permission") {
         if (toolPermissionConfig.rules.length === 0) {
           NotificationsManager.fromBackend("Add at least one tool permission rule");
@@ -542,7 +584,8 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
       console.log("values: ", JSON.stringify(values));
 
       // Use pre-fetched provider params to copy recognised params
-      if (providerParams && selectedProvider) {
+      // Skip for providers that handle their own litellm_params (llm_as_a_judge, tool_permission, content filter, PII)
+      if (providerParams && selectedProvider && guardrailProvider !== "llm_as_a_judge") {
         const providerKey = guardrail_provider_map[selectedProvider]?.toLowerCase();
         console.log("providerKey: ", providerKey);
         const providerSpecificParams = providerParams[providerKey] || {};
@@ -749,8 +792,20 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
           </Select>
         </Form.Item>
 
+        <Form.Item
+          name="skip_system_message_choice"
+          label="Skip system messages in guardrail"
+          tooltip="Unified guardrails only: omit role: system from guardrail evaluation input (OpenAI chat + Anthropic messages). The model still receives full messages. Use global default follows litellm_settings.skip_system_message_in_guardrail."
+        >
+          <Select>
+            <Select.Option value="inherit">Use global default</Select.Option>
+            <Select.Option value="yes">Yes — exclude from guardrail scan</Select.Option>
+            <Select.Option value="no">No — always include in scan</Select.Option>
+          </Select>
+        </Form.Item>
+
         {/* Use the GuardrailProviderFields component to render provider-specific fields */}
-        {!isToolPermissionProvider && !shouldRenderContentFilterConfigSettings(selectedProvider) && (
+        {!isToolPermissionProvider && !shouldRenderContentFilterConfigSettings(selectedProvider) && !shouldRenderLLMJudgeFields(selectedProvider) && (
           <GuardrailProviderFields
             selectedProvider={selectedProvider}
             accessToken={accessToken}
@@ -855,6 +910,9 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
         }
         if (shouldRenderContentFilterConfigSettings(selectedProvider)) {
           return renderContentFilterConfiguration("categories");
+        }
+        if (shouldRenderLLMJudgeFields(selectedProvider)) {
+          return <LLMJudgeFields availableModels={availableModels} form={form} />;
         }
         return renderOptionalParams();
       case 2:
@@ -1096,6 +1154,7 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
             initialValues={{
               mode: "pre_call",
               default_on: false,
+              skip_system_message_choice: "inherit",
             }}
           >
             {stepConfigs.map((step, index) => {

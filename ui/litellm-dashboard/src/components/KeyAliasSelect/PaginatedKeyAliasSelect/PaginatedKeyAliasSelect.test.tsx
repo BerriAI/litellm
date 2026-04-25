@@ -112,7 +112,7 @@ describe("PaginatedKeyAliasSelect", () => {
   it("should pass pageSize to useInfiniteKeyAliases", () => {
     renderWithProviders(<PaginatedKeyAliasSelect onChange={mockOnChange} pageSize={25} />);
 
-    expect(mockUseInfiniteKeyAliases).toHaveBeenCalledWith(25, undefined);
+    expect(mockUseInfiniteKeyAliases).toHaveBeenCalledWith(25, undefined, undefined);
   });
 
   it("should pass search to useInfiniteKeyAliases when user types", async () => {
@@ -124,7 +124,7 @@ describe("PaginatedKeyAliasSelect", () => {
     await user.keyboard("my-alias");
 
     await waitFor(() => {
-      expect(mockUseInfiniteKeyAliases).toHaveBeenCalledWith(50, "my-alias");
+      expect(mockUseInfiniteKeyAliases).toHaveBeenCalledWith(50, "my-alias", undefined);
     });
   });
 

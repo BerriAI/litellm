@@ -36,9 +36,14 @@ class TestCharityEngineProviderConfig:
 
         charity_engine = JSONProviderRegistry.get("charity_engine")
         assert charity_engine is not None
-        assert charity_engine.base_url == "https://api.charityengine.services/remotejobs/v2/inference"
+        assert (
+            charity_engine.base_url
+            == "https://api.charityengine.services/remotejobs/v2/inference"
+        )
         assert charity_engine.api_key_env == "CHARITY_ENGINE_API_KEY"
-        assert charity_engine.param_mappings.get("max_completion_tokens") == "max_tokens"
+        assert (
+            charity_engine.param_mappings.get("max_completion_tokens") == "max_tokens"
+        )
 
     def test_charity_engine_provider_resolution(self):
         """Test that provider resolution finds charity_engine"""

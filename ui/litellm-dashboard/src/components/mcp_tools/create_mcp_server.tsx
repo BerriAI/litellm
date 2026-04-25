@@ -17,6 +17,7 @@ import { validateMCPServerUrl, validateMCPServerName } from "./utils";
 import NotificationsManager from "../molecules/notifications_manager";
 import { useMcpOAuthFlow } from "@/hooks/useMcpOAuthFlow";
 import { useTestMCPConnection } from "@/hooks/useTestMCPConnection";
+import { getSecureItem, setSecureItem } from "@/utils/secureStorage";
 
 const asset_logos_folder = "../ui/assets/logos/";
 export const mcpLogoImg = `${asset_logos_folder}mcp_logo.png`;
@@ -94,7 +95,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
     }
     try {
       const values = form.getFieldsValue(true);
-      window.sessionStorage.setItem(
+      setSecureItem(
         CREATE_OAUTH_UI_STATE_KEY,
         JSON.stringify({
           modalVisible: isModalVisible,
@@ -177,7 +178,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
     if (typeof window === "undefined") {
       return;
     }
-    const storedState = window.sessionStorage.getItem(CREATE_OAUTH_UI_STATE_KEY);
+    const storedState = getSecureItem(CREATE_OAUTH_UI_STATE_KEY);
     if (!storedState) {
       return;
     }
@@ -283,6 +284,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
         credentials: credentialValues,
         allow_all_keys: allowAllKeysRaw,
         available_on_public_internet: availableOnPublicInternetRaw,
+        token_validation_json: rawTokenValidationJson,
         ...restValues
       } = values;
 
@@ -355,6 +357,18 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
         restValues.transport = "http";
       }
 
+      // Parse token_validation JSON if provided
+      let tokenValidation: Record<string, any> | null = null;
+      if (rawTokenValidationJson && rawTokenValidationJson.trim() !== "") {
+        try {
+          tokenValidation = JSON.parse(rawTokenValidationJson);
+        } catch {
+          NotificationsManager.fromBackend("Invalid JSON in Token Validation Rules");
+          setIsLoading(false);
+          return;
+        }
+      }
+
       // Prepare the payload with cost configuration and allowed tools
       const payload: Record<string, any> = {
         ...restValues,
@@ -375,6 +389,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
         allow_all_keys: Boolean(allowAllKeysRaw),
         available_on_public_internet: Boolean(availableOnPublicInternetRaw),
         static_headers: staticHeaders,
+        ...(tokenValidation !== null && { token_validation: tokenValidation }),
       };
 
       payload.static_headers = staticHeaders;
@@ -930,6 +945,38 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                 >
                   <Input.Password
                     placeholder="Enter session token (optional)"
+                    className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
+                  />
+                </Form.Item>
+                <Form.Item
+                  label={
+                    <span className="text-sm font-medium text-gray-700 flex items-center">
+                      AWS Role ARN
+                      <Tooltip title="Optional. IAM role ARN to assume via STS before signing. If set, LiteLLM calls sts:AssumeRole to get temporary credentials. Uses ambient credentials (IAM role, env vars) as the source identity unless explicit keys are also provided.">
+                        <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
+                      </Tooltip>
+                    </span>
+                  }
+                  name={["credentials", "aws_role_name"]}
+                >
+                  <Input
+                    placeholder="arn:aws:iam::123456789012:role/MyRole (optional)"
+                    className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
+                  />
+                </Form.Item>
+                <Form.Item
+                  label={
+                    <span className="text-sm font-medium text-gray-700 flex items-center">
+                      AWS Session Name
+                      <Tooltip title="Optional. Session name for the AssumeRole call — appears in CloudTrail logs. Auto-generated if omitted.">
+                        <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
+                      </Tooltip>
+                    </span>
+                  }
+                  name={["credentials", "aws_session_name"]}
+                >
+                  <Input
+                    placeholder="litellm-prod (optional, auto-generated if blank)"
                     className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
                   />
                 </Form.Item>

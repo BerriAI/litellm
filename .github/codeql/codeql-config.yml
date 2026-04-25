@@ -1,22 +1,21 @@
 name: "LiteLLM CodeQL config"
 
-# Use security-extended suite instead of security-and-quality to avoid
-# result sets > 2 GiB on this codebase that cause fatal OOM failures.
 queries:
-  - uses: security-extended
+  - uses: security-and-quality
 
-# These two queries are security queries included in security-extended that
-# individually produce result sets > 2 GiB on this codebase, causing fatal
-# OOM failures. Exclude them as a safety net until CI confirms they no longer
-# OOM; drop these exclusions in a follow-up once verified.
+# Known OOM queries on large Python codebases:
+# CodeQL builds a full data flow graph in memory. These two queries trace
+# sensitive data through every log call / regex pattern, causing combinatorial
+# path explosion on codebases with extensive logging like LiteLLM (>2 GiB
+# result sets). This is a known CodeQL scaling limitation, not a code issue.
+# Re-test periodically as CodeQL improves or the codebase refactors logging.
 query-filters:
   - exclude:
-      id: py/clear-text-logging-sensitive-data  # CWE-312 — > 2 GiB result set
+      id: py/clear-text-logging-sensitive-data  # CWE-312
   - exclude:
-      id: py/polynomial-redos                   # CWE-730 — > 2 GiB result set
+      id: py/polynomial-redos                   # CWE-730
 
 paths-ignore:
   - tests
   - docs
   - "**/*.md"
-  - litellm/proxy/_experimental/out
