@@ -836,11 +836,22 @@ def test_reset_budget_for_team_members_resets_new_counter_key_format():
     membership.user_id = "user-1"
     membership.team_id = "team-1"
 
+    model_spend_row = MagicMock()
+    model_spend_row.user_id = "user-1"
+    model_spend_row.team_id = "team-1"
+    model_spend_row.model = "gpt-4o"
+
     mock_prisma_client = MagicMock()
     mock_prisma_client.db.litellm_teammembership.find_many = AsyncMock(
         return_value=[membership]
     )
     mock_prisma_client.db.litellm_teammembership.update_many = AsyncMock(
+        return_value={"count": 1}
+    )
+    mock_prisma_client.db.litellm_teammembermodelspend.find_many = AsyncMock(
+        return_value=[model_spend_row]
+    )
+    mock_prisma_client.db.litellm_teammembermodelspend.update_many = AsyncMock(
         return_value={"count": 1}
     )
 
@@ -852,6 +863,9 @@ def test_reset_budget_for_team_members_resets_new_counter_key_format():
     fake_module._get_team_member_counter_key = (
         lambda user_id, team_id: f"spend:team_member:team_id::{team_id}::user_id::{user_id}"
     )
+    fake_module._get_team_member_model_counter_key = (
+        lambda user_id, team_id, model: f"spend:team_member:team_id::{team_id}::user_id::{user_id}::model::{model}"
+    )
 
     with patch.dict(sys.modules, {"litellm.proxy.proxy_server": fake_module}):
         job = ResetBudgetJob(
@@ -862,6 +876,14 @@ def test_reset_budget_for_team_members_resets_new_counter_key_format():
     spend_counter_cache.in_memory_cache.set_cache.assert_any_call(
         key="spend:team_member:team_id::team-1::user_id::user-1",
         value=0.0,
+    )
+    spend_counter_cache.in_memory_cache.set_cache.assert_any_call(
+        key="spend:team_member:team_id::team-1::user_id::user-1::model::gpt-4o",
+        value=0.0,
+    )
+    mock_prisma_client.db.litellm_teammembermodelspend.update_many.assert_awaited_once_with(
+        where={"OR": [{"user_id": "user-1", "team_id": "team-1"}]},
+        data={"spend": 0},
     )
 
 
