@@ -4123,6 +4123,12 @@ LiteLLM_ManagementEndpoint_MetadataFields_Premium = [
     "allowed_passthrough_routes",
 ]
 
+# Metadata keys that are immutable once set: preserved when an update omits them,
+# and rejected (400) when an update tries to change them.
+LiteLLM_Reserved_Metadata_Fields = [
+    "service_account_id",
+]
+
 
 class ProviderBudgetResponseObject(LiteLLMPydanticObjectBase):
     """
