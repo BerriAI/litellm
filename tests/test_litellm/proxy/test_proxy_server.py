@@ -8,7 +8,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from unittest import mock
-from unittest.mock import AsyncMock, MagicMock, mock_open, patch
+from unittest.mock import AsyncMock, MagicMock, call, mock_open, patch
 
 import click
 import httpx
@@ -4851,6 +4851,72 @@ async def test_get_current_spend_fallback_to_in_memory():
         assert result == 0.50
     finally:
         ps.spend_counter_cache = original
+
+
+@pytest.mark.asyncio
+async def test_get_current_spend_reads_legacy_team_member_counter_on_new_key_miss():
+    """Tagged team-member key reads should fall back to legacy key format."""
+    from litellm.caching.dual_cache import DualCache
+
+    counter_cache = DualCache()
+    mock_redis = AsyncMock()
+    mock_redis.async_get_cache = AsyncMock(side_effect=[None, 9.25])
+    counter_cache.redis_cache = mock_redis
+
+    import litellm.proxy.proxy_server as ps
+
+    original = ps.spend_counter_cache
+    ps.spend_counter_cache = counter_cache
+
+    try:
+        from litellm.proxy.proxy_server import get_current_spend
+
+        result = await get_current_spend(
+            counter_key="spend:team_member:team_id::team-1::user_id::user-1",
+            fallback_spend=0.0,
+        )
+        assert result == 9.25
+        assert mock_redis.async_get_cache.await_args_list == [
+            call(key="spend:team_member:team_id::team-1::user_id::user-1"),
+            call(key="spend:team_member:user-1:team-1"),
+        ]
+    finally:
+        ps.spend_counter_cache = original
+
+
+@pytest.mark.asyncio
+async def test_init_and_increment_spend_counter_seeds_from_legacy_team_member_counter():
+    from litellm.caching.dual_cache import DualCache
+
+    counter_cache = DualCache()
+    fake_redis = AsyncMock()
+    fake_redis.async_get_cache = AsyncMock(return_value=None)
+    fake_redis.async_increment = AsyncMock(return_value=6.0)
+    fake_redis.async_set_cache = AsyncMock(return_value=True)
+    counter_cache.redis_cache = fake_redis
+    counter_cache.in_memory_cache.set_cache(
+        key="spend:team_member:user-1:team-1", value=5.5
+    )
+
+    import litellm.proxy.proxy_server as ps
+    from litellm.proxy.proxy_server import _init_and_increment_spend_counter
+
+    orig_counter = ps.spend_counter_cache
+    ps.spend_counter_cache = counter_cache
+    try:
+        await _init_and_increment_spend_counter(
+            counter_key="spend:team_member:team_id::team-1::user_id::user-1",
+            source_cache_key="team_membership:user-1:team-1",
+            increment=0.5,
+        )
+
+        fake_redis.async_set_cache.assert_awaited_once_with(
+            "spend:team_member:team_id::team-1::user_id::user-1",
+            5.5,
+            nx=True,
+        )
+    finally:
+        ps.spend_counter_cache = orig_counter
 
 
 @pytest.mark.asyncio

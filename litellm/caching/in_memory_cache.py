@@ -165,6 +165,9 @@ class InMemoryCache(BaseCache):
         # This keeps expiration_heap bounded even when the live cache stays
         # below max_size_in_memory and keys are reinserted after TTL expiry.
         self.evict_cache()
+        if kwargs.get("nx", False) and key in self.cache_dict:
+            if not self.evict_element_if_expired(key):
+                return
         if not self.check_value_size(value):
             return
 

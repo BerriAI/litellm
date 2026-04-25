@@ -1777,7 +1777,8 @@ async def get_current_spend(counter_key: str, fallback_spend: float) -> float:
     Fallback chain:
     1. Redis counter (cross-pod, authoritative)
     2. In-memory counter (single-instance or Redis failure)
-    3. Cached object's .spend from DB (cold start, no counter yet)
+    3. Legacy team-member key (backward compatibility during key migration)
+    4. Cached object's .spend from DB (cold start, no counter yet)
     """
     # 1. Try Redis first (cross-pod authoritative)
     if spend_counter_cache.redis_cache is not None:
@@ -1797,6 +1798,27 @@ async def get_current_spend(counter_key: str, fallback_spend: float) -> float:
     if val is not None:
         return float(val)
 
+    legacy_counter_key = _get_legacy_team_member_counter_key_from_new_key(counter_key)
+    if legacy_counter_key is not None:
+        if spend_counter_cache.redis_cache is not None:
+            try:
+                legacy_val = await spend_counter_cache.redis_cache.async_get_cache(
+                    key=legacy_counter_key
+                )
+                if legacy_val is not None:
+                    return float(legacy_val)
+            except Exception as e:
+                verbose_proxy_logger.debug(
+                    "get_current_spend: legacy Redis read failed for %s, falling back to in-memory: %s",
+                    legacy_counter_key,
+                    e,
+                )
+        legacy_val = spend_counter_cache.in_memory_cache.get_cache(
+            key=legacy_counter_key
+        )
+        if legacy_val is not None:
+            return float(legacy_val)
+
     # 3. Final fallback: cached object's spend from DB
     return fallback_spend
 
@@ -1807,6 +1829,37 @@ def _get_team_member_counter_key(user_id: str, team_id: str) -> str:
 
 def _get_team_member_model_counter_key(user_id: str, team_id: str, model: str) -> str:
     return f"spend:team_member:team_id::{team_id}::user_id::{user_id}::model::{model}"
+
+
+def _get_legacy_team_member_counter_key(user_id: str, team_id: str) -> str:
+    return f"spend:team_member:{user_id}:{team_id}"
+
+
+def _get_legacy_team_member_model_counter_key(
+    user_id: str, team_id: str, model: str
+) -> str:
+    return f"spend:team_member:{user_id}:{team_id}:model:{model}"
+
+
+def _get_legacy_team_member_counter_key_from_new_key(
+    counter_key: str,
+) -> Optional[str]:
+    if not counter_key.startswith("spend:team_member:team_id::"):
+        return None
+
+    suffix = counter_key[len("spend:team_member:") :]
+    parsed_team_member_key = _parse_team_member_counter_suffix(suffix=suffix)
+    if parsed_team_member_key is None:
+        return None
+
+    member_user_id, member_team_id, model_name = parsed_team_member_key
+    if model_name is None:
+        return _get_legacy_team_member_counter_key(
+            user_id=member_user_id, team_id=member_team_id
+        )
+    return _get_legacy_team_member_model_counter_key(
+        user_id=member_user_id, team_id=member_team_id, model=model_name
+    )
 
 
 def _parse_team_member_counter_suffix(
@@ -2049,7 +2102,19 @@ async def _init_and_increment_spend_counter(
     """
     current = await spend_counter_cache.async_get_cache(key=counter_key)
     if current is None:
-        base_spend = await _reseed_spend_from_db(counter_key)
+        base_spend: float = 0.0
+        legacy_counter_key = _get_legacy_team_member_counter_key_from_new_key(
+            counter_key
+        )
+        if legacy_counter_key is not None:
+            legacy_val = await spend_counter_cache.async_get_cache(
+                key=legacy_counter_key
+            )
+            if legacy_val is not None:
+                base_spend = float(legacy_val)
+
+        if base_spend == 0.0:
+            base_spend = await _reseed_spend_from_db(counter_key)
         if prisma_client is None and source_cache_key is not None:
             # Best-effort fallback when prisma is unavailable (tests or
             # early-startup paths). May be stale but avoids resetting to 0.
