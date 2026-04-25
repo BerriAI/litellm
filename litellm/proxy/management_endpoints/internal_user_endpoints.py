@@ -81,9 +81,9 @@ def _update_internal_new_user_params(data_json: dict, data: NewUserRequest) -> d
     auto_create_key = data_json.pop("auto_create_key", True)
 
     if auto_create_key is False:
-        data_json[
-            "table_name"
-        ] = "user"  # only create a user, don't create key if 'auto_create_key' set to False
+        data_json["table_name"] = (
+            "user"  # only create a user, don't create key if 'auto_create_key' set to False
+        )
 
     if litellm.default_internal_user_params and (
         data.user_role != LitellmUserRoles.PROXY_ADMIN.value
@@ -395,6 +395,7 @@ async def new_user(
     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - internal user-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"]}. IF null or {} then no object permission.
     - prompts: Optional[List[str]] - List of allowed prompts for the user. If specified, the user will only be able to use these specific prompts.
     - organizations: List[str] - List of organization id's the user is a member of
+    - budget_limits: Optional[list] - List of concurrent budget windows for the user. Each window specifies a budget_limit, time_period, and optional budget_duration. Example - [{"budget_limit": 10.0, "time_period": "1d"}, {"budget_limit": 50.0, "time_period": "7d"}].
     Returns:
     - key: (str) The generated api key for the user
     - expires: (datetime) Datetime object for when key expires.
@@ -1103,9 +1104,9 @@ def _update_internal_user_params(
         "budget_duration" not in non_default_values
     ):  # applies internal user limits, if user role updated
         if is_internal_user and litellm.internal_user_budget_duration is not None:
-            non_default_values[
-                "budget_duration"
-            ] = litellm.internal_user_budget_duration
+            non_default_values["budget_duration"] = (
+                litellm.internal_user_budget_duration
+            )
             from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 
             non_default_values["budget_reset_at"] = get_budget_reset_time(
@@ -1178,6 +1179,23 @@ async def _update_single_user_helper(
                 status_code=403,
                 detail={
                     "error": "User does not have permission to update this user. Only PROXY_ADMIN can update other users."
+                },
+            )
+    else:
+        # Silent-create guard: if the target user doesn't exist, the update
+        # path falls through to an upsert that creates a new user with
+        # caller-supplied fields (models, metadata, budgets, …). Only
+        # PROXY_ADMIN is allowed to create users this way; otherwise an org
+        # admin could spawn arbitrary users attached to nothing by supplying
+        # a fresh email, bypassing the /user/new org/team-scoping checks.
+        if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value:
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "error": (
+                        "User not found. Only PROXY_ADMIN can create users "
+                        "via /user/update; use /user/new instead."
+                    )
                 },
             )
 
@@ -1346,7 +1364,8 @@ async def user_update(
         - key_alias: Optional[str] - [NOT IMPLEMENTED].
         - object_permission: Optional[LiteLLM_ObjectPermissionBase] - internal user-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"]}. IF null or {} then no object permission.
         - prompts: Optional[List[str]] - List of allowed prompts for the user. If specified, the user will only be able to use these specific prompts.
-    
+        - budget_limits: Optional[list] - List of concurrent budget windows for the user. Each window specifies a budget_limit, time_period, and optional budget_duration. Example - [{"budget_limit": 10.0, "time_period": "1d"}, {"budget_limit": 50.0, "time_period": "7d"}].
+
     """
     try:
         verbose_proxy_logger.debug("/user/update: Received data = %s", data)
@@ -2057,6 +2076,52 @@ async def delete_user(
     if data.user_ids is None:
         raise HTTPException(status_code=400, detail={"error": "No user id passed in"})
 
+    # Per-target authorization: the route-level gate accepts this call when
+    # the caller is PROXY_ADMIN or an ORG_ADMIN of *any* org named in
+    # request_data["organization_id"]/["organizations"]. That gate does NOT
+    # cross-check data.user_ids against the caller's scope, so without this
+    # loop an org-admin of org-A could delete users in org-B by supplying
+    # {"user_ids": [victim_in_org_B], "organization_id": "org-A"}.
+    caller_is_proxy_admin = (
+        user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
+    )
+    caller_admin_org_ids: set = set()
+    if not caller_is_proxy_admin:
+        caller_memberships = (
+            await prisma_client.db.litellm_organizationmembership.find_many(
+                where={
+                    "user_id": user_api_key_dict.user_id,
+                    "user_role": LitellmUserRoles.ORG_ADMIN.value,
+                }
+            )
+            if user_api_key_dict.user_id
+            else []
+        )
+        caller_admin_org_ids = {
+            m.organization_id for m in caller_memberships if m.organization_id
+        }
+        if not caller_admin_org_ids:
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "error": "Only PROXY_ADMIN or ORG_ADMIN users may delete users."
+                },
+            )
+
+    # Batch-fetch target memberships once before the per-user loop. Avoids
+    # an N+1 DB call when delete_user is called with a large user_ids list.
+    target_org_ids_by_user: Dict[str, set] = {}
+    if not caller_is_proxy_admin:
+        all_target_memberships = (
+            await prisma_client.db.litellm_organizationmembership.find_many(
+                where={"user_id": {"in": data.user_ids}}
+            )
+        )
+        for m in all_target_memberships:
+            if not m.organization_id:
+                continue
+            target_org_ids_by_user.setdefault(m.user_id, set()).add(m.organization_id)
+
     # check that all teams passed exist
     for user_id in data.user_ids:
         user_row = await prisma_client.db.litellm_usertable.find_unique(
@@ -2068,30 +2133,47 @@ async def delete_user(
                 status_code=404,
                 detail={"error": f"User not found, passed user_id={user_id}"},
             )
-        else:
-            # Enterprise Feature - Audit Logging. Enable with litellm.store_audit_logs = True
-            # we do this after the first for loop, since first for loop is for validation. we only want this inserted after validation passes
-            if litellm.store_audit_logs is True:
-                # make an audit log for each team deleted
-                _user_row = user_row.json(exclude_none=True)
 
-                asyncio.create_task(
-                    create_audit_log_for_update(
-                        request_data=LiteLLM_AuditLogs(
-                            id=str(uuid.uuid4()),
-                            updated_at=datetime.now(timezone.utc),
-                            changed_by=litellm_changed_by
-                            or user_api_key_dict.user_id
-                            or litellm_proxy_admin_name,
-                            changed_by_api_key=user_api_key_dict.api_key,
-                            table_name=LitellmTableNames.USER_TABLE_NAME,
-                            object_id=user_id,
-                            action="deleted",
-                            updated_values="{}",
-                            before_value=_user_row,
+        if not caller_is_proxy_admin:
+            target_org_ids = target_org_ids_by_user.get(user_id, set())
+            # Org-admin may only delete users whose entire org membership is
+            # within their admin scope. A target with ANY org outside the
+            # caller's scope (or no org at all) requires PROXY_ADMIN.
+            if not target_org_ids or not target_org_ids.issubset(caller_admin_org_ids):
+                raise HTTPException(
+                    status_code=403,
+                    detail={
+                        "error": (
+                            f"User {user_id} is not within your admin scope. "
+                            "Only PROXY_ADMIN may delete users outside your "
+                            "administered organizations."
                         )
+                    },
+                )
+
+        # Enterprise Feature - Audit Logging. Enable with litellm.store_audit_logs = True
+        # we do this after the first for loop, since first for loop is for validation. we only want this inserted after validation passes
+        if litellm.store_audit_logs is True:
+            # make an audit log for each team deleted
+            _user_row = user_row.json(exclude_none=True)
+
+            asyncio.create_task(
+                create_audit_log_for_update(
+                    request_data=LiteLLM_AuditLogs(
+                        id=str(uuid.uuid4()),
+                        updated_at=datetime.now(timezone.utc),
+                        changed_by=litellm_changed_by
+                        or user_api_key_dict.user_id
+                        or litellm_proxy_admin_name,
+                        changed_by_api_key=user_api_key_dict.api_key,
+                        table_name=LitellmTableNames.USER_TABLE_NAME,
+                        object_id=user_id,
+                        action="deleted",
+                        updated_values="{}",
+                        before_value=_user_row,
                     )
                 )
+            )
 
         ## CLEANUP MEMBERS_WITH_ROLES
         fetch_all_teams = await prisma_client.db.litellm_teamtable.find_many(
@@ -2399,13 +2481,13 @@ async def ui_view_users(
             }
 
         # Query users with pagination and filters
-        users: Optional[
-            List[BaseModel]
-        ] = await prisma_client.db.litellm_usertable.find_many(
-            where=where_conditions,
-            skip=skip,
-            take=page_size,
-            order={"created_at": "desc"},
+        users: Optional[List[BaseModel]] = (
+            await prisma_client.db.litellm_usertable.find_many(
+                where=where_conditions,
+                skip=skip,
+                take=page_size,
+                order={"created_at": "desc"},
+            )
         )
 
         if not users:

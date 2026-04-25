@@ -33,7 +33,7 @@ from litellm.types.proxy.guardrails.guardrail_hooks.tool_permission import (
     ToolPermissionGuardrailConfigModel,
 )
 from litellm.types.proxy.guardrails.guardrail_hooks.hiddenlayer import (
-    HiddenlayerGuardrailConfigModel
+    HiddenlayerGuardrailConfigModel,
 )
 
 """
@@ -91,6 +91,7 @@ class SupportedGuardrailIntegrations(Enum):
     BLOCK_CODE_EXECUTION = "block_code_execution"
     AKTO = "akto"
     MCP_JWT_SIGNER = "mcp_jwt_signer"
+    LLM_AS_A_JUDGE = "llm_as_a_judge"
 
 
 class Role(Enum):
@@ -766,7 +767,7 @@ class LitellmParams(
     IBMGuardrailsBaseConfigModel,
     QualifireGuardrailConfigModel,
     BlockCodeExecutionGuardrailConfigModel,
-    HiddenlayerGuardrailConfigModel
+    HiddenlayerGuardrailConfigModel,
 ):
     guardrail: str = Field(description="The type of guardrail integration to use")
     mode: Union[str, List[str], Mode] = Field(
@@ -886,6 +887,8 @@ class ApplyGuardrailRequest(BaseModel):
     text: str
     language: Optional[str] = None
     entities: Optional[List[PiiEntityType]] = None
+    input_type: str = "request"
+    messages: Optional[List[Dict[str, Any]]] = None
 
 
 class ApplyGuardrailResponse(BaseModel):

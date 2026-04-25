@@ -244,8 +244,9 @@ def test_router_silent_experiment_completion():
     mock_completion_mock = MagicMock(return_value=mock_response)
 
     # Patch at the litellm module level
-    with patch.object(litellm, "acompletion", mock_acompletion_mock), patch.object(
-        litellm, "completion", mock_completion_mock
+    with (
+        patch.object(litellm, "acompletion", mock_acompletion_mock),
+        patch.object(litellm, "completion", mock_completion_mock),
     ):
         response = router.completion(
             model="primary-model",

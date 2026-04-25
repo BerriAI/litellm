@@ -483,6 +483,8 @@ class BedrockAmazonNovaCanvasImageEditConfig(BaseImageEditConfig):
         headers: dict,
         model: str,
         api_key: Optional[str] = None,
+        litellm_params: Optional[dict] = None,
+        api_base: Optional[str] = None,
     ) -> dict:
         if headers is None:
             headers = {}
