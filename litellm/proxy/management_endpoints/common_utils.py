@@ -369,6 +369,11 @@ async def _upsert_budget_and_membership(
 
     If max_budget, tpm_limit, and rpm_limit are all None, the user's budget is removed from the team membership.
     If any of these values exist, a budget is updated or created and linked to the team membership.
+
+    Update semantics on the existing-budget path are PATCH-style: only fields
+    explicitly supplied (non-None) are written. Fields passed as None are left
+    unchanged on the existing row. To clear all limits, omit them all and the
+    membership's budget link is disconnected (see the all-None branch above).
     """
     if max_budget is None and tpm_limit is None and rpm_limit is None:
         # disconnect the budget since all limits are None
