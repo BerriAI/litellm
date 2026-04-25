@@ -331,8 +331,17 @@ class CustomGuardrail(CustomLogger):
 
         if "guardrails" in data:
             return data["guardrails"]
-        metadata = data.get("litellm_metadata") or data.get("metadata", {})
-        return metadata.get("guardrails") or []
+        # Check both metadata locations. For regular endpoints move_guardrails_to_metadata
+        # writes to "metadata"; for thread/assistant endpoints it writes to
+        # "litellm_metadata". We check the one that actually contains the "guardrails"
+        # key so that a non-empty litellm_metadata without guardrails does not shadow
+        # the merged list stored in metadata (which would cause team guardrails to be
+        # silently skipped while default_on=True policy guardrails still fire).
+        for meta_key in ("metadata", "litellm_metadata"):
+            meta = data.get(meta_key) or {}
+            if isinstance(meta, dict) and "guardrails" in meta:
+                return meta.get("guardrails") or []
+        return []
 
     def _guardrail_is_in_requested_guardrails(
         self,
