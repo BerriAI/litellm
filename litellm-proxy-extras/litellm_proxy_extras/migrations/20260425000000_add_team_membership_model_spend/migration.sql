@@ -1,2 +1,4 @@
--- AlterTable: add model_spend JSON column to LiteLLM_TeamMembership for per-model budget tracking
-ALTER TABLE "LiteLLM_TeamMembership" ADD COLUMN IF NOT EXISTS "model_spend" JSONB NOT NULL DEFAULT '{}';
+-- No-op: model_spend column on LiteLLM_TeamMembership was superseded by the
+-- dedicated LiteLLM_TeamMemberModelSpend table (added in the next migration).
+-- The JSON approach was dropped to allow atomic per-model increment without
+-- read-modify-write races under concurrent pod flushes.
