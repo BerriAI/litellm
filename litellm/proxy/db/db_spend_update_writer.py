@@ -1841,7 +1841,7 @@ class DBSpendUpdateWriter:
             for attempt in range(n_retry_times + 1):
                 start_time = time.time()
                 try:
-                    await prisma_client.db.litellm_teammembermodeispend.upsert(
+                    await prisma_client.db.litellm_teammembermodelspend.upsert(
                         where={
                             "user_id_team_id_model": {
                                 "user_id": user_id,
