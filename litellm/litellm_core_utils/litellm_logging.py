@@ -416,6 +416,12 @@ class Logging(LiteLLMLoggingBaseClass):
             "model": model,
         }
 
+        # Set by proxy request handlers to defer spend-log fire until after
+        # post_call guardrails have run; the @client decorator then stores the
+        # enqueue closure here instead of firing it immediately.
+        self._defer_async_logging: bool = False
+        self._enqueue_deferred_logging: Optional[Callable[[], None]] = None
+
     def process_dynamic_callbacks(self):
         """
         Initializes CustomLogger compatible callbacks in self.dynamic_* callbacks

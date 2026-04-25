@@ -407,9 +407,6 @@ from litellm.proxy.management_endpoints.organization_endpoints import (
     router as organization_router,
 )
 from litellm.proxy.management_endpoints.policy_endpoints import router as policy_router
-from litellm.proxy.management_endpoints.project_endpoints import (
-    router as project_router,
-)
 from litellm.proxy.management_endpoints.router_settings_endpoints import (
     router as router_settings_router,
 )
@@ -428,6 +425,7 @@ from litellm.proxy.management_endpoints.team_endpoints import (
 from litellm.proxy.management_endpoints.tool_management_endpoints import (
     router as tool_management_router,
 )
+from litellm.proxy.memory.memory_endpoints import router as memory_router
 from litellm.proxy.management_endpoints.ui_sso import (
     get_disabled_non_admin_personal_key_creation,
 )
@@ -14195,7 +14193,6 @@ app.include_router(team_router)
 app.include_router(ui_sso_router)
 app.include_router(scim_router)
 app.include_router(organization_router)
-app.include_router(project_router)
 app.include_router(customer_router)
 app.include_router(spend_management_router)
 app.include_router(cloudzero_router)
@@ -14220,6 +14217,7 @@ app.include_router(model_management_router)
 app.include_router(model_access_group_management_router)
 app.include_router(tag_management_router)
 app.include_router(tool_management_router)
+app.include_router(memory_router)
 app.include_router(cost_tracking_settings_router)
 app.include_router(router_settings_router)
 app.include_router(fallback_management_router)

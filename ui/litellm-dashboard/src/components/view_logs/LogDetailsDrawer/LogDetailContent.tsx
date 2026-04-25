@@ -4,6 +4,7 @@ import moment from "moment";
 import { LogEntry } from "../columns";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import GuardrailViewer from "../GuardrailViewer/GuardrailViewer";
+import EvalViewer from "../EvalViewer/EvalViewer";
 import { CostBreakdownViewer } from "../CostBreakdownViewer";
 import { ConfigInfoMessage } from "../ConfigInfoMessage";
 import { VectorStoreViewer } from "../VectorStoreViewer";
@@ -67,6 +68,10 @@ export function LogDetailContent({ logEntry, onOpenSettings, isLoadingDetails = 
   const hasGuardrailData = guardrailEntries.length > 0;
   const totalMaskedEntities = calculateTotalMaskedEntities(guardrailEntries);
   const primaryGuardrailLabel = getGuardrailLabel(guardrailEntries);
+
+  // LLM Judge data
+  const evalInfo = metadata?.eval_information;
+  const hasEvalData = evalInfo != null;
 
   // Vector store data
   const hasVectorStoreData = checkHasVectorStoreData(metadata);
@@ -189,6 +194,9 @@ export function LogDetailContent({ logEntry, onOpenSettings, isLoadingDetails = 
           />
         </div>
       )}
+
+      {/* LLM Judge Results */}
+      {hasEvalData && <EvalViewer data={evalInfo} />}
 
       {/* Vector Store Data */}
       {hasVectorStoreData && <VectorStoreViewer data={metadata.vector_store_request_metadata} />}
