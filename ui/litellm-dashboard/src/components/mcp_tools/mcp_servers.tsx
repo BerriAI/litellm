@@ -7,7 +7,7 @@ import React, { useEffect, useState, useMemo, useCallback } from "react";
 import { useMCPServers } from "../../app/(dashboard)/hooks/mcpServers/useMCPServers";
 import { useMCPServerHealth } from "../../app/(dashboard)/hooks/mcpServers/useMCPServerHealth";
 import NotificationsManager from "../molecules/notifications_manager";
-import { deleteMCPServer } from "../networking";
+import { deleteMCPServer, deleteMCPUserCredential } from "../networking";
 import { MCPSubmissionsTab } from "./MCPSubmissionsTab";
 import { MCPToolsetsTab } from "./MCPToolsetsTab";
 import { DataTable } from "../view_logs/table";
@@ -130,6 +130,10 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
         server.mcp_access_groups?.some((g: any) => (typeof g === "string" ? g === group : g && g.name === group)),
       );
     }
+    // Defense-in-depth: non-admins only see approved/active servers
+    if (isInternalUser) {
+      filtered = filtered.filter((server) => !server.approval_status || server.approval_status === "active");
+    }
     const sorted = [...filtered].sort((a, b) => {
       if (!a.created_at && !b.created_at) return 0;
       if (!a.created_at) return 1;
@@ -156,6 +160,18 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
     filterServers(selectedTeam, selectedMcpAccessGroup);
   }, [serversWithHealth, selectedTeam, selectedMcpAccessGroup, filterServers]);
 
+  const handleByokDisconnect = useCallback(async (server: MCPServer) => {
+    if (!accessToken) return;
+    try {
+      await deleteMCPUserCredential(accessToken, server.server_id);
+      NotificationsManager.success("Disconnected from " + (server.server_name ?? server.server_id));
+      refetch();
+    } catch (error) {
+      console.error("Error disconnecting credential:", error);
+      NotificationsManager.fromBackend("Failed to disconnect credential");
+    }
+  }, [accessToken, refetch]);
+
   const columns = React.useMemo(
     () =>
       mcpServerColumns(
@@ -173,8 +189,9 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
         (server: MCPServer) => setByokModalServer(server),
         recheckServerHealth,
         recheckingServerIds,
+        handleByokDisconnect,
       ),
-    [userRole, isLoadingHealth, recheckServerHealth, recheckingServerIds],
+    [userRole, isLoadingHealth, recheckServerHealth, recheckingServerIds, handleByokDisconnect],
   );
 
   function handleDelete(server_id: string) {
