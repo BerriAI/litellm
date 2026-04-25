@@ -175,7 +175,10 @@ class PredibaseConfig(BaseConfig):
                 completion_response["generated_text"]
             )
 
-        if "details" in completion_response and "tokens" in completion_response["details"]:
+        if (
+            "details" in completion_response
+            and "tokens" in completion_response["details"]
+        ):
             model_response.choices[0].finish_reason = map_finish_reason(
                 completion_response["details"]["finish_reason"]
             )
@@ -203,7 +206,9 @@ class PredibaseConfig(BaseConfig):
                 and "best_of_sequences" in completion_response["details"]
             ):
                 choices_list = []
-                for idx, item in enumerate(completion_response["details"]["best_of_sequences"]):
+                for idx, item in enumerate(
+                    completion_response["details"]["best_of_sequences"]
+                ):
                     sum_logprob = 0
                     for token in item["tokens"]:
                         if token["logprob"] is not None:
@@ -342,7 +347,9 @@ class PredibaseConfig(BaseConfig):
             base_url = os.getenv("PREDIBASE_API_BASE", "")
 
         completion_url = f"{base_url}/{tenant_id}/deployments/v2/llms/{model}"
-        should_stream = stream if stream is not None else optional_params.get("stream", False)
+        should_stream = (
+            stream if stream is not None else optional_params.get("stream", False)
+        )
         if should_stream is True:
             completion_url += "/generate_stream"
         else:
