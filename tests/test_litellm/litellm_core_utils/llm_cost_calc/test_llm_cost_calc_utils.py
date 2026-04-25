@@ -449,6 +449,63 @@ def test_gpt55_dated_variants_match_base_reasoning_effort_capabilities(
         )
 
 
+@pytest.mark.parametrize(
+    "model,expected_mode,expected_input,expected_output,expected_cache_read",
+    [
+        ("azure/gpt-5.5", "chat", 5e-6, 3e-5, 5e-7),
+        ("azure/gpt-5.5-2026-04-23", "chat", 5e-6, 3e-5, 5e-7),
+        ("azure/gpt-5.5-pro", "responses", 6e-5, 3.6e-4, 6e-6),
+        ("azure/gpt-5.5-pro-2026-04-23", "responses", 6e-5, 3.6e-4, 6e-6),
+    ],
+)
+def test_azure_gpt55_entries_present_with_correct_pricing(
+    model, expected_mode, expected_input, expected_output, expected_cache_read
+):
+    """Day-0 Azure entries for GPT-5.5 mirror the OpenAI pricing structure.
+
+    Pricing parity with openai/gpt-5.5* (verified against OpenAI's pricing page
+    on 2026-04-24): $5/$30 input/output per 1M for chat, $60/$360 for pro.
+    Cache discount is 10% of input.
+    """
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    m = litellm.model_cost[model]
+    assert m["litellm_provider"] == "azure"
+    assert m["mode"] == expected_mode
+    assert m["input_cost_per_token"] == expected_input
+    assert m["output_cost_per_token"] == expected_output
+    assert m["cache_read_input_token_cost"] == expected_cache_read
+    # Long-context window inherited from gpt-5.4 / openai gpt-5.5.
+    assert m["max_input_tokens"] == 1050000
+    assert m["max_output_tokens"] == 128000
+
+
+@pytest.mark.parametrize(
+    "model,expected_none,expected_minimal,expected_xhigh",
+    [
+        # Mirror live OpenAI API contract (verified via openai/gpt-5.5* on
+        # 2026-04-24): chat accepts {none, low, medium, high, xhigh} but NOT
+        # minimal; pro accepts {medium, high, xhigh} only.
+        # NOTE: openai/gpt-5.5* entries currently set supports_minimal=true on
+        # main (pre #26456). Once that PR lands, OpenAI + Azure flags align.
+        ("azure/gpt-5.5", True, False, True),
+        ("azure/gpt-5.5-pro", False, False, True),
+    ],
+)
+def test_azure_gpt55_reasoning_effort_flags_match_live_openai_api(
+    model, expected_none, expected_minimal, expected_xhigh
+):
+    """Azure entries pin reasoning_effort flags to OpenAI's actual API contract."""
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    m = litellm.model_cost[model]
+    assert m.get("supports_none_reasoning_effort") is expected_none
+    assert m.get("supports_minimal_reasoning_effort") is expected_minimal
+    assert m.get("supports_xhigh_reasoning_effort") is expected_xhigh
+
+
 def test_generic_cost_per_token_anthropic_prompt_caching():
     model = "claude-sonnet-4@20250514"
     usage = Usage(
