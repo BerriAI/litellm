@@ -235,7 +235,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             ):
                 from litellm.types.utils import CallTypes
 
-                setattr(value, "call_type", CallTypes.completion.value)
+                setattr(value, "call_type", CallTypes.anthropic_messages.value)
                 setattr(
                     value, "stream_options", completion_kwargs.get("stream_options")
                 )
