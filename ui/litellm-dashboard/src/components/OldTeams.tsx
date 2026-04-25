@@ -174,22 +174,13 @@ const getOrganizationAlias = (
   return organization?.organization_alias || organizationId;
 };
 
-const BUDGET_DURATION_OPTIONS = [
-  { label: "No reset", value: "" },
-  { label: "Daily", value: "24h" },
-  { label: "Weekly", value: "7d" },
-  { label: "Monthly", value: "30d" },
-  { label: "Yearly", value: "365d" },
-];
-
 interface ModelBudgetRow {
   id: string;
   model: string;
   max_budget: number | null;
-  budget_duration: string;
 }
 
-type ModelBudgetValue = Record<string, { max_budget: number; budget_duration?: string }>;
+type ModelBudgetValue = Record<string, { max_budget: number }>;
 
 interface ModelBudgetEditorProps {
   value?: ModelBudgetValue;
@@ -204,7 +195,6 @@ const ModelBudgetEditor: React.FC<ModelBudgetEditorProps> = ({ value, onChange, 
       id: Math.random().toString(36).slice(2),
       model,
       max_budget: cfg.max_budget ?? null,
-      budget_duration: cfg.budget_duration ?? "",
     }));
   });
 
@@ -217,10 +207,7 @@ const ModelBudgetEditor: React.FC<ModelBudgetEditorProps> = ({ value, onChange, 
     }
     const obj: ModelBudgetValue = {};
     for (const r of filled) {
-      obj[r.model] = {
-        max_budget: r.max_budget ?? 0,
-        ...(r.budget_duration ? { budget_duration: r.budget_duration } : {}),
-      };
+      obj[r.model] = { max_budget: r.max_budget ?? 0 };
     }
     onChange(obj);
   };
@@ -228,7 +215,7 @@ const ModelBudgetEditor: React.FC<ModelBudgetEditorProps> = ({ value, onChange, 
   const addRow = () => {
     const newRows = [
       ...rows,
-      { id: Math.random().toString(36).slice(2), model: "", max_budget: null, budget_duration: "" },
+      { id: Math.random().toString(36).slice(2), model: "", max_budget: null },
     ];
     setRows(newRows);
   };
@@ -268,12 +255,6 @@ const ModelBudgetEditor: React.FC<ModelBudgetEditorProps> = ({ value, onChange, 
             prefix="$"
             value={row.max_budget}
             onChange={(val) => updateRow(row.id, "max_budget", val)}
-          />
-          <Select
-            style={{ width: 130 }}
-            value={row.budget_duration}
-            onChange={(val) => updateRow(row.id, "budget_duration", val)}
-            options={BUDGET_DURATION_OPTIONS}
           />
           <Button
             type="text"
