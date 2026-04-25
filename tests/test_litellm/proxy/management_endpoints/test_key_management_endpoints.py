@@ -22,9 +22,11 @@ from litellm.proxy._types import (
     LiteLLM_TeamTableCachedObj,
     LiteLLM_UserTable,
     LiteLLM_VerificationToken,
+    LiteLLMKeyType,
     LitellmUserRoles,
     Member,
     ProxyException,
+    RegenerateKeyRequest,
     ResetSpendRequest,
     UpdateKeyRequest,
 )
@@ -9078,8 +9080,6 @@ class TestKeyTypeAndPassthroughRoutesCallerPermission:
 
     @pytest.mark.asyncio
     async def test_non_admin_generate_management_key_type_rejected(self):
-        from litellm.proxy._types import LiteLLMKeyType
-
         data = GenerateKeyRequest(
             key_alias="escalate-via-key-type",
             key_type=LiteLLMKeyType.MANAGEMENT,
@@ -9189,6 +9189,7 @@ class TestKeyTypeAndPassthroughRoutesCallerPermission:
                 {"metadata": {"allowed_passthrough_routes": ["/cache/settings"]}},
                 "allowed_passthrough_routes",
             ),
+            ({"key_type": LiteLLMKeyType.MANAGEMENT}, "key_type"),
         ],
     )
     @pytest.mark.asyncio
@@ -9202,7 +9203,6 @@ class TestKeyTypeAndPassthroughRoutesCallerPermission:
         ``key_type='management'`` at regeneration time, side-stepping the
         admin gate ``/key/generate`` and ``/key/update`` already enforce.
         """
-        from litellm.proxy._types import RegenerateKeyRequest
         from litellm.proxy.management_endpoints.key_management_endpoints import (
             regenerate_key_fn,
         )
@@ -9231,38 +9231,6 @@ class TestKeyTypeAndPassthroughRoutesCallerPermission:
                 )
         assert str(exc_info.value.code) == "403"
         assert expected_substring in str(exc_info.value.message)
-
-    @pytest.mark.asyncio
-    async def test_non_admin_regenerate_key_management_type_rejected(self):
-        from litellm.proxy._types import LiteLLMKeyType, RegenerateKeyRequest
-        from litellm.proxy.management_endpoints.key_management_endpoints import (
-            regenerate_key_fn,
-        )
-
-        data = RegenerateKeyRequest(key="sk-victim", key_type=LiteLLMKeyType.MANAGEMENT)
-        user_api_key_dict = UserAPIKeyAuth(
-            user_id="internal-user-123",
-            user_role=LitellmUserRoles.INTERNAL_USER,
-        )
-        mock_prisma_client = AsyncMock()
-
-        with (
-            patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client),
-            patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
-            patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()),
-            patch("litellm.proxy.proxy_server.master_key", "sk-master"),
-            patch("litellm.proxy.proxy_server.premium_user", True),
-            patch("litellm.proxy.proxy_server.hash_token", lambda x: f"hash::{x}"),
-        ):
-            with pytest.raises(ProxyException) as exc_info:
-                await regenerate_key_fn(
-                    key="sk-victim",
-                    data=data,
-                    user_api_key_dict=user_api_key_dict,
-                    litellm_changed_by=None,
-                )
-        assert str(exc_info.value.code) == "403"
-        assert "key_type" in str(exc_info.value.message)
 
 
 def test_jinja_prompt_manager_is_sandboxed():

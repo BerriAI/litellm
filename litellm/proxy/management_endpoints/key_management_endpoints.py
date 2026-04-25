@@ -485,7 +485,7 @@ def _check_allowed_routes_caller_permission(
 
 
 def _check_management_key_type_caller_permission(
-    key_type: Optional[str],
+    key_type: Optional[LiteLLMKeyType],
     user_api_key_dict: UserAPIKeyAuth,
 ) -> None:
     """
@@ -3988,11 +3988,6 @@ async def regenerate_key_fn(  # noqa: PLR0915
                 detail={"error": "DB not connected. prisma_client is None"},
             )
 
-        # Mirror the route-grant gates from /key/generate and /key/update.
-        # Without these, any caller authorized to regenerate a key can also
-        # rewrite its grant fields (allowed_routes, key_type, allowed_passthrough_routes)
-        # at regeneration time, side-stepping the role check those endpoints
-        # already enforce.
         if data is not None:
             _check_allowed_routes_caller_permission(
                 allowed_routes=data.allowed_routes,
