@@ -910,7 +910,7 @@ def _resolve_bedrock_model_id_to_model_group(
         configured = params.get("model") or ""
         if not configured:
             continue
-        for prefix in ("bedrock/converse/", "bedrock/"):
+        for prefix in ("bedrock/converse/", "bedrock/invoke/", "bedrock/"):
             if configured.startswith(prefix):
                 configured = configured[len(prefix) :]
                 break
@@ -971,14 +971,19 @@ def get_model_from_request(
     # Pattern: /bedrock[/v{N}]/model/{modelId}/{invoke|converse|...}
     # The modelId may contain slashes (e.g. `aws/anthropic/…`) and may be
     # prefixed with `application-inference-profile/` for inference profiles.
-    if model is None:
-        bedrock_match = _BEDROCK_PASSTHROUGH_ROUTE_PATTERN.match(route)
-        if bedrock_match:
-            bedrock_model_id = bedrock_match.group("model")
-            resolved = _resolve_bedrock_model_id_to_model_group(
-                bedrock_model_id=bedrock_model_id, llm_router=llm_router
-            )
-            model = resolved or bedrock_model_id
+    # For Bedrock routes the URL model is authoritative — override any body
+    # `model` field so that ACL checks cannot be bypassed via the request body.
+    bedrock_match = _BEDROCK_PASSTHROUGH_ROUTE_PATTERN.match(route)
+    if bedrock_match:
+        bedrock_model_id = bedrock_match.group("model")
+        resolved = _resolve_bedrock_model_id_to_model_group(
+            bedrock_model_id=bedrock_model_id, llm_router=llm_router
+        )
+        # Use resolved model_group when available; fall back to the raw Bedrock
+        # model ID so callers can still do literal-name comparisons.  When no
+        # router deployment maps to this model the raw ID is the best proxy we
+        # have — returning None would silently skip all ACL enforcement.
+        model = resolved or bedrock_model_id
 
     return model
 
