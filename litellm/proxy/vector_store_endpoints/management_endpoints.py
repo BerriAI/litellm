@@ -40,25 +40,11 @@ from litellm.vector_stores.vector_store_registry import VectorStoreRegistry
 
 router = APIRouter()
 
-# Module-level masker — extends the default sensitive-key heuristics with
-# plural forms used by some providers (e.g. Vertex's ``vertex_credentials``,
-# which would otherwise slip past the singular "credential" pattern).
+# Inherit the default sensitive-key heuristics and add the plural
+# ``credentials`` so segment-exact matching catches Vertex's
+# ``vertex_credentials`` (the singular ``credential`` pattern misses it).
 _LITELLM_PARAMS_MASKER = SensitiveDataMasker(
-    sensitive_patterns={
-        "password",
-        "secret",
-        "key",
-        "token",
-        "auth",
-        "authorization",
-        "credential",
-        "credentials",
-        "access",
-        "private",
-        "certificate",
-        "fingerprint",
-        "tenancy",
-    },
+    sensitive_patterns={*SensitiveDataMasker().sensitive_patterns, "credentials"},
 )
 
 
@@ -66,41 +52,20 @@ def _redact_sensitive_litellm_params(
     litellm_params: Optional[Dict[str, Any]],
 ) -> Optional[Dict[str, Any]]:
     """
-    Replace credential-bearing values inside ``litellm_params`` with the
-    ``REDACTED_BY_LITELM`` sentinel while preserving non-secret keys
-    (``api_base``, ``region``, ``model``, etc.) so callers can still see
-    *which* upstream is configured.
-
-    Without this, ``/vector_store/list`` and ``/vector_store/info`` return
-    the raw provider credentials (OpenAI ``api_key``, AWS
-    ``aws_secret_access_key``, GCP ``vertex_credentials``, ...) to any
-    authenticated principal, including read-only users and narrowly-scoped
-    keys.
+    Replace credential-bearing values in ``litellm_params`` with
+    ``REDACTED_BY_LITELM`` while preserving non-secret keys (``api_base``,
+    ``region``, ``model``, ``api_version``).
     """
     if not litellm_params or not isinstance(litellm_params, dict):
         return litellm_params
-
-    redacted: Dict[str, Any] = {}
-    for k, v in litellm_params.items():
-        if _LITELLM_PARAMS_MASKER.is_sensitive_key(k):
-            redacted[k] = REDACTED_BY_LITELM_STRING
-        else:
-            redacted[k] = v
-    return redacted
-
-
-def _redact_vector_store(
-    vector_store: LiteLLM_ManagedVectorStore,
-) -> LiteLLM_ManagedVectorStore:
-    """
-    Return a copy of ``vector_store`` with credential-bearing fields
-    inside ``litellm_params`` replaced by the redaction sentinel.
-    """
-    redacted = LiteLLM_ManagedVectorStore(**vector_store)
-    redacted["litellm_params"] = _redact_sensitive_litellm_params(
-        vector_store.get("litellm_params")
-    )
-    return redacted
+    return {
+        k: (
+            REDACTED_BY_LITELM_STRING
+            if _LITELLM_PARAMS_MASKER.is_sensitive_key(k)
+            else v
+        )
+        for k, v in litellm_params.items()
+    }
 
 
 def _resolve_embedding_config_from_router(
@@ -619,7 +584,11 @@ async def list_vector_stores(
         accessible_vector_stores = []
         for vs in vector_store_map.values():
             if await _check_vector_store_access(vs, user_api_key_dict):
-                accessible_vector_stores.append(_redact_vector_store(vs))
+                redacted = LiteLLM_ManagedVectorStore(**vs)
+                redacted["litellm_params"] = _redact_sensitive_litellm_params(
+                    vs.get("litellm_params")
+                )
+                accessible_vector_stores.append(redacted)
 
         total_count = len(accessible_vector_stores)
         total_pages = (total_count + page_size - 1) // page_size

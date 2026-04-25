@@ -1938,23 +1938,15 @@ class TestRedactSensitiveLitellmParams:
         assert _redact_sensitive_litellm_params(None) is None
         assert _redact_sensitive_litellm_params({}) == {}
 
-    def test_redact_vector_store_does_not_mutate_input(self):
+    def test_redaction_does_not_mutate_input_litellm_params(self):
         from litellm.proxy.vector_store_endpoints.management_endpoints import (
-            _redact_vector_store,
+            _redact_sensitive_litellm_params,
         )
 
         original = {
-            "vector_store_id": "vs_abc123",
-            "vector_store_name": "prod-embeddings",
-            "litellm_params": {
-                "api_key": "sk-real-openai-key-12345",
-                "api_base": "https://api.openai.com/v1",
-            },
+            "api_key": "sk-real-openai-key-12345",
+            "api_base": "https://api.openai.com/v1",
         }
-        snapshot = {
-            "vector_store_id": original["vector_store_id"],
-            "vector_store_name": original["vector_store_name"],
-            "litellm_params": dict(original["litellm_params"]),
-        }
-        _redact_vector_store(original)
-        assert original == snapshot, "input vector store dict must not be mutated"
+        snapshot = dict(original)
+        _redact_sensitive_litellm_params(original)
+        assert original == snapshot, "input dict must not be mutated"
