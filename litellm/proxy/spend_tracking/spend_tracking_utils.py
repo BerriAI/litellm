@@ -228,8 +228,6 @@ def _extract_usage_for_ocr_call(response_obj: Any, response_obj_dict: dict) -> d
 def get_logging_payload(  # noqa: PLR0915
     kwargs, response_obj, start_time, end_time
 ) -> SpendLogsPayload:
-    from litellm.proxy.proxy_server import general_settings, master_key
-
     if kwargs is None:
         kwargs = {}
 
