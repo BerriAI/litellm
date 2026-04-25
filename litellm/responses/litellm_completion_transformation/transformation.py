@@ -32,6 +32,7 @@ from litellm.types.llms.openai import (
     OpenAIWebSearchOptions,
     OpenAIWebSearchUserLocation,
     OutputTokensDetails,
+    Reasoning,
     ResponseAPIUsage,
     ResponsesAPIOptionalRequestParams,
     ResponsesAPIResponse,
@@ -181,12 +182,19 @@ class LiteLLMCompletionResponsesConfig:
             )
 
         # Extract reasoning_effort from reasoning parameter
-        reasoning_effort = None
+        reasoning_effort: Optional[Union[Reasoning, str]] = None
         reasoning_param = responses_api_request.get("reasoning")
         if reasoning_param:
             if isinstance(reasoning_param, dict):
-                # reasoning can be {"effort": "low|medium|high"}
-                reasoning_effort = reasoning_param.get("effort")
+                # reasoning can be {"effort": "low|medium|high", "summary": "detailed"}
+                # Keep the full dict when summary is set so the responses API bridge can
+                # forward it; otherwise use the effort string for chat completion (e.g. Gemini).
+                if "summary" in reasoning_param:
+                    reasoning_effort = reasoning_param
+                elif "effort" in reasoning_param:
+                    reasoning_effort = reasoning_param.get("effort")
+                else:
+                    reasoning_effort = reasoning_param
             elif isinstance(reasoning_param, str):
                 # reasoning could be a string directly
                 reasoning_effort = reasoning_param
@@ -1203,21 +1211,31 @@ class LiteLLMCompletionResponsesConfig:
         return [chat_completion_response_message]
 
     @staticmethod
+    def _resolve_file_id(item: Dict[str, Any]) -> Optional[str]:
+        """
+        Return the effective file_id for a Responses API input_file item.
+        Explicit file_id takes precedence; file_url is used as fallback so
+        downstream providers (Anthropic, Gemini) can handle the URL natively.
+        """
+        return item.get("file_id") or item.get("file_url") or None
+
+    @staticmethod
     def _transform_input_file_item_to_file_item(item: Dict[str, Any]) -> Dict[str, Any]:
         """
         Transform a Responses API input_file item to a Chat Completion file item
 
         Args:
-            item: Dictionary containing input_file type with file_id and/or file_data
+            item: Dictionary containing input_file type with file_id, file_data, and/or file_url
 
         Returns:
             Dictionary with transformed file structure for Chat Completion
         """
         file_dict: Dict[str, Any] = {}
-        keys = ["file_id", "file_data"]
-        for key in keys:
-            if item.get(key):
-                file_dict[key] = item.get(key)
+        file_id = LiteLLMCompletionResponsesConfig._resolve_file_id(item)
+        if file_id:
+            file_dict["file_id"] = file_id
+        if item.get("file_data"):
+            file_dict["file_data"] = item["file_data"]
 
         new_item: Dict[str, Any] = {"type": "file", "file": file_dict}
         return new_item
@@ -1509,7 +1527,7 @@ class LiteLLMCompletionResponsesConfig:
         """
         Map chat completion finish_reason to responses API status.
 
-        Chat completion finish_reason values include: "stop", "length", "tool_calls", "content_filter", "function_call"
+        Chat completion finish_reason values include: "stop", "length", "tool_calls", "content_filter", "function_call", "refusal"
         Responses API status values are: "completed", "failed", "in_progress", "cancelled", "queued", "incomplete"
 
         Args:
@@ -1524,7 +1542,7 @@ class LiteLLMCompletionResponsesConfig:
         # Map finish reasons to status
         if finish_reason in ["stop", "tool_calls", "function_call"]:
             return "completed"
-        elif finish_reason in ["length", "content_filter"]:
+        elif finish_reason in ["length", "content_filter", "refusal"]:
             return "incomplete"
         else:
             # Default to completed for unknown finish reasons
@@ -1642,7 +1660,7 @@ class LiteLLMCompletionResponsesConfig:
             id=chat_completion_response.id,
             created_at=chat_completion_response.created,
             model=chat_completion_response.model,
-            object=chat_completion_response.object,
+            object="response",
             error=getattr(chat_completion_response, "error", None),
             incomplete_details=getattr(
                 chat_completion_response, "incomplete_details", None
@@ -2113,9 +2131,9 @@ class LiteLLMCompletionResponsesConfig:
                 hasattr(completion_details, "reasoning_tokens")
                 and completion_details.reasoning_tokens is not None
             ):
-                output_details_dict[
-                    "reasoning_tokens"
-                ] = completion_details.reasoning_tokens
+                output_details_dict["reasoning_tokens"] = (
+                    completion_details.reasoning_tokens
+                )
             else:
                 output_details_dict["reasoning_tokens"] = 0
 

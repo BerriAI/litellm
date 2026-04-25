@@ -183,6 +183,19 @@ def _build_part_for_input(
         return PartType(text=element)
 
 
+_SUPPORTED_EMBED_PARAMS = {"outputDimensionality", "taskType", "title"}
+
+
+def _filter_embed_params(optional_params: dict) -> dict:
+    """Map and filter optional_params to only include Gemini embedding fields."""
+    gemini_params = optional_params.copy()
+    if "dimensions" in gemini_params:
+        gemini_params["outputDimensionality"] = gemini_params.pop("dimensions")
+    if "task_type" in gemini_params:
+        gemini_params["taskType"] = gemini_params.pop("task_type")
+    return {k: v for k, v in gemini_params.items() if k in _SUPPORTED_EMBED_PARAMS}
+
+
 def transform_openai_input_gemini_content(
     input: EmbeddingInput,
     model: str,
@@ -206,11 +219,7 @@ def transform_openai_input_gemini_content(
     """
     gemini_model_name = "models/{}".format(model)
 
-    gemini_params = optional_params.copy()
-    if "dimensions" in gemini_params:
-        gemini_params["outputDimensionality"] = gemini_params.pop("dimensions")
-    if "task_type" in gemini_params:
-        gemini_params["taskType"] = gemini_params.pop("task_type")
+    gemini_params = _filter_embed_params(optional_params)
 
     input_list = [input] if isinstance(input, str) else input
     requests: List[EmbedContentRequest] = []
@@ -260,11 +269,7 @@ def transform_openai_input_gemini_embed_content(
     """
     resolved_files = resolved_files or {}
 
-    gemini_params = optional_params.copy()
-    if "dimensions" in gemini_params:
-        gemini_params["outputDimensionality"] = gemini_params.pop("dimensions")
-    if "task_type" in gemini_params:
-        gemini_params["taskType"] = gemini_params.pop("task_type")
+    gemini_params = _filter_embed_params(optional_params)
 
     input_list = [input] if isinstance(input, str) else input
     parts: List[PartType] = []

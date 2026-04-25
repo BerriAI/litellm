@@ -31,8 +31,8 @@ def test_router_timeouts():
             "model_name": "openai-gpt-4",
             "litellm_params": {
                 "model": "azure/gpt-4.1-mini",
-                "api_key": "os.environ/AZURE_API_KEY",
-                "api_base": "os.environ/AZURE_API_BASE",
+                "api_key": "os.environ/AZURE_AI_API_KEY",
+                "api_base": "os.environ/AZURE_AI_API_BASE",
                 "api_version": "os.environ/AZURE_API_VERSION",
             },
             "tpm": 80000,
@@ -105,7 +105,7 @@ async def test_router_timeouts_bedrock():
         {
             "model_name": "bedrock",
             "litellm_params": {
-                "model": "bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+                "model": "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
                 "timeout": 0.00001,
             },
             "tpm": 80000,

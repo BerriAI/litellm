@@ -153,4 +153,7 @@ class TestTruncateBase64InMessages:
             }
         ]
         result = truncate_base64_in_messages(messages)
-        assert result[0]["content"][0]["image_url"]["url"] == f"data:image/png;base64,{short}"
+        assert (
+            result[0]["content"][0]["image_url"]["url"]
+            == f"data:image/png;base64,{short}"
+        )

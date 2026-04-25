@@ -1,12 +1,16 @@
 name: "Unit Tests: Security"
 
-# Uses DATABASE_URL secret — only runs on trusted branches, not PRs.
+# Kept push-only (was previously required by DATABASE_URL secret scoping;
+# now the postgres credentials are ephemeral localhost values but the
+# push-trigger stays to match the proxy-db workflow cadence).
 on:
   push:
-    branches: [main, "litellm_*"]
+    branches: [main, "litellm_**"]
 
 permissions:
   contents: read
+  id-token: write
+  pull-requests: write
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -20,9 +24,5 @@ jobs:
       workers: 1
       reruns: 2
       timeout-minutes: 20
-      enable-redis: false
       enable-postgres: true
-    secrets:
-      DATABASE_URL: ${{ secrets.DATABASE_URL }}
-      POSTGRES_USER: ${{ secrets.POSTGRES_USER }}
-      POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+      artifact-name: security

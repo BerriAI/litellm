@@ -1063,7 +1063,7 @@ class BaseLLMChatTest(ABC):
         # Use local PDF file instead of external URL to avoid flaky tests
         test_dir = os.path.dirname(__file__)
         pdf_path = os.path.join(test_dir, "fixtures", "dummy.pdf")
-        
+
         with open(pdf_path, "rb") as f:
             file_data = f.read()
 
