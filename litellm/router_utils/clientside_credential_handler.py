@@ -11,34 +11,48 @@ If given, generate a unique model_id for the deployment.
 Ensures cooldowns are applied correctly.
 """
 
+from typing import List
+
 clientside_credential_keys = ["api_key", "api_base", "base_url"]
 
-# Admin-configured fields that carry secrets or environment-specific config
-# meant for the *original* upstream. When the caller redirects ``api_base`` /
-# ``base_url`` to their own server, these MUST NOT flow through unchanged or
-# the admin's ``OpenAI-Organization`` header, ``extra_body`` payloads, AWS /
-# Vertex / Azure credentials, etc. would be sent to the attacker. Only carry
-# them through when the caller explicitly re-supplies the field.
-_ADMIN_CONFIG_FIELDS_TO_CLEAR_ON_BASE_OVERRIDE = [
-    "organization",
-    "extra_body",
-    "extra_headers",
-    "default_headers",
-    "api_version",
-    "api_type",
-    "azure_ad_token",
-    "azure_ad_token_provider",
-    "aws_access_key_id",
-    "aws_secret_access_key",
-    "aws_session_token",
-    "aws_region_name",
-    "aws_sts_endpoint",
-    "aws_web_identity_token",
-    "aws_role_name",
-    "vertex_credentials",
-    "vertex_project",
-    "vertex_location",
-]
+
+def _admin_config_fields_to_clear_on_base_override() -> List[str]:
+    """
+    Provider-specific credential / endpoint-targeting fields that must NOT
+    flow through to a client-redirected upstream.
+
+    Built dynamically from ``CredentialLiteLLMParams.model_fields`` so any
+    new provider field added there (Bedrock endpoint, Watsonx region, etc.)
+    is gated automatically — plus a fixed list of kwargs-only fields that
+    aren't declared on the typed model.
+    """
+    from litellm.types.router import CredentialLiteLLMParams
+
+    typed_fields = [
+        f
+        for f in CredentialLiteLLMParams.model_fields
+        if f not in clientside_credential_keys
+    ]
+    kwargs_only_fields = [
+        # Caller-supplied via **kwargs, not declared on CredentialLiteLLMParams.
+        "organization",
+        "extra_body",
+        "extra_headers",
+        "default_headers",
+        "api_type",
+        "azure_ad_token",
+        "azure_ad_token_provider",
+        "aws_session_token",
+        "aws_sts_endpoint",
+        "aws_web_identity_token",
+        "aws_role_name",
+    ]
+    return typed_fields + kwargs_only_fields
+
+
+_ADMIN_CONFIG_FIELDS_TO_CLEAR_ON_BASE_OVERRIDE = (
+    _admin_config_fields_to_clear_on_base_override()
+)
 
 
 def is_clientside_credential(request_kwargs: dict) -> bool:

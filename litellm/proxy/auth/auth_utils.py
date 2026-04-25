@@ -9,6 +9,7 @@ from fastapi import HTTPException, Request, status
 from litellm import Router, provider_list
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import STANDARD_CUSTOMER_ID_HEADERS
+from litellm.litellm_core_utils.url_utils import SSRFError, validate_url
 from litellm.proxy._types import *
 from litellm.types.router import CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS
 
@@ -78,8 +79,6 @@ def check_complete_credentials(request_body: dict) -> bool:
     api_key_value = request_body.get("api_key")
     if not (api_key_value and isinstance(api_key_value, str) and api_key_value.strip()):
         return False
-
-    from litellm.litellm_core_utils.url_utils import SSRFError, validate_url
 
     for url_field in ("api_base", "base_url"):
         url_value = request_body.get(url_field)
