@@ -623,6 +623,15 @@ model LiteLLM_TeamMembership {
   @@id([user_id, team_id])
 }
 
+model LiteLLM_TeamMemberModelSpend {
+  // Per-model spend tracking for team members — uses atomic increment, unlike JSON field approach
+  user_id  String
+  team_id  String
+  model    String
+  spend    Float  @default(0.0)
+  @@id([user_id, team_id, model])
+}
+
 model LiteLLM_OrganizationMembership {
   // Use this table to track Internal User and Organization membership. Helps tracking a users role within an Organization
   user_id         String
