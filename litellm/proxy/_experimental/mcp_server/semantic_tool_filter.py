@@ -221,25 +221,41 @@ class SemanticMCPToolFilter:
         Return True if a client-side tool name refers to the given canonical
         MCP tool name.
 
-        MCP clients (e.g. opencode) commonly wrap the proxy's canonical tool
-        name with an additive namespace prefix of their own
-        (``<client_alias><sep><canonical>``). The prefix can use either a
-        dash or an underscore as separator regardless of what
-        ``MCP_TOOL_PREFIX_SEPARATOR`` is set to on the proxy, because the
-        client doesn't know the proxy's separator.
+        MCP clients commonly wrap the proxy's canonical tool name in one of
+        two ways:
 
-        The match is anchored: ``canonical`` must form the complete suffix
-        of ``client_name`` and be preceded by a separator character, so
-        ``rain_gear`` does not match canonical ``ear``.
+        1. **Prefix** (e.g. opencode): ``<client_alias><sep><canonical>``
+           — the canonical forms the complete suffix of the client name.
+        2. **Suffix** (e.g. LibreChat): ``<canonical><sep><unique_id>``
+           — the canonical forms the complete prefix of the client name,
+           followed by a separator and a client-generated unique identifier
+           used to avoid naming collisions across multiple MCP servers.
 
-        Suffix matching is additionally gated on ``canonical`` itself
+        In both cases the separator can be either a dash or an underscore
+        regardless of what ``MCP_TOOL_PREFIX_SEPARATOR`` is set to on the
+        proxy, because the client doesn't know the proxy's separator.
+
+        The match is anchored on both sides:
+
+        - **Prefix match**: ``canonical`` must form the complete suffix of
+          ``client_name`` and be preceded by a separator character, so
+          ``rain_gear`` does not match canonical ``ear``.
+        - **Suffix match**: ``canonical`` must form the complete prefix of
+          ``client_name`` and be followed by a separator character, so
+          ``fc_web_search-firecrawl_scrape`` does match
+          ``fc_web_search-firecrawl_scrape_a1b2c3d4`` but does not match
+          ``fc_web_search-firecrawl_scrape_extra_tool`` (the part after the
+          canonical must be a single unique-ID segment, not another
+          ``<sep><tool_name>`` pair).
+
+        Both prefix and suffix matching are gated on ``canonical`` itself
         containing ``MCP_TOOL_PREFIX_SEPARATOR``. Server-registered MCP
         tools are always emitted as
         ``<server_name><MCP_TOOL_PREFIX_SEPARATOR><tool_name>`` (see
         ``add_server_prefix_to_name``), so a canonical without the
         separator is not a namespaced MCP tool and falling back to
-        suffix matching would spuriously collide with unrelated local
-        user functions whose names end in the same characters.
+        anchored matching would spuriously collide with unrelated local
+        user functions whose names start or end in the same characters.
         """
         if client_name == canonical:
             return True
@@ -247,10 +263,35 @@ class SemanticMCPToolFilter:
             return False
         if len(client_name) <= len(canonical):
             return False
-        if not client_name.endswith(canonical):
-            return False
-        separator = client_name[-len(canonical) - 1]
-        return separator in ("_", "-")
+
+        # Prefix match: client_name = <alias><sep><canonical>
+        # e.g. "litellm_fc_web_search-firecrawl_scrape" matches
+        #      canonical "fc_web_search-firecrawl_scrape"
+        if client_name.endswith(canonical):
+            separator = client_name[-len(canonical) - 1]
+            if separator in ("_", "-"):
+                return True
+
+        # Suffix match: client_name = <canonical><sep><unique_id>
+        # e.g. "fc_web_search-firecrawl_scrape_a1b2c3d4" matches
+        #      canonical "fc_web_search-firecrawl_scrape"
+        if client_name.startswith(canonical):
+            remainder = client_name[len(canonical):]
+            # The remainder must be a single <sep><unique_id> segment.
+            # A unique-ID segment contains no separator (it's a short
+            # hex or alphanumeric string), so we check that the very
+            # next character is a separator and the rest contains no
+            # further MCP_TOOL_PREFIX_SEPARATOR. This prevents
+            # "svc-search-extra_tool" from matching canonical
+            # "svc-search" — the remainder after the separator would
+            # itself contain a separator, indicating it's another
+            # namespaced tool, not a unique-ID suffix.
+            if remainder and remainder[0] in ("_", "-"):
+                rest = remainder[1:]
+                if MCP_TOOL_PREFIX_SEPARATOR not in rest:
+                    return True
+
+        return False
 
     def _get_tools_by_names(
         self, tool_names: List[str], available_tools: List[Any]

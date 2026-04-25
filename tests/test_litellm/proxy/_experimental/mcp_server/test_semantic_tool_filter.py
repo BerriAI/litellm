@@ -640,3 +640,155 @@ class TestGetToolsByNames:
         )
 
         assert matched == []
+
+    # --- Suffix-match tests (issue #26507) ---
+    # LibreChat and similar MCP clients append a unique-ID suffix to
+    # tool names (e.g. ``<canonical>_<uid>``) to avoid naming collisions
+    # across multiple connected MCP servers.  The filter must recognise
+    # these as referring to the canonical tool.
+
+    def test_client_suffix_with_underscore_separator(self):
+        """LibreChat pattern: canonical followed by ``_<unique_id>``."""
+        filter_instance = self._make_filter()
+        canonical = "fc_web_search-firecrawl_scrape"
+        client_name = canonical + "_a1b2c3d4"
+        available_tools = [{"name": client_name, "description": "scrape"}]
+
+        matched = filter_instance._get_tools_by_names(
+            [canonical], available_tools
+        )
+
+        assert len(matched) == 1
+        # Must return the incoming tool unchanged so the client-facing
+        # name survives for tool-call round-trips.
+        assert matched[0]["name"] == client_name
+
+    def test_client_suffix_with_dash_separator(self):
+        """Some clients use dash as the suffix separator; accept that too."""
+        filter_instance = self._make_filter()
+        canonical = "weather_svc-get_weather"
+        client_name = canonical + "-a1b2c3d4"
+        available_tools = [{"name": client_name, "description": "weather"}]
+
+        matched = filter_instance._get_tools_by_names(
+            [canonical], available_tools
+        )
+
+        assert len(matched) == 1
+        assert matched[0]["name"] == client_name
+
+    def test_suffix_does_not_match_another_namespaced_tool(self):
+        """
+        ``svc-search-extra_tool`` must NOT match canonical ``svc-search``
+        because the remainder after the separator (``extra_tool``) itself
+        contains ``MCP_TOOL_PREFIX_SEPARATOR`` (``-``), indicating it is
+        another namespaced tool, not a unique-ID suffix.
+        """
+        filter_instance = self._make_filter()
+        available_tools = [
+            {"name": "svc-search-extra_tool", "description": "different tool"},
+        ]
+
+        matched = filter_instance._get_tools_by_names(
+            ["svc-search"], available_tools
+        )
+
+        assert matched == []
+
+    def test_suffix_without_separator_in_canonical_does_not_match(self):
+        """
+        If the canonical has no MCP_TOOL_PREFIX_SEPARATOR, suffix matching
+        must not kick in — same safety guard as the prefix case.
+        ``my_firecrawl_scrape`` must not match canonical ``firecrawl_scrape``
+        because ``firecrawl_scrape`` contains no separator.
+        """
+        filter_instance = self._make_filter()
+        available_tools = [
+            {"name": "my_firecrawl_scrape", "description": "unrelated"},
+        ]
+
+        matched = filter_instance._get_tools_by_names(
+            ["firecrawl_scrape"],  # no MCP_TOOL_PREFIX_SEPARATOR
+            available_tools,
+        )
+
+        assert matched == []
+
+    def test_exact_match_preferred_over_suffixed(self):
+        """
+        When both a bare canonical and a suffixed variant are present,
+        the bare one wins so ordering is stable.
+        """
+        filter_instance = self._make_filter()
+        canonical = "svc-search"
+        available_tools = [
+            {"name": canonical, "description": "plain"},
+            {"name": canonical + "_a1b2c3d4", "description": "suffixed"},
+        ]
+
+        matched = filter_instance._get_tools_by_names(
+            [canonical], available_tools
+        )
+
+        assert len(matched) == 1
+        assert matched[0]["name"] == canonical
+
+    def test_prefix_and_suffix_both_match_same_canonical(self):
+        """
+        Both ``litellm_<canonical>`` (prefix) and ``<canonical>_<uid>``
+        (suffix) should resolve to the canonical when present in the
+        available tools.
+        """
+        filter_instance = self._make_filter()
+        canonical = "fc_web_search-firecrawl_scrape"
+        prefixed = "litellm_" + canonical
+        suffixed = canonical + "_a1b2c3d4"
+        available_tools = [
+            {"name": prefixed, "description": "prefixed"},
+            {"name": suffixed, "description": "suffixed"},
+        ]
+
+        matched = filter_instance._get_tools_by_names(
+            [canonical], available_tools
+        )
+
+        # Should match the shortest qualifying name (prefix case)
+        assert len(matched) == 1
+        assert matched[0]["name"] == prefixed
+
+    def test_name_matches_canonical_suffix_static(self):
+        """Direct static-method tests for the suffix branch."""
+        from litellm.proxy._experimental.mcp_server.semantic_tool_filter import (
+            SemanticMCPToolFilter,
+        )
+
+        # Suffix match with underscore
+        assert SemanticMCPToolFilter._name_matches_canonical(
+            "fc_web_search-firecrawl_scrape_a1b2c3d4",
+            "fc_web_search-firecrawl_scrape",
+        )
+        # Suffix match with dash
+        assert SemanticMCPToolFilter._name_matches_canonical(
+            "fc_web_search-firecrawl_scrape-a1b2c3d4",
+            "fc_web_search-firecrawl_scrape",
+        )
+        # No suffix match when remainder contains separator (another tool)
+        assert not SemanticMCPToolFilter._name_matches_canonical(
+            "svc-search-extra_tool",
+            "svc-search",
+        )
+        # No suffix match when canonical has no separator
+        assert not SemanticMCPToolFilter._name_matches_canonical(
+            "my_firecrawl_scrape",
+            "firecrawl_scrape",
+        )
+        # Exact match still works
+        assert SemanticMCPToolFilter._name_matches_canonical(
+            "fc_web_search-firecrawl_scrape",
+            "fc_web_search-firecrawl_scrape",
+        )
+        # Prefix match still works
+        assert SemanticMCPToolFilter._name_matches_canonical(
+            "litellm_fc_web_search-firecrawl_scrape",
+            "fc_web_search-firecrawl_scrape",
+        )
