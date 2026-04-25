@@ -255,6 +255,137 @@ def test_get_model_from_request_vertex_passthrough_still_works():
     assert get_model_from_request(request_data={}, route=route) == "gemini-1.5-pro"
 
 
+# Tests for the Bedrock passthrough URL extraction in get_model_from_request.
+# Fixes https://github.com/BerriAI/litellm/issues/26399 — without this branch the
+# auth layer skipped can_key_call_model on /bedrock/model/{id}/{action} routes
+# and silently bypassed key.models / user.models access control.
+
+
+def test_get_model_from_request_bedrock_passthrough_actions():
+    """Test that all Bedrock passthrough actions extract the modelId from the URL."""
+    model_id = "global.anthropic.claude-opus-4-7"
+    for action in (
+        "invoke",
+        "invoke-with-response-stream",
+        "converse",
+        "converse-stream",
+        "count_tokens",
+        "count-tokens",
+    ):
+        route = f"/bedrock/model/{model_id}/{action}"
+        assert (
+            get_model_from_request(request_data={}, route=route) == model_id
+        ), f"failed for action={action}"
+
+
+def test_get_model_from_request_bedrock_application_inference_profile():
+    """Test that the application-inference-profile path is extracted as the full identifier."""
+    route = "/bedrock/model/application-inference-profile/my-profile-id/converse"
+    assert (
+        get_model_from_request(request_data={}, route=route)
+        == "application-inference-profile/my-profile-id"
+    )
+
+
+def test_get_model_from_request_bedrock_modelid_with_colons_and_slashes():
+    """Test that Bedrock modelIds containing colons (versioning) or slashes are extracted intact."""
+    assert (
+        get_model_from_request(
+            request_data={},
+            route="/bedrock/model/anthropic.claude-3-5-sonnet-20241022-v2:0/invoke",
+        )
+        == "anthropic.claude-3-5-sonnet-20241022-v2:0"
+    )
+    assert (
+        get_model_from_request(
+            request_data={}, route="/bedrock/model/aws/anthropic/foo/invoke"
+        )
+        == "aws/anthropic/foo"
+    )
+
+
+def test_get_model_from_request_bedrock_resolves_via_router_to_model_group():
+    """Test that a configured router deployment maps the Bedrock id to its model_group
+    name, so the existing access-control check works against user-facing model names.
+    """
+    from litellm import Router
+
+    llm_router = Router(
+        model_list=[
+            {
+                "model_name": "claude-opus-4-7",
+                "litellm_params": {
+                    "model": "bedrock/global.anthropic.claude-opus-4-7",
+                    "api_key": "test-api-key",
+                },
+            }
+        ]
+    )
+    route = "/bedrock/model/global.anthropic.claude-opus-4-7/invoke"
+    assert (
+        get_model_from_request(request_data={}, route=route, llm_router=llm_router)
+        == "claude-opus-4-7"
+    )
+
+
+def test_get_model_from_request_bedrock_falls_back_to_raw_id_when_router_has_no_match():
+    """Test that the raw Bedrock id is returned when no router deployment matches,
+    so the access-control check denies unconfigured models by default.
+    """
+    from litellm import Router
+
+    llm_router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {
+                    "model": "openai/gpt-4",
+                    "api_key": "test-api-key",
+                },
+            }
+        ]
+    )
+    route = "/bedrock/model/global.anthropic.claude-opus-4-7/invoke"
+    assert (
+        get_model_from_request(request_data={}, route=route, llm_router=llm_router)
+        == "global.anthropic.claude-opus-4-7"
+    )
+
+
+def test_get_model_from_request_bedrock_no_router_returns_raw_id():
+    """Test that without a router the Bedrock id is returned as-is, so the
+    access-control check has the raw model identifier to evaluate.
+    """
+    route = "/bedrock/model/global.anthropic.claude-opus-4-7/invoke"
+    assert (
+        get_model_from_request(request_data={}, route=route)
+        == "global.anthropic.claude-opus-4-7"
+    )
+
+
+def test_get_model_from_request_bedrock_non_action_path_unaffected():
+    """Test that paths under /bedrock/ that are not recognized actions return None,
+    matching pre-fix behavior for unknown bedrock routes.
+    """
+    assert (
+        get_model_from_request(
+            request_data={}, route="/bedrock/model/foo/some-unknown-action"
+        )
+        is None
+    )
+
+
+def test_get_model_from_request_bedrock_request_body_model_takes_precedence():
+    """Test that an explicit request-body model wins over Bedrock URL extraction,
+    matching the existing precedence for other passthrough patterns.
+    """
+    route = "/bedrock/model/global.anthropic.claude-opus-4-7/invoke"
+    assert (
+        get_model_from_request(request_data={"model": "claude-opus-4-7"}, route=route)
+        == "claude-opus-4-7"
+    )
+
+
 def test_get_customer_user_header_returns_none_when_no_customer_role():
     from litellm.proxy.auth.auth_utils import get_customer_user_header_from_mapping
 

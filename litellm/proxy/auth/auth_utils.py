@@ -879,8 +879,41 @@ def get_end_user_id_from_request_body(
     return None
 
 
+_BEDROCK_PASSTHROUGH_PATH_RE = re.compile(
+    r"^/bedrock/model/(.+)/"
+    r"(?:invoke|invoke-with-response-stream|converse|converse-stream|count_tokens|count-tokens)"
+    r"/?$"
+)
+
+
+def _resolve_bedrock_model_id_to_router_model_group(
+    model_id: str, llm_router: Optional[Router]
+) -> Optional[str]:
+    """
+    Map a Bedrock model_id from a /bedrock/model/{id}/{action} URL to the
+    user-facing model_group name configured in the router.
+
+    Returns the matching model_group when a deployment's litellm_params.model
+    ends with `/{model_id}` (e.g., the deployment "bedrock/global.anthropic.
+    claude-opus-4-7" matches model_id "global.anthropic.claude-opus-4-7").
+    Returns None when no deployment matches; callers should fall back to the
+    raw model_id so the access-control check denies unconfigured models by
+    default.
+    """
+    if llm_router is None:
+        return None
+    for deployment in llm_router.get_model_list() or []:
+        litellm_params = deployment.get("litellm_params") or {}
+        deployment_model = litellm_params.get("model") or ""
+        if deployment_model.endswith(f"/{model_id}"):
+            return deployment.get("model_name")
+    return None
+
+
 def get_model_from_request(
-    request_data: dict, route: str
+    request_data: dict,
+    route: str,
+    llm_router: Optional[Router] = None,
 ) -> Optional[Union[str, List[str]]]:
     # First try to get model from request_data
     model = request_data.get("model") or request_data.get("target_model_names")
@@ -922,6 +955,25 @@ def get_model_from_request(
         vertex_match = re.search(r"/models/([^:]+)", route)
         if vertex_match:
             model = vertex_match.group(1)
+
+    # Bedrock passthrough routes carry the model exclusively in the URL path
+    # (the native InvokeModel / Converse request bodies have no top-level
+    # `model` field). Without this branch, model is None, the auth layer
+    # skips can_key_call_model, and key.models / user.models access control
+    # is silently bypassed.
+    # Pattern: /bedrock/model/{modelId}/{action}
+    # Examples:
+    # - /bedrock/model/global.anthropic.claude-opus-4-7/invoke
+    # - /bedrock/model/anthropic.claude-3-5-sonnet-20241022-v2:0/converse
+    # - /bedrock/model/application-inference-profile/{profileId}/converse
+    if model is None:
+        bedrock_match = _BEDROCK_PASSTHROUGH_PATH_RE.match(route)
+        if bedrock_match:
+            model_id = bedrock_match.group(1)
+            resolved = _resolve_bedrock_model_id_to_router_model_group(
+                model_id, llm_router
+            )
+            model = resolved if resolved is not None else model_id
 
     return model
 

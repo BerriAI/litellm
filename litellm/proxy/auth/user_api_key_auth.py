@@ -869,7 +869,9 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                     )
 
                     # Check if model has zero cost - if so, skip all budget checks
-                    model = get_model_from_request(request_data, route)
+                    model = get_model_from_request(
+                        request_data, route, llm_router=llm_router
+                    )
                     skip_budget_checks = False
                     if model is not None and llm_router is not None:
                         from litellm.proxy.auth.auth_checks import _is_model_cost_zero
@@ -1276,7 +1278,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                     user_obj = None
 
             # Check 2a. Check if model has zero cost - if so, skip all budget checks
-            model = get_model_from_request(request_data, route)
+            model = get_model_from_request(request_data, route, llm_router=llm_router)
             skip_budget_checks = False
             if model is not None and llm_router is not None:
                 from litellm.proxy.auth.auth_checks import _is_model_cost_zero
@@ -1807,7 +1809,7 @@ async def _enforce_key_and_fallback_model_access(
     ):
         pass
     else:
-        model = get_model_from_request(request_data, route)
+        model = get_model_from_request(request_data, route, llm_router=llm_router)
         fallback_models = cast(
             Optional[List[ALL_FALLBACK_MODEL_VALUES]],
             request_data.get("fallbacks", None),
