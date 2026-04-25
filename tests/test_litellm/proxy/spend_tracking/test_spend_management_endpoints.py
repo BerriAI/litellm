@@ -833,7 +833,10 @@ async def test_ui_view_spend_logs_sort_by_model(
 
     async def mock_query_raw(sql_query, *params):
         assert "model" in sql_query
-        assert "NULLS LAST" in sql_query
+        # model is non-nullable in the schema, so NULLS LAST should NOT be
+        # appended — only ttft_ms gets that clause. This guards against
+        # accidentally widening the change to all sort columns.
+        assert "NULLS LAST" not in sql_query
         reverse = "DESC" in sql_query
         sorted_logs = sorted(
             base_logs, key=lambda x: x.get("model", ""), reverse=reverse
