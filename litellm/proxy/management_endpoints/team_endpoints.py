@@ -66,6 +66,7 @@ from litellm.proxy.auth.auth_checks import (
     allowed_route_check_inside_route,
     can_org_access_model,
     get_org_object,
+    get_team_membership,
     get_team_object,
     get_user_object,
 )
@@ -3448,7 +3449,7 @@ async def team_member_me(
     --header 'Authorization: Bearer your_api_key_here'
     ```
     """
-    from litellm.proxy.proxy_server import prisma_client
+    from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
 
     if prisma_client is None:
         raise HTTPException(
@@ -3468,20 +3469,22 @@ async def team_member_me(
             },
         )
 
-    team_row = await prisma_client.db.litellm_teamtable.find_unique(
-        where={"team_id": team_id},
+    team_table = await get_team_object(
+        team_id=team_id,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
     )
-    if team_row is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail={"error": f"Team not found, passed team_id={team_id}."},
-        )
 
-    team_table = LiteLLM_TeamTable(**team_row.model_dump())
-
+    caller_user_email = user_api_key_dict.user_email
     member_role: Optional[str] = None
     for m in team_table.members_with_roles:
-        if m.user_id == caller_user_id:
+        # Match by user_id when present, else fall back to email — members
+        # added by email may have user_id=None on the stored entry.
+        if (m.user_id is not None and m.user_id == caller_user_id) or (
+            m.user_email is not None
+            and caller_user_email is not None
+            and m.user_email == caller_user_email
+        ):
             member_role = m.role
             break
 
@@ -3496,22 +3499,22 @@ async def team_member_me(
             },
         )
 
-    membership_row = await prisma_client.db.litellm_teammembership.find_unique(
-        where={
-            "user_id_team_id": {
-                "user_id": caller_user_id,
-                "team_id": team_id,
-            }
-        },
-        include={"litellm_budget_table": True},
+    membership = await get_team_membership(
+        user_id=caller_user_id,
+        team_id=team_id,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
     )
 
-    user_row = await prisma_client.db.litellm_usertable.find_unique(
-        where={"user_id": caller_user_id}
+    user_row = await get_user_object(
+        user_id=caller_user_id,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        user_id_upsert=False,
     )
     user_email = getattr(user_row, "user_email", None) if user_row is not None else None
 
-    if membership_row is None:
+    if membership is None:
         # Member is in members_with_roles but has no membership row yet
         # (no per-member budget/limits configured). Return defaults.
         return TeamMemberInfoResponse(
@@ -3526,17 +3529,16 @@ async def team_member_me(
             litellm_budget_table=None,
         )
 
-    membership_dict = membership_row.model_dump()
     return TeamMemberInfoResponse(
         user_id=caller_user_id,
         team_id=team_id,
         team_alias=team_table.team_alias,
         role=member_role,
         user_email=user_email,
-        spend=membership_dict.get("spend", 0.0),
-        total_spend=membership_dict.get("total_spend", 0.0),
-        budget_id=membership_dict.get("budget_id"),
-        litellm_budget_table=membership_dict.get("litellm_budget_table"),
+        spend=membership.spend,
+        total_spend=membership.total_spend,
+        budget_id=membership.budget_id,
+        litellm_budget_table=membership.litellm_budget_table,
     )
 
 

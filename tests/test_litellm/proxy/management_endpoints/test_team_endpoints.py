@@ -2,6 +2,7 @@ import asyncio
 import json
 import os
 import sys
+from datetime import datetime, timezone
 from typing import Optional, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -16,10 +17,13 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 from litellm.proxy._types import UserAPIKeyAuth  # Import UserAPIKeyAuth
 from litellm.proxy._types import (
+    LiteLLM_BudgetTableFull,
     LiteLLM_OrganizationMembershipTable,
     LiteLLM_OrganizationTable,
     LiteLLM_OrganizationTableWithMembers,
+    LiteLLM_TeamMembership,
     LiteLLM_TeamTable,
+    LiteLLM_TeamTableCachedObj,
     LiteLLM_UserTable,
     LitellmUserRoles,
     Member,
@@ -7233,40 +7237,57 @@ async def test_update_team_rejects_unauthorized_caller():
 # ----- /team/{team_id}/members/me -----
 
 
-def _build_team_row_for_me(team_id, members):
-    row = MagicMock()
-    row.model_dump.return_value = {
-        "team_id": team_id,
-        "team_alias": "team-vec",
-        "members_with_roles": members,
-        "metadata": {},
-        "models": [],
-        "spend": 0.0,
-    }
-    return row
+def _build_team_for_me(team_id, members):
+    """Real LiteLLM_TeamTableCachedObj as get_team_object would return."""
+    return LiteLLM_TeamTableCachedObj(
+        team_id=team_id,
+        team_alias="team-vec",
+        members_with_roles=[Member(**m) for m in members],
+        metadata={},
+        models=[],
+        spend=0.0,
+    )
 
 
-def _build_membership_row_for_me(user_id, team_id, *, spend=12.34, max_budget=100.0):
-    row = MagicMock()
-    row.model_dump.return_value = {
-        "user_id": user_id,
-        "team_id": team_id,
-        "budget_id": "b-1",
-        "spend": spend,
-        "total_spend": spend,
-        "litellm_budget_table": {
-            "budget_id": "b-1",
-            "max_budget": max_budget,
-            "soft_budget": None,
-            "tpm_limit": 500,
-            "rpm_limit": 50,
-            "model_max_budget": None,
-            "budget_duration": "30d",
-            "budget_reset_at": "2026-05-01T00:00:00Z",
-            "allowed_models": None,
-        },
-    }
-    return row
+def _build_membership_for_me(user_id, team_id, *, spend=12.34, max_budget=100.0):
+    """Real LiteLLM_TeamMembership as get_team_membership would return."""
+    return LiteLLM_TeamMembership(
+        user_id=user_id,
+        team_id=team_id,
+        budget_id="b-1",
+        spend=spend,
+        total_spend=spend,
+        litellm_budget_table=LiteLLM_BudgetTableFull(
+            budget_id="b-1",
+            max_budget=max_budget,
+            soft_budget=None,
+            tpm_limit=500,
+            rpm_limit=50,
+            model_max_budget=None,
+            budget_duration="30d",
+            budget_reset_at=datetime(2026, 5, 1, tzinfo=timezone.utc),
+            allowed_models=None,
+            created_at=datetime(2026, 4, 1, tzinfo=timezone.utc),
+        ),
+    )
+
+
+def _patch_member_me_helpers(*, team, membership=None, user=None):
+    """Patch the three auth helpers used by team_member_me with AsyncMocks."""
+    return (
+        patch(
+            "litellm.proxy.management_endpoints.team_endpoints.get_team_object",
+            AsyncMock(return_value=team),
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.team_endpoints.get_team_membership",
+            AsyncMock(return_value=membership),
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.team_endpoints.get_user_object",
+            AsyncMock(return_value=user),
+        ),
+    )
 
 
 @pytest.mark.asyncio
@@ -7283,30 +7304,25 @@ async def test_team_member_me_returns_caller_membership(mock_db_client):
         user_role=LitellmUserRoles.INTERNAL_USER, user_id=caller_id
     )
 
-    mock_db_client.db.litellm_teamtable.find_unique = AsyncMock(
-        return_value=_build_team_row_for_me(
-            team_id,
-            [
-                {"user_id": caller_id, "user_email": None, "role": "user"},
-                {"user_id": other_id, "user_email": None, "role": "admin"},
-            ],
-        )
+    team = _build_team_for_me(
+        team_id,
+        [
+            {"user_id": caller_id, "user_email": None, "role": "user"},
+            {"user_id": other_id, "user_email": None, "role": "admin"},
+        ],
     )
-    mock_db_client.db.litellm_teammembership = MagicMock()
-    mock_db_client.db.litellm_teammembership.find_unique = AsyncMock(
-        return_value=_build_membership_row_for_me(caller_id, team_id, spend=42.0)
-    )
-    mock_user_row = MagicMock()
-    mock_user_row.user_email = caller_id
-    mock_db_client.db.litellm_usertable.find_unique = AsyncMock(
-        return_value=mock_user_row
-    )
+    membership = _build_membership_for_me(caller_id, team_id, spend=42.0)
+    user = LiteLLM_UserTable(user_id=caller_id, user_email=caller_id, max_budget=None)
 
-    response = await team_member_me(
-        http_request=MagicMock(spec=Request),
-        team_id=team_id,
-        user_api_key_dict=caller_auth,
+    p_team, p_membership, p_user = _patch_member_me_helpers(
+        team=team, membership=membership, user=user
     )
+    with p_team, p_membership as mock_get_membership, p_user:
+        response = await team_member_me(
+            http_request=MagicMock(spec=Request),
+            team_id=team_id,
+            user_api_key_dict=caller_auth,
+        )
 
     assert response.user_id == caller_id
     assert response.team_id == team_id
@@ -7315,13 +7331,63 @@ async def test_team_member_me_returns_caller_membership(mock_db_client):
     assert response.team_alias == "team-vec"
     assert response.litellm_budget_table is not None
     assert response.litellm_budget_table.max_budget == 100.0
+    # budget_reset_at must survive end-to-end — proves the BudgetTableFull
+    # variant of the Union is selected (created_at is present), not the base
+    # LiteLLM_BudgetTable which would silently strip this field.
+    assert response.litellm_budget_table.budget_reset_at == datetime(
+        2026, 5, 1, tzinfo=timezone.utc
+    )
 
     # Membership lookup must scope to caller_id, not just team_id — proves the
     # endpoint cannot return another member's row.
-    mock_db_client.db.litellm_teammembership.find_unique.assert_awaited_with(
-        where={"user_id_team_id": {"user_id": caller_id, "team_id": team_id}},
-        include={"litellm_budget_table": True},
+    call_kwargs = mock_get_membership.call_args.kwargs
+    assert call_kwargs["user_id"] == caller_id
+    assert call_kwargs["team_id"] == team_id
+
+
+@pytest.mark.asyncio
+async def test_team_member_me_matches_email_only_member(mock_db_client):
+    """
+    Members onboarded by email may have user_id=None on the stored entry —
+    the lookup must fall back to email matching against the caller, otherwise
+    a valid team member gets a false 404.
+    """
+    from fastapi import Request
+
+    from litellm.proxy.management_endpoints.team_endpoints import team_member_me
+
+    team_id = "team-me-email"
+    caller_id = "u-123"
+    caller_email = "alice@example.com"
+    caller_auth = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id=caller_id,
+        user_email=caller_email,
     )
+
+    # Member entry with user_id=None and email matching the caller's email.
+    team = _build_team_for_me(
+        team_id,
+        [{"user_id": None, "user_email": caller_email, "role": "user"}],
+    )
+    membership = _build_membership_for_me(caller_id, team_id, spend=7.0)
+    user = LiteLLM_UserTable(
+        user_id=caller_id, user_email=caller_email, max_budget=None
+    )
+
+    p_team, p_membership, p_user = _patch_member_me_helpers(
+        team=team, membership=membership, user=user
+    )
+    with p_team, p_membership, p_user:
+        response = await team_member_me(
+            http_request=MagicMock(spec=Request),
+            team_id=team_id,
+            user_api_key_dict=caller_auth,
+        )
+
+    assert response.user_id == caller_id
+    assert response.role == "user"
+    assert response.spend == 7.0
 
 
 @pytest.mark.asyncio
@@ -7337,19 +7403,19 @@ async def test_team_member_me_returns_404_for_non_member(mock_db_client):
         user_role=LitellmUserRoles.INTERNAL_USER, user_id=caller_id
     )
 
-    mock_db_client.db.litellm_teamtable.find_unique = AsyncMock(
-        return_value=_build_team_row_for_me(
-            team_id,
-            [{"user_id": "someone_else", "user_email": None, "role": "user"}],
-        )
+    team = _build_team_for_me(
+        team_id,
+        [{"user_id": "someone_else", "user_email": None, "role": "user"}],
     )
 
-    with pytest.raises(HTTPException) as exc_info:
-        await team_member_me(
-            http_request=MagicMock(spec=Request),
-            team_id=team_id,
-            user_api_key_dict=caller_auth,
-        )
+    p_team, p_membership, p_user = _patch_member_me_helpers(team=team)
+    with p_team, p_membership, p_user:
+        with pytest.raises(HTTPException) as exc_info:
+            await team_member_me(
+                http_request=MagicMock(spec=Request),
+                team_id=team_id,
+                user_api_key_dict=caller_auth,
+            )
     assert exc_info.value.status_code == 404
 
 
@@ -7368,19 +7434,19 @@ async def test_team_member_me_returns_404_for_proxy_admin_not_in_team(
     team_id = "team-me-3"
     mock_admin_auth.user_id = "admin_user_999"
 
-    mock_db_client.db.litellm_teamtable.find_unique = AsyncMock(
-        return_value=_build_team_row_for_me(
-            team_id,
-            [{"user_id": "someone_else", "user_email": None, "role": "user"}],
-        )
+    team = _build_team_for_me(
+        team_id,
+        [{"user_id": "someone_else", "user_email": None, "role": "user"}],
     )
 
-    with pytest.raises(HTTPException) as exc_info:
-        await team_member_me(
-            http_request=MagicMock(spec=Request),
-            team_id=team_id,
-            user_api_key_dict=mock_admin_auth,
-        )
+    p_team, p_membership, p_user = _patch_member_me_helpers(team=team)
+    with p_team, p_membership, p_user:
+        with pytest.raises(HTTPException) as exc_info:
+            await team_member_me(
+                http_request=MagicMock(spec=Request),
+                team_id=team_id,
+                user_api_key_dict=mock_admin_auth,
+            )
     assert exc_info.value.status_code == 404
 
 
@@ -7400,21 +7466,18 @@ async def test_team_member_me_returns_defaults_when_no_membership_row(mock_db_cl
         user_role=LitellmUserRoles.INTERNAL_USER, user_id=caller_id
     )
 
-    mock_db_client.db.litellm_teamtable.find_unique = AsyncMock(
-        return_value=_build_team_row_for_me(
-            team_id,
-            [{"user_id": caller_id, "user_email": None, "role": "user"}],
-        )
+    team = _build_team_for_me(
+        team_id,
+        [{"user_id": caller_id, "user_email": None, "role": "user"}],
     )
-    mock_db_client.db.litellm_teammembership = MagicMock()
-    mock_db_client.db.litellm_teammembership.find_unique = AsyncMock(return_value=None)
-    mock_db_client.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
 
-    response = await team_member_me(
-        http_request=MagicMock(spec=Request),
-        team_id=team_id,
-        user_api_key_dict=caller_auth,
-    )
+    p_team, p_membership, p_user = _patch_member_me_helpers(team=team)
+    with p_team, p_membership, p_user:
+        response = await team_member_me(
+            http_request=MagicMock(spec=Request),
+            team_id=team_id,
+            user_api_key_dict=caller_auth,
+        )
 
     assert response.user_id == caller_id
     assert response.role == "user"
@@ -7442,7 +7505,7 @@ async def test_team_member_me_rejects_team_key_without_user_id(mock_db_client):
 
 @pytest.mark.asyncio
 async def test_team_member_me_returns_404_for_unknown_team(mock_db_client):
-    """Unknown team_id returns 404."""
+    """Unknown team_id returns 404 — propagated from get_team_object."""
     from fastapi import Request, HTTPException
 
     from litellm.proxy.management_endpoints.team_endpoints import team_member_me
@@ -7450,12 +7513,20 @@ async def test_team_member_me_returns_404_for_unknown_team(mock_db_client):
     caller_auth = UserAPIKeyAuth(
         user_role=LitellmUserRoles.INTERNAL_USER, user_id="alice@example.com"
     )
-    mock_db_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=None)
 
-    with pytest.raises(HTTPException) as exc_info:
-        await team_member_me(
-            http_request=MagicMock(spec=Request),
-            team_id="does-not-exist",
-            user_api_key_dict=caller_auth,
-        )
+    # get_team_object raises 404 directly when the team is missing.
+    with patch(
+        "litellm.proxy.management_endpoints.team_endpoints.get_team_object",
+        AsyncMock(
+            side_effect=HTTPException(
+                status_code=404, detail={"error": "Team doesn't exist in db."}
+            )
+        ),
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await team_member_me(
+                http_request=MagicMock(spec=Request),
+                team_id="does-not-exist",
+                user_api_key_dict=caller_auth,
+            )
     assert exc_info.value.status_code == 404
