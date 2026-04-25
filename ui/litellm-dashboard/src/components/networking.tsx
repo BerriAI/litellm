@@ -9986,3 +9986,20 @@ export const listMCPUserCredentials = async (
   if (!response.ok) return [];
   return response.json();
 };
+
+export const deleteMCPUserCredential = async (
+  accessToken: string,
+  serverId: string,
+): Promise<void> => {
+  const url = proxyBaseUrl
+    ? `${proxyBaseUrl}/v1/mcp/server/${serverId}/user-credential`
+    : `/v1/mcp/server/${serverId}/user-credential`;
+  const response = await fetch(url, {
+    method: "DELETE",
+    headers: { [globalLitellmHeaderName]: `Bearer ${accessToken}` },
+  });
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    throw new Error(errorData?.detail?.error ?? errorData?.error ?? "Failed to disconnect credential");
+  }
+};
