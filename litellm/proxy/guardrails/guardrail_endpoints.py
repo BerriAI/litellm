@@ -7,7 +7,7 @@ import inspect
 import json
 import os
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Type, TypeVar, Union, cast
+from typing import Any, Dict, List, Literal, Optional, Type, TypeVar, Union, cast
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -363,6 +363,21 @@ async def create_guardrail(
             )
             verbose_proxy_logger.info(
                 f"Immediate sync: Successfully initialized guardrail '{guardrail_name}' (ID: {guardrail_id})"
+            )
+        except (ValueError, TypeError) as init_error:
+            # Configuration error — roll back the DB write so the guardrail isn't orphaned
+            if prisma_client is not None:
+                try:
+                    await prisma_client.db.litellm_guardrailstable.delete(
+                        where={"guardrail_id": guardrail_id}
+                    )
+                except Exception as rollback_err:
+                    verbose_proxy_logger.warning(
+                        f"Rollback failed for guardrail '{guardrail_id}': {rollback_err}"
+                    )
+            raise HTTPException(
+                status_code=400,
+                detail=f"Guardrail configuration error: {init_error}",
             )
         except Exception as init_error:
             verbose_proxy_logger.warning(
@@ -2181,10 +2196,28 @@ async def apply_guardrail(
                 detail=f"Guardrail '{request.guardrail_name}' not found. Please ensure the guardrail is configured in your LiteLLM proxy.",
             )
 
+        request_data: dict = {}
+        if request.messages:
+            request_data["messages"] = request.messages
+
+        # Auto-detect input_type: if the caller didn't specify "response" but the
+        # guardrail only runs post_call (e.g. LLM-as-a-judge), use "response" so
+        # the test actually exercises the guardrail logic.
+        from litellm.types.guardrails import GuardrailEventHooks
+
+        resolved_input_type = request.input_type
+        if resolved_input_type == "request":
+            hook = getattr(active_guardrail, "event_hook", None)
+            if hook == GuardrailEventHooks.post_call or hook == "post_call":
+                resolved_input_type = "response"
+
+        _input_type: Literal["request", "response"] = (
+            "response" if resolved_input_type == "response" else "request"
+        )
         guardrailed_inputs = await active_guardrail.apply_guardrail(
             inputs={"texts": [request.text]},
-            request_data={},
-            input_type="request",
+            request_data=request_data,
+            input_type=_input_type,
         )
         response_text = guardrailed_inputs.get("texts", [])
 
