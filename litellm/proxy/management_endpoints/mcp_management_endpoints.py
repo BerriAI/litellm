@@ -37,9 +37,10 @@ from fastapi import (
 from fastapi.responses import JSONResponse
 
 try:
-    from prisma.errors import RecordNotFoundError
+    from prisma.errors import RecordNotFoundError, UniqueViolationError
 except ImportError:
     RecordNotFoundError = Exception  # type: ignore
+    UniqueViolationError = Exception  # type: ignore
 
 import litellm
 from litellm._logging import verbose_logger, verbose_proxy_logger
@@ -51,12 +52,34 @@ from litellm.proxy._experimental.mcp_server.utils import (
 from litellm.proxy._experimental.mcp_server.utils import (
     validate_and_normalize_mcp_server_payload as _base_validate_and_normalize_mcp_server_payload,
 )
+from litellm.proxy.common_utils.encrypt_decrypt_utils import (
+    decrypt_value_helper,
+    encrypt_value_helper,
+)
 
 router = APIRouter(prefix="/v1/mcp", tags=["mcp"])
 
 MCP_AVAILABLE: bool = True
 
 TEMPORARY_MCP_SERVER_TTL_SECONDS = 300
+TEMPORARY_MCP_SERVER_REDIS_KEY_PREFIX = "litellm:mcp:temporary_server"
+
+
+def does_mcp_server_exist(
+    mcp_server_records: Iterable[Any], mcp_server_id: str
+) -> bool:
+    """
+    Check if the mcp server with the given id exists in the iterable of mcp servers.
+
+    Defined at module level (outside ``if MCP_AVAILABLE``) so it can be imported
+    on Python < 3.10 where the ``mcp`` package is unavailable.
+    """
+    for mcp_server_record in mcp_server_records:
+        if mcp_server_record.server_id == mcp_server_id:
+            return True
+    return False
+
+
 DEFAULT_MCP_REGISTRY_VERSION = "1.0.0"
 LITELLM_MCP_SERVER_NAME = "litellm-mcp-server"
 LITELLM_MCP_SERVER_DESCRIPTION = "MCP Server for LiteLLM"
@@ -311,13 +334,115 @@ if MCP_AVAILABLE:
         )
         return server
 
-    def get_cached_temporary_mcp_server(
+    async def _cache_temporary_mcp_server_in_redis(
+        server: MCPServer, ttl_seconds: int
+    ) -> None:
+        """
+        Best-effort write-through to Redis so temporary MCP OAuth sessions are
+        shared across proxy instances. Keep local in-memory cache as fallback.
+        """
+        if litellm.cache is None or not hasattr(litellm.cache, "cache"):
+            return
+        cache_backend = getattr(litellm.cache, "cache", None)
+        if cache_backend is None or not hasattr(cache_backend, "async_set_cache"):
+            return
+
+        payload: Dict[str, Any] = server.model_dump(mode="json")
+        payload_json = json.dumps(payload)
+        try:
+            encrypted_payload = encrypt_value_helper(payload_json)
+        except Exception as e:
+            verbose_proxy_logger.debug(
+                f"Failed to encrypt temporary MCP server payload for Redis cache: {str(e)}"
+            )
+            return
+
+        if not isinstance(encrypted_payload, str):
+            verbose_proxy_logger.debug(
+                "Encrypted temporary MCP payload is not a string; skipping Redis cache write"
+            )
+            return
+
+        try:
+            await cache_backend.async_set_cache(
+                key=f"{TEMPORARY_MCP_SERVER_REDIS_KEY_PREFIX}:{server.server_id}",
+                value=encrypted_payload,
+                ttl=max(1, ttl_seconds),
+            )
+        except Exception as e:
+            verbose_proxy_logger.debug(
+                f"Failed to write temporary MCP server to Redis cache: {str(e)}"
+            )
+
+    async def _get_temporary_mcp_server_from_redis(
+        server_id: str,
+    ) -> Optional[MCPServer]:
+        """
+        Best-effort read from Redis shared cache. Returns None on miss/errors.
+
+        Values must be encrypted strings (same contract as _cache_temporary_mcp_server_in_redis);
+        legacy plaintext dict payloads are rejected.
+        """
+        if litellm.cache is None or not hasattr(litellm.cache, "cache"):
+            return None
+        cache_backend = getattr(litellm.cache, "cache", None)
+        if cache_backend is None or not hasattr(cache_backend, "async_get_cache"):
+            return None
+
+        try:
+            cached_server = await cache_backend.async_get_cache(
+                key=f"{TEMPORARY_MCP_SERVER_REDIS_KEY_PREFIX}:{server_id}"
+            )
+        except Exception as e:
+            verbose_proxy_logger.debug(
+                f"Failed reading temporary MCP server from Redis cache: {str(e)}"
+            )
+            return None
+
+        if not isinstance(cached_server, str):
+            verbose_proxy_logger.debug(
+                "Temporary MCP Redis cache value must be an encrypted string; rejecting non-string payload"
+            )
+            return None
+
+        decrypted_json = decrypt_value_helper(
+            value=cached_server,
+            key="temporary_mcp_server",
+            exception_type="debug",
+        )
+        if decrypted_json is None:
+            return None
+        try:
+            loaded = json.loads(decrypted_json)
+        except Exception as e:
+            verbose_proxy_logger.debug(
+                f"Invalid decrypted temporary MCP payload in Redis cache: {str(e)}"
+            )
+            return None
+        if not isinstance(loaded, dict):
+            return None
+        payload_dict: Dict[str, Any] = loaded
+
+        try:
+            return MCPServer(**payload_dict)
+        except Exception as e:
+            verbose_proxy_logger.debug(
+                f"Invalid temporary MCP server payload in Redis cache: {str(e)}"
+            )
+            return None
+
+    async def get_cached_temporary_mcp_server(
         server_id: str,
     ) -> Optional[MCPServer]:
         _prune_expired_temporary_mcp_servers()
         entry = _temporary_mcp_servers.get(server_id)
         if entry is None:
-            return None
+            redis_server = await _get_temporary_mcp_server_from_redis(server_id)
+            if redis_server is None:
+                return None
+            # Intentionally avoid repopulating local cache from Redis to prevent
+            # extending effective lifetime beyond the remaining Redis TTL.
+            return redis_server
         return entry.server
 
     def _redact_mcp_credentials(
@@ -424,17 +549,17 @@ if MCP_AVAILABLE:
             inherited_credentials["scopes"] = existing_server.scopes
         # AWS SigV4 fields
         if existing_server.aws_access_key_id:
-            inherited_credentials[
-                "aws_access_key_id"
-            ] = existing_server.aws_access_key_id
+            inherited_credentials["aws_access_key_id"] = (
+                existing_server.aws_access_key_id
+            )
         if existing_server.aws_secret_access_key:
-            inherited_credentials[
-                "aws_secret_access_key"
-            ] = existing_server.aws_secret_access_key
+            inherited_credentials["aws_secret_access_key"] = (
+                existing_server.aws_secret_access_key
+            )
         if existing_server.aws_session_token:
-            inherited_credentials[
-                "aws_session_token"
-            ] = existing_server.aws_session_token
+            inherited_credentials["aws_session_token"] = (
+                existing_server.aws_session_token
+            )
         if existing_server.aws_region_name:
             inherited_credentials["aws_region_name"] = existing_server.aws_region_name
         if existing_server.aws_service_name:
@@ -501,17 +626,6 @@ if MCP_AVAILABLE:
                 detail={"error": message},
             )
         return prisma_client
-
-    def does_mcp_server_exist(
-        mcp_server_records: Iterable[LiteLLM_MCPServerTable], mcp_server_id: str
-    ) -> bool:
-        """
-        Check if the mcp server with the given id exists in the iterable of mcp servers
-        """
-        for mcp_server_record in mcp_server_records:
-            if mcp_server_record.server_id == mcp_server_id:
-                return True
-        return False
 
     # Router to fetch all MCP tools available for the current key
 
@@ -1318,6 +1432,10 @@ if MCP_AVAILABLE:
                 temporary_server,
                 ttl_seconds=TEMPORARY_MCP_SERVER_TTL_SECONDS,
             )
+            await _cache_temporary_mcp_server_in_redis(
+                temporary_server,
+                ttl_seconds=TEMPORARY_MCP_SERVER_TTL_SECONDS,
+            )
         except Exception as e:
             verbose_proxy_logger.exception(
                 f"Error caching temporary mcp server: {str(e)}"
@@ -1329,18 +1447,24 @@ if MCP_AVAILABLE:
 
         return _redact_mcp_credentials(temp_record)
 
-    def _get_cached_temporary_mcp_server_or_404(server_id: str) -> MCPServer:
-        server = get_cached_temporary_mcp_server(server_id)
+    async def _get_cached_temporary_mcp_server_or_404(
+        server_id: str, request: Optional[Request] = None
+    ) -> MCPServer:
+        server = await get_cached_temporary_mcp_server(server_id)
         if server is None:
             # Fall back to real DB/config server (e.g. for the user-side OAuth flow
             # which calls these endpoints with a real server_id, not a temp session id).
             from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
                 global_mcp_server_manager,
             )
+            from litellm.proxy.auth.ip_address_utils import IPAddressUtils
 
+            client_ip = IPAddressUtils.get_mcp_client_ip(request) if request else None
             server = global_mcp_server_manager.get_mcp_server_by_id(
                 server_id
-            ) or global_mcp_server_manager.get_mcp_server_by_name(server_id)
+            ) or global_mcp_server_manager.get_mcp_server_by_name(
+                server_id, client_ip=client_ip
+            )
         if server is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -1351,10 +1475,12 @@ if MCP_AVAILABLE:
     @router.get(
         "/server/oauth/{server_id}/authorize",
         include_in_schema=False,
+        dependencies=[Depends(user_api_key_auth)],
     )
     async def mcp_authorize(
         request: Request,
         server_id: str,
+        user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
         client_id: Optional[str] = None,
         redirect_uri: str = Query(...),
         state: str = "",
@@ -1363,7 +1489,9 @@ if MCP_AVAILABLE:
         response_type: Optional[str] = None,
         scope: Optional[str] = None,
     ):
-        mcp_server = _get_cached_temporary_mcp_server_or_404(server_id)
+        mcp_server = await _get_cached_temporary_mcp_server_or_404(
+            server_id, request=request
+        )
         # Use the server's stored client_id when the caller doesn't supply one
         resolved_client_id = mcp_server.client_id or client_id or ""
         if not resolved_client_id:
@@ -1392,10 +1520,12 @@ if MCP_AVAILABLE:
     @router.post(
         "/server/oauth/{server_id}/token",
         include_in_schema=False,
+        dependencies=[Depends(user_api_key_auth)],
     )
     async def mcp_token(
         request: Request,
         server_id: str,
+        user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
         grant_type: str = Form(...),
         code: Optional[str] = Form(None),
         redirect_uri: Optional[str] = Form(None),
@@ -1405,7 +1535,9 @@ if MCP_AVAILABLE:
         refresh_token: Optional[str] = Form(None),
         scope: Optional[str] = Form(None),
     ):
-        mcp_server = _get_cached_temporary_mcp_server_or_404(server_id)
+        mcp_server = await _get_cached_temporary_mcp_server_or_404(
+            server_id, request=request
+        )
         resolved_client_id = mcp_server.client_id or client_id or ""
         if not resolved_client_id:
             raise HTTPException(
@@ -1434,9 +1566,16 @@ if MCP_AVAILABLE:
     @router.post(
         "/server/oauth/{server_id}/register",
         include_in_schema=False,
+        dependencies=[Depends(user_api_key_auth)],
     )
-    async def mcp_register(request: Request, server_id: str):
-        mcp_server = _get_cached_temporary_mcp_server_or_404(server_id)
+    async def mcp_register(
+        request: Request,
+        server_id: str,
+        user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    ):
+        mcp_server = await _get_cached_temporary_mcp_server_or_404(
+            server_id, request=request
+        )
         request_data = await _read_request_body(request=request)
         data: dict = {**request_data}
 
@@ -2031,3 +2170,192 @@ if MCP_AVAILABLE:
                 f"Failed to load OpenAPI registry from {_OPENAPI_REGISTRY_PATH}: {e}"
             )
             return {"apis": []}
+
+    # ---------------------------------------------------------------------------
+    # MCP Toolset endpoints
+    # ---------------------------------------------------------------------------
+
+    from litellm.proxy._experimental.mcp_server.toolset_db import (
+        create_mcp_toolset,
+        delete_mcp_toolset,
+        get_mcp_toolset,
+        list_mcp_toolsets,
+        update_mcp_toolset,
+    )
+    from litellm.types.mcp_server.mcp_toolset import (
+        NewMCPToolsetRequest,
+        UpdateMCPToolsetRequest,
+    )
+
+    @router.post(
+        "/toolset",
+        description="Create a new MCP toolset (admin only)",
+        status_code=status.HTTP_201_CREATED,
+    )
+    @management_endpoint_wrapper
+    async def add_mcp_toolset(
+        payload: NewMCPToolsetRequest,
+        user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+        litellm_changed_by: Optional[str] = Header(None),
+    ):
+        """Create a named toolset — a curated selection of {server_id, tool_name} pairs."""
+        prisma_client = get_prisma_client_or_throw(
+            "Database not connected. Connect a database to your proxy"
+        )
+        if LitellmUserRoles.PROXY_ADMIN != user_api_key_dict.user_role:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={"error": "Only proxy admins can create MCP toolsets."},
+            )
+        touched_by = (
+            litellm_changed_by or user_api_key_dict.user_id or LITELLM_PROXY_ADMIN_NAME
+        )
+        try:
+            result = await create_mcp_toolset(prisma_client, payload, touched_by)
+        except UniqueViolationError:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "error": f"A toolset named '{payload.toolset_name}' already exists."
+                },
+            )
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+
+        global_mcp_server_manager.invalidate_toolset_cache()
+        return result
+
+    @router.get(
+        "/toolset",
+        description="List MCP toolsets accessible to the calling key",
+    )
+    @management_endpoint_wrapper
+    async def fetch_mcp_toolsets(
+        user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    ):
+        """Return toolsets the calling key is allowed to access."""
+        prisma_client = get_prisma_client_or_throw(
+            "Database not connected. Connect a database to your proxy"
+        )
+        is_admin = _user_has_admin_view(user_api_key_dict)
+        op = user_api_key_dict.object_permission
+        # mcp_toolsets=None or [] both mean "not restricted by toolsets".
+        # For admins: either value → no restriction → return all.
+        # For non-admins: either value → no toolsets explicitly granted → return nothing.
+        # (An admin whose DB row has mcp_toolsets=[] should still see all toolsets.)
+        raw_toolsets = getattr(op, "mcp_toolsets", None) if op else None
+        if not raw_toolsets:
+            if is_admin:
+                return await list_mcp_toolsets(prisma_client)
+            return []
+        return await list_mcp_toolsets(prisma_client, toolset_ids=raw_toolsets)
+
+    @router.get(
+        "/toolset/{toolset_id}",
+        description="Get a specific MCP toolset by ID",
+    )
+    @management_endpoint_wrapper
+    async def fetch_mcp_toolset(
+        toolset_id: str,
+        user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    ):
+        prisma_client = get_prisma_client_or_throw(
+            "Database not connected. Connect a database to your proxy"
+        )
+        # Non-admin keys may only fetch toolsets they've been explicitly granted.
+        if not _user_has_admin_view(user_api_key_dict):
+            op = user_api_key_dict.object_permission
+            granted = getattr(op, "mcp_toolsets", None) if op else None
+            if granted is None or toolset_id not in granted:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail={"error": "API key does not have access to this toolset."},
+                )
+        toolset = await get_mcp_toolset(prisma_client, toolset_id)
+        if toolset is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={"error": f"Toolset '{toolset_id}' not found."},
+            )
+        return toolset
+
+    @router.put(
+        "/toolset",
+        description="Update an existing MCP toolset (admin only)",
+    )
+    @management_endpoint_wrapper
+    async def edit_mcp_toolset(
+        payload: UpdateMCPToolsetRequest,
+        user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+        litellm_changed_by: Optional[str] = Header(None),
+    ):
+        prisma_client = get_prisma_client_or_throw(
+            "Database not connected. Connect a database to your proxy"
+        )
+        if LitellmUserRoles.PROXY_ADMIN != user_api_key_dict.user_role:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={"error": "Only proxy admins can update MCP toolsets."},
+            )
+        touched_by = (
+            litellm_changed_by or user_api_key_dict.user_id or LITELLM_PROXY_ADMIN_NAME
+        )
+        try:
+            result = await update_mcp_toolset(prisma_client, payload, touched_by)
+        except UniqueViolationError:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "error": (
+                        f"A toolset named '{payload.toolset_name}' already exists."
+                        if payload.toolset_name
+                        else "A toolset with that name already exists."
+                    )
+                },
+            )
+        if result is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={"error": f"Toolset '{payload.toolset_id}' not found."},
+            )
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+
+        global_mcp_server_manager.invalidate_toolset_cache(
+            getattr(payload, "toolset_id", None)
+        )
+        return result
+
+    @router.delete(
+        "/toolset/{toolset_id}",
+        description="Delete an MCP toolset (admin only)",
+        status_code=status.HTTP_202_ACCEPTED,
+    )
+    @management_endpoint_wrapper
+    async def remove_mcp_toolset(
+        toolset_id: str,
+        user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+        litellm_changed_by: Optional[str] = Header(None),
+    ):
+        prisma_client = get_prisma_client_or_throw(
+            "Database not connected. Connect a database to your proxy"
+        )
+        if LitellmUserRoles.PROXY_ADMIN != user_api_key_dict.user_role:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={"error": "Only proxy admins can delete MCP toolsets."},
+            )
+        deleted = await delete_mcp_toolset(prisma_client, toolset_id)
+        if deleted is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={"error": f"Toolset '{toolset_id}' not found."},
+            )
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+
+        global_mcp_server_manager.invalidate_toolset_cache(toolset_id)
+        return Response(status_code=status.HTTP_202_ACCEPTED)

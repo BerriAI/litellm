@@ -2,9 +2,17 @@
 
 import pytest
 
+import litellm
 from litellm.caching import DualCache
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
+from litellm.llms.base_llm.guardrail_translation.utils import (
+    effective_skip_system_message_for_guardrail,
+    openai_messages_without_system,
+)
+from litellm.llms.openai.chat.guardrail_translation.handler import (
+    OpenAIChatCompletionsHandler,
+)
 from litellm.llms.base_llm.ocr.transformation import OCRPage, OCRResponse
 from litellm.llms.mistral.ocr.guardrail_translation.handler import OCRHandler
 from litellm.proxy._experimental.mcp_server.guardrail_translation.handler import (
@@ -68,6 +76,110 @@ def _inject_mcp_handler_mapping():
 
 
 class TestUnifiedLLMGuardrails:
+    class TestSkipSystemMessageForChatCompletions:
+        def test_openai_messages_without_system(self):
+            msgs = [
+                {"role": "system", "content": "sys"},
+                {"role": "user", "content": "hi"},
+            ]
+            out = openai_messages_without_system(msgs)
+            assert len(out) == 1
+            assert out[0]["role"] == "user"
+            assert msgs[0]["content"] == "sys"
+
+        def test_effective_skip_respects_per_guardrail_over_global(self, monkeypatch):
+            monkeypatch.setattr(
+                litellm, "skip_system_message_in_guardrail", True, raising=False
+            )
+
+            class G:
+                skip_system_message_in_guardrail = False
+
+            assert effective_skip_system_message_for_guardrail(G()) is False
+
+            class G2:
+                skip_system_message_in_guardrail = None
+
+            assert effective_skip_system_message_for_guardrail(G2()) is True
+
+        @pytest.mark.asyncio
+        async def test_openai_handler_skips_system_in_guardrail_inputs(
+            self, monkeypatch
+        ):
+            monkeypatch.setattr(
+                litellm, "skip_system_message_in_guardrail", True, raising=False
+            )
+
+            captured = {}
+
+            class MockGuardrail:
+                skip_system_message_in_guardrail = None
+
+                async def apply_guardrail(
+                    self, inputs, request_data, input_type, logging_obj=None
+                ):
+                    captured["inputs"] = inputs
+                    return inputs
+
+            data = {
+                "messages": [
+                    {"role": "system", "content": "secret system"},
+                    {"role": "user", "content": "hello"},
+                ],
+                "model": "gpt-4o",
+            }
+
+            handler = OpenAIChatCompletionsHandler()
+            await handler.process_input_messages(
+                data=data,
+                guardrail_to_apply=MockGuardrail(),
+                litellm_logging_obj=None,
+            )
+
+            assert captured["inputs"]["texts"] == ["hello"]
+            sm = captured["inputs"].get("structured_messages") or []
+            assert all(m.get("role") != "system" for m in sm)
+            assert data["messages"][0]["content"] == "secret system"
+
+        @pytest.mark.asyncio
+        async def test_openai_handler_per_guardrail_skip_false_overrides_global(
+            self, monkeypatch
+        ):
+            monkeypatch.setattr(
+                litellm, "skip_system_message_in_guardrail", True, raising=False
+            )
+
+            captured = {}
+
+            class MockGuardrail:
+                skip_system_message_in_guardrail = False
+
+                async def apply_guardrail(
+                    self, inputs, request_data, input_type, logging_obj=None
+                ):
+                    captured["inputs"] = inputs
+                    return inputs
+
+            data = {
+                "messages": [
+                    {"role": "system", "content": "sys"},
+                    {"role": "user", "content": "u"},
+                ],
+            }
+
+            await OpenAIChatCompletionsHandler().process_input_messages(
+                data=data,
+                guardrail_to_apply=MockGuardrail(),
+                litellm_logging_obj=None,
+            )
+
+            assert "sys" in captured["inputs"]["texts"]
+            roles = {
+                m.get("role")
+                for m in (captured["inputs"].get("structured_messages") or [])
+            }
+            assert "system" in roles
+
     class TestAsyncPreCallHook:
         @pytest.mark.asyncio
         async def test_uses_mcp_event_type(self):
@@ -78,9 +190,7 @@ class TestUnifiedLLMGuardrails:
 
             data = {
                 "guardrail_to_apply": guardrail,
-                "messages": [
-                    {"role": "user", "content": "Tool: test\nArguments: {}"}
-                ],
+                "messages": [{"role": "user", "content": "Tool: test\nArguments: {}"}],
                 "model": "mcp-tool-call",
             }
 
@@ -102,9 +212,7 @@ class TestUnifiedLLMGuardrails:
 
             data = {
                 "guardrail_to_apply": guardrail,
-                "messages": [
-                    {"role": "user", "content": "Tool: test\nArguments: {}"}
-                ],
+                "messages": [{"role": "user", "content": "Tool: test\nArguments: {}"}],
                 "model": "mcp-tool-call",
             }
 
@@ -168,6 +276,7 @@ class TestUnifiedLLMGuardrails:
                     guardrail_to_apply,
                     litellm_logging_obj=None,
                     user_api_key_dict=None,
+                    request_data=None,
                 ):
                     # Simulate what the real handler does:
                     # put combined text in first chunk, clear the rest
@@ -200,10 +309,12 @@ class TestUnifiedLLMGuardrails:
             chunks = []
             for i in range(10):
                 chunk = ModelResponseStream(
-                    choices=[StreamingChoices(
-                        delta=Delta(content=f"word{i} ", role="assistant"),
-                        finish_reason=None,
-                    )],
+                    choices=[
+                        StreamingChoices(
+                            delta=Delta(content=f"word{i} ", role="assistant"),
+                            finish_reason=None,
+                        )
+                    ],
                 )
                 chunks.append(chunk)
 
@@ -228,7 +339,9 @@ class TestUnifiedLLMGuardrails:
                 response=mock_stream(),
                 request_data=request_data,
             ):
-                content = item.choices[0].delta.content if item.choices[0].delta else None
+                content = (
+                    item.choices[0].delta.content if item.choices[0].delta else None
+                )
                 yielded_contents.append(content)
 
             # Every chunk should have non-empty content
@@ -271,10 +384,15 @@ class TestUnifiedLLMGuardrails:
             assert guardrail.event_history == [GuardrailEventHooks.pre_call]
             assert len(guardrail.apply_calls) == 1
             assert guardrail.apply_calls[0]["input_type"] == "request"
-            assert "https://arxiv.org/pdf/2201.04234" in guardrail.apply_calls[0]["inputs"]["texts"]
+            assert (
+                "https://arxiv.org/pdf/2201.04234"
+                in guardrail.apply_calls[0]["inputs"]["texts"]
+            )
 
             # Data should be returned with document intact
-            assert result["document"]["document_url"] == "https://arxiv.org/pdf/2201.04234"
+            assert (
+                result["document"]["document_url"] == "https://arxiv.org/pdf/2201.04234"
+            )
 
         @pytest.mark.asyncio
         async def test_moderation_hook_invokes_ocr_handler(self):
@@ -302,7 +420,10 @@ class TestUnifiedLLMGuardrails:
 
             assert guardrail.event_history == [GuardrailEventHooks.during_call]
             assert len(guardrail.apply_calls) == 1
-            assert "https://example.com/scan.png" in guardrail.apply_calls[0]["inputs"]["texts"]
+            assert (
+                "https://example.com/scan.png"
+                in guardrail.apply_calls[0]["inputs"]["texts"]
+            )
 
         @pytest.mark.asyncio
         async def test_post_call_success_hook_guardrails_ocr_output(self):
@@ -318,7 +439,9 @@ class TestUnifiedLLMGuardrails:
                 def should_run_guardrail(self, data, event_type):  # type: ignore[override]
                     return True
 
-                async def apply_guardrail(self, inputs, request_data, input_type, **kwargs):
+                async def apply_guardrail(
+                    self, inputs, request_data, input_type, **kwargs
+                ):
                     texts = inputs.get("texts", [])
                     return {"texts": [t.replace("SECRET", "[REDACTED]") for t in texts]}
 

@@ -431,7 +431,7 @@ class TestLangfuseLogging:
             await self._verify_langfuse_call(
                 setup["mock_post"], "completion_with_no_choices.json", setup["trace_id"]
             )
-    
+
     @pytest.mark.asyncio
     @pytest.mark.flaky(retries=3, delay=1)
     async def test_langfuse_logging_completion_with_bedrock_llm_response(
@@ -448,12 +448,12 @@ class TestLangfuseLogging:
                     completion_tokens=10,
                     total_tokens=20,
                 ),
-                model="anthropic.claude-3-5-sonnet-20240620-v1:0",
+                model="anthropic.claude-haiku-4-5-20251001-v1:0",
                 object="chat.completion",
                 created=1723081200,
             ).model_dump()
             await litellm.acompletion(
-                model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+                model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
                 messages=[{"role": "user", "content": "Hello!"}],
                 mock_response=mock_response,
                 metadata={"trace_id": setup["trace_id"]},
@@ -462,8 +462,11 @@ class TestLangfuseLogging:
                 aws_region="us-east-1",
             )
             await self._verify_langfuse_call(
-                setup["mock_post"], "completion_with_bedrock_call.json", setup["trace_id"]
+                setup["mock_post"],
+                "completion_with_bedrock_call.json",
+                setup["trace_id"],
             )
+
     @pytest.mark.asyncio
     @pytest.mark.flaky(retries=3, delay=1)
     async def test_langfuse_logging_completion_with_vertex_llm_response(
@@ -493,7 +496,9 @@ class TestLangfuseLogging:
                 api_key="my-mock-credentials-2",
             )
             await self._verify_langfuse_call(
-                setup["mock_post"], "completion_with_vertex_call.json", setup["trace_id"]
+                setup["mock_post"],
+                "completion_with_vertex_call.json",
+                setup["trace_id"],
             )
 
     @pytest.mark.asyncio
@@ -561,7 +566,7 @@ class TestLangfuseLogging:
                         "model": "gpt-3.5-turbo",
                         "mock_response": "Hello! How can I assist you today?",
                         "api_key": "test_api_key",
-                    }
+                    },
                 }
             ]
         )
@@ -584,5 +589,7 @@ class TestLangfuseLogging:
                 metadata={"trace_id": mock_setup["trace_id"]},
             )
             await self._verify_langfuse_call(
-                mock_setup["mock_post"], "completion_with_router.json", mock_setup["trace_id"]
+                mock_setup["mock_post"],
+                "completion_with_router.json",
+                mock_setup["trace_id"],
             )

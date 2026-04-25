@@ -17,8 +17,15 @@ from litellm.constants import (
     MCP_OAUTH2_TOKEN_CACHE_MAX_SIZE,
     MCP_OAUTH2_TOKEN_CACHE_MIN_TTL,
     MCP_OAUTH2_TOKEN_EXPIRY_BUFFER_SECONDS,
+    MCP_PER_USER_TOKEN_DEFAULT_TTL,
+    MCP_PER_USER_TOKEN_EXPIRY_BUFFER_SECONDS,
+    MCP_PER_USER_TOKEN_REDIS_KEY_PREFIX,
 )
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+from litellm.proxy.common_utils.encrypt_decrypt_utils import (
+    decrypt_value_helper,
+    encrypt_value_helper,
+)
 from litellm.types.llms.custom_http import httpxSpecialProvider
 
 if TYPE_CHECKING:
@@ -150,6 +157,107 @@ class MCPOAuth2TokenCache(InMemoryCache):
 
 
 mcp_oauth2_token_cache = MCPOAuth2TokenCache()
+
+
+def _compute_per_user_token_ttl(server: "MCPServer", expires_in: Optional[int]) -> int:
+    """Compute Redis TTL for a per-user token.
+
+    Uses server.token_storage_ttl_seconds when configured; otherwise derives
+    TTL from expires_in minus the expiry buffer; falls back to the default TTL.
+    """
+    if server.token_storage_ttl_seconds is not None:
+        return max(server.token_storage_ttl_seconds, 1)
+    if expires_in is not None:
+        return max(
+            expires_in - MCP_PER_USER_TOKEN_EXPIRY_BUFFER_SECONDS,
+            1,
+        )
+    return MCP_PER_USER_TOKEN_DEFAULT_TTL
+
+
+class MCPPerUserTokenCache:
+    """Redis-backed cache for per-user OAuth2 access tokens.
+
+    Uses LiteLLM's existing ``user_api_key_cache`` (DualCache with optional
+    Redis backend).  Tokens are NaCl-encrypted with ``encrypt_value_helper``
+    before storage so they are safe at rest in Redis.
+
+    Redis key format: ``mcp:per_user_token:{user_id}:{server_id}``
+    Redis value: ``encrypt_value_helper(access_token)`` — URL-safe base64
+    """
+
+    def _cache_key(self, user_id: str, server_id: str) -> str:
+        return f"{MCP_PER_USER_TOKEN_REDIS_KEY_PREFIX}:{user_id}:{server_id}"
+
+    async def get(self, user_id: str, server_id: str) -> Optional[str]:
+        """Return the plaintext access_token, or None on miss/error."""
+        try:
+            from litellm.proxy.proxy_server import user_api_key_cache  # noqa: PLC0415
+
+            key = self._cache_key(user_id, server_id)
+            encrypted = await user_api_key_cache.async_get_cache(key)
+            if encrypted is None:
+                return None
+            plaintext = decrypt_value_helper(
+                encrypted,
+                key="mcp_per_user_token",
+                exception_type="debug",
+            )
+            return plaintext or None
+        except Exception as exc:
+            verbose_logger.debug(
+                "MCPPerUserTokenCache.get failed for user=%s server=%s: %s",
+                user_id,
+                server_id,
+                exc,
+            )
+            return None
+
+    async def set(
+        self,
+        user_id: str,
+        server_id: str,
+        access_token: str,
+        ttl: int,
+    ) -> None:
+        """Store NaCl-encrypted access_token in Redis with the given TTL."""
+        try:
+            from litellm.proxy.proxy_server import user_api_key_cache  # noqa: PLC0415
+
+            key = self._cache_key(user_id, server_id)
+            encrypted = encrypt_value_helper(access_token)
+            await user_api_key_cache.async_set_cache(key, encrypted, ttl=ttl)
+            verbose_logger.debug(
+                "MCPPerUserTokenCache.set: cached token for user=%s server=%s ttl=%ds",
+                user_id,
+                server_id,
+                ttl,
+            )
+        except Exception as exc:
+            verbose_logger.debug(
+                "MCPPerUserTokenCache.set failed for user=%s server=%s: %s",
+                user_id,
+                server_id,
+                exc,
+            )
+
+    async def delete(self, user_id: str, server_id: str) -> None:
+        """Invalidate the cached token (removes from both in-memory and Redis layers)."""
+        try:
+            from litellm.proxy.proxy_server import user_api_key_cache  # noqa: PLC0415
+
+            key = self._cache_key(user_id, server_id)
+            await user_api_key_cache.async_delete_cache(key)
+        except Exception as exc:
+            verbose_logger.debug(
+                "MCPPerUserTokenCache.delete failed for user=%s server=%s: %s",
+                user_id,
+                server_id,
+                exc,
+            )
+
+
+mcp_per_user_token_cache = MCPPerUserTokenCache()
 
 
 async def resolve_mcp_auth(
