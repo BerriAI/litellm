@@ -5691,13 +5691,16 @@ async def get_available_models_for_user(
         from litellm.proxy.auth.auth_checks import get_user_object
         from litellm.proxy.auth.model_checks import get_user_models
 
-        user_object = await get_user_object(
-            user_id=user_api_key_dict.user_id,
-            prisma_client=prisma_client,
-            user_api_key_cache=user_api_key_cache,
-            user_id_upsert=False,
-            proxy_logging_obj=proxy_logging_obj,
-        )
+        try:
+            user_object = await get_user_object(
+                user_id=user_api_key_dict.user_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                user_id_upsert=False,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+        except Exception:
+            user_object = None
         if user_object and user_object.models:
             expanded_user_models = get_user_models(
                 user_models=user_object.models,
