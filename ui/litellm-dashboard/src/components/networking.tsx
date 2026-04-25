@@ -1414,59 +1414,6 @@ export const teamInfoCall = async (accessToken: string, teamID: string | null) =
   }
 };
 
-export interface TeamMemberInfo {
-  user_id: string;
-  team_id: string;
-  team_alias?: string | null;
-  role?: string | null;
-  user_email?: string | null;
-  budget_id?: string | null;
-  spend?: number | null;
-  total_spend?: number | null;
-  litellm_budget_table?: {
-    budget_id?: string;
-    soft_budget?: number | null;
-    max_budget?: number | null;
-    max_parallel_requests?: number | null;
-    tpm_limit?: number | null;
-    rpm_limit?: number | null;
-    model_max_budget?: Record<string, number> | null;
-    budget_duration?: string | null;
-    budget_reset_at?: string | null;
-    allowed_models?: string[] | null;
-  } | null;
-}
-
-export const teamMemberMeCall = async (
-  accessToken: string,
-  teamID: string,
-): Promise<TeamMemberInfo> => {
-  try {
-    const url = proxyBaseUrl
-      ? `${proxyBaseUrl}/team/${encodeURIComponent(teamID)}/members/me`
-      : `/team/${encodeURIComponent(teamID)}/members/me`;
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    return (await response.json()) as TeamMemberInfo;
-  } catch (error) {
-    console.error("Failed to fetch team member 'me' info:", error);
-    throw error;
-  }
-};
-
 type TeamListResponse = {
   teams: Team[];
   total: number;

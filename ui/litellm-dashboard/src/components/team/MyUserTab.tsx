@@ -1,14 +1,12 @@
-import { TeamMemberInfo } from "@/components/networking";
 import { formatBudgetReset } from "@/utils/budgetUtils";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { Card, Col, Row, Space, Tag, Tooltip, Typography } from "antd";
 import React from "react";
+import { useMyTeamMember } from "./useMyTeamMember";
 
 interface MyUserTabProps {
-  data: TeamMemberInfo | null;
-  loading: boolean;
-  error: string | null;
+  teamId: string;
 }
 
 const labelWithTooltip = (label: string, tooltip: string) => (
@@ -30,8 +28,10 @@ const formatRateLimit = (value: number | null | undefined): string => {
   return formatNumberWithCommas(value, 0);
 };
 
-export default function MyUserTab({ data, loading, error }: MyUserTabProps) {
-  if (loading) {
+export default function MyUserTab({ teamId }: MyUserTabProps) {
+  const { data, isLoading, error } = useMyTeamMember(teamId);
+
+  if (isLoading) {
     return (
       <Card>
         <Typography.Text type="secondary">Loading your membership info…</Typography.Text>
@@ -42,7 +42,11 @@ export default function MyUserTab({ data, loading, error }: MyUserTabProps) {
   if (error) {
     return (
       <Card>
-        <Typography.Text type="danger">{error}</Typography.Text>
+        <Typography.Text type="danger">
+          {error instanceof Error
+            ? error.message
+            : "Failed to load your membership info for this team."}
+        </Typography.Text>
       </Card>
     );
   }
@@ -145,7 +149,7 @@ export default function MyUserTab({ data, loading, error }: MyUserTabProps) {
           <Card>
             {labelWithTooltip(
               "Model Scope",
-              "Models you can access within this team. Empty means you inherit all team models.",
+              "Models you can access within this team.",
             )}
             <div style={{ marginTop: 8 }}>
               {allowedModels && allowedModels.length > 0 ? (
@@ -155,7 +159,7 @@ export default function MyUserTab({ data, loading, error }: MyUserTabProps) {
                   ))}
                 </Space>
               ) : (
-                <Typography.Text type="secondary">(all team models)</Typography.Text>
+                <Typography.Text>All Team Models</Typography.Text>
               )}
             </div>
           </Card>
