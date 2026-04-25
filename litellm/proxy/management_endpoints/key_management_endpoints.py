@@ -744,6 +744,16 @@ async def _common_key_generation_helper(  # noqa: PLR0915
         allowed_routes=data_json.get("allowed_routes"),
         user_api_key_dict=user_api_key_dict,
     )
+    # Same defense-in-depth for ``allowed_passthrough_routes``: every
+    # endpoint that mutates a key (``/key/generate``, ``/key/update``,
+    # ``/key/regenerate``) gates this field at the request-body layer,
+    # but ``/key/service-account/generate`` reaches this helper directly
+    # without running those gates. Centralizing the check here means any
+    # caller of ``_common_key_generation_helper`` is covered.
+    _check_allowed_passthrough_routes_caller_permission(
+        metadata=data_json.get("metadata"),
+        user_api_key_dict=user_api_key_dict,
+    )
 
     # if we get max_budget passed to /key/generate, then use it as key_max_budget. Since generate_key_helper_fn is used to make new users
     if "max_budget" in data_json:

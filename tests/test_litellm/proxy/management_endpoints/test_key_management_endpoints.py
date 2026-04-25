@@ -9232,6 +9232,66 @@ class TestKeyTypeAndPassthroughRoutesCallerPermission:
         assert str(exc_info.value.code) == "403"
         assert expected_substring in str(exc_info.value.message)
 
+    @pytest.mark.asyncio
+    async def test_non_admin_service_account_generate_with_passthrough_metadata_rejected(
+        self,
+    ):
+        """
+        ``/key/service-account/generate`` calls ``_common_key_generation_helper``
+        directly without going through ``generate_key_fn``'s per-field gate
+        stack. The gate must therefore live inside the helper as well, so
+        non-admin team admins cannot mint a service-account key with
+        ``metadata.allowed_passthrough_routes`` populated.
+        """
+        from litellm.proxy.management_endpoints.key_management_endpoints import (
+            generate_service_account_key_fn,
+        )
+
+        data = GenerateKeyRequest(
+            key_alias="sa-escalate",
+            team_id="team-A",
+            metadata={"allowed_passthrough_routes": ["/cache/settings"]},
+        )
+        user_api_key_dict = UserAPIKeyAuth(
+            user_id="team-admin-not-proxy-admin",
+            user_role=LitellmUserRoles.INTERNAL_USER,
+        )
+
+        mock_prisma_client = AsyncMock()
+        # Make the team lookup resolve so we reach the helper.
+        mock_team_table = MagicMock()
+        mock_team_table.team_id = "team-A"
+
+        with (
+            patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client),
+            patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
+            patch("litellm.proxy.proxy_server.user_custom_key_generate", None),
+            patch(
+                "litellm.proxy.management_endpoints.key_management_endpoints.validate_team_id_used_in_service_account_request",
+                new_callable=AsyncMock,
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.key_management_endpoints.get_team_object",
+                new_callable=AsyncMock,
+                return_value=mock_team_table,
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.key_management_endpoints._check_team_key_limits",
+                new_callable=AsyncMock,
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.key_management_endpoints.key_generation_check"
+            ),
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await generate_service_account_key_fn(
+                    data=data,
+                    user_api_key_dict=user_api_key_dict,
+                    litellm_changed_by=None,
+                )
+        assert exc_info.value.status_code == 403
+        assert "allowed_passthrough_routes" in str(exc_info.value.detail)
+
 
 def test_jinja_prompt_manager_is_sandboxed():
     """
