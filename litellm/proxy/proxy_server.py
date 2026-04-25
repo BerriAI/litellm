@@ -1951,9 +1951,9 @@ async def _reseed_spend_from_db(counter_key: str) -> float:
                 membership_part, model_name = suffix.rsplit(":model:", 1)
                 if ":" not in membership_part:
                     return 0.0
-                member_user_id, member_team_id = membership_part.split(":", 1)
+                member_user_id, member_team_id = membership_part.rsplit(":", 1)
                 model_row = (
-                    await prisma_client.db.litellm_teammembermodeispend.find_unique(
+                    await prisma_client.db.litellm_teammembermodelspend.find_unique(
                         where={
                             "user_id_team_id_model": {
                                 "user_id": member_user_id,
@@ -1968,7 +1968,7 @@ async def _reseed_spend_from_db(counter_key: str) -> float:
                 membership_part = suffix
                 if ":" not in membership_part:
                     return 0.0
-                member_user_id, member_team_id = membership_part.split(":", 1)
+                member_user_id, member_team_id = membership_part.rsplit(":", 1)
                 row = await prisma_client.db.litellm_teammembership.find_unique(
                     where={
                         "user_id_team_id": {
