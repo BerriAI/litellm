@@ -376,6 +376,7 @@ ignored_keys = [
     "metadata.error_information",
     "metadata.attempted_retries",
     "metadata.max_retries",
+    "metadata.eval_information",
 ]
 
 MODEL_LIST = [
