@@ -23,9 +23,6 @@ dependencies = [
     "pydantic==2.12.5",
     "jsonschema==4.23.0",
 ]
-include = [
-    { path = "litellm/model_prices_and_context_window.json", format = ["wheel", "sdist"] }
-]
 
 [project.urls]
 Homepage = "https://litellm.ai"
