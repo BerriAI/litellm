@@ -659,6 +659,8 @@ async def common_checks(  # noqa: PLR0915
                 valid_token=valid_token,
                 model=_model,
                 llm_router=llm_router,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
             )
 
         # 5. If end_user ('user' passed to /chat/completions, /embeddings endpoint) is in budget
@@ -1293,6 +1295,34 @@ async def get_team_membership(
             team_id,
         )
         return None
+
+
+@log_db_metrics
+async def get_team_member_model_spend(
+    user_id: str,
+    team_id: str,
+    model: str,
+    prisma_client: Optional[PrismaClient],
+    user_api_key_cache: DualCache,
+) -> float:
+    if prisma_client is None:
+        return 0.0
+    _key = f"team_member_model_spend:{user_id}:{team_id}:{model}"
+    cached_spend = await user_api_key_cache.async_get_cache(key=_key)
+    if cached_spend is not None:
+        return float(cached_spend)
+    row = await prisma_client.db.litellm_teammembermodelspend.find_unique(
+        where={
+            "user_id_team_id_model": {
+                "user_id": user_id,
+                "team_id": team_id,
+                "model": model,
+            }
+        }
+    )
+    spend = float(row.spend if row is not None else 0.0)
+    await user_api_key_cache.async_set_cache(key=_key, value=spend, ttl=5)
+    return spend
 
 
 def model_in_access_group(
@@ -3351,6 +3381,8 @@ async def _check_team_member_model_budget(
     valid_token: Optional[UserAPIKeyAuth],
     model: Optional[Union[str, List[str]]],
     llm_router: Optional[Router],
+    prisma_client: Optional[PrismaClient] = None,
+    user_api_key_cache: Optional[DualCache] = None,
 ):
     """
     Check if a team member has exceeded their per-model budget for this team.
@@ -3383,7 +3415,6 @@ async def _check_team_member_model_budget(
 
     from litellm.proxy.proxy_server import (
         _get_team_member_model_counter_key,
-        _reseed_spend_from_db,
         get_current_spend,
     )
 
@@ -3426,16 +3457,19 @@ async def _check_team_member_model_budget(
             team_id=team_object.team_id,
             model=counter_model,
         )
-        # -1.0 is the sentinel for "cache cold". Negative spend is impossible,
-        # so this distinguishes "not cached yet" from a real zero balance.
+        fallback_spend = 0.0
+        if prisma_client is not None and user_api_key_cache is not None:
+            fallback_spend = await get_team_member_model_spend(
+                user_id=valid_token.user_id,
+                team_id=team_object.team_id,
+                model=counter_model,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+            )
         model_spend = await get_current_spend(
             counter_key=counter_key,
-            fallback_spend=-1.0,
+            fallback_spend=fallback_spend,
         )
-        if model_spend < 0:
-            # Cache cold (pod restart / Redis flush) — fetch authoritative value from DB.
-            # Do not write cache from auth path to avoid clobbering in-flight increments.
-            model_spend = await _reseed_spend_from_db(counter_key)
 
         if model_spend >= max_budget:
             raise litellm.BudgetExceededError(
