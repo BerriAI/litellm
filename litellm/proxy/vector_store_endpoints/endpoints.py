@@ -10,7 +10,10 @@ from litellm.proxy._types import CommonProxyErrors, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.utils import jsonify_object
-from litellm.proxy.vector_store_endpoints.utils import can_user_access_vector_store
+from litellm.proxy.vector_store_endpoints.utils import (
+    _is_proxy_admin,
+    can_user_access_vector_store,
+)
 from litellm.types.vector_stores import IndexCreateRequest
 
 router = APIRouter()
@@ -498,6 +501,12 @@ async def vector_store_delete(
     API Reference:
     https://platform.openai.com/docs/api-reference/vector-stores/delete
     """
+    if not _is_proxy_admin(user_api_key_dict):
+        raise HTTPException(
+            status_code=403,
+            detail="Only proxy admins can delete vector stores.",
+        )
+
     from litellm.proxy.proxy_server import (
         general_settings,
         llm_router,

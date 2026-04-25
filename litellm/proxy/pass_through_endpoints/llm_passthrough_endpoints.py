@@ -47,6 +47,7 @@ from litellm.types.passthrough_endpoints.pass_through_endpoints import (
 )
 from litellm.proxy.utils import is_known_model
 from litellm.proxy.vector_store_endpoints.utils import (
+    _is_proxy_admin,
     is_allowed_to_call_vector_store_endpoint,
 )
 from litellm.secret_managers.main import get_secret_str
@@ -1369,6 +1370,14 @@ async def azure_proxy_route(
                     ),
                 )
             elif is_vector_store_index:
+                if request.method == "DELETE" and not _is_proxy_admin(
+                    user_api_key_dict
+                ):
+                    raise HTTPException(
+                        status_code=403,
+                        detail="Only proxy admins can delete vector store indexes.",
+                    )
+
                 # get the api key from the provider config
                 provider_config = (
                     ProviderConfigManager.get_provider_vector_stores_config(
@@ -1427,6 +1436,14 @@ async def azure_proxy_route(
                     custom_llm_provider=litellm.LlmProviders.AZURE_AI,
                     extra_headers=cast(dict, extra_headers),
                 )
+
+    if request.method == "DELETE" and "indexes" in endpoint and not _is_proxy_admin(
+        user_api_key_dict
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail="Only proxy admins can delete vector store indexes.",
+        )
 
     base_target_url = get_secret_str(secret_name="AZURE_API_BASE")
     if base_target_url is None:
