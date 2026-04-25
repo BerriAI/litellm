@@ -5,7 +5,7 @@ Deletes expired virtual keys created for LiteLLM dashboard sessions.
 """
 
 from datetime import datetime, timezone
-from typing import List
+from typing import Any, Dict, List, Optional
 
 from litellm._logging import verbose_proxy_logger
 from litellm.caching import DualCache
@@ -85,11 +85,22 @@ class ExpiredUISessionKeyCleanupManager:
                 user_api_key_dict=system_user,
                 litellm_changed_by=LITELLM_INTERNAL_JOBS_SERVICE_ACCOUNT_NAME,
             )
-            verbose_proxy_logger.info(
-                "Deleted %s expired UI session key(s)", len(tokens)
+            deleted_count = self._get_deleted_token_count(
+                tokens=tokens,
+                response=response,
             )
-            return len(tokens)
+            verbose_proxy_logger.info(
+                "Deleted %s expired UI session key(s)", deleted_count
+            )
+            return deleted_count
         except Exception as e:
+            if getattr(e, "status_code", None) == 404:
+                verbose_proxy_logger.debug(
+                    "Expired UI session key cleanup skipped because selected keys "
+                    "were already deleted: %s",
+                    e,
+                )
+                return 0
             verbose_proxy_logger.error(f"Expired UI session key cleanup failed: {e}")
             return 0
         finally:
@@ -101,6 +112,35 @@ class ExpiredUISessionKeyCleanupManager:
                 await self.pod_lock_manager.release_lock(
                     cronjob_id=EXPIRED_UI_SESSION_KEY_CLEANUP_JOB_NAME,
                 )
+
+    @staticmethod
+    def _get_deleted_token_count(
+        tokens: List[str],
+        response: Optional[Dict[str, Any]],
+    ) -> int:
+        """
+        Return the number of tokens actually deleted from the delete helper response.
+        """
+        if response is None:
+            return len(tokens)
+
+        deleted_keys = response.get("deleted_keys")
+        if isinstance(deleted_keys, list):
+            return len(deleted_keys)
+        if isinstance(deleted_keys, int):
+            return deleted_keys
+        if isinstance(deleted_keys, dict):
+            nested_deleted_keys = deleted_keys.get("deleted_keys")
+            if isinstance(nested_deleted_keys, list):
+                return len(nested_deleted_keys)
+            if isinstance(nested_deleted_keys, int):
+                return nested_deleted_keys
+
+        failed_tokens = response.get("failed_tokens") or []
+        if failed_tokens:
+            return max(len(tokens) - len(set(failed_tokens)), 0)
+
+        return len(tokens)
 
     async def _find_expired_ui_session_keys(self) -> List[LiteLLM_VerificationToken]:
         """
