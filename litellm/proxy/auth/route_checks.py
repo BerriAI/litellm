@@ -537,7 +537,18 @@ class RouteChecks:
         """
         Check if route is a passthrough route.
         Supports both exact match and prefix match.
+
+        Defense-in-depth: only authorize routes that are also registered as
+        pass-through endpoints in the admin-defined registry. Without this,
+        any caller with ``metadata.allowed_passthrough_routes`` populated
+        could authorize arbitrary internal routes (e.g. ``/cache/settings``,
+        ``/model/new``) by listing them — even if they happen to no longer
+        be a proxy admin at request time.
         """
+        from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+            InitPassThroughEndpointHelpers,
+        )
+
         metadata = user_api_key_dict.metadata
         team_metadata = user_api_key_dict.team_metadata or {}
         if metadata is None and team_metadata is None:
@@ -551,6 +562,12 @@ class RouteChecks:
             metadata.get("allowed_passthrough_routes") is None
             and team_metadata.get("allowed_passthrough_routes") is None
         ):
+            return False
+
+        # The route must actually be registered as a pass-through endpoint.
+        # Routes that aren't in the registry (e.g. internal admin routes)
+        # cannot be authorized by metadata, even if listed there.
+        if not InitPassThroughEndpointHelpers.is_registered_pass_through_route(route):
             return False
 
         allowed_passthrough_routes = (

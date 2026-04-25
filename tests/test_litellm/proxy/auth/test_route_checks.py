@@ -1,5 +1,6 @@
 import os
 import sys
+from contextlib import contextmanager
 from unittest.mock import MagicMock, patch
 
 sys.path.insert(
@@ -11,6 +12,22 @@ from fastapi import HTTPException, Request
 
 from litellm.proxy._types import LiteLLM_UserTable, LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.route_checks import RouteChecks
+
+
+@contextmanager
+def _registered_passthrough(is_registered: bool = True):
+    """
+    Patch ``InitPassThroughEndpointHelpers.is_registered_pass_through_route``
+    so tests that exercise the metadata-matching logic in
+    ``check_passthrough_route_access`` don't have to spin up the real
+    pass-through route registry.
+    """
+    with patch(
+        "litellm.proxy.pass_through_endpoints.pass_through_endpoints."
+        "InitPassThroughEndpointHelpers.is_registered_pass_through_route",
+        return_value=is_registered,
+    ):
+        yield
 
 
 def test_non_admin_config_update_route_rejected():
@@ -544,10 +561,11 @@ def test_check_passthrough_route_access_key_metadata_exact_match():
     )
 
     # Test exact match
-    result = RouteChecks.check_passthrough_route_access(
-        route="/custom-endpoint",
-        user_api_key_dict=valid_token,
-    )
+    with _registered_passthrough():
+        result = RouteChecks.check_passthrough_route_access(
+            route="/custom-endpoint",
+            user_api_key_dict=valid_token,
+        )
 
     assert result is True
 
@@ -562,10 +580,11 @@ def test_check_passthrough_route_access_key_metadata_prefix_match():
     )
 
     # Test prefix match
-    result = RouteChecks.check_passthrough_route_access(
-        route="/custom-endpoint/v1/chat/completions",
-        user_api_key_dict=valid_token,
-    )
+    with _registered_passthrough():
+        result = RouteChecks.check_passthrough_route_access(
+            route="/custom-endpoint/v1/chat/completions",
+            user_api_key_dict=valid_token,
+        )
 
     assert result is True
 
@@ -599,10 +618,11 @@ def test_check_passthrough_route_access_team_metadata_exact_match():
     )
 
     # Test exact match
-    result = RouteChecks.check_passthrough_route_access(
-        route="/team-endpoint",
-        user_api_key_dict=valid_token,
-    )
+    with _registered_passthrough():
+        result = RouteChecks.check_passthrough_route_access(
+            route="/team-endpoint",
+            user_api_key_dict=valid_token,
+        )
 
     assert result is True
 
@@ -618,10 +638,11 @@ def test_check_passthrough_route_access_team_metadata_prefix_match():
     )
 
     # Test prefix match
-    result = RouteChecks.check_passthrough_route_access(
-        route="/team-endpoint/v1/messages",
-        user_api_key_dict=valid_token,
-    )
+    with _registered_passthrough():
+        result = RouteChecks.check_passthrough_route_access(
+            route="/team-endpoint/v1/messages",
+            user_api_key_dict=valid_token,
+        )
 
     assert result is True
 
@@ -656,16 +677,17 @@ def test_check_passthrough_route_access_key_metadata_takes_precedence():
     )
 
     # Test that key endpoint is allowed
-    result1 = RouteChecks.check_passthrough_route_access(
-        route="/key-endpoint",
-        user_api_key_dict=valid_token,
-    )
+    with _registered_passthrough():
+        result1 = RouteChecks.check_passthrough_route_access(
+            route="/key-endpoint",
+            user_api_key_dict=valid_token,
+        )
 
-    # Test that team endpoint is NOT allowed (key metadata takes precedence)
-    result2 = RouteChecks.check_passthrough_route_access(
-        route="/team-endpoint",
-        user_api_key_dict=valid_token,
-    )
+        # Test that team endpoint is NOT allowed (key metadata takes precedence)
+        result2 = RouteChecks.check_passthrough_route_access(
+            route="/team-endpoint",
+            user_api_key_dict=valid_token,
+        )
 
     assert result1 is True
     assert result2 is False
@@ -742,24 +764,25 @@ def test_check_passthrough_route_access_multiple_routes():
     )
 
     # Test that all allowed routes work
-    result1 = RouteChecks.check_passthrough_route_access(
-        route="/endpoint-1/v1/chat",
-        user_api_key_dict=valid_token,
-    )
-    result2 = RouteChecks.check_passthrough_route_access(
-        route="/endpoint-2",
-        user_api_key_dict=valid_token,
-    )
-    result3 = RouteChecks.check_passthrough_route_access(
-        route="/endpoint-3/completions",
-        user_api_key_dict=valid_token,
-    )
+    with _registered_passthrough():
+        result1 = RouteChecks.check_passthrough_route_access(
+            route="/endpoint-1/v1/chat",
+            user_api_key_dict=valid_token,
+        )
+        result2 = RouteChecks.check_passthrough_route_access(
+            route="/endpoint-2",
+            user_api_key_dict=valid_token,
+        )
+        result3 = RouteChecks.check_passthrough_route_access(
+            route="/endpoint-3/completions",
+            user_api_key_dict=valid_token,
+        )
 
-    # Test that non-allowed route fails
-    result4 = RouteChecks.check_passthrough_route_access(
-        route="/endpoint-4",
-        user_api_key_dict=valid_token,
-    )
+        # Test that non-allowed route fails
+        result4 = RouteChecks.check_passthrough_route_access(
+            route="/endpoint-4",
+            user_api_key_dict=valid_token,
+        )
 
     assert result1 is True
     assert result2 is True
@@ -777,18 +800,19 @@ def test_check_passthrough_route_access_prevents_false_prefix_match():
     )
 
     # Test that /endpoint-2 is NOT allowed (not a valid prefix match)
-    result = RouteChecks.check_passthrough_route_access(
-        route="/endpoint-2",
-        user_api_key_dict=valid_token,
-    )
+    with _registered_passthrough():
+        result = RouteChecks.check_passthrough_route_access(
+            route="/endpoint-2",
+            user_api_key_dict=valid_token,
+        )
 
-    assert result is False
+        assert result is False
 
-    # Test that /endpoint/something IS allowed (valid prefix match)
-    result2 = RouteChecks.check_passthrough_route_access(
-        route="/endpoint/something",
-        user_api_key_dict=valid_token,
-    )
+        # Test that /endpoint/something IS allowed (valid prefix match)
+        result2 = RouteChecks.check_passthrough_route_access(
+            route="/endpoint/something",
+            user_api_key_dict=valid_token,
+        )
 
     assert result2 is True
 
@@ -807,6 +831,31 @@ def test_check_passthrough_route_access_empty_list():
         route="/any-endpoint",
         user_api_key_dict=valid_token,
     )
+
+    assert result is False
+
+
+def test_check_passthrough_route_access_unregistered_route_denied():
+    """
+    Defense-in-depth: even when ``metadata.allowed_passthrough_routes``
+    matches the request route, access must be denied if the route is not
+    actually registered in the admin-defined pass-through endpoint registry.
+
+    Without this, anyone who could populate ``allowed_passthrough_routes``
+    (e.g. by briefly having admin and then losing it) could authorize
+    arbitrary internal routes — including admin endpoints like
+    ``/cache/settings`` — by listing them in metadata.
+    """
+    valid_token = UserAPIKeyAuth(
+        user_id="test_user",
+        metadata={"allowed_passthrough_routes": ["/cache/settings"]},
+    )
+
+    with _registered_passthrough(is_registered=False):
+        result = RouteChecks.check_passthrough_route_access(
+            route="/cache/settings",
+            user_api_key_dict=valid_token,
+        )
 
     assert result is False
 

@@ -734,6 +734,17 @@ async def _common_key_generation_helper(  # noqa: PLR0915
 
     data_json = handle_key_type(data, data_json)
 
+    # Defense-in-depth: re-run the allowed_routes admin gate on the post-
+    # transform value. ``_check_allowed_routes_caller_permission`` already
+    # ran on the request body in generate_key_fn; running it here again
+    # catches any field (today: ``key_type``; future: anything else)
+    # that injects ``allowed_routes`` via ``handle_key_type``-style
+    # transformation after the request-body check.
+    _check_allowed_routes_caller_permission(
+        allowed_routes=data_json.get("allowed_routes"),
+        user_api_key_dict=user_api_key_dict,
+    )
+
     # if we get max_budget passed to /key/generate, then use it as key_max_budget. Since generate_key_helper_fn is used to make new users
     if "max_budget" in data_json:
         data_json["key_max_budget"] = data_json.pop("max_budget", None)
