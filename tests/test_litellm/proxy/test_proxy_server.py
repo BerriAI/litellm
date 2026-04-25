@@ -4968,6 +4968,10 @@ async def test_increment_spend_counters_team_and_member():
             key="spend:team_member:team_id::team-1::user_id::user-1::model::gpt-4o"
         )
         assert member_model_counter == 0.30
+        model_fallback_spend = key_cache.in_memory_cache.get_cache(
+            key="team_member_model_spend:user-1:team-1:gpt-4o"
+        )
+        assert model_fallback_spend == 0.30
     finally:
         ps.user_api_key_cache = original_key_cache
         ps.spend_counter_cache = original_counter_cache

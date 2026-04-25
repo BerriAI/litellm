@@ -1926,6 +1926,10 @@ async def increment_spend_counters(
                 source_cache_key=None,
                 increment=response_cost,
             )
+            await user_api_key_cache.async_increment_cache(
+                key=f"team_member_model_spend:{user_id}:{team_id}:{model}",
+                value=response_cost,
+            )
 
     if user_id is not None:
         await _init_and_increment_spend_counter(
