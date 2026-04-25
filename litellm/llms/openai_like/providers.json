@@ -101,5 +101,13 @@
     "param_mappings": {
       "max_completion_tokens": "max_tokens"
     }
+  },
+  "futurmix": {
+    "base_url": "https://futurmix.ai/v1",
+    "api_key_env": "FUTURMIX_API_KEY",
+    "api_base_env": "FUTURMIX_API_BASE",
+    "param_mappings": {
+      "max_completion_tokens": "max_tokens"
+    }
   }
 }
