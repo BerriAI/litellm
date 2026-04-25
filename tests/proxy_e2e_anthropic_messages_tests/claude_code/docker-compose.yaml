@@ -22,7 +22,7 @@ services:
       - "${PROXY_PORT:-4000}:4000"
     environment:
       DATABASE_URL: postgresql://litellm:litellm@postgres:5432/litellm
-      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:-sk-darcy-sf-onsite-interview}
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:-sk-1234}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
       AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
@@ -53,7 +53,7 @@ services:
         CLAUDE_CODE_VERSION: ${CLAUDE_CODE_VERSION:-latest}
     environment:
       ANTHROPIC_BASE_URL: http://litellm:4000
-      ANTHROPIC_AUTH_TOKEN: ${LITELLM_MASTER_KEY:-sk-darcy-sf-onsite-interview}
+      ANTHROPIC_AUTH_TOKEN: ${LITELLM_MASTER_KEY:-sk-1234}
       MODEL_NAME: ${MODEL_NAME:-claude-sonnet-4-6}
       CLAUDE_CODE_PROMPT: "${CLAUDE_CODE_PROMPT:-Respond with exactly this text and nothing else: Hello from LiteLLM Claude Code.}"
     depends_on:

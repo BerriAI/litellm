@@ -2036,7 +2036,7 @@ jobs:
           name: Run Dockerized Claude Code E2E Tests
           command: |
             mkdir -p test-results
-            : "${LITELLM_MASTER_KEY:?Set LITELLM_MASTER_KEY in CircleCI project env vars.}"
+            LITELLM_MASTER_KEY="${LITELLM_MASTER_KEY:-sk-1234}"
             : "${ANTHROPIC_API_KEY:?Set ANTHROPIC_API_KEY in CircleCI project env vars.}"
             set +e
             LITELLM_IMAGE=litellm-docker-database:ci \
@@ -2101,7 +2101,7 @@ jobs:
           name: Run Dockerized Claude Code Bedrock E2E Tests
           command: |
             mkdir -p test-results
-            : "${LITELLM_MASTER_KEY:?Set LITELLM_MASTER_KEY in CircleCI project env vars.}"
+            LITELLM_MASTER_KEY="${LITELLM_MASTER_KEY:-sk-1234}"
             : "${AWS_ACCESS_KEY_ID:?Set AWS_ACCESS_KEY_ID in CircleCI project env vars.}"
             : "${AWS_SECRET_ACCESS_KEY:?Set AWS_SECRET_ACCESS_KEY in CircleCI project env vars.}"
             : "${AWS_REGION_NAME:?Set AWS_REGION_NAME in CircleCI project env vars.}"
@@ -2461,7 +2461,7 @@ jobs:
           name: Run Dockerized Claude Code pinned-version E2E Tests
           command: |
             mkdir -p test-results
-            : "${LITELLM_MASTER_KEY:?Set LITELLM_MASTER_KEY in CircleCI project env vars.}"
+            LITELLM_MASTER_KEY="${LITELLM_MASTER_KEY:-sk-1234}"
             : "${ANTHROPIC_API_KEY:?Set ANTHROPIC_API_KEY in CircleCI project env vars.}"
             set +e
             LITELLM_IMAGE=litellm-docker-database:ci \
