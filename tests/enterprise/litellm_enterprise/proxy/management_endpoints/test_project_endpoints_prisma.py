@@ -20,7 +20,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.proxy.management_endpoints.team_endpoints import (
     new_team,
 )
-from litellm.proxy.management_endpoints.project_endpoints import (
+from litellm_enterprise.proxy.management_endpoints.project_endpoints import (
     new_project,
     update_project,
     delete_project,
@@ -432,7 +432,7 @@ def test_check_team_project_limits_models_not_in_team():
     """
     Test that creating a project with models not in the team raises an error.
     """
-    from litellm.proxy.management_endpoints.project_endpoints import (
+    from litellm_enterprise.proxy.management_endpoints.project_endpoints import (
         _check_team_project_limits,
     )
     from litellm.proxy._types import LiteLLM_TeamTable
@@ -458,7 +458,7 @@ def test_check_team_project_limits_budget_exceeds_team():
     """
     Test that creating a project with budget > team budget raises an error.
     """
-    from litellm.proxy.management_endpoints.project_endpoints import (
+    from litellm_enterprise.proxy.management_endpoints.project_endpoints import (
         _check_team_project_limits,
     )
     from litellm.proxy._types import LiteLLM_TeamTable
@@ -485,7 +485,7 @@ def test_check_team_project_limits_valid_subset():
     """
     Test that a valid project (models subset, budget within limit) passes.
     """
-    from litellm.proxy.management_endpoints.project_endpoints import (
+    from litellm_enterprise.proxy.management_endpoints.project_endpoints import (
         _check_team_project_limits,
     )
     from litellm.proxy._types import LiteLLM_TeamTable
@@ -510,7 +510,7 @@ def test_check_team_project_limits_all_proxy_models():
     """
     Test that team with 'all-proxy-models' allows any project models.
     """
-    from litellm.proxy.management_endpoints.project_endpoints import (
+    from litellm_enterprise.proxy.management_endpoints.project_endpoints import (
         _check_team_project_limits,
     )
     from litellm.proxy._types import LiteLLM_TeamTable
@@ -533,7 +533,7 @@ def test_check_team_project_limits_tpm_exceeds_team():
     """
     Test that project tpm_limit exceeding team tpm_limit raises an error.
     """
-    from litellm.proxy.management_endpoints.project_endpoints import (
+    from litellm_enterprise.proxy.management_endpoints.project_endpoints import (
         _check_team_project_limits,
     )
     from litellm.proxy._types import LiteLLM_TeamTable
@@ -560,7 +560,7 @@ def test_check_team_project_limits_negative_budget():
     """
     Test that negative budget values raise an error.
     """
-    from litellm.proxy.management_endpoints.project_endpoints import (
+    from litellm_enterprise.proxy.management_endpoints.project_endpoints import (
         _check_team_project_limits,
     )
     from litellm.proxy._types import LiteLLM_TeamTable
@@ -586,7 +586,7 @@ def test_check_team_project_limits_soft_budget_gte_max():
     """
     Test that soft_budget >= max_budget raises an error.
     """
-    from litellm.proxy.management_endpoints.project_endpoints import (
+    from litellm_enterprise.proxy.management_endpoints.project_endpoints import (
         _check_team_project_limits,
     )
     from litellm.proxy._types import LiteLLM_TeamTable
@@ -801,7 +801,7 @@ async def test_list_projects_returns_timestamps():
     from datetime import datetime, timezone
     from unittest.mock import AsyncMock, MagicMock, patch
 
-    from litellm.proxy.management_endpoints.project_endpoints import list_projects
+    from litellm_enterprise.proxy.management_endpoints.project_endpoints import list_projects
     from litellm.proxy._types import LiteLLM_ProjectTable
 
     now = datetime(2024, 1, 15, 12, 0, 0, tzinfo=timezone.utc)
