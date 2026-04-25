@@ -462,22 +462,29 @@ _NON_ADMIN_SAFE_ALLOWED_ROUTES_PRESETS = frozenset({"llm_api_routes", "info_rout
 def _check_allowed_routes_caller_permission(
     allowed_routes: Optional[list],
     user_api_key_dict: UserAPIKeyAuth,
+    *,
+    allow_safe_presets: bool = False,
 ) -> None:
     """
-    Only proxy admins may set `allowed_routes` on a key, except for the safe
-    presets produced by `handle_key_type` for non-elevated buckets
-    (`llm_api_routes`, `info_routes`).
+    Only proxy admins may set `allowed_routes` on a key.
 
     `allowed_routes` overrides the standard role-based route gate in
     RouteChecks.non_proxy_admin_allowed_routes_check, so the field is
-    restricted to admins outside of those safe presets.
+    restricted to admins. Non-admins must instead use `key_type` to pick a
+    preset bucket — that path goes through `handle_key_type` and re-enters
+    this function with `allow_safe_presets=True`, which lets the derived
+    `llm_api_routes` / `info_routes` values through. Raw-body call sites
+    leave `allow_safe_presets=False` so non-admins can't write those values
+    directly.
     """
     # Empty list is the default on GenerateKeyRequest — treat as "not set".
     if not allowed_routes:
         return
     if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
         return
-    if all(r in _NON_ADMIN_SAFE_ALLOWED_ROUTES_PRESETS for r in allowed_routes):
+    if allow_safe_presets and all(
+        r in _NON_ADMIN_SAFE_ALLOWED_ROUTES_PRESETS for r in allowed_routes
+    ):
         return
     raise HTTPException(
         status_code=403,
@@ -712,10 +719,13 @@ async def _common_key_generation_helper(  # noqa: PLR0915
 
     # Re-check allowed_routes after handle_key_type, since key_type can derive
     # an elevated bucket (e.g. ["management_routes"]) that wasn't present in
-    # the original request body.
+    # the original request body. The safe presets produced by handle_key_type
+    # for non-elevated buckets are accepted here; the raw-body pre-checks at
+    # the entry of each handler keep their default strictness.
     _check_allowed_routes_caller_permission(
         allowed_routes=data_json.get("allowed_routes"),
         user_api_key_dict=user_api_key_dict,
+        allow_safe_presets=True,
     )
 
     # if we get max_budget passed to /key/generate, then use it as key_max_budget. Since generate_key_helper_fn is used to make new users
@@ -1498,6 +1508,15 @@ async def generate_service_account_key_fn(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail={"error": CommonProxyErrors.db_not_connected_error.value},
         )
+
+    _check_allowed_routes_caller_permission(
+        allowed_routes=data.allowed_routes,
+        user_api_key_dict=user_api_key_dict,
+    )
+    _check_passthrough_routes_caller_permission(
+        data=data,
+        user_api_key_dict=user_api_key_dict,
+    )
 
     await validate_team_id_used_in_service_account_request(
         team_id=data.team_id,
@@ -3949,6 +3968,14 @@ async def regenerate_key_fn(  # noqa: PLR0915
             _check_passthrough_routes_caller_permission(
                 data=data,
                 user_api_key_dict=user_api_key_dict,
+            )
+            # Mirror /key/generate's post-handle_key_type recheck so a
+            # non-admin can't elevate via a key_type preset that the
+            # regenerate flow would otherwise carry through unchecked.
+            _check_allowed_routes_caller_permission(
+                allowed_routes=handle_key_type(data, {}).get("allowed_routes"),
+                user_api_key_dict=user_api_key_dict,
+                allow_safe_presets=True,
             )
 
         is_master_key_regeneration = data and data.new_master_key is not None
