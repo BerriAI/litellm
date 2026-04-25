@@ -2035,11 +2035,10 @@ def test_get_http_exception_no_blocked_assessments_omits_field():
 
 
 @pytest.mark.asyncio
-async def test_streaming_post_call_parallel_output_passes_request_data_to_make_bedrock():
+async def test_streaming_post_call_output_passes_request_data_to_make_bedrock():
     """
-    async_post_call_streaming_iterator_hook must pass request_data into OUTPUT
-    make_bedrock_api_request so spend/standard_logging attaches to the real request
-    (Greptile: previously OUTPUT used request_data=None / ephemeral {}).
+    async_post_call_streaming_iterator_hook should run the post-call OUTPUT check once,
+    passing request_data so spend/standard_logging attaches to the real request.
     """
     request_data = {
         "model": "gpt-4o-mini",
@@ -2111,8 +2110,7 @@ async def test_streaming_post_call_parallel_output_passes_request_data_to_make_b
     input_calls = [
         c for c in mock_make.call_args_list if c.kwargs.get("source") == "INPUT"
     ]
-    assert len(input_calls) == 1
-    assert input_calls[0].kwargs.get("request_data") is request_data
+    assert len(input_calls) == 0
 
 
 @pytest.mark.asyncio

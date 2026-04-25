@@ -500,6 +500,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         #########################################################
         # Add guardrail information to request trace
         #########################################################
+        httpx_response = cast(httpx.Response, httpx_response)
         _json_response = httpx_response.json()
         # Raw Bedrock JSON is passed here; match/regex redaction runs once inside
         # CustomGuardrail.add_standard_logging_guardrail_information_to_request_data.
@@ -1224,11 +1225,8 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         """
         Process streaming response chunks.
 
-        Collect content from the stream and make parallel bedrock api requests to get the guardrail responses.
+        Collect content from the stream and make the post-call Bedrock OUTPUT check.
         """
-        # Import here to avoid circular imports
-        import asyncio
-
         from litellm.llms.base_llm.base_model_iterator import MockResponseIterator
         from litellm.main import stream_chunk_builder
         from litellm.types.utils import TextCompletionResponse
@@ -1249,57 +1247,19 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
 
             # Bedrock will raise an exception if this violates the guardrail policy
             ###################################################################
-            # Determine if INPUT validation is needed in post_call
-            # Skip INPUT validation if pre_call or during_call is already enabled
-            # (to avoid redundant validation - those hooks would have already validated INPUT)
-            should_validate_input = not (
-                self._event_hook_is_event_type(GuardrailEventHooks.pre_call)
-                or self._event_hook_is_event_type(GuardrailEventHooks.during_call)
-            )
-
             output_guardrail_response: Optional[
                 Union[BedrockGuardrailResponse, str]
             ] = None
 
-            if should_validate_input:
-                # Create tasks for parallel execution
-                input_filter = self._prepare_guardrail_messages_for_role(
-                    messages=request_data.get("messages")
-                )
-                input_messages = input_filter.payload_messages or request_data.get(
-                    "messages"
-                )
-                input_task = self.make_bedrock_api_request(
-                    source="INPUT",
-                    messages=input_messages,
-                    request_data=request_data,
-                    logging_event_type=GuardrailEventHooks.post_call,
-                )  # Only input messages
-                output_task = self.make_bedrock_api_request(
+            try:
+                output_guardrail_response = await self.make_bedrock_api_request(
                     source="OUTPUT",
                     response=assembled_model_response,
                     request_data=request_data,
                     logging_event_type=GuardrailEventHooks.post_call,
-                )  # Only response
-
-                # Execute both requests in parallel
-                try:
-                    _, output_guardrail_response = await asyncio.gather(
-                        input_task, output_task
-                    )
-                except GuardrailInterventionNormalStringError as e:
-                    output_guardrail_response = e.message
-            else:
-                # Only run OUTPUT validation (INPUT was already validated in pre_call or during_call)
-                try:
-                    output_guardrail_response = await self.make_bedrock_api_request(
-                        source="OUTPUT",
-                        response=assembled_model_response,
-                        request_data=request_data,
-                        logging_event_type=GuardrailEventHooks.post_call,
-                    )
-                except GuardrailInterventionNormalStringError as e:
-                    output_guardrail_response = e.message
+                )
+            except GuardrailInterventionNormalStringError as e:
+                output_guardrail_response = e.message
 
             #########################################################################
             ########## 2. Apply masking to response with output guardrail response ##########
