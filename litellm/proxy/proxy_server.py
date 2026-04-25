@@ -1894,9 +1894,10 @@ async def increment_spend_counters(
             increment=response_cost,
         )
         if model is not None:
-            await spend_counter_cache.async_increment_cache(
-                key=f"spend:team_member:{user_id}:{team_id}:model:{model}",
-                value=response_cost or 0.0,
+            await _init_and_increment_spend_counter(
+                counter_key=f"spend:team_member:{user_id}:{team_id}:model:{model}",
+                source_cache_key=None,
+                increment=response_cost,
             )
 
     if user_id is not None:
@@ -1944,12 +1945,33 @@ async def _reseed_spend_from_db(counter_key: str) -> float:
             )
         elif counter_key.startswith("spend:team_member:"):
             suffix = counter_key[len("spend:team_member:") :]
-            if ":" not in suffix:
+            model_name: Optional[str] = None
+            if ":model:" in suffix:
+                # format: {user_id}:{team_id}:model:{model}
+                membership_part, model_name = suffix.rsplit(":model:", 1)
+            else:
+                membership_part = suffix
+            if ":" not in membership_part:
                 return 0.0
-            user_id, team_id = suffix.rsplit(":", 1)
+            member_user_id, member_team_id = membership_part.split(":", 1)
             row = await prisma_client.db.litellm_teammembership.find_unique(
-                where={"user_id_team_id": {"user_id": user_id, "team_id": team_id}}
+                where={
+                    "user_id_team_id": {
+                        "user_id": member_user_id,
+                        "team_id": member_team_id,
+                    }
+                }
             )
+            if model_name is not None:
+                # Return per-model spend from the model_spend JSON field
+                if row is None:
+                    return 0.0
+                model_spend_map = getattr(row, "model_spend", None) or {}
+                if isinstance(model_spend_map, str):
+                    import json as _json
+
+                    model_spend_map = _json.loads(model_spend_map)
+                return float(model_spend_map.get(model_name, 0.0) or 0.0)
         elif counter_key.startswith("spend:team:"):
             team_id = counter_key[len("spend:team:") :]
             row = await prisma_client.db.litellm_teamtable.find_unique(
@@ -1979,7 +2001,7 @@ async def _reseed_spend_from_db(counter_key: str) -> float:
 
 async def _init_and_increment_spend_counter(
     counter_key: str,
-    source_cache_key: str,
+    source_cache_key: Optional[str],
     increment: float,
 ):
     """
@@ -2001,7 +2023,7 @@ async def _init_and_increment_spend_counter(
     current = await spend_counter_cache.async_get_cache(key=counter_key)
     if current is None:
         base_spend = await _reseed_spend_from_db(counter_key)
-        if prisma_client is None:
+        if prisma_client is None and source_cache_key is not None:
             # Best-effort fallback when prisma is unavailable (tests or
             # early-startup paths). May be stale but avoids resetting to 0.
             source = await user_api_key_cache.async_get_cache(key=source_cache_key)
