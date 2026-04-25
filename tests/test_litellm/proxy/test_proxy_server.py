@@ -4982,14 +4982,20 @@ async def test_init_and_increment_spend_counter_reseeds_from_db_on_counter_miss(
 
     counter_cache = DualCache()
     recorded_increments: list = []
+    recorded_sets: list = []
 
     async def record_increment(key, value, ttl=None, **kwargs):
         recorded_increments.append({"key": key, "value": value, "ttl": ttl})
         return value
 
+    async def record_set(key, value, **kwargs):
+        recorded_sets.append({"key": key, "value": value, **kwargs})
+        return True
+
     fake_redis = AsyncMock()
     fake_redis.async_increment = AsyncMock(side_effect=record_increment)
     fake_redis.async_get_cache = AsyncMock(return_value=None)  # counter missing
+    fake_redis.async_set_cache = AsyncMock(side_effect=record_set)
     counter_cache.redis_cache = fake_redis
 
     # Prisma returns spend=42.0 (authoritative) while the stale cached
@@ -5026,10 +5032,10 @@ async def test_init_and_increment_spend_counter_reseeds_from_db_on_counter_miss(
         fake_prisma.db.litellm_teamtable.find_unique.assert_awaited_once_with(
             where={"team_id": "team-9"}
         )
-        # Two increments keyed on the counter: seed ($42) then request ($1.50).
+        seed_writes = [(c["key"], c["value"]) for c in recorded_sets]
+        assert ("spend:team:team-9", 42.0) in seed_writes
         writes = [(c["key"], c["value"]) for c in recorded_increments]
-        assert ("spend:team:team-9", 42.0) in writes
-        assert ("spend:team:team-9", 1.5) in writes
+        assert writes == [("spend:team:team-9", 1.5)]
     finally:
         ps.user_api_key_cache = orig_user
         ps.spend_counter_cache = orig_counter

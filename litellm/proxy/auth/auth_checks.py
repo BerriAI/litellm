@@ -1296,19 +1296,6 @@ async def get_team_membership(
         return None
 
 
-async def get_team_member_model_spend(
-    user_id: str,
-    team_id: str,
-    model: str,
-    user_api_key_cache: DualCache,
-) -> float:
-    _key = f"team_member_model_spend:{user_id}:{team_id}:{model}"
-    cached_spend = await user_api_key_cache.async_get_cache(key=_key)
-    if cached_spend is not None:
-        return float(cached_spend)
-    return 0.0
-
-
 def model_in_access_group(
     model: str, team_models: Optional[List[str]], llm_router: Optional[Router]
 ) -> bool:
@@ -3398,7 +3385,9 @@ async def _check_team_member_model_budget(
 
     from litellm.proxy.proxy_server import (
         _get_team_member_model_counter_key,
+        _reseed_spend_from_db,
         get_current_spend,
+        spend_counter_cache,
     )
 
     for requested_model_str in models_to_check:
@@ -3440,18 +3429,15 @@ async def _check_team_member_model_budget(
             team_id=team_object.team_id,
             model=counter_model,
         )
-        fallback_spend = 0.0
-        if user_api_key_cache is not None:
-            fallback_spend = await get_team_member_model_spend(
-                user_id=valid_token.user_id,
-                team_id=team_object.team_id,
-                model=counter_model,
-                user_api_key_cache=user_api_key_cache,
-            )
         model_spend = await get_current_spend(
             counter_key=counter_key,
-            fallback_spend=fallback_spend,
+            fallback_spend=-1.0,
         )
+        if model_spend < 0:
+            model_spend = await _reseed_spend_from_db(counter_key)
+            await spend_counter_cache.async_set_cache(
+                key=counter_key, value=model_spend, nx=True
+            )
 
         if model_spend >= max_budget:
             raise litellm.BudgetExceededError(
