@@ -544,6 +544,17 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                 httpx_response.status_code,
                 httpx_response.text,
             )
+            # Always audit non-200 Bedrock responses regardless of log_result
+            self.add_standard_logging_guardrail_information_to_request_data(
+                guardrail_provider=self.guardrail_provider,
+                guardrail_json_response=_json_response,
+                request_data=request_data or {},
+                guardrail_status="guardrail_failed_to_respond",
+                start_time=start_time.timestamp(),
+                end_time=datetime.now().timestamp(),
+                duration=(datetime.now() - start_time).total_seconds(),
+                event_type=event_type,
+            )
             raise HTTPException(status_code=status_code, detail=detail_message)
 
         return bedrock_guardrail_response
