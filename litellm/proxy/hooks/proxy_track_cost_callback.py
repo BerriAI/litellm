@@ -208,8 +208,11 @@ class _ProxyDBLogger(CustomLogger):
 
                     # Atomically update spend counters (in-memory + Redis)
                     # for cross-pod budget enforcement.
+                    # Use model_group (router group name, e.g. "gpt-4o") not
+                    # sl_object["model"] (resolved name, e.g. "gpt-4o-2024-08-06")
+                    # so the key matches what auth_checks reads from the request.
                     _model_for_counter = (
-                        sl_object.get("model_group") or sl_object.get("model")
+                        sl_object.get("model_group") or kwargs.get("model")
                         if sl_object is not None
                         else kwargs.get("model")
                     )
