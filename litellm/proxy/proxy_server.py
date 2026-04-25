@@ -1945,33 +1945,38 @@ async def _reseed_spend_from_db(counter_key: str) -> float:
             )
         elif counter_key.startswith("spend:team_member:"):
             suffix = counter_key[len("spend:team_member:") :]
-            model_name: Optional[str] = None
             if ":model:" in suffix:
-                # format: {user_id}:{team_id}:model:{model}
+                # format: {user_id}:{team_id}:model:{model_name}
+                # Read from dedicated atomic table — no read-modify-write race
                 membership_part, model_name = suffix.rsplit(":model:", 1)
+                if ":" not in membership_part:
+                    return 0.0
+                member_user_id, member_team_id = membership_part.split(":", 1)
+                model_row = (
+                    await prisma_client.db.litellm_teammembermodeispend.find_unique(
+                        where={
+                            "user_id_team_id_model": {
+                                "user_id": member_user_id,
+                                "team_id": member_team_id,
+                                "model": model_name,
+                            }
+                        }
+                    )
+                )
+                return float(model_row.spend if model_row is not None else 0.0)
             else:
                 membership_part = suffix
-            if ":" not in membership_part:
-                return 0.0
-            member_user_id, member_team_id = membership_part.split(":", 1)
-            row = await prisma_client.db.litellm_teammembership.find_unique(
-                where={
-                    "user_id_team_id": {
-                        "user_id": member_user_id,
-                        "team_id": member_team_id,
-                    }
-                }
-            )
-            if model_name is not None:
-                # Return per-model spend from the model_spend JSON field
-                if row is None:
+                if ":" not in membership_part:
                     return 0.0
-                model_spend_map = getattr(row, "model_spend", None) or {}
-                if isinstance(model_spend_map, str):
-                    import json as _json
-
-                    model_spend_map = _json.loads(model_spend_map)
-                return float(model_spend_map.get(model_name, 0.0) or 0.0)
+                member_user_id, member_team_id = membership_part.split(":", 1)
+                row = await prisma_client.db.litellm_teammembership.find_unique(
+                    where={
+                        "user_id_team_id": {
+                            "user_id": member_user_id,
+                            "team_id": member_team_id,
+                        }
+                    }
+                )
         elif counter_key.startswith("spend:team:"):
             team_id = counter_key[len("spend:team:") :]
             row = await prisma_client.db.litellm_teamtable.find_unique(
