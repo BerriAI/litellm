@@ -1229,9 +1229,7 @@ async def test_update_preserves_service_account_id_when_metadata_replaced():
         metadata={"service_account_id": "sa-123"},
     )
 
-    result = await prepare_key_update_data(
-        data=data, existing_key_row=existing_key
-    )
+    result = await prepare_key_update_data(data=data, existing_key_row=existing_key)
 
     assert result["metadata"]["service_account_id"] == "sa-123"
     assert result["metadata"]["unrelated"] == "value"
@@ -1274,9 +1272,7 @@ async def test_update_allows_matching_service_account_id():
         metadata={"service_account_id": "sa-123"},
     )
 
-    result = await prepare_key_update_data(
-        data=data, existing_key_row=existing_key
-    )
+    result = await prepare_key_update_data(data=data, existing_key_row=existing_key)
 
     assert result["metadata"]["service_account_id"] == "sa-123"
     assert result["metadata"]["other"] == "value"
@@ -1334,9 +1330,7 @@ async def test_update_without_metadata_still_preserves_existing():
         metadata={"service_account_id": "sa-123", "other": "kept"},
     )
 
-    result = await prepare_key_update_data(
-        data=data, existing_key_row=existing_key
-    )
+    result = await prepare_key_update_data(data=data, existing_key_row=existing_key)
 
     assert result["metadata"]["service_account_id"] == "sa-123"
     assert result["metadata"]["other"] == "kept"
@@ -8221,9 +8215,7 @@ async def test_update_key_non_budget_rejects_cross_user_modification(monkeypatch
     )
 
     mock_prisma_client = AsyncMock()
-    test_hashed_token = (
-        "cafebabe" * 8
-    )
+    test_hashed_token = "cafebabe" * 8
 
     mock_existing_key = MagicMock()
     mock_existing_key.token = test_hashed_token
