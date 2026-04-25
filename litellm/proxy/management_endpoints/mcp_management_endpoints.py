@@ -1502,16 +1502,28 @@ if MCP_AVAILABLE:
 
     async def _authorize_user_auth(request: Request) -> UserAPIKeyAuth:
         """Accept Bearer header OR session cookie for browser-redirect authorize endpoint."""
-        from litellm.proxy._experimental.mcp_server.byok_oauth_endpoints import (
-            _user_id_from_session_cookie,
-        )
+        from litellm.proxy.auth.user_api_key_auth import _user_api_key_auth_builder
         from litellm.proxy.proxy_server import master_key as _master_key
 
         auth_header = request.headers.get("Authorization") or request.headers.get(
             "x-litellm-api-key"
         )
         if auth_header:
-            return await user_api_key_auth(request=request)
+            # Call the builder directly — user_api_key_auth() has Security() params that
+            # are only injected by FastAPI's DI system; calling it directly leaves them
+            # as raw Security objects and causes a TypeError.
+            # Pass the raw header value (e.g. "Bearer sk-1234"); get_api_key() inside
+            # the builder strips the prefix via _get_bearer_token().
+            return await _user_api_key_auth_builder(
+                request=request,
+                api_key=auth_header,
+                azure_api_key_header="",
+                anthropic_api_key_header=None,
+                google_ai_studio_api_key_header=None,
+                azure_apim_header=None,
+                request_data={},
+                custom_litellm_key_header=None,
+            )
 
         # Browser redirect: verify session cookie and build a UserAPIKeyAuth from it
         cookie_token = request.cookies.get("token")
