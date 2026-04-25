@@ -1737,7 +1737,112 @@ async def test_user_api_key_auth_builder_no_blocking_calls():
             setattr(_proxy_server_mod, k, v)
 
 
+@pytest.mark.asyncio
+async def test_team_metadata_refreshed_from_team_object_during_auth():
+    """
+    Regression test: when a cached API key has stale team_metadata (e.g. a
+    guardrail was added to the team after the key was cached), the auth flow
+    must update valid_token.team_metadata from the freshly fetched team object
+    so that move_guardrails_to_metadata picks up the new guardrail.
+
+    Before the fix: valid_token.team_metadata was never updated from _team_obj
+    at the "Check 6" team-auth step in _user_api_key_auth_builder, so stale
+    team_metadata persisted for the lifetime of the key cache entry.
+    """
+    from starlette.datastructures import URL
+    from starlette.requests import Request
+
+    from litellm.proxy._types import LiteLLM_TeamTableCachedObj, LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.auth.user_api_key_auth import _user_api_key_auth_builder
+
+    api_key = "sk-test-team-metadata-refresh"
+
+    # Simulate a cached key whose team_metadata was captured BEFORE the
+    # guardrail was added — so it has no "guardrails" key.
+    stale_team_metadata: dict = {"some_old_key": "some_old_value"}
+    valid_token = UserAPIKeyAuth(
+        api_key=api_key,
+        token=api_key,
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        team_id="team-guardrail-test",
+        team_metadata=stale_team_metadata,
+    )
+
+    # The fresh team object returned by get_team_object has the new guardrail.
+    fresh_team_obj = LiteLLM_TeamTableCachedObj(
+        team_id="team-guardrail-test",
+        metadata={"guardrails": ["test-guardrail-333"]},
+    )
+
+    mock_cache = AsyncMock()
+    mock_cache.async_get_cache = AsyncMock(return_value=valid_token)
+    mock_cache.async_set_cache = AsyncMock(return_value=None)
+
+    mock_proxy_logging_obj = MagicMock()
+    mock_proxy_logging_obj.internal_usage_cache = MagicMock()
+    mock_proxy_logging_obj.internal_usage_cache.dual_cache = AsyncMock()
+    mock_proxy_logging_obj.internal_usage_cache.dual_cache.async_delete_cache = (
+        AsyncMock()
+    )
+    mock_proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
+
+    import litellm.proxy.proxy_server as _proxy_server_mod
+
+    _attrs = {
+        "prisma_client": MagicMock(),
+        "user_api_key_cache": mock_cache,
+        "proxy_logging_obj": mock_proxy_logging_obj,
+        "master_key": "sk-master-key",
+        "general_settings": {},
+        "llm_model_list": [],
+        "llm_router": None,
+        "open_telemetry_logger": None,
+        "model_max_budget_limiter": MagicMock(),
+        "user_custom_auth": None,
+        "jwt_handler": None,
+        "litellm_proxy_admin_name": "admin",
+    }
+    _originals = {k: getattr(_proxy_server_mod, k, None) for k in _attrs}
+
+    try:
+        for k, v in _attrs.items():
+            setattr(_proxy_server_mod, k, v)
+
+        request = Request(scope={"type": "http"})
+        request._url = URL(url="/chat/completions")
+
+        with (
+            patch(
+                "litellm.proxy.auth.user_api_key_auth.get_key_object",
+                new_callable=AsyncMock,
+                return_value=valid_token,
+            ),
+            patch(
+                "litellm.proxy.auth.user_api_key_auth.get_team_object",
+                new_callable=AsyncMock,
+                return_value=fresh_team_obj,
+            ),
+        ):
+            result = await _user_api_key_auth_builder(
+                request=request,
+                api_key=f"Bearer {api_key}",
+                azure_api_key_header="",
+                anthropic_api_key_header=None,
+                google_ai_studio_api_key_header=None,
+                azure_apim_header=None,
+                request_data={},
+            )
+
+        assert result.team_metadata == {"guardrails": ["test-guardrail-333"]}, (
+            f"team_metadata was not updated from fresh team object. Got: {result.team_metadata}"
+        )
+
+    finally:
+        for k, v in _originals.items():
+            setattr(_proxy_server_mod, k, v)
+            
 # ---------------------------------------------------------------------------
+            
 # _run_centralized_common_checks — centralized authz gate
 # ---------------------------------------------------------------------------
 

@@ -1445,6 +1445,10 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
 
             if _team_obj is not None:
                 valid_token.team_object_permission = _team_obj.object_permission
+                # Keep team_metadata in sync with the freshly fetched team so that
+                # guardrails (or any other metadata) added after the key was cached
+                # are picked up on subsequent requests without a cache eviction.
+                valid_token.team_metadata = _team_obj.metadata
             else:
                 valid_token.team_object_permission = None
 
