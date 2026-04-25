@@ -1,0 +1,41 @@
+{
+  "schema_version": "1",
+  "results": [
+    {
+      "feature_id": "basic_messaging_non_streaming",
+      "provider": "anthropic",
+      "nodeid": "tests/claude_code/basic_messaging_non_streaming/test_anthropic.py::test_basic_messaging_non_streaming_anthropic[claude-haiku-4-5]",
+      "result": {"status": "pass"}
+    },
+    {
+      "feature_id": "basic_messaging_non_streaming",
+      "provider": "anthropic",
+      "nodeid": "tests/claude_code/basic_messaging_non_streaming/test_anthropic.py::test_basic_messaging_non_streaming_anthropic[claude-sonnet-4-6]",
+      "result": {"status": "pass"}
+    },
+    {
+      "feature_id": "basic_messaging_non_streaming",
+      "provider": "anthropic",
+      "nodeid": "tests/claude_code/basic_messaging_non_streaming/test_anthropic.py::test_basic_messaging_non_streaming_anthropic[claude-opus-4-7]",
+      "result": {"status": "pass"}
+    },
+    {
+      "feature_id": "tool_use",
+      "provider": "anthropic",
+      "nodeid": "tests/claude_code/tool_use/test_anthropic.py::test_x[claude-haiku-4-5]",
+      "result": {"status": "pass"}
+    },
+    {
+      "feature_id": "tool_use",
+      "provider": "anthropic",
+      "nodeid": "tests/claude_code/tool_use/test_anthropic.py::test_x[claude-sonnet-4-6]",
+      "result": {"status": "fail", "error": "[claude-sonnet-4-6] tool call dropped"}
+    },
+    {
+      "feature_id": "tool_use",
+      "provider": "bedrock_invoke",
+      "nodeid": "tests/claude_code/tool_use/test_bedrock_invoke.py::test_x[claude-haiku-4-5]",
+      "result": {"status": "not_applicable", "reason": "tool use not yet wired up for Bedrock Invoke"}
+    }
+  ]
+}

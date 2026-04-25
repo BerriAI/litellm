@@ -1,0 +1,26 @@
+# Claude Code Compatibility Matrix — feature manifest.
+#
+# Defines the row order of the matrix and maps each feature_id to its
+# human-readable display name. Adding a new feature to the matrix is a
+# three-step change:
+#   1. Append an entry to `features:` below.
+#   2. Create a directory `tests/claude_code/<feature_id>/`.
+#   3. Add per-provider test files inside that directory.
+#
+# `feature_id` MUST match the directory name on disk; the test harness
+# infers (feature, provider) for each test from its file path.
+
+schema_version: "1"
+
+# Provider column order in the rendered matrix.
+providers:
+  - anthropic
+  - bedrock_invoke
+  - bedrock_converse
+  - vertex_ai
+  - azure
+
+# Feature row order.
+features:
+  - id: basic_messaging_non_streaming
+    name: Basic messaging (non-streaming)

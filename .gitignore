@@ -124,3 +124,6 @@ crash.*.log
 # and should be committed.
 .vscode
 .pin_list.txt
+
+# Claude Code compatibility-matrix pytest artifact (CI-only output).
+compat-results.json
