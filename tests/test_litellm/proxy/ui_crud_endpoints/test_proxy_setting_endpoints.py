@@ -1147,6 +1147,53 @@ class TestProxySettingEndpoints:
         assert response.status_code == 200
         assert general_settings.get("forward_llm_provider_auth_headers") is True
 
+    def test_update_ui_settings_persists_and_syncs_disable_key_generate_for_org_admin(
+        self, mock_auth, monkeypatch
+    ):
+        """disable_key_generate_for_org_admin must be allowlisted, persisted, and synced to general_settings."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        from litellm.proxy._types import UserAPIKeyAuth
+        from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+        mock_user_auth = UserAPIKeyAuth(
+            user_id="test-user-123",
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+        )
+        app.dependency_overrides[user_api_key_auth] = lambda: mock_user_auth
+
+        monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+
+        general_settings: dict = {}
+        monkeypatch.setattr(
+            "litellm.proxy.proxy_server.general_settings", general_settings
+        )
+
+        mock_prisma = MagicMock()
+        mock_prisma.db.litellm_uisettings.upsert = AsyncMock()
+        mock_prisma.db.litellm_uisettings.find_unique = AsyncMock(return_value=None)
+        monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+
+        flag_name = "disable_key_generate_for_org_admin"
+        payload = {flag_name: True}
+
+        try:
+            response = client.patch("/update/ui_settings", json=payload)
+        finally:
+            app.dependency_overrides.clear()
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["settings"][flag_name] is True
+
+        # Persisted in DB
+        call_args = mock_prisma.db.litellm_uisettings.upsert.call_args
+        stored_settings = json.loads(call_args.kwargs["data"]["create"]["ui_settings"])
+        assert stored_settings[flag_name] is True
+
+        # Synced into general_settings so the enforcement helper sees it
+        assert general_settings.get(flag_name) is True
+
     def test_get_sso_settings_from_database(
         self, mock_proxy_config, mock_auth, monkeypatch
     ):
