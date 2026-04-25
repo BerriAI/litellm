@@ -83,6 +83,8 @@ class BaseRAGIngestion(ABC):
             credential_values = CredentialAccessor.get_credential_values(
                 credential_name
             )
+            if not credential_values:
+                return
             for key, value in credential_values.items():
                 self.vector_store_config[key] = value
             if (
