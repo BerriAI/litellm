@@ -3400,14 +3400,15 @@ async def _check_team_member_model_budget(
         )
         if model_spend < 0:
             # Cache cold (pod restart / Redis flush) — fetch authoritative value from DB.
-            # Seed spend_counter_cache immediately so concurrent auth calls for the same
-            # (user_id, team_id, model) slot use the cached value instead of each
-            # issuing another DB query (O(1) vs O(concurrent-requests) DB hits).
+            # Use async_set_cache (idempotent overwrite) not async_increment_cache:
+            # two concurrent requests that both see a miss would each call INCRBYFLOAT,
+            # doubling the seed value and producing false budget-exceeded 429s.
+            # Seed unconditionally (including zero spend) so new users don't hit DB
+            # on every auth request until their first request's cost callback fires.
             model_spend = await _reseed_spend_from_db(counter_key)
-            if model_spend > 0:
-                await spend_counter_cache.async_increment_cache(
-                    key=counter_key, value=model_spend
-                )
+            await spend_counter_cache.async_set_cache(
+                key=counter_key, value=model_spend
+            )
 
         if model_spend >= max_budget:
             raise litellm.BudgetExceededError(
