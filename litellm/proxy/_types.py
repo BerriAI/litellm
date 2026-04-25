@@ -201,6 +201,7 @@ class Litellm_EntityType(enum.Enum):
     END_USER = "end_user"
     TEAM = "team"
     TEAM_MEMBER = "team_member"
+    TEAM_MEMBER_MODEL = "team_member_model"
     ORGANIZATION = "organization"
     PROJECT = "project"
     TAG = "tag"
@@ -4502,6 +4503,7 @@ class DBSpendUpdateTransactions(TypedDict):
     key_list_transactions: Optional[Dict[str, float]]
     team_list_transactions: Optional[Dict[str, float]]
     team_member_list_transactions: Optional[Dict[str, float]]
+    team_member_model_list_transactions: Optional[Dict[str, float]]
     org_list_transactions: Optional[Dict[str, float]]
     tag_list_transactions: Optional[Dict[str, float]]
     agent_list_transactions: Optional[Dict[str, float]]
