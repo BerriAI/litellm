@@ -1513,9 +1513,13 @@ class TestIsMasterKey:
     def test_non_matching_key_returns_false(self):
         assert _is_master_key(api_key="sk-other", _master_key="sk-master") is False
 
-    def test_hashed_key_returns_true(self):
+    def test_master_key_hash_is_rejected(self):
+        """
+        ``_is_master_key`` must not accept ``hash_token(master_key)`` as
+        equivalent to the raw master key — only the raw value matches.
+        """
         from litellm.proxy.utils import hash_token
 
         master = "sk-master-key-123"
         hashed = hash_token(master)
-        assert _is_master_key(api_key=hashed, _master_key=master) is True
+        assert _is_master_key(api_key=hashed, _master_key=master) is False
