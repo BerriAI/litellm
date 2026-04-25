@@ -2111,7 +2111,12 @@ async def test_streaming_post_call_output_passes_request_data_to_make_bedrock():
         c for c in mock_make.call_args_list if c.kwargs.get("source") == "INPUT"
     ]
     assert len(input_calls) == 1
-    assert input_calls[0].kwargs.get("request_data") is request_data
+    # INPUT gets a copy (not the original) so its log entry doesn't pollute the
+    # real request_data and create a duplicate UI evaluation entry.
+    input_rd = input_calls[0].kwargs.get("request_data")
+    assert input_rd is not request_data
+    assert input_rd.get("model") == request_data["model"]
+    assert input_rd.get("messages") == request_data["messages"]
 
 
 @pytest.mark.asyncio

@@ -1270,10 +1270,24 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                 )
                 input_messages = input_filter.payload_messages or new_messages
 
+                # Route INPUT logging to a throwaway container so it doesn't
+                # create a second UI evaluation entry; the OUTPUT log is canonical.
+                _input_log_data: dict = {
+                    k: v
+                    for k, v in request_data.items()
+                    if k not in ("metadata", "litellm_metadata")
+                }
+                _input_meta = {
+                    k: v
+                    for k, v in (request_data.get("metadata") or {}).items()
+                    if k != "standard_logging_guardrail_information"
+                }
+                _input_log_data["metadata"] = _input_meta
+
                 input_task = self.make_bedrock_api_request(
                     source="INPUT",
                     messages=input_messages,
-                    request_data=request_data,
+                    request_data=_input_log_data,
                     logging_event_type=GuardrailEventHooks.post_call,
                 )
                 output_task = self.make_bedrock_api_request(
