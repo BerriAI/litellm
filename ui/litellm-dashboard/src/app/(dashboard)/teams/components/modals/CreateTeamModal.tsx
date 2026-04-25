@@ -12,6 +12,7 @@ import MCPServerSelector from "@/components/mcp_server_management/MCPServerSelec
 import AgentSelector from "@/components/agent_management/AgentSelector";
 import PremiumLoggingSettings from "@/components/common_components/PremiumLoggingSettings";
 import ModelAliasManager from "@/components/common_components/ModelAliasManager";
+import { ModelBudgetEditor } from "@/components/OldTeams";
 import React, { useEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import NotificationsManager from "@/components/molecules/notifications_manager";
@@ -494,7 +495,7 @@ const CreateTeamModal = ({
             }
             name="team_member_model_max_budget"
           >
-            <TextInput placeholder={'{"gpt-3.5-turbo": {"max_budget": 10.0}}'} />
+            <ModelBudgetEditor availableModels={modelsToPick} />
           </Form.Item>
 
           <Form.Item label="Max Budget (USD)" name="max_budget">

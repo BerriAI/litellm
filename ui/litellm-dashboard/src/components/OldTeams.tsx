@@ -188,7 +188,7 @@ interface ModelBudgetEditorProps {
   availableModels: string[];
 }
 
-const ModelBudgetEditor: React.FC<ModelBudgetEditorProps> = ({ value, onChange, availableModels }) => {
+export const ModelBudgetEditor: React.FC<ModelBudgetEditorProps> = ({ value, onChange, availableModels }) => {
   const [rows, setRows] = useState<ModelBudgetRow[]>(() => {
     if (!value || Object.keys(value).length === 0) return [];
     return Object.entries(value).map(([model, cfg]) => ({
