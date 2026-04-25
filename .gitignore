@@ -104,3 +104,5 @@ STABILIZATION_TODO.md
 
 # Claude Code compatibility-matrix pytest artifact (CI-only output).
 compat-results.json
+# Matrix JSON produced by the daily-cron publisher (pushed to litellm-docs).
+compatibility-matrix.json
