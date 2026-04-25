@@ -200,14 +200,14 @@ const ModelBudgetEditor: React.FC<ModelBudgetEditorProps> = ({ value, onChange, 
 
   const notifyChange = (newRows: ModelBudgetRow[]) => {
     if (!onChange) return;
-    const filled = newRows.filter((r) => r.model);
+    const filled = newRows.filter((r) => r.model && r.max_budget !== null);
     if (filled.length === 0) {
       onChange(undefined);
       return;
     }
     const obj: ModelBudgetValue = {};
     for (const r of filled) {
-      obj[r.model] = { max_budget: r.max_budget ?? 0 };
+      obj[r.model] = { max_budget: r.max_budget as number };
     }
     onChange(obj);
   };
