@@ -2094,7 +2094,7 @@ def test_vertexai_multimodalembedding_embedding_latest():
         response = embedding(
             model="vertex_ai/multimodalembedding@001",
             input=["hi"],
-            dimensions=1,
+            dimensions=128,
             auto_truncate=True,
             task_type="RETRIEVAL_QUERY",
         )
