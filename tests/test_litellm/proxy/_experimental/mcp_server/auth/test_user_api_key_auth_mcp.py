@@ -817,10 +817,18 @@ class TestMCPPublicRouteGuard:
         async def mock_user_api_key_auth_fails(api_key, request):
             raise HTTPException(status_code=401, detail="Invalid API key")
 
-        with patch(
-            "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
-            side_effect=mock_user_api_key_auth_fails,
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
+                side_effect=mock_user_api_key_auth_fails,
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager"
+            ) as mock_mgr,
         ):
+            # Explicit unresolvable target — proves auth still fails even
+            # when the registry has no info to fall back to.
+            mock_mgr.get_mcp_server_by_name.return_value = None
             with pytest.raises(HTTPException) as exc_info:
                 await MCPRequestHandler.process_mcp_request(scope)
             assert exc_info.value.status_code == 401
@@ -842,10 +850,16 @@ class TestMCPPublicRouteGuard:
         async def mock_user_api_key_auth_fails(api_key, request):
             raise HTTPException(status_code=401, detail="Invalid API key")
 
-        with patch(
-            "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
-            side_effect=mock_user_api_key_auth_fails,
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
+                side_effect=mock_user_api_key_auth_fails,
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager"
+            ) as mock_mgr,
         ):
+            mock_mgr.get_mcp_server_by_name.return_value = None
             with pytest.raises(HTTPException) as exc_info:
                 await MCPRequestHandler.process_mcp_request(scope)
             assert exc_info.value.status_code == 401
