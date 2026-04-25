@@ -24,3 +24,13 @@ providers:
 features:
   - id: basic_messaging_non_streaming
     name: Basic messaging (non-streaming)
+  - id: basic_messaging_streaming
+    name: Basic messaging (streaming)
+  - id: tool_use
+    name: Tool use
+  - id: prompt_caching_5m
+    name: Prompt caching (5m TTL)
+  - id: vision
+    name: Vision
+  - id: extended_thinking
+    name: Extended thinking
