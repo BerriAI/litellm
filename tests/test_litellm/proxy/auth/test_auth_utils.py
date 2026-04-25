@@ -5,6 +5,8 @@ Unit tests for auth_utils functions related to rate limiting and customer ID ext
 from typing import Optional
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.auth_utils import (
     _get_customer_id_from_standard_headers,
@@ -660,3 +662,146 @@ class TestCheckCompleteCredentials:
     def test_returns_true_when_api_key_is_valid(self):
         result = check_complete_credentials({"model": "gpt-4", "api_key": "sk-valid"})
         assert result is True
+
+
+class TestCheckCompleteCredentialsBlocksSSRF:
+    """
+    Even with credentials supplied, ``api_base`` / ``base_url`` must not
+    point at private / internal / cloud-metadata addresses. Without this
+    the gate accepts ``api_key=anything`` plus a malicious target and the
+    proxy is used as an SSRF pivot.
+    """
+
+    @pytest.mark.parametrize(
+        "url_field",
+        ["api_base", "base_url"],
+    )
+    @pytest.mark.parametrize(
+        "blocked_url",
+        [
+            "http://169.254.169.254/latest/meta-data/iam/security-credentials/",
+            "http://metadata.google.internal/computeMetadata/v1/",
+            "http://127.0.0.1:8080/admin",
+            "http://10.0.0.1/",
+            "http://192.168.1.1/",
+        ],
+    )
+    def test_rejects_private_or_metadata_targets(self, url_field, blocked_url):
+        with pytest.raises(ValueError) as exc_info:
+            check_complete_credentials(
+                {
+                    "model": "gpt-4",
+                    "api_key": "sk-some-clientside-key",
+                    url_field: blocked_url,
+                }
+            )
+        assert url_field in str(exc_info.value)
+        assert "SSRF" in str(exc_info.value)
+
+    def test_allows_public_https_target(self):
+        # No DNS / SSRF guard objection on a normal public host.
+        result = check_complete_credentials(
+            {
+                "model": "gpt-4",
+                "api_key": "sk-some-clientside-key",
+                "api_base": "https://api.openai.com/v1",
+            }
+        )
+        assert result is True
+
+
+class TestGetDynamicLitellmParamsClearsAdminConfigOnBaseOverride:
+    """
+    When the caller redirects ``api_base`` / ``base_url`` to their own
+    server, admin-set fields like ``OpenAI-Organization``, ``extra_body``,
+    AWS / Vertex / Azure tokens, and per-deployment ``api_version`` must
+    NOT flow through to that destination.
+    """
+
+    def test_clears_admin_organization_and_extra_body_on_base_override(self):
+        from litellm.router_utils.clientside_credential_handler import (
+            get_dynamic_litellm_params,
+        )
+
+        admin_params = {
+            "model": "gpt-4",
+            "api_key": "sk-admin-key",
+            "api_base": "https://admin.upstream/v1",
+            "organization": "org-admin-corp",
+            "extra_body": {"x-admin-secret": "super-secret"},
+            "api_version": "2026-04-01",
+        }
+        out = get_dynamic_litellm_params(
+            litellm_params=dict(admin_params),
+            request_kwargs={
+                "api_key": "sk-attacker",
+                "api_base": "https://attacker.example",
+            },
+        )
+        assert out["api_base"] == "https://attacker.example"
+        assert out["api_key"] == "sk-attacker"
+        assert "organization" not in out
+        assert "extra_body" not in out
+        assert "api_version" not in out
+
+    def test_clears_aws_and_vertex_secrets_on_base_override(self):
+        from litellm.router_utils.clientside_credential_handler import (
+            get_dynamic_litellm_params,
+        )
+
+        admin_params = {
+            "model": "bedrock/claude-3",
+            "aws_access_key_id": "AKIA-EXAMPLE",
+            "aws_secret_access_key": "secret-example",
+            "aws_session_token": "session-example",
+            "vertex_credentials": '{"private_key":"-----BEGIN..."}',
+            "vertex_project": "admin-gcp-project",
+        }
+        out = get_dynamic_litellm_params(
+            litellm_params=dict(admin_params),
+            request_kwargs={"base_url": "https://attacker.example"},
+        )
+        assert "aws_access_key_id" not in out
+        assert "aws_secret_access_key" not in out
+        assert "aws_session_token" not in out
+        assert "vertex_credentials" not in out
+        assert "vertex_project" not in out
+
+    def test_preserves_admin_config_when_caller_resupplies(self):
+        from litellm.router_utils.clientside_credential_handler import (
+            get_dynamic_litellm_params,
+        )
+
+        out = get_dynamic_litellm_params(
+            litellm_params={
+                "api_base": "https://admin.upstream/v1",
+                "organization": "org-admin",
+                "extra_body": {"admin": "value"},
+            },
+            request_kwargs={
+                "api_base": "https://attacker.example",
+                "organization": "org-attacker",
+                "extra_body": {"attacker": "value"},
+            },
+        )
+        assert out["organization"] == "org-admin"
+        assert out["extra_body"] == {"admin": "value"}
+
+    def test_no_clearing_when_only_api_key_overridden(self):
+        from litellm.router_utils.clientside_credential_handler import (
+            get_dynamic_litellm_params,
+        )
+
+        # Caller only overrides api_key (BYOK pattern); admin's organization /
+        # extra_body / region still apply because the destination is unchanged.
+        out = get_dynamic_litellm_params(
+            litellm_params={
+                "api_base": "https://admin.upstream/v1",
+                "organization": "org-admin",
+                "api_version": "2026-04-01",
+            },
+            request_kwargs={"api_key": "sk-byok"},
+        )
+        assert out["organization"] == "org-admin"
+        assert out["api_version"] == "2026-04-01"
+        assert out["api_base"] == "https://admin.upstream/v1"

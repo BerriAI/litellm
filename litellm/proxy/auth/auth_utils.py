@@ -53,6 +53,12 @@ def _check_valid_ip(
 def check_complete_credentials(request_body: dict) -> bool:
     """
     if 'api_base' in request body. Check if complete credentials given. Prevent malicious attacks.
+
+    Supplying an ``api_key`` is necessary but not sufficient: even with
+    credentials supplied, an ``api_base`` / ``base_url`` that resolves to a
+    private/internal/cloud-metadata address would still allow the proxy to
+    be used as an SSRF pivot. Validate any URL fields here so the gate
+    can't be bypassed with ``api_key=anything`` plus a malicious target.
     """
     given_model: Optional[str] = None
 
@@ -70,10 +76,24 @@ def check_complete_credentials(request_body: dict) -> bool:
         return False
 
     api_key_value = request_body.get("api_key")
-    if api_key_value and isinstance(api_key_value, str) and api_key_value.strip():
-        return True
+    if not (api_key_value and isinstance(api_key_value, str) and api_key_value.strip()):
+        return False
 
-    return False
+    from litellm.litellm_core_utils.url_utils import SSRFError, validate_url
+
+    for url_field in ("api_base", "base_url"):
+        url_value = request_body.get(url_field)
+        if not url_value or not isinstance(url_value, str):
+            continue
+        try:
+            validate_url(url_value)
+        except SSRFError as e:
+            raise ValueError(
+                f"Rejected request: client-side {url_field}={url_value!r} "
+                f"is rejected by the SSRF guard ({e})."
+            )
+
+    return True
 
 
 def check_regex_or_str_match(request_body_value: Any, regex_str: str) -> bool:
