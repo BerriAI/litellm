@@ -677,8 +677,8 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
               />
             )}
 
-            {/* BYOK toggle - only for OpenAPI */}
-            {transportType === TRANSPORT.OPENAPI && (
+            {/* BYOK toggle - only for OpenAPI, admins only */}
+            {transportType === TRANSPORT.OPENAPI && isAdmin && (
               <>
                 <Form.Item
                   label={
