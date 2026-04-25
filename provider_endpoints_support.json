@@ -66,24 +66,6 @@
         "a2a": false
       }
     },
-    "aiml": {
-      "display_name": "AI/ML API (`aiml`)",
-      "url": "https://docs.litellm.ai/docs/providers/aiml",
-      "endpoints": {
-        "chat_completions": true,
-        "messages": true,
-        "responses": true,
-        "embeddings": true,
-        "image_generations": true,
-        "audio_transcriptions": false,
-        "audio_speech": false,
-        "moderations": false,
-        "batches": false,
-        "rerank": false,
-        "a2a": true,
-        "interactions": true
-      }
-    },
     "ai21": {
       "display_name": "AI21 (`ai21`)",
       "url": "https://docs.litellm.ai/docs/providers/ai21",
@@ -111,6 +93,24 @@
         "responses": true,
         "embeddings": false,
         "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": true,
+        "interactions": true
+      }
+    },
+    "aiml": {
+      "display_name": "AI/ML API (`aiml`)",
+      "url": "https://docs.litellm.ai/docs/providers/aiml",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": true,
+        "embeddings": true,
+        "image_generations": true,
         "audio_transcriptions": false,
         "audio_speech": false,
         "moderations": false,
@@ -229,68 +229,6 @@
         "interactions": true
       }
     },
-    "bedrock": {
-      "display_name": "AWS - Bedrock (`bedrock`)",
-      "url": "https://docs.litellm.ai/docs/providers/bedrock",
-      "endpoints": {
-        "chat_completions": true,
-        "messages": true,
-        "responses": true,
-        "embeddings": true,
-        "image_generations": false,
-        "audio_transcriptions": false,
-        "audio_speech": false,
-        "moderations": false,
-        "batches": false,
-        "rerank": true,
-        "a2a": true,
-        "interactions": true,
-        "bedrock_invoke": true,
-        "bedrock_converse": true,
-        "vector_stores_search": true,
-        "count_tokens": true,
-        "rag_ingest": true,
-        "rag_query": true
-      }
-    },
-    "s3_vectors": {
-      "display_name": "AWS S3 Vectors (`s3_vectors`)",
-      "url": "https://docs.litellm.ai/docs/providers/s3_vectors",
-      "endpoints": {
-        "chat_completions": false,
-        "messages": false,
-        "responses": false,
-        "embeddings": false,
-        "image_generations": false,
-        "audio_transcriptions": false,
-        "audio_speech": false,
-        "moderations": false,
-        "batches": false,
-        "rerank": false,
-        "a2a": false,
-        "interactions": false,
-        "vector_stores_create": true,
-        "vector_stores_search": true
-      }
-    },
-    "sagemaker": {
-      "display_name": "AWS - Sagemaker (`sagemaker`)",
-      "url": "https://docs.litellm.ai/docs/providers/aws_sagemaker",
-      "endpoints": {
-        "chat_completions": true,
-        "messages": true,
-        "responses": true,
-        "embeddings": true,
-        "image_generations": false,
-        "audio_transcriptions": false,
-        "audio_speech": false,
-        "moderations": false,
-        "batches": false,
-        "rerank": false,
-        "a2a": true,
-        "interactions": true
-      }
-    },
     "aws_polly": {
       "display_name": "AWS - Polly (`aws_polly`)",
       "url": "https://docs.litellm.ai/docs/providers/aws_polly",
@@ -351,23 +289,6 @@
         "vector_stores_search": true
       }
     },
-    "azure_ai/doc-intelligence": {
-      "display_name": "Azure AI Document Intelligence (`azure_ai/doc-intelligence`)",
-      "url": "https://docs.litellm.ai/docs/providers/azure_document_intelligence",
-      "endpoints": {
-        "chat_completions": false,
-        "messages": false,
-        "responses": false,
-        "embeddings": false,
-        "image_generations": false,
-        "audio_transcriptions": false,
-        "audio_speech": false,
-        "moderations": false,
-        "batches": false,
-        "rerank": false,
-        "ocr": true
-      }
-    },
     "azure_ai/agents": {
       "display_name": "Azure AI Foundry Agents (`azure_ai/agents`)",
       "url": "https://docs.litellm.ai/docs/providers/azure_ai_agents",
@@ -384,6 +305,23 @@
         "rerank": false,
         "a2a": true,
         "interactions": true
+      }
+    },
+    "azure_ai/doc-intelligence": {
+      "display_name": "Azure AI Document Intelligence (`azure_ai/doc-intelligence`)",
+      "url": "https://docs.litellm.ai/docs/providers/azure_document_intelligence",
+      "endpoints": {
+        "chat_completions": false,
+        "messages": false,
+        "responses": false,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "ocr": true
       }
     },
     "azure_text": {
@@ -420,6 +358,81 @@
         "rerank": false,
         "a2a": true,
         "interactions": true
+      }
+    },
+    "bedrock": {
+      "display_name": "AWS - Bedrock (`bedrock`)",
+      "url": "https://docs.litellm.ai/docs/providers/bedrock",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": true,
+        "embeddings": true,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": true,
+        "a2a": true,
+        "interactions": true,
+        "bedrock_invoke": true,
+        "bedrock_converse": true,
+        "vector_stores_search": true,
+        "count_tokens": true,
+        "rag_ingest": true,
+        "rag_query": true
+      }
+    },
+    "bedrock_mantle": {
+      "display_name": "Bedrock Mantle (`bedrock_mantle`)",
+      "url": "https://docs.litellm.ai/docs/providers/bedrock",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": true,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": false
+      }
+    },
+    "black_forest_labs": {
+      "display_name": "Black Forest Labs (`black_forest_labs`)",
+      "url": "https://docs.litellm.ai/docs/providers/black_forest_labs",
+      "endpoints": {
+        "chat_completions": false,
+        "messages": false,
+        "responses": false,
+        "embeddings": false,
+        "image_generations": true,
+        "image_edits": true,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false
+      }
+    },
+    "brave": {
+      "display_name": "Brave Search (`brave`)",
+      "url": "https://docs.litellm.ai/docs/search/brave",
+      "endpoints": {
+        "chat_completions": false,
+        "messages": false,
+        "responses": false,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "search": true
       }
     },
     "bytez": {
@@ -461,6 +474,22 @@
     "charity_engine": {
       "display_name": "Charity Engine (`charity_engine`)",
       "url": "https://docs.litellm.ai/docs/providers/charity_engine",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": true,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false
+      }
+    },
+    "chatgpt": {
+      "display_name": "ChatGPT Subscription (`chatgpt`)",
+      "url": "https://docs.litellm.ai/docs/providers/chatgpt",
       "endpoints": {
         "chat_completions": true,
         "messages": true,
@@ -603,6 +632,24 @@
     "compactifai": {
       "display_name": "CompactifAI (`compactifai`)",
       "url": "https://docs.litellm.ai/docs/providers/compactifai",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": true,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": true,
+        "interactions": true
+      }
+    },
+    "cursor": {
+      "display_name": "Cursor BYOK (`cursor`)",
+      "url": "https://docs.litellm.ai/docs/providers/cursor",
       "endpoints": {
         "chat_completions": true,
         "messages": true,
@@ -779,6 +826,24 @@
         "interactions": true
       }
     },
+    "docker_model_runner": {
+      "display_name": "Docker Model Runner (`docker_model_runner`)",
+      "url": "https://docs.litellm.ai/docs/providers/docker_model_runner",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": true,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": true,
+        "interactions": true
+      }
+    },
     "duckduckgo": {
       "display_name": "DuckDuckGo (`duckduckgo`)",
       "url": "https://docs.litellm.ai/docs/search/duckduckgo",
@@ -814,40 +879,6 @@
         "interactions": true
       }
     },
-    "exa_ai": {
-      "display_name": "Exa AI (`exa_ai`)",
-      "url": "https://docs.litellm.ai/docs/search/exa_ai",
-      "endpoints": {
-        "chat_completions": false,
-        "messages": false,
-        "responses": false,
-        "embeddings": false,
-        "image_generations": false,
-        "audio_transcriptions": false,
-        "audio_speech": false,
-        "moderations": false,
-        "batches": false,
-        "rerank": false,
-        "search": true
-      }
-    },
-    "brave": {
-      "display_name": "Brave Search (`brave`)",
-      "url": "https://docs.litellm.ai/docs/search/brave",
-      "endpoints": {
-        "chat_completions": false,
-        "messages": false,
-        "responses": false,
-        "embeddings": false,
-        "image_generations": false,
-        "audio_transcriptions": false,
-        "audio_speech": false,
-        "moderations": false,
-        "batches": false,
-        "rerank": false,
-        "search": true
-      }
-    },
     "empower": {
       "display_name": "Empower (`empower`)",
       "url": "https://docs.litellm.ai/docs/providers/empower",
@@ -864,6 +895,23 @@
         "rerank": false,
         "a2a": true,
         "interactions": true
+      }
+    },
+    "exa_ai": {
+      "display_name": "Exa AI (`exa_ai`)",
+      "url": "https://docs.litellm.ai/docs/search/exa_ai",
+      "endpoints": {
+        "chat_completions": false,
+        "messages": false,
+        "responses": false,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "search": true
       }
     },
     "fal_ai": {
@@ -902,6 +950,23 @@
         "interactions": true
       }
     },
+    "firecrawl": {
+      "display_name": "Firecrawl (`firecrawl`)",
+      "url": "https://docs.litellm.ai/docs/search/firecrawl",
+      "endpoints": {
+        "chat_completions": false,
+        "messages": false,
+        "responses": false,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "search": true
+      }
+    },
     "fireworks_ai": {
       "display_name": "Fireworks AI (`fireworks_ai`)",
       "url": "https://docs.litellm.ai/docs/providers/fireworks_ai",
@@ -920,43 +985,27 @@
         "interactions": true
       }
     },
-    "firecrawl": {
-      "display_name": "Firecrawl (`firecrawl`)",
-      "url": "https://docs.litellm.ai/docs/search/firecrawl",
-      "endpoints": {
-        "chat_completions": false,
-        "messages": false,
-        "responses": false,
-        "embeddings": false,
-        "image_generations": false,
-        "audio_transcriptions": false,
-        "audio_speech": false,
-        "moderations": false,
-        "batches": false,
-        "rerank": false,
-        "search": true
-      }
-    },
-    "linkup": {
-      "display_name": "Linkup (`linkup`)",
-      "url": "https://docs.litellm.ai/docs/search/linkup",
-      "endpoints": {
-        "chat_completions": false,
-        "messages": false,
-        "responses": false,
-        "embeddings": false,
-        "image_generations": false,
-        "audio_transcriptions": false,
-        "audio_speech": false,
-        "moderations": false,
-        "batches": false,
-        "rerank": false,
-        "search": true
-      }
-    },
     "friendliai": {
       "display_name": "FriendliAI (`friendliai`)",
       "url": "https://docs.litellm.ai/docs/providers/friendliai",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": true,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": true,
+        "interactions": true
+      }
+    },
+    "futurmix": {
+      "display_name": "FuturMix (`futurmix`)",
+      "url": "https://docs.litellm.ai/docs/providers/futurmix",
       "endpoints": {
         "chat_completions": true,
         "messages": true,
@@ -990,9 +1039,42 @@
         "interactions": true
       }
     },
-    "github_copilot": {
-      "display_name": "GitHub Copilot (`github_copilot`)",
-      "url": "https://docs.litellm.ai/docs/providers/github_copilot",
+    "gemini": {
+      "display_name": "Google AI Studio - Gemini (`gemini`)",
+      "url": "https://docs.litellm.ai/docs/providers/gemini",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": true,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "interactions": true,
+        "a2a": true,
+        "vector_stores_search": true,
+        "count_tokens": true,
+        "rag_ingest": true,
+        "realtime": true,
+        "generateContent": true
+      }
+    },
+    "gigachat": {
+      "display_name": "GigaChat (`gigachat`)",
+      "url": "https://docs.litellm.ai/docs/providers/gigachat",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": true,
+        "embeddings": true
+      }
+    },
+    "github": {
+      "display_name": "GitHub Models (`github`)",
+      "url": "https://docs.litellm.ai/docs/providers/github",
       "endpoints": {
         "chat_completions": true,
         "messages": true,
@@ -1008,27 +1090,9 @@
         "interactions": true
       }
     },
-    "chatgpt": {
-      "display_name": "ChatGPT Subscription (`chatgpt`)",
-      "url": "https://docs.litellm.ai/docs/providers/chatgpt",
-      "endpoints": {
-        "chat_completions": true,
-        "messages": true,
-        "responses": true,
-        "embeddings": false,
-        "image_generations": false,
-        "audio_transcriptions": false,
-        "audio_speech": false,
-        "moderations": false,
-        "batches": false,
-        "rerank": false,
-        "a2a": false,
-        "interactions": false
-      }
-    },
-    "github": {
-      "display_name": "GitHub Models (`github`)",
-      "url": "https://docs.litellm.ai/docs/providers/github",
+    "github_copilot": {
+      "display_name": "GitHub Copilot (`github_copilot`)",
+      "url": "https://docs.litellm.ai/docs/providers/github_copilot",
       "endpoints": {
         "chat_completions": true,
         "messages": true,
@@ -1062,53 +1126,11 @@
         "interactions": true
       }
     },
-    "vertex_ai": {
-      "display_name": "Google - Vertex AI (`vertex_ai`)",
-      "url": "https://docs.litellm.ai/docs/providers/vertex",
+    "google_pse": {
+      "display_name": "Google PSE (`google_pse`)",
+      "url": "https://docs.litellm.ai/docs/search/google_pse",
       "endpoints": {
-        "chat_completions": true,
-        "messages": true,
-        "responses": true,
-        "embeddings": true,
-        "image_generations": true,
-        "audio_transcriptions": false,
-        "audio_speech": true,
-        "moderations": false,
-        "batches": false,
-        "rerank": false,
-        "ocr": true,
-        "a2a": true,
-        "interactions": true,
-        "vector_stores_search": true,
-        "count_tokens": true,
-        "fine_tuning": true,
-        "rag_ingest": true,
-        "rag_query": true,
-        "generateContent": true,
-        "realtime": true
-      }
-    },
-    "gemini": {
-      "display_name": "Google AI Studio - Gemini (`gemini`)",
-      "url": "https://docs.litellm.ai/docs/providers/gemini",
-      "endpoints": {
-        "chat_completions": true,
-        "messages": true,
-        "responses": true,
-        "embeddings": false,
-        "image_generations": false,
-        "audio_transcriptions": false,
-        "audio_speech": false,
-        "moderations": false,
-        "batches": false,
-        "rerank": false,
-        "interactions": true,
-        "a2a": true,
-        "vector_stores_search": true,
-        "count_tokens": true,
-        "rag_ingest": true,
-        "realtime": true,
-        "generateContent": true
+        "search": true
       }
     },
     "gradient_ai": {
@@ -1145,6 +1167,15 @@
         "rerank": false,
         "a2a": true,
         "interactions": true
+      }
+    },
+    "helicone": {
+      "display_name": "Helicone (`helicone`)",
+      "url": "https://docs.litellm.ai/docs/providers/helicone",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": true
       }
     },
     "heroku": {
@@ -1220,24 +1251,6 @@
         "interactions": true
       }
     },
-    "watsonx": {
-      "display_name": "IBM - Watsonx.ai (`watsonx`)",
-      "url": "https://docs.litellm.ai/docs/providers/watsonx",
-      "endpoints": {
-        "chat_completions": true,
-        "messages": true,
-        "responses": true,
-        "embeddings": true,
-        "image_generations": false,
-        "audio_transcriptions": true,
-        "audio_speech": false,
-        "moderations": false,
-        "batches": false,
-        "rerank": false,
-        "a2a": true,
-        "interactions": true
-      }
-    },
     "infinity": {
       "display_name": "Infinity (`infinity`)",
       "url": "https://docs.litellm.ai/docs/providers/infinity",
@@ -1288,6 +1301,24 @@
         "interactions": true
       }
     },
+    "langgraph": {
+      "display_name": "LangGraph (`langgraph`)",
+      "url": "https://docs.litellm.ai/docs/providers/langgraph",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": true,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": true,
+        "interactions": true
+      }
+    },
     "lemonade": {
       "display_name": "Lemonade (`lemonade`)",
       "url": "https://docs.litellm.ai/docs/providers/lemonade",
@@ -1304,6 +1335,23 @@
         "rerank": false,
         "a2a": true,
         "interactions": true
+      }
+    },
+    "linkup": {
+      "display_name": "Linkup (`linkup`)",
+      "url": "https://docs.litellm.ai/docs/search/linkup",
+      "endpoints": {
+        "chat_completions": false,
+        "messages": false,
+        "responses": false,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "search": true
       }
     },
     "litellm_proxy": {
@@ -1342,6 +1390,15 @@
         "interactions": true
       }
     },
+    "llamagate": {
+      "display_name": "LlamaGate (`llamagate`)",
+      "url": "https://docs.litellm.ai/docs/providers/llamagate",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": true
+      }
+    },
     "lm_studio": {
       "display_name": "LM Studio (`lm_studio`)",
       "url": "https://docs.litellm.ai/docs/providers/lm_studio",
@@ -1355,6 +1412,25 @@
         "audio_speech": false,
         "moderations": false,
         "batches": false,
+        "rerank": false,
+        "a2a": true,
+        "interactions": true
+      }
+    },
+    "manus": {
+      "display_name": "Manus (`manus`)",
+      "url": "https://docs.litellm.ai/docs/providers/manus",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": true,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "files": true,
         "rerank": false,
         "a2a": true,
         "interactions": true
@@ -1396,6 +1472,22 @@
         "interactions": true
       }
     },
+    "milvus": {
+      "display_name": "Milvus (`milvus`)",
+      "url": "https://docs.litellm.ai/docs/providers/milvus_vector_stores",
+      "endpoints": {
+        "vector_stores_search": true
+      }
+    },
+    "minimax": {
+      "display_name": "Minimax (`minimax`)",
+      "url": "https://docs.litellm.ai/docs/providers/minimax",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": true
+      }
+    },
     "mistral": {
       "display_name": "Mistral AI API (`mistral`)",
       "url": "https://docs.litellm.ai/docs/providers/mistral",
@@ -1418,24 +1510,6 @@
     "moonshot": {
       "display_name": "Moonshot (`moonshot`)",
       "url": "https://docs.litellm.ai/docs/providers/moonshot",
-      "endpoints": {
-        "chat_completions": true,
-        "messages": true,
-        "responses": true,
-        "embeddings": false,
-        "image_generations": false,
-        "audio_transcriptions": false,
-        "audio_speech": false,
-        "moderations": false,
-        "batches": false,
-        "rerank": false,
-        "a2a": true,
-        "interactions": true
-      }
-    },
-    "docker_model_runner": {
-      "display_name": "Docker Model Runner (`docker_model_runner`)",
-      "url": "https://docs.litellm.ai/docs/providers/docker_model_runner",
       "endpoints": {
         "chat_completions": true,
         "messages": true,
@@ -1785,6 +1859,13 @@
         "interactions": true
       }
     },
+    "pg_vector": {
+      "display_name": "PG Vector (`pg_vector`)",
+      "url": "https://docs.litellm.ai/docs/providers/pg_vector",
+      "endpoints": {
+        "vector_stores_search": true
+      }
+    },
     "poe": {
       "display_name": "Poe (`poe`)",
       "endpoints": {
@@ -1799,6 +1880,24 @@
         "batches": false,
         "rerank": false,
         "a2a": false
+      }
+    },
+    "predibase": {
+      "display_name": "Predibase (`predibase`)",
+      "url": "https://docs.litellm.ai/docs/providers/predibase",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": true,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": true,
+        "interactions": true
       }
     },
     "publicai": {
@@ -1819,9 +1918,26 @@
         "interactions": true
       }
     },
-    "predibase": {
-      "display_name": "Predibase (`predibase`)",
-      "url": "https://docs.litellm.ai/docs/providers/predibase",
+    "pydantic_ai_agents": {
+      "display_name": "Pydantic AI Agents (`pydantic_ai_agents`)",
+      "url": "https://docs.litellm.ai/docs/providers/pydantic_ai_agent",
+      "endpoints": {
+        "chat_completions": false,
+        "messages": false,
+        "responses": false,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": true
+      }
+    },
+    "ragflow": {
+      "display_name": "RAGFlow (`ragflow`)",
+      "url": "https://docs.litellm.ai/docs/providers/ragflow",
       "endpoints": {
         "chat_completions": true,
         "messages": true,
@@ -1833,6 +1949,7 @@
         "moderations": false,
         "batches": false,
         "rerank": false,
+        "vector_stores_create": true,
         "a2a": true,
         "interactions": true
       }
@@ -1888,6 +2005,44 @@
         "video_generations": true
       }
     },
+    "s3_vectors": {
+      "display_name": "AWS S3 Vectors (`s3_vectors`)",
+      "url": "https://docs.litellm.ai/docs/providers/s3_vectors",
+      "endpoints": {
+        "chat_completions": false,
+        "messages": false,
+        "responses": false,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": false,
+        "interactions": false,
+        "vector_stores_create": true,
+        "vector_stores_search": true
+      }
+    },
+    "sagemaker": {
+      "display_name": "AWS - Sagemaker (`sagemaker`)",
+      "url": "https://docs.litellm.ai/docs/providers/aws_sagemaker",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": true,
+        "embeddings": true,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": true,
+        "interactions": true
+      }
+    },
     "sagemaker_chat": {
       "display_name": "Sagemaker Chat (`sagemaker_chat`)",
       "url": "https://docs.litellm.ai/docs/providers/aws_sagemaker",
@@ -1904,23 +2059,6 @@
         "rerank": false,
         "a2a": true,
         "interactions": true
-      }
-    },
-    "searxng": {
-      "display_name": "SearXNG (`searxng`)",
-      "url": "https://docs.litellm.ai/docs/search/searxng",
-      "endpoints": {
-        "chat_completions": false,
-        "messages": false,
-        "responses": false,
-        "embeddings": false,
-        "image_generations": false,
-        "audio_transcriptions": false,
-        "audio_speech": false,
-        "moderations": false,
-        "batches": false,
-        "rerank": false,
-        "search": true
       }
     },
     "sambanova": {
@@ -1959,6 +2097,15 @@
         "interactions": true
       }
     },
+    "sarvam": {
+      "display_name": "Sarvam (`sarvam`)",
+      "url": "https://docs.litellm.ai/docs/providers/sarvam",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": true
+      }
+    },
     "scaleway": {
       "display_name": "Scaleway (`scaleway`)",
       "url": "https://docs.litellm.ai/docs/providers/scaleway",
@@ -1975,6 +2122,48 @@
         "rerank": false,
         "a2a": true,
         "interactions": true
+      }
+    },
+    "searchapi": {
+      "display_name": "SearchAPI (`searchapi`)",
+      "url": "https://docs.litellm.ai/docs/providers/searchapi",
+      "endpoints": {
+        "chat_completions": false,
+        "messages": false,
+        "responses": false,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "search": true,
+        "a2a": false
+      }
+    },
+    "searxng": {
+      "display_name": "SearXNG (`searxng`)",
+      "url": "https://docs.litellm.ai/docs/search/searxng",
+      "endpoints": {
+        "chat_completions": false,
+        "messages": false,
+        "responses": false,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "search": true
+      }
+    },
+    "serper": {
+      "display_name": "Serper (`serper`)",
+      "url": "https://docs.litellm.ai/docs/search/serper",
+      "endpoints": {
+        "search": true
       }
     },
     "snowflake": {
@@ -1995,6 +2184,23 @@
         "interactions": true
       }
     },
+    "stability": {
+      "display_name": "Stability AI (`stability`)",
+      "url": "https://docs.litellm.ai/docs/providers/stability",
+      "endpoints": {
+        "chat_completions": false,
+        "messages": false,
+        "responses": false,
+        "embeddings": false,
+        "image_generations": true,
+        "image_edits": true,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false
+      }
+    },
     "synthetic": {
       "display_name": "Synthetic (`synthetic`)",
       "endpoints": {
@@ -2009,6 +2215,13 @@
         "batches": false,
         "rerank": false,
         "a2a": false
+      }
+    },
+    "tavily": {
+      "display_name": "Tavily (`tavily`)",
+      "url": "https://docs.litellm.ai/docs/search/tavily",
+      "endpoints": {
+        "search": true
       }
     },
     "text-completion-codestral": {
@@ -2072,20 +2285,6 @@
         "image_variations": true
       }
     },
-    "tavily": {
-      "display_name": "Tavily (`tavily`)",
-      "url": "https://docs.litellm.ai/docs/search/tavily",
-      "endpoints": {
-        "search": true
-      }
-    },
-    "serper": {
-      "display_name": "Serper (`serper`)",
-      "url": "https://docs.litellm.ai/docs/search/serper",
-      "endpoints": {
-        "search": true
-      }
-    },
     "triton": {
       "display_name": "Triton (`triton`)",
       "url": "https://docs.litellm.ai/docs/providers/triton-inference-server",
@@ -2122,9 +2321,71 @@
         "interactions": true
       }
     },
+    "venice": {
+      "display_name": "Venice.ai (`venice`)",
+      "url": "https://docs.litellm.ai/docs/providers/venice",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": true,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": true,
+        "interactions": true
+      }
+    },
     "vercel_ai_gateway": {
       "display_name": "Vercel AI Gateway (`vercel_ai_gateway`)",
       "url": "https://docs.litellm.ai/docs/providers/vercel_ai_gateway",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": true,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": true,
+        "interactions": true
+      }
+    },
+    "vertex_ai": {
+      "display_name": "Google - Vertex AI (`vertex_ai`)",
+      "url": "https://docs.litellm.ai/docs/providers/vertex",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": true,
+        "embeddings": true,
+        "image_generations": true,
+        "audio_transcriptions": false,
+        "audio_speech": true,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "ocr": true,
+        "a2a": true,
+        "interactions": true,
+        "vector_stores_search": true,
+        "count_tokens": true,
+        "fine_tuning": true,
+        "rag_ingest": true,
+        "rag_query": true,
+        "generateContent": true,
+        "realtime": true
+      }
+    },
+    "vertex_ai/agent_engine": {
+      "display_name": "Vertex AI Agent Engine (`vertex_ai/agent_engine`)",
+      "url": "https://docs.litellm.ai/docs/providers/vertex_ai_agent_engine",
       "endpoints": {
         "chat_completions": true,
         "messages": true,
@@ -2211,6 +2472,24 @@
         "interactions": true
       }
     },
+    "watsonx": {
+      "display_name": "IBM - Watsonx.ai (`watsonx`)",
+      "url": "https://docs.litellm.ai/docs/providers/watsonx",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": true,
+        "embeddings": true,
+        "image_generations": false,
+        "audio_transcriptions": true,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": true,
+        "interactions": true
+      }
+    },
     "watsonx_text": {
       "display_name": "Watsonx Text (`watsonx_text`)",
       "url": "https://docs.litellm.ai/docs/providers/watsonx",
@@ -2248,6 +2527,15 @@
         "realtime": true
       }
     },
+    "xiaomi_mimo": {
+      "display_name": "Xiaomi Mimo (`xiaomi_mimo`)",
+      "url": "https://docs.litellm.ai/docs/providers/xiaomi_mimo",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": true
+      }
+    },
     "xinference": {
       "display_name": "Xinference (`xinference`)",
       "url": "https://docs.litellm.ai/docs/providers/xinference",
@@ -2280,294 +2568,6 @@
         "rerank": false,
         "a2a": true,
         "interactions": true
-      }
-    },
-    "ragflow": {
-      "display_name": "RAGFlow (`ragflow`)",
-      "url": "https://docs.litellm.ai/docs/providers/ragflow",
-      "endpoints": {
-        "chat_completions": true,
-        "messages": true,
-        "responses": true,
-        "embeddings": false,
-        "image_generations": false,
-        "audio_transcriptions": false,
-        "audio_speech": false,
-        "moderations": false,
-        "batches": false,
-        "rerank": false,
-        "vector_stores_create": true,
-        "a2a": true,
-        "interactions": true
-      }
-    },
-    "cursor": {
-      "display_name": "Cursor BYOK (`cursor`)",
-      "url": "https://docs.litellm.ai/docs/providers/cursor",
-      "endpoints": {
-        "chat_completions": true,
-        "messages": true,
-        "responses": true,
-        "embeddings": false,
-        "image_generations": false,
-        "audio_transcriptions": false,
-        "audio_speech": false,
-        "moderations": false,
-        "batches": false,
-        "rerank": false,
-        "a2a": true,
-        "interactions": true
-      }
-    },
-    "langgraph": {
-      "display_name": "LangGraph (`langgraph`)",
-      "url": "https://docs.litellm.ai/docs/providers/langgraph",
-      "endpoints": {
-        "chat_completions": true,
-        "messages": true,
-        "responses": true,
-        "embeddings": false,
-        "image_generations": false,
-        "audio_transcriptions": false,
-        "audio_speech": false,
-        "moderations": false,
-        "batches": false,
-        "rerank": false,
-        "a2a": true,
-        "interactions": true
-      }
-    },
-    "vertex_ai/agent_engine": {
-      "display_name": "Vertex AI Agent Engine (`vertex_ai/agent_engine`)",
-      "url": "https://docs.litellm.ai/docs/providers/vertex_ai_agent_engine",
-      "endpoints": {
-        "chat_completions": true,
-        "messages": true,
-        "responses": true,
-        "embeddings": false,
-        "image_generations": false,
-        "audio_transcriptions": false,
-        "audio_speech": false,
-        "moderations": false,
-        "batches": false,
-        "rerank": false,
-        "a2a": true,
-        "interactions": true
-      }
-    },
-    "pydantic_ai_agents": {
-      "display_name": "Pydantic AI Agents (`pydantic_ai_agents`)",
-      "url": "https://docs.litellm.ai/docs/providers/pydantic_ai_agent",
-      "endpoints": {
-        "chat_completions": false,
-        "messages": false,
-        "responses": false,
-        "embeddings": false,
-        "image_generations": false,
-        "audio_transcriptions": false,
-        "audio_speech": false,
-        "moderations": false,
-        "batches": false,
-        "rerank": false,
-        "a2a": true
-      }
-    },
-    "stability": {
-      "display_name": "Stability AI (`stability`)",
-      "url": "https://docs.litellm.ai/docs/providers/stability",
-      "endpoints": {
-        "chat_completions": false,
-        "messages": false,
-        "responses": false,
-        "embeddings": false,
-        "image_generations": true,
-        "image_edits": true,
-        "audio_transcriptions": false,
-        "audio_speech": false,
-        "moderations": false,
-        "batches": false,
-        "rerank": false
-      }
-    },
-    "venice": {
-      "display_name": "Venice.ai (`venice`)",
-      "url": "https://docs.litellm.ai/docs/providers/venice",
-      "endpoints": {
-        "chat_completions": true,
-        "messages": true,
-        "responses": true,
-        "embeddings": false,
-        "image_generations": false,
-        "audio_transcriptions": false,
-        "audio_speech": false,
-        "moderations": false,
-        "batches": false,
-        "rerank": false,
-        "a2a": true,
-        "interactions": true
-      }
-    },
-    "gigachat": {
-      "display_name": "GigaChat (`gigachat`)",
-      "url": "https://docs.litellm.ai/docs/providers/gigachat",
-      "endpoints": {
-        "chat_completions": true,
-        "messages": true,
-        "responses": true,
-        "embeddings": true
-      }
-    },
-    "google_pse": {
-      "display_name": "Google PSE (`google_pse`)",
-      "url": "https://docs.litellm.ai/docs/search/google_pse",
-      "endpoints": {
-        "search": true
-      }
-    },
-    "milvus": {
-      "display_name": "Milvus (`milvus`)",
-      "url": "https://docs.litellm.ai/docs/providers/milvus_vector_stores",
-      "endpoints": {
-        "vector_stores_search": true
-      }
-    },
-    "minimax": {
-      "display_name": "Minimax (`minimax`)",
-      "url": "https://docs.litellm.ai/docs/providers/minimax",
-      "endpoints": {
-        "chat_completions": true,
-        "messages": true,
-        "responses": true
-      }
-    },
-    "pg_vector": {
-      "display_name": "PG Vector (`pg_vector`)",
-      "url": "https://docs.litellm.ai/docs/providers/pg_vector",
-      "endpoints": {
-        "vector_stores_search": true
-      }
-    },
-    "helicone": {
-      "display_name": "Helicone (`helicone`)",
-      "url": "https://docs.litellm.ai/docs/providers/helicone",
-      "endpoints": {
-        "chat_completions": true,
-        "messages": true,
-        "responses": true
-      }
-    },
-    "llamagate": {
-      "display_name": "LlamaGate (`llamagate`)",
-      "url": "https://docs.litellm.ai/docs/providers/llamagate",
-      "endpoints": {
-        "chat_completions": true,
-        "messages": true,
-        "responses": true
-      }
-    },
-    "xiaomi_mimo": {
-      "display_name": "Xiaomi Mimo (`xiaomi_mimo`)",
-      "url": "https://docs.litellm.ai/docs/providers/xiaomi_mimo",
-      "endpoints": {
-        "chat_completions": true,
-        "messages": true,
-        "responses": true
-      }
-    },
-    "manus": {
-      "display_name": "Manus (`manus`)",
-      "url": "https://docs.litellm.ai/docs/providers/manus",
-      "endpoints": {
-        "chat_completions": true,
-        "messages": true,
-        "responses": true,
-        "embeddings": false,
-        "image_generations": false,
-        "audio_transcriptions": false,
-        "audio_speech": false,
-        "moderations": false,
-        "batches": false,
-        "files": true,
-        "rerank": false,
-        "a2a": true,
-        "interactions": true
-      }
-    },
-    "sarvam": {
-      "display_name": "Sarvam (`sarvam`)",
-      "url": "https://docs.litellm.ai/docs/providers/sarvam",
-      "endpoints": {
-        "chat_completions": true,
-        "messages": true,
-        "responses": true
-      }
-    },
-    "bedrock_mantle": {
-      "display_name": "Bedrock Mantle (`bedrock_mantle`)",
-      "url": "https://docs.litellm.ai/docs/providers/bedrock",
-      "endpoints": {
-        "chat_completions": true,
-        "messages": true,
-        "responses": true,
-        "embeddings": false,
-        "image_generations": false,
-        "audio_transcriptions": false,
-        "audio_speech": false,
-        "moderations": false,
-        "batches": false,
-        "rerank": false,
-        "a2a": false
-      }
-    },
-    "searchapi": {
-      "display_name": "SearchAPI (`searchapi`)",
-      "url": "https://docs.litellm.ai/docs/providers/searchapi",
-      "endpoints": {
-        "chat_completions": false,
-        "messages": false,
-        "responses": false,
-        "embeddings": false,
-        "image_generations": false,
-        "audio_transcriptions": false,
-        "audio_speech": false,
-        "moderations": false,
-        "batches": false,
-        "rerank": false,
-        "search": true,
-        "a2a": false
-      }
-    },
-    "black_forest_labs": {
-      "display_name": "Black Forest Labs (`black_forest_labs`)",
-      "url": "https://docs.litellm.ai/docs/providers/black_forest_labs",
-      "endpoints": {
-        "chat_completions": false,
-        "messages": false,
-        "responses": false,
-        "embeddings": false,
-        "image_generations": true,
-        "image_edits": true,
-        "audio_transcriptions": false,
-        "audio_speech": false,
-        "moderations": false,
-        "batches": false,
-        "rerank": false
-      }
-    },
-    "charity_engine": {
-      "display_name": "Charity Engine (`charity_engine`)",
-      "url": "https://docs.litellm.ai/docs/providers/charity_engine",
-      "endpoints": {
-        "chat_completions": true,
-        "messages": true,
-        "responses": true,
-        "embeddings": false,
-        "image_generations": false,
-        "audio_transcriptions": false,
-        "audio_speech": false,
-        "moderations": false,
-        "batches": false,
-        "rerank": false
       }
     }
   },
