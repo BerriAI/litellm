@@ -650,6 +650,18 @@ async def common_checks(  # noqa: PLR0915
                 proxy_logging_obj=proxy_logging_obj,
             )
 
+        ## 4.3 check team member per-model budget
+        with tracer.trace(
+            "litellm.proxy.auth.common_checks.check_team_member_model_budget"
+        ):
+            await _check_team_member_model_budget(
+                team_object=team_object,
+                valid_token=valid_token,
+                model=_model,
+                llm_router=llm_router,
+                user_api_key_cache=user_api_key_cache,
+            )
+
         # 5. If end_user ('user' passed to /chat/completions, /embeddings endpoint) is in budget
         if (
             end_user_object is not None
@@ -1282,6 +1294,19 @@ async def get_team_membership(
             team_id,
         )
         return None
+
+
+async def get_team_member_model_spend(
+    user_id: str,
+    team_id: str,
+    model: str,
+    user_api_key_cache: DualCache,
+) -> float:
+    _key = f"team_member_model_spend:{user_id}:{team_id}:{model}"
+    cached_spend = await user_api_key_cache.async_get_cache(key=_key)
+    if cached_spend is not None:
+        return float(cached_spend)
+    return 0.0
 
 
 def model_in_access_group(
@@ -3314,10 +3339,16 @@ async def _check_team_member_budget(
             ) or 0.0
 
             # Read from cross-pod counter (Redis-first) if available
-            from litellm.proxy.proxy_server import get_current_spend
+            from litellm.proxy.proxy_server import (
+                _get_team_member_counter_key,
+                get_current_spend,
+            )
 
             team_member_spend = await get_current_spend(
-                counter_key=f"spend:team_member:{valid_token.user_id}:{team_object.team_id}",
+                counter_key=_get_team_member_counter_key(
+                    user_id=valid_token.user_id,
+                    team_id=team_object.team_id,
+                ),
                 fallback_spend=team_member_spend,
             )
 
@@ -3327,6 +3358,111 @@ async def _check_team_member_budget(
                     max_budget=team_member_budget,
                     message=f"Budget has been exceeded! User={valid_token.user_id} in Team={team_object.team_id} Current cost: {team_member_spend}, Max budget: {team_member_budget}",
                 )
+
+
+async def _check_team_member_model_budget(
+    team_object: Optional[LiteLLM_TeamTable],
+    valid_token: Optional[UserAPIKeyAuth],
+    model: Optional[Union[str, List[str]]],
+    llm_router: Optional[Router],
+    user_api_key_cache: Optional[DualCache] = None,
+):
+    """
+    Check if a team member has exceeded their per-model budget for this team.
+
+    The per-model limits are set at the team level via team_member_model_max_budget
+    (stored in team metadata) and apply to each member independently.
+    Spend is tracked via the spend counter cache keyed by
+    spend:team_member:team_id::{team_id}::user_id::{user_id}::model::{model}.
+    """
+    if (
+        team_object is None
+        or team_object.team_id is None
+        or valid_token is None
+        or valid_token.user_id is None
+        or model is None
+    ):
+        return
+
+    team_metadata = team_object.metadata or {}
+    team_member_model_max_budget: dict = team_metadata.get(
+        "team_member_model_max_budget", {}
+    )
+    if not team_member_model_max_budget:
+        return
+
+    # Build the list of candidate models to check
+    models_to_check: List[str] = [model] if isinstance(model, str) else list(model)
+    if not models_to_check:
+        return
+
+    from litellm.proxy.proxy_server import (
+        _get_team_member_model_counter_key,
+        get_current_spend,
+    )
+
+    for requested_model_str in models_to_check:
+        counter_model = requested_model_str
+        if requested_model_str in litellm.model_alias_map:
+            counter_model = litellm.model_alias_map[requested_model_str]
+        elif (
+            llm_router is not None
+            and isinstance(llm_router.model_group_alias, dict)
+            and requested_model_str in llm_router.model_group_alias
+        ):
+            resolved_model = llm_router._get_model_from_alias(requested_model_str)
+            if resolved_model:
+                counter_model = resolved_model
+
+        model_budget_config = team_member_model_max_budget.get(counter_model)
+        if model_budget_config is None:
+            model_budget_config = team_member_model_max_budget.get(requested_model_str)
+        if model_budget_config is None:
+            continue
+
+        raw_max_budget = (
+            model_budget_config.get("max_budget")
+            if isinstance(model_budget_config, dict)
+            else None
+        )
+        if isinstance(raw_max_budget, (int, float)):
+            max_budget = float(raw_max_budget)
+        elif isinstance(raw_max_budget, str):
+            try:
+                max_budget = float(raw_max_budget)
+            except ValueError:
+                continue
+        else:
+            continue
+
+        counter_key = _get_team_member_model_counter_key(
+            user_id=valid_token.user_id,
+            team_id=team_object.team_id,
+            model=counter_model,
+        )
+        fallback_spend = 0.0
+        if user_api_key_cache is not None:
+            fallback_spend = await get_team_member_model_spend(
+                user_id=valid_token.user_id,
+                team_id=team_object.team_id,
+                model=counter_model,
+                user_api_key_cache=user_api_key_cache,
+            )
+        model_spend = await get_current_spend(
+            counter_key=counter_key,
+            fallback_spend=fallback_spend,
+        )
+
+        if model_spend >= max_budget:
+            raise litellm.BudgetExceededError(
+                current_cost=model_spend,
+                max_budget=max_budget,
+                message=(
+                    f"ExceededBudget: Team member model budget exceeded. "
+                    f"User={valid_token.user_id}, Team={team_object.team_id}, "
+                    f"Model={counter_model}. Spend=${model_spend:.6f}, Budget=${max_budget:.6f}"
+                ),
+            )
 
 
 async def _check_team_member_model_access(

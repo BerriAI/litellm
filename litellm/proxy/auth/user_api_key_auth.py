@@ -1316,7 +1316,10 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                         )
                         if team_member_budget is not None and team_member_budget > 0:
                             # Read from cross-pod counter (Redis-first) if available
-                            from litellm.proxy.proxy_server import get_current_spend
+                            from litellm.proxy.proxy_server import (
+                                _get_team_member_counter_key,
+                                get_current_spend,
+                            )
 
                             team_member_spend = valid_token.team_member_spend
                             if (
@@ -1324,7 +1327,10 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                                 and valid_token.team_id is not None
                             ):
                                 team_member_spend = await get_current_spend(
-                                    counter_key=f"spend:team_member:{valid_token.user_id}:{valid_token.team_id}",
+                                    counter_key=_get_team_member_counter_key(
+                                        user_id=valid_token.user_id,
+                                        team_id=valid_token.team_id,
+                                    ),
                                     fallback_spend=team_member_spend,
                                 )
                             if team_member_spend > team_member_budget:

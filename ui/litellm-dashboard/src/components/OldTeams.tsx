@@ -5,6 +5,7 @@ import TeamSSOSettings from "@/components/TeamSSOSettings";
 import { isProxyAdminRole } from "@/utils/roles";
 import {
   InfoCircleOutlined,
+  MinusCircleOutlined,
   PlusOutlined,
   TeamOutlined,
   ReloadOutlined,
@@ -21,6 +22,7 @@ import {
   Flex,
   Form,
   Input,
+  InputNumber,
   Layout,
   Modal,
   Pagination,
@@ -170,6 +172,108 @@ const getOrganizationAlias = (
 
   const organization = organizations.find((org) => org.organization_id === organizationId);
   return organization?.organization_alias || organizationId;
+};
+
+interface ModelBudgetRow {
+  id: string;
+  model: string;
+  max_budget: number | null;
+}
+
+type ModelBudgetValue = Record<string, { max_budget: number }>;
+
+interface ModelBudgetEditorProps {
+  value?: ModelBudgetValue;
+  onChange?: (val: ModelBudgetValue | undefined) => void;
+  availableModels: string[];
+}
+
+export const ModelBudgetEditor: React.FC<ModelBudgetEditorProps> = ({ value, onChange, availableModels }) => {
+  const [rows, setRows] = useState<ModelBudgetRow[]>(() => {
+    if (!value || Object.keys(value).length === 0) return [];
+    return Object.entries(value).map(([model, cfg]) => ({
+      id: Math.random().toString(36).slice(2),
+      model,
+      max_budget: cfg.max_budget ?? null,
+    }));
+  });
+
+  const notifyChange = (newRows: ModelBudgetRow[]) => {
+    if (!onChange) return;
+    const filled = newRows.filter((r) => r.model && r.max_budget !== null);
+    if (filled.length === 0) {
+      onChange(undefined);
+      return;
+    }
+    const obj: ModelBudgetValue = {};
+    for (const r of filled) {
+      obj[r.model] = { max_budget: r.max_budget as number };
+    }
+    onChange(obj);
+  };
+
+  const addRow = () => {
+    const newRows = [
+      ...rows,
+      { id: Math.random().toString(36).slice(2), model: "", max_budget: null },
+    ];
+    setRows(newRows);
+  };
+
+  const updateRow = (id: string, field: keyof ModelBudgetRow, val: any) => {
+    const newRows = rows.map((r) => (r.id === id ? { ...r, [field]: val } : r));
+    setRows(newRows);
+    notifyChange(newRows);
+  };
+
+  const removeRow = (id: string) => {
+    const newRows = rows.filter((r) => r.id !== id);
+    setRows(newRows);
+    notifyChange(newRows);
+  };
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+      {rows.map((row) => (
+        <div key={row.id} style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          <Select
+            style={{ width: 200 }}
+            placeholder="Select model"
+            value={row.model || undefined}
+            onChange={(val) => updateRow(row.id, "model", val)}
+            showSearch
+            options={availableModels.map((m) => ({ label: m, value: m }))}
+            filterOption={(input, opt) =>
+              (opt?.label as string ?? "").toLowerCase().includes(input.toLowerCase())
+            }
+          />
+          <InputNumber
+            style={{ width: 140 }}
+            placeholder="Max budget"
+            min={0}
+            precision={4}
+            prefix="$"
+            value={row.max_budget}
+            onChange={(val) => updateRow(row.id, "max_budget", val)}
+          />
+          <Button
+            type="text"
+            danger
+            icon={<MinusCircleOutlined />}
+            onClick={() => removeRow(row.id)}
+          />
+        </div>
+      ))}
+      <Button
+        type="dashed"
+        onClick={addRow}
+        icon={<PlusOutlined />}
+        style={{ width: "fit-content" }}
+      >
+        Add model limit
+      </Button>
+    </div>
+  );
 };
 
 // @deprecated
@@ -1222,6 +1326,14 @@ const Teams: React.FC<TeamProps> = ({
                   </Form.Item>
                   <Form.Item label="Requests per minute Limit (RPM)" name="rpm_limit">
                     <NumericalInput step={1} width={400} />
+                  </Form.Item>
+
+                  <Form.Item
+                    label="Default Member Model Budget"
+                    name="team_member_model_max_budget"
+                    tooltip="Optional. Set per-model spend limits for every team member. Each member gets their own independent budget per model."
+                  >
+                    <ModelBudgetEditor availableModels={userModels} />
                   </Form.Item>
 
                   <Accordion
