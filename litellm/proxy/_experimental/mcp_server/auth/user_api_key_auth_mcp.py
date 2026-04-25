@@ -142,12 +142,18 @@ class MCPRequestHandler:
                     api_key=litellm_api_key, request=request
                 )
             except (HTTPException, ProxyException) as e:
-                # HTTPException.status_code is int; ProxyException.code is normalized
-                # to str in its __init__ (proxy/_types.py).
-                status = e.status_code if isinstance(e, HTTPException) else int(e.code)
+                # HTTPException.status_code is int; ProxyException.code is
+                # normalized to str in its __init__ but can be ``"None"`` or any
+                # non-numeric string when the caller didn't supply a numeric
+                # code, so we compare against both int and str forms rather
+                # than coercing (``int("None")`` would raise ValueError and
+                # rewrite the auth error as a 500).
+                status = e.status_code if isinstance(e, HTTPException) else e.code
                 if status in (
                     401,
                     403,
+                    "401",
+                    "403",
                 ) and MCPRequestHandler._target_servers_use_oauth2(
                     path=request.url.path, mcp_servers=mcp_servers
                 ):

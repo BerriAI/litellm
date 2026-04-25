@@ -1028,6 +1028,38 @@ class TestMCPOAuth2FallbackTargetGating:
                 await MCPRequestHandler.process_mcp_request(scope)
             assert exc_info.value.status_code == 401
 
+    async def test_proxy_exception_with_non_numeric_code_propagates(self):
+        """
+        ``ProxyException`` normalises ``code`` via ``str()`` in its __init__,
+        so callers may produce ``"None"`` or any non-numeric string when no
+        explicit code was supplied. The exception handler must not coerce
+        with ``int(...)`` (which would raise ``ValueError`` and rewrite the
+        auth error as an unhandled 500); it must simply re-raise.
+        """
+        from litellm.proxy._types import ProxyException
+
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": "/mcp/atlassian_mcp",
+            "headers": [(b"authorization", b"Bearer anything")],
+        }
+
+        async def mock_user_api_key_auth_no_code(api_key, request):
+            raise ProxyException(
+                message="Authentication Error",
+                type="auth_error",
+                param="api_key",
+                code=None,
+            )
+
+        with patch(
+            "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
+            side_effect=mock_user_api_key_auth_no_code,
+        ):
+            with pytest.raises(ProxyException):
+                await MCPRequestHandler.process_mcp_request(scope)
+
 
 class TestMCPCustomHeaderName:
     """Test suite for custom MCP authentication header name functionality"""
