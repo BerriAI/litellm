@@ -3972,6 +3972,12 @@ async def regenerate_key_fn(  # noqa: PLR0915
             # Mirror /key/generate's post-handle_key_type recheck so a
             # non-admin can't elevate via a key_type preset that the
             # regenerate flow would otherwise carry through unchecked.
+            # The empty dict is intentional — `handle_key_type` is reused
+            # purely as a side-effect-free lookup of the preset bucket, not
+            # to mutate an existing `data_json`. Do not pass a real
+            # `data_json` here; that path would write the derived routes
+            # into the DB update payload and is owned by
+            # `_common_key_generation_helper`.
             _check_allowed_routes_caller_permission(
                 allowed_routes=handle_key_type(data, {}).get("allowed_routes"),
                 user_api_key_dict=user_api_key_dict,
