@@ -3854,6 +3854,8 @@ async def _execute_virtual_key_regeneration(
 
     non_default_values = {}
     if data is not None:
+        # Enforce upperbound key params on regenerate (don't fill defaults)
+        _enforce_upperbound_key_params(data, fill_defaults=False)
         non_default_values = await prepare_key_update_data(
             data=data, existing_key_row=key_in_db
         )
