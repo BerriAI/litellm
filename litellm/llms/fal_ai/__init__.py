@@ -1,4 +1,5 @@
 from .cost_calculator import cost_calculator
+from .image_edit import FalAIImageEditConfig
 from .image_generation import (
     FalAIBaseConfig,
     FalAIBriaConfig,
@@ -15,6 +16,7 @@ from .image_generation import (
 __all__ = [
     "cost_calculator",
     "FalAIBaseConfig",
+    "FalAIImageEditConfig",
     "FalAIImageGenerationConfig",
     "FalAIImagen4Config",
     "FalAIRecraftV3Config",
