@@ -1,6 +1,6 @@
 import types
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union, cast
 
 import httpx
 
@@ -289,3 +289,32 @@ class BaseResponsesAPIConfig(ABC):
     #########################################################
     ########## END COMPACT RESPONSE API TRANSFORMATION ######
     #########################################################
+
+    @staticmethod
+    def strip_custom_tool_call_namespace_from_responses_input(
+        input: Union[str, ResponseInputParam],
+    ) -> Union[str, ResponseInputParam]:
+        """
+        Remove ``namespace`` from ``custom_tool_call`` input items.
+        """
+        if not isinstance(input, list):
+            return input
+        out: List[Any] = []
+        for item in input:
+            if isinstance(item, dict) and item.get("type") == "custom_tool_call":
+                out.append({k: v for k, v in item.items() if k != "namespace"})
+            else:
+                out.append(item)
+        return cast(ResponseInputParam, out)
+
+    @staticmethod
+    def normalize_responses_api_request_dict(data: Dict[str, Any]) -> Dict[str, Any]:
+        """Apply provider-agnostic fixes to an outbound Responses API request dict."""
+        if not isinstance(data, dict) or "input" not in data:
+            return data
+        return {
+            **data,
+            "input": BaseResponsesAPIConfig.strip_custom_tool_call_namespace_from_responses_input(
+                data["input"]
+            ),
+        }

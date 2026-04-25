@@ -15,6 +15,7 @@ import litellm.types
 import litellm.types.llms
 from litellm import verbose_logger
 from litellm._uuid import uuid
+from litellm.litellm_core_utils.url_utils import async_safe_get, safe_get
 from litellm.llms.custom_httpx.http_handler import HTTPHandler, get_async_httpx_client
 from litellm.types.files import get_file_extension_from_mime_type
 from litellm.types.llms.anthropic import *
@@ -3324,7 +3325,7 @@ def _load_image_from_url(image_url):
     try:
         # Send a GET request to the image URL
         client = HTTPHandler(concurrent_limit=1)
-        response = client.get(image_url)
+        response = safe_get(client, image_url)
         response.raise_for_status()  # Raise an exception for HTTP errors
 
         # Check the response's content type to ensure it is an image
@@ -3562,7 +3563,7 @@ class BedrockImageProcessor:
                 params={"concurrent_limit": 1},
             )
             # Send a GET request to the image URL
-            response = await client.get(image_url, follow_redirects=True)
+            response = await async_safe_get(client, image_url)
             response.raise_for_status()  # Raise an exception for HTTP errors
 
             return BedrockImageProcessor._post_call_image_processing(
@@ -3577,7 +3578,7 @@ class BedrockImageProcessor:
         try:
             client = HTTPHandler(concurrent_limit=1)
             # Send a GET request to the image URL
-            response = client.get(image_url, follow_redirects=True)
+            response = safe_get(client, image_url)
             response.raise_for_status()  # Raise an exception for HTTP errors
 
             return BedrockImageProcessor._post_call_image_processing(
@@ -4047,6 +4048,40 @@ def _deduplicate_bedrock_tool_content(
 ) -> List[BedrockContentBlock]:
     """Convenience wrapper: deduplicate ``toolResult`` blocks by ``toolUseId``."""
     return _deduplicate_bedrock_content_blocks(tool_content, "toolResult")
+
+
+def _sort_bedrock_assistant_content_blocks(
+    blocks: List[BedrockContentBlock],
+) -> List[BedrockContentBlock]:
+    """
+    Sort assistant content blocks so that ``text`` blocks appear before
+    ``toolUse`` blocks.
+
+    Bedrock requires all ``text`` blocks to precede any ``toolUse`` blocks
+    within an assistant message.  When the Responses API converts
+    function_call items before message items, the resulting ``toolUse``
+    blocks can end up before ``text`` blocks, causing Bedrock to reject
+    the request with a 400 error because the ``toolUse`` → ``toolResult``
+    pairing is broken by the intervening ``text`` block.
+
+    Sort order (stable):
+      0 - reasoningContent
+      1 - text / image / document / video / other non-tool blocks
+      2 - toolUse
+    """
+
+    def _sort_key(block: BedrockContentBlock) -> int:
+        if "reasoningContent" in block:
+            return 0
+        if "toolUse" in block:
+            return 2
+        if "cachePoint" in block:
+            # cachePoint blocks are paired with their preceding toolUse block.
+            # Same key as toolUse so Python's stable sort keeps them together.
+            return 2
+        return 1
+
+    return sorted(blocks, key=_sort_key)
 
 
 def _insert_assistant_continue_message(
@@ -4642,6 +4677,9 @@ class BedrockConverseMessagesProcessor:
             assistant_content = _deduplicate_bedrock_content_blocks(
                 assistant_content, "toolUse"
             )
+            assistant_content = _sort_bedrock_assistant_content_blocks(
+                assistant_content
+            )
 
             if assistant_content:
                 contents.append(
@@ -5007,6 +5045,7 @@ def _bedrock_converse_messages_pt(  # noqa: PLR0915
         assistant_content = _deduplicate_bedrock_content_blocks(
             assistant_content, "toolUse"
         )
+        assistant_content = _sort_bedrock_assistant_content_blocks(assistant_content)
 
         if assistant_content:
             contents.append(

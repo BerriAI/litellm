@@ -152,6 +152,38 @@ def test_virtual_key_mcp_routes_allows_v1_mcp_server_subpaths(route):
     assert result is True
 
 
+@pytest.mark.parametrize(
+    "route",
+    [
+        "/v1/mcp/server",
+        "/v1/mcp/server/abc-123",
+        "/v1/mcp/server/abc-123/approve",
+    ],
+)
+def test_mcp_management_routes_classified_as_management_not_llm_api(route):
+    """MCP server CRUD must be management routes, not llm_api routes, so
+    DISABLE_LLM_API_ENDPOINTS on admin nodes does not block the Admin UI."""
+
+    assert RouteChecks.is_llm_api_route(route=route) is False
+    assert RouteChecks.is_management_route(route=route) is True
+
+
+@pytest.mark.parametrize(
+    "route",
+    [
+        "/mcp/tools/call",
+        "/mcp-rest/tools/call",
+        "/mcp/tools/list",
+    ],
+)
+def test_mcp_inference_routes_classified_as_llm_api(route):
+    """MCP tool-call / passthrough routes must remain llm_api routes so they
+    continue to be blocked by DISABLE_LLM_API_ENDPOINTS on admin nodes."""
+
+    assert RouteChecks.is_llm_api_route(route=route) is True
+    assert RouteChecks.is_management_route(route=route) is False
+
+
 def test_virtual_key_allowed_routes_with_litellm_routes_member_name_denied():
     """Test that virtual key is denied when route is not in the allowed LiteLLMRoutes group"""
 

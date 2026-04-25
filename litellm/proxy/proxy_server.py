@@ -407,9 +407,6 @@ from litellm.proxy.management_endpoints.organization_endpoints import (
     router as organization_router,
 )
 from litellm.proxy.management_endpoints.policy_endpoints import router as policy_router
-from litellm.proxy.management_endpoints.project_endpoints import (
-    router as project_router,
-)
 from litellm.proxy.management_endpoints.router_settings_endpoints import (
     router as router_settings_router,
 )
@@ -952,6 +949,17 @@ async def proxy_startup_event(app: FastAPI):  # noqa: PLR0915
         asyncio.create_task(
             _run_background_health_check()
         )  # start the background health check coroutine.
+
+    # Start adaptive-router queue flusher unconditionally — adaptive routers
+    # may be added later via `/config/reload`, and the flusher is a no-op when
+    # `llm_router.adaptive_routers` is empty. Per-router DB state is loaded
+    # lazily by the flusher on first tick (see `_state_loaded` flag) so
+    # hot-reloaded routers also get their persisted priors.
+    if llm_router is not None and getattr(llm_router, "adaptive_routers", None):
+        for _ar in llm_router.adaptive_routers.values():
+            await _ar.load_state_from_db(prisma_client)
+            _ar._state_loaded = True
+    asyncio.create_task(_adaptive_router_flusher_loop())
 
     ## [Optional] Initialize dd tracer
     ProxyStartupEvent._init_dd_tracer()
@@ -1796,6 +1804,7 @@ async def increment_spend_counters(
     team_id: Optional[str],
     user_id: Optional[str],
     response_cost: Optional[float],
+    org_id: Optional[str] = None,
 ):
     """
     Atomically increment spend counters for budget enforcement.
@@ -1882,6 +1891,83 @@ async def increment_spend_counters(
             increment=response_cost,
         )
 
+    if user_id is not None:
+        await _init_and_increment_spend_counter(
+            counter_key=f"spend:user:{user_id}",
+            source_cache_key=user_id,
+            increment=response_cost,
+        )
+
+    if org_id is not None:
+        await _init_and_increment_spend_counter(
+            counter_key=f"spend:org:{org_id}",
+            source_cache_key=f"org_id:{org_id}",
+            increment=response_cost,
+        )
+
+
+async def _reseed_spend_from_db(counter_key: str) -> float:
+    """
+    Read the authoritative spend for a missing counter from the DB. The
+    counter_key prefix encodes the table to query:
+
+        spend:key:{token}                 -> LiteLLM_VerificationToken.spend
+        spend:team:{team_id}              -> LiteLLM_TeamTable.spend
+        spend:team_member:{uid}:{tid}     -> LiteLLM_TeamMembership.spend
+        spend:user:{user_id}              -> LiteLLM_UserTable.spend
+        spend:org:{org_id}                -> LiteLLM_OrganizationTable.spend
+
+    Returns 0.0 if prisma is unavailable, the row is missing, or the
+    key format is unrecognized. On failure, logs and returns 0.0 rather
+    than raising so the caller can still record the current increment.
+    """
+    if prisma_client is None:
+        return 0.0
+    # Per-window counters (spend:*:window:{duration}) share prefixes with
+    # primary counters but don't correspond to a DB row; their ambiguity
+    # would otherwise be silently parsed as a regular counter and miss.
+    if ":window:" in counter_key:
+        return 0.0
+    try:
+        if counter_key.startswith("spend:key:"):
+            token = counter_key[len("spend:key:") :]
+            row = await prisma_client.db.litellm_verificationtoken.find_unique(
+                where={"token": token}
+            )
+        elif counter_key.startswith("spend:team_member:"):
+            suffix = counter_key[len("spend:team_member:") :]
+            if ":" not in suffix:
+                return 0.0
+            user_id, team_id = suffix.rsplit(":", 1)
+            row = await prisma_client.db.litellm_teammembership.find_unique(
+                where={"user_id_team_id": {"user_id": user_id, "team_id": team_id}}
+            )
+        elif counter_key.startswith("spend:team:"):
+            team_id = counter_key[len("spend:team:") :]
+            row = await prisma_client.db.litellm_teamtable.find_unique(
+                where={"team_id": team_id}
+            )
+        elif counter_key.startswith("spend:user:"):
+            user_id = counter_key[len("spend:user:") :]
+            row = await prisma_client.db.litellm_usertable.find_unique(
+                where={"user_id": user_id}
+            )
+        elif counter_key.startswith("spend:org:"):
+            org_id = counter_key[len("spend:org:") :]
+            row = await prisma_client.db.litellm_organizationtable.find_unique(
+                where={"organization_id": org_id}
+            )
+        else:
+            return 0.0
+    except Exception:
+        verbose_proxy_logger.exception(
+            "Failed to reseed spend counter %s from DB", counter_key
+        )
+        return 0.0
+    if row is None:
+        return 0.0
+    return float(getattr(row, "spend", 0.0) or 0.0)
+
 
 async def _init_and_increment_spend_counter(
     counter_key: str,
@@ -1889,28 +1975,33 @@ async def _init_and_increment_spend_counter(
     increment: float,
 ):
     """
-    Initialize counter from cached object's DB-loaded spend if not yet set,
-    then atomically increment in both in-memory and Redis.
+    Initialize counter from the authoritative DB spend value if not yet
+    set, then atomically increment in both in-memory and Redis.
 
     On first access per pod:
-    1. Check spend_counter_cache (in-memory -> Redis via DualCache for init check)
-    2. If not found anywhere, read base spend from user_api_key_cache (DB-loaded object)
+    1. Check spend_counter_cache (in-memory -> Redis via DualCache)
+    2. If not found, reseed from the DB (`_reseed_spend_from_db`). Falls
+       back to the cached object's `.spend` via user_api_key_cache only
+       if prisma is unavailable, since that value can lag the flusher.
     3. Seed counter via async_increment_cache (not async_set_cache) to avoid a
        check-then-set race: if two pods cold-start simultaneously, both may see
-       the counter as absent and seed it. Using increment instead of set means
-       the worst case is over-counting (conservative — blocks slightly early)
-       rather than under-counting (would allow overspend).
+       the counter as absent and seed it. Using increment means the worst case
+       is over-counting (conservative, blocks slightly early) rather than
+       under-counting (would allow overspend).
     4. Increment atomically (both in-memory + Redis)
     """
     current = await spend_counter_cache.async_get_cache(key=counter_key)
     if current is None:
-        source = await user_api_key_cache.async_get_cache(key=source_cache_key)
-        base_spend = 0.0
-        if source is not None:
-            if isinstance(source, dict):
-                base_spend = source.get("spend", 0.0) or 0.0
-            else:
-                base_spend = getattr(source, "spend", 0.0) or 0.0
+        base_spend = await _reseed_spend_from_db(counter_key)
+        if prisma_client is None:
+            # Best-effort fallback when prisma is unavailable (tests or
+            # early-startup paths). May be stale but avoids resetting to 0.
+            source = await user_api_key_cache.async_get_cache(key=source_cache_key)
+            if source is not None:
+                if isinstance(source, dict):
+                    base_spend = source.get("spend", 0.0) or 0.0
+                else:
+                    base_spend = getattr(source, "spend", 0.0) or 0.0
         if base_spend > 0:
             await spend_counter_cache.async_increment_cache(
                 key=counter_key, value=base_spend
@@ -2426,6 +2517,38 @@ def _write_health_state_to_router_cache(
         verbose_proxy_logger.warning(
             "Failed to write health state to router cache: %s", str(e)
         )
+
+
+_ADAPTIVE_ROUTER_FLUSH_INTERVAL_SECONDS = 10
+
+
+async def _adaptive_router_flusher_loop():
+    """
+    Drain every AdaptiveRouter's in-memory state + session aggregators into
+    Postgres on a fixed cadence. Hot-path writes go to memory; this loop is
+    the only writer to the adaptive router DB tables.
+    """
+    global llm_router, prisma_client
+    while True:
+        try:
+            await asyncio.sleep(_ADAPTIVE_ROUTER_FLUSH_INTERVAL_SECONDS)
+            adaptive_routers = getattr(llm_router, "adaptive_routers", None) or {}
+            if not adaptive_routers or prisma_client is None:
+                continue
+            for ar in adaptive_routers.values():
+                # Lazy state load: covers adaptive routers registered via
+                # `/config/reload` after proxy boot.
+                if not getattr(ar, "_state_loaded", False):
+                    try:
+                        await ar.load_state_from_db(prisma_client)
+                    finally:
+                        ar._state_loaded = True
+                await ar.queue.flush_state_to_db(prisma_client)
+                await ar.queue.flush_session_to_db(prisma_client)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            verbose_proxy_logger.exception("adaptive_router flusher iteration failed")
 
 
 async def _run_background_health_check():
@@ -7232,6 +7355,7 @@ async def chat_completion(  # noqa: PLR0915
             and user_api_key_dict.agent_id is not None
         ):
             data["metadata"]["agent_id"] = user_api_key_dict.agent_id
+
     base_llm_response_processor = ProxyBaseLLMRequestProcessing(data=data)
     try:
         result = await base_llm_response_processor.base_process_llm_request(
@@ -13954,6 +14078,38 @@ async def home(request: Request):
     return "LiteLLM: RUNNING"
 
 
+@router.get(
+    "/adaptive_router/state",
+    tags=["adaptive_router"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def get_adaptive_router_state(
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """Return live bandit posteriors + queue depth for every configured adaptive router.
+
+    Admin-only. Returns 404 if no adaptive router is configured.
+
+    Response shape: `{"routers": [<snapshot>, ...]}` — one snapshot per
+    adaptive-router deployment. Each snapshot's `router_name` field identifies
+    which deployment it came from.
+    """
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+        raise HTTPException(
+            status_code=403,
+            detail={"error": CommonProxyErrors.not_allowed_access.value},
+        )
+    if llm_router is None or not llm_router.adaptive_routers:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": "No adaptive_router is configured on this proxy."},
+        )
+    snapshots = [
+        await ar.get_state_snapshot() for ar in llm_router.adaptive_routers.values()
+    ]
+    return {"routers": snapshots}
+
+
 @router.get("/routes", dependencies=[Depends(user_api_key_auth)])
 async def get_routes():
     """
@@ -14037,7 +14193,6 @@ app.include_router(team_router)
 app.include_router(ui_sso_router)
 app.include_router(scim_router)
 app.include_router(organization_router)
-app.include_router(project_router)
 app.include_router(customer_router)
 app.include_router(spend_management_router)
 app.include_router(cloudzero_router)
