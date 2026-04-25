@@ -371,6 +371,11 @@ async def get_form_data(request: Request) -> Dict[str, Any]:
             parsed_form_data.setdefault(clean_key, []).append(value)
         else:
             parsed_form_data[key] = value
+    # Same ingress sanitization as _read_request_body — multipart endpoints
+    # (audio transcription, skills, container uploads, passthrough) route
+    # through here directly via get_request_body and would otherwise bypass
+    # the strip that JSON ingress applies.
+    strip_internal_control_fields(parsed_form_data)
     return parsed_form_data
 
 

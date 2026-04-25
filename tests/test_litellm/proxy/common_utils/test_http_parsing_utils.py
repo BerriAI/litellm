@@ -1108,3 +1108,60 @@ class TestStripInternalControlFields:
         second = await _read_request_body(mock_request)
         mock_request.body.assert_not_called()
         assert second["metadata"]["user_api_key_user_id"] == "real-user"
+
+    @pytest.mark.asyncio
+    async def test_get_form_data_strips_restricted_fields(self, monkeypatch):
+        """Multipart endpoints (audio transcription, skills, container
+        uploads, passthrough) route through get_form_data directly via
+        get_request_body and would otherwise bypass the JSON-ingress
+        strip. Form values are strings, so metadata arrives as a JSON
+        string."""
+        self._clear_allow_mock(monkeypatch)
+        mock_request = MagicMock()
+        mock_request.form = AsyncMock(
+            return_value={
+                "model": "whisper-1",
+                "file": "<binary>",
+                "mock_response": "canned",
+                "metadata": json.dumps(
+                    {
+                        "applied_guardrails": ["caller"],
+                        "pillar_response_headers": {"X-Caller": "yes"},
+                        "user_api_key_user_id": "caller-supplied",
+                        "tag": "ok",
+                    }
+                ),
+            }
+        )
+
+        result = await get_form_data(mock_request)
+
+        assert "mock_response" not in result
+        # metadata stays a string (form values are strings) but the
+        # restricted keys inside it are gone.
+        assert isinstance(result["metadata"], str)
+        assert json.loads(result["metadata"]) == {"tag": "ok"}
+        # Other form fields are untouched.
+        assert result["model"] == "whisper-1"
+        assert result["file"] == "<binary>"
+
+    @pytest.mark.asyncio
+    async def test_get_request_body_dispatcher_strips_multipart(
+        self, monkeypatch
+    ):
+        """The dispatcher routes multipart/form-data to get_form_data;
+        confirm that path is also sanitized end-to-end."""
+        self._clear_allow_mock(monkeypatch)
+        mock_request = MagicMock()
+        mock_request.method = "POST"
+        mock_request.headers = {"content-type": "multipart/form-data; boundary=x"}
+        mock_request.form = AsyncMock(
+            return_value={
+                "model": "whisper-1",
+                "mock_response": "canned",
+            }
+        )
+
+        result = await get_request_body(mock_request)
+        assert "mock_response" not in result
+        assert result["model"] == "whisper-1"
