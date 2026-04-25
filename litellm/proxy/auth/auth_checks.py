@@ -60,6 +60,7 @@ from litellm.proxy._types import (
     SpecialModelNames,
     UserAPIKeyAuth,
 )
+from litellm.proxy.auth.auth_metrics import AuthMetrics
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.guardrails.tool_name_extraction import (
@@ -2257,6 +2258,7 @@ async def _fetch_key_object_from_db_with_reconnect(
     Fetch key object from DB and retry once if a DB connection error can be healed.
     """
     try:
+        AuthMetrics.inc_combined_view_query(hashed_token)
         return await prisma_client.get_data(
             token=hashed_token,
             table_name="combined_view",
