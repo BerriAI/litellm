@@ -6737,14 +6737,13 @@ class ProxyStartupEvent:
             # Skip DB load when credentials come from env vars — avoids raising
             # if prisma_client is not yet connected at startup.
             data = {} if settings.has_env_vars else await settings.load()
-            import os as _os
 
             client = MavvrikClient(
-                api_key=data.get("api_key") or _os.getenv("MAVVRIK_API_KEY", ""),
+                api_key=data.get("api_key") or os.getenv("MAVVRIK_API_KEY", ""),
                 api_endpoint=data.get("api_endpoint")
-                or _os.getenv("MAVVRIK_API_ENDPOINT", ""),
+                or os.getenv("MAVVRIK_API_ENDPOINT", ""),
                 connection_id=data.get("connection_id")
-                or _os.getenv("MAVVRIK_CONNECTION_ID", ""),
+                or os.getenv("MAVVRIK_CONNECTION_ID", ""),
             )
             uploader = MavvrikUploader(client=client)
             orchestrator = MavvrikOrchestrator(client=client, uploader=uploader)
