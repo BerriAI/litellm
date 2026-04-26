@@ -204,23 +204,31 @@ class Uploader:
                 while len(gz_buffer) >= _GCS_CHUNK_SIZE:
                     chunk = bytes(gz_buffer[:_GCS_CHUNK_SIZE])
                     gz_buffer = gz_buffer[_GCS_CHUNK_SIZE:]
-                    await self._put_chunk(session_uri, chunk, offset=offset, final=False)
+                    await self._put_chunk(
+                        session_uri, chunk, offset=offset, final=False
+                    )
                     offset += len(chunk)
 
             if not has_data:
-                verbose_proxy_logger.debug("uploader: no data to stream, skipping upload")
+                verbose_proxy_logger.debug(
+                    "uploader: no data to stream, skipping upload"
+                )
                 return 0
 
             gz.close()
             gz_buffer.extend(raw_buf.getvalue())
             total = offset + len(gz_buffer)
-            await self._put_chunk(session_uri, bytes(gz_buffer), offset=offset, final=True)
+            await self._put_chunk(
+                session_uri, bytes(gz_buffer), offset=offset, final=True
+            )
 
         except Exception:
             # Cancel the open GCS session so it doesn't linger for up to 1 week.
             if session_uri:
                 with contextlib.suppress(Exception):
-                    await http_request("DELETE", session_uri, timeout=10.0, label="cancel")
+                    await http_request(
+                        "DELETE", session_uri, timeout=10.0, label="cancel"
+                    )
             raise
 
         verbose_proxy_logger.info(
