@@ -97,9 +97,12 @@ async def test_pre_call_redacts_messages_and_caches_session():
     user = UserAPIKeyAuth(api_key="x")
     out = await g.async_pre_call_hook(user, cache, data, "completion")
 
+    from litellm.proxy.guardrails.guardrail_hooks.peyeeye.peyeeye import (
+        global_cache,
+    )
     assert out["messages"][0]["content"] == "hi [EMAIL_1]"
-    cached = cache.get_cache("peyeeye_session:call-1")
-    assert cached == "ses_abc"
+    assert global_cache.get_cache("peyeeye_session:call-1") == "ses_abc"
+    global_cache.delete_cache("peyeeye_session:call-1")
 
 
 @pytest.mark.asyncio
@@ -123,9 +126,13 @@ async def test_pre_call_stateless_returns_skey():
     }
     await g.async_pre_call_hook(UserAPIKeyAuth(api_key="x"), cache, data, "completion")
 
+    from litellm.proxy.guardrails.guardrail_hooks.peyeeye.peyeeye import (
+        global_cache,
+    )
     sent_body = g.async_handler.post.call_args.kwargs["json"]
     assert sent_body["session"] == "stateless"
-    assert cache.get_cache("peyeeye_session:call-2") == "skey_xyz"
+    assert global_cache.get_cache("peyeeye_session:call-2") == "skey_xyz"
+    global_cache.delete_cache("peyeeye_session:call-2")
 
 
 @pytest.mark.asyncio
@@ -144,18 +151,29 @@ async def test_pre_call_skips_when_no_messages():
 
 
 @pytest.mark.asyncio
-async def test_post_call_rehydrates_response():
+async def test_pre_and_post_call_roundtrip_uses_shared_cache():
+    """End-to-end: pre-call seeds session id, post-call retrieves & rehydrates."""
+    from litellm.proxy.guardrails.guardrail_hooks.peyeeye.peyeeye import (
+        global_cache,
+    )
+
     g = PeyeeyeGuardrail(peyeeye_api_key="pk", guardrail_name="t")
     g.async_handler = MagicMock()
     g.async_handler.post = AsyncMock(
-        return_value=_ok({"text": "Reply to alice@acme.com", "replaced": 1})
+        side_effect=[
+            _ok({"text": ["hi [EMAIL_1]"], "session_id": "ses_abc"}),
+            _ok({"text": "Reply to alice@acme.com", "replaced": 1}),
+        ]
     )
     g.async_handler.delete = AsyncMock()
 
-    # Seed the session id into litellm.cache so the post-call hook finds it.
-    litellm.cache = MagicMock()
-    litellm.cache.get_cache = MagicMock(return_value="ses_abc")
-    litellm.cache.delete_cache = MagicMock()
+    cache = DualCache()
+    data = {
+        "messages": [{"role": "user", "content": "hi alice@acme.com"}],
+        "litellm_call_id": "rt-1",
+    }
+    user = UserAPIKeyAuth(api_key="x")
+    await g.async_pre_call_hook(user, cache, data, "completion")
 
     response = litellm.ModelResponse()
     response.choices = [
@@ -167,15 +185,12 @@ async def test_post_call_rehydrates_response():
             ),
         )
     ]
-    data = {"litellm_call_id": "call-1"}
-
     out = await g.async_post_call_success_hook(
-        data, UserAPIKeyAuth(api_key="x"), response
+        {"litellm_call_id": "rt-1"}, user, response
     )
     assert out.choices[0].message.content == "Reply to alice@acme.com"
     g.async_handler.delete.assert_awaited()
-    litellm.cache.delete_cache.assert_called_once_with("peyeeye_session:call-1")
-    litellm.cache = None
+    assert global_cache.get_cache("peyeeye_session:rt-1") is None
 
 
 @pytest.mark.asyncio
@@ -184,7 +199,6 @@ async def test_post_call_noop_without_session():
     g.async_handler = MagicMock()
     g.async_handler.post = AsyncMock()
 
-    litellm.cache = None
     response = litellm.ModelResponse()
     response.choices = [
         litellm.utils.Choices(
