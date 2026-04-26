@@ -14,9 +14,11 @@ Internal methods:
   _get_usage_data(date_str, limit) → DataFrame
   _to_csv(df, connection_id) → str
 
-DB not connected: all methods log a warning and return empty/None — never raise.
-The scheduler skips the date gracefully; user-triggered endpoints surface the
-missing-DB error through Settings._ensure_prisma_client() before reaching here.
+DB not connected:
+  _get_usage_data / _to_csv — log warning and return empty/None (scheduler path).
+  _stream_pages              — raises RuntimeError (propagates to Orchestrator try/except).
+  Service.export / dry_run   — call Settings._ensure_prisma_client() before reaching here,
+                               so they raise before the exporter is called.
 
 polars is an optional [proxy] dependency — imported lazily inside methods so
 SDK-only users are not affected when Logger is imported via custom_logger_registry.

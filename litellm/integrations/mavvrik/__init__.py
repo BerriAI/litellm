@@ -275,6 +275,8 @@ class Service:
         if not data and not self._settings.has_env_vars:
             raise ValueError("Mavvrik not configured. Call POST /mavvrik/init first.")
 
+        self._settings._ensure_prisma_client()
+
         date_str = date_str or self._yesterday()
         effective_limit = limit or MAVVRIK_MAX_FETCHED_DATA_RECORDS
 
@@ -325,6 +327,8 @@ class Service:
         data = await self._settings.load()
         if not data and not self._settings.has_env_vars:
             raise ValueError("Mavvrik not configured. Call POST /mavvrik/init first.")
+
+        self._settings._ensure_prisma_client()
 
         date_str = date_str or self._yesterday()
         effective_limit = limit or MAVVRIK_MAX_FETCHED_DATA_RECORDS
