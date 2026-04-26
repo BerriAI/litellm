@@ -43,10 +43,10 @@ def _reload_mcp_manager_module():
     # After reload, server.py still holds a stale reference to the old
     # global_mcp_server_manager. Update it so tests that exercise server.py
     # functions (e.g. _get_tools_from_mcp_servers) use the fresh instance.
-    server_module = sys.modules.get(
-        "litellm.proxy._experimental.mcp_server.server"
-    )
-    if server_module is not None and hasattr(server_module, "global_mcp_server_manager"):
+    server_module = sys.modules.get("litellm.proxy._experimental.mcp_server.server")
+    if server_module is not None and hasattr(
+        server_module, "global_mcp_server_manager"
+    ):
         server_module.global_mcp_server_manager = reloaded.global_mcp_server_manager
     return reloaded
 
@@ -223,9 +223,7 @@ class TestMCPServerManager:
         with caplog.at_level(logging.WARNING, logger="LiteLLM"):
             await manager.load_servers_from_config(config)
 
-        assert any(
-            "invalid alias 'bad/name'" in message for message in caplog.messages
-        )
+        assert any("invalid alias 'bad/name'" in message for message in caplog.messages)
 
     @pytest.mark.asyncio
     async def test_load_servers_from_config_accepts_valid_alias(self, caplog):
@@ -492,7 +490,12 @@ class TestMCPServerManager:
         mock_client = AsyncMock()
         mock_client.list_prompts = AsyncMock(return_value=[mock_prompt])
 
-        with patch.object(manager, "_create_mcp_client", new_callable=AsyncMock, return_value=mock_client):
+        with patch.object(
+            manager,
+            "_create_mcp_client",
+            new_callable=AsyncMock,
+            return_value=mock_client,
+        ):
             prompts = await manager.get_prompts_from_server(server, add_prefix=True)
 
         mock_client.list_prompts.assert_awaited_once()
@@ -520,7 +523,12 @@ class TestMCPServerManager:
         mock_client = AsyncMock()
         mock_client.get_prompt = AsyncMock(return_value=mock_result)
 
-        with patch.object(manager, "_create_mcp_client", new_callable=AsyncMock, return_value=mock_client):
+        with patch.object(
+            manager,
+            "_create_mcp_client",
+            new_callable=AsyncMock,
+            return_value=mock_client,
+        ):
             result = await manager.get_prompt_from_server(
                 server=server,
                 prompt_name="hello",
@@ -551,13 +559,23 @@ class TestMCPServerManager:
         mock_client = AsyncMock()
         mock_resources = [Resource(name="file", uri="https://example.com/file")]
         mock_client.list_resources = AsyncMock(return_value=mock_resources)
-        prefixed_resources = [Resource(name="alias-server-file", uri="https://example.com/file")]
+        prefixed_resources = [
+            Resource(name="alias-server-file", uri="https://example.com/file")
+        ]
 
-        with patch.object(manager, "_create_mcp_client", new_callable=AsyncMock, return_value=mock_client) as mock_create_client, patch.object(
-            manager,
-            "_create_prefixed_resources",
-            return_value=prefixed_resources,
-        ) as mock_prefix:
+        with (
+            patch.object(
+                manager,
+                "_create_mcp_client",
+                new_callable=AsyncMock,
+                return_value=mock_client,
+            ) as mock_create_client,
+            patch.object(
+                manager,
+                "_create_prefixed_resources",
+                return_value=prefixed_resources,
+            ) as mock_prefix,
+        ):
             result = await manager.get_resources_from_server(
                 server=server,
                 mcp_auth_header="auth",
@@ -602,11 +620,19 @@ class TestMCPServerManager:
             )
         ]
 
-        with patch.object(manager, "_create_mcp_client", new_callable=AsyncMock, return_value=mock_client) as mock_create_client, patch.object(
-            manager,
-            "_create_prefixed_resource_templates",
-            return_value=prefixed_templates,
-        ) as mock_prefix:
+        with (
+            patch.object(
+                manager,
+                "_create_mcp_client",
+                new_callable=AsyncMock,
+                return_value=mock_client,
+            ) as mock_create_client,
+            patch.object(
+                manager,
+                "_create_prefixed_resource_templates",
+                return_value=prefixed_templates,
+            ) as mock_prefix,
+        ):
             result = await manager.get_resource_templates_from_server(
                 server=server,
                 mcp_auth_header="auth",
@@ -650,7 +676,12 @@ class TestMCPServerManager:
         )
         mock_client.read_resource = AsyncMock(return_value=read_result)
 
-        with patch.object(manager, "_create_mcp_client", new_callable=AsyncMock, return_value=mock_client) as mock_create_client:
+        with patch.object(
+            manager,
+            "_create_mcp_client",
+            new_callable=AsyncMock,
+            return_value=mock_client,
+        ) as mock_create_client:
             result = await manager.read_resource_from_server(
                 server=server,
                 url="https://example.com/resource",
@@ -661,7 +692,9 @@ class TestMCPServerManager:
         mock_create_client.assert_called_once()
         called_kwargs = mock_create_client.call_args.kwargs
         assert called_kwargs["extra_headers"] == {"X-Test": "1", "X-Static": "1"}
-        mock_client.read_resource.assert_awaited_once_with("https://example.com/resource")
+        mock_client.read_resource.assert_awaited_once_with(
+            "https://example.com/resource"
+        )
         assert result is read_result
 
     @pytest.mark.asyncio
@@ -724,22 +757,27 @@ class TestMCPServerManager:
             registration_url=None,
         )
 
-        with patch(
-            "litellm.proxy._experimental.mcp_server.mcp_server_manager.get_async_httpx_client",
-            return_value=mock_client,
-        ), patch.object(
-            manager,
-            "_fetch_oauth_metadata_from_resource",
-            AsyncMock(return_value=([], None)),
-        ), patch.object(
-            manager,
-            "_attempt_well_known_discovery",
-            AsyncMock(return_value=([], None)),
-        ), patch.object(
-            manager,
-            "_fetch_authorization_server_metadata",
-            AsyncMock(return_value=mock_metadata),
-        ) as mock_fetch_auth:
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.get_async_httpx_client",
+                return_value=mock_client,
+            ),
+            patch.object(
+                manager,
+                "_fetch_oauth_metadata_from_resource",
+                AsyncMock(return_value=([], None)),
+            ),
+            patch.object(
+                manager,
+                "_attempt_well_known_discovery",
+                AsyncMock(return_value=([], None)),
+            ),
+            patch.object(
+                manager,
+                "_fetch_authorization_server_metadata",
+                AsyncMock(return_value=mock_metadata),
+            ) as mock_fetch_auth,
+        ):
             result = await manager._descovery_metadata(server_url)
 
         mock_fetch_auth.assert_awaited_once_with(["https://example.com"])
@@ -779,9 +817,8 @@ class TestMCPServerManager:
         assert server.scopes == ["config"]  # config overrides discovery
         assert server.authorization_url == "https://config.example.com/auth"
         assert server.token_url == "https://discovered.example.com/token"
-        assert (
-            server.registration_url == "https://discovered.example.com/register"
-        )
+        assert server.registration_url == "https://discovered.example.com/register"
+
     @pytest.mark.asyncio
     async def test_config_oauth_initialize_tool_name_to_mcp_server_name_mapping(self):
         manager = MCPServerManager()
@@ -801,7 +838,7 @@ class TestMCPServerManager:
         # Initialize the tool mapping
         await manager._initialize_tool_name_to_mcp_server_name_mapping()
         assert manager.tool_name_to_mcp_server_name_mapping == {}
-        
+
     @pytest.mark.asyncio
     async def test_list_tools_handles_missing_server_alias(self):
         """Test that list_tools handles servers without alias gracefully"""
@@ -1017,7 +1054,9 @@ class TestMCPServerManager:
         # Capture the extra_headers passed to _create_mcp_client
         captured_extra_headers = None
 
-        async def capture_create_mcp_client(server, mcp_auth_header, extra_headers, stdio_env):
+        async def capture_create_mcp_client(
+            server, mcp_auth_header, extra_headers, stdio_env
+        ):
             nonlocal captured_extra_headers
             captured_extra_headers = extra_headers
             return mock_client
@@ -1314,15 +1353,19 @@ class TestMCPServerManager:
 
             return tool_func
 
-        with patch(
-            "litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator.create_tool_function",
-            side_effect=fake_create_tool_function,
-        ), patch(
-            "litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator.build_input_schema",
-            return_value={"type": "object", "properties": {}, "required": []},
-        ), patch(
-            "litellm.proxy._experimental.mcp_server.tool_registry.global_mcp_tool_registry.register_tool",
-            return_value=None,
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator.create_tool_function",
+                side_effect=fake_create_tool_function,
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator.build_input_schema",
+                return_value={"type": "object", "properties": {}, "required": []},
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.tool_registry.global_mcp_tool_registry.register_tool",
+                return_value=None,
+            ),
         ):
             await manager._register_openapi_tools(
                 spec_path=str(spec_path),
@@ -2161,7 +2204,9 @@ class TestMCPServerManager:
         # Register the server and map a tool to it
         manager.registry = {"test-server": server}
         manager.tool_name_to_mcp_server_name_mapping["test_tool"] = "test-server"
-        manager.tool_name_to_mcp_server_name_mapping["test-server-test_tool"] = "test-server"
+        manager.tool_name_to_mcp_server_name_mapping["test-server-test_tool"] = (
+            "test-server"
+        )
 
         # Create mock client that tracks call_tool usage
         mock_client = AsyncMock()
@@ -2252,11 +2297,16 @@ class TestMCPServerManager:
             # Verify MCPRequestHandler.get_allowed_mcp_servers was called with user_api_key_auth
             mock_get_allowed.assert_called_once()
             call_args = mock_get_allowed.call_args
-            assert call_args[0][0] is user_api_key_auth  # First positional arg should be user_api_key_auth
+            assert (
+                call_args[0][0] is user_api_key_auth
+            )  # First positional arg should be user_api_key_auth
             assert call_args[0][0].user_id == "user-123"
             assert call_args[0][0].object_permission_id == "perm_123"
             assert call_args[0][0].object_permission is not None
-            assert call_args[0][0].object_permission.mcp_servers == ["test_server_1", "test_server_2"]
+            assert call_args[0][0].object_permission.mcp_servers == [
+                "test_server_1",
+                "test_server_2",
+            ]
 
             # Verify result contains the expected servers
             assert "test_server_1" in result
@@ -2481,6 +2531,290 @@ class TestHasClientCredentialsOAuth2Flow:
             oauth2_flow="client_credentials",
         )
         assert server.needs_user_oauth_token is False
+
+
+# ---------------------------------------------------------------------------
+# Upstream initialize-instructions cache
+# ---------------------------------------------------------------------------
+
+
+class TestMCPServerManagerUpstreamInstructionsCache:
+    """Tests for the upstream initialize-instructions cache."""
+
+    def test_get_returns_none_when_empty(self):
+        """Empty cache returns None for any key."""
+        manager = MCPServerManager()
+        assert (
+            manager._upstream_initialize_instructions_by_server_id.get("nonexistent")
+            is None
+        )
+
+    def test_remember_stores_stripped_value(self):
+        """_remember_upstream_initialize_instructions stores a stripped string."""
+        manager = MCPServerManager()
+        fake_server = MagicMock(server_id="srv")
+        fake_client = MagicMock(_last_initialize_instructions="  hello \n")
+        manager._remember_upstream_initialize_instructions(fake_server, fake_client)
+        assert (
+            manager._upstream_initialize_instructions_by_server_id.get("srv") == "hello"
+        )
+
+    def test_remember_ignores_empty_string(self):
+        """Whitespace-only instructions are not stored."""
+        manager = MCPServerManager()
+        fake_server = MagicMock(server_id="srv")
+        fake_client = MagicMock(_last_initialize_instructions="   ")
+        manager._remember_upstream_initialize_instructions(fake_server, fake_client)
+        assert manager._upstream_initialize_instructions_by_server_id.get("srv") is None
+
+    def test_remember_ignores_none(self):
+        """None instructions are not stored."""
+        manager = MCPServerManager()
+        fake_server = MagicMock(server_id="srv")
+        fake_client = MagicMock(_last_initialize_instructions=None)
+        manager._remember_upstream_initialize_instructions(fake_server, fake_client)
+        assert manager._upstream_initialize_instructions_by_server_id.get("srv") is None
+
+    @pytest.mark.asyncio
+    async def test_load_servers_from_config_clears_cache(self):
+        """Reloading config clears any previously cached upstream instructions."""
+        manager = MCPServerManager()
+        manager._upstream_initialize_instructions_by_server_id["old"] = "stale"
+        await manager.load_servers_from_config(
+            mcp_servers_config={
+                "fresh_srv": {
+                    "url": "https://example.com",
+                    "instructions": "from yaml",
+                }
+            }
+        )
+        assert manager._upstream_initialize_instructions_by_server_id.get("old") is None
+
+    @pytest.mark.asyncio
+    async def test_load_servers_reads_instructions_from_config(self):
+        """instructions field from YAML config is persisted on the MCPServer."""
+        manager = MCPServerManager()
+        await manager.load_servers_from_config(
+            mcp_servers_config={
+                "srv_a": {
+                    "url": "https://a.example.com",
+                    "instructions": "A instructions",
+                },
+                "srv_b": {
+                    "url": "https://b.example.com",
+                },
+            }
+        )
+        by_name = {s.server_name: s for s in manager.config_mcp_servers.values()}
+        assert "srv_a" in by_name and by_name["srv_a"].instructions == "A instructions"
+        assert "srv_b" in by_name and by_name["srv_b"].instructions is None
+
+
+class TestMCPServerManagerExpandPermissionList:
+    """Tests for the alias/name-aware permission list expansion used by team MCP permissions."""
+
+    def _make_server(
+        self,
+        server_id: str,
+        server_name: str,
+        alias=None,
+        name=None,
+    ) -> MCPServer:
+        return MCPServer(
+            server_id=server_id,
+            name=name if name is not None else (alias or server_name),
+            alias=alias,
+            server_name=server_name,
+            url=f"https://{server_id}.example.com",
+            transport=MCPTransport.http,
+        )
+
+    def test_empty_list_returns_empty(self):
+        manager = MCPServerManager()
+        assert manager.expand_permission_list([]) == []
+
+    def test_expands_server_name(self):
+        manager = MCPServerManager()
+        manager.config_mcp_servers["id-usw1"] = self._make_server(
+            "id-usw1", server_name="a"
+        )
+
+        assert manager.expand_permission_list(["a"]) == ["id-usw1"]
+
+    def test_expands_alias(self):
+        manager = MCPServerManager()
+        manager.config_mcp_servers["id-1"] = self._make_server(
+            "id-1", server_name="internal_name", alias="public_alias"
+        )
+
+        assert manager.expand_permission_list(["public_alias"]) == ["id-1"]
+
+    def test_passes_through_unknown_entry(self):
+        """Unresolved entries pass through unchanged (with a debug log) —
+        the downstream access check denies them when compared to the
+        concrete request server_id."""
+        manager = MCPServerManager()
+        manager.config_mcp_servers["id-1"] = self._make_server("id-1", server_name="b")
+
+        assert manager.expand_permission_list(["a"]) == ["a"]
+
+    def test_name_collision_expands_to_all_matches(self):
+        """Two servers sharing a server_name both resolve — the documented behavior."""
+        manager = MCPServerManager()
+        manager.config_mcp_servers["id-config"] = self._make_server(
+            "id-config", server_name="shared"
+        )
+        manager.registry["id-db"] = self._make_server("id-db", server_name="shared")
+
+        assert sorted(manager.expand_permission_list(["shared"])) == [
+            "id-config",
+            "id-db",
+        ]
+
+    def test_searches_config_and_registry_union(self):
+        manager = MCPServerManager()
+        manager.config_mcp_servers["cfg-id"] = self._make_server(
+            "cfg-id", server_name="a"
+        )
+        manager.registry["reg-id"] = self._make_server("reg-id", server_name="b")
+
+        assert manager.expand_permission_list(["a"]) == ["cfg-id"]
+        assert manager.expand_permission_list(["b"]) == ["reg-id"]
+
+    def test_id_match_takes_precedence_over_name_match(self):
+        """
+        If a permission entry matches a server_id directly, don't also add
+        servers whose server_name happens to equal that id.
+        """
+        manager = MCPServerManager()
+        manager.config_mcp_servers["id-1"] = self._make_server(
+            "id-1", server_name="other_name"
+        )
+        manager.config_mcp_servers["id-2"] = self._make_server(
+            "id-2", server_name="id-1"
+        )
+
+        assert manager.expand_permission_list(["id-1"]) == ["id-1"]
+
+    def test_mixed_ids_and_names_in_same_list(self):
+        manager = MCPServerManager()
+        manager.config_mcp_servers["uuid-1"] = self._make_server(
+            "uuid-1", server_name="a"
+        )
+        manager.config_mcp_servers["uuid-2"] = self._make_server(
+            "uuid-2", server_name="b"
+        )
+
+        # ["uuid-1", "b"] -> uuid-1 passes through, "b" resolves to uuid-2
+        assert sorted(manager.expand_permission_list(["uuid-1", "b"])) == [
+            "uuid-1",
+            "uuid-2",
+        ]
+
+    def test_deduplicates_overlapping_id_and_name_entries(self):
+        """If a list references the same server by both id and name, return it once."""
+        manager = MCPServerManager()
+        manager.config_mcp_servers["uuid-1"] = self._make_server(
+            "uuid-1", server_name="a"
+        )
+
+        assert manager.expand_permission_list(["uuid-1", "a"]) == ["uuid-1"]
+
+    def test_simulates_cross_region_portability(self):
+        """
+        Same permission entry "a" resolves to different concrete IDs per region —
+        the cross-region portability the customer is asking for.
+        """
+        usw1 = MCPServerManager()
+        usw1.config_mcp_servers["hash-usw1"] = self._make_server(
+            "hash-usw1", server_name="a"
+        )
+
+        usc1 = MCPServerManager()
+        usc1.config_mcp_servers["hash-usc1"] = self._make_server(
+            "hash-usc1", server_name="a"
+        )
+
+        assert usw1.expand_permission_list(["a"]) == ["hash-usw1"]
+        assert usc1.expand_permission_list(["a"]) == ["hash-usc1"]
+
+
+class TestMCPServerManagerExpandToolPermissions:
+    """Tests for tool-permission dict rewriting — the privilege-escalation guard."""
+
+    def _make_server(self, server_id: str, server_name: str, alias=None) -> MCPServer:
+        return MCPServer(
+            server_id=server_id,
+            name=alias or server_name,
+            alias=alias,
+            server_name=server_name,
+            url=f"https://{server_id}.example.com",
+            transport=MCPTransport.http,
+        )
+
+    def test_empty_or_none_returns_empty_dict(self):
+        manager = MCPServerManager()
+        assert manager.expand_tool_permissions(None) == {}
+        assert manager.expand_tool_permissions({}) == {}
+
+    def test_rewrites_name_key_to_server_id(self):
+        """Privilege-escalation guard: a name-based key must resolve to the
+        concrete server_id, otherwise `.get(server_id)` misses and the tool
+        restriction is silently dropped (caller treats None as allow-all)."""
+        manager = MCPServerManager()
+        manager.config_mcp_servers["uuid-a"] = self._make_server(
+            "uuid-a", server_name="my-alias"
+        )
+
+        result = manager.expand_tool_permissions({"my-alias": ["read_file"]})
+        assert result == {"uuid-a": ["read_file"]}
+
+    def test_passes_through_existing_server_id_key(self):
+        manager = MCPServerManager()
+        manager.config_mcp_servers["uuid-a"] = self._make_server(
+            "uuid-a", server_name="alpha"
+        )
+
+        result = manager.expand_tool_permissions({"uuid-a": ["read_file"]})
+        assert result == {"uuid-a": ["read_file"]}
+
+    def test_unresolved_key_passes_through_unchanged(self):
+        """A stale id-keyed restriction (server since deleted, or just a
+        test-fixture placeholder) must still apply when something looks it
+        up by that same string — dropping would silently remove the
+        restriction."""
+        manager = MCPServerManager()
+
+        result = manager.expand_tool_permissions({"stale-uuid": ["read_file"]})
+        assert result == {"stale-uuid": ["read_file"]}
+
+    def test_name_collision_unions_tool_lists(self):
+        """Two servers sharing a server_name both match; their tool lists get
+        the restriction (matches the list-expansion collision semantics)."""
+        manager = MCPServerManager()
+        manager.config_mcp_servers["uuid-1"] = self._make_server(
+            "uuid-1", server_name="shared"
+        )
+        manager.registry["uuid-2"] = self._make_server("uuid-2", server_name="shared")
+
+        result = manager.expand_tool_permissions({"shared": ["read_file"]})
+        assert sorted(result.keys()) == ["uuid-1", "uuid-2"]
+        assert result["uuid-1"] == ["read_file"]
+        assert result["uuid-2"] == ["read_file"]
+
+    def test_id_and_name_keys_pointing_at_same_server_union_tools(self):
+        """If the admin writes both {"uuid-a": [...], "alias-a": [...]} and
+        both refer to the same server, the tool lists are unioned rather
+        than one overwriting the other."""
+        manager = MCPServerManager()
+        manager.config_mcp_servers["uuid-a"] = self._make_server(
+            "uuid-a", server_name="alias-a"
+        )
+
+        result = manager.expand_tool_permissions(
+            {"uuid-a": ["read_file"], "alias-a": ["write_file"]}
+        )
+        assert sorted(result["uuid-a"]) == ["read_file", "write_file"]
 
 
 if __name__ == "__main__":

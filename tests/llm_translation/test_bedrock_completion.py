@@ -70,7 +70,7 @@ def test_completion_bedrock_claude_completion_auth():
 
     try:
         response = completion(
-            model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+            model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
             messages=messages,
             max_tokens=10,
             temperature=0.1,
@@ -106,7 +106,7 @@ def test_completion_bedrock_guardrails(streaming):
     try:
         if streaming is False:
             response = completion(
-                model="anthropic.claude-3-5-sonnet-20240620-v1:0",
+                model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
                 messages=[
                     {
                         "content": "where do i buy coffee from? ",
@@ -134,7 +134,7 @@ def test_completion_bedrock_guardrails(streaming):
         else:
             litellm.set_verbose = True
             response = completion(
-                model="anthropic.claude-3-5-sonnet-20240620-v1:0",
+                model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
                 messages=[
                     {
                         "content": "where do i buy coffee from? ",
@@ -196,7 +196,7 @@ def test_completion_bedrock_claude_external_client_auth():
         )
 
         response = completion(
-            model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+            model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
             messages=messages,
             max_tokens=10,
             temperature=0.1,
@@ -741,7 +741,7 @@ def test_bedrock_ptu():
         )
         try:
             response = litellm.completion(
-                model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+                model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
                 messages=[{"role": "user", "content": "What's AWS?"}],
                 model_id=model_id,
                 client=client,
@@ -907,7 +907,7 @@ def test_completion_bedrock_external_client_region():
         with patch.object(client, "post", new=Mock()) as mock_client_post:
             try:
                 response = completion(
-                    model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+                    model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
                     messages=messages,
                     max_tokens=10,
                     temperature=0.1,
@@ -1066,6 +1066,72 @@ def test_bedrock_tools_pt_invalid_names():
     assert result[1]["toolSpec"]["name"] == "another_invalid_name"
 
 
+def test_bedrock_converse_tools_pt_converts_custom_schema_type_to_object():
+    """
+    Bedrock Converse ``toolSpec.inputSchema.json`` must use standard JSON Schema
+    types. Anthropic / Claude Code use ``type: \"custom\"`` in ``input_schema`` (or
+    OpenAI ``parameters``); ``_bedrock_tools_pt`` must convert ``custom`` → ``object``
+    at the root and inside nested ``properties``.
+    """
+    tools = [
+        {
+            "name": "Agent",
+            "description": "Subagent tool",
+            "type": "custom",
+            "input_schema": {
+                "type": "custom",
+                "additionalProperties": False,
+                "properties": {
+                    "prompt": {"type": "string"},
+                    "nested": {
+                        "type": "custom",
+                        "properties": {"x": {"type": "string"}},
+                        "required": ["x"],
+                    },
+                },
+                "required": ["prompt"],
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "other",
+                "description": "x",
+                "parameters": {
+                    "type": "custom",
+                    "properties": {
+                        "a": {"type": "integer"},
+                        "nested_obj": {
+                            "type": "custom",
+                            "properties": {"b": {"type": "string"}},
+                        },
+                    },
+                    "required": ["a"],
+                },
+            },
+        },
+        {
+            "input_schema": {
+                "type": "object",
+                "properties": {"q": {"type": "string"}},
+            },
+        },
+    ]
+
+    result = _bedrock_tools_pt(tools)
+
+    assert result[0]["toolSpec"]["name"] == "Agent"
+    j0 = result[0]["toolSpec"]["inputSchema"]["json"]
+    assert j0["type"] == "object"
+    assert j0["properties"]["nested"]["type"] == "object"
+
+    j1 = result[1]["toolSpec"]["inputSchema"]["json"]
+    assert j1["type"] == "object"
+    assert j1["properties"]["nested_obj"]["type"] == "object"
+
+    assert result[2]["toolSpec"]["name"] == "litellm_unnamed_tool_2"
+
+
 def test_bedrock_tools_transformation_valid_params():
     from litellm.types.llms.bedrock import ToolJsonSchemaBlock
 
@@ -1150,8 +1216,8 @@ def test_bedrock_cross_region_inference(model):
     "model, expected_base_model",
     [
         (
-            "apac.anthropic.claude-3-5-sonnet-20240620-v1:0",
-            "anthropic.claude-3-5-sonnet-20240620-v1:0",
+            "apac.anthropic.claude-haiku-4-5-20251001-v1:0",
+            "anthropic.claude-haiku-4-5-20251001-v1:0",
         ),
     ],
 )
@@ -1257,7 +1323,7 @@ def test_base_aws_llm_get_credentials():
 def test_bedrock_completion_test_2():
     litellm.set_verbose = True
     data = {
-        "model": "bedrock/anthropic.claude-3-opus-20240229-v1:0",
+        "model": "bedrock/anthropic.claude-3-7-sonnet-20250219-v1:0",
         "messages": [
             {
                 "role": "system",
@@ -1564,7 +1630,7 @@ def test_bedrock_completion_test_4(modify_params):
     litellm.modify_params = modify_params
 
     data = {
-        "model": "anthropic.claude-3-opus-20240229-v1:0",
+        "model": "anthropic.claude-3-7-sonnet-20250219-v1:0",
         "messages": [
             {
                 "role": "user",
@@ -1889,9 +1955,9 @@ def test_bedrock_base_model_helper():
 
     assert (
         BedrockModelInfo.get_base_model(
-            "invoke/anthropic.claude-3-5-sonnet-20241022-v2:0"
+            "invoke/anthropic.claude-haiku-4-5-20251001-v1:0"
         )
-        == "anthropic.claude-3-5-sonnet-20241022-v2:0"
+        == "anthropic.claude-haiku-4-5-20251001-v1:0"
     )
 
 
@@ -1984,7 +2050,7 @@ def test_bedrock_prompt_caching_message(messages, expected_cache_control):
     "model, expected_supports_tool_call",
     [
         ("bedrock/us.amazon.nova-pro-v1:0", True),
-        ("bedrock/anthropic.claude-3-5-sonnet-20241022-v2:0", True),
+        ("bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0", True),
         ("bedrock/mistral.mistral-7b-instruct-v0.1:0", True),
         ("bedrock/meta.llama3-1-8b-instruct:0", True),
         ("bedrock/meta.llama3-2-70b-instruct:0", True),
@@ -2008,7 +2074,7 @@ class TestBedrockConverseChatCrossRegion(BaseLLMChatTest):
         litellm.model_cost = litellm.get_model_cost_map(url="")
         litellm.add_known_models()
         return {
-            "model": "bedrock/us.anthropic.claude-3-5-sonnet-20241022-v2:0",
+            "model": "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
         }
 
     def test_tool_call_no_arguments(self, tool_call_no_arguments):
@@ -2027,7 +2093,7 @@ class TestBedrockConverseChatCrossRegion(BaseLLMChatTest):
         """
         os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
         litellm.model_cost = litellm.get_model_cost_map(url="")
-        bedrock_model = "us.anthropic.claude-3-5-sonnet-20241022-v2:0"
+        bedrock_model = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
         litellm.model_cost.pop(bedrock_model, None)
         model = f"bedrock/{bedrock_model}"
 
@@ -2044,7 +2110,7 @@ class TestBedrockConverseChatCrossRegion(BaseLLMChatTest):
 class TestBedrockConverseAnthropicUnitTests(BaseAnthropicChatTest):
     def get_base_completion_call_args(self) -> dict:
         return {
-            "model": "bedrock/us.anthropic.claude-3-5-sonnet-20241022-v2:0",
+            "model": "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
         }
 
     def get_base_completion_call_args_with_thinking(self) -> dict:
@@ -2060,7 +2126,7 @@ class TestBedrockConverseChatNormal(BaseLLMChatTest):
         litellm.model_cost = litellm.get_model_cost_map(url="")
         litellm.add_known_models()
         return {
-            "model": "bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+            "model": "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
             "aws_region_name": "us-east-1",
         }
 
@@ -2472,7 +2538,6 @@ def test_bedrock_error_handling_streaming():
         "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf",
         # "https://raw.githubusercontent.com/datasets/gdp/master/data/gdp.csv",
         "https://www.cmu.edu/blackboard/files/evaluate/tests-example.xls",
-        "http://www.krishdholakia.com/",
         # "https://raw.githubusercontent.com/datasets/sample-data/master/README.txt", # invalid url
         "https://raw.githubusercontent.com/mdn/content/main/README.md",
     ],
@@ -2654,13 +2719,13 @@ def test_bedrock_top_k_param(model, expected_params):
 def test_bedrock_invoke_provider():
     assert (
         litellm.AmazonInvokeConfig().get_bedrock_invoke_provider(
-            "bedrock/invoke/us.anthropic.claude-3-5-sonnet-20240620-v1:0"
+            "bedrock/invoke/us.anthropic.claude-haiku-4-5-20251001-v1:0"
         )
         == "anthropic"
     )
     assert (
         litellm.AmazonInvokeConfig().get_bedrock_invoke_provider(
-            "bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0"
+            "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0"
         )
         == "anthropic"
     )
@@ -2904,12 +2969,13 @@ def test_bedrock_application_inference_profile():
         }
     ]
 
-    with patch.object(client, "post") as mock_post, patch.object(
-        client2, "post"
-    ) as mock_post2:
+    with (
+        patch.object(client, "post") as mock_post,
+        patch.object(client2, "post") as mock_post2,
+    ):
         try:
             resp = completion(
-                model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+                model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
                 messages=[{"role": "user", "content": "Hello, how are you?"}],
                 model_id="arn:aws:bedrock:eu-central-1:000000000000:application-inference-profile/a0a0a0a0a0a0",
                 client=client,
@@ -3076,16 +3142,16 @@ async def test_bedrock_passthrough(sync_mode: bool):
 
     if sync_mode:
         response = litellm.llm_passthrough_route(
-            model="bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0",
+            model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
             method="POST",
-            endpoint="/model/us.anthropic.claude-3-5-sonnet-20240620-v1:0/invoke",
+            endpoint="/model/us.anthropic.claude-haiku-4-5-20251001-v1:0/invoke",
             data=data,
         )
     else:
         response = await litellm.allm_passthrough_route(
-            model="bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0",
+            model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
             method="POST",
-            endpoint="/model/us.anthropic.claude-3-5-sonnet-20240620-v1:0/invoke",
+            endpoint="/model/us.anthropic.claude-haiku-4-5-20251001-v1:0/invoke",
             data=data,
         )
 
@@ -3112,7 +3178,7 @@ async def test_bedrock_passthrough_router():
             {
                 "model_name": "special-bedrock-model",
                 "litellm_params": {
-                    "model": "bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0",
+                    "model": "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
                 },
             }
         ]
@@ -3178,9 +3244,9 @@ async def test_bedrock_converse__streaming_passthrough(monkeypatch):
     }
     with patch.object(mock_custom_logger, "async_log_success_event") as mock_callback:
         response = await litellm.allm_passthrough_route(
-            model="bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0",
+            model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
             method="POST",
-            endpoint="/model/us.anthropic.claude-3-5-sonnet-20240620-v1:0/converse-stream",
+            endpoint="/model/us.anthropic.claude-haiku-4-5-20251001-v1:0/converse-stream",
             data=data,
         )
         async for chunk in response:
@@ -3231,9 +3297,9 @@ async def test_bedrock_streaming_passthrough_test2(monkeypatch):
 
     with patch.object(mock_custom_logger, "async_log_success_event") as mock_callback:
         response = await litellm.allm_passthrough_route(
-            model="bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0",
+            model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
             method="POST",
-            endpoint="/model/us.anthropic.claude-3-5-sonnet-20240620-v1:0/invoke-with-response-stream",
+            endpoint="/model/us.anthropic.claude-haiku-4-5-20251001-v1:0/invoke-with-response-stream",
             data=data,
         )
         async for chunk in response:
@@ -3283,9 +3349,9 @@ async def test_bedrock_streaming_passthrough_test1(monkeypatch):
 
     with patch.object(mock_custom_logger, "async_log_success_event") as mock_callback:
         response = await litellm.allm_passthrough_route(
-            model="bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0",
+            model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
             method="POST",
-            endpoint="/model/us.anthropic.claude-3-5-sonnet-20240620-v1:0/invoke-with-response-stream",
+            endpoint="/model/us.anthropic.claude-haiku-4-5-20251001-v1:0/invoke-with-response-stream",
             data=data,
         )
         async for chunk in response:

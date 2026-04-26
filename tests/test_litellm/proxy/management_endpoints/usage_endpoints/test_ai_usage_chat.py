@@ -220,15 +220,15 @@ class TestStreamUsageAiChat:
     async def test_stream_emits_status_events(self):
         _, mock_first_response = self._make_tool_call_response()
 
-        with patch(
-            "litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat._get_proxy_router",
-            return_value=None,
-        ), patch(
-            "litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat.litellm"
-        ) as mock_litellm, patch(
-            "litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat._fetch_usage_data",
-            new_callable=AsyncMock,
-        ) as mock_fetch:
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat.litellm"
+            ) as mock_litellm,
+            patch(
+                "litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat._fetch_usage_data",
+                new_callable=AsyncMock,
+            ) as mock_fetch,
+        ):
             mock_litellm.acompletion = AsyncMock(
                 side_effect=[
                     mock_first_response,
@@ -269,15 +269,15 @@ class TestStreamUsageAiChat:
             "id"
         ] = "call_team"
 
-        with patch(
-            "litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat._get_proxy_router",
-            return_value=None,
-        ), patch(
-            "litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat.litellm"
-        ) as mock_litellm, patch(
-            "litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat._fetch_team_usage_data",
-            new_callable=AsyncMock,
-        ) as mock_fetch:
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat.litellm"
+            ) as mock_litellm,
+            patch(
+                "litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat._fetch_team_usage_data",
+                new_callable=AsyncMock,
+            ) as mock_fetch,
+        ):
             mock_litellm.acompletion = AsyncMock(
                 side_effect=[
                     mock_first_response,
@@ -342,20 +342,20 @@ class TestStreamUsageAiChat:
 
         mock_fetch = AsyncMock(return_value=SAMPLE_AGGREGATED_RESPONSE)
 
-        with patch(
-            "litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat._get_proxy_router",
-            return_value=None,
-        ), patch(
-            "litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat.litellm"
-        ) as mock_litellm, patch.dict(
-            "litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat.TOOL_HANDLERS",
-            {
-                "get_usage_data": {
-                    "fetch": mock_fetch,
-                    "summarise": _summarise_usage_data,
-                    "label": "global usage data",
-                }
-            },
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat.litellm"
+            ) as mock_litellm,
+            patch.dict(
+                "litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat.TOOL_HANDLERS",
+                {
+                    "get_usage_data": {
+                        "fetch": mock_fetch,
+                        "summarise": _summarise_usage_data,
+                        "label": "global usage data",
+                    }
+                },
+            ),
         ):
             mock_litellm.acompletion = AsyncMock(
                 side_effect=[

@@ -113,7 +113,7 @@ class TestVertexImageGeneration(BaseImageGenTest):
         litellm.in_memory_llm_clients_cache = InMemoryCache()
         return {
             "model": "vertex_ai/imagen-3.0-fast-generate-001",
-            "vertex_ai_project": "pathrise-convert-1606954137718",
+            "vertex_ai_project": "litellm-ci-cd",
             "vertex_ai_location": "us-central1",
             "n": 1,
         }
@@ -129,7 +129,7 @@ class TestVertexAIGeminiImageGeneration(BaseImageGenTest):
         litellm.in_memory_llm_clients_cache = InMemoryCache()
         return {
             "model": "vertex_ai/gemini-2.5-flash-image",
-            "vertex_ai_project": "pathrise-convert-1606954137718",
+            "vertex_ai_project": "litellm-ci-cd",
             "vertex_ai_location": "us-central1",
             "n": 1,
             "size": "1024x1024",
@@ -199,12 +199,15 @@ class TestAimlImageGeneration(BaseImageGenTest):
         mock_response.text = json.dumps(mock_aiml_response)
         mock_response.headers = {}
 
-        with patch(
-            "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
-            new_callable=AsyncMock,
-        ) as mock_async_post, patch(
-            "litellm.llms.custom_httpx.http_handler.HTTPHandler.post",
-        ) as mock_sync_post:
+        with (
+            patch(
+                "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+                new_callable=AsyncMock,
+            ) as mock_async_post,
+            patch(
+                "litellm.llms.custom_httpx.http_handler.HTTPHandler.post",
+            ) as mock_sync_post,
+        ):
             mock_async_post.return_value = mock_response
             mock_sync_post.return_value = mock_response
 

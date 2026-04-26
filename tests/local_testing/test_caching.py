@@ -1237,7 +1237,7 @@ async def test_redis_cache_acompletion_stream_bedrock():
         response_2_content = ""
 
         response1 = await litellm.acompletion(
-            model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+            model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
             messages=messages,
             max_tokens=40,
             temperature=1,
@@ -1253,7 +1253,7 @@ async def test_redis_cache_acompletion_stream_bedrock():
         print("\n\n Response 1 content: ", response_1_content, "\n\n")
 
         response2 = await litellm.acompletion(
-            model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+            model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
             messages=messages,
             max_tokens=40,
             temperature=1,
@@ -2178,9 +2178,10 @@ async def test_logging_turn_off_message_logging_streaming(sync_mode):
     mock_obj = Cache(type="local")
     litellm.cache = mock_obj
 
-    with patch.object(mock_obj, "add_cache") as mock_client, patch.object(
-        mock_obj, "async_add_cache"
-    ) as mock_async_client:
+    with (
+        patch.object(mock_obj, "add_cache") as mock_client,
+        patch.object(mock_obj, "async_add_cache") as mock_async_client,
+    ):
         print(f"mock_obj.add_cache: {mock_obj.add_cache}")
 
         if sync_mode is True:
@@ -2596,9 +2597,12 @@ def test_redis_caching_multiple_namespaces():
     messages = [{"role": "user", "content": f"what is litellm? {test_uuid}"}]
 
     # Mock the Redis client creation from the _redis module
-    with patch("litellm._redis.get_redis_client") as mock_get_redis_client, patch(
-        "litellm._redis.get_redis_connection_pool"
-    ) as mock_get_redis_connection_pool:
+    with (
+        patch("litellm._redis.get_redis_client") as mock_get_redis_client,
+        patch(
+            "litellm._redis.get_redis_connection_pool"
+        ) as mock_get_redis_connection_pool,
+    ):
         # Create a mock Redis client that simulates real Redis behavior
         mock_redis_client = MagicMock()
         mock_get_redis_client.return_value = mock_redis_client

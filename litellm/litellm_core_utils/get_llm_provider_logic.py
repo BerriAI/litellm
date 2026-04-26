@@ -169,9 +169,6 @@ def get_llm_provider(  # noqa: PLR0915
                 return remainder, custom_llm_provider, dynamic_api_key, api_base
             return model, custom_llm_provider, dynamic_api_key, api_base
 
-        if api_key and api_key.startswith("os.environ/"):
-            dynamic_api_key = get_secret_str(api_key)
-
         # Check JSON-configured providers FIRST (before enum-based provider_list)
         provider_prefix = model.split("/", 1)[0]
         if len(model.split("/")) > 1 and JSONProviderRegistry.exists(provider_prefix):
@@ -205,8 +202,8 @@ def get_llm_provider(  # noqa: PLR0915
                 )
             if dynamic_api_key is not None and not isinstance(dynamic_api_key, str):
                 raise Exception(
-                    "dynamic_api_key needs to be a string. dynamic_api_key={}".format(
-                        dynamic_api_key
+                    "dynamic_api_key needs to be a string. Got type={}".format(
+                        type(dynamic_api_key).__name__
                     )
                 )
             return model, custom_llm_provider, dynamic_api_key, api_base

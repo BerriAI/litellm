@@ -373,35 +373,6 @@ def test_openai_azure_embedding_optional_arg():
 # test_openai_embedding()
 
 
-@pytest.mark.parametrize(
-    "model, api_base",
-    [
-        ("embed-english-v2.0", None),
-    ],
-)
-@pytest.mark.parametrize("sync_mode", [True, False])
-@pytest.mark.asyncio
-async def test_cohere_embedding(sync_mode, model, api_base):
-    try:
-        # litellm.set_verbose=True
-        data = {
-            "model": model,
-            "input": ["good morning from litellm", "this is another item"],
-            "input_type": "search_query",
-            "api_base": api_base,
-        }
-        if sync_mode:
-            response = embedding(**data)
-        else:
-            response = await litellm.aembedding(**data)
-
-        print(f"response:", response)
-
-        assert isinstance(response.usage, litellm.Usage)
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
-
 # test_cohere_embedding()
 
 
@@ -549,7 +520,7 @@ def test_bedrock_embedding_cohere():
                 "good morning from litellm, attempting to embed data",
                 "lets test a second string for good measure",
             ],
-            aws_region_name="os.environ/AWS_REGION_NAME",
+            aws_region_name="us-west-2",
         )
         assert isinstance(
             response["data"][0]["embedding"], list

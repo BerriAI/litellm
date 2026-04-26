@@ -1179,6 +1179,7 @@ async def test_async_increment_tokens_with_ttl_preservation():
     # Test keys - use hash tags to ensure they map to same Redis cluster slot
     # Use a unique suffix per test run to avoid stale state from prior runs
     import uuid
+
     unique_suffix = str(uuid.uuid4())[:8]
     test_key_with_ttl = f"{{test_ttl}}:with_ttl:{unique_suffix}"
     test_key_without_ttl = f"{{test_ttl}}:without_ttl:{unique_suffix}"
@@ -2239,7 +2240,9 @@ async def test_agent_rate_limit_from_metadata_agent_id():
             agent_descriptor = d
             break
 
-    assert agent_descriptor is not None, "Agent descriptor should be created from metadata agent_id"
+    assert (
+        agent_descriptor is not None
+    ), "Agent descriptor should be created from metadata agent_id"
     assert agent_descriptor["value"] == _agent_id
     assert agent_descriptor["rate_limit"]["requests_per_unit"] == 25
 
@@ -2590,3 +2593,95 @@ class TestGetTotalTokensFromUsageCacheExclusion:
         """Should handle None usage gracefully."""
         result = handler._get_total_tokens_from_usage(None, "total")
         assert result == 0, f"Expected 0 for None usage, got {result}"
+
+
+@pytest.mark.asyncio
+async def test_project_model_rate_limits_enforced_v3():
+    """
+    Regression test: project-level model-specific rate limits must be enforced.
+
+    Bug: When a key belongs to a project that has model_rpm_limit/model_tpm_limit
+    in project_metadata, those limits were never checked — only model-level limits
+    were applied. This test verifies the fix.
+    """
+    _api_key = hash_token("sk-project-test")
+    local_cache = DualCache()
+    parallel_request_handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache)
+    )
+
+    captured_descriptors = []
+
+    async def mock_should_rate_limit(descriptors, **kwargs):
+        captured_descriptors.extend(descriptors)
+        return {"overall_code": "OK", "statuses": []}
+
+    parallel_request_handler.should_rate_limit = mock_should_rate_limit
+
+    # Key with project_metadata containing model-specific rate limits
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key=_api_key,
+        project_id="proj-abc123",
+        project_metadata={
+            "model_rpm_limit": {"gpt-4": 5},
+            "model_tpm_limit": {"gpt-4": 1000},
+        },
+    )
+
+    await parallel_request_handler.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict,
+        cache=local_cache,
+        data={"model": "gpt-4"},
+        call_type="",
+    )
+
+    descriptor_keys = [d["key"] for d in captured_descriptors]
+    assert (
+        "model_per_project" in descriptor_keys
+    ), f"Expected model_per_project descriptor, got: {descriptor_keys}"
+
+    model_per_project = next(
+        d for d in captured_descriptors if d["key"] == "model_per_project"
+    )
+    assert model_per_project["value"] == "proj-abc123:gpt-4"
+    assert model_per_project["rate_limit"]["requests_per_unit"] == 5
+    assert model_per_project["rate_limit"]["tokens_per_unit"] == 1000
+
+
+@pytest.mark.asyncio
+async def test_project_model_rate_limits_not_triggered_for_other_model_v3():
+    """Project model limits should not trigger for a model not in project_metadata."""
+    _api_key = hash_token("sk-project-test-2")
+    local_cache = DualCache()
+    parallel_request_handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache)
+    )
+
+    captured_descriptors = []
+
+    async def mock_should_rate_limit(descriptors, **kwargs):
+        captured_descriptors.extend(descriptors)
+        return {"overall_code": "OK", "statuses": []}
+
+    parallel_request_handler.should_rate_limit = mock_should_rate_limit
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key=_api_key,
+        project_id="proj-abc123",
+        project_metadata={
+            "model_rpm_limit": {"gpt-4": 5},
+        },
+    )
+
+    # Request for gpt-3.5-turbo — project only limits gpt-4
+    await parallel_request_handler.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict,
+        cache=local_cache,
+        data={"model": "gpt-3.5-turbo"},
+        call_type="",
+    )
+
+    descriptor_keys = [d["key"] for d in captured_descriptors]
+    assert (
+        "model_per_project" not in descriptor_keys
+    ), f"model_per_project should not be added for unrelated model, got: {descriptor_keys}"

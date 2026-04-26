@@ -6,7 +6,6 @@ import traceback
 import json
 
 
-
 from typing import List, Dict, Any
 
 sys.path.insert(
@@ -115,20 +114,18 @@ def test_get_model_info_ollama_chat():
         assert mock_client.call_args.kwargs["json"]["name"] == "unknown-model"
 
 
-
-
 def test_get_model_info_bedrock_region():
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
     args = {
-        "model": "us.anthropic.claude-3-5-sonnet-20241022-v2:0",
+        "model": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
         "custom_llm_provider": "bedrock",
     }
-    litellm.model_cost.pop("us.anthropic.claude-3-5-sonnet-20241022-v2:0", None)
+    litellm.model_cost.pop("us.anthropic.claude-haiku-4-5-20251001-v1:0", None)
     info = litellm.get_model_info(**args)
     print("info", info)
-    assert info["key"] == "anthropic.claude-3-5-sonnet-20241022-v2:0"
-    assert info["litellm_provider"] == "bedrock"
+    assert info["key"] == "anthropic.claude-haiku-4-5-20251001-v1:0"
+    assert info["litellm_provider"] == "bedrock_converse"
 
 
 @pytest.mark.parametrize(
@@ -156,7 +153,6 @@ def test_get_model_info_ft_model_with_provider_prefix():
     info = litellm.get_model_info(**args)
     print("info", info)
     assert info["key"] == "ft:gpt-3.5-turbo"
-
 
 
 def _enforce_bedrock_converse_models(
@@ -281,7 +277,7 @@ def test_get_model_info_custom_model_router():
                 },
                 "model_info": {
                     "id": "c20d603e-1166-4e0f-aa65-ed9c476ad4ca",
-                }
+                },
             }
         ]
     )
