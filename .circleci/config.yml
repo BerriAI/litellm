@@ -2395,6 +2395,7 @@ jobs:
           name: Build Claude Code client image
           command: |
             docker build \
+              --build-arg CLAUDE_CODE_VERSION=2.1.100 \
               -t claude-code-client:ci \
               -f tests/proxy_e2e_anthropic_messages_tests/claude_code/Dockerfile.claude-code \
               tests/proxy_e2e_anthropic_messages_tests/claude_code
@@ -2418,7 +2419,7 @@ jobs:
           name: Build pinned Claude Code client image
           command: |
             docker build \
-              --build-arg CLAUDE_CODE_VERSION=2.1.100 \
+              --build-arg CLAUDE_CODE_VERSION=2.1.90 \
               -t claude-code-client-pinned:ci \
               -f tests/proxy_e2e_anthropic_messages_tests/claude_code/Dockerfile.claude-code \
               tests/proxy_e2e_anthropic_messages_tests/claude_code
@@ -2430,6 +2431,30 @@ jobs:
           root: .
           paths:
             - claude-code-client-pinned.tar.zst
+
+  build_claude_code_client_image_pinned_2_1_80:
+    machine:
+      image: ubuntu-2204:2024.04.1
+    resource_class: medium
+    working_directory: ~/project
+    steps:
+      - checkout
+      - run:
+          name: Build pinned Claude Code client image (2.1.80)
+          command: |
+            docker build \
+              --build-arg CLAUDE_CODE_VERSION=2.1.80 \
+              -t claude-code-client-pinned-2-1-80:ci \
+              -f tests/proxy_e2e_anthropic_messages_tests/claude_code/Dockerfile.claude-code \
+              tests/proxy_e2e_anthropic_messages_tests/claude_code
+      - run:
+          name: Save pinned Claude Code image (2.1.80) to workspace root
+          command: |
+            docker save claude-code-client-pinned-2-1-80:ci | zstd -1 -T0 > claude-code-client-pinned-2-1-80.tar.zst
+      - persist_to_workspace:
+          root: .
+          paths:
+            - claude-code-client-pinned-2-1-80.tar.zst
 
   proxy_e2e_claude_code_pinned_version_tests:
     machine:
@@ -2485,6 +2510,71 @@ jobs:
                 '<testsuite name="proxy_e2e_claude_code_pinned_version_tests" tests="1" failures="1">' \
                 '  <testcase classname="claude_code_docker" name="claude_code_through_litellm_pinned_version">' \
                 '    <failure message="Dockerized Claude Code pinned-version E2E test failed">See CircleCI job output for Docker and LiteLLM logs.</failure>' \
+                '  </testcase>' \
+                '</testsuite>' \
+                > test-results/junit.xml
+            fi
+            exit "$status"
+          no_output_timeout: 15m
+
+      # Store test results
+      - store_test_results:
+          path: test-results
+
+  proxy_e2e_claude_code_pinned_version_tests_2_1_80:
+    machine:
+      image: ubuntu-2204:2024.04.1
+    resource_class: large
+    working_directory: ~/project
+    steps:
+      - checkout
+      - setup_google_dns
+      - attach_workspace:
+          at: ~/project
+      - run:
+          name: Load Docker Database Image
+          command: |
+            zstd -d litellm-docker-database.tar.zst --stdout | docker load
+            docker images | grep litellm-docker-database
+      - run:
+          name: Load pinned Claude Code client image (2.1.80)
+          command: |
+            zstd -d claude-code-client-pinned-2-1-80.tar.zst --stdout | docker load
+            docker images | grep claude-code-client-pinned-2-1-80
+      - run:
+          name: Verify required container images stage
+          command: |
+            docker image inspect litellm-docker-database:ci >/dev/null
+            docker image inspect claude-code-client-pinned-2-1-80:ci >/dev/null
+            echo "LiteLLM and pinned Claude Code images are ready (2.1.80)"
+      - run:
+          name: Run Dockerized Claude Code pinned-version E2E Tests (2.1.80)
+          command: |
+            mkdir -p test-results
+            LITELLM_MASTER_KEY="${LITELLM_MASTER_KEY:-sk-1234}"
+            : "${ANTHROPIC_API_KEY:?Set ANTHROPIC_API_KEY in CircleCI project env vars.}"
+            set +e
+            LITELLM_IMAGE=litellm-docker-database:ci \
+              CLAUDE_CODE_IMAGE=claude-code-client-pinned-2-1-80:ci \
+              UPSTREAM_PROVIDER=anthropic \
+              LITELLM_SKIP_BUILD=true \
+              CLAUDE_CODE_SKIP_BUILD=true \
+              LITELLM_MASTER_KEY="${LITELLM_MASTER_KEY}" \
+              tests/proxy_e2e_anthropic_messages_tests/claude_code/run_claude_code_docker_test.sh
+            status=$?
+            if [ "$status" -eq 0 ]; then
+              printf '%s\n' \
+                '<?xml version="1.0" encoding="UTF-8"?>' \
+                '<testsuite name="proxy_e2e_claude_code_pinned_version_tests_2_1_80" tests="1" failures="0">' \
+                '  <testcase classname="claude_code_docker" name="claude_code_through_litellm_pinned_version_2_1_80"/>' \
+                '</testsuite>' \
+                > test-results/junit.xml
+            else
+              printf '%s\n' \
+                '<?xml version="1.0" encoding="UTF-8"?>' \
+                '<testsuite name="proxy_e2e_claude_code_pinned_version_tests_2_1_80" tests="1" failures="1">' \
+                '  <testcase classname="claude_code_docker" name="claude_code_through_litellm_pinned_version_2_1_80">' \
+                '    <failure message="Dockerized Claude Code pinned-version E2E test failed (2.1.80)">See CircleCI job output for Docker and LiteLLM logs.</failure>' \
                 '  </testcase>' \
                 '</testsuite>' \
                 > test-results/junit.xml
@@ -2573,6 +2663,8 @@ workflows:
           filters: *main_branches
       - build_claude_code_client_image_pinned:
           filters: *main_branches
+      - build_claude_code_client_image_pinned_2_1_80:
+          filters: *main_branches
       - e2e_ui_testing:
           filters: *main_branches
       - build_and_test:
@@ -2618,6 +2710,11 @@ workflows:
           requires:
             - build_docker_database_image
             - build_claude_code_client_image_pinned
+          filters: *main_branches
+      - proxy_e2e_claude_code_pinned_version_tests_2_1_80:
+          requires:
+            - build_docker_database_image
+            - build_claude_code_client_image_pinned_2_1_80
           filters: *main_branches
       - proxy_e2e_claude_code_bedrock_tests:
           requires:

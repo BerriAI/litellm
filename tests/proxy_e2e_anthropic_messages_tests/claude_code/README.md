@@ -10,7 +10,10 @@ This test validates the customer-critical Claude Code -> LiteLLM path in CircleC
 - Runs Claude Code as a non-root user with only the LiteLLM proxy key.
 - Points Claude Code at LiteLLM via `ANTHROPIC_BASE_URL`.
 - Verifies the configured model alias is visible from `/v1/models`.
-- Sends back-to-back Claude Code prompts through LiteLLM and validates both responses.
+- Runs a comprehensive test suite including:
+  - **Basic Request**: Verifies successful text generation.
+  - **Tool Use**: Verifies Claude Code can use its filesystem tools (via LiteLLM) to create and read files.
+  - **Error Handling**: Verifies correct failure behavior for invalid models.
 - Sends a direct Anthropic Messages API request through LiteLLM and checks proxy response headers:
   - `x-litellm-call-id`
   - `x-litellm-response-cost`
@@ -20,11 +23,15 @@ For Bedrock, LiteLLM still exposes an Anthropic-compatible interface to Claude C
 
 ## Claude Code Version Policy
 
-The Claude Code image resolves `@anthropic-ai/claude-code@latest` by querying npm publish times, selecting the newest version older than three days, then installing that exact version.
+CircleCI runs a pinned Claude Code version set instead of rolling `latest`:
 
-This intentionally follows the newest Claude Code release that has aged at least three days, which catches customer-facing compatibility issues while avoiding just-published releases that are more likely to be pulled or patched.
+- `2.1.100`
+- `2.1.90`
+- `2.1.80`
 
-Set `CLAUDE_CODE_VERSION=<version>` to test a specific version locally or in a follow-up CI job.
+This keeps CI deterministic while still exercising multiple Claude Code versions.
+
+Set `CLAUDE_CODE_VERSION=<version>` to test a specific version locally.
 
 ## Running Locally
 
@@ -41,7 +48,7 @@ MODEL_NAME=claude-sonnet-4-6
 LITELLM_UPSTREAM_MODEL=anthropic/claude-sonnet-4-6
 UPSTREAM_PROVIDER=anthropic
 CLAUDE_CODE_IMAGE=litellm-claude-code-client:local
-CLAUDE_CODE_VERSION=latest
+CLAUDE_CODE_VERSION=2.1.100
 KEEP_CONTAINERS=1
 ```
 
@@ -64,11 +71,11 @@ The CircleCI job now has explicit component stages before test execution:
 - use prebuilt Claude Code client image (`claude-code-client:ci`)
 - run end-to-end test with both image builds skipped (`LITELLM_SKIP_BUILD=true` and `CLAUDE_CODE_SKIP_BUILD=true`)
 
-## Intentionally Left Out Of V0
+## Intentionally Left Out
 
 - Vertex and Azure provider coverage. Those belong in a follow-up matrix after Anthropic + Bedrock.
-- Tool-use assertions. Claude Code can invoke tools in richer scenarios, but V0 keeps the signal focused on proxy compatibility and real Anthropic request success.
-- A Claude Code version matrix. The Dockerfile supports `CLAUDE_CODE_VERSION`, but the default CI path tests one recent version to keep cost and flake surface low.
+- Full streaming validation (though Claude Code uses streaming by default, we don't currently assert on chunk timing/presence).
+- Wider Claude Code version expansion beyond the pinned CI set (`2.1.100`, `2.1.90`, `2.1.80`).
 
 ## Failure Output
 
