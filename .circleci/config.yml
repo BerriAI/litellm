@@ -2104,7 +2104,6 @@ jobs:
             LITELLM_MASTER_KEY="${LITELLM_MASTER_KEY:-sk-1234}"
             : "${AWS_ACCESS_KEY_ID:?Set AWS_ACCESS_KEY_ID in CircleCI project env vars.}"
             : "${AWS_SECRET_ACCESS_KEY:?Set AWS_SECRET_ACCESS_KEY in CircleCI project env vars.}"
-            : "${AWS_REGION_NAME:?Set AWS_REGION_NAME in CircleCI project env vars.}"
             set +e
             LITELLM_IMAGE=litellm-docker-database:ci \
               CLAUDE_CODE_IMAGE=claude-code-client:ci \
@@ -2116,7 +2115,8 @@ jobs:
               LITELLM_MASTER_KEY="${LITELLM_MASTER_KEY}" \
               AWS_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID}" \
               AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY}" \
-              AWS_REGION_NAME="${AWS_REGION_NAME}" \
+              AWS_REGION_NAME="us-east-1" \
+              AWS_SESSION_TOKEN="${AWS_SESSION_TOKEN:-}" \
               tests/proxy_e2e_anthropic_messages_tests/claude_code/run_claude_code_docker_test.sh
             status=$?
             if [ "$status" -eq 0 ]; then
