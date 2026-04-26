@@ -37,6 +37,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
   const [costConfig, setCostConfig] = useState<MCPServerCostInfo>({});
   const [tools, setTools] = useState<any[]>([]);
   const [isLoadingTools, setIsLoadingTools] = useState(false);
+  const [toolsError, setToolsError] = useState<string | null>(null);
   const [searchValue, setSearchValue] = useState<string>("");
   const [aliasManuallyEdited, setAliasManuallyEdited] = useState(false);
   const [allowedTools, setAllowedTools] = useState<string[]>([]);
@@ -283,6 +284,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
     if (!accessToken || !mcpServer.server_id) return;
 
     setIsLoadingTools(true);
+    setToolsError(null);
 
     try {
       // Use the GET endpoint which looks up stored credentials by server_id,
@@ -294,10 +296,12 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
       } else {
         console.error("Failed to fetch tools:", toolsResponse.message);
         setTools([]);
+        setToolsError(toolsResponse.message || "Failed to load tools");
       }
     } catch (error) {
       console.error("Tools fetch error:", error);
       setTools([]);
+      setToolsError(error instanceof Error ? error.message : "Failed to load tools");
     } finally {
       setIsLoadingTools(false);
     }
@@ -1097,6 +1101,10 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                 toolNameToDescription={toolNameToDescription}
                 onToolNameToDisplayNameChange={setToolNameToDisplayName}
                 onToolNameToDescriptionChange={setToolNameToDescription}
+                externalTools={tools}
+                externalIsLoading={isLoadingTools}
+                externalError={toolsError}
+                externalCanFetch={!!mcpServer.server_id}
               />
             </div>
 
