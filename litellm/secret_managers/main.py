@@ -255,10 +255,12 @@ def get_secret(  # noqa: PLR0915
             return oidc_token
         elif oidc_provider == "env_path":
             # Load token from a file path specified in an environment variable
+            # within an allowed credential directory.
             token_file_path = os.getenv(oidc_aud)
             if token_file_path is None:
                 raise ValueError(f"Environment variable {oidc_aud} not found")
-            with open(token_file_path, "r") as f:
+            safe_path = _resolve_oidc_file_path(token_file_path)
+            with open(safe_path, "r") as f:
                 oidc_token = f.read()
                 return oidc_token
         else:
