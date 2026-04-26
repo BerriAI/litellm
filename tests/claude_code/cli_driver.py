@@ -173,6 +173,73 @@ def _extract_assistant_text(events: Sequence[Mapping[str, Any]]) -> str:
     return "".join(chunks)
 
 
+def failure_diagnostic(result: "DriverResult", *, max_len: int = 800) -> str:
+    """Build a human-readable error string from a non-zero `claude` CLI run.
+
+    The CLI is annoying to debug because the most useful failure signal
+    rarely lands on stderr. When the proxy returns an HTTP error, the CLI
+    swallows it into an `assistant`/`result` event on **stdout** with
+    `is_error: true` and a JSON-shaped `text` block — and exits non-zero.
+    Tests that only print `stderr.strip()` see an empty string, which is
+    exactly the situation that masked a misconfigured proxy in early
+    bring-up of the compat matrix.
+
+    This helper concatenates the most useful diagnostic we can find, in
+    priority order:
+
+      1. `result.text` (the assistant's user-visible reply, which is where
+         API errors land in stream-json mode), trimmed
+      2. `api_error_status` from any `result` event, if present
+      3. `result.stderr`, trimmed
+      4. `<no diagnostic output>` as a last resort
+
+    The output is truncated to `max_len` characters so a giant HTML 502
+    page from a misbehaving load balancer doesn't blow up the matrix
+    JSON.
+    """
+    pieces: List[str] = [f"exit={result.exit_code}"]
+
+    # api_error_status only appears on the final `result` event when the
+    # CLI received an HTTP error from the upstream API. Surfacing it
+    # explicitly makes "is this a proxy/auth problem or a CLI problem?"
+    # answerable without re-reading the events list.
+    api_status = _extract_api_error_status(result.events)
+    if api_status is not None:
+        pieces.append(f"api_status={api_status}")
+
+    text = (result.text or "").strip()
+    if text:
+        pieces.append(f"text={_truncate(text, max_len)}")
+
+    stderr = (result.stderr or "").strip()
+    if stderr:
+        pieces.append(f"stderr={_truncate(stderr, max_len)}")
+
+    if len(pieces) == 1:
+        pieces.append("(no diagnostic output)")
+
+    return "; ".join(pieces)
+
+
+def _extract_api_error_status(
+    events: Sequence[Mapping[str, Any]],
+) -> Optional[int]:
+    """Return the `api_error_status` from the last `result` event, if any."""
+    for event in reversed(list(events)):
+        if event.get("type") != "result":
+            continue
+        status = event.get("api_error_status")
+        if isinstance(status, int):
+            return status
+    return None
+
+
+def _truncate(s: str, max_len: int) -> str:
+    if len(s) <= max_len:
+        return s
+    return s[:max_len] + "...(truncated)"
+
+
 def _extract_usage(events: Sequence[Mapping[str, Any]]) -> Optional[Dict[str, Any]]:
     """Return the most recent `usage` block seen on any event, if any.
 
