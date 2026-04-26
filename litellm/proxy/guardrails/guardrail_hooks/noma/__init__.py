@@ -39,6 +39,20 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
 def initialize_guardrail_v2(litellm_params: "LitellmParams", guardrail: "Guardrail"):
     import litellm
 
+    # Forward streaming knobs from YAML litellm_params only when set, so that
+    # NomaV2Guardrail.__init__ leaves them unset on self and the default values
+    # in UnifiedLLMGuardrails.async_post_call_streaming_iterator_hook remain the
+    # source of truth for unconfigured deployments.
+    extra_kwargs: dict = {}
+    streaming_end_of_stream_only = getattr(
+        litellm_params, "streaming_end_of_stream_only", None
+    )
+    if streaming_end_of_stream_only is not None:
+        extra_kwargs["streaming_end_of_stream_only"] = streaming_end_of_stream_only
+    streaming_sampling_rate = getattr(litellm_params, "streaming_sampling_rate", None)
+    if streaming_sampling_rate is not None:
+        extra_kwargs["streaming_sampling_rate"] = streaming_sampling_rate
+
     _noma_v2_callback = NomaV2Guardrail(
         guardrail_name=guardrail.get("guardrail_name", ""),
         api_key=litellm_params.api_key,
@@ -48,6 +62,7 @@ def initialize_guardrail_v2(litellm_params: "LitellmParams", guardrail: "Guardra
         block_failures=litellm_params.block_failures,
         event_hook=litellm_params.mode,
         default_on=litellm_params.default_on,
+        **extra_kwargs,
     )
     litellm.logging_callback_manager.add_litellm_callback(_noma_v2_callback)
 
