@@ -13,6 +13,7 @@
 #   - claude-{tier}-bedrock-invoke          → Bedrock InvokeModel API
 #   - claude-{tier}-bedrock-converse        → Bedrock Converse API
 #   - claude-{tier}-vertex                  → GCP Vertex AI
+#   - claude-{tier}-azure                   → Microsoft Foundry (Anthropic deployments)
 
 model_list:
   # ---- Anthropic ----
@@ -73,6 +74,29 @@ model_list:
       model: vertex_ai/claude-opus-4-7
       vertex_ai_project: pathrise-convert-1606954137718
       vertex_ai_location: us-east5
+
+  # ---- Microsoft Foundry (Anthropic deployments on Azure) ----
+  # Anthropic announced Claude Haiku 4.5, Sonnet 4.5/4.6, and Opus 4.1/4.6/4.7
+  # in Microsoft Foundry on 2025-11-18. Foundry exposes these models on an
+  # Anthropic-shape `/anthropic/v1/messages` endpoint (not Azure OpenAI's
+  # chat-completions route), and LiteLLM routes them via the `azure_ai/`
+  # provider prefix. Set AZURE_FOUNDRY_API_BASE to the host (or host +
+  # `/anthropic`); LiteLLM normalizes the URL to `…/anthropic/v1/messages`.
+  - model_name: claude-haiku-4-5-azure
+    litellm_params:
+      model: azure_ai/claude-haiku-4-5
+      api_base: os.environ/AZURE_FOUNDRY_API_BASE
+      api_key: os.environ/AZURE_FOUNDRY_API_KEY
+  - model_name: claude-sonnet-4-6-azure
+    litellm_params:
+      model: azure_ai/claude-sonnet-4-6
+      api_base: os.environ/AZURE_FOUNDRY_API_BASE
+      api_key: os.environ/AZURE_FOUNDRY_API_KEY
+  - model_name: claude-opus-4-7-azure
+    litellm_params:
+      model: azure_ai/claude-opus-4-7
+      api_base: os.environ/AZURE_FOUNDRY_API_BASE
+      api_key: os.environ/AZURE_FOUNDRY_API_KEY
 
 general_settings:
   # Claude Code sends provider-specific headers (e.g. anthropic-beta) we

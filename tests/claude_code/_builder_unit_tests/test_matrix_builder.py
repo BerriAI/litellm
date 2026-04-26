@@ -182,12 +182,10 @@ def test_build_matrix_6x5_grid_matches_published_sample():
 
     Inputs mirror the structure of `compat-results.json` after a real
     run with the proxy configured for all five columns and all six
-    feature directories:
-      - anthropic, bedrock_invoke, bedrock_converse, vertex_ai: three
-        per-model `pass` results each (Haiku, Sonnet, Opus) for every
-        feature.
-      - azure: three `not_applicable` results per feature; Azure does
-        not host Claude, so the column is gray on every row.
+    feature directories: every (feature, provider, model) cell yields a
+    `pass`. Anthropic announced Claude in Microsoft Foundry on
+    2025-11-18, so the Azure column is now exercised end-to-end like
+    the others rather than reporting `not_applicable`.
 
     The aggregated matrix must equal the checked-in
     `sample_compatibility-matrix.json` byte-for-byte (after JSON load),
@@ -197,16 +195,12 @@ def test_build_matrix_6x5_grid_matches_published_sample():
     manifest = load_manifest(repo_root / "manifest.yaml")
 
     feature_ids = [feature["id"] for feature in manifest["features"]]
-    pass_providers = ["anthropic", "bedrock_invoke", "bedrock_converse", "vertex_ai"]
+    providers = manifest["providers"]
     models = ["claude-haiku-4-5", "claude-sonnet-4-6", "claude-opus-4-7"]
-    azure_reason = (
-        "Azure OpenAI Service does not host Anthropic Claude models. "
-        "Route Claude requests through Anthropic, AWS Bedrock, or GCP Vertex AI."
-    )
 
     results = []
     for feature_id in feature_ids:
-        for provider in pass_providers:
+        for provider in providers:
             for model in models:
                 results.append(
                     {
@@ -219,18 +213,6 @@ def test_build_matrix_6x5_grid_matches_published_sample():
                         "result": {"status": "pass"},
                     }
                 )
-        for model in models:
-            results.append(
-                {
-                    "feature_id": feature_id,
-                    "provider": "azure",
-                    "nodeid": (
-                        f"tests/claude_code/{feature_id}/test_azure.py"
-                        f"::test[{model}]"
-                    ),
-                    "result": {"status": "not_applicable", "reason": azure_reason},
-                }
-            )
 
     matrix = build_matrix(
         manifest=manifest,

@@ -1,11 +1,13 @@
-"""basic_messaging_streaming x Azure.
+"""basic_messaging_streaming x Azure (Microsoft Foundry).
 
-Azure (Azure OpenAI Service) does not host Anthropic Claude models —
-the platform's first-party catalog is OpenAI models, plus a smaller set
-of Microsoft and partner models. There is no supported route for the
-`claude` CLI to talk to Claude through Azure via LiteLLM, so every
-(model, Azure) combination for `basic_messaging_streaming` reports
-`not_applicable` rather than `fail`.
+Drive the real `claude` CLI in headless `--output-format stream-json`
+mode against a running LiteLLM proxy that routes Claude requests to
+Anthropic's models hosted in Microsoft Foundry on Azure, and report the
+outcome via `compat_result`.
+
+Foundry exposes Claude on an Anthropic-shape `/anthropic/v1/messages`
+endpoint with native SSE streaming; LiteLLM forwards stream events
+through the `azure_ai/claude-*` provider unchanged.
 
 The (feature, provider) for this cell is inferred from the file path by
 `tests/claude_code/conftest.py`:
@@ -17,21 +19,83 @@ The (feature, provider) for this cell is inferred from the file path by
 
 from __future__ import annotations
 
+import os
+
 import pytest
 
-AZURE_MODELS = [
-    "claude-haiku-4-5",
-    "claude-sonnet-4-6",
-    "claude-opus-4-7",
-]
+from tests.claude_code.cli_driver import ClaudeCLIError, run_claude
 
-NOT_APPLICABLE_REASON = (
-    "Azure OpenAI Service does not host Anthropic Claude models. "
-    "Route Claude requests through Anthropic, AWS Bedrock, or GCP Vertex AI."
-)
+PROXY_BASE_URL_ENV = "LITELLM_PROXY_BASE_URL"
+PROXY_API_KEY_ENV = "LITELLM_PROXY_API_KEY"
+
+AZURE_MODELS = [
+    "claude-haiku-4-5-azure",
+    "claude-sonnet-4-6-azure",
+    "claude-opus-4-7-azure",
+]
 
 
 @pytest.mark.parametrize("model", AZURE_MODELS)
 def test_basic_messaging_streaming_azure(compat_result, model):
-    """Report `not_applicable` for every (model, Azure) combination."""
-    compat_result.set({"status": "not_applicable", "reason": NOT_APPLICABLE_REASON})
+    """Drive the `claude` CLI against the LiteLLM proxy and assert a
+    non-empty streamed reply (at least one stream-json event observed).
+    """
+    base_url = os.environ.get(PROXY_BASE_URL_ENV)
+    api_key = os.environ.get(PROXY_API_KEY_ENV)
+    if not base_url or not api_key:
+        compat_result.set(
+            {
+                "status": "fail",
+                "error": (
+                    f"missing required env: set {PROXY_BASE_URL_ENV} and "
+                    f"{PROXY_API_KEY_ENV} to point at a running LiteLLM proxy"
+                ),
+            }
+        )
+        pytest.fail(
+            f"{PROXY_BASE_URL_ENV} / {PROXY_API_KEY_ENV} not configured", pytrace=False
+        )
+
+    try:
+        result = run_claude(
+            prompt="Count from 1 to 5, one number per line.",
+            model=model,
+            base_url=base_url,
+            api_key=api_key,
+        )
+    except ClaudeCLIError as exc:
+        compat_result.set({"status": "fail", "error": f"[{model}] {exc}"})
+        pytest.fail(str(exc), pytrace=False)
+        return
+
+    if result.exit_code != 0:
+        compat_result.set(
+            {
+                "status": "fail",
+                "error": f"[{model}] claude CLI exited {result.exit_code}: {result.stderr.strip()}",
+            }
+        )
+        pytest.fail(f"claude CLI exited {result.exit_code} for {model}", pytrace=False)
+        return
+
+    if not result.events:
+        compat_result.set(
+            {
+                "status": "fail",
+                "error": f"[{model}] no stream-json events emitted; streaming wire silent",
+            }
+        )
+        pytest.fail(f"no stream events for {model}", pytrace=False)
+        return
+
+    if not result.text.strip():
+        compat_result.set(
+            {
+                "status": "fail",
+                "error": f"[{model}] claude returned empty assistant text",
+            }
+        )
+        pytest.fail(f"empty reply for {model}", pytrace=False)
+        return
+
+    compat_result.set({"status": "pass"})
