@@ -20,7 +20,7 @@ from typing import Any, Mapping, Sequence
 
 import pytest
 
-from tests.claude_code.cli_driver import ClaudeCLIError, run_claude
+from tests.claude_code.cli_driver import ClaudeCLIError, failure_diagnostic, run_claude
 
 PROXY_BASE_URL_ENV = "LITELLM_PROXY_BASE_URL"
 PROXY_API_KEY_ENV = "LITELLM_PROXY_API_KEY"
@@ -88,10 +88,12 @@ def test_tool_use_vertex_ai(compat_result, model):
         compat_result.set(
             {
                 "status": "fail",
-                "error": f"[{model}] claude CLI exited {result.exit_code}: {result.stderr.strip()}",
+                "error": f"[{model}] claude CLI failed: {failure_diagnostic(result)}",
             }
         )
-        pytest.fail(f"claude CLI exited {result.exit_code} for {model}", pytrace=False)
+        pytest.fail(
+            f"[{model}] claude CLI failed: {failure_diagnostic(result)}", pytrace=False
+        )
         return
 
     if not _has_tool_use_event(result.events):

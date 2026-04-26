@@ -18,6 +18,7 @@ import pytest
 from tests.claude_code.cli_driver import (
     ClaudeCLIError,
     DriverResult,
+    failure_diagnostic,
     run_claude,
 )
 
@@ -237,3 +238,102 @@ def test_run_claude_validates_required_params():
             api_key="",
             runner=runner,
         )
+
+
+# ---------------------------------------------------------------------------
+# failure_diagnostic
+#
+# Regression coverage for the bring-up incident where the proxy was started
+# with the wrong config and tests reported only `claude CLI exited 1` while
+# the actual 400 from LiteLLM was sitting in stdout. The helper must surface
+# api_status, the assistant text (where API errors land), stderr, and the
+# exit code together — and gracefully degrade when individual pieces are
+# missing.
+# ---------------------------------------------------------------------------
+
+
+def test_failure_diagnostic_surfaces_api_error_text_from_stdout():
+    """The CLI hides 4xx/5xx from the proxy in `assistant.message.content` text."""
+    api_error_text = (
+        'API Error: 400 {"error":{"message":"litellm.BadRequestError: '
+        "You passed in model=claude-haiku-4-5. There are no healthy "
+        'deployments..."}}'
+    )
+    result = DriverResult(
+        text=api_error_text,
+        events=[
+            {
+                "type": "assistant",
+                "message": {"content": [{"type": "text", "text": api_error_text}]},
+            },
+            {
+                "type": "result",
+                "is_error": True,
+                "api_error_status": 400,
+                "result": api_error_text,
+            },
+        ],
+        exit_code=1,
+        stderr="",
+    )
+
+    diag = failure_diagnostic(result)
+
+    assert "exit=1" in diag
+    assert "api_status=400" in diag
+    assert "There are no healthy deployments" in diag
+
+
+def test_failure_diagnostic_falls_back_to_stderr_when_no_text():
+    result = DriverResult(text="", events=[], exit_code=2, stderr="boom\n")
+    diag = failure_diagnostic(result)
+    assert "exit=2" in diag
+    assert "stderr=boom" in diag
+
+
+def test_failure_diagnostic_handles_completely_empty_result():
+    """A run that produced literally nothing should still yield a useful string."""
+    result = DriverResult(text="", events=[], exit_code=137, stderr="")
+    diag = failure_diagnostic(result)
+    assert "exit=137" in diag
+    assert "no diagnostic output" in diag
+
+
+def test_failure_diagnostic_truncates_long_text():
+    """Don't let a 5MB HTML 502 page from a load balancer wreck the matrix JSON."""
+    huge = "x" * 5000
+    result = DriverResult(text=huge, events=[], exit_code=1, stderr="")
+    diag = failure_diagnostic(result, max_len=100)
+    assert "truncated" in diag
+    # Allow some slack for the prefix/suffix/separator characters.
+    assert len(diag) < 300
+
+
+def test_failure_diagnostic_ignores_non_int_api_error_status():
+    """The CLI sometimes emits api_error_status as a string; don't crash."""
+    result = DriverResult(
+        text="oops",
+        events=[{"type": "result", "api_error_status": "n/a"}],
+        exit_code=1,
+        stderr="",
+    )
+    diag = failure_diagnostic(result)
+    assert "api_status" not in diag
+    assert "text=oops" in diag
+
+
+def test_failure_diagnostic_uses_last_result_event_status():
+    """If multiple `result` events appear, the most recent status wins."""
+    result = DriverResult(
+        text="",
+        events=[
+            {"type": "result", "api_error_status": 500},
+            {"type": "assistant", "message": {"content": []}},
+            {"type": "result", "api_error_status": 429},
+        ],
+        exit_code=1,
+        stderr="",
+    )
+    diag = failure_diagnostic(result)
+    assert "api_status=429" in diag
+    assert "500" not in diag

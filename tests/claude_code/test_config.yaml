@@ -76,12 +76,6 @@ model_list:
       vertex_ai_location: us-east5
 
   # ---- Microsoft Foundry (Anthropic deployments on Azure) ----
-  # Anthropic announced Claude Haiku 4.5, Sonnet 4.5/4.6, and Opus 4.1/4.6/4.7
-  # in Microsoft Foundry on 2025-11-18. Foundry exposes these models on an
-  # Anthropic-shape `/anthropic/v1/messages` endpoint (not Azure OpenAI's
-  # chat-completions route), and LiteLLM routes them via the `azure_ai/`
-  # provider prefix. Set AZURE_FOUNDRY_API_BASE to the host (or host +
-  # `/anthropic`); LiteLLM normalizes the URL to `…/anthropic/v1/messages`.
   - model_name: claude-haiku-4-5-azure
     litellm_params:
       model: azure_ai/claude-haiku-4-5
