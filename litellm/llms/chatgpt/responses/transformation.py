@@ -150,7 +150,9 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
         return completed_response
 
     @staticmethod
-    def _should_use_openai_json_response_parser(raw_response: Any, body_text: str) -> bool:
+    def _should_use_openai_json_response_parser(
+        raw_response: Any, body_text: str
+    ) -> bool:
         content_type = (raw_response.headers or {}).get("content-type", "")
         if "text/event-stream" in content_type.lower():
             return False
