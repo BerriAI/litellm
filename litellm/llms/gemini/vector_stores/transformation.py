@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
 import httpx
 
+from litellm.llms.base_llm._url_utils import encode_url_path
 from litellm.llms.base_llm.vector_store.transformation import BaseVectorStoreConfig
 from litellm.llms.gemini.common_utils import (
     GeminiError,
@@ -137,7 +138,7 @@ class GeminiVectorStoreConfig(BaseVectorStoreConfig):
         api_key = litellm_params.get("api_key") or GeminiModelInfo.get_api_key()
         if not api_key:
             raise ValueError("GEMINI_API_KEY or GOOGLE_API_KEY is required")
-        url = f"{api_base}/models/{model}:generateContent"
+        url = f"{api_base}/models/{encode_url_path(model)}:generateContent"
 
         # Build file_search tool configuration (using snake_case as per Gemini docs)
         file_search_config: Dict[str, Any] = {

@@ -9,6 +9,7 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
 from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.llms.base_llm._url_utils import encode_path_segment
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.types.llms.openai import (
     FileContentRequest,
@@ -89,7 +90,7 @@ class AnthropicFilesHandler:
             raise ValueError("Missing Anthropic API Key")
 
         # Construct the Anthropic batch results URL
-        results_url = f"{api_base.rstrip('/')}/v1/messages/batches/{batch_id}/results"
+        results_url = f"{api_base.rstrip('/')}/v1/messages/batches/{encode_path_segment(batch_id)}/results"
 
         # Prepare headers
         headers = {

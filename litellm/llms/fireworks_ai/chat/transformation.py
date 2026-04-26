@@ -10,6 +10,7 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.litellm_core_utils.llm_response_utils.get_headers import (
     get_response_headers,
 )
+from litellm.llms.base_llm._url_utils import encode_path_segment
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -438,7 +439,7 @@ class FireworksAIConfig(OpenAIGPTConfig):
         if base.endswith("/v1"):
             base = base[: -len("/v1")]
         response = litellm.module_level_client.get(
-            url=f"{base}/v1/accounts/{account_id}/models",
+            url=f"{base}/v1/accounts/{encode_path_segment(account_id)}/models",
             headers={"Authorization": f"Bearer {api_key}"},
         )
 

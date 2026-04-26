@@ -22,6 +22,7 @@ from litellm.constants import (
     AZURE_DOCUMENT_INTELLIGENCE_DEFAULT_DPI,
     AZURE_OPERATION_POLLING_TIMEOUT,
 )
+from litellm.llms.base_llm._url_utils import encode_path_segment
 from litellm.llms.base_llm.ocr.transformation import (
     BaseOCRConfig,
     DocumentType,
@@ -220,10 +221,7 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
 
         # Azure Document Intelligence analyze endpoint
         # Note: API version 2024-11-30+ uses /documentintelligence/ (not /formrecognizer/)
-        url = (
-            f"{api_base}/documentintelligence/documentModels/{model_id}:analyze"
-            f"?api-version={AZURE_DOCUMENT_INTELLIGENCE_API_VERSION}"
-        )
+        url = f"{api_base}/documentintelligence/documentModels/{encode_path_segment(model_id)}:analyze?api-version={AZURE_DOCUMENT_INTELLIGENCE_API_VERSION}"
 
         # Azure DI accepts `pages` as a query param (1-based, e.g. "1-3,5").
         # `optional_params` has already been normalized in `map_ocr_params`.

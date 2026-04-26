@@ -13,6 +13,7 @@ from openai.types.file_deleted import FileDeleted
 
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.prompt_templates.common_utils import extract_file_data
+from litellm.llms.base_llm._url_utils import encode_url_path
 from litellm.llms.base_llm.files.transformation import (
     BaseFilesConfig,
     LiteLLMLoggingObj,
@@ -232,7 +233,7 @@ class GoogleAIStudioFilesHandler(GeminiModelInfo, BaseFilesConfig):
         )
         api_base = api_base.rstrip("/")
 
-        url = f"{api_base}/v1beta/{file_part}"
+        url = f"{api_base}/v1beta/{encode_url_path(file_part)}"
 
         # API key is passed via x-goog-api-key header (set in validate_environment)
         return url, {}
@@ -346,7 +347,7 @@ class GoogleAIStudioFilesHandler(GeminiModelInfo, BaseFilesConfig):
             file_name = file_id if file_id.startswith("files/") else f"files/{file_id}"
 
         # Construct the delete URL
-        url = f"{api_base}/v1beta/{file_name}"
+        url = f"{api_base}/v1beta/{encode_url_path(file_name)}"
 
         # Add API key as header (Google AI Studio uses x-goog-api-key header)
         params: dict = {}

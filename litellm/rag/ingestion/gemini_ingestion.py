@@ -10,6 +10,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, cast
 
 from litellm._logging import verbose_logger
+from litellm.llms.base_llm._url_utils import encode_path_segment
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
@@ -231,7 +232,7 @@ class GeminiRAGIngestion(BaseRAGIngestion):
         # base_url is like: https://generativelanguage.googleapis.com/v1beta
         # We need: https://generativelanguage.googleapis.com/upload/v1beta/{store_id}:uploadToFileSearchStore
         api_base = base_url.replace("/v1beta", "")  # Get base without version
-        url = f"{api_base}/upload/v1beta/{vector_store_id}:uploadToFileSearchStore"
+        url = f"{api_base}/upload/v1beta/{encode_path_segment(vector_store_id)}:uploadToFileSearchStore"
 
         # Build request body with chunking config and metadata if provided
         request_body: Dict[str, Any] = {"displayName": filename}

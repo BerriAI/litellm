@@ -7,6 +7,7 @@ from typing import Any, Dict, Optional, Tuple
 import httpx
 
 from litellm._logging import verbose_logger
+from litellm.llms.base_llm._url_utils import encode_path_segment
 from litellm.llms.base_llm.skills.transformation import (
     BaseSkillsAPIConfig,
     LiteLLMLoggingObj,
@@ -81,7 +82,7 @@ class AnthropicSkillsConfig(BaseSkillsAPIConfig):
             api_base = AnthropicModelInfo.get_api_base()
 
         if skill_id:
-            return f"{api_base}/v1/skills/{skill_id}"
+            return f"{api_base}/v1/skills/{encode_path_segment(skill_id)}"
         return f"{api_base}/v1/{endpoint}"
 
     def transform_create_skill_request(

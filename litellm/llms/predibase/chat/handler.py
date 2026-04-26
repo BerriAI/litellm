@@ -17,6 +17,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     custom_prompt,
     prompt_factory,
 )
+from litellm.llms.base_llm._url_utils import encode_path_segment
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     get_async_httpx_client,
@@ -254,7 +255,7 @@ class PredibaseChatCompletion:
         elif "PREDIBASE_API_BASE" in os.environ:
             base_url = os.getenv("PREDIBASE_API_BASE", "")
 
-        completion_url = f"{base_url}/{tenant_id}/deployments/v2/llms/{model}"
+        completion_url = f"{base_url}/{encode_path_segment(tenant_id)}/deployments/v2/llms/{encode_path_segment(model)}"
 
         if optional_params.get("stream", False) is True:
             completion_url += "/generate_stream"

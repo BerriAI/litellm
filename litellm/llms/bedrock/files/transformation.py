@@ -11,6 +11,7 @@ from litellm._logging import verbose_logger
 from litellm._uuid import uuid
 from litellm.files.utils import FilesAPIUtils
 from litellm.litellm_core_utils.prompt_templates.common_utils import extract_file_data
+from litellm.llms.base_llm._url_utils import encode_path_segment, encode_url_path
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.files.transformation import (
     BaseFilesConfig,
@@ -195,7 +196,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
             or f"https://s3.{aws_region_name}.amazonaws.com"
         )
 
-        return f"{s3_endpoint_url}/{bucket_name}/{object_name}"
+        return f"{s3_endpoint_url}/{encode_path_segment(bucket_name)}/{encode_url_path(object_name)}"
 
     def get_supported_openai_params(
         self, model: str

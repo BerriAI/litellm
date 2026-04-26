@@ -5,6 +5,7 @@ from typing import AsyncIterator, Iterator, List, Optional, Union
 import httpx
 
 import litellm
+from litellm.llms.base_llm._url_utils import encode_url_path
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.chat.transformation import (
     BaseConfig,
@@ -89,7 +90,7 @@ class CloudflareChatConfig(BaseConfig):
             api_base = (
                 f"https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/run/"
             )
-        return api_base + model
+        return api_base + encode_url_path(model)
 
     def get_supported_openai_params(self, model: str) -> List[str]:
         return [

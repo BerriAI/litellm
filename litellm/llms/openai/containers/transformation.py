@@ -16,6 +16,7 @@ from litellm.types.containers.main import (
 )
 from litellm.types.router import GenericLiteLLMParams
 
+from ...base_llm._url_utils import encode_path_segment
 from ...base_llm.containers.transformation import BaseContainerConfig
 from .utils import join_container_api_base_path
 
@@ -198,7 +199,9 @@ class OpenAIContainerConfig(BaseContainerConfig):
     ) -> Tuple[str, Dict]:
         """Transform the OpenAI container retrieve request."""
         # For container retrieve, we just need to construct the URL
-        url = join_container_api_base_path(api_base, f"/{container_id}")
+        url = join_container_api_base_path(
+            api_base, f"/{encode_path_segment(container_id)}"
+        )
 
         # No additional data needed for GET request
         data: Dict[str, Any] = {}
@@ -230,7 +233,9 @@ class OpenAIContainerConfig(BaseContainerConfig):
         - DELETE /v1/containers/{container_id}
         """
         # Construct the URL for container delete
-        url = join_container_api_base_path(api_base, f"/{container_id}")
+        url = join_container_api_base_path(
+            api_base, f"/{encode_path_segment(container_id)}"
+        )
 
         # No data needed for DELETE request
         data: Dict[str, Any] = {}
@@ -267,7 +272,9 @@ class OpenAIContainerConfig(BaseContainerConfig):
         - GET /v1/containers/{container_id}/files
         """
         # Construct the URL for container files
-        url = join_container_api_base_path(api_base, f"/{container_id}/files")
+        url = join_container_api_base_path(
+            api_base, f"/{encode_path_segment(container_id)}/files"
+        )
 
         # Prepare query parameters
         params: Dict[str, Any] = {}
@@ -312,7 +319,8 @@ class OpenAIContainerConfig(BaseContainerConfig):
         """
         # Construct the URL for container file content
         url = join_container_api_base_path(
-            api_base, f"/{container_id}/files/{file_id}/content"
+            api_base,
+            f"/{encode_path_segment(container_id)}/files/{encode_path_segment(file_id)}/content",
         )
 
         # No query parameters needed

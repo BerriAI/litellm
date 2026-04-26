@@ -14,6 +14,7 @@ from httpx._types import RequestFiles
 
 from litellm.constants import DEFAULT_GOOGLE_VIDEO_DURATION_SECONDS
 from litellm.images.utils import ImageEditRequestUtils
+from litellm.llms.base_llm._url_utils import encode_path_segment, encode_url_path
 from litellm.llms.base_llm.videos.transformation import BaseVideoConfig
 from litellm.llms.vertex_ai.common_utils import (
     _convert_vertex_datetime_to_openai_datetime,
@@ -238,7 +239,7 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         else:
             base_url = get_vertex_base_url(vertex_location)
 
-        url = f"{base_url}/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model_name}"
+        url = f"{base_url}/v1/projects/{encode_path_segment(vertex_project)}/locations/{encode_path_segment(vertex_location)}/publishers/google/models/{encode_url_path(model_name)}"
 
         return url
 
@@ -406,7 +407,7 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         # Construct the full URL including model ID
         # URL format: https://LOCATION-aiplatform.googleapis.com/v1/projects/PROJECT/locations/LOCATION/publishers/google/models/MODEL:fetchPredictOperation
         # Strip trailing slashes from api_base and append model
-        url = f"{api_base.rstrip('/')}/{model}:fetchPredictOperation"
+        url = f"{api_base.rstrip('/')}/{encode_url_path(model)}:fetchPredictOperation"
 
         # Request body contains the operation name
         params = {"operationName": operation_name}

@@ -6,6 +6,7 @@ import httpx
 
 import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.llms.base_llm._url_utils import encode_url_path
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
@@ -40,7 +41,7 @@ def get_hf_task_embedding_for_model(
             )
     http_client = HTTPHandler(concurrent_limit=1)
 
-    model_info = http_client.get(url=f"{api_base}/api/models/{model}")
+    model_info = http_client.get(url=f"{api_base}/api/models/{encode_url_path(model)}")
 
     model_info_dict = model_info.json()
 
@@ -65,7 +66,9 @@ async def async_get_hf_task_embedding_for_model(
         llm_provider=litellm.LlmProviders.HUGGINGFACE,
     )
 
-    model_info = await http_client.get(url=f"{api_base}/api/models/{model}")
+    model_info = await http_client.get(
+        url=f"{api_base}/api/models/{encode_url_path(model)}"
+    )
 
     model_info_dict = model_info.json()
 

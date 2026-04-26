@@ -3,6 +3,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union, cast
 import httpx
 
 import litellm
+from litellm.llms.base_llm._url_utils import encode_path_segment
 from litellm.llms.base_llm.vector_store.transformation import BaseVectorStoreConfig
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.router import GenericLiteLLMParams
@@ -107,7 +108,7 @@ class OpenAIVectorStoreConfig(BaseVectorStoreConfig):
         litellm_logging_obj: LiteLLMLoggingObj,
         litellm_params: dict,
     ) -> Tuple[str, Dict]:
-        url = f"{api_base}/{vector_store_id}/search"
+        url = f"{api_base}/{encode_path_segment(vector_store_id)}/search"
         typed_request_body = VectorStoreSearchRequest(
             query=query,
             filters=vector_store_search_optional_params.get("filters", None),

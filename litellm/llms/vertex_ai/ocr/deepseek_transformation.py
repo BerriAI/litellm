@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any, Dict, Optional
 import httpx
 
 from litellm._logging import verbose_logger
+from litellm.llms.base_llm._url_utils import encode_path_segment
 from litellm.llms.base_llm.ocr.transformation import (
     BaseOCRConfig,
     DocumentType,
@@ -125,7 +126,7 @@ class VertexAIDeepSeekOCRConfig(BaseOCRConfig):
 
         # Vertex AI DeepSeek OCR endpoint format
         # Format: https://{region}-aiplatform.googleapis.com/v1/projects/{project}/locations/{region}/endpoints/openapi/chat/completions
-        return f"{api_base}/v1/projects/{vertex_project}/locations/{vertex_location}/endpoints/openapi/chat/completions"
+        return f"{api_base}/v1/projects/{encode_path_segment(vertex_project)}/locations/{encode_path_segment(vertex_location)}/endpoints/openapi/chat/completions"
 
     def transform_ocr_request(
         self,

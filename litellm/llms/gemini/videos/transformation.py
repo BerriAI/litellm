@@ -7,6 +7,7 @@ from httpx._types import RequestFiles
 import litellm
 from litellm.constants import DEFAULT_GOOGLE_VIDEO_DURATION_SECONDS
 from litellm.images.utils import ImageEditRequestUtils
+from litellm.llms.base_llm._url_utils import encode_url_path
 from litellm.llms.base_llm.videos.transformation import BaseVideoConfig
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.gemini import (
@@ -245,7 +246,7 @@ class GeminiVideoConfig(BaseVideoConfig):
             return api_base.rstrip("/")
 
         model_name = model.replace("gemini/", "")
-        url = f"{api_base.rstrip('/')}/v1beta/models/{model_name}:predictLongRunning"
+        url = f"{api_base.rstrip('/')}/v1beta/models/{encode_url_path(model_name)}:predictLongRunning"
 
         return url
 
@@ -376,7 +377,7 @@ class GeminiVideoConfig(BaseVideoConfig):
         GET https://generativelanguage.googleapis.com/v1beta/{operation_name}
         """
         operation_name = extract_original_video_id(video_id)
-        url = f"{api_base.rstrip('/')}/v1beta/{operation_name}"
+        url = f"{api_base.rstrip('/')}/v1beta/{encode_url_path(operation_name)}"
         params: Dict[str, Any] = {}
 
         return url, params
@@ -451,7 +452,7 @@ class GeminiVideoConfig(BaseVideoConfig):
         """
         operation_name = extract_original_video_id(video_id)
 
-        status_url = f"{api_base.rstrip('/')}/v1beta/{operation_name}"
+        status_url = f"{api_base.rstrip('/')}/v1beta/{encode_url_path(operation_name)}"
         client = litellm.module_level_client
         status_response = client.get(url=status_url, headers=headers)
         status_response.raise_for_status()

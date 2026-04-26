@@ -7,6 +7,7 @@ import httpx
 
 from litellm.litellm_core_utils.exception_mapping_utils import exception_type
 from litellm.litellm_core_utils.logging_utils import track_llm_api_timing
+from litellm.llms.base_llm._url_utils import encode_url_path
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
@@ -149,7 +150,7 @@ class BytezChatConfig(BaseConfig):
         litellm_params: dict,
         stream: Optional[bool] = None,
     ) -> str:
-        return f"{API_BASE}/{model}"
+        return f"{API_BASE}/{encode_url_path(model)}"
 
     def transform_request(
         self,

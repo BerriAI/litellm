@@ -9,6 +9,7 @@ from litellm.constants import (
     RUNWAYML_DEFAULT_API_VERSION,
     RUNWAYML_POLLING_TIMEOUT,
 )
+from litellm.llms.base_llm._url_utils import encode_path_segment
 from litellm.llms.base_llm.image_generation.transformation import (
     BaseImageGenerationConfig,
 )
@@ -222,7 +223,7 @@ class RunwayMLImageGenerationConfig(BaseImageGenerationConfig):
 
         # Build task status URL
         api_base = api_base.rstrip("/")
-        task_url = f"{api_base}/v1/tasks/{task_id}"
+        task_url = f"{api_base}/v1/tasks/{encode_path_segment(task_id)}"
 
         verbose_logger.debug(f"Polling RunwayML task: {task_url}")
 
@@ -271,7 +272,7 @@ class RunwayMLImageGenerationConfig(BaseImageGenerationConfig):
 
         # Build task status URL
         api_base = api_base.rstrip("/")
-        task_url = f"{api_base}/v1/tasks/{task_id}"
+        task_url = f"{api_base}/v1/tasks/{encode_path_segment(task_id)}"
 
         verbose_logger.debug(f"Polling RunwayML task (async): {task_url}")
 
