@@ -277,18 +277,19 @@ def _set_embedding_outputs(span: "Span", response_obj, embedding_attrs, span_att
             )
 
 
+# Items can arrive as Pydantic models (SDK path) or dicts (proxy path).
+# Read both via a uniform accessor so dict-shaped output[] arrays from
+# Responses API don't get silently skipped.
+def _get(obj, key, default=None):
+    if hasattr(obj, "get"):
+        return obj.get(key, default)
+    return getattr(obj, key, default)
+
+
 def _set_structured_outputs(span: "Span", response_obj, msg_attrs, span_attrs):
     output_items = response_obj.get("output", [])
     for i, item in enumerate(output_items):
         prefix = f"{span_attrs.LLM_OUTPUT_MESSAGES}.{i}"
-
-        # Items can arrive as Pydantic models (SDK path) or dicts (proxy path).
-        # Read both via a uniform accessor so dict-shaped output[] arrays from
-        # Responses API don't get silently skipped.
-        def _get(obj, key, default=None):
-            if hasattr(obj, "get"):
-                return obj.get(key, default)
-            return getattr(obj, key, default)
 
         item_type = _get(item, "type")
         if item_type is None:
@@ -718,7 +719,7 @@ def _extract_chain_output(
     - Reranker → ``results`` JSON
     - Anything else → ``standard_logging_payload["response"]``
     """
-    
+
     if isinstance(response_obj, BaseModel):
         try:
             response_obj = response_obj.model_dump()

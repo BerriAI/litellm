@@ -5,7 +5,6 @@ from litellm._logging import verbose_logger
 from litellm.integrations.arize import _utils
 from litellm.integrations.arize._utils import ArizeOTELAttributes
 from litellm.types.integrations.arize_phoenix import ArizePhoenixConfig
-from opentelemetry import trace as _trace
 
 if TYPE_CHECKING:
     from opentelemetry.sdk.trace import TracerProvider
@@ -238,6 +237,8 @@ class ArizePhoenixLogger(OpenTelemetry):  # type: ignore
         # Guardrail context: in proxy mode it's a sibling of litellm_request
         # under litellm_proxy_request. In SDK mode there is no proxy parent,
         # so we parent it to the litellm_request span to avoid an orphan.
+        from opentelemetry import trace as _trace
+
         guardrail_ctx = (
             ctx if parent_span is not None else _trace.set_span_in_context(span)
         )
@@ -289,6 +290,8 @@ class ArizePhoenixLogger(OpenTelemetry):  # type: ignore
         self._record_exception_on_span(span=span, kwargs=kwargs)
 
         # See _handle_success for guardrail context rationale.
+        from opentelemetry import trace as _trace
+
         guardrail_ctx = (
             ctx if parent_span is not None else _trace.set_span_in_context(span)
         )
