@@ -431,24 +431,25 @@ async def upsert_memory(
     """
     prisma_client = _require_prisma()
 
-    # `metadata` is a `Json?` column. prisma-client-python rejects raw
-    # Python values on `Json?` fields, and there is no `JsonNull`/`DbNull`
-    # sentinel yet (RobertCraigie/prisma-client-py#714) so we have no way
-    # to write a true SQL NULL via the typed client. We mirror the rest of
-    # the proxy's handling of nullable `Json?` columns: forward metadata
-    # only when the caller sent a non-null value (always JSON-encoded),
-    # and treat explicit `metadata: null` as a no-op for the column. This
-    # matches the prior crashing behavior the PR fixes — there is no
-    # regression of a previously-working "clear metadata" path, and the
-    # rest of the proxy gives the same treatment to nullable `Json?`
-    # fields elsewhere.
+    # `metadata` is a `Json?` column. prisma-client-python has no
+    # `JsonNull`/`DbNull` sentinel for writing a true SQL NULL
+    # (RobertCraigie/prisma-client-py#714), so an explicit `metadata: null`
+    # is encoded as the JSON literal `null` instead — stored as Postgres
+    # `jsonb 'null'`, which prisma deserializes back to Python `None` on
+    # read. From a caller's perspective `PUT {"metadata": null}` clears
+    # the field (subsequent reads return `metadata: null`), matching the
+    # natural expectation. Callers wanting a strict SQL NULL must use
+    # raw SQL — there is no typed-client path.
+    #
+    # When `metadata` is omitted from the request body entirely (not in
+    # `model_fields_set`), the column is preserved as-is.
     fields_sent = body.model_fields_set
-    metadata_explicit_value = "metadata" in fields_sent and body.metadata is not None
+    metadata_in_payload = "metadata" in fields_sent
 
     data: dict = {}
     if body.value is not None:
         data["value"] = body.value
-    if metadata_explicit_value:
+    if metadata_in_payload:
         data["metadata"] = _serialize_metadata_for_prisma(body.metadata)
     if not data:
         raise HTTPException(

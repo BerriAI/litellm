@@ -97,8 +97,8 @@ class _InMemoryMemoryTable:
         self._counter += 1
         # Mirror real Prisma read-side behavior for `Json?` columns: writes
         # come in as JSON strings (the endpoint pre-processes via
-        # `jsonify_object`), and Prisma deserializes them back to Python
-        # values on read.
+        # `_serialize_metadata_for_prisma`), and Prisma deserializes them
+        # back to Python values on read.
         metadata = data.get("metadata")
         if isinstance(metadata, str):
             try:
@@ -143,8 +143,9 @@ class _InMemoryMemoryTable:
             if r.memory_id == where["memory_id"]:
                 for k, v in data.items():
                     # Mirror real Prisma's read behavior for `Json?` columns:
-                    # the endpoint sends JSON strings via `jsonify_object`,
-                    # and Prisma round-trips them back to Python values.
+                    # the endpoint sends JSON strings via
+                    # `_serialize_metadata_for_prisma`, and Prisma
+                    # round-trips them back to Python values.
                     if k == "metadata" and isinstance(v, str):
                         try:
                             v = _json.loads(v)
@@ -244,9 +245,9 @@ class TestMemoryEndpoints:
         """
         Regression: prisma-client-python rejects bare dicts / None on `Json?`
         columns with `DataError: metadata should be of any of the following
-        types: NullableJsonNullValueInput, Json`. The endpoint follows the
-        rest of the proxy's pattern (`jsonify_object`) and JSON-encodes dict
-        metadata to a string before handing it to Prisma.
+        types: NullableJsonNullValueInput, Json`. The endpoint runs metadata
+        through `_serialize_metadata_for_prisma` to JSON-encode it before
+        handing it to Prisma.
         """
         import json as _json
 
@@ -647,15 +648,15 @@ class TestMemoryEndpoints:
         assert resp.json()["value"] == "new"
         assert len(table.rows) == 1
 
-    def test_put_memory_explicit_null_metadata_is_noop(self):
+    def test_put_memory_explicit_null_metadata_clears_field(self):
         """
         prisma-client-python can't write a true SQL NULL to a `Json?` column
         (no `JsonNull`/`DbNull` sentinel — see
-        RobertCraigie/prisma-client-py#714). We mirror the rest of the proxy
-        and treat `metadata: null` as "leave the column alone" rather than
-        500ing or silently writing a JSON `null`. The caller can still
-        update other fields in the same request; existing metadata is
-        preserved.
+        RobertCraigie/prisma-client-py#714). We instead encode an explicit
+        `metadata: null` as the JSON literal `null` (Postgres `jsonb 'null'`).
+        prisma deserializes that back to Python `None` on read, so from a
+        caller's perspective the field is cleared — matching the natural
+        expectation of `PUT {"metadata": null}`.
         """
         table = self.prisma.db.litellm_memorytable
         table.rows.append(
@@ -676,14 +677,15 @@ class TestMemoryEndpoints:
         assert resp.status_code == 200, resp.text
         body = resp.json()
         assert body["value"] == "new"
-        assert body["metadata"] == {"tag": "old"}
-        assert table.rows[0].metadata == {"tag": "old"}
+        assert body["metadata"] is None
+        assert table.rows[0].metadata is None
 
-    def test_put_memory_null_metadata_alone_returns_400(self):
+    def test_put_memory_null_metadata_alone_clears_field(self):
         """
-        With explicit-null treated as a no-op, a payload that ONLY carries
-        `metadata: null` has no effective fields to write — surface 400 so
-        the caller doesn't get a misleading 200 with no state change.
+        A payload that ONLY carries `metadata: null` should clear the
+        column — the field is effective, not skipped. (Earlier iterations
+        of this PR treated explicit-null as a no-op and surfaced 400; we
+        now write JSON `null` so the column reads back as None.)
         """
         table = self.prisma.db.litellm_memorytable
         table.rows.append(
@@ -699,7 +701,9 @@ class TestMemoryEndpoints:
         client = _make_client(_user_auth("user-a", "team-a"))
         with _patch_prisma(self.prisma):
             resp = client.put("/v1/memory/notes", json={"metadata": None})
-        assert resp.status_code == 400
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["metadata"] is None
+        assert table.rows[0].metadata is None
 
     def test_put_memory_omitted_metadata_preserves_field(self):
         """PUT without a metadata field should NOT touch the stored metadata."""
