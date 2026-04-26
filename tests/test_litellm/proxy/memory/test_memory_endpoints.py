@@ -276,6 +276,104 @@ class TestMemoryEndpoints:
         assert _json.loads(sent_metadata) == {"key": "value"}
         assert resp.json()["metadata"] == {"key": "value"}
 
+    def test_create_memory_with_list_metadata_jsonifies_for_prisma(self):
+        """
+        `metadata` is typed `Optional[Any]` — callers may legitimately send
+        a JSON array (e.g. a list of tag objects). Lists must also be
+        JSON-stringified before reaching Prisma; otherwise prisma-client-
+        python raises the same `DataError` this PR is meant to fix.
+        """
+        import json as _json
+
+        table = self.prisma.db.litellm_memorytable
+        original_create = table.create
+        captured: Dict[str, Any] = {}
+
+        async def spy_create(data: Dict[str, Any]):
+            captured["data"] = dict(data)
+            return await original_create(data)
+
+        table.create = spy_create  # type: ignore[assignment]
+
+        client = _make_client(_user_auth("user-a", "team-a"))
+        with _patch_prisma(self.prisma):
+            resp = client.post(
+                "/v1/memory",
+                json={
+                    "key": "agent_memory_id",
+                    "value": "hello world",
+                    "metadata": [{"tag": "work"}, {"tag": "shared"}],
+                },
+            )
+        assert resp.status_code == 200, resp.text
+        sent_metadata = captured["data"]["metadata"]
+        assert isinstance(sent_metadata, str)
+        assert _json.loads(sent_metadata) == [{"tag": "work"}, {"tag": "shared"}]
+        assert resp.json()["metadata"] == [{"tag": "work"}, {"tag": "shared"}]
+
+    def test_put_memory_with_list_metadata_jsonifies_for_prisma(self):
+        """Same regression as the POST list-metadata test, but for PUT-create."""
+        import json as _json
+
+        table = self.prisma.db.litellm_memorytable
+        original_create = table.create
+        captured: Dict[str, Any] = {}
+
+        async def spy_create(data: Dict[str, Any]):
+            captured["data"] = dict(data)
+            return await original_create(data)
+
+        table.create = spy_create  # type: ignore[assignment]
+
+        client = _make_client(_user_auth("user-a", "team-a"))
+        with _patch_prisma(self.prisma):
+            resp = client.put(
+                "/v1/memory/notes",
+                json={"value": "v", "metadata": [1, 2, 3]},
+            )
+        assert resp.status_code == 200, resp.text
+        sent_metadata = captured["data"]["metadata"]
+        assert isinstance(sent_metadata, str)
+        assert _json.loads(sent_metadata) == [1, 2, 3]
+        assert resp.json()["metadata"] == [1, 2, 3]
+
+    def test_put_memory_update_with_list_metadata_jsonifies_for_prisma(self):
+        """Same regression as the POST list-metadata test, but for PUT-update."""
+        import json as _json
+
+        table = self.prisma.db.litellm_memorytable
+        table.rows.append(
+            _make_row(
+                memory_id="m1",
+                key="notes",
+                value="old",
+                user_id="user-a",
+                team_id="team-a",
+                metadata={"tag": "old"},
+            )
+        )
+
+        original_update = table.update
+        captured: Dict[str, Any] = {}
+
+        async def spy_update(where, data):
+            captured["data"] = dict(data)
+            return await original_update(where, data)
+
+        table.update = spy_update  # type: ignore[assignment]
+
+        client = _make_client(_user_auth("user-a", "team-a"))
+        with _patch_prisma(self.prisma):
+            resp = client.put(
+                "/v1/memory/notes",
+                json={"metadata": [{"a": 1}]},
+            )
+        assert resp.status_code == 200, resp.text
+        sent_metadata = captured["data"]["metadata"]
+        assert isinstance(sent_metadata, str)
+        assert _json.loads(sent_metadata) == [{"a": 1}]
+        assert resp.json()["metadata"] == [{"a": 1}]
+
     def test_create_memory_duplicate_key_returns_409(self):
         client = _make_client(_user_auth("user-a", "team-a"))
         with _patch_prisma(self.prisma):
