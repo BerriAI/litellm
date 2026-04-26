@@ -94,17 +94,23 @@ def test_supports_reasoning_effort():
 
 
 def test_get_supported_openai_params_reasoning_effort():
-    """Test that reasoning_effort is always included — Fireworks accepts it on all models."""
+    """
+    Test that reasoning_effort is always included in supported params.
+
+    Verified against live Fireworks API (Apr 2026): sending reasoning_effort
+    to non-reasoning models (e.g. llama-v3p3-70b-instruct) returns a
+    successful response — the API accepts and silently ignores the parameter.
+    Models that do support it (qwen3, deepseek-v3p1/v3p2, glm-5p1) use it
+    to control reasoning depth. The Fireworks API never returns a 4xx for an
+    unrecognised reasoning_effort value on unsupported models.
+    """
     config = FireworksAIConfig()
 
-    # reasoning_effort should be present for reasoning models
     supported_params = config.get_supported_openai_params(
         "fireworks_ai/accounts/fireworks/models/qwen3-8b"
     )
     assert "reasoning_effort" in supported_params
 
-    # reasoning_effort should also be present for non-reasoning models
-    # (Fireworks API accepts it; unsupported models simply ignore it)
     other_params = config.get_supported_openai_params(
         "fireworks_ai/accounts/fireworks/models/llama-v3-70b-instruct"
     )
@@ -347,6 +353,80 @@ def test_get_models_account_id_equals_fireworks_no_duplicate_query():
         # Should only query once (not duplicate for account_id == "fireworks")
         mock_get.assert_called_once()
         assert result == ["fireworks_ai/accounts/fireworks/models/deepseek-v3p2"]
+
+
+@pytest.mark.parametrize(
+    "api_base, expected_base",
+    [
+        (
+            "https://my-proxy.example.com",
+            "https://my-proxy.example.com/v1/accounts/fireworks/models",
+        ),
+        (
+            "https://my-proxy.example.com/inference/v1",
+            "https://my-proxy.example.com/v1/accounts/fireworks/models",
+        ),
+        (
+            "https://my-proxy.example.com/custom/",
+            "https://my-proxy.example.com/custom/v1/accounts/fireworks/models",
+        ),
+        (None, "https://api.fireworks.ai/v1/accounts/fireworks/models"),
+    ],
+    ids=["plain-base", "inference-v1-stripped", "trailing-slash", "default"],
+)
+def test_get_models_respects_api_base(api_base, expected_base):
+    """get_models should use api_base (or FIREWORKS_API_BASE) instead of hardcoding."""
+    config = FireworksAIConfig()
+
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {
+        "models": [{"name": "accounts/fireworks/models/llama-v3-70b"}]
+    }
+
+    with (
+        patch(
+            "litellm.module_level_client.get", return_value=mock_response
+        ) as mock_get,
+        patch(
+            "litellm.llms.fireworks_ai.chat.transformation.get_secret_str",
+            return_value=None,
+        ),
+    ):
+        config.get_models(api_key="test-key", api_base=api_base)
+
+        called_url = mock_get.call_args.kwargs.get("url") or mock_get.call_args[1].get(
+            "url", ""
+        )
+        assert called_url == expected_base
+        assert "/v1/v1/" not in called_url
+
+
+def test_get_models_respects_fireworks_api_base_env():
+    """get_models should fall back to FIREWORKS_API_BASE env when no api_base arg."""
+    config = FireworksAIConfig()
+
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {"models": []}
+
+    with (
+        patch(
+            "litellm.module_level_client.get", return_value=mock_response
+        ) as mock_get,
+        patch(
+            "litellm.llms.fireworks_ai.chat.transformation.get_secret_str",
+            side_effect=lambda key: (
+                "https://env-proxy.example.com" if key == "FIREWORKS_API_BASE" else None
+            ),
+        ),
+    ):
+        config.get_models(api_key="test-key")
+
+        called_url = mock_get.call_args.kwargs.get("url") or mock_get.call_args[1].get(
+            "url", ""
+        )
+        assert called_url.startswith("https://env-proxy.example.com/")
 
 
 def test_transform_messages_helper_removes_provider_specific_fields():

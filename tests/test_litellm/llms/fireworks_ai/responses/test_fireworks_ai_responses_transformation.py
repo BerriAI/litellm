@@ -85,6 +85,15 @@ class TestValidateEnvironment:
             )
             assert headers["Authorization"] == "Bearer env-key"
 
+    def test_should_not_overwrite_existing_authorization(self, config):
+        params = GenericLiteLLMParams(api_key="new-key")
+        headers = config.validate_environment(
+            headers={"Authorization": "Bearer pre-existing"},
+            model="accounts/fireworks/models/llama-v3-70b",
+            litellm_params=params,
+        )
+        assert headers["Authorization"] == "Bearer pre-existing"
+
 
 class TestGetCompleteUrl:
     """Tests for get_complete_url."""

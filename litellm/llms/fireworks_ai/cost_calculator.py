@@ -4,6 +4,7 @@ For calculating cost of fireworks ai serverless inference models.
 
 from typing import Tuple
 
+from litellm._logging import verbose_logger
 from litellm.constants import (
     FIREWORKS_AI_4_B,
     FIREWORKS_AI_16_B,
@@ -74,7 +75,13 @@ def cost_per_token(model: str, usage: Usage) -> Tuple[float, float]:
         return generic_cost_per_token(
             model=model, usage=usage, custom_llm_provider="fireworks_ai"
         )
-    except Exception:
+    except Exception as e:
+        verbose_logger.debug(
+            "fireworks_ai cost_per_token: model '%s' not in pricing JSON, "
+            "falling back to size heuristic: %s",
+            model,
+            e,
+        )
         base_model = get_base_model_for_pricing(model_name=model)
         return generic_cost_per_token(
             model=base_model, usage=usage, custom_llm_provider="fireworks_ai"

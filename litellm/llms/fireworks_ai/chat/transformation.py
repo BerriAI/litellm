@@ -261,9 +261,7 @@ class FireworksAIConfig(OpenAIGPTConfig):
         return {
             "supports_function_calling": True,
             "supports_tool_choice": True,
-            "supports_prompt_caching": True,  # https://docs.fireworks.ai/guides/prompt-caching
-            "supports_pdf_input": True,  # via document inlining
-            "supports_vision": True,  # via document inlining
+            "supports_pdf_input": True,
         }
 
     def transform_request(
@@ -413,7 +411,14 @@ class FireworksAIConfig(OpenAIGPTConfig):
                 "(or FIREWORKS_AI_API_KEY / FIREWORKSAI_API_KEY / FIREWORKS_AI_TOKEN)."
             )
 
-        base_url = "https://api.fireworks.ai"
+        base_url = (
+            api_base
+            or get_secret_str("FIREWORKS_API_BASE")
+            or "https://api.fireworks.ai"
+        )
+        if base_url.endswith("/inference/v1"):
+            base_url = base_url[: -len("/inference/v1")]
+        base_url = base_url.rstrip("/")
         headers = {"Authorization": f"Bearer {api_key}"}
         seen: set = set()
         result: List[str] = []
