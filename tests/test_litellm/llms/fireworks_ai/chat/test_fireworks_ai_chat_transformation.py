@@ -94,20 +94,21 @@ def test_supports_reasoning_effort():
 
 
 def test_get_supported_openai_params_reasoning_effort():
-    """Test that reasoning_effort is only included in supported params for models that support it."""
+    """Test that reasoning_effort is always included — Fireworks accepts it on all models."""
     config = FireworksAIConfig()
 
-    # Model that supports reasoning_effort
+    # reasoning_effort should be present for reasoning models
     supported_params = config.get_supported_openai_params(
         "fireworks_ai/accounts/fireworks/models/qwen3-8b"
     )
     assert "reasoning_effort" in supported_params
 
-    # Model that doesn't support reasoning_effort
-    unsupported_params = config.get_supported_openai_params(
+    # reasoning_effort should also be present for non-reasoning models
+    # (Fireworks API accepts it; unsupported models simply ignore it)
+    other_params = config.get_supported_openai_params(
         "fireworks_ai/accounts/fireworks/models/llama-v3-70b-instruct"
     )
-    assert "reasoning_effort" not in unsupported_params
+    assert "reasoning_effort" in other_params
 
 
 def test_add_transform_inline_image_block_skips_data_urls():
@@ -145,37 +146,17 @@ def test_add_transform_inline_image_block_skips_data_urls():
     ), "https URL should get #transform=inline"
 
 
-@pytest.mark.parametrize(
-    "api_base, expected_url_prefix",
-    [
-        (
-            "https://api.fireworks.ai/inference/v1",
-            "https://api.fireworks.ai/inference/v1/accounts/",
-        ),
-        (
-            "https://api.fireworks.ai/inference/v1/",
-            "https://api.fireworks.ai/inference/v1/accounts/",
-        ),
-        (
-            "https://custom-host.example.com/v1",
-            "https://custom-host.example.com/v1/accounts/",
-        ),
-        (
-            "https://custom-host.example.com/api",
-            "https://custom-host.example.com/api/v1/accounts/",
-        ),
-    ],
-    ids=["default", "trailing-slash", "custom-with-v1", "custom-without-v1"],
-)
-def test_get_models_url_no_double_v1(api_base, expected_url_prefix):
-    """Ensure get_models never produces a /v1/v1/ URL segment (fixes #23106)."""
+def test_get_models_serverless_only():
+    """Without FIREWORKS_ACCOUNT_ID, get_models queries only the fireworks public account."""
     config = FireworksAIConfig()
-    account_id = "fireworks"
 
     mock_response = MagicMock()
     mock_response.status_code = 200
     mock_response.json.return_value = {
-        "models": [{"name": "accounts/fireworks/models/llama-v3-70b"}]
+        "models": [
+            {"name": "accounts/fireworks/models/deepseek-v3p2"},
+            {"name": "accounts/fireworks/models/qwen3-8b"},
+        ]
     }
 
     with (
@@ -184,23 +165,97 @@ def test_get_models_url_no_double_v1(api_base, expected_url_prefix):
         ) as mock_get,
         patch(
             "litellm.llms.fireworks_ai.chat.transformation.get_secret_str",
-            side_effect=lambda key: {
-                "FIREWORKS_API_KEY": "test-key",
-                "FIREWORKS_API_BASE": api_base,
-                "FIREWORKS_ACCOUNT_ID": account_id,
-            }.get(key),
+            return_value=None,
         ),
     ):
-        result = config.get_models(api_key="test-key", api_base=api_base)
+        result = config.get_models(api_key="test-key")
 
+        # Should call the management API for the fireworks public account
+        mock_get.assert_called_once()
         called_url = mock_get.call_args.kwargs.get("url") or mock_get.call_args[1].get(
             "url", ""
         )
-        assert "/v1/v1/" not in called_url, f"Double /v1/ detected in URL: {called_url}"
-        assert called_url.startswith(
-            expected_url_prefix
-        ), f"URL {called_url} does not start with {expected_url_prefix}"
-        assert result == ["fireworks_ai/accounts/fireworks/models/llama-v3-70b"]
+        assert called_url == "https://api.fireworks.ai/v1/accounts/fireworks/models"
+        called_params = mock_get.call_args.kwargs.get("params", {})
+        assert called_params.get("filter") == "supports_serverless=true"
+        assert result == [
+            "fireworks_ai/accounts/fireworks/models/deepseek-v3p2",
+            "fireworks_ai/accounts/fireworks/models/qwen3-8b",
+        ]
+
+
+def test_get_models_with_account_id():
+    """With FIREWORKS_ACCOUNT_ID set, get_models queries both public and user accounts."""
+    config = FireworksAIConfig()
+
+    serverless_response = MagicMock()
+    serverless_response.status_code = 200
+    serverless_response.json.return_value = {
+        "models": [{"name": "accounts/fireworks/models/deepseek-v3p2"}]
+    }
+
+    user_response = MagicMock()
+    user_response.status_code = 200
+    user_response.json.return_value = {
+        "models": [{"name": "accounts/myteam/models/my-finetuned-llama"}]
+    }
+
+    with (
+        patch(
+            "litellm.module_level_client.get",
+            side_effect=[serverless_response, user_response],
+        ) as mock_get,
+        patch(
+            "litellm.llms.fireworks_ai.chat.transformation.get_secret_str",
+            side_effect=lambda key: "myteam" if key == "FIREWORKS_ACCOUNT_ID" else None,
+        ),
+    ):
+        result = config.get_models(api_key="test-key")
+
+        assert mock_get.call_count == 2
+        # First call: fireworks public serverless
+        url1 = mock_get.call_args_list[0].kwargs.get("url", "")
+        assert url1 == "https://api.fireworks.ai/v1/accounts/fireworks/models"
+        # Second call: user account
+        url2 = mock_get.call_args_list[1].kwargs.get("url", "")
+        assert url2 == "https://api.fireworks.ai/v1/accounts/myteam/models"
+        assert result == [
+            "fireworks_ai/accounts/fireworks/models/deepseek-v3p2",
+            "fireworks_ai/accounts/myteam/models/my-finetuned-llama",
+        ]
+
+
+def test_get_models_deduplicates():
+    """Models appearing in both public and user accounts are not duplicated."""
+    config = FireworksAIConfig()
+
+    response = MagicMock()
+    response.status_code = 200
+    response.json.return_value = {
+        "models": [{"name": "accounts/fireworks/models/deepseek-v3p2"}]
+    }
+
+    with (
+        patch("litellm.module_level_client.get", return_value=response),
+        patch(
+            "litellm.llms.fireworks_ai.chat.transformation.get_secret_str",
+            return_value=None,
+        ),
+    ):
+        result = config.get_models(api_key="test-key")
+        assert result == ["fireworks_ai/accounts/fireworks/models/deepseek-v3p2"]
+        assert len(result) == 1
+
+
+def test_get_models_no_api_key_raises():
+    """get_models raises ValueError when no API key is available."""
+    config = FireworksAIConfig()
+    with patch(
+        "litellm.llms.fireworks_ai.chat.transformation.get_secret_str",
+        return_value=None,
+    ):
+        with pytest.raises(ValueError, match="API key is not set"):
+            config.get_models()
 
 
 def test_transform_messages_helper_removes_provider_specific_fields():
@@ -232,3 +287,9 @@ def test_transform_messages_helper_removes_provider_specific_fields():
     )
     for msg in out:
         assert "provider_specific_fields" not in msg
+
+
+def test_custom_llm_provider_property():
+    """Test that the custom_llm_provider property returns 'fireworks_ai'."""
+    config = FireworksAIConfig()
+    assert config.custom_llm_provider == "fireworks_ai"

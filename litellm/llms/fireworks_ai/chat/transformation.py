@@ -4,6 +4,7 @@ from typing import Any, List, Literal, Optional, Tuple, Union, cast
 import httpx
 
 import litellm
+from litellm._logging import verbose_logger
 from litellm._uuid import uuid
 from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -15,7 +16,6 @@ from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionImageObject,
     ChatCompletionToolParam,
-    OpenAIChatCompletionToolParam,
 )
 from litellm.types.utils import (
     ChatCompletionMessageToolCall,
@@ -27,7 +27,6 @@ from litellm.types.utils import (
 )
 from litellm.utils import (
     supports_function_calling,
-    supports_reasoning,
     supports_tool_choice,
 )
 
@@ -39,8 +38,53 @@ class FireworksAIConfig(OpenAIGPTConfig):
     """
     Reference: https://docs.fireworks.ai/api-reference/post-chatcompletions
 
-    The class `FireworksAIConfig` provides configuration for the Fireworks's Chat Completions API interface. Below are the parameters:
+    Fireworks AI Chat Completions API configuration.
+
+    Fireworks is largely OpenAI-compatible. The tweaks below document where
+    this config diverges from the base ``OpenAIGPTConfig``:
+
+    Request transforms
+    ------------------
+    - **Model name prefixing**: bare model names are expanded to
+      ``accounts/fireworks/models/<model>`` before sending.
+    - **Document inlining**: ``#transform=inline`` is appended to non-data
+      image URLs so non-vision models can process documents/images. Skipped
+      for ``data:`` URLs and vision models. Controllable via
+      ``disable_add_transform_inline_image_block``.
+    - **File → image migration**: ``file`` content parts (PDFs) are
+      converted to ``image_url`` parts for inlining.
+    - **Field stripping**: ``cache_control`` and ``provider_specific_fields``
+      are removed from messages (Fireworks rejects them).
+
+    Response transforms
+    -------------------
+    - **Model prefixing**: the returned model name is prefixed with
+      ``fireworks_ai/``.
+    - **Tool-calls-in-content workaround**: some older Fireworks models
+      (e.g. Llama-v3p3-70b) return tool calls as a JSON string in the
+      ``content`` field with ``tool_calls: null``. The response handler
+      detects this and moves it to the proper ``tool_calls`` field.
+      (Newer models like Kimi, MiniMax, GLM, DeepSeek return tool calls
+      correctly.)
+
+    Parameter handling
+    ------------------
+    - All standard OpenAI params are passed through (``tool_choice``,
+      ``response_format``, ``max_completion_tokens``, ``strict`` in tools).
+    - Additional Fireworks-supported params: ``top_k``, ``top_logprobs``,
+      ``seed``, ``logit_bias``, ``parallel_tool_calls``, ``thinking``,
+      ``prompt_truncate_length``, ``context_length_exceeded_behavior``.
+    - ``tools`` and ``tool_choice`` are conditionally added based on
+      capability flags from ``model_prices_and_context_window.json``.
+      For unlisted models (custom/fine-tuned), ``get_provider_info``
+      defaults both to allowed.
+    - ``reasoning_effort`` is always passed through — the Fireworks API
+      accepts it on all models and handles unsupported cases itself.
     """
+
+    @property
+    def custom_llm_provider(self) -> Optional[str]:
+        return "fireworks_ai"
 
     tools: Optional[list] = None
     tool_choice: Optional[Union[str, dict]] = None
@@ -90,7 +134,6 @@ class FireworksAIConfig(OpenAIGPTConfig):
         return super().get_config()
 
     def get_supported_openai_params(self, model: str):
-        # Base parameters supported by all models
         supported_params = [
             "stream",
             "max_completion_tokens",
@@ -105,21 +148,21 @@ class FireworksAIConfig(OpenAIGPTConfig):
             "response_format",
             "user",
             "logprobs",
+            "top_logprobs",
+            "seed",
+            "logit_bias",
+            "parallel_tool_calls",
+            "thinking",
+            "reasoning_effort",
             "prompt_truncate_length",
             "context_length_exceeded_behavior",
         ]
 
-        # Only add tools for models that support function calling
         if supports_function_calling(model=model, custom_llm_provider="fireworks_ai"):
             supported_params.append("tools")
 
-        # Only add tool_choice for models that explicitly support it
         if supports_tool_choice(model=model, custom_llm_provider="fireworks_ai"):
             supported_params.append("tool_choice")
-
-        # Only add reasoning_effort for models that support it
-        if supports_reasoning(model=model, custom_llm_provider="fireworks_ai"):
-            supported_params.append("reasoning_effort")
 
         return supported_params
 
@@ -131,38 +174,12 @@ class FireworksAIConfig(OpenAIGPTConfig):
         drop_params: bool,
     ) -> dict:
         supported_openai_params = self.get_supported_openai_params(model=model)
-        is_tools_set = any(
-            param == "tools" and value is not None
-            for param, value in non_default_params.items()
-        )
 
         for param, value in non_default_params.items():
             if param == "tool_choice":
-                if value == "required":
-                    # relevant issue: https://github.com/BerriAI/litellm/issues/4416
-                    optional_params["tool_choice"] = "any"
-                else:
-                    # pass through the value of tool choice
-                    optional_params["tool_choice"] = value
+                optional_params["tool_choice"] = value
             elif param == "response_format":
-                if (
-                    is_tools_set
-                ):  # fireworks ai doesn't support tools and response_format together
-                    optional_params = self._add_response_format_to_tools(
-                        optional_params=optional_params,
-                        value=value,
-                        is_response_format_supported=False,
-                        enforce_tool_choice=False,  # tools and response_format are both set, don't enforce tool_choice
-                    )
-                elif "json_schema" in value:
-                    optional_params["response_format"] = {
-                        "type": "json_object",
-                        "schema": value["json_schema"]["schema"],
-                    }
-                else:
-                    optional_params["response_format"] = value
-            elif param == "max_completion_tokens":
-                optional_params["max_tokens"] = value
+                optional_params["response_format"] = value
             elif param in supported_openai_params:
                 if value is not None:
                     optional_params[param] = value
@@ -196,14 +213,6 @@ class FireworksAIConfig(OpenAIGPTConfig):
             if not url.lower().startswith("data:"):
                 content["image_url"]["url"] = f"{url}#transform=inline"
         return content
-
-    def _transform_tools(
-        self, tools: List[OpenAIChatCompletionToolParam]
-    ) -> List[OpenAIChatCompletionToolParam]:
-        for tool in tools:
-            if tool.get("type") == "function":
-                tool["function"].pop("strict", None)
-        return tools
 
     def _transform_messages_helper(
         self, messages: List[AllMessageValues], model: str, litellm_params: dict
@@ -249,47 +258,13 @@ class FireworksAIConfig(OpenAIGPTConfig):
         return messages
 
     def get_provider_info(self, model: str) -> ProviderSpecificModelInfo:
-        # Models that support reasoning_effort
-        reasoning_supported_models = [
-            "qwen3-8b",
-            "qwen3-32b",
-            "qwen3-coder-480b-a35b-instruct",
-            "deepseek-v3p1",
-            "deepseek-v3p2",
-            "glm-4p5",
-            "glm-4p5-air",
-            "glm-4p6",
-            "gpt-oss-120b",
-            "gpt-oss-20b",
-        ]
-
-        # Normalize model name - remove prefix if present
-        normalized_model = model
-        if model.startswith("fireworks_ai/"):
-            normalized_model = model.replace("fireworks_ai/", "")
-        if normalized_model.startswith("accounts/fireworks/models/"):
-            normalized_model = normalized_model.replace(
-                "accounts/fireworks/models/", ""
-            )
-
-        # Check if model supports reasoning
-        supports_reasoning_value = any(
-            reasoning_model in normalized_model
-            for reasoning_model in reasoning_supported_models
-        )
-
-        provider_specific_model_info: ProviderSpecificModelInfo = {
+        return {
             "supports_function_calling": True,
+            "supports_tool_choice": True,
             "supports_prompt_caching": True,  # https://docs.fireworks.ai/guides/prompt-caching
             "supports_pdf_input": True,  # via document inlining
             "supports_vision": True,  # via document inlining
         }
-
-        # Only include supports_reasoning if True
-        if supports_reasoning_value:
-            provider_specific_model_info["supports_reasoning"] = True
-
-        return provider_specific_model_info
 
     def transform_request(
         self,
@@ -304,9 +279,6 @@ class FireworksAIConfig(OpenAIGPTConfig):
         messages = self._transform_messages_helper(
             messages=messages, model=model, litellm_params=litellm_params
         )
-        if "tools" in optional_params and optional_params["tools"] is not None:
-            tools = self._transform_tools(tools=optional_params["tools"])
-            optional_params["tools"] = tools
         return super().transform_request(
             model=model,
             messages=messages,
@@ -419,37 +391,94 @@ class FireworksAIConfig(OpenAIGPTConfig):
         )
         return api_base, dynamic_api_key
 
-    def get_models(self, api_key: Optional[str] = None, api_base: Optional[str] = None):
-        api_base, api_key = self._get_openai_compatible_provider_info(
-            api_base=api_base, api_key=api_key
-        )
-        if api_base is None or api_key is None:
+    def get_models(
+        self, api_key: Optional[str] = None, api_base: Optional[str] = None
+    ) -> List[str]:
+        """
+        Fetches available models from Fireworks AI.
+
+        Uses the Management API ``/v1/accounts/{account_id}/models`` endpoint
+        (documented at https://docs.fireworks.ai/api-reference/list-models).
+
+        - Always queries ``accounts/fireworks/models`` with
+          ``filter=supports_serverless=true`` to list publicly available
+          serverless models.
+        - If ``FIREWORKS_ACCOUNT_ID`` is set, also queries the user's account
+          for dedicated deployments and merges both lists.
+        """
+        api_key = self.get_api_key(api_key)
+        if api_key is None:
             raise ValueError(
-                "FIREWORKS_API_BASE or FIREWORKS_API_KEY is not set. Please set the environment variable, to query Fireworks AI's `/models` endpoint."
+                "Fireworks AI API key is not set. Please set FIREWORKS_API_KEY "
+                "(or FIREWORKS_AI_API_KEY / FIREWORKSAI_API_KEY / FIREWORKS_AI_TOKEN)."
             )
 
-        account_id = get_secret_str("FIREWORKS_ACCOUNT_ID")
-        if account_id is None:
-            raise ValueError(
-                "FIREWORKS_ACCOUNT_ID is not set. Please set the environment variable, to query Fireworks AI's `/models` endpoint."
+        base_url = "https://api.fireworks.ai"
+        headers = {"Authorization": f"Bearer {api_key}"}
+        seen: set = set()
+        result: List[str] = []
+
+        for account, query_filter in self._get_model_list_targets():
+            self._fetch_models_from_account(
+                base_url, account, query_filter, headers, seen, result
             )
 
-        base = api_base.rstrip("/")
-        if base.endswith("/v1"):
-            base = base[: -len("/v1")]
-        response = litellm.module_level_client.get(
-            url=f"{base}/v1/accounts/{account_id}/models",
-            headers={"Authorization": f"Bearer {api_key}"},
-        )
+        return result
 
-        if response.status_code != 200:
-            raise ValueError(
-                f"Failed to fetch models from Fireworks AI. Status code: {response.status_code}, Response: {response.json()}"
+    @staticmethod
+    def _get_model_list_targets() -> List[tuple]:
+        """Return (account_id, filter) pairs to query."""
+        targets: List[tuple] = [
+            ("fireworks", "supports_serverless=true"),
+        ]
+        user_account = get_secret_str("FIREWORKS_ACCOUNT_ID")
+        if user_account and user_account != "fireworks":
+            targets.append((user_account, None))
+        return targets
+
+    @staticmethod
+    def _fetch_models_from_account(
+        base_url: str,
+        account_id: str,
+        query_filter: Optional[str],
+        headers: dict,
+        seen: set,
+        result: List[str],
+    ) -> None:
+        """Paginate through /v1/accounts/{account_id}/models and append unique models."""
+        page_token: Optional[str] = None
+        while True:
+            params: dict = {"pageSize": "200"}
+            if query_filter:
+                params["filter"] = query_filter
+            if page_token:
+                params["pageToken"] = page_token
+
+            response = litellm.module_level_client.get(
+                url=f"{base_url}/v1/accounts/{account_id}/models",
+                headers=headers,
+                params=params,
             )
+            if response.status_code != 200:
+                verbose_logger.warning(
+                    "Failed to fetch models from Fireworks AI account '%s'. "
+                    "Status %d: %s",
+                    account_id,
+                    response.status_code,
+                    response.text,
+                )
+                break
 
-        models = response.json()["models"]
+            data = response.json()
+            for model in data.get("models", []):
+                name = model.get("name", "")
+                if name and name not in seen:
+                    seen.add(name)
+                    result.append("fireworks_ai/" + name)
 
-        return ["fireworks_ai/" + model["name"] for model in models]
+            page_token = data.get("nextPageToken")
+            if not page_token:
+                break
 
     @staticmethod
     def get_api_key(api_key: Optional[str] = None) -> Optional[str]:
