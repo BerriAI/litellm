@@ -54,7 +54,7 @@ LEFT JOIN "LiteLLM_VerificationToken" vt  ON dus.api_key   = vt.token
 LEFT JOIN "LiteLLM_TeamTable"         tt  ON vt.team_id    = tt.team_id
 LEFT JOIN "LiteLLM_UserTable"         ut  ON dus.user_id   = ut.user_id
 WHERE dus.date = $1
-ORDER BY dus.date, dus.user_id, dus.api_key, dus.model ASC
+ORDER BY dus.date, dus.user_id, dus.api_key, dus.model, dus.id ASC
 """
 
 _EARLIEST_DATE_QUERY = 'SELECT MIN(date) AS earliest FROM "LiteLLM_DailyUserSpend"'
