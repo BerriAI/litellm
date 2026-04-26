@@ -245,9 +245,9 @@ class TestMemoryEndpoints:
         """
         Regression: prisma-client-python rejects bare dicts / None on `Json?`
         columns with `DataError: metadata should be of any of the following
-        types: NullableJsonNullValueInput, Json`. The endpoint runs metadata
-        through `_serialize_metadata_for_prisma` to JSON-encode it before
-        handing it to Prisma.
+        types: NullableJsonNullValueInput, Json`. The endpoint follows the
+        rest of the proxy's pattern (`jsonify_object`) and JSON-encodes dict
+        metadata to a string before handing it to Prisma.
         """
         import json as _json
 
