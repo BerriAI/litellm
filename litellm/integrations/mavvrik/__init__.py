@@ -221,6 +221,37 @@ class Service:
             )
 
         await self._settings.save(**merged)
+
+        # Reschedule the background job with the new credentials so the
+        # running Orchestrator uses the merged values immediately —
+        # without this, the in-memory Client keeps old credentials until restart.
+        from litellm.constants import (
+            MAVVRIK_EXPORT_INTERVAL_MINUTES,
+            MAVVRIK_EXPORT_USAGE_DATA_JOB_NAME,
+        )
+
+        import litellm.proxy.proxy_server as _pserver
+
+        _scheduler = getattr(_pserver, "scheduler", None)
+        if _scheduler is not None:
+            client = Client(
+                api_key=merged["api_key"],
+                api_endpoint=merged["api_endpoint"],
+                connection_id=merged["connection_id"],
+            )
+            uploader = Uploader(client=client)
+            orchestrator = Orchestrator(client=client, uploader=uploader)
+            _scheduler.add_job(
+                orchestrator.run,
+                "interval",
+                minutes=MAVVRIK_EXPORT_INTERVAL_MINUTES,
+                id=MAVVRIK_EXPORT_USAGE_DATA_JOB_NAME,
+                replace_existing=True,
+            )
+            verbose_proxy_logger.info(
+                "mavvrik: background job rescheduled with updated credentials"
+            )
+
         return {"message": "Mavvrik settings updated successfully", "status": "success"}
 
     # ------------------------------------------------------------------
