@@ -8,7 +8,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat import (
-    TOOL_HANDLERS,
     TOOLS_ADMIN,
     TOOLS_BASE,
     _build_system_prompt,
@@ -222,6 +221,9 @@ class TestStreamUsageAiChat:
         _, mock_first_response = self._make_tool_call_response()
 
         with patch(
+            "litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat._get_proxy_router",
+            return_value=None,
+        ), patch(
             "litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat.litellm"
         ) as mock_litellm, patch(
             "litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat._fetch_usage_data",
@@ -268,6 +270,9 @@ class TestStreamUsageAiChat:
         ] = "call_team"
 
         with patch(
+            "litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat._get_proxy_router",
+            return_value=None,
+        ), patch(
             "litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat.litellm"
         ) as mock_litellm, patch(
             "litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat._fetch_team_usage_data",
@@ -296,6 +301,9 @@ class TestStreamUsageAiChat:
     @pytest.mark.asyncio
     async def test_stream_handles_error(self):
         with patch(
+            "litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat._get_proxy_router",
+            return_value=None,
+        ), patch(
             "litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat.litellm"
         ) as mock_litellm:
             mock_litellm.acompletion = AsyncMock(side_effect=Exception("LLM error"))
@@ -335,6 +343,9 @@ class TestStreamUsageAiChat:
         mock_fetch = AsyncMock(return_value=SAMPLE_AGGREGATED_RESPONSE)
 
         with patch(
+            "litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat._get_proxy_router",
+            return_value=None,
+        ), patch(
             "litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat.litellm"
         ) as mock_litellm, patch.dict(
             "litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat.TOOL_HANDLERS",

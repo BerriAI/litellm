@@ -226,11 +226,11 @@ async def _query_activity(
     use_aggregated: bool = False,
 ) -> SpendAnalyticsPaginatedResponse:
     """Shared helper that calls the daily activity query layer."""
-    from litellm.proxy.management_endpoints.common_daily_activity import (
+    from litellm.proxy.management_endpoints.common_daily_activity import (  # noqa: PLC0415
         get_daily_activity,
         get_daily_activity_aggregated,
     )
-    from litellm.proxy.proxy_server import prisma_client
+    from litellm.proxy.proxy_server import prisma_client  # noqa: PLC0415
 
     if use_aggregated:
         return await get_daily_activity_aggregated(
@@ -509,10 +509,10 @@ async def _process_tool_call(
     )
 
 
-def _get_proxy_router():
+def _get_proxy_router() -> Optional[Any]:
     """Return the global proxy router when available."""
     try:
-        from litellm.proxy.proxy_server import llm_router
+        from litellm.proxy.proxy_server import llm_router  # noqa: PLC0415
     except Exception as exc:
         verbose_proxy_logger.debug(
             "Could not import llm_router, falling back to litellm: %s", exc
@@ -527,7 +527,7 @@ async def _usage_ai_acompletion(
     messages: List[Dict[str, Any]],
     team_id: Optional[str] = None,
     **kwargs: Any,
-):
+) -> Any:
     """
     Route Usage AI requests through the proxy router when available so proxy
     aliases and model groups resolve consistently with normal proxy traffic.

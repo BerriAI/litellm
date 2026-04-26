@@ -59,7 +59,7 @@ async def usage_ai_chat(
             model=data.model,
             user_id=user_id,
             is_admin=is_admin,
-            team_id=user_api_key_dict.team_id,
+            team_id=getattr(user_api_key_dict, "team_id", None),
         ),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
