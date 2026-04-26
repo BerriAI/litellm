@@ -5,6 +5,7 @@ This handler provides token counting for partner models hosted on Vertex AI.
 Unlike Gemini models which use Google's token counting API, partner models use
 their respective publisher-specific count-tokens endpoints.
 """
+
 from typing import Any, Dict, Optional
 
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
