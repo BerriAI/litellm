@@ -245,8 +245,8 @@ class SemanticMCPToolFilter:
           ``fc_web_search-firecrawl_scrape`` does match
           ``fc_web_search-firecrawl_scrape_a1b2c3d4`` but does not match
           ``fc_web_search-firecrawl_scrape_extra_tool`` (the part after the
-          canonical must be a single unique-ID segment, not another
-          ``<sep><tool_name>`` pair).
+          canonical contains a separator, indicating it's another
+          namespaced tool, not a unique-ID suffix).
 
         Both prefix and suffix matching are gated on ``canonical`` itself
         containing ``MCP_TOOL_PREFIX_SEPARATOR``. Server-registered MCP
@@ -288,7 +288,12 @@ class SemanticMCPToolFilter:
             # namespaced tool, not a unique-ID suffix.
             if remainder and remainder[0] in ("_", "-"):
                 rest = remainder[1:]
-                if MCP_TOOL_PREFIX_SEPARATOR not in rest:
+                # A unique-ID segment contains no separator at all (it's a
+                # short hex or alphanumeric string). Reject remainders that
+                # contain either underscore or dash, since both are valid
+                # separators in MCP tool names regardless of the configured
+                # MCP_TOOL_PREFIX_SEPARATOR.
+                if "_" not in rest and "-" not in rest:
                     return True
 
         return False

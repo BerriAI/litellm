@@ -681,8 +681,8 @@ class TestGetToolsByNames:
         """
         ``svc-search-extra_tool`` must NOT match canonical ``svc-search``
         because the remainder after the separator (``extra_tool``) itself
-        contains ``MCP_TOOL_PREFIX_SEPARATOR`` (``-``), indicating it is
-        another namespaced tool, not a unique-ID suffix.
+        contains a separator character (``_``), indicating it is another
+        namespaced tool, not a unique-ID suffix.
         """
         filter_instance = self._make_filter()
         available_tools = [
