@@ -222,19 +222,18 @@ class TestStreamUsageAiChat:
 
         with (
             patch(
-                "litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat.litellm"
-            ) as mock_litellm,
+                "litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat._usage_ai_acompletion",
+                new_callable=AsyncMock,
+            ) as mock_usage_ai_acompletion,
             patch(
                 "litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat._fetch_usage_data",
                 new_callable=AsyncMock,
             ) as mock_fetch,
         ):
-            mock_litellm.acompletion = AsyncMock(
-                side_effect=[
-                    mock_first_response,
-                    self._mock_stream(),
-                ]
-            )
+            mock_usage_ai_acompletion.side_effect = [
+                mock_first_response,
+                self._mock_stream(),
+            ]
             mock_fetch.return_value = SAMPLE_AGGREGATED_RESPONSE
 
             events = []
@@ -271,19 +270,18 @@ class TestStreamUsageAiChat:
 
         with (
             patch(
-                "litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat.litellm"
-            ) as mock_litellm,
+                "litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat._usage_ai_acompletion",
+                new_callable=AsyncMock,
+            ) as mock_usage_ai_acompletion,
             patch(
                 "litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat._fetch_team_usage_data",
                 new_callable=AsyncMock,
             ) as mock_fetch,
         ):
-            mock_litellm.acompletion = AsyncMock(
-                side_effect=[
-                    mock_first_response,
-                    self._mock_stream(content="Engineering is the top team."),
-                ]
-            )
+            mock_usage_ai_acompletion.side_effect = [
+                mock_first_response,
+                self._mock_stream(content="Engineering is the top team."),
+            ]
             mock_fetch.return_value = SAMPLE_TEAM_RESPONSE
 
             events = []
@@ -301,12 +299,10 @@ class TestStreamUsageAiChat:
     @pytest.mark.asyncio
     async def test_stream_handles_error(self):
         with patch(
-            "litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat._get_proxy_router",
-            return_value=None,
-        ), patch(
-            "litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat.litellm"
-        ) as mock_litellm:
-            mock_litellm.acompletion = AsyncMock(side_effect=Exception("LLM error"))
+            "litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat._usage_ai_acompletion",
+            new_callable=AsyncMock,
+        ) as mock_usage_ai_acompletion:
+            mock_usage_ai_acompletion.side_effect = Exception("LLM error")
 
             events = []
             async for event in stream_usage_ai_chat(
@@ -344,8 +340,9 @@ class TestStreamUsageAiChat:
 
         with (
             patch(
-                "litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat.litellm"
-            ) as mock_litellm,
+                "litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat._usage_ai_acompletion",
+                new_callable=AsyncMock,
+            ) as mock_usage_ai_acompletion,
             patch.dict(
                 "litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat.TOOL_HANDLERS",
                 {
@@ -357,12 +354,10 @@ class TestStreamUsageAiChat:
                 },
             ),
         ):
-            mock_litellm.acompletion = AsyncMock(
-                side_effect=[
-                    mock_first_response,
-                    self._mock_stream(content="Data."),
-                ]
-            )
+            mock_usage_ai_acompletion.side_effect = [
+                mock_first_response,
+                self._mock_stream(content="Data."),
+            ]
 
             events = []
             async for event in stream_usage_ai_chat(
