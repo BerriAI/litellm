@@ -50,15 +50,15 @@ DEFAULT_API_BASE = "https://api.peyeeye.ai"
 SESSION_CACHE_TTL_SECONDS = 3600
 
 
-class PeyeeyeGuardrailMissingSecrets(Exception):
+class PEyeEyeGuardrailMissingSecrets(Exception):
     """Raised when the peyeeye API key is missing."""
 
 
-class PeyeeyeGuardrailAPIError(Exception):
+class PEyeEyeGuardrailAPIError(Exception):
     """Raised when the peyeeye API returns an error."""
 
 
-class PeyeeyeGuardrail(CustomGuardrail):
+class PEyeEyeGuardrail(CustomGuardrail):
     """Peyeeye PII redaction + rehydration guardrail.
 
     Pre-call hook redacts PII from each message's ``content`` and stores the
@@ -90,7 +90,7 @@ class PeyeeyeGuardrail(CustomGuardrail):
             peyeeye_api_key or api_key or os.environ.get("PEYEEYE_API_KEY")
         )
         if self.peyeeye_api_key is None:
-            raise PeyeeyeGuardrailMissingSecrets(
+            raise PEyeEyeGuardrailMissingSecrets(
                 "Couldn't get peyeeye api key, either set the `PEYEEYE_API_KEY` "
                 "environment variable or pass it as `api_key` in the guardrail config."
             )
@@ -147,6 +147,12 @@ class PeyeeyeGuardrail(CustomGuardrail):
         redacted_texts, session_id = await self._redact_batch(
             [t for _, _, t in text_parts]
         )
+        if len(redacted_texts) != len(text_parts):
+            raise PEyeEyeGuardrailAPIError(
+                f"peyeeye /v1/redact returned {len(redacted_texts)} texts for "
+                f"{len(text_parts)} inputs; refusing to forward partially-"
+                "redacted data"
+            )
         for (msg_idx, part_path, _), redacted in zip(text_parts, redacted_texts):
             _set_message_text(messages[msg_idx], part_path, redacted)
 
@@ -248,7 +254,7 @@ class PeyeeyeGuardrail(CustomGuardrail):
         elif isinstance(out_text, list):
             redacted = [str(x) for x in out_text]
         else:
-            raise PeyeeyeGuardrailAPIError(
+            raise PEyeEyeGuardrailAPIError(
                 "peyeeye /v1/redact returned unexpected response shape; "
                 "refusing to forward unredacted text"
             )
@@ -296,31 +302,31 @@ class PeyeeyeGuardrail(CustomGuardrail):
     def _reraise_api_error(error: Exception, path: str) -> NoReturn:
         if HTTPX_AVAILABLE and httpx is not None:
             if isinstance(error, httpx.TimeoutException):
-                raise PeyeeyeGuardrailAPIError(f"peyeeye {path} timed out") from error
+                raise PEyeEyeGuardrailAPIError(f"peyeeye {path} timed out") from error
             if isinstance(error, httpx.HTTPStatusError):
                 status = error.response.status_code
                 if status == 401:
-                    raise PeyeeyeGuardrailMissingSecrets(
+                    raise PEyeEyeGuardrailMissingSecrets(
                         "Invalid peyeeye API key"
                     ) from error
                 if status == 429:
-                    raise PeyeeyeGuardrailAPIError(
+                    raise PEyeEyeGuardrailAPIError(
                         "peyeeye rate limit exceeded"
                     ) from error
-                raise PeyeeyeGuardrailAPIError(
+                raise PEyeEyeGuardrailAPIError(
                     f"peyeeye {path} returned {status}"
                 ) from error
-        raise PeyeeyeGuardrailAPIError(
+        raise PEyeEyeGuardrailAPIError(
             f"peyeeye {path} failed: {error}"
         ) from error
 
     @staticmethod
     def get_config_model() -> Optional[Type["GuardrailConfigModel"]]:
         from litellm.types.proxy.guardrails.guardrail_hooks.peyeeye import (
-            PeyeeyeGuardrailConfigModel,
+            PEyeEyeGuardrailConfigModel,
         )
 
-        return PeyeeyeGuardrailConfigModel
+        return PEyeEyeGuardrailConfigModel
 
 
 # ---------------------------------------------------------------- text helpers

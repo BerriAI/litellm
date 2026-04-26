@@ -2,7 +2,7 @@ from typing import TYPE_CHECKING
 
 from litellm.types.guardrails import SupportedGuardrailIntegrations
 
-from .peyeeye import PeyeeyeGuardrail
+from .peyeeye import PEyeEyeGuardrail
 
 if TYPE_CHECKING:
     from litellm.types.guardrails import Guardrail, LitellmParams
@@ -11,7 +11,7 @@ if TYPE_CHECKING:
 def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"):
     import litellm
 
-    _peyeeye_callback = PeyeeyeGuardrail(
+    _peyeeye_callback = PEyeEyeGuardrail(
         guardrail_name=guardrail.get("guardrail_name", ""),
         api_key=litellm_params.api_key,
         api_base=litellm_params.api_base,
@@ -32,5 +32,5 @@ guardrail_initializer_registry = {
 
 
 guardrail_class_registry = {
-    SupportedGuardrailIntegrations.PEYEEYE.value: PeyeeyeGuardrail,
+    SupportedGuardrailIntegrations.PEYEEYE.value: PEyeEyeGuardrail,
 }
