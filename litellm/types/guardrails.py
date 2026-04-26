@@ -439,7 +439,7 @@ class LassoGuardrailConfigModel(BaseModel):
     )
 
 
-class PeyeeyeGuardrailConfigModel(BaseModel):
+class PEyeEyeGuardrailConfigModel(BaseModel):
     """Configuration parameters for the peyeeye PII redaction & rehydration guardrail"""
 
     peyeeye_locale: Optional[str] = Field(
@@ -772,7 +772,7 @@ class LitellmParams(
     BedrockGuardrailConfigModel,
     LakeraV2GuardrailConfigModel,
     LassoGuardrailConfigModel,
-    PeyeeyeGuardrailConfigModel,
+    PEyeEyeGuardrailConfigModel,
     PillarGuardrailConfigModel,
     GraySwanGuardrailConfigModel,
     NomaGuardrailConfigModel,

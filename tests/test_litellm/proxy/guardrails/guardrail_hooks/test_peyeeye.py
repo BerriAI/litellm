@@ -10,9 +10,9 @@ import litellm
 from litellm import DualCache
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.peyeeye.peyeeye import (
-    PeyeeyeGuardrail,
-    PeyeeyeGuardrailAPIError,
-    PeyeeyeGuardrailMissingSecrets,
+    PEyeEyeGuardrail,
+    PEyeEyeGuardrailAPIError,
+    PEyeEyeGuardrailMissingSecrets,
 )
 from litellm.proxy.guardrails.init_guardrails import init_guardrails_v2
 
@@ -27,14 +27,14 @@ def _ok(json_payload: dict):
 def test_peyeeye_init_requires_api_key():
     for var in ("PEYEEYE_API_KEY", "PEYEEYE_API_BASE"):
         os.environ.pop(var, None)
-    with pytest.raises(PeyeeyeGuardrailMissingSecrets):
-        PeyeeyeGuardrail(guardrail_name="t")
+    with pytest.raises(PEyeEyeGuardrailMissingSecrets):
+        PEyeEyeGuardrail(guardrail_name="t")
 
 
 def test_peyeeye_init_reads_env():
     os.environ["PEYEEYE_API_KEY"] = "pk_test"
     try:
-        g = PeyeeyeGuardrail(guardrail_name="t")
+        g = PEyeEyeGuardrail(guardrail_name="t")
         assert g.peyeeye_api_key == "pk_test"
         assert g.api_base == "https://api.peyeeye.ai"
         assert g.peyeeye_session_mode == "stateful"
@@ -43,7 +43,7 @@ def test_peyeeye_init_reads_env():
 
 
 def test_peyeeye_init_explicit_args():
-    g = PeyeeyeGuardrail(
+    g = PEyeEyeGuardrail(
         peyeeye_api_key="pk_x",
         api_base="https://api.example/",
         peyeeye_locale="en",
@@ -81,7 +81,7 @@ def test_peyeeye_guardrail_config_via_init():
 
 @pytest.mark.asyncio
 async def test_pre_call_redacts_messages_and_caches_session():
-    g = PeyeeyeGuardrail(peyeeye_api_key="pk", guardrail_name="t")
+    g = PEyeEyeGuardrail(peyeeye_api_key="pk", guardrail_name="t")
     g.async_handler = MagicMock()
     g.async_handler.post = AsyncMock(
         return_value=_ok(
@@ -107,7 +107,7 @@ async def test_pre_call_redacts_messages_and_caches_session():
 
 @pytest.mark.asyncio
 async def test_pre_call_stateless_returns_skey():
-    g = PeyeeyeGuardrail(
+    g = PEyeEyeGuardrail(
         peyeeye_api_key="pk",
         peyeeye_session_mode="stateless",
         guardrail_name="t",
@@ -137,7 +137,7 @@ async def test_pre_call_stateless_returns_skey():
 
 @pytest.mark.asyncio
 async def test_pre_call_skips_when_no_messages():
-    g = PeyeeyeGuardrail(peyeeye_api_key="pk", guardrail_name="t")
+    g = PEyeEyeGuardrail(peyeeye_api_key="pk", guardrail_name="t")
     g.async_handler = MagicMock()
     g.async_handler.post = AsyncMock()
 
@@ -157,7 +157,7 @@ async def test_pre_and_post_call_roundtrip_uses_shared_cache():
         global_cache,
     )
 
-    g = PeyeeyeGuardrail(peyeeye_api_key="pk", guardrail_name="t")
+    g = PEyeEyeGuardrail(peyeeye_api_key="pk", guardrail_name="t")
     g.async_handler = MagicMock()
     g.async_handler.post = AsyncMock(
         side_effect=[
@@ -195,7 +195,7 @@ async def test_pre_and_post_call_roundtrip_uses_shared_cache():
 
 @pytest.mark.asyncio
 async def test_post_call_noop_without_session():
-    g = PeyeeyeGuardrail(peyeeye_api_key="pk", guardrail_name="t")
+    g = PEyeEyeGuardrail(peyeeye_api_key="pk", guardrail_name="t")
     g.async_handler = MagicMock()
     g.async_handler.post = AsyncMock()
 
@@ -216,7 +216,7 @@ async def test_post_call_noop_without_session():
 
 @pytest.mark.asyncio
 async def test_redact_api_error_raises_typed():
-    g = PeyeeyeGuardrail(peyeeye_api_key="pk", guardrail_name="t")
+    g = PEyeEyeGuardrail(peyeeye_api_key="pk", guardrail_name="t")
     g.async_handler = MagicMock()
 
     bad = MagicMock()
@@ -224,7 +224,7 @@ async def test_redact_api_error_raises_typed():
     g.async_handler.post = AsyncMock(return_value=bad)
 
     cache = DualCache()
-    with pytest.raises(PeyeeyeGuardrailAPIError):
+    with pytest.raises(PEyeEyeGuardrailAPIError):
         await g.async_pre_call_hook(
             UserAPIKeyAuth(api_key="x"),
             cache,
@@ -233,4 +233,47 @@ async def test_redact_api_error_raises_typed():
                 "litellm_call_id": "c",
             },
             "completion",
+        )
+
+
+@pytest.mark.asyncio
+async def test_pre_call_raises_on_length_mismatch():
+    """If /v1/redact returns fewer texts than sent, refuse to forward."""
+    g = PEyeEyeGuardrail(peyeeye_api_key="pk", guardrail_name="t")
+    g.async_handler = MagicMock()
+    g.async_handler.post = AsyncMock(
+        return_value=_ok({"text": ["[EMAIL_1]"], "session_id": "ses_x"})
+    )
+
+    cache = DualCache()
+    data = {
+        "messages": [
+            {"role": "user", "content": "hi alice@acme.com"},
+            {"role": "user", "content": "hi bob@acme.com"},
+        ],
+        "litellm_call_id": "len-1",
+    }
+    with pytest.raises(PEyeEyeGuardrailAPIError, match="partially-redacted"):
+        await g.async_pre_call_hook(
+            UserAPIKeyAuth(api_key="x"), cache, data, "completion"
+        )
+
+
+@pytest.mark.asyncio
+async def test_pre_call_raises_on_unexpected_response_shape():
+    """If /v1/redact returns neither str nor list for `text`, refuse to forward."""
+    g = PEyeEyeGuardrail(peyeeye_api_key="pk", guardrail_name="t")
+    g.async_handler = MagicMock()
+    g.async_handler.post = AsyncMock(
+        return_value=_ok({"text": 42, "session_id": "ses_x"})
+    )
+
+    cache = DualCache()
+    data = {
+        "messages": [{"role": "user", "content": "hi alice@acme.com"}],
+        "litellm_call_id": "shape-1",
+    }
+    with pytest.raises(PEyeEyeGuardrailAPIError, match="unexpected response shape"):
+        await g.async_pre_call_hook(
+            UserAPIKeyAuth(api_key="x"), cache, data, "completion"
         )

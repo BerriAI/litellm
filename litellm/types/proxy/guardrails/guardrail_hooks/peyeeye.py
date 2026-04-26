@@ -5,7 +5,7 @@ from pydantic import BaseModel, Field
 from .base import GuardrailConfigModel
 
 
-class PeyeeyeGuardrailConfigModelOptionalParams(BaseModel):
+class PEyeEyeGuardrailConfigModelOptionalParams(BaseModel):
     peyeeye_locale: Optional[str] = Field(
         default="auto",
         description="BCP-47 language tag for PII detection. 'auto' lets peyeeye detect.",
@@ -20,8 +20,8 @@ class PeyeeyeGuardrailConfigModelOptionalParams(BaseModel):
     )
 
 
-class PeyeeyeGuardrailConfigModel(
-    GuardrailConfigModel[PeyeeyeGuardrailConfigModelOptionalParams]
+class PEyeEyeGuardrailConfigModel(
+    GuardrailConfigModel[PEyeEyeGuardrailConfigModelOptionalParams]
 ):
     api_key: Optional[str] = Field(
         default=None,
