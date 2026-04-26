@@ -73,7 +73,7 @@
     "eslint-plugin-unused-imports": "4.3.0",
     "jsdom": "27.4.0",
     "knip": "5.83.1",
-    "postcss": "8.5.6",
+    "postcss": "8.5.10",
     "prettier": "3.2.5",
     "tailwindcss": "3.4.19",
     "typescript": "5.9.3",
