@@ -10,6 +10,10 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
+from litellm.proxy._experimental.mcp_server.oauth_utils import (
+    TOKEN_NO_CACHE_HEADERS,
+    validate_loopback_redirect_uri,
+)
 from litellm.proxy.auth.ip_address_utils import IPAddressUtils
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     decrypt_value_helper,
@@ -251,7 +255,9 @@ async def _store_per_user_token_server_side(
 
     raw_expires = token_response.get("expires_in")
     try:
-        expires_in: Optional[int] = int(raw_expires) if raw_expires is not None else None
+        expires_in: Optional[int] = (
+            int(raw_expires) if raw_expires is not None else None
+        )
     except (TypeError, ValueError):
         expires_in = None
 
@@ -320,6 +326,12 @@ async def authorize_with_server(
             status_code=400, detail="MCP server authorization url is not set"
         )
 
+    # Loopback-only redirect_uri. The URI is encrypted into the OAuth
+    # state and decoded on /callback to redirect the user back; a non-
+    # loopback URI would be an open-redirect + code-theft primitive
+    # (VERIA-57 root cause B). MCP clients are native apps — loopback is
+    # the spec-compliant callback pattern.
+    validate_loopback_redirect_uri(redirect_uri)
     parsed = urlparse(redirect_uri)
     base_url = urlunparse(parsed._replace(query=""))
     request_base_url = get_request_base_url(request)
@@ -470,7 +482,8 @@ async def exchange_token_with_server(
     if "scope" in token_response and token_response["scope"]:
         result["scope"] = token_response["scope"]
 
-    return JSONResponse(result)
+    # RFC 6749 §5.1: token responses must not be cached.
+    return JSONResponse(result, headers=TOKEN_NO_CACHE_HEADERS)
 
 
 async def register_client_with_server(
@@ -637,20 +650,26 @@ async def token_endpoint(
 @router.get("/callback")
 async def callback(code: str, state: str):
     try:
-        # Decode the state hash to get base_url, original state, and PKCE params
         state_data = decode_state_hash(state)
         base_url = state_data["base_url"]
         original_state = state_data["original_state"]
 
-        # Forward code and original state back to client
-        params = {"code": code, "state": original_state}
+        # Re-validate loopback at the sink. /authorize rejects non-loopback
+        # redirect_uri before encoding into state, but encrypted states
+        # minted before that check was added have no expiry and remain
+        # valid indefinitely. Validating here blocks the open-redirect +
+        # code-theft primitive even for pre-fix states.
+        validate_loopback_redirect_uri(base_url)
 
-        # Forward to client's callback endpoint
+        params = {"code": code, "state": original_state}
         complete_returned_url = f"{base_url}?{urlencode(params)}"
         return RedirectResponse(url=complete_returned_url, status_code=302)
 
+    except HTTPException:
+        # Re-raise so a non-loopback base_url surfaces as 400 instead of
+        # a generic "authentication incomplete" redirect.
+        raise
     except Exception:
-        # fallback if state hash not found
         return HTMLResponse(
             "<html><body>Authentication incomplete. You can close this window.</body></html>"
         )
@@ -734,9 +753,9 @@ def _build_oauth_protected_resource_response(
             )
         ],
         "resource": resource_url,
-        "scopes_supported": mcp_server.scopes
-        if mcp_server and mcp_server.scopes
-        else [],
+        "scopes_supported": (
+            mcp_server.scopes if mcp_server and mcp_server.scopes else []
+        ),
     }
 
 
@@ -846,16 +865,18 @@ def _build_oauth_authorization_server_response(
         "authorization_endpoint": authorization_endpoint,
         "token_endpoint": token_endpoint,
         "response_types_supported": ["code"],
-        "scopes_supported": mcp_server.scopes
-        if mcp_server and mcp_server.scopes
-        else [],
+        "scopes_supported": (
+            mcp_server.scopes if mcp_server and mcp_server.scopes else []
+        ),
         "grant_types_supported": ["authorization_code", "refresh_token"],
         "code_challenge_methods_supported": ["S256"],
         "token_endpoint_auth_methods_supported": ["client_secret_post"],
         # Claude expects a registration endpoint, even if we just fake it
-        "registration_endpoint": f"{request_base_url}/{mcp_server_name}/register"
-        if mcp_server_name
-        else f"{request_base_url}/register",
+        "registration_endpoint": (
+            f"{request_base_url}/{mcp_server_name}/register"
+            if mcp_server_name
+            else f"{request_base_url}/register"
+        ),
     }
 
 

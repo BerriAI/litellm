@@ -366,7 +366,6 @@ async def test_auth_with_allowed_routes(route, should_raise_error):
         ("/global/spend/logs", "proxy_admin", True),
         ("/global/activity/cache_hits", "proxy_admin", True),
         # Internal User - allowed read-only routes
-        ("/global/spend/logs", "internal_user", True),
         ("/spend/logs/ui", "internal_user", True),
         ("/global/activity/cache_hits", "internal_user", True),
         ("/health/services", "internal_user", True),
@@ -375,9 +374,12 @@ async def test_auth_with_allowed_routes(route, should_raise_error):
         ("/config/pass_through_endpoint", "internal_user", False),
         ("/config/field/update", "internal_user", False),
         ("/organization/member_add", "internal_user", False),
+        # Internal User - BLOCKED from proxy-wide spend routes
+        ("/global/spend/logs", "internal_user", False),
         # Internal User Viewer - allowed spend routes only
         ("/spend/logs/ui", "internal_user_viewer", True),
-        ("/global/spend/all_tag_names", "internal_user_viewer", True),
+        # Internal User Viewer - BLOCKED from proxy-wide spend routes
+        ("/global/spend/all_tag_names", "internal_user_viewer", False),
         # Internal User Viewer - blocked from admin routes
         ("/config/update", "internal_user_viewer", False),
         ("/key/generate", "internal_user_viewer", False),
@@ -1093,12 +1095,15 @@ async def test_jwt_non_admin_team_route_access(monkeypatch):
     # Mock enterprise license check and JWTAuthManager.auth_builder
     # License check must be mocked to avoid environment variable pollution
     # in parallel test execution
-    with patch(
-        "litellm.proxy.proxy_server.premium_user",
-        True,
-    ), patch(
-        "litellm.proxy.auth.handle_jwt.JWTAuthManager.auth_builder",
-        return_value=mock_jwt_response,
+    with (
+        patch(
+            "litellm.proxy.proxy_server.premium_user",
+            True,
+        ),
+        patch(
+            "litellm.proxy.auth.handle_jwt.JWTAuthManager.auth_builder",
+            return_value=mock_jwt_response,
+        ),
     ):
         try:
             await user_api_key_auth(request=request, api_key="Bearer fake.jwt.token")
