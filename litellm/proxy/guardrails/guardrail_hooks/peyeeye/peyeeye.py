@@ -12,6 +12,7 @@ from typing import (
     Dict,
     List,
     Literal,
+    NoReturn,
     Optional,
     Type,
     Union,
@@ -25,13 +26,12 @@ except ImportError:
     httpx = None  # type: ignore
     HTTPX_AVAILABLE = False
 
-from fastapi import HTTPException
-
 import litellm
 from litellm import DualCache
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
+    dc as global_cache,
     log_guardrail_information,
 )
 from litellm.llms.custom_httpx.http_handler import (
@@ -153,7 +153,7 @@ class PeyeeyeGuardrail(CustomGuardrail):
         if session_id:
             cache_key = self._cache_key(data)
             try:
-                cache.set_cache(
+                global_cache.set_cache(
                     cache_key, session_id, ttl=SESSION_CACHE_TTL_SECONDS
                 )
             except Exception as e:
@@ -177,7 +177,7 @@ class PeyeeyeGuardrail(CustomGuardrail):
 
         cache_key = self._cache_key(data)
         try:
-            session_id = litellm.cache.get_cache(cache_key) if litellm.cache else None
+            session_id = global_cache.get_cache(cache_key)
         except Exception:
             session_id = None
         if not session_id:
@@ -214,8 +214,7 @@ class PeyeeyeGuardrail(CustomGuardrail):
                     "peyeeye: best-effort session cleanup failed: %s", e
                 )
         try:
-            if litellm.cache:
-                litellm.cache.delete_cache(cache_key)
+            global_cache.delete_cache(cache_key)
         except Exception:
             pass
 
@@ -249,7 +248,10 @@ class PeyeeyeGuardrail(CustomGuardrail):
         elif isinstance(out_text, list):
             redacted = [str(x) for x in out_text]
         else:
-            redacted = list(texts)  # fallback
+            raise PeyeeyeGuardrailAPIError(
+                "peyeeye /v1/redact returned unexpected response shape; "
+                "refusing to forward unredacted text"
+            )
 
         if self.peyeeye_session_mode == "stateless":
             session_id = payload.get("rehydration_key")
@@ -291,9 +293,7 @@ class PeyeeyeGuardrail(CustomGuardrail):
         }
 
     @staticmethod
-    def _reraise_api_error(error: Exception, path: str) -> None:
-        if isinstance(error, HTTPException):
-            raise error
+    def _reraise_api_error(error: Exception, path: str) -> NoReturn:
         if HTTPX_AVAILABLE and httpx is not None:
             if isinstance(error, httpx.TimeoutException):
                 raise PeyeeyeGuardrailAPIError(f"peyeeye {path} timed out") from error
