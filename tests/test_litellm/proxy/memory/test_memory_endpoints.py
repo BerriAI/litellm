@@ -374,6 +374,38 @@ class TestMemoryEndpoints:
         assert _json.loads(sent_metadata) == [{"a": 1}]
         assert resp.json()["metadata"] == [{"a": 1}]
 
+    def test_create_memory_with_string_metadata_jsonifies_for_prisma(self):
+        """
+        `metadata: Optional[Any]` permits JSON scalars too (string, number,
+        bool). A bare Python string like `"hello"` is NOT valid JSON for
+        Postgres `jsonb` — it must be JSON-encoded as `"\"hello\""`.
+        Without that encoding Prisma still raises `DataError`.
+        """
+        import json as _json
+
+        table = self.prisma.db.litellm_memorytable
+        original_create = table.create
+        captured: Dict[str, Any] = {}
+
+        async def spy_create(data: Dict[str, Any]):
+            captured["data"] = dict(data)
+            return await original_create(data)
+
+        table.create = spy_create  # type: ignore[assignment]
+
+        client = _make_client(_user_auth("user-a", "team-a"))
+        with _patch_prisma(self.prisma):
+            resp = client.post(
+                "/v1/memory",
+                json={"key": "k", "value": "v", "metadata": "hello"},
+            )
+        assert resp.status_code == 200, resp.text
+        sent_metadata = captured["data"]["metadata"]
+        assert isinstance(sent_metadata, str)
+        # Encoded as JSON string literal — `_json.loads` round-trips back.
+        assert _json.loads(sent_metadata) == "hello"
+        assert resp.json()["metadata"] == "hello"
+
     def test_create_memory_duplicate_key_returns_409(self):
         client = _make_client(_user_auth("user-a", "team-a"))
         with _patch_prisma(self.prisma):

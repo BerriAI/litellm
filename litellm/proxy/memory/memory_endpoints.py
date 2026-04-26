@@ -44,14 +44,14 @@ def _serialize_metadata_for_prisma(metadata: Any) -> str:
     """
     Encode a `metadata` payload for the `Json?` column.
 
-    `metadata` is typed `Optional[Any]` — callers may send dicts, lists, or
-    JSON scalars. prisma-client-python rejects raw Python values on `Json?`
-    columns (`MissingRequiredValueError` / `DataError`), so we always
-    `json.dumps` here. Strings are passed through unchanged so callers that
-    already pre-serialize aren't double-encoded.
+    `metadata` is typed `Optional[Any]`, so callers may send dicts, lists,
+    or JSON scalars (including plain Python strings like `"hello"`).
+    prisma-client-python rejects raw Python values on `Json?` columns
+    (`MissingRequiredValueError` / `DataError`), and Postgres `jsonb`
+    rejects bare-word strings as invalid JSON — so always `json.dumps`,
+    regardless of input type. Roundtrip on read deserializes back to the
+    original Python value.
     """
-    if isinstance(metadata, str):
-        return metadata
     return json.dumps(metadata)
 
 
