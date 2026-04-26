@@ -2094,7 +2094,7 @@ def test_vertexai_multimodalembedding_embedding_latest():
         response = embedding(
             model="vertex_ai/multimodalembedding@001",
             input=["hi"],
-            dimensions=1,
+            dimensions=128,
             auto_truncate=True,
             task_type="RETRIEVAL_QUERY",
         )
@@ -3937,8 +3937,13 @@ def test_vertex_ai_gemini_audio_ogg():
     client = HTTPHandler()
     httpx_mock = MagicMock(return_value=mock_response)
 
-    with patch.object(client, "post", new=httpx_mock), patch.object(
-        VertexBase, "_ensure_access_token", return_value=("fake-token", "fake-project")
+    with (
+        patch.object(client, "post", new=httpx_mock),
+        patch.object(
+            VertexBase,
+            "_ensure_access_token",
+            return_value=("fake-token", "fake-project"),
+        ),
     ):
         response = completion(
             model="vertex_ai/gemini-2.0-flash",

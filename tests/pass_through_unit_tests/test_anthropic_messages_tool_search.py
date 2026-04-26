@@ -27,12 +27,12 @@ from base_anthropic_messages_tool_search_test import (
 class TestAnthropicAPIToolSearch(BaseAnthropicMessagesToolSearchTest):
     """
     E2E tests for tool search with Anthropic API directly.
-    
+
     Uses the anthropic/ prefix which routes through the native
     Anthropic Messages API.
-    
+
     Beta header: advanced-tool-use-2025-11-20
-    
+
     Note: Tool search is only supported on Claude Opus 4.5 and Claude Sonnet 4.5.
     """
 
@@ -43,9 +43,9 @@ class TestAnthropicAPIToolSearch(BaseAnthropicMessagesToolSearchTest):
 # class TestAzureAnthropicToolSearch(BaseAnthropicMessagesToolSearchTest):
 #     """
 #     E2E tests for tool search with Azure Anthropic (Microsoft Foundry).
-    
+
 #     Uses the azure/ prefix which routes through Azure's Anthropic endpoint.
-    
+
 #     Beta header: advanced-tool-use-2025-11-20
 #     """
 
@@ -56,10 +56,10 @@ class TestAnthropicAPIToolSearch(BaseAnthropicMessagesToolSearchTest):
 # class TestVertexAIToolSearch(BaseAnthropicMessagesToolSearchTest):
 #     """
 #     E2E tests for tool search with Vertex AI.
-    
+
 #     Uses the vertex_ai/ prefix which routes through Google Cloud's
 #     Vertex AI Anthropic partner models.
-    
+
 #     Beta header: tool-search-tool-2025-10-19
 #     """
 
@@ -70,12 +70,12 @@ class TestAnthropicAPIToolSearch(BaseAnthropicMessagesToolSearchTest):
 # class TestBedrockInvokeToolSearch(BaseAnthropicMessagesToolSearchTest):
 #     """
 #     E2E tests for tool search with Bedrock Invoke API.
-    
+
 #     Uses the bedrock/invoke/ prefix which routes through the native
 #     Anthropic Messages API format on Bedrock.
-    
+
 #     Beta header: advanced-tool-use-2025-11-20 (passed via extra_headers)
-    
+
 #     Note: Tool search on Bedrock is only supported on Claude Opus 4.5.
 #     """
 

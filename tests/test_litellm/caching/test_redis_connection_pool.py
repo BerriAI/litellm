@@ -101,6 +101,7 @@ def _make_redis_cache():
         p.start()
 
     from litellm.caching.redis_cache import RedisCache
+
     cache = RedisCache(host="localhost", port=6379)
 
     for p in patches:
@@ -127,5 +128,3 @@ async def test_disconnect_idempotent():
 
     await cache.disconnect()
     await cache.disconnect()  # should not raise
-
-

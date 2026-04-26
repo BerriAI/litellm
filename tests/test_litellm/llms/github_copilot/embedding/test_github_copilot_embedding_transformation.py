@@ -7,8 +7,11 @@ import pytest
 sys.path.insert(0, os.path.abspath("../../../.."))
 
 from litellm.exceptions import AuthenticationError
-from litellm.llms.github_copilot.embedding.transformation import GithubCopilotEmbeddingConfig
+from litellm.llms.github_copilot.embedding.transformation import (
+    GithubCopilotEmbeddingConfig,
+)
 from litellm.llms.github_copilot.common_utils import GetAPIKeyError
+
 
 def test_github_copilot_embedding_config_validate_environment():
     """Test the GitHub Copilot embedding configuration environment validation."""
@@ -22,7 +25,7 @@ def test_github_copilot_embedding_config_validate_environment():
     # Test with valid API key
     headers = {}
     model = "github_copilot/text-embedding-3-small"
-    
+
     validated_headers = config.validate_environment(
         headers=headers,
         model=model,
@@ -55,11 +58,12 @@ def test_github_copilot_embedding_config_validate_environment():
 
     assert "Failed to get API key" in str(excinfo.value)
 
+
 def test_github_copilot_embedding_config_get_complete_url():
     """Test the GitHub Copilot embedding configuration URL generation."""
     config = GithubCopilotEmbeddingConfig()
     config.authenticator = MagicMock()
-    
+
     # Test with default API base
     config.authenticator.get_api_base.return_value = None
     url = config.get_complete_url(
@@ -72,7 +76,9 @@ def test_github_copilot_embedding_config_get_complete_url():
     assert url == "https://api.githubcopilot.com/embeddings"
 
     # Test with custom API base from authenticator
-    config.authenticator.get_api_base.return_value = "https://api.enterprise.githubcopilot.com"
+    config.authenticator.get_api_base.return_value = (
+        "https://api.enterprise.githubcopilot.com"
+    )
     url = config.get_complete_url(
         api_base=None,
         api_key=None,
@@ -93,10 +99,11 @@ def test_github_copilot_embedding_config_get_complete_url():
     )
     assert url == "https://custom.api.com/embeddings"
 
+
 def test_github_copilot_embedding_config_transform_request():
     """Test the GitHub Copilot embedding request transformation."""
     config = GithubCopilotEmbeddingConfig()
-    
+
     model = "github_copilot/text-embedding-3-small"
     input_data = ["hello world"]
     optional_params = {"user": "test-user"}
@@ -123,11 +130,12 @@ def test_github_copilot_embedding_config_transform_request():
     )
     assert transformed_request_str["input"] == [input_str]
 
+
 def test_github_copilot_embedding_config_transform_request_param_filtering():
     """Test the GitHub Copilot embedding request parameter filtering."""
     config = GithubCopilotEmbeddingConfig()
-    
-    # Test text-embedding-ada-002 
+
+    # Test text-embedding-ada-002
     model = "github_copilot/text-embedding-ada-002"
     input_data = ["hello"]
     optional_params = {"dimensions": 1536, "user": "test-user"}
@@ -159,27 +167,19 @@ def test_github_copilot_embedding_config_transform_request_param_filtering():
     assert transformed_request["dimensions"] == 512
     assert transformed_request["user"] == "test-user"
 
+
 def test_github_copilot_embedding_config_transform_response():
     """Test the GitHub Copilot embedding response transformation."""
     config = GithubCopilotEmbeddingConfig()
     from litellm.types.utils import EmbeddingResponse
-    
+
     # Mock response
     mock_response = MagicMock()
     mock_response.json.return_value = {
         "object": "list",
-        "data": [
-            {
-                "object": "embedding",
-                "embedding": [0.1, 0.2, 0.3],
-                "index": 0
-            }
-        ],
+        "data": [{"object": "embedding", "embedding": [0.1, 0.2, 0.3], "index": 0}],
         "model": "text-embedding-3-small",
-        "usage": {
-            "prompt_tokens": 5,
-            "total_tokens": 5
-        }
+        "usage": {"prompt_tokens": 5, "total_tokens": 5},
     }
     mock_response.text = "mock response text"
 
@@ -199,7 +199,7 @@ def test_github_copilot_embedding_config_transform_response():
 
     # Verify logging
     logging_obj.post_call.assert_called_once()
-    
+
     assert response is not None
     assert len(response.data) == 1
     assert response.data[0]["embedding"] == [0.1, 0.2, 0.3]
