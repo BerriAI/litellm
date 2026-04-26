@@ -225,60 +225,135 @@ async def test_no_flag_fires_create_task_normally():
 
 
 # ---------------------------------------------------------------------------
-# 4. Non-streaming: deferred logging fires even if guardrail raises
+# 4. Non-streaming: deferred success log is suppressed when guardrail raises
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
-async def test_deferred_logging_fires_on_guardrail_exception():
+def test_flush_deferred_async_logging_fires_on_success():
     """
-    If post_call_success_hook raises (e.g., guardrail blocks content),
-    the deferred logging closure must still fire (via try/finally).
+    Happy path: with no exception, the production flush helper invokes the
+    deferred async-success closure and clears the slot.
     """
-    from fastapi import HTTPException  # noqa: local import for test isolation
-
     enqueue_called = False
 
     def mock_enqueue():
         nonlocal enqueue_called
         enqueue_called = True
 
-    class BlockingGuardrail(CustomGuardrail):
-        def __init__(self):
-            super().__init__(
-                guardrail_name="blocker",
-                default_on=True,
-                event_hook=GuardrailEventHooks.post_call,
-            )
+    logging_obj = MagicMock()
+    logging_obj._enqueue_deferred_logging = mock_enqueue
 
-        async def async_post_call_success_hook(
-            self, data: dict, user_api_key_dict: UserAPIKeyAuth, response: Any
-        ) -> Any:
-            raise HTTPException(status_code=400, detail="Content blocked")
+    ProxyBaseLLMRequestProcessing._flush_deferred_async_logging(
+        logging_obj=logging_obj,
+        exception_raised=False,
+    )
 
-    guardrail = BlockingGuardrail()
+    assert enqueue_called is True
+    assert logging_obj._enqueue_deferred_logging is None
+
+
+def test_flush_deferred_async_logging_suppressed_on_exception():
+    """
+    Regression: when post_call_success_hook raises (e.g. a post-call guardrail
+    blocks the response), the production flush helper MUST NOT fire the
+    deferred async-success closure. The proxy's error path invokes
+    post_call_failure_hook which writes its own failure spend log via
+    async_failure_handler; firing both produced a duplicate (Success +
+    Failure) entry per request, with the Success row exposing the blocked
+    LLM response.
+
+    This test exercises the real helper in
+    `ProxyBaseLLMRequestProcessing._flush_deferred_async_logging` so a
+    regression that re-fires the closure on exception (or removes the
+    `exception_raised` gate) is caught.
+    """
+    enqueue_called = False
+
+    def mock_enqueue():
+        nonlocal enqueue_called
+        enqueue_called = True
 
     logging_obj = MagicMock()
     logging_obj._enqueue_deferred_logging = mock_enqueue
 
-    with patch("litellm.callbacks", [guardrail]):
-        proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
+    ProxyBaseLLMRequestProcessing._flush_deferred_async_logging(
+        logging_obj=logging_obj,
+        exception_raised=True,
+    )
 
-        with pytest.raises(HTTPException):
-            try:
-                await proxy_logging.post_call_success_hook(
-                    data={"model": "gpt-4", "metadata": {}},
-                    response=MagicMock(),
-                    user_api_key_dict=UserAPIKeyAuth(api_key="test"),
-                )
-            finally:
-                # Mirrors the proxy's finally block
-                _enqueue_fn = getattr(logging_obj, "_enqueue_deferred_logging", None)
-                if _enqueue_fn is not None:
-                    logging_obj._enqueue_deferred_logging = None
-                    _enqueue_fn()
+    assert enqueue_called is False, (
+        "Deferred success log must not fire when the post-call hook raised — "
+        "post_call_failure_hook writes its own failure log."
+    )
+    # Slot is still cleared so a follow-up flush does not double-fire.
+    assert logging_obj._enqueue_deferred_logging is None
 
-    assert enqueue_called is True
+
+def test_flush_deferred_async_logging_noop_when_no_closure_stored():
+    """
+    Streaming early-returns and non-deferred paths never store a closure;
+    flushing must be a no-op (no AttributeError, no firing).
+    """
+
+    class _Bare:
+        pass
+
+    logging_obj = _Bare()  # no _enqueue_deferred_logging attribute
+
+    ProxyBaseLLMRequestProcessing._flush_deferred_async_logging(
+        logging_obj=logging_obj,
+        exception_raised=False,
+    )
+    ProxyBaseLLMRequestProcessing._flush_deferred_async_logging(
+        logging_obj=logging_obj,
+        exception_raised=True,
+    )
+
+    # Helper must not create the attribute as a side effect.
+    assert not hasattr(logging_obj, "_enqueue_deferred_logging")
+
+
+def test_proxy_finally_block_routes_through_flush_helper():
+    """
+    Source-level contract: the proxy's `base_process_llm_request` finally
+    block must delegate to `_flush_deferred_async_logging` rather than
+    inlining the gating logic. Inlining is what allowed the duplicate
+    Success+Failure spend log to slip in originally — this guards the
+    refactor.
+    """
+    import inspect
+
+    src = inspect.getsource(ProxyBaseLLMRequestProcessing.base_process_llm_request)
+    assert "_flush_deferred_async_logging" in src, (
+        "base_process_llm_request must call _flush_deferred_async_logging "
+        "from its finally block — do not inline the gating logic."
+    )
+    # Belt-and-braces: the inlined `_enqueue_deferred_logging = None` reset
+    # was the symptom of the duplicate-log bug; assert it stays inside the
+    # helper, not in the request-processing function.
+    assert "_enqueue_deferred_logging = None" not in src, (
+        "Reset of _enqueue_deferred_logging must live inside "
+        "_flush_deferred_async_logging, not in base_process_llm_request."
+    )
+
+
+def test_flush_deferred_async_logging_swallows_closure_errors():
+    """
+    The flush helper must not propagate exceptions from the deferred closure —
+    a logging failure must not break the request lifecycle for the caller.
+    """
+
+    def boom():
+        raise RuntimeError("logger failure")
+
+    logging_obj = MagicMock()
+    logging_obj._enqueue_deferred_logging = boom
+
+    # Should not raise.
+    ProxyBaseLLMRequestProcessing._flush_deferred_async_logging(
+        logging_obj=logging_obj,
+        exception_raised=False,
+    )
     assert logging_obj._enqueue_deferred_logging is None
 
 

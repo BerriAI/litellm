@@ -366,7 +366,6 @@ async def test_auth_with_allowed_routes(route, should_raise_error):
         ("/global/spend/logs", "proxy_admin", True),
         ("/global/activity/cache_hits", "proxy_admin", True),
         # Internal User - allowed read-only routes
-        ("/global/spend/logs", "internal_user", True),
         ("/spend/logs/ui", "internal_user", True),
         ("/global/activity/cache_hits", "internal_user", True),
         ("/health/services", "internal_user", True),
@@ -375,9 +374,12 @@ async def test_auth_with_allowed_routes(route, should_raise_error):
         ("/config/pass_through_endpoint", "internal_user", False),
         ("/config/field/update", "internal_user", False),
         ("/organization/member_add", "internal_user", False),
+        # Internal User - BLOCKED from proxy-wide spend routes
+        ("/global/spend/logs", "internal_user", False),
         # Internal User Viewer - allowed spend routes only
         ("/spend/logs/ui", "internal_user_viewer", True),
-        ("/global/spend/all_tag_names", "internal_user_viewer", True),
+        # Internal User Viewer - BLOCKED from proxy-wide spend routes
+        ("/global/spend/all_tag_names", "internal_user_viewer", False),
         # Internal User Viewer - blocked from admin routes
         ("/config/update", "internal_user_viewer", False),
         ("/key/generate", "internal_user_viewer", False),
