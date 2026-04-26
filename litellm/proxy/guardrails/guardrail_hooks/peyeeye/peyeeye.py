@@ -211,8 +211,9 @@ class PEyeEyeGuardrail(CustomGuardrail):
                             new_parts.append(part)
                     message.content = new_parts
 
-        # Clean up: drop the session server-side and from cache.
-        if self.peyeeye_session_mode == "stateful" and session_id.startswith("ses_"):
+        # Clean up: drop the stateful session server-side. Stateless
+        # ``skey_…`` blobs hold no server-side state, so skip the DELETE.
+        if self.peyeeye_session_mode == "stateful":
             try:
                 await self._delete_session(session_id)
             except Exception as e:
@@ -288,9 +289,9 @@ class PEyeEyeGuardrail(CustomGuardrail):
                 url=url, headers=self._headers(), json=body, timeout=15.0
             )
             response.raise_for_status()
+            return response.json()
         except Exception as e:
             self._reraise_api_error(e, path)
-        return response.json()
 
     def _headers(self) -> Dict[str, str]:
         return {

@@ -237,6 +237,30 @@ async def test_redact_api_error_raises_typed():
 
 
 @pytest.mark.asyncio
+async def test_redact_json_decode_error_raises_typed():
+    """If response.json() blows up, surface a typed PEyeEyeGuardrailAPIError."""
+    g = PEyeEyeGuardrail(peyeeye_api_key="pk", guardrail_name="t")
+    g.async_handler = MagicMock()
+
+    bad = MagicMock()
+    bad.raise_for_status = MagicMock()
+    bad.json.side_effect = ValueError("not json")
+    g.async_handler.post = AsyncMock(return_value=bad)
+
+    cache = DualCache()
+    with pytest.raises(PEyeEyeGuardrailAPIError):
+        await g.async_pre_call_hook(
+            UserAPIKeyAuth(api_key="x"),
+            cache,
+            {
+                "messages": [{"role": "user", "content": "hi"}],
+                "litellm_call_id": "json-err",
+            },
+            "completion",
+        )
+
+
+@pytest.mark.asyncio
 async def test_pre_call_raises_on_length_mismatch():
     """If /v1/redact returns fewer texts than sent, refuse to forward."""
     g = PEyeEyeGuardrail(peyeeye_api_key="pk", guardrail_name="t")
