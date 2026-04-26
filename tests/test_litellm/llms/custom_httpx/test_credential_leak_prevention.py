@@ -135,6 +135,24 @@ class TestMaskedHTTPStatusError:
         # Content-Encoding must have been stripped from the rebuilt headers.
         assert "content-encoding" not in {k.lower() for k in masked.response.headers}
 
+    def test_preserves_non_ascii_response_headers(self):
+        header_value = "本地化错误消息"
+        request = httpx.Request("GET", "https://api.example.com?key=SECRET")
+        response = httpx.Response(
+            status_code=400,
+            content=b"bad request",
+            headers=[
+                (b"x-localized-message", header_value.encode("utf-8")),
+            ],
+            request=request,
+        )
+        orig = httpx.HTTPStatusError("400", request=request, response=response)
+
+        masked = MaskedHTTPStatusError(orig)
+
+        assert masked.response.headers.get("x-localized-message") == header_value
+        assert "SECRET" not in str(masked.response.request.url)
+
 
 class TestSafeResponseHelpers:
     def test_safe_get_response_text_normal(self):

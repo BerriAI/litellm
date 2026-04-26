@@ -40,6 +40,7 @@ async def test_aiohttp_transport_response_uses_stream_not_content():
             class Resp:
                 status = 200
                 headers = {}
+                raw_headers = ()
 
                 async def __aenter__(self):
                     return self
@@ -73,6 +74,7 @@ async def test_aiohttp_response_stream_aclose_releases_connection():
     class MockResponse:
         status = 200
         headers = {}
+        raw_headers = ()
 
         @property
         def content(self):
