@@ -424,6 +424,8 @@ class FireworksAIConfig(OpenAIGPTConfig):
         )
         if base_url.endswith("/inference/v1"):
             base_url = base_url[: -len("/inference/v1")]
+        elif base_url.endswith("/v1"):
+            base_url = base_url[: -len("/v1")]
         base_url = base_url.rstrip("/")
         headers = {"Authorization": f"Bearer {api_key}"}
         seen: set = set()

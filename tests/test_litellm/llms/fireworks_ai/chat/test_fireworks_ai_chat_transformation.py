@@ -370,9 +370,13 @@ def test_get_models_account_id_equals_fireworks_no_duplicate_query():
             "https://my-proxy.example.com/custom/",
             "https://my-proxy.example.com/custom/v1/accounts/fireworks/models",
         ),
+        (
+            "https://my-proxy.example.com/v1",
+            "https://my-proxy.example.com/v1/accounts/fireworks/models",
+        ),
         (None, "https://api.fireworks.ai/v1/accounts/fireworks/models"),
     ],
-    ids=["plain-base", "inference-v1-stripped", "trailing-slash", "default"],
+    ids=["plain-base", "inference-v1-stripped", "trailing-slash", "bare-v1-stripped", "default"],
 )
 def test_get_models_respects_api_base(api_base, expected_base):
     """get_models should use api_base (or FIREWORKS_API_BASE) instead of hardcoding."""
