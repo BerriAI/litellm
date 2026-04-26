@@ -1653,9 +1653,7 @@ def test_max_effort_rejected_for_opus_45():
 
     messages = [{"role": "user", "content": "Test"}]
 
-    with pytest.raises(
-        ValueError, match="effort='max' is not supported by this model"
-    ):
+    with pytest.raises(ValueError, match="effort='max' is not supported by this model"):
         optional_params = {"output_config": {"effort": "max"}}
         config.transform_request(
             model="claude-opus-4-5-20251101",
@@ -2217,9 +2215,7 @@ def test_max_effort_rejected_for_sonnet_46():
     config = AnthropicConfig()
     messages = [{"role": "user", "content": "Test"}]
 
-    with pytest.raises(
-        ValueError, match="effort='max' is not supported by this model"
-    ):
+    with pytest.raises(ValueError, match="effort='max' is not supported by this model"):
         config.transform_request(
             model="claude-sonnet-4-6-20260219",
             messages=messages,

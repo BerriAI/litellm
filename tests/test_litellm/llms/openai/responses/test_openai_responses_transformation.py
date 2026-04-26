@@ -547,7 +547,12 @@ class TestOpenAIResponsesAPIConfig:
         """Base helper strips ``namespace`` from custom_tool_call for every provider path."""
         inp = [
             {"type": "function_call", "call_id": "a", "name": "f", "namespace": "keep"},
-            {"type": "custom_tool_call", "call_id": "b", "name": "c", "namespace": "drop"},
+            {
+                "type": "custom_tool_call",
+                "call_id": "b",
+                "name": "c",
+                "namespace": "drop",
+            },
         ]
         out = BaseResponsesAPIConfig.strip_custom_tool_call_namespace_from_responses_input(
             inp

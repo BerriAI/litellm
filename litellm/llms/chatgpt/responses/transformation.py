@@ -203,10 +203,6 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
                     ],
                 }
             ]
-            if "created_at" in completed_response_payload:
-                completed_response_payload["created_at"] = _safe_convert_created_field(
-                    completed_response_payload["created_at"]
-                )
             try:
                 completed_response = ResponsesAPIResponse(**completed_response_payload)
             except Exception:

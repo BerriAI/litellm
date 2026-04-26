@@ -801,7 +801,9 @@ async def test_list_projects_returns_timestamps():
     from datetime import datetime, timezone
     from unittest.mock import AsyncMock, MagicMock, patch
 
-    from litellm_enterprise.proxy.management_endpoints.project_endpoints import list_projects
+    from litellm_enterprise.proxy.management_endpoints.project_endpoints import (
+        list_projects,
+    )
     from litellm.proxy._types import LiteLLM_ProjectTable
 
     now = datetime(2024, 1, 15, 12, 0, 0, tzinfo=timezone.utc)

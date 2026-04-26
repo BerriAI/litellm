@@ -99,7 +99,9 @@ def test_fingerprint_agentic_tools_is_deterministic():
     tools_a = {"tool_calls": [{"id": "1", "input": {"q": "abc"}, "name": "web_search"}]}
     tools_b = {"tool_calls": [{"name": "web_search", "input": {"q": "abc"}, "id": "1"}]}
 
-    assert handler._fingerprint_agentic_tools(tools_a) == handler._fingerprint_agentic_tools(tools_b)
+    assert handler._fingerprint_agentic_tools(
+        tools_a
+    ) == handler._fingerprint_agentic_tools(tools_b)
 
 
 @pytest.mark.asyncio
