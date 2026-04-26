@@ -387,10 +387,10 @@ class Service:
                 },
             }
 
-        total_cost = float(df["spend"].sum()) if "spend" in df.columns else 0.0
+        total_cost = float(df["spend"].sum() or 0.0) if "spend" in df.columns else 0.0
         total_tokens = (
             int((df["prompt_tokens"].sum() or 0) + (df["completion_tokens"].sum() or 0))
-            if "prompt_tokens" in df.columns
+            if "prompt_tokens" in df.columns and "completion_tokens" in df.columns
             else 0
         )
         unique_models = df["model"].n_unique() if "model" in df.columns else 0
