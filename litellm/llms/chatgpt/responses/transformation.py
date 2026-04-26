@@ -133,7 +133,9 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
         )
 
         completed_response = None
+        completed_response_payload = None
         error_message = None
+        output_text_parts = []
         for chunk in body_text.splitlines():
             stripped_chunk = CustomStreamWrapper._strip_sse_data_from_chunk(chunk)
             if not stripped_chunk:
@@ -150,10 +152,16 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
             if not isinstance(parsed_chunk, dict):
                 continue
             event_type = parsed_chunk.get("type")
+            if event_type == ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA:
+                content_part = parsed_chunk.get("delta", None)
+                if isinstance(content_part, str) and content_part:
+                    output_text_parts.append(content_part)
+                continue
             if event_type == ResponsesAPIStreamEvents.RESPONSE_COMPLETED:
                 response_payload = parsed_chunk.get("response")
                 if isinstance(response_payload, dict):
                     response_payload = dict(response_payload)
+                    completed_response_payload = response_payload
                     if "created_at" in response_payload:
                         response_payload["created_at"] = _safe_convert_created_field(
                             response_payload["created_at"]
@@ -177,6 +185,34 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
                         error_message = error_obj.get("message") or str(error_obj)
                     else:
                         error_message = str(error_obj)
+
+        if (
+            completed_response_payload is not None
+            and not completed_response_payload.get("output")
+            and len(output_text_parts) > 0
+        ):
+            completed_response_payload["output"] = [
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "output_text",
+                            "text": "".join(output_text_parts),
+                        }
+                    ],
+                }
+            ]
+            if "created_at" in completed_response_payload:
+                completed_response_payload["created_at"] = _safe_convert_created_field(
+                    completed_response_payload["created_at"]
+                )
+            try:
+                completed_response = ResponsesAPIResponse(**completed_response_payload)
+            except Exception:
+                completed_response = ResponsesAPIResponse.model_construct(
+                    **completed_response_payload
+                )
 
         if completed_response is None:
             raise OpenAIError(
