@@ -259,23 +259,31 @@ class Service:
     # ------------------------------------------------------------------
 
     async def delete(self) -> dict:
-        """Remove all Mavvrik settings and deregister the scheduler job.
+        """Deregister the scheduler job and remove DB settings if present.
+
+        Works for both env-var-only and DB-backed deployments:
+        - Scheduler job is always deregistered (independent of DB).
+        - DB row is only deleted when credentials come from the DB; env-var
+          deployments have no row so this step is skipped.
 
         Raises:
-            LookupError: when no settings exist in the database.
+            LookupError: only when DB is connected and no settings row exists.
         """
         from litellm.constants import MAVVRIK_EXPORT_USAGE_DATA_JOB_NAME
 
         import litellm.proxy.proxy_server as _pserver
 
-        await self._settings.delete()
-
+        # Deregister scheduler first — independent of whether creds are in DB or env vars.
         _scheduler = getattr(_pserver, "scheduler", None)
         if _scheduler is not None:
             try:
                 _scheduler.remove_job(MAVVRIK_EXPORT_USAGE_DATA_JOB_NAME)
             except Exception:
                 pass  # job may not exist if scheduler was restarted
+
+        # Only delete the DB row for DB-backed deployments; env-var-only has no row.
+        if not self._settings.has_env_vars:
+            await self._settings.delete()  # raises LookupError if no row found
 
         verbose_proxy_logger.info("mavvrik settings deleted")
         return {"message": "Mavvrik settings deleted successfully", "status": "success"}

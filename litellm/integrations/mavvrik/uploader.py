@@ -19,6 +19,7 @@ GCS resumable upload protocol reference:
   https://cloud.google.com/storage/docs/resumable-uploads
 """
 
+import contextlib
 import gzip
 import io
 from typing import TYPE_CHECKING, Any, AsyncIterator
@@ -184,35 +185,43 @@ class Uploader:
         session_uri: str = ""
         has_data = False
 
-        async for csv_chunk in pages:
-            if not csv_chunk:
-                continue
+        try:
+            async for csv_chunk in pages:
+                if not csv_chunk:
+                    continue
+
+                if not has_data:
+                    signed_url = await self._client.get_signed_url(date_str)
+                    session_uri = await self._initiate_resumable_upload(signed_url)
+                    has_data = True
+
+                gz.write(csv_chunk.encode("utf-8"))
+                gz.flush()
+                gz_buffer.extend(raw_buf.getvalue())
+                raw_buf.seek(0)
+                raw_buf.truncate(0)
+
+                while len(gz_buffer) >= _GCS_CHUNK_SIZE:
+                    chunk = bytes(gz_buffer[:_GCS_CHUNK_SIZE])
+                    gz_buffer = gz_buffer[_GCS_CHUNK_SIZE:]
+                    await self._put_chunk(session_uri, chunk, offset=offset, final=False)
+                    offset += len(chunk)
 
             if not has_data:
-                signed_url = await self._client.get_signed_url(date_str)
-                session_uri = await self._initiate_resumable_upload(signed_url)
-                has_data = True
+                verbose_proxy_logger.debug("uploader: no data to stream, skipping upload")
+                return 0
 
-            gz.write(csv_chunk.encode("utf-8"))
-            gz.flush()
+            gz.close()
             gz_buffer.extend(raw_buf.getvalue())
-            raw_buf.seek(0)
-            raw_buf.truncate(0)
+            total = offset + len(gz_buffer)
+            await self._put_chunk(session_uri, bytes(gz_buffer), offset=offset, final=True)
 
-            while len(gz_buffer) >= _GCS_CHUNK_SIZE:
-                chunk = bytes(gz_buffer[:_GCS_CHUNK_SIZE])
-                gz_buffer = gz_buffer[_GCS_CHUNK_SIZE:]
-                await self._put_chunk(session_uri, chunk, offset=offset, final=False)
-                offset += len(chunk)
-
-        if not has_data:
-            verbose_proxy_logger.debug("uploader: no data to stream, skipping upload")
-            return 0
-
-        gz.close()
-        gz_buffer.extend(raw_buf.getvalue())
-        total = offset + len(gz_buffer)
-        await self._put_chunk(session_uri, bytes(gz_buffer), offset=offset, final=True)
+        except Exception:
+            # Cancel the open GCS session so it doesn't linger for up to 1 week.
+            if session_uri:
+                with contextlib.suppress(Exception):
+                    await http_request("DELETE", session_uri, timeout=10.0, label="cancel")
+            raise
 
         verbose_proxy_logger.info(
             "uploader: stream upload complete — %d bytes for date %s", total, date_str
