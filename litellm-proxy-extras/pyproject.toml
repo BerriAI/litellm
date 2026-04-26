@@ -1,9 +1,10 @@
 [project]
 name = "litellm-proxy-extras"
-version = "0.4.68"
+version = "0.4.69"
 description = "Additional files for the LiteLLM Proxy. Reduces the size of the main litellm package."
 readme = "README.md"
 requires-python = ">=3.9"
+license = "MIT"
 license-files = ["LICENSE"]
 authors = [
     { name = "BerriAI" },
@@ -19,13 +20,13 @@ requires = ["uv_build==0.10.7"]
 build-backend = "uv_build"
 
 [tool.uv]
-required-version = "==0.10.9"
+required-version = ">=0.10.9"
 
 [tool.uv.build-backend]
 module-root = ""
 
 [tool.commitizen]
-version = "0.4.68"
+version = "0.4.69"
 version_files = [
     "pyproject.toml:^version",
     "../pyproject.toml:litellm-proxy-extras==",
