@@ -212,8 +212,11 @@ class XecGuardGuardrail(CustomGuardrail):
             isinstance(kwargs, dict)
             and "litellm_params" in kwargs
             and "metadata" in kwargs["litellm_params"]
-            and "standard_logging_guardrail_information"in kwargs["litellm_params"]["metadata"]
-            and kwargs["litellm_params"]["metadata"]["standard_logging_guardrail_information"]
+            and "standard_logging_guardrail_information"
+            in kwargs["litellm_params"]["metadata"]
+            and kwargs["litellm_params"]["metadata"][
+                "standard_logging_guardrail_information"
+            ]
         ):
             return kwargs, result
 
