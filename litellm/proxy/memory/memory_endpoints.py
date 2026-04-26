@@ -17,6 +17,7 @@ Scoping:
   the caller is a PROXY_ADMIN who explicitly supplies a different scope.
 """
 
+import json
 from typing import Any, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -37,6 +38,21 @@ from litellm.types.memory_management import (
 )
 
 router = APIRouter()
+
+
+def _serialize_metadata_for_prisma(metadata: Any) -> str:
+    """
+    Encode a `metadata` payload for the `Json?` column.
+
+    `metadata` is typed `Optional[Any]`, so callers may send dicts, lists,
+    or JSON scalars (including plain Python strings like `"hello"`).
+    prisma-client-python rejects raw Python values on `Json?` columns
+    (`MissingRequiredValueError` / `DataError`), and Postgres `jsonb`
+    rejects bare-word strings as invalid JSON — so always `json.dumps`,
+    regardless of input type. Roundtrip on read deserializes back to the
+    original Python value.
+    """
+    return json.dumps(metadata)
 
 
 def _is_admin(user_api_key_dict: UserAPIKeyAuth) -> bool:
@@ -273,9 +289,9 @@ async def create_memory(
     prisma_client = _require_prisma()
     user_id, team_id = _resolve_scope(user_api_key_dict, body.user_id, body.team_id)
 
-    # Prisma's Python client rejects `metadata=None` on a `Json?` field —
-    # the field must be omitted entirely to store SQL NULL. Build the data
-    # dict conditionally so we only include metadata when the caller sent it.
+    # `metadata` is a `Json?` column — prisma-client-python rejects raw
+    # Python values, so JSON-encode any non-null payload and omit the field
+    # entirely when None so the column defaults to SQL NULL.
     create_data: dict = {
         "key": body.key,
         "value": body.value,
@@ -285,7 +301,7 @@ async def create_memory(
         "updated_by": user_api_key_dict.user_id,
     }
     if body.metadata is not None:
-        create_data["metadata"] = body.metadata
+        create_data["metadata"] = _serialize_metadata_for_prisma(body.metadata)
 
     try:
         row = await prisma_client.db.litellm_memorytable.create(data=create_data)
@@ -415,20 +431,25 @@ async def upsert_memory(
     """
     prisma_client = _require_prisma()
 
-    # Distinguish "metadata omitted from request" from "metadata: null".
-    # Omitted → don't touch the existing field. Explicit null → clear to SQL NULL.
-    # `model_fields_set` (Pydantic v2) only contains field names the caller
-    # actually sent in the payload.
+    # `metadata` is a `Json?` column. prisma-client-python rejects raw
+    # Python values on `Json?` fields, and there is no `JsonNull`/`DbNull`
+    # sentinel yet (RobertCraigie/prisma-client-py#714) so we have no way
+    # to write a true SQL NULL via the typed client. We mirror the rest of
+    # the proxy's handling of nullable `Json?` columns: forward metadata
+    # only when the caller sent a non-null value (always JSON-encoded),
+    # and treat explicit `metadata: null` as a no-op for the column. This
+    # matches the prior crashing behavior the PR fixes — there is no
+    # regression of a previously-working "clear metadata" path, and the
+    # rest of the proxy gives the same treatment to nullable `Json?`
+    # fields elsewhere.
     fields_sent = body.model_fields_set
-    metadata_explicit = "metadata" in fields_sent
+    metadata_explicit_value = "metadata" in fields_sent and body.metadata is not None
 
     data: dict = {}
     if body.value is not None:
         data["value"] = body.value
-    if metadata_explicit:
-        # body.metadata may be None here — Prisma update accepts None on a
-        # nullable Json? field and sets the column to SQL NULL.
-        data["metadata"] = body.metadata
+    if metadata_explicit_value:
+        data["metadata"] = _serialize_metadata_for_prisma(body.metadata)
     if not data:
         raise HTTPException(
             status_code=400,
@@ -467,7 +488,9 @@ async def upsert_memory(
             user_id, team_id = _resolve_scope(
                 user_api_key_dict, body.user_id, body.team_id
             )
-            # Omit `metadata` when None — Prisma rejects None on Json? fields.
+            # Omit `metadata` when None so the column defaults to SQL NULL;
+            # otherwise JSON-encode for Prisma — same pattern as
+            # `create_memory` above.
             create_data: dict = {
                 "key": key,
                 "value": body.value,
@@ -477,7 +500,7 @@ async def upsert_memory(
                 "updated_by": user_api_key_dict.user_id,
             }
             if body.metadata is not None:
-                create_data["metadata"] = body.metadata
+                create_data["metadata"] = _serialize_metadata_for_prisma(body.metadata)
             try:
                 row = await prisma_client.db.litellm_memorytable.create(
                     data=create_data
