@@ -99,10 +99,18 @@ def test_per_provider_test_file_imports_and_parametrizes_three_models(
 
 
 @pytest.mark.parametrize("feature_id", EXPECTED_FEATURE_IDS)
-def test_azure_test_file_reports_not_applicable(feature_id):
-    """Azure OpenAI Service does not host Claude on any v0 feature, so
-    every Azure cell in the v0 matrix is `not_applicable`. Pin that
-    here so a future "let's just call the proxy and see what happens"
-    edit doesn't silently turn the gray cells red."""
+def test_azure_test_file_drives_the_proxy(feature_id):
+    """Azure (Microsoft Foundry) hosts Anthropic Claude as of 2025-11-18,
+    so every Azure cell in the v0 matrix exercises a real route through
+    the LiteLLM proxy — same shape as the other provider columns. Pin
+    that here so a future regression doesn't silently revert these
+    cells to the old `not_applicable` boilerplate."""
     text = (REPO_ROOT / feature_id / "test_azure.py").read_text()
-    assert '"status": "not_applicable"' in text
+    assert "run_claude" in text, (
+        f"{feature_id}/test_azure.py must drive the claude CLI via run_claude(); "
+        "the not_applicable stub was removed when Foundry started hosting Claude."
+    )
+    assert '"status": "not_applicable"' not in text, (
+        f"{feature_id}/test_azure.py still reports not_applicable; Microsoft Foundry "
+        "now hosts Claude (Haiku 4.5, Sonnet 4.6, Opus 4.7), so this row must run."
+    )
