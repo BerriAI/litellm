@@ -28,8 +28,7 @@
           "status": "pass"
         },
         "azure": {
-          "status": "not_applicable",
-          "reason": "Azure OpenAI Service does not host Anthropic Claude models. Route Claude requests through Anthropic, AWS Bedrock, or GCP Vertex AI."
+          "status": "pass"
         }
       }
     },
@@ -50,8 +49,7 @@
           "status": "pass"
         },
         "azure": {
-          "status": "not_applicable",
-          "reason": "Azure OpenAI Service does not host Anthropic Claude models. Route Claude requests through Anthropic, AWS Bedrock, or GCP Vertex AI."
+          "status": "pass"
         }
       }
     },
@@ -72,8 +70,7 @@
           "status": "pass"
         },
         "azure": {
-          "status": "not_applicable",
-          "reason": "Azure OpenAI Service does not host Anthropic Claude models. Route Claude requests through Anthropic, AWS Bedrock, or GCP Vertex AI."
+          "status": "pass"
         }
       }
     },
@@ -94,8 +91,7 @@
           "status": "pass"
         },
         "azure": {
-          "status": "not_applicable",
-          "reason": "Azure OpenAI Service does not host Anthropic Claude models. Route Claude requests through Anthropic, AWS Bedrock, or GCP Vertex AI."
+          "status": "pass"
         }
       }
     },
@@ -116,8 +112,7 @@
           "status": "pass"
         },
         "azure": {
-          "status": "not_applicable",
-          "reason": "Azure OpenAI Service does not host Anthropic Claude models. Route Claude requests through Anthropic, AWS Bedrock, or GCP Vertex AI."
+          "status": "pass"
         }
       }
     },
@@ -138,8 +133,7 @@
           "status": "pass"
         },
         "azure": {
-          "status": "not_applicable",
-          "reason": "Azure OpenAI Service does not host Anthropic Claude models. Route Claude requests through Anthropic, AWS Bedrock, or GCP Vertex AI."
+          "status": "pass"
         }
       }
     }
