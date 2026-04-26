@@ -108,6 +108,20 @@ class TestValidateAnthropicMessagesEnvironment:
         )
         assert api_base == "https://custom.example.com"
 
+    def test_should_not_set_auth_when_no_key_available(self, config):
+        with patch(
+            "litellm.llms.fireworks_ai.messages.transformation.get_secret_str",
+            return_value=None,
+        ):
+            headers, _ = config.validate_anthropic_messages_environment(
+                headers={},
+                model="claude-3-5-sonnet",
+                messages=[],
+                optional_params={},
+                litellm_params={},
+            )
+            assert "Authorization" not in headers
+
 
 class TestGetCompleteUrl:
     """Tests for get_complete_url."""

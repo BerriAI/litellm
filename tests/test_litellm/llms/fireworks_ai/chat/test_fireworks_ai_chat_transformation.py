@@ -258,6 +258,97 @@ def test_get_models_no_api_key_raises():
             config.get_models()
 
 
+def test_get_models_pagination():
+    """get_models should follow nextPageToken to fetch all pages."""
+    config = FireworksAIConfig()
+
+    page1 = MagicMock()
+    page1.status_code = 200
+    page1.json.return_value = {
+        "models": [{"name": "accounts/fireworks/models/model-a"}],
+        "nextPageToken": "tok2",
+    }
+
+    page2 = MagicMock()
+    page2.status_code = 200
+    page2.json.return_value = {
+        "models": [{"name": "accounts/fireworks/models/model-b"}],
+    }
+
+    with (
+        patch(
+            "litellm.module_level_client.get", side_effect=[page1, page2]
+        ) as mock_get,
+        patch(
+            "litellm.llms.fireworks_ai.chat.transformation.get_secret_str",
+            return_value=None,
+        ),
+    ):
+        result = config.get_models(api_key="test-key")
+
+        assert mock_get.call_count == 2
+        # Second call should include pageToken
+        second_params = mock_get.call_args_list[1].kwargs.get("params", {})
+        assert second_params.get("pageToken") == "tok2"
+        assert result == [
+            "fireworks_ai/accounts/fireworks/models/model-a",
+            "fireworks_ai/accounts/fireworks/models/model-b",
+        ]
+
+
+def test_get_models_api_error_logs_warning():
+    """get_models should log a warning and return empty on non-200 response."""
+    config = FireworksAIConfig()
+
+    error_response = MagicMock()
+    error_response.status_code = 403
+    error_response.text = "Forbidden"
+
+    with (
+        patch("litellm.module_level_client.get", return_value=error_response),
+        patch(
+            "litellm.llms.fireworks_ai.chat.transformation.get_secret_str",
+            return_value=None,
+        ),
+        patch(
+            "litellm.llms.fireworks_ai.chat.transformation.verbose_logger"
+        ) as mock_logger,
+    ):
+        result = config.get_models(api_key="test-key")
+
+        assert result == []
+        mock_logger.warning.assert_called_once()
+        assert "Fireworks AI" in mock_logger.warning.call_args[0][0]
+
+
+def test_get_models_account_id_equals_fireworks_no_duplicate_query():
+    """When FIREWORKS_ACCOUNT_ID is 'fireworks', should not query the same account twice."""
+    config = FireworksAIConfig()
+
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {
+        "models": [{"name": "accounts/fireworks/models/deepseek-v3p2"}]
+    }
+
+    with (
+        patch(
+            "litellm.module_level_client.get", return_value=mock_response
+        ) as mock_get,
+        patch(
+            "litellm.llms.fireworks_ai.chat.transformation.get_secret_str",
+            side_effect=lambda key: (
+                "fireworks" if key == "FIREWORKS_ACCOUNT_ID" else None
+            ),
+        ),
+    ):
+        result = config.get_models(api_key="test-key")
+
+        # Should only query once (not duplicate for account_id == "fireworks")
+        mock_get.assert_called_once()
+        assert result == ["fireworks_ai/accounts/fireworks/models/deepseek-v3p2"]
+
+
 def test_transform_messages_helper_removes_provider_specific_fields():
     """
     Test that _transform_messages_helper removes provider_specific_fields from messages.
