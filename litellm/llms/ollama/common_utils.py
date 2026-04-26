@@ -108,7 +108,7 @@ class OllamaModelInfo(BaseLLMModelInfo):
                     continue
                 nm = entry.get("name") or entry.get("model")
                 if isinstance(nm, str):
-                    names.add(nm)
+                    names.add(f"ollama/{nm}")
         except Exception as e:
             verbose_logger.warning(f"Error retrieving ollama tag endpoint: {e}")
             # If tags endpoint fails, fall back to static list
