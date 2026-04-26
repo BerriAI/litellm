@@ -33,7 +33,7 @@ class FireworksAIMessagesConfig(AnthropicMessagesConfig):
             or get_secret_str("FIREWORKSAI_API_KEY")
             or get_secret_str("FIREWORKS_AI_TOKEN")
         )
-        if api_key and "Authorization" not in headers:
+        if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
         if "content-type" not in headers:
             headers["content-type"] = "application/json"

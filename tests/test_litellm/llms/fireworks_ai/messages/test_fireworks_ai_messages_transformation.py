@@ -62,7 +62,7 @@ class TestValidateAnthropicMessagesEnvironment:
             )
             assert headers["Authorization"] == "Bearer ai-env-key"
 
-    def test_should_not_overwrite_existing_authorization(self, config):
+    def test_should_override_existing_authorization_with_explicit_key(self, config):
         headers, _ = config.validate_anthropic_messages_environment(
             headers={"Authorization": "Bearer pre-existing"},
             model="claude-3-5-sonnet",
@@ -71,7 +71,7 @@ class TestValidateAnthropicMessagesEnvironment:
             litellm_params={},
             api_key="new-key",
         )
-        assert headers["Authorization"] == "Bearer pre-existing"
+        assert headers["Authorization"] == "Bearer new-key"
 
     def test_should_set_default_content_type(self, config):
         headers, _ = config.validate_anthropic_messages_environment(

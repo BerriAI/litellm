@@ -70,7 +70,9 @@ class FireworksAIConfig(OpenAIGPTConfig):
     Parameter handling
     ------------------
     - All standard OpenAI params are passed through (``tool_choice``,
-      ``response_format``, ``max_completion_tokens``, ``strict`` in tools).
+      ``response_format``, ``strict`` in tools).
+    - ``max_completion_tokens`` is mapped to ``max_tokens`` (Fireworks
+      treats it as an alias and rejects requests with both).
     - Additional Fireworks-supported params: ``top_k``, ``top_logprobs``,
       ``seed``, ``logit_bias``, ``parallel_tool_calls``, ``thinking``,
       ``prompt_truncate_length``, ``context_length_exceeded_behavior``.
@@ -180,6 +182,10 @@ class FireworksAIConfig(OpenAIGPTConfig):
                 optional_params["tool_choice"] = value
             elif param == "response_format":
                 optional_params["response_format"] = value
+            elif param == "max_completion_tokens":
+                # Fireworks treats max_completion_tokens as an alias for max_tokens
+                # and rejects requests containing both. Normalize to max_tokens.
+                optional_params["max_tokens"] = value
             elif param in supported_openai_params:
                 if value is not None:
                     optional_params[param] = value
