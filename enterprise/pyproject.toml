@@ -1,6 +1,6 @@
 [project]
 name = "litellm-enterprise"
-version = "0.1.38"
+version = "0.1.39"
 description = "Package for LiteLLM Enterprise features"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -26,7 +26,7 @@ required-version = ">=0.10.9"
 module-root = ""
 
 [tool.commitizen]
-version = "0.1.38"
+version = "0.1.39"
 version_files = [
     "pyproject.toml:^version",
     "../pyproject.toml:litellm-enterprise==",
