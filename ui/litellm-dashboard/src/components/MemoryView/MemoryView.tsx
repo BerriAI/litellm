@@ -8,7 +8,6 @@ import {
   Drawer,
   Empty,
   Input,
-  Modal,
   Space,
   Table,
   Tooltip,
@@ -32,6 +31,7 @@ import {
   updateMemory,
 } from "../networking";
 import { MemoryEditModal } from "./MemoryEditModal";
+import DeleteResourceModal from "../common_components/DeleteResourceModal";
 
 const { Text, Paragraph, Title } = Typography;
 
@@ -65,6 +65,7 @@ export const MemoryView: React.FC<MemoryViewProps> = ({ accessToken }) => {
   const [appliedSearch, setAppliedSearch] = useState("");
   const [detailRow, setDetailRow] = useState<MemoryRow | null>(null);
   const [editRow, setEditRow] = useState<MemoryRow | null>(null);
+  const [deleteRow, setDeleteRow] = useState<MemoryRow | null>(null);
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
 
@@ -162,18 +163,18 @@ export const MemoryView: React.FC<MemoryViewProps> = ({ accessToken }) => {
   });
 
   const handleDelete = (row: MemoryRow) => {
-    Modal.confirm({
-      title: "Delete memory",
-      content: (
-        <span>
-          Delete memory key <Text code>{row.key}</Text>? This cannot be undone.
-        </span>
-      ),
-      okText: "Delete",
-      okType: "danger",
-      cancelText: "Cancel",
-      onOk: () => deleteMutation.mutateAsync(row.key).catch(() => {}),
-    });
+    setDeleteRow(row);
+  };
+
+  const confirmDelete = async () => {
+    if (!deleteRow) return;
+    try {
+      await deleteMutation.mutateAsync(deleteRow.key);
+      setDeleteRow(null);
+    } catch {
+      // Error toast already surfaced by deleteMutation.onError;
+      // leave the modal open so the user can retry or cancel.
+    }
   };
 
   const handleSave = async (
@@ -536,6 +537,30 @@ export const MemoryView: React.FC<MemoryViewProps> = ({ accessToken }) => {
           setEditRow(null);
         }}
         onSave={handleSave}
+      />
+
+      {/* Delete confirmation modal */}
+      <DeleteResourceModal
+        isOpen={!!deleteRow}
+        title="Delete memory"
+        message="This action cannot be undone."
+        resourceInformationTitle="Memory"
+        resourceInformation={
+          deleteRow
+            ? [
+                { label: "Key", value: deleteRow.key, code: true },
+                { label: "Memory ID", value: deleteRow.memory_id, code: true },
+                { label: "User ID", value: deleteRow.user_id ?? "-", code: true },
+                { label: "Team ID", value: deleteRow.team_id ?? "-", code: true },
+              ]
+            : []
+        }
+        onCancel={() => {
+          if (!deleteMutation.isPending) setDeleteRow(null);
+        }}
+        onOk={confirmDelete}
+        confirmLoading={deleteMutation.isPending}
+        requiredConfirmation={deleteRow?.key}
       />
     </div>
   );
