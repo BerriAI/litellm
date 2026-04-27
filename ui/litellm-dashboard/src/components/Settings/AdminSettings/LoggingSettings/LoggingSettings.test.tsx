@@ -41,7 +41,7 @@ describe("LoggingSettings", () => {
   const mockRefetch = vi.fn();
 
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
     mockUseStoreRequestInSpendLogs.mockReturnValue({
       mutate: mockMutate,
       isPending: false,
@@ -168,6 +168,9 @@ describe("LoggingSettings", () => {
   it("should show a single error notification via onError callback", async () => {
     const user = userEvent.setup();
     const error = new Error("Backend error");
+    mockDeleteField.mockImplementation((_params, options) => {
+      options?.onSettled?.();
+    });
     mockMutate.mockImplementation((_params, options) => {
       options?.onError?.(error);
     });
