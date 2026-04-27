@@ -636,6 +636,27 @@ class RealTimeStreaming:
 
                 ## LOGGING
                 self.store_input(message=message)
+                
+                ## GUARDRAIL: Inject turn_detection into first session.update if needed
+                try:
+                    msg_obj = json.loads(message)
+                    if (
+                        msg_obj.get("type") == "session.update"
+                        and self.session_configuration_request is None
+                        and not self._guardrail_turn_detection_update_sent
+                        and self._has_audio_transcription_guardrails()
+                    ):
+                        # Inject turn_detection into the first session.update
+                        session = msg_obj.setdefault("session", {})
+                        session.setdefault("turn_detection", {})["create_response"] = False
+                        message = json.dumps(msg_obj)
+                        self._guardrail_turn_detection_update_sent = True
+                        verbose_logger.debug(
+                            "Injected turn_detection into first session.update for audio transcription guardrails"
+                        )
+                except (json.JSONDecodeError, AttributeError):
+                    pass
+                
                 ## FORWARD TO BACKEND
                 if self.provider_config:
                     message = self.provider_config.transform_realtime_request(
