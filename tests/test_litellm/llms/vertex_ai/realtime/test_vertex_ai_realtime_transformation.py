@@ -97,6 +97,29 @@ def test_vertex_requires_session_configuration_feature_flag(monkeypatch):
     assert cfg.requires_session_configuration() is False
 
 
+def test_vertex_session_update_defaults_to_audio_modality():
+    cfg = VertexAIRealtimeConfig(
+        access_token="tok", project="my-proj", location="us-central1"
+    )
+
+    session_update = {
+        "type": "session.update",
+        "session": {
+            "instructions": "You are a helpful assistant.",
+            # No modalities provided on purpose
+        },
+    }
+
+    messages = cfg.transform_realtime_request(
+        json.dumps(session_update),
+        "gemini-live-2.5-flash-native-audio",
+        session_configuration_request=None,
+    )
+    assert len(messages) == 1
+    setup_payload = json.loads(messages[0])["setup"]
+    assert setup_payload["generationConfig"]["responseModalities"] == ["AUDIO"]
+
+
 # ---------------------------------------------------------------------------
 # Round-trip test: text-in / text-out via RealTimeStreaming
 # ---------------------------------------------------------------------------

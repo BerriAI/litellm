@@ -254,6 +254,50 @@ async def test_transcription_captured_in_backend_to_client():
     assert logging_obj.model_call_details["messages"] == streaming.input_messages
 
 
+@pytest.mark.asyncio
+async def test_client_ack_caches_setup_to_prevent_duplicate_session_update_setup():
+    websocket = MagicMock()
+    backend_ws = MagicMock()
+    logging_obj = MagicMock()
+    logging_obj.pre_call = MagicMock()
+
+    # Two session.update messages arrive before setupComplete round-trip.
+    websocket.receive_text = AsyncMock(
+        side_effect=[
+            json.dumps({"type": "session.update", "session": {"tools": []}}),
+            json.dumps({"type": "session.update", "session": {"tools": []}}),
+            Exception("client done"),
+        ]
+    )
+
+    provider_config = MagicMock()
+
+    def _transform(message: str, model: str, session_configuration_request=None):
+        if session_configuration_request is None:
+            return [json.dumps({"setup": {"model": "models/gemini-2.5-flash"}})]
+        return []
+
+    provider_config.transform_realtime_request = MagicMock(side_effect=_transform)
+
+    backend_ws.send = AsyncMock()
+
+    streaming = RealTimeStreaming(
+        websocket=websocket,
+        backend_ws=backend_ws,
+        logging_obj=logging_obj,
+        provider_config=provider_config,
+        model="gemini-2.5-flash",
+    )
+
+    await streaming.client_ack_messages()
+
+    # Setup should be forwarded exactly once even with repeated session.update.
+    assert backend_ws.send.await_count == 1
+    assert streaming.session_configuration_request is not None
+    sent_payload = json.loads(backend_ws.send.await_args_list[0].args[0])
+    assert "setup" in sent_payload
+
+
 def test_collect_session_tools_from_session_update():
     """
     Test that tools from session.update events are collected.

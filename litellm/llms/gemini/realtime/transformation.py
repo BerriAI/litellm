@@ -667,6 +667,8 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
     def transform_tool_call_events(
         self,
         tool_call_message: dict,
+        response_id: Optional[str] = None,
+        output_item_id: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """
         Transform Gemini toolCall message to OpenAI function call events.
@@ -674,6 +676,8 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         Converts Gemini's functionCalls format to OpenAI's response.function_call_arguments.done events.
         """
         function_calls = tool_call_message.get("functionCalls", [])
+        resolved_response_id = response_id or f"resp_{uuid.uuid4()}"
+        resolved_output_item_id = output_item_id or f"item_{uuid.uuid4()}"
         
         verbose_logger.debug(
             f"Gemini Realtime: Transforming {len(function_calls)} tool call(s) to OpenAI format"
@@ -683,11 +687,14 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
             {
                 "type": "response.function_call_arguments.done",
                 "event_id": f"event_{uuid.uuid4()}",
+                "response_id": resolved_response_id,
+                "item_id": resolved_output_item_id,
+                "output_index": idx,
                 "call_id": fc.get("id", ""),
                 "name": fc.get("name", ""),
                 "arguments": json.dumps(fc.get("args", {})),
             }
-            for fc in function_calls
+            for idx, fc in enumerate(function_calls)
         ]
 
     @staticmethod
@@ -1067,7 +1074,11 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                 returned_message.append(transformed_message)
             elif openai_event == ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DONE:
                 # Handle toolCall from Gemini
-                tool_call_events = self.transform_tool_call_events(value)
+                tool_call_events = self.transform_tool_call_events(
+                    value,
+                    response_id=current_response_id,
+                    output_item_id=current_output_item_id,
+                )
                 returned_message.extend(tool_call_events)
             elif openai_event == OpenAIRealtimeEventTypes.RESPONSE_DONE:
                 transformed_response_done_event = self.transform_response_done_event(

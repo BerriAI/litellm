@@ -297,6 +297,9 @@ def test_gemini_realtime_tool_call_transformation():
     assert function_call_event is not None, "Expected function_call_arguments.done event"
     assert function_call_event["call_id"] == "call_123"
     assert function_call_event["name"] == "get_weather"
+    assert function_call_event["response_id"] == "resp_123"
+    assert function_call_event["item_id"] == "item_123"
+    assert function_call_event["output_index"] == 0
     
     # Verify arguments are properly serialized as JSON string
     args = json.loads(function_call_event["arguments"])
@@ -454,3 +457,18 @@ def test_gemini_realtime_user_text_transformation():
     assert len(turn["parts"]) == 1
     assert turn["parts"][0]["text"] == "What's the weather in London?"
     assert client_content["turnComplete"] is True
+
+
+def test_return_new_content_delta_events_without_session_config_does_not_error():
+    config = GeminiRealtimeConfig()
+
+    events = config.return_new_content_delta_events(
+        response_id="resp_1",
+        output_item_id="item_1",
+        conversation_id="conv_1",
+        delta_type="text",
+        session_configuration_request=None,
+    )
+
+    assert len(events) >= 1
+    assert events[0]["type"] == "response.created"
