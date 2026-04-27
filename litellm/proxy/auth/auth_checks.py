@@ -656,12 +656,19 @@ async def common_checks(  # noqa: PLR0915
             and end_user_object.litellm_budget_table is not None
         ):
             end_user_budget = end_user_object.litellm_budget_table.max_budget
-            if end_user_budget is not None and end_user_object.spend > end_user_budget:
-                raise litellm.BudgetExceededError(
-                    current_cost=end_user_object.spend,
-                    max_budget=end_user_budget,
-                    message=f"ExceededBudget: End User={end_user_object.user_id} over budget. Spend={end_user_object.spend}, Budget={end_user_budget}",
+            if end_user_budget is not None:
+                from litellm.proxy.proxy_server import get_current_spend
+
+                end_user_spend = await get_current_spend(
+                    counter_key=f"spend:end_user:{end_user_object.user_id}",
+                    fallback_spend=end_user_object.spend or 0.0,
                 )
+                if end_user_spend > end_user_budget:
+                    raise litellm.BudgetExceededError(
+                        current_cost=end_user_spend,
+                        max_budget=end_user_budget,
+                        message=f"ExceededBudget: End User={end_user_object.user_id} over budget. Spend={end_user_spend}, Budget={end_user_budget}",
+                    )
 
     _enforce_user_param_check(general_settings, request, request_body, route)
     _reject_clientside_metadata_tags_check(general_settings, request_body, route)
@@ -3813,6 +3820,9 @@ async def _tag_max_budget_check(
         proxy_logging_obj=proxy_logging_obj,
     )
 
+    # Read spend from cross-pod counter (Redis-first) or cached object (fallback)
+    from litellm.proxy.proxy_server import get_current_spend
+
     # Check budget for each tag
     for tag_name in tags:
         tag_object = tag_objects.get(tag_name)
@@ -3823,14 +3833,18 @@ async def _tag_max_budget_check(
         if (
             tag_object.litellm_budget_table is not None
             and tag_object.litellm_budget_table.max_budget is not None
-            and tag_object.spend is not None
-            and tag_object.spend > tag_object.litellm_budget_table.max_budget
         ):
-            raise litellm.BudgetExceededError(
-                current_cost=tag_object.spend,
-                max_budget=tag_object.litellm_budget_table.max_budget,
-                message=f"Budget has been exceeded! Tag={tag_name} Current cost: {tag_object.spend}, Max budget: {tag_object.litellm_budget_table.max_budget}",
+            tag_max_budget = tag_object.litellm_budget_table.max_budget
+            tag_spend = await get_current_spend(
+                counter_key=f"spend:tag:{tag_name}",
+                fallback_spend=(tag_object.spend or 0.0),
             )
+            if tag_spend > tag_max_budget:
+                raise litellm.BudgetExceededError(
+                    current_cost=tag_spend,
+                    max_budget=tag_max_budget,
+                    message=f"Budget has been exceeded! Tag={tag_name} Current cost: {tag_spend}, Max budget: {tag_max_budget}",
+                )
 
 
 def is_model_allowed_by_pattern(model: str, allowed_model_pattern: str) -> bool:

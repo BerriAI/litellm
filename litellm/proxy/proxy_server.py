@@ -1816,6 +1816,8 @@ async def increment_spend_counters(
     user_id: Optional[str],
     response_cost: Optional[float],
     org_id: Optional[str] = None,
+    end_user_id: Optional[str] = None,
+    tags: Optional[List[str]] = None,
 ):
     """
     Atomically increment spend counters for budget enforcement.
@@ -1916,6 +1918,26 @@ async def increment_spend_counters(
             increment=response_cost,
         )
 
+    if end_user_id is not None:
+        await _init_and_increment_spend_counter(
+            counter_key=f"spend:end_user:{end_user_id}",
+            source_cache_key=f"end_user_id:{end_user_id}",
+            increment=response_cost,
+        )
+
+    if tags is not None:
+        tag_tasks = [
+            _init_and_increment_spend_counter(
+                counter_key=f"spend:tag:{tag_name}",
+                source_cache_key=f"tag:{tag_name}",
+                increment=response_cost,
+            )
+            for tag_name in tags
+            if tag_name and isinstance(tag_name, str)
+        ]
+        if tag_tasks:
+            await asyncio.gather(*tag_tasks)
+
 
 async def _init_and_increment_spend_counter(
     counter_key: str,
@@ -1971,6 +1993,7 @@ async def update_cache(  # noqa: PLR0915
     response_cost: Optional[float],
     parent_otel_span: Optional[Span],  # type: ignore
     tags: Optional[List[str]] = None,
+    org_id: Optional[str] = None,
 ):
     """
     Use this to update the cache with new user spend.
@@ -2203,6 +2226,81 @@ async def update_cache(  # noqa: PLR0915
                 traceback.format_exc(),
             )
 
+    ### UPDATE TEAM MEMBERSHIP SPEND ###
+    async def _update_team_membership_cache():
+        if user_id is None or team_id is None or response_cost is None:
+            return
+
+        _key = f"team_membership:{user_id}:{team_id}"
+        try:
+            existing_membership_obj = await user_api_key_cache.async_get_cache(key=_key)
+            if existing_membership_obj is None:
+                # do nothing if membership not in api key cache
+                return
+
+            if isinstance(existing_membership_obj, dict):
+                existing_spend = existing_membership_obj.get("spend", 0) or 0
+            else:
+                existing_spend = getattr(existing_membership_obj, "spend", 0) or 0
+
+            new_spend = existing_spend + response_cost
+
+            if isinstance(existing_membership_obj, dict):
+                existing_membership_obj["spend"] = new_spend
+                values_to_update_in_cache.append((_key, existing_membership_obj))
+            else:
+                existing_membership_obj.spend = new_spend
+                values_to_update_in_cache.append((_key, existing_membership_obj))
+        except Exception as e:
+            verbose_proxy_logger.warning(
+                "Spend tracking - failed to update team membership spend in cache. "
+                "Budget enforcement may use stale spend values. "
+                "user_id=%s, team_id=%s, response_cost=%s - %s\n%s",
+                user_id,
+                team_id,
+                response_cost,
+                str(e),
+                traceback.format_exc(),
+            )
+
+    ### UPDATE ORG SPEND ###
+    async def _update_org_cache():
+        if org_id is None or response_cost is None:
+            return
+
+        for cache_key in (f"org_id:{org_id}", f"org_id:{org_id}:with_budget"):
+            try:
+                existing_org_obj = await user_api_key_cache.async_get_cache(
+                    key=cache_key
+                )
+                if existing_org_obj is None:
+                    continue
+
+                if isinstance(existing_org_obj, dict):
+                    existing_spend = existing_org_obj.get("spend", 0) or 0
+                else:
+                    existing_spend = getattr(existing_org_obj, "spend", 0) or 0
+
+                new_spend = existing_spend + response_cost
+
+                if isinstance(existing_org_obj, dict):
+                    existing_org_obj["spend"] = new_spend
+                    values_to_update_in_cache.append((cache_key, existing_org_obj))
+                else:
+                    existing_org_obj.spend = new_spend
+                    values_to_update_in_cache.append((cache_key, existing_org_obj))
+            except Exception as e:
+                verbose_proxy_logger.warning(
+                    "Spend tracking - failed to update organization spend in cache. "
+                    "Budget enforcement may use stale spend values. "
+                    "org_id=%s, cache_key=%s, response_cost=%s - %s\n%s",
+                    org_id,
+                    cache_key,
+                    response_cost,
+                    str(e),
+                    traceback.format_exc(),
+                )
+
     ### UPDATE TAG SPEND ###
     async def _update_tag_cache():
         """
@@ -2266,6 +2364,12 @@ async def update_cache(  # noqa: PLR0915
 
     if team_id is not None:
         await _update_team_cache()
+
+    if user_id is not None and team_id is not None:
+        await _update_team_membership_cache()
+
+    if org_id is not None:
+        await _update_org_cache()
 
     if tags is not None:
         await _update_tag_cache()

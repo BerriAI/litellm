@@ -35,6 +35,8 @@ class SpendCounterReseed:
         spend:team_member:{uid}:{tid}     -> LiteLLM_TeamMembership.spend
         spend:user:{user_id}              -> LiteLLM_UserTable.spend
         spend:org:{org_id}                -> LiteLLM_OrganizationTable.spend
+        spend:end_user:{end_user_id}      -> LiteLLM_EndUserTable.spend
+        spend:tag:{tag_name}              -> LiteLLM_TagTable.spend
     """
 
     _locks: ClassVar["OrderedDict[str, asyncio.Lock]"] = OrderedDict()
@@ -101,6 +103,16 @@ class SpendCounterReseed:
                 org_id = counter_key[len("spend:org:") :]
                 row = await prisma_client.db.litellm_organizationtable.find_unique(
                     where={"organization_id": org_id}
+                )
+            elif counter_key.startswith("spend:end_user:"):
+                end_user_id = counter_key[len("spend:end_user:") :]
+                row = await prisma_client.db.litellm_endusertable.find_unique(
+                    where={"user_id": end_user_id}
+                )
+            elif counter_key.startswith("spend:tag:"):
+                tag_name = counter_key[len("spend:tag:") :]
+                row = await prisma_client.db.litellm_tagtable.find_unique(
+                    where={"tag_name": tag_name}
                 )
             else:
                 return None
