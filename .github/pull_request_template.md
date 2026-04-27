@@ -43,11 +43,13 @@ If you're seeing a delay in your PR being merged, ping the LiteLLM Team on [Slac
 
 <!-- Select the type of Pull Request -->
 <!-- Keep only the necessary ones -->
+<!-- NOTE: Documentation lives in a separate repo: https://github.com/BerriAI/litellm-docs -->
+<!-- For doc changes, please open a PR there instead. -->
 
 🆕 New Feature
 🐛 Bug Fix
 🧹 Refactoring
-📖 Documentation
+📖 Documentation (submit doc PRs to [litellm-docs](https://github.com/BerriAI/litellm-docs))
 🚄 Infrastructure
 ✅ Test
 
