@@ -311,3 +311,88 @@ def test_transform_anthropic_messages_request_removes_scope_from_cache_control()
     # scope removed from message content
     assert "scope" not in result["messages"][0]["content"][0]["cache_control"]
     assert result["messages"][0]["content"][0]["cache_control"]["type"] == "ephemeral"
+
+
+def test_validate_environment_custom_api_base_calls_get_complete_vertex_url():
+    """Regression test for #25748: custom api_base must still go through
+    get_complete_vertex_url so that the required endpoint suffix
+    (:streamRawPredict / :rawPredict) is appended."""
+    config = VertexAIPartnerModelsAnthropicMessagesConfig()
+    headers = {}
+    litellm_params = {
+        "vertex_ai_project": "test-project",
+        "vertex_ai_location": "us-central1",
+        "vertex_credentials": "{}",
+    }
+    custom_base = (
+        "https://aiplatform.us.rep.googleapis.com/v1/projects/my-project"
+        "/locations/us/publishers/anthropic/models/claude-sonnet-4-5@20250929"
+    )
+    optional_params = {"stream": True}
+
+    with patch.object(
+        config, "_ensure_access_token", return_value=("token", "test-project")
+    ), patch.object(
+        config,
+        "get_complete_vertex_url",
+        return_value=f"{custom_base}:streamRawPredict",
+    ) as mock_get_url:
+        updated_headers, api_base = config.validate_anthropic_messages_environment(
+            headers=headers,
+            model="claude-sonnet-4-5@20250929",
+            messages=[],
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+            api_base=custom_base,
+        )
+
+        # get_complete_vertex_url MUST be called even with a custom api_base
+        assert mock_get_url.called, (
+            "get_complete_vertex_url should be called when api_base is provided "
+            "so that the endpoint suffix (:streamRawPredict) is appended"
+        )
+        assert mock_get_url.call_args.kwargs["custom_api_base"] == custom_base
+        # The returned api_base should have the suffix
+        assert api_base == f"{custom_base}:streamRawPredict"
+
+
+def test_validate_environment_custom_api_base_non_streaming():
+    """Regression test for #25748 (non-streaming path): custom api_base must
+    still go through get_complete_vertex_url so that :rawPredict is appended."""
+    config = VertexAIPartnerModelsAnthropicMessagesConfig()
+    headers = {}
+    litellm_params = {
+        "vertex_ai_project": "test-project",
+        "vertex_ai_location": "us-central1",
+        "vertex_credentials": "{}",
+    }
+    custom_base = (
+        "https://aiplatform.us.rep.googleapis.com/v1/projects/my-project"
+        "/locations/us/publishers/anthropic/models/claude-sonnet-4-5@20250929"
+    )
+    optional_params = {"stream": False}
+
+    with patch.object(
+        config, "_ensure_access_token", return_value=("token", "test-project")
+    ), patch.object(
+        config,
+        "get_complete_vertex_url",
+        return_value=f"{custom_base}:rawPredict",
+    ) as mock_get_url:
+        updated_headers, api_base = config.validate_anthropic_messages_environment(
+            headers=headers,
+            model="claude-sonnet-4-5@20250929",
+            messages=[],
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+            api_base=custom_base,
+        )
+
+        # get_complete_vertex_url MUST be called even with a custom api_base
+        assert mock_get_url.called, (
+            "get_complete_vertex_url should be called when api_base is provided "
+            "so that the endpoint suffix (:rawPredict) is appended"
+        )
+        assert mock_get_url.call_args.kwargs["custom_api_base"] == custom_base
+        # The returned api_base should have the non-streaming suffix
+        assert api_base == f"{custom_base}:rawPredict"
