@@ -5,6 +5,7 @@ This file contains the transformation logic for the Gemini realtime API.
 import json
 from typing import Any, Dict, List, Optional, Union, cast
 
+import litellm
 from litellm import verbose_logger
 from litellm._uuid import uuid
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -1136,10 +1137,10 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         }
 
     def requires_session_configuration(self) -> bool:
-        # Return False so we DON'T auto-send setup on connection
-        # Instead, setup will be sent when client sends session.update
-        # This allows us to include tools, instructions, etc. in the FIRST setup
-        return False
+        # Default behavior is backwards-compatible: send setup on connect.
+        # Opt-in to deferred setup for tool-injection flow via:
+        #   litellm.gemini_live_defer_setup = True
+        return not litellm.gemini_live_defer_setup
 
     def session_configuration_request(self, model: str) -> str:
         """

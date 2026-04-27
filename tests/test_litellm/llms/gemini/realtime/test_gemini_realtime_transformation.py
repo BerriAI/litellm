@@ -369,6 +369,18 @@ def test_gemini_realtime_session_update_with_tools():
     assert "parameters" in function_decl
 
 
+def test_gemini_requires_session_configuration_feature_flag(monkeypatch):
+    config = GeminiRealtimeConfig()
+
+    # Default behavior remains backwards-compatible (auto setup on connect)
+    monkeypatch.setattr(litellm, "gemini_live_defer_setup", False, raising=False)
+    assert config.requires_session_configuration() is True
+
+    # Opt-in behavior: defer setup until client sends session.update
+    monkeypatch.setattr(litellm, "gemini_live_defer_setup", True, raising=False)
+    assert config.requires_session_configuration() is False
+
+
 def test_gemini_realtime_function_call_output_transformation():
     """Test transformation of OpenAI function_call_output to Gemini toolResponse format."""
     config = GeminiRealtimeConfig()

@@ -19,6 +19,7 @@ import websockets.exceptions  # registers websockets.exceptions on the websocket
 
 sys.path.insert(0, os.path.abspath("../../../../.."))
 
+import litellm
 from litellm.llms.vertex_ai.realtime.transformation import VertexAIRealtimeConfig
 
 # ---------------------------------------------------------------------------
@@ -80,6 +81,20 @@ def test_session_configuration_request_model_format():
     assert parsed["setup"]["model"] == (
         "projects/my-proj/locations/us-central1/publishers/google/models/gemini-2.0-flash-live-001"
     )
+
+
+def test_vertex_requires_session_configuration_feature_flag(monkeypatch):
+    cfg = VertexAIRealtimeConfig(
+        access_token="tok", project="my-proj", location="us-central1"
+    )
+
+    # Default remains backwards-compatible (auto setup on connect)
+    monkeypatch.setattr(litellm, "gemini_live_defer_setup", False, raising=False)
+    assert cfg.requires_session_configuration() is True
+
+    # Opt-in deferred setup for tool-injection flow
+    monkeypatch.setattr(litellm, "gemini_live_defer_setup", True, raising=False)
+    assert cfg.requires_session_configuration() is False
 
 
 # ---------------------------------------------------------------------------
