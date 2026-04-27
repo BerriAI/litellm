@@ -387,6 +387,7 @@ def test_generic_cost_per_token_gpt55_pro():
     assert "/v1/chat/completions" not in model_cost_map["supported_endpoints"]
     assert "/v1/responses" in model_cost_map["supported_endpoints"]
     # Inherits GPT-5.4-pro's long-context window + tiered pricing.
+    assert model_cost_map["max_input_tokens"] == 1050000
     assert model_cost_map["input_cost_per_token_above_272k_tokens"] == 6e-5
     assert model_cost_map["output_cost_per_token_above_272k_tokens"] == 2.7e-4
 
