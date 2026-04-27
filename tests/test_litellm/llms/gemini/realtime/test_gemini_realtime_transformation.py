@@ -372,6 +372,26 @@ def test_gemini_realtime_session_update_with_tools():
     assert "parameters" in function_decl
 
 
+def test_gemini_session_update_defaults_to_audio_modality():
+    config = GeminiRealtimeConfig()
+
+    session_update = {
+        "type": "session.update",
+        "session": {
+            "instructions": "You are a helpful assistant.",
+            # No modalities on purpose
+        },
+    }
+
+    messages = config.transform_realtime_request(
+        json.dumps(session_update), "gemini-2.5-flash", session_configuration_request=None
+    )
+
+    assert len(messages) == 1
+    setup_payload = json.loads(messages[0])["setup"]
+    assert setup_payload["generationConfig"]["responseModalities"] == ["AUDIO"]
+
+
 def test_gemini_requires_session_configuration_feature_flag(monkeypatch):
     config = GeminiRealtimeConfig()
 
@@ -472,3 +492,53 @@ def test_return_new_content_delta_events_without_session_config_does_not_error()
 
     assert len(events) >= 1
     assert events[0]["type"] == "response.created"
+
+
+def test_gemini_realtime_multi_tool_calls_have_unique_item_ids():
+    config = GeminiRealtimeConfig()
+    logging_obj = MagicMock()
+    logging_obj.litellm_trace_id = "test-trace-123"
+
+    gemini_tool_call = {
+        "toolCall": {
+            "functionCalls": [
+                {
+                    "id": "call_1",
+                    "name": "get_weather",
+                    "args": {"location": "SF"},
+                },
+                {
+                    "id": "call_2",
+                    "name": "get_weather",
+                    "args": {"location": "NYC"},
+                },
+            ]
+        }
+    }
+
+    result = config.transform_realtime_response(
+        json.dumps(gemini_tool_call),
+        "gemini-2.5-flash",
+        logging_obj,
+        realtime_response_transform_input={
+            "session_configuration_request": None,
+            "current_output_item_id": "item_123",
+            "current_response_id": "resp_123",
+            "current_conversation_id": None,
+            "current_delta_chunks": [],
+            "current_item_chunks": [],
+            "current_delta_type": None,
+        },
+    )
+
+    responses = [
+        ev
+        for ev in result["response"]
+        if ev.get("type") == "response.function_call_arguments.done"
+    ]
+    assert len(responses) == 2
+    assert responses[0]["response_id"] == "resp_123"
+    assert responses[1]["response_id"] == "resp_123"
+    assert responses[0]["item_id"] != responses[1]["item_id"]
+    assert responses[0]["output_index"] == 0
+    assert responses[1]["output_index"] == 1

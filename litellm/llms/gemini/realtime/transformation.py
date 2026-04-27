@@ -235,6 +235,10 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
             client_session_configuration_request = self.map_openai_params(
                 optional_params={}, non_default_params=json_message["session"]
             )
+            generation_config = client_session_configuration_request.setdefault(
+                "generationConfig", {}
+            )
+            generation_config.setdefault("responseModalities", ["AUDIO"])
             client_session_configuration_request["model"] = f"models/{model}"
             gemini_setup_msg = json.dumps({"setup": client_session_configuration_request})
             verbose_logger.debug(
@@ -682,13 +686,18 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         verbose_logger.debug(
             f"Gemini Realtime: Transforming {len(function_calls)} tool call(s) to OpenAI format"
         )
+        has_multiple_calls = len(function_calls) > 1
         
         return [
             {
                 "type": "response.function_call_arguments.done",
                 "event_id": f"event_{uuid.uuid4()}",
                 "response_id": resolved_response_id,
-                "item_id": resolved_output_item_id,
+                "item_id": (
+                    f"{resolved_output_item_id}_tool_{idx}"
+                    if has_multiple_calls
+                    else resolved_output_item_id
+                ),
                 "output_index": idx,
                 "call_id": fc.get("id", ""),
                 "name": fc.get("name", ""),
