@@ -5167,6 +5167,7 @@ class BaseLLMHTTPHandler:
                     if synthetic_session is not None:
                         await websocket.send_text(json.dumps(synthetic_session))
                         realtime_streaming._session_created_sent_to_client = True
+                        await realtime_streaming._maybe_send_guardrail_turn_detection_update()
                         verbose_logger.debug(
                             "Sent synthetic session.created to client to unblock connection"
                         )

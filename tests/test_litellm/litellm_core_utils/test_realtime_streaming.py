@@ -1022,3 +1022,61 @@ async def test_provider_path_suppresses_duplicate_session_created_after_syntheti
     assert not any(
         payload.get("type") == "session.created" for payload in sent_payloads
     ), f"Expected duplicate session.created to be suppressed, got: {sent_payloads}"
+
+
+@pytest.mark.asyncio
+async def test_duplicate_session_created_still_triggers_guardrail_turn_detection_update():
+    client_ws = MagicMock()
+    client_ws.send_text = AsyncMock()
+
+    backend_ws = MagicMock()
+    backend_ws.recv = AsyncMock(
+        side_effect=[b'{"setupComplete": {}}', ConnectionClosed(None, None)]
+    )
+    backend_ws.send = AsyncMock()
+
+    provider_config = MagicMock()
+    provider_config.transform_realtime_response = MagicMock(
+        return_value={
+            "response": [
+                {
+                    "type": "session.created",
+                    "event_id": "event_1",
+                    "session": {"id": "sess_1", "modalities": ["audio"]},
+                }
+            ],
+            "current_output_item_id": None,
+            "current_response_id": None,
+            "current_delta_chunks": [],
+            "current_conversation_id": None,
+            "current_item_chunks": [],
+            "current_delta_type": None,
+            "session_configuration_request": None,
+        }
+    )
+
+    logging_obj = MagicMock()
+    logging_obj.litellm_trace_id = "trace_1"
+    logging_obj.async_success_handler = AsyncMock()
+    logging_obj.success_handler = MagicMock()
+
+    streaming = RealTimeStreaming(
+        websocket=client_ws,
+        backend_ws=backend_ws,
+        logging_obj=logging_obj,
+        provider_config=provider_config,
+        model="gemini-2.5-flash",
+    )
+    # Synthetic session.created already sent by llm_http_handler.
+    streaming._session_created_sent_to_client = True
+    streaming._has_audio_transcription_guardrails = MagicMock(return_value=True)  # type: ignore[method-assign]
+    streaming._send_to_backend = AsyncMock()  # type: ignore[method-assign]
+
+    await streaming.backend_to_client_send_messages()
+
+    # Duplicate session.created should still cause the one-time guardrail
+    # turn_detection update to be sent to backend.
+    assert streaming._send_to_backend.await_count == 1
+    sent_update = json.loads(streaming._send_to_backend.await_args_list[0].args[0])
+    assert sent_update["type"] == "session.update"
+    assert sent_update["session"]["turn_detection"]["create_response"] is False

@@ -78,6 +78,9 @@ class RealTimeStreaming:
         # Track whether session.created has already been sent to the client
         # (e.g. synthetic event in deferred setup mode).
         self._session_created_sent_to_client: bool = False
+        # Track whether we have already sent the guardrail turn-detection update
+        # that disables provider auto-response for transcription guardrails.
+        self._guardrail_turn_detection_update_sent: bool = False
 
     def _should_store_message(
         self,
@@ -244,6 +247,22 @@ class RealTimeStreaming:
                 self.session_configuration_request = transformed_message
         except (json.JSONDecodeError, TypeError):
             return
+
+    async def _maybe_send_guardrail_turn_detection_update(self) -> None:
+        """Disable provider auto-response once when transcription guardrails are enabled."""
+        if self._guardrail_turn_detection_update_sent:
+            return
+        if not self._has_audio_transcription_guardrails():
+            return
+        await self._send_to_backend(
+            json.dumps(
+                {
+                    "type": "session.update",
+                    "session": {"turn_detection": {"create_response": False}},
+                }
+            )
+        )
+        self._guardrail_turn_detection_update_sent = True
 
     def _has_realtime_guardrails(self) -> bool:
         """Return True if any callback is registered for realtime guardrail event types."""
@@ -446,6 +465,7 @@ class RealTimeStreaming:
             event_str = json.dumps(event)
             if isinstance(event, dict) and event.get("type") == "session.created":
                 if self._session_created_sent_to_client:
+                    await self._maybe_send_guardrail_turn_detection_update()
                     verbose_logger.debug(
                         "Skipping duplicate session.created from provider stream"
                     )
@@ -459,14 +479,7 @@ class RealTimeStreaming:
             ):
                 self.store_message(event_str)
                 await self.websocket.send_text(event_str)
-                await self._send_to_backend(
-                    json.dumps(
-                        {
-                            "type": "session.update",
-                            "session": {"turn_detection": {"create_response": False}},
-                        }
-                    )
-                )
+                await self._maybe_send_guardrail_turn_detection_update()
                 continue
             ## GUARDRAIL: run on transcription events in provider_config path too
             if (
