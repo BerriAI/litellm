@@ -618,3 +618,50 @@ def test_gemini_session_update_includes_input_audio_transcription_default():
     assert "setup" in setup
     assert "inputAudioTranscription" in setup["setup"]
     assert setup["setup"]["inputAudioTranscription"] == {}
+
+
+def test_gemini_tool_call_emits_response_created_preamble():
+    """Verify response.created is emitted before tool call events when response_id is None."""
+    config = GeminiRealtimeConfig()
+    logging_obj = MagicMock()
+    logging_obj.litellm_trace_id = "trace_123"
+    
+    gemini_tool_call = {
+        "toolCall": {
+            "functionCalls": [
+                {
+                    "id": "call_123",
+                    "name": "get_weather",
+                    "args": {"location": "San Francisco", "unit": "fahrenheit"}
+                }
+            ]
+        }
+    }
+    
+    # Transform with current_response_id=None to trigger preamble emission
+    result = config.transform_realtime_response(
+        json.dumps(gemini_tool_call),
+        "gemini-2.5-flash",
+        logging_obj,
+        realtime_response_transform_input={
+            "session_configuration_request": None,
+            "current_output_item_id": None,
+            "current_response_id": None,
+            "current_conversation_id": None,
+            "current_delta_chunks": [],
+            "current_item_chunks": [],
+            "current_delta_type": None,
+        },
+    )
+    
+    responses = result["response"]
+    # Should have: response.created, output_item.added, function_call_arguments.done, conversation.item.created
+    assert len(responses) >= 4
+    assert responses[0]["type"] == "response.created"
+    assert "response" in responses[0]
+    assert responses[0]["response"]["status"] == "in_progress"
+    assert responses[1]["type"] == "response.output_item.added"
+    assert responses[1]["item"]["type"] == "function_call"
+    assert responses[2]["type"] == "response.function_call_arguments.done"
+    assert responses[3]["type"] == "conversation.item.created"
+    assert responses[3]["item"]["type"] == "function_call"

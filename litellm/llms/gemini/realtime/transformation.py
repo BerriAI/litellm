@@ -1077,12 +1077,65 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                 returned_message.append(transformed_message)
             elif openai_event == ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DONE:
                 # Handle toolCall from Gemini
+                # Emit response.created preamble if this is the first event in the response
+                if current_response_id is None:
+                    current_response_id = f"resp_{uuid.uuid4()}"
+                    current_output_item_id = f"item_{uuid.uuid4()}"
+                    current_conversation_id = current_conversation_id or f"conv_{uuid.uuid4()}"
+                    
+                    # Emit response.created
+                    returned_message.append({
+                        "type": "response.created",
+                        "event_id": f"event_{uuid.uuid4()}",
+                        "response": {
+                            "object": "realtime.response",
+                            "id": current_response_id,
+                            "status": "in_progress",
+                            "output": [],
+                            "conversation_id": current_conversation_id,
+                        },
+                    })
+                
                 tool_call_events = self.transform_tool_call_events(
                     value,
                     response_id=current_response_id,
                     output_item_id=current_output_item_id,
                 )
-                returned_message.extend(tool_call_events)
+                # Emit output_item.added and conversation.item.created for each function call
+                for idx, tool_call in enumerate(tool_call_events):
+                    item_id = tool_call["item_id"]
+                    # response.output_item.added
+                    returned_message.append({
+                        "type": "response.output_item.added",
+                        "event_id": f"event_{uuid.uuid4()}",
+                        "response_id": current_response_id,
+                        "output_index": idx,
+                        "item": {
+                            "id": item_id,
+                            "object": "realtime.item",
+                            "type": "function_call",
+                            "status": "in_progress",
+                            "call_id": tool_call["call_id"],
+                            "name": tool_call["name"],
+                            "arguments": "",
+                        },
+                    })
+                    # response.function_call_arguments.done
+                    returned_message.append(tool_call)
+                    # conversation.item.created
+                    returned_message.append({
+                        "type": "conversation.item.created",
+                        "event_id": f"event_{uuid.uuid4()}",
+                        "item": {
+                            "id": item_id,
+                            "object": "realtime.item",
+                            "type": "function_call",
+                            "status": "completed",
+                            "call_id": tool_call["call_id"],
+                            "name": tool_call["name"],
+                            "arguments": tool_call["arguments"],
+                        },
+                    })
             elif openai_event == OpenAIRealtimeEventTypes.RESPONSE_DONE:
                 transformed_response_done_event = self.transform_response_done_event(
                     message=BidiGenerateContentServerMessage(**json_message),  # type: ignore
