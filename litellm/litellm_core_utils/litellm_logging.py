@@ -4021,6 +4021,15 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
             vantage_logger = VantageLogger()
             _in_memory_loggers.append(vantage_logger)
             return vantage_logger  # type: ignore
+        elif logging_integration == "mavvrik":
+            from litellm.integrations.mavvrik import Logger as MavvrikLogger
+
+            for callback in _in_memory_loggers:
+                if isinstance(callback, MavvrikLogger):
+                    return callback  # type: ignore
+            mavvrik_logger = MavvrikLogger()
+            _in_memory_loggers.append(mavvrik_logger)
+            return mavvrik_logger  # type: ignore
         elif logging_integration == "deepeval":
             for callback in _in_memory_loggers:
                 if isinstance(callback, DeepEvalLogger):
@@ -4398,6 +4407,12 @@ def get_custom_logger_compatible_class(  # noqa: PLR0915
 
             for callback in _in_memory_loggers:
                 if isinstance(callback, VantageLogger):
+                    return callback
+        elif logging_integration == "mavvrik":
+            from litellm.integrations.mavvrik import Logger as MavvrikLogger
+
+            for callback in _in_memory_loggers:
+                if isinstance(callback, MavvrikLogger):
                     return callback
         elif logging_integration == "deepeval":
             for callback in _in_memory_loggers:
