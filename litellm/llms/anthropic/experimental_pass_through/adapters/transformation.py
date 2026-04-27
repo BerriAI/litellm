@@ -299,7 +299,14 @@ class LiteLLMAnthropicMessagesAdapter:
             if isinstance(source, dict)
             else getattr(source, "cache_control", None)
         )
-        if cache_control and model and self.is_anthropic_claude_model(model):
+        if (
+            cache_control
+            and model
+            and (
+                self.is_anthropic_claude_model(model)
+                or ("arn:" in model.lower() and "bedrock" in model.lower())
+            )
+        ):
             # TypedDict objects support dict operations at runtime
             # Use type ignore consistent with codebase pattern (see anthropic/chat/transformation.py:432)
             if isinstance(target, dict):
@@ -667,7 +674,7 @@ class LiteLLMAnthropicMessagesAdapter:
 
     @staticmethod
     def translate_anthropic_thinking_to_reasoning_effort(
-        thinking: Dict[str, Any]
+        thinking: Dict[str, Any],
     ) -> Optional[str]:
         """
         Translate Anthropic's thinking parameter to OpenAI's reasoning_effort.
