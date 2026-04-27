@@ -377,6 +377,13 @@ class VolcEngineResponsesAPIConfig(OpenAIResponsesAPIConfig):
         response = ResponsesAPIResponse(**raw_response_json)
         response._hidden_params["additional_headers"] = processed_headers
         response._hidden_params["headers"] = raw_response_headers
+
+        # Calculate costs from usage data (fixes P1 issue - VolcEngine GET-response)
+        usage_dict = raw_response_json.get("usage", {})
+        model = raw_response_json.get("model") or getattr(logging_obj, "model", None)
+        if model:
+            self._calculate_response_cost(model, usage_dict, response)
+
         return response
 
     #########################################################
