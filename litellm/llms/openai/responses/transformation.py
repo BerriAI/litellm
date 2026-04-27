@@ -11,11 +11,12 @@ from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response impo
     _safe_convert_created_field,
 )
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
+from litellm.llms.openai.cost_calculation import cost_per_token
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import *
 from litellm.types.responses.main import *
 from litellm.types.router import GenericLiteLLMParams
-from litellm.types.utils import LlmProviders
+from litellm.types.utils import LlmProviders, Usage
 
 from ..common_utils import OpenAIError
 
@@ -240,40 +241,30 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
             response = ResponsesAPIResponse.model_construct(**raw_response_json)
 
         # Calculate costs from usage data (fixes issue #26475)
-        # The Responses API includes usage data but cost calculation was missing
+        # Use OpenAI's cost_per_token utility which properly handles:
+        # - Cached token costs (cache_read_input_token_cost)
+        # - custom_llm_provider for Azure/provider-specific pricing
+        # - Service tiers and all edge cases
         try:
-            usage = raw_response_json.get("usage", {})
-            if usage:
-                prompt_tokens = usage.get("prompt_tokens", 0)
-                completion_tokens = usage.get("completion_tokens", 0)
-                cached_tokens = usage.get("prompt_tokens_details", {}).get("cached_tokens", 0)
+            usage_dict = raw_response_json.get("usage", {})
+            if usage_dict:
+                # Convert usage dict to Usage object for cost_per_token
+                usage_obj = Usage(**usage_dict)
 
-                # Get pricing from model config
-                try:
-                    model_info = litellm.get_model_info(model)
-                    input_cost_per_token = model_info.get("input_cost_per_token", 0)
-                    output_cost_per_token = model_info.get("output_cost_per_token", 0)
-                except Exception as e:
-                    verbose_logger.warning(
-                        f"Could not get model pricing for {model}: {e}. Defaulting to 0."
-                    )
-                    input_cost_per_token = 0
-                    output_cost_per_token = 0
-
-                # Calculate costs (subtract cached tokens from input cost)
-                non_cached_tokens = max(0, prompt_tokens - cached_tokens)
-                input_cost = non_cached_tokens * input_cost_per_token
-                output_cost = completion_tokens * output_cost_per_token
-                total_cost = input_cost + output_cost
+                # Use the proper OpenAI cost calculation that handles all edge cases
+                prompt_cost, completion_cost = cost_per_token(
+                    model=model,
+                    usage=usage_obj,
+                    service_tier=None,  # TODO: Extract from request if needed
+                )
+                total_cost = prompt_cost + completion_cost
 
                 # Store cost in hidden params (used by LiteLLM for tracking and headers)
                 response._hidden_params["response_cost"] = total_cost
 
                 verbose_logger.debug(
                     f"Responses API cost calculated for {model}: "
-                    f"input_tokens={non_cached_tokens} (cached={cached_tokens}), "
-                    f"output_tokens={completion_tokens}, "
-                    f"input_cost=${input_cost:.6f}, output_cost=${output_cost:.6f}, "
+                    f"prompt_cost=${prompt_cost:.6f}, completion_cost=${completion_cost:.6f}, "
                     f"total_cost=${total_cost:.6f}"
                 )
         except Exception as e:
