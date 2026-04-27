@@ -40,6 +40,7 @@ from litellm.types.llms.openai import (
     OpenAIRealtimeStreamSession,
     OpenAIRealtimeStreamSessionEvents,
     OpenAIRealtimeTurnDetection,
+    ResponsesAPIStreamEvents,
 )
 from litellm.types.llms.vertex_ai import (
     GeminiResponseModalities,
@@ -56,11 +57,12 @@ from litellm.utils import get_empty_usage
 
 from ..common_utils import encode_unserializable_types, get_api_key_from_env
 
-MAP_GEMINI_FIELD_TO_OPENAI_EVENT: Dict[str, OpenAIRealtimeEventTypes] = {
+MAP_GEMINI_FIELD_TO_OPENAI_EVENT: Dict[str, Union[OpenAIRealtimeEventTypes, ResponsesAPIStreamEvents]] = {
     "setupComplete": OpenAIRealtimeEventTypes.SESSION_CREATED,
     "serverContent.generationComplete": OpenAIRealtimeEventTypes.RESPONSE_TEXT_DONE,
     "serverContent.turnComplete": OpenAIRealtimeEventTypes.RESPONSE_DONE,
     "serverContent.interrupted": OpenAIRealtimeEventTypes.RESPONSE_DONE,
+    "toolCall": ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DONE,
 }
 
 
@@ -190,7 +192,8 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                 )
 
                 vertex_gemini_config = VertexGeminiConfig()
-                optional_params["generationConfig"]["tools"] = (
+                # Tools should be at the top level of setup, not inside generationConfig
+                optional_params["tools"] = (
                     vertex_gemini_config._map_function(
                         value=value, optional_params=optional_params
                     )
@@ -214,6 +217,107 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
             optional_params.pop("generationConfig")
         return optional_params
 
+    def _handle_session_update(
+        self,
+        json_message: dict,
+        model: str,
+        session_configuration_request: Optional[str],
+    ) -> List[str]:
+        """
+        Handle session.update by sending setup to Gemini.
+        
+        Only sends setup on the FIRST session.update (when session_configuration_request is None).
+        Subsequent session.update messages are ignored because Gemini doesn't support dynamic updates.
+        """
+        if session_configuration_request is None:
+            # First session.update - send the setup with all configuration
+            client_session_configuration_request = self.map_openai_params(
+                optional_params={}, non_default_params=json_message["session"]
+            )
+            client_session_configuration_request["model"] = f"models/{model}"
+            gemini_setup_msg = json.dumps({"setup": client_session_configuration_request})
+            verbose_logger.debug(
+                f"Gemini Realtime: Sending initial setup with tools to backend"
+            )
+            return [gemini_setup_msg]
+        else:
+            # Subsequent session.update - ignore (Gemini doesn't support dynamic updates)
+            verbose_logger.debug(
+                "Gemini Realtime: Ignoring session.update (setup already sent)"
+            )
+            return []
+
+    def _handle_conversation_item(self, json_message: dict) -> List[str]:
+        """
+        Handle conversation.item.create for user text or function call output.
+        
+        Converts OpenAI format to Gemini's clientContent (for user text) or 
+        toolResponse (for function outputs).
+        """
+        item = json_message.get("item", {})
+        item_type = item.get("type")
+        
+        # Handle function call output (tool response)
+        if item_type == "function_call_output":
+            return self._handle_function_call_output(item)
+        
+        # Handle regular text content
+        return self._handle_user_text_content(item)
+
+    def _handle_function_call_output(self, item: dict) -> List[str]:
+        """Transform function_call_output to Gemini toolResponse format."""
+        call_id = item.get("call_id", "")
+        output = item.get("output", "{}")
+        
+        verbose_logger.debug(f"Gemini Realtime: Transforming function_call_output for call_id={call_id}")
+        
+        # Parse the output to get the result
+        try:
+            output_dict = json.loads(output) if isinstance(output, str) else output
+        except json.JSONDecodeError:
+            output_dict = {"result": output}
+        
+        # Build Gemini toolResponse format
+        tool_response_message = {
+            "toolResponse": {
+                "functionResponses": [
+                    {
+                        "id": call_id,
+                        "response": output_dict,
+                    }
+                ]
+            }
+        }
+        
+        return [json.dumps(tool_response_message)]
+
+    def _handle_user_text_content(self, item: dict) -> List[str]:
+        """Transform user text content to Gemini clientContent format."""
+        content_list = item.get("content", [])
+        text_parts = [
+            c.get("text", "")
+            for c in content_list
+            if isinstance(c, dict) and c.get("type") == "input_text"
+        ]
+        text = " ".join(filter(None, text_parts))
+        if not text:
+            return []
+        
+        # Build clientContent message with turns (proper Gemini Live API format)
+        client_content_message = {
+            "clientContent": {
+                "turns": [
+                    {
+                        "role": "user",
+                        "parts": [{"text": text}]
+                    }
+                ],
+                "turnComplete": True
+            }
+        }
+        
+        return [json.dumps(client_content_message)]
+
     def transform_realtime_request(
         self,
         message: str,
@@ -233,14 +337,11 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         messages: List[str] = []
         msg_type = json_message.get("type")
 
-        ## HANDLE SESSION UPDATE — translate to Gemini setup; no realtime_input needed ##
+        ## HANDLE SESSION UPDATE — translate to Gemini setup ##
         if msg_type == "session.update":
-            client_session_configuration_request = self.map_openai_params(
-                optional_params={}, non_default_params=json_message["session"]
+            return self._handle_session_update(
+                json_message, model, session_configuration_request
             )
-            client_session_configuration_request["model"] = f"models/{model}"
-            messages.append(json.dumps({"setup": client_session_configuration_request}))
-            return messages
 
         ## HANDLE response.create — Gemini responds automatically; nothing to forward ##
         if msg_type == "response.create":
@@ -251,37 +352,29 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
             realtime_input_dict["audio"] = HttpxBlobType(
                 mimeType=self.get_audio_mime_type(), data=json_message["audio"]
             )
-        ## HANDLE conversation.item.create — extract actual user text ##
+        ## HANDLE conversation.item.create — extract user text or function call output ##
         elif msg_type == "conversation.item.create":
-            item = json_message.get("item", {})
-            content_list = item.get("content", [])
-            text_parts = [
-                c.get("text", "")
-                for c in content_list
-                if isinstance(c, dict) and c.get("type") == "input_text"
-            ]
-            text = " ".join(filter(None, text_parts))
-            if not text:
-                return []
-            realtime_input_dict["text"] = text
+            return self._handle_conversation_item(json_message)
+        
+        ## HANDLE INPUT AUDIO BUFFER - use realtimeInput for audio streaming ##
+        elif msg_type == "input_audio_buffer.append":
+            realtime_input_dict["audio"] = HttpxBlobType(
+                mimeType=self.get_audio_mime_type(), data=json_message["audio"]
+            )
+            
+            realtime_input_dict = cast(
+                BidiGenerateContentRealtimeInput,
+                encode_unserializable_types(cast(Dict[str, object], realtime_input_dict)),
+            )
+
+            gemini_msg = json.dumps({"realtimeInput": realtime_input_dict})
+            verbose_logger.debug("Gemini Realtime: Sending audio realtimeInput to backend")
+            messages.append(gemini_msg)
+            return messages
         else:
             # Unknown/unsupported OpenAI event type — drop silently rather than
             # forwarding raw JSON as text input to the model.
             return []
-
-        if len(realtime_input_dict) != 1:
-            raise ValueError(
-                f"Only one argument can be set, got {len(realtime_input_dict)}:"
-                f" {list(realtime_input_dict.keys())}"
-            )
-
-        realtime_input_dict = cast(
-            BidiGenerateContentRealtimeInput,
-            encode_unserializable_types(cast(Dict[str, object], realtime_input_dict)),
-        )
-
-        messages.append(json.dumps({"realtime_input": realtime_input_dict}))
-        return messages
 
     def transform_session_created_event(
         self,
@@ -576,6 +669,32 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         returned_items.append(response_output_item_done)
         return returned_items
 
+    def transform_tool_call_events(
+        self,
+        tool_call_message: dict,
+    ) -> List[Dict[str, Any]]:
+        """
+        Transform Gemini toolCall message to OpenAI function call events.
+        
+        Converts Gemini's functionCalls format to OpenAI's response.function_call_arguments.done events.
+        """
+        function_calls = tool_call_message.get("functionCalls", [])
+        
+        verbose_logger.debug(
+            f"Gemini Realtime: Transforming {len(function_calls)} tool call(s) to OpenAI format"
+        )
+        
+        return [
+            {
+                "type": "response.function_call_arguments.done",
+                "event_id": f"event_{uuid.uuid4()}",
+                "call_id": fc.get("id", ""),
+                "name": fc.get("name", ""),
+                "arguments": json.dumps(fc.get("args", {})),
+            }
+            for fc in function_calls
+        ]
+
     @staticmethod
     def get_nested_value(obj: dict, path: str) -> Any:
         keys = path.split(".")
@@ -811,10 +930,10 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         value: dict,
         current_delta_type: Optional[ALL_DELTA_TYPES],
         json_message: dict,
-    ) -> OpenAIRealtimeEventTypes:
+    ) -> Union[OpenAIRealtimeEventTypes, ResponsesAPIStreamEvents]:
         model_turn_event = value.get("modelTurn")
         generation_complete_event = value.get("generationComplete")
-        openai_event: Optional[OpenAIRealtimeEventTypes] = None
+        openai_event: Optional[Union[OpenAIRealtimeEventTypes, ResponsesAPIStreamEvents]] = None
         if model_turn_event:  # check if model turn event
             openai_event = self.map_model_turn_event(model_turn_event)
         elif generation_complete_event:
@@ -853,6 +972,8 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
             else:
                 message_str = str(message)
             raise ValueError(f"Invalid JSON message: {message_str}")
+
+        verbose_logger.debug(f"Realtime Response Transform: Gemini message={json.dumps(json_message)[:500]}")
 
         logging_session_id = logging_obj.litellm_trace_id
 
@@ -949,6 +1070,10 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                 )
                 session_configuration_request = json.dumps(transformed_message)
                 returned_message.append(transformed_message)
+            elif openai_event == ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DONE:
+                # Handle toolCall from Gemini
+                tool_call_events = self.transform_tool_call_events(value)
+                returned_message.extend(tool_call_events)
             elif openai_event == OpenAIRealtimeEventTypes.RESPONSE_DONE:
                 transformed_response_done_event = self.transform_response_done_event(
                     message=BidiGenerateContentServerMessage(**json_message),  # type: ignore
@@ -993,6 +1118,12 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
             transformed_message=returned_message,
             current_item_chunks=current_item_chunks,
         )
+        
+        # Log the transformed events
+        for msg in returned_message:
+            event_type = msg.get("type") if isinstance(msg, dict) else "unknown"
+            verbose_logger.debug(f"Realtime Response Transform: OpenAI event={event_type}, data={json.dumps(msg)[:500] if isinstance(msg, dict) else str(msg)[:500]}")
+        
         return {
             "response": returned_message,
             "current_output_item_id": current_output_item_id,
@@ -1005,7 +1136,10 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         }
 
     def requires_session_configuration(self) -> bool:
-        return True
+        # Return False so we DON'T auto-send setup on connection
+        # Instead, setup will be sent when client sends session.update
+        # This allows us to include tools, instructions, etc. in the FIRST setup
+        return False
 
     def session_configuration_request(self, model: str) -> str:
         """

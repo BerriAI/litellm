@@ -5155,6 +5155,22 @@ class BaseLLMHTTPHandler:
                 )
                 if _session_config:
                     realtime_streaming.session_configuration_request = _session_config
+                
+                # For Gemini/Vertex AI: if no initial setup sent (waiting for client's session.update),
+                # send synthetic session.created to unblock client
+                if not provider_config.requires_session_configuration() and hasattr(
+                    provider_config, 'transform_session_created_event'
+                ):
+                    synthetic_session = provider_config.transform_session_created_event(
+                        model=model,
+                        logging_session_id=logging_obj.litellm_trace_id,
+                        session_configuration_request=None,
+                    )
+                    await websocket.send_text(json.dumps(synthetic_session))
+                    verbose_logger.debug(
+                        "Sent synthetic session.created to client to unblock connection"
+                    )
+                
                 await realtime_streaming.bidirectional_forward()
 
         except websockets.exceptions.InvalidStatusCode as e:  # type: ignore

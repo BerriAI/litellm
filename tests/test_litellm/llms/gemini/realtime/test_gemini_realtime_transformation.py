@@ -242,3 +242,203 @@ def test_gemini_3_1_flash_live_preview_model_cost_map_entry():
         assert info.get("max_output_tokens") == 65536
         assert "video" in info.get("supported_modalities", [])
         assert info.get("supports_function_calling") is True
+
+
+def test_gemini_realtime_tool_call_transformation():
+    """Test transformation of Gemini toolCall to OpenAI function_call_arguments.done format."""
+    config = GeminiRealtimeConfig()
+    
+    # Gemini toolCall message format
+    gemini_tool_call = {
+        "toolCall": {
+            "functionCalls": [
+                {
+                    "id": "call_123",
+                    "name": "get_weather",
+                    "args": {"location": "San Francisco", "unit": "fahrenheit"},
+                }
+            ]
+        }
+    }
+    
+    gemini_tool_call_str = json.dumps(gemini_tool_call)
+    logging_obj = MagicMock()
+    logging_obj.litellm_trace_id = "test-trace-123"
+    
+    # Transform the toolCall message
+    result = config.transform_realtime_response(
+        gemini_tool_call_str,
+        "gemini-2.5-flash",
+        logging_obj,
+        realtime_response_transform_input={
+            "session_configuration_request": None,
+            "current_output_item_id": "item_123",
+            "current_response_id": "resp_123",
+            "current_conversation_id": None,
+            "current_delta_chunks": [],
+            "current_item_chunks": [],
+            "current_delta_type": None,
+        },
+    )
+    
+    print("Tool call transformation result:", json.dumps(result, indent=2))
+    
+    # Verify the transformation
+    responses = result["response"]
+    assert len(responses) > 0, "Expected at least one response event"
+    
+    # Find the function_call_arguments.done event
+    function_call_event = None
+    for event in responses:
+        if event.get("type") == "response.function_call_arguments.done":
+            function_call_event = event
+            break
+    
+    assert function_call_event is not None, "Expected function_call_arguments.done event"
+    assert function_call_event["call_id"] == "call_123"
+    assert function_call_event["name"] == "get_weather"
+    
+    # Verify arguments are properly serialized as JSON string
+    args = json.loads(function_call_event["arguments"])
+    assert args["location"] == "San Francisco"
+    assert args["unit"] == "fahrenheit"
+
+
+def test_gemini_realtime_session_update_with_tools():
+    """Test transformation of OpenAI session.update with tools to Gemini setup format."""
+    config = GeminiRealtimeConfig()
+    
+    # OpenAI format session update with tools
+    session_update = {
+        "type": "session.update",
+        "session": {
+            "instructions": "You are a helpful assistant with weather tools.",
+            "temperature": 0.7,
+            "max_response_output_tokens": 1024,
+            "modalities": ["audio"],
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "get_weather",
+                        "description": "Get the current weather for a location.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "location": {
+                                    "type": "string",
+                                    "description": "The city name",
+                                },
+                                "unit": {
+                                    "type": "string",
+                                    "enum": ["fahrenheit", "celsius"],
+                                },
+                            },
+                            "required": ["location"],
+                        },
+                    },
+                }
+            ],
+        },
+    }
+    
+    # Transform to Gemini format (first session.update, so setup should be sent)
+    messages = config.transform_realtime_request(
+        json.dumps(session_update), "gemini-2.5-flash", session_configuration_request=None
+    )
+    
+    assert len(messages) == 1, "Expected one setup message"
+    
+    gemini_setup = json.loads(messages[0])
+    assert "setup" in gemini_setup
+    
+    setup_config = gemini_setup["setup"]
+    
+    # Verify tools are at top level, not in generationConfig
+    assert "tools" in setup_config
+    assert "tools" not in setup_config.get("generationConfig", {})
+    
+    # Verify tool structure matches Gemini format
+    tools = setup_config["tools"]
+    assert len(tools) == 1
+    assert "function_declarations" in tools[0]
+    
+    function_decl = tools[0]["function_declarations"][0]
+    assert function_decl["name"] == "get_weather"
+    assert "Get the current weather" in function_decl["description"]
+    assert "parameters" in function_decl
+
+
+def test_gemini_realtime_function_call_output_transformation():
+    """Test transformation of OpenAI function_call_output to Gemini toolResponse format."""
+    config = GeminiRealtimeConfig()
+    
+    # OpenAI format function call output
+    function_output = {
+        "type": "conversation.item.create",
+        "item": {
+            "type": "function_call_output",
+            "call_id": "call_123",
+            "output": json.dumps({
+                "location": "San Francisco",
+                "temperature": 72,
+                "unit": "fahrenheit",
+                "conditions": "sunny",
+            }),
+        },
+    }
+    
+    # Transform to Gemini format
+    messages = config.transform_realtime_request(
+        json.dumps(function_output), "gemini-2.5-flash", session_configuration_request="existing"
+    )
+    
+    assert len(messages) == 1, "Expected one toolResponse message"
+    
+    gemini_response = json.loads(messages[0])
+    assert "toolResponse" in gemini_response
+    
+    tool_response = gemini_response["toolResponse"]
+    assert "functionResponses" in tool_response
+    assert len(tool_response["functionResponses"]) == 1
+    
+    func_response = tool_response["functionResponses"][0]
+    assert func_response["id"] == "call_123"
+    assert "response" in func_response
+    assert func_response["response"]["temperature"] == 72
+    assert func_response["response"]["conditions"] == "sunny"
+
+
+def test_gemini_realtime_user_text_transformation():
+    """Test transformation of OpenAI user message to Gemini clientContent format."""
+    config = GeminiRealtimeConfig()
+    
+    # OpenAI format user message
+    user_message = {
+        "type": "conversation.item.create",
+        "item": {
+            "type": "message",
+            "role": "user",
+            "content": [{"type": "input_text", "text": "What's the weather in London?"}],
+        },
+    }
+    
+    # Transform to Gemini format
+    messages = config.transform_realtime_request(
+        json.dumps(user_message), "gemini-2.5-flash", session_configuration_request="existing"
+    )
+    
+    assert len(messages) == 1, "Expected one clientContent message"
+    
+    gemini_message = json.loads(messages[0])
+    assert "clientContent" in gemini_message
+    
+    client_content = gemini_message["clientContent"]
+    assert "turns" in client_content
+    assert len(client_content["turns"]) == 1
+    
+    turn = client_content["turns"][0]
+    assert turn["role"] == "user"
+    assert len(turn["parts"]) == 1
+    assert turn["parts"][0]["text"] == "What's the weather in London?"
+    assert client_content["turnComplete"] is True
