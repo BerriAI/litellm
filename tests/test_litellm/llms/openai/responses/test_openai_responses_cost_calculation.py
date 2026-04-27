@@ -2,18 +2,6 @@
 Unit tests for Responses API cost calculation functionality.
 Tests the fix for issue #26475 - ensuring cost calculation works correctly
 across all 60+ providers inheriting from OpenAIResponsesAPIConfig.
-"""
-import json
-import os
-import sys
-from unittest.mock import MagicMock, patch
-
-import httpx
-import pytest
-
-sys.path.insert(
-    0, os.path.abspath("../../../../..")
-)  # Adds the parent directory to the system path
 
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.types.llms.openai import (

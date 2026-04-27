@@ -63,7 +63,7 @@ class TestVolcEngineResponsesAPICostCalculation:
         # Verify cost was calculated
         assert isinstance(result, ResponsesAPIResponse)
         assert "response_cost" in result._hidden_params
-        assert result._hidden_params["response_cost"] == 0.003  # 0.002 + 0.001
+        assert result._hidden_params["response_cost"] == pytest.approx(0.003)  # 0.002 + 0.001
 
     @patch("litellm.llms.openai.responses.transformation.generic_cost_per_token")
     def test_transform_response_api_response_with_cached_tokens(
@@ -104,7 +104,7 @@ class TestVolcEngineResponsesAPICostCalculation:
         # Verify cost was calculated with caching
         assert isinstance(result, ResponsesAPIResponse)
         assert "response_cost" in result._hidden_params
-        assert result._hidden_params["response_cost"] == 0.007
+        assert result._hidden_params["response_cost"] == pytest.approx(0.007)
 
     @patch("litellm.llms.openai.responses.transformation.generic_cost_per_token")
     def test_transform_streaming_response_completed_calculates_cost(
@@ -142,7 +142,7 @@ class TestVolcEngineResponsesAPICostCalculation:
 
         # Verify cost was calculated and stored in the response object
         assert "response_cost" in result.response._hidden_params
-        assert result.response._hidden_params["response_cost"] == 0.00225
+        assert result.response._hidden_params["response_cost"] == pytest.approx(0.00225)
 
     def test_transform_streaming_response_non_completed_no_cost(self):
         """Test that non-completed streaming events don't calculate cost"""
@@ -197,7 +197,7 @@ class TestVolcEngineResponsesAPICostCalculation:
         # Should patch missing output and still calculate cost
         assert isinstance(result, ResponseCompletedEvent)
         assert "response_cost" in result.response._hidden_params
-        assert result.response._hidden_params["response_cost"] == 0.0015
+        assert result.response._hidden_params["response_cost"] == pytest.approx(0.0015)
 
     @patch("litellm.llms.openai.responses.transformation.generic_cost_per_token")
     def test_cost_calculation_with_zero_tokens(self, mock_generic_cost):

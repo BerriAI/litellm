@@ -94,7 +94,7 @@ class TestManusResponsesAPICostCalculation:
         # Verify cost was calculated
         assert isinstance(result, ResponsesAPIResponse)
         assert "response_cost" in result._hidden_params
-        assert result._hidden_params["response_cost"] == 0.00225
+        assert result._hidden_params["response_cost"] == pytest.approx(0.00225)
 
     @patch("litellm.llms.openai.responses.transformation.generic_cost_per_token")
     def test_transform_get_response_api_response_extracts_model_from_response(
@@ -133,7 +133,7 @@ class TestManusResponsesAPICostCalculation:
         # Verify cost was calculated using model from response
         assert isinstance(result, ResponsesAPIResponse)
         assert "response_cost" in result._hidden_params
-        assert result._hidden_params["response_cost"] == 0.0015
+        assert result._hidden_params["response_cost"] == pytest.approx(0.0015)
 
     @patch("litellm.llms.openai.responses.transformation.generic_cost_per_token")
     def test_transform_get_response_api_response_fallback_to_logging_obj(
@@ -174,7 +174,7 @@ class TestManusResponsesAPICostCalculation:
         # Verify cost was calculated using model from logging_obj
         assert isinstance(result, ResponsesAPIResponse)
         assert "response_cost" in result._hidden_params
-        assert result._hidden_params["response_cost"] == 0.0015
+        assert result._hidden_params["response_cost"] == pytest.approx(0.0015)
 
     @patch("litellm.llms.openai.responses.transformation.generic_cost_per_token")
     def test_cost_calculation_with_missing_usage(self, mock_generic_cost):
