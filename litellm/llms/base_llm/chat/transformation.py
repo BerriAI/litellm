@@ -79,6 +79,19 @@ class BaseLLMException(Exception):
 
 
 class BaseConfig(ABC):
+    # Per-provider capability flag: ``True`` means this provider's
+    # ``map_openai_params`` / ``_map_reasoning_effort`` (or equivalent)
+    # accepts the literal value ``reasoning_effort="disable"`` and translates
+    # it into a real "no reasoning" signal upstream (e.g. Gemini's
+    # ``thinkingConfig.thinkingBudget = 0``, Ollama's native ``think=False``).
+    # Providers that only accept ``low|medium|high|minimal|none|None`` and
+    # would raise on ``"disable"`` (Anthropic, Bedrock, OpenAI o-series, ...)
+    # must leave this as ``False``. Used by
+    # ``litellm.utils._think_to_reasoning_effort`` to decide whether the
+    # Ollama-style ``"think": false`` request flag should be translated to
+    # ``reasoning_effort="disable"`` for this provider, or silently dropped.
+    supports_reasoning_disable: bool = False
+
     def __init__(self):
         pass
 

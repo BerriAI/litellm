@@ -47,6 +47,9 @@ else:
 
 
 class OllamaChatConfig(BaseConfig):
+    # See OllamaConfig: `reasoning_effort="disable"` is mapped to the native
+    # `think=False` parameter upstream, so it is safe to inject for `think:false`.
+    supports_reasoning_disable: bool = True
     """
     Reference: https://github.com/ollama/ollama/blob/main/docs/api.md#parameters
 

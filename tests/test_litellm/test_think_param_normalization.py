@@ -15,6 +15,23 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..",
 from litellm.utils import _think_to_reasoning_effort, get_optional_params
 
 
+class _FakeConfigSupportsDisable:
+    """Stand-in for a provider config (e.g. ``GeminiConfig`` /
+    ``OllamaConfig``) that opts in to ``reasoning_effort='disable'`` via the
+    ``supports_reasoning_disable`` class flag."""
+
+    supports_reasoning_disable = True
+
+
+class _FakeConfigRejectsDisable:
+    """Stand-in for a provider config (e.g. ``AnthropicConfig`` /
+    ``BedrockConverseConfig``) whose ``_map_reasoning_effort`` would raise on
+    the literal ``'disable'``; default value of the ``BaseConfig`` class flag
+    is ``False``."""
+
+    supports_reasoning_disable = False
+
+
 class TestThinkToReasoningEffortHelper:
     def test_think_false_bool_sets_reasoning_effort_disable(self):
         non_default_params: dict = {}
@@ -24,6 +41,7 @@ class TestThinkToReasoningEffortHelper:
             think_value=False,
             non_default_params=non_default_params,
             supported_params=supported_params,
+            provider_config=_FakeConfigSupportsDisable(),
             custom_llm_provider="gemini",
         )
 
@@ -37,6 +55,7 @@ class TestThinkToReasoningEffortHelper:
             think_value=falsy,
             non_default_params=non_default_params,
             supported_params=["reasoning_effort"],
+            provider_config=_FakeConfigSupportsDisable(),
             custom_llm_provider="gemini",
         )
 
@@ -49,6 +68,7 @@ class TestThinkToReasoningEffortHelper:
             think_value=True,
             non_default_params=non_default_params,
             supported_params=["reasoning_effort"],
+            provider_config=_FakeConfigSupportsDisable(),
             custom_llm_provider="gemini",
         )
 
@@ -63,6 +83,7 @@ class TestThinkToReasoningEffortHelper:
             think_value=False,
             non_default_params=non_default_params,
             supported_params=["temperature", "top_p"],
+            provider_config=_FakeConfigRejectsDisable(),
             custom_llm_provider="cohere_chat",
         )
 
@@ -75,6 +96,7 @@ class TestThinkToReasoningEffortHelper:
             think_value=False,
             non_default_params=non_default_params,
             supported_params=["reasoning_effort"],
+            provider_config=_FakeConfigSupportsDisable(),
             custom_llm_provider="gemini",
         )
 
@@ -90,29 +112,40 @@ class TestThinkToReasoningEffortHelper:
             think_value=False,
             non_default_params=non_default_params,
             supported_params=["reasoning_effort"],
+            provider_config=_FakeConfigSupportsDisable(),
             custom_llm_provider="gemini",
         )
 
         assert non_default_params["reasoning_effort"] == ""
 
-    @pytest.mark.parametrize(
-        "provider",
-        ["anthropic", "bedrock", "openai", "azure", "vertex_ai_anthropic"],
-    )
-    def test_think_false_dropped_for_providers_that_reject_disable(self, provider):
-        """Providers whose `_map_reasoning_effort` does not accept the literal
-        ``"disable"`` (Anthropic, Bedrock, OpenAI o-series, ...) would raise a
-        runtime ``ValueError`` / ``BadRequestError`` if we injected
-        ``reasoning_effort="disable"``. For these providers, ``think:false``
-        must be silently dropped instead. Regression test for the P1 review
-        comment on PR #26642."""
+    def test_think_false_dropped_when_provider_config_rejects_disable(self):
+        """Providers whose config has ``supports_reasoning_disable=False`` (the
+        ``BaseConfig`` default — Anthropic, Bedrock, OpenAI o-series, ...)
+        would raise on ``reasoning_effort='disable'``. ``think:false`` must be
+        silently dropped instead. Regression for the P1 review on PR #26642."""
         non_default_params: dict = {}
 
         _think_to_reasoning_effort(
             think_value=False,
             non_default_params=non_default_params,
             supported_params=["reasoning_effort"],
-            custom_llm_provider=provider,
+            provider_config=_FakeConfigRejectsDisable(),
+            custom_llm_provider="anthropic",
+        )
+
+        assert "reasoning_effort" not in non_default_params
+
+    def test_think_false_dropped_when_no_provider_config_passed(self):
+        """If we cannot determine the provider's capability (no config), be
+        conservative and drop rather than risk a runtime ValueError."""
+        non_default_params: dict = {}
+
+        _think_to_reasoning_effort(
+            think_value=False,
+            non_default_params=non_default_params,
+            supported_params=["reasoning_effort"],
+            provider_config=None,
+            custom_llm_provider="some_unknown_provider",
         )
 
         assert "reasoning_effort" not in non_default_params
@@ -124,10 +157,48 @@ class TestThinkToReasoningEffortHelper:
             think_value="maybe",
             non_default_params=non_default_params,
             supported_params=["reasoning_effort"],
+            provider_config=_FakeConfigSupportsDisable(),
             custom_llm_provider="gemini",
         )
 
         assert "reasoning_effort" not in non_default_params
+
+
+class TestProviderConfigsOptInToReasoningDisable:
+    """Verifies the per-provider opt-in flags wired up on the actual config
+    classes — these are what the real ``get_optional_params`` flow consults."""
+
+    def test_gemini_configs_opt_in(self):
+        from litellm.llms.gemini.chat.transformation import GoogleAIStudioGeminiConfig
+        from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+            VertexGeminiConfig,
+        )
+
+        assert VertexGeminiConfig.supports_reasoning_disable is True
+        assert GoogleAIStudioGeminiConfig.supports_reasoning_disable is True
+
+    def test_ollama_configs_opt_in(self):
+        from litellm.llms.ollama.chat.transformation import OllamaChatConfig
+        from litellm.llms.ollama.completion.transformation import OllamaConfig
+
+        assert OllamaConfig.supports_reasoning_disable is True
+        assert OllamaChatConfig.supports_reasoning_disable is True
+
+    def test_anthropic_config_does_not_opt_in(self):
+        """Anthropic's ``_map_reasoning_effort`` raises on ``'disable'``, so it
+        must keep the ``BaseConfig`` default of ``False``."""
+        from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+
+        assert AnthropicConfig.supports_reasoning_disable is False
+
+    def test_bedrock_config_does_not_opt_in(self):
+        """Bedrock Converse rejects any ``reasoning_effort`` value outside
+        ``low|medium|high``, so it must not opt in."""
+        from litellm.llms.bedrock.chat.converse_transformation import (
+            AmazonConverseConfig,
+        )
+
+        assert AmazonConverseConfig.supports_reasoning_disable is False
 
 
 class TestGetOptionalParamsThinkFalse:
