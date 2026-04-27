@@ -198,6 +198,75 @@ def test_get_optional_params_image_gen_filters_empty_values():
     assert optional_params == {}
 
 
+def test_gpt_image_2_provider_and_model_info():
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    litellm.get_model_info.cache_clear()
+
+    model, custom_llm_provider, _, _ = litellm.get_llm_provider(model="gpt-image-2")
+
+    assert model == "gpt-image-2"
+    assert custom_llm_provider == "openai"
+
+    model_info = litellm.get_model_info(model="gpt-image-2")
+    assert model_info["litellm_provider"] == "openai"
+    assert model_info["mode"] == "image_generation"
+    assert model_info["input_cost_per_token"] == 5e-06
+    assert model_info["input_cost_per_image_token"] == 8e-06
+    assert model_info["output_cost_per_token"] == 1e-05
+    assert model_info["output_cost_per_image_token"] == 3e-05
+    assert (
+        "/v1/images/generations"
+        in litellm.model_cost["gpt-image-2"]["supported_endpoints"]
+    )
+    assert (
+        "/v1/images/edits" in litellm.model_cost["gpt-image-2"]["supported_endpoints"]
+    )
+    assert model_info["supports_vision"] is True
+    assert model_info["supports_pdf_input"] is True
+
+
+def test_gpt_image_2_snapshot_model_info():
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    litellm.get_model_info.cache_clear()
+
+    model, custom_llm_provider, _, _ = litellm.get_llm_provider(
+        model="gpt-image-2-2026-04-21"
+    )
+
+    assert model == "gpt-image-2-2026-04-21"
+    assert custom_llm_provider == "openai"
+
+    model_info = litellm.get_model_info(model="gpt-image-2-2026-04-21")
+    assert model_info["litellm_provider"] == "openai"
+    assert model_info["mode"] == "image_generation"
+    assert model_info["output_cost_per_image_token"] == 3e-05
+
+
+def test_azure_gpt_image_2_model_info():
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    litellm.get_model_info.cache_clear()
+
+    model, custom_llm_provider, _, _ = litellm.get_llm_provider(
+        model="azure/gpt-image-2"
+    )
+
+    assert model == "gpt-image-2"
+    assert custom_llm_provider == "azure"
+
+    model_info = litellm.get_model_info(
+        model="gpt-image-2", custom_llm_provider="azure"
+    )
+    assert model_info["litellm_provider"] == "azure"
+    assert model_info["mode"] == "image_generation"
+    assert model_info["input_cost_per_token"] == 5e-06
+    assert model_info["input_cost_per_image_token"] == 8e-06
+    assert model_info["output_cost_per_token"] == 1e-05
+    assert model_info["output_cost_per_image_token"] == 3e-05
+
+
 def test_all_model_configs():
     from litellm.llms.vertex_ai.vertex_ai_partner_models.ai21.transformation import (
         VertexAIAi21Config,
