@@ -3679,6 +3679,54 @@ def filter_out_litellm_params(kwargs: dict) -> dict:
     }
 
 
+def _think_to_reasoning_effort(
+    think_value: Any,
+    non_default_params: dict,
+    supported_params: List[str],
+) -> None:
+    """
+    Translate the Ollama-style ``think`` flag (passed directly in a chat
+    completion request body) into the OpenAI-style ``reasoning_effort`` param.
+
+    Some clients send ``"think": false`` (or ``"false"``) to disable reasoning.
+    Because ``think`` is not part of the OpenAI-compatible param surface, it is
+    otherwise silently dropped, leaving reasoning enabled on providers that
+    default to it (e.g. some Gemini / reasoning-capable models). See
+    https://github.com/BerriAI/litellm/issues/26413
+
+    Behavior:
+
+    - ``think`` falsy (``False`` / ``"false"`` / ``0`` / ``"no"`` / ``"off"``):
+      set ``reasoning_effort = "disable"`` on ``non_default_params`` -- but only
+      when (a) the caller has not already supplied ``reasoning_effort`` and
+      (b) the provider lists ``reasoning_effort`` as a supported param.
+      Otherwise the flag is silently ignored.
+    - ``think`` truthy: ``reasoning_effort`` is left untouched (callers that
+      want to enable reasoning should pass ``reasoning_effort`` explicitly).
+    - ``think`` is an unrecognized string: ignored.
+    """
+    if think_value is None:
+        return
+
+    if isinstance(think_value, str):
+        normalized = think_value.strip().lower()
+        if normalized in ("false", "0", "no", "off"):
+            think_bool: Optional[bool] = False
+        elif normalized in ("true", "1", "yes", "on"):
+            think_bool = True
+        else:
+            think_bool = None
+    else:
+        think_bool = bool(think_value)
+
+    if (
+        think_bool is False
+        and not non_default_params.get("reasoning_effort")
+        and "reasoning_effort" in supported_params
+    ):
+        non_default_params["reasoning_effort"] = "disable"
+
+
 class PreProcessNonDefaultParams:
     @staticmethod
     def base_pre_process_non_default_params(
@@ -3980,6 +4028,14 @@ def get_optional_params(  # noqa: PLR0915
 ):
     passed_params = locals().copy()
     special_params = passed_params.pop("kwargs")
+
+    # Capture and remove the Ollama-style ``think`` flag from kwargs *before*
+    # pre-processing so it cannot leak into ``passed_params`` / ``optional_params``
+    # for openai-compatible providers. The flag is later translated to
+    # ``reasoning_effort`` once we know the provider's supported params.
+    # See https://github.com/BerriAI/litellm/issues/26413
+    _think_value = special_params.pop("think", None)
+
     provider_config: Optional[BaseConfig] = None
     if custom_llm_provider is not None and custom_llm_provider in [
         provider.value for provider in LlmProviders
@@ -4058,6 +4114,19 @@ def get_optional_params(  # noqa: PLR0915
     supported_params = supported_params or []
     allowed_openai_params = allowed_openai_params or []
     supported_params.extend(allowed_openai_params)
+
+    # Honor Ollama-style `think` flag passed directly in the request body. When
+    # `think: false` is supplied (with no explicit `reasoning_effort`), translate
+    # it to `reasoning_effort="disable"` for providers that support reasoning so
+    # reasoning is actually turned off upstream. Otherwise drop it silently so it
+    # does not raise UnsupportedParamsError. See
+    # https://github.com/BerriAI/litellm/issues/26413
+    if _think_value is not None:
+        _think_to_reasoning_effort(
+            think_value=_think_value,
+            non_default_params=non_default_params,
+            supported_params=supported_params,
+        )
 
     _check_valid_arg(
         supported_params=supported_params or [],
