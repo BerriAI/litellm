@@ -171,6 +171,24 @@ class ManusResponsesAPIConfig(OpenAIResponsesAPIConfig):
 
         return base_request
 
+    def _get_usage_dict(self, usage_obj):
+        """Helper to convert ResponseAPIUsage object or dict to usage dict."""
+        if isinstance(usage_obj, ResponseAPIUsage):
+            usage_dict = {
+                "input_tokens": usage_obj.input_tokens,
+                "output_tokens": usage_obj.output_tokens,
+                "total_tokens": usage_obj.total_tokens,
+            }
+            if hasattr(usage_obj, "input_tokens_details") and usage_obj.input_tokens_details:
+                usage_dict["input_tokens_details"] = usage_obj.input_tokens_details
+            if hasattr(usage_obj, "output_tokens_details") and usage_obj.output_tokens_details:
+                usage_dict["output_tokens_details"] = usage_obj.output_tokens_details
+            return usage_dict
+        elif isinstance(usage_obj, dict):
+            return usage_obj
+        else:
+            return {}
+
     def transform_response_api_response(
         self,
         model: str,
@@ -247,7 +265,7 @@ class ManusResponsesAPIConfig(OpenAIResponsesAPIConfig):
             response = ResponsesAPIResponse.model_construct(**raw_response_json)
 
         # Calculate costs from usage data (fixes issue #26475)
-        usage_dict = raw_response_json.get("usage", {})
+        usage_dict = self._get_usage_dict(raw_response_json.get("usage", {}))
         self._calculate_response_cost(model, usage_dict, response)
 
         # Store processed headers in additional_headers so they get returned to the client
@@ -352,8 +370,11 @@ class ManusResponsesAPIConfig(OpenAIResponsesAPIConfig):
             response = ResponsesAPIResponse.model_construct(**raw_response_json)
 
         # Calculate costs from usage data (fixes issue #26475)
-        usage_dict = raw_response_json.get("usage", {})
-        self._calculate_response_cost(model, usage_dict, response)
+        usage_dict = self._get_usage_dict(raw_response_json.get("usage", {}))
+        # Get model from response or logging_obj
+        model = raw_response_json.get("model") or getattr(logging_obj, "model", None)
+        if model:
+            self._calculate_response_cost(model, usage_dict, response)
 
         # Store processed headers in additional_headers so they get returned to the client
         response._hidden_params["additional_headers"] = processed_headers
