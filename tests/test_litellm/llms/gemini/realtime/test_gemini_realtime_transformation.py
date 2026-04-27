@@ -584,3 +584,37 @@ def test_gemini_realtime_multi_tool_calls_have_unique_item_ids():
     assert responses[0]["item_id"] != responses[1]["item_id"]
     assert responses[0]["output_index"] == 0
     assert responses[1]["output_index"] == 1
+
+
+def test_gemini_session_update_includes_input_audio_transcription_default():
+    """Verify _handle_session_update includes inputAudioTranscription default."""
+    config = GeminiRealtimeConfig()
+    session_update = {
+        "type": "session.update",
+        "session": {
+            "modalities": ["text", "audio"],
+            "tools": [
+                {
+                    "type": "function",
+                    "name": "get_weather",
+                    "description": "Get weather",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"location": {"type": "string"}},
+                    },
+                }
+            ],
+        },
+    }
+
+    result = config.transform_realtime_request(
+        json.dumps(session_update),
+        "gemini-2.5-flash",
+        session_configuration_request=None,
+    )
+
+    assert len(result) == 1
+    setup = json.loads(result[0])
+    assert "setup" in setup
+    assert "inputAudioTranscription" in setup["setup"]
+    assert setup["setup"]["inputAudioTranscription"] == {}

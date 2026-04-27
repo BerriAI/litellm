@@ -239,6 +239,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                 "generationConfig", {}
             )
             generation_config.setdefault("responseModalities", ["AUDIO"])
+            client_session_configuration_request.setdefault("inputAudioTranscription", {})
             client_session_configuration_request["model"] = f"models/{model}"
             gemini_setup_msg = json.dumps({"setup": client_session_configuration_request})
             verbose_logger.debug(
