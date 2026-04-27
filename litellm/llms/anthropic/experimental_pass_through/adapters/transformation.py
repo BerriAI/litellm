@@ -534,9 +534,9 @@ class LiteLLMAnthropicMessagesAdapter:
 
             ## ASSISTANT MESSAGE ##
             assistant_message_str: str | None = None
-            assistant_content_list: list[
-                dict[str, Any]
-            ] = []  # For content blocks with cache_control
+            assistant_content_list: list[dict[str, Any]] = (
+                []
+            )  # For content blocks with cache_control
             has_cache_control_in_text = False
             tool_calls: list[ChatCompletionAssistantToolCall] = []
             reasoning_content_parts: list[str] = []
