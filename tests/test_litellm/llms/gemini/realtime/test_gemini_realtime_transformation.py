@@ -655,13 +655,18 @@ def test_gemini_tool_call_emits_response_created_preamble():
     )
     
     responses = result["response"]
-    # Should have: response.created, output_item.added, function_call_arguments.done, conversation.item.created
-    assert len(responses) >= 4
+    # Should have: response.created, output_item.added, function_call_arguments.done, output_item.done, conversation.item.created
+    assert len(responses) >= 5
     assert responses[0]["type"] == "response.created"
     assert "response" in responses[0]
     assert responses[0]["response"]["status"] == "in_progress"
     assert responses[1]["type"] == "response.output_item.added"
     assert responses[1]["item"]["type"] == "function_call"
+    assert responses[1]["item"]["status"] == "in_progress"
     assert responses[2]["type"] == "response.function_call_arguments.done"
-    assert responses[3]["type"] == "conversation.item.created"
+    assert responses[3]["type"] == "response.output_item.done"
     assert responses[3]["item"]["type"] == "function_call"
+    assert responses[3]["item"]["status"] == "completed"
+    assert responses[4]["type"] == "conversation.item.created"
+    assert responses[4]["item"]["type"] == "function_call"
+    assert responses[4]["item"]["status"] == "completed"

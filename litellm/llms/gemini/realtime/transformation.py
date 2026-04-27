@@ -1122,6 +1122,22 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                     })
                     # response.function_call_arguments.done
                     returned_message.append(tool_call)
+                    # response.output_item.done
+                    returned_message.append({
+                        "type": "response.output_item.done",
+                        "event_id": f"event_{uuid.uuid4()}",
+                        "response_id": current_response_id,
+                        "output_index": idx,
+                        "item": {
+                            "id": item_id,
+                            "object": "realtime.item",
+                            "type": "function_call",
+                            "status": "completed",
+                            "call_id": tool_call["call_id"],
+                            "name": tool_call["name"],
+                            "arguments": tool_call["arguments"],
+                        },
+                    })
                     # conversation.item.created
                     returned_message.append({
                         "type": "conversation.item.created",
