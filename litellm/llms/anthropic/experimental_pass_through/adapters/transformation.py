@@ -1331,7 +1331,7 @@ class LiteLLMAnthropicMessagesAdapter:
             openai_finish_reason=response.choices[0].finish_reason  # type: ignore
         )
         # extract usage
-        usage: Usage = response.usage
+        usage: Usage = response.usage  # type: ignore[attr-defined]
         uncached_input_tokens = usage.prompt_tokens or 0
         cached_tokens = 0
         if hasattr(usage, "prompt_tokens_details") and usage.prompt_tokens_details:

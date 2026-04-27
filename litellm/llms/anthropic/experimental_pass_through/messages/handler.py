@@ -48,8 +48,10 @@ def _should_route_to_responses_api(custom_llm_provider: Optional[str]) -> bool:
 
 
 def _sanitize_think_tag_text_blocks(
-    response: Union[AnthropicMessagesResponse, AsyncIterator]
-) -> Union[AnthropicMessagesResponse, AsyncIterator]:
+    response: Union[
+        AnthropicMessagesResponse, AsyncIterator[Any], Coroutine[Any, Any, Any]
+    ],
+) -> Union[AnthropicMessagesResponse, AsyncIterator[Any], Coroutine[Any, Any, Any]]:
     if not isinstance(response, dict):
         return response
 
@@ -57,7 +59,7 @@ def _sanitize_think_tag_text_blocks(
     if not isinstance(content, list):
         return response
 
-    sanitized_content: List[Dict[str, Any]] = []
+    sanitized_content: List[Any] = []
     for block in content:
         if not isinstance(block, dict):
             sanitized_content.append(block)
@@ -221,7 +223,7 @@ async def anthropic_messages(
     client: Optional[AsyncHTTPHandler] = None,
     custom_llm_provider: Optional[str] = None,
     **kwargs,
-) -> Union[AnthropicMessagesResponse, AsyncIterator]:
+) -> Union[AnthropicMessagesResponse, AsyncIterator[Any], Coroutine[Any, Any, Any]]:
     """
     Async: Make llm api request in Anthropic /messages API spec
     """
