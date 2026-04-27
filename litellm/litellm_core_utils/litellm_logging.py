@@ -994,10 +994,8 @@ class Logging(LiteLLMLoggingBaseClass):
                 try:
                     # [Non-blocking Extra Debug Information in metadata]
                     if turn_off_message_logging is True:
-                        _metadata["raw_request"] = (
-                            "redacted by litellm. \
+                        _metadata["raw_request"] = "redacted by litellm. \
                             'litellm.turn_off_message_logging=True'"
-                        )
                     else:
                         curl_command = self._get_request_curl_command(
                             api_base=additional_args.get("api_base", ""),
@@ -1031,12 +1029,8 @@ class Logging(LiteLLMLoggingBaseClass):
                             error=str(e),
                         )
                     )
-                    _metadata["raw_request"] = (
-                        "Unable to Log \
-                        raw request: {}".format(
-                            str(e)
-                        )
-                    )
+                    _metadata["raw_request"] = "Unable to Log \
+                        raw request: {}".format(str(e))
             if getattr(self, "logger_fn", None) and callable(self.logger_fn):
                 try:
                     self.logger_fn(
@@ -1725,13 +1719,20 @@ class Logging(LiteLLMLoggingBaseClass):
             return
         if self.model_call_details.get("litellm_params") is None:
             return
+        metadata_hidden_params = hidden_params.copy()
         response_cost = self.model_call_details.get("response_cost")
-        if hidden_params.get("response_cost") is None and response_cost is not None:
-            hidden_params["response_cost"] = response_cost
-        self.model_call_details["litellm_params"].setdefault("metadata", {})
-        if self.model_call_details["litellm_params"]["metadata"] is None:
-            self.model_call_details["litellm_params"]["metadata"] = {}
-        self.model_call_details["litellm_params"]["metadata"]["hidden_params"] = hidden_params
+        if (
+            metadata_hidden_params.get("response_cost") is None
+            and response_cost is not None
+        ):
+            metadata_hidden_params["response_cost"] = response_cost
+
+        litellm_params = self.model_call_details["litellm_params"]
+        metadata = litellm_params.setdefault("metadata", {})
+        if metadata is None:
+            metadata = {}
+            litellm_params["metadata"] = metadata
+        metadata["hidden_params"] = metadata_hidden_params
 
     def _process_hidden_params_and_response_cost(
         self,
@@ -5439,11 +5440,6 @@ def get_standard_logging_object_payload(
             completion_start_time_float=completion_start_time_float,
             stream=kwargs.get("stream", False),
         )
-        # clean up litellm hidden params
-        clean_hidden_params = StandardLoggingPayloadSetup.get_hidden_params(
-            hidden_params
-        )
-
         # clean up litellm metadata
         clean_metadata = StandardLoggingPayloadSetup.get_standard_logging_metadata(
             metadata=metadata,
@@ -5477,6 +5473,17 @@ def get_standard_logging_object_payload(
         ## Get model cost information ##
         base_model = _get_base_model_from_metadata(model_call_details=kwargs)
         custom_pricing = use_custom_pricing_for_model(litellm_params=litellm_params)
+        response_cost: float = kwargs.get("response_cost", 0) or 0.0
+
+        # clean up litellm hidden params
+        clean_hidden_params = StandardLoggingPayloadSetup.get_hidden_params(
+            hidden_params
+        )
+        if (
+            clean_hidden_params["response_cost"] is None
+            and kwargs.get("response_cost") is not None
+        ):
+            clean_hidden_params["response_cost"] = response_cost
 
         model_cost_information = StandardLoggingPayloadSetup.get_model_cost_information(
             base_model=base_model,
@@ -5485,7 +5492,6 @@ def get_standard_logging_object_payload(
             init_response_obj=init_response_obj,
             api_base=litellm_params.get("api_base"),
         )
-        response_cost: float = kwargs.get("response_cost", 0) or 0.0
 
         error_information = StandardLoggingPayloadSetup.get_error_information(
             original_exception=original_exception,
