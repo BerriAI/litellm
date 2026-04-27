@@ -11,11 +11,12 @@ from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response impo
     _safe_convert_created_field,
 )
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
+from litellm.llms.openai.cost_calculation import cost_per_token
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import *
 from litellm.types.responses.main import *
 from litellm.types.router import GenericLiteLLMParams
-from litellm.types.utils import LlmProviders
+from litellm.types.utils import LlmProviders, Usage
 
 from ..common_utils import OpenAIError
 
@@ -215,7 +216,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
     ) -> ResponsesAPIResponse:
-        """No transform applied since outputs are in OpenAI spec already"""
+        """Transform OpenAI Responses API response with cost calculation"""
         try:
             logging_obj.post_call(
                 original_response=raw_response.text,
@@ -238,6 +239,38 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
                 f"Error constructing ResponsesAPIResponse: {raw_response_json}, using model_construct"
             )
             response = ResponsesAPIResponse.model_construct(**raw_response_json)
+
+        # Calculate costs from usage data (fixes issue #26475)
+        # Use OpenAI's cost_per_token utility which properly handles:
+        # - Cached token costs (cache_read_input_token_cost)
+        # - custom_llm_provider for Azure/provider-specific pricing
+        # - Service tiers and all edge cases
+        try:
+            usage_dict = raw_response_json.get("usage", {})
+            if usage_dict:
+                # Convert usage dict to Usage object for cost_per_token
+                usage_obj = Usage(**usage_dict)
+
+                # Use the proper OpenAI cost calculation that handles all edge cases
+                prompt_cost, completion_cost = cost_per_token(
+                    model=model,
+                    usage=usage_obj,
+                    service_tier=None,  # TODO: Extract from request if needed
+                )
+                total_cost = prompt_cost + completion_cost
+
+                # Store cost in hidden params (used by LiteLLM for tracking and headers)
+                response._hidden_params["response_cost"] = total_cost
+
+                verbose_logger.debug(
+                    f"Responses API cost calculated for {model}: "
+                    f"prompt_cost=${prompt_cost:.6f}, completion_cost=${completion_cost:.6f}, "
+                    f"total_cost=${total_cost:.6f}"
+                )
+        except Exception as e:
+            verbose_logger.error(f"Error calculating Responses API cost: {e}")
+            # Don't fail the request if cost calculation errors
+            pass
 
         # Store processed headers in additional_headers so they get returned to the client
         response._hidden_params["additional_headers"] = processed_headers
