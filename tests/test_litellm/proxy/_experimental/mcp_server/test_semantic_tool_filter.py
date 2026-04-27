@@ -489,9 +489,7 @@ class TestGetToolsByNames:
             {"name": "send_email", "description": "send mail"},
         ]
 
-        matched = filter_instance._get_tools_by_names(
-            ["send_email"], available_tools
-        )
+        matched = filter_instance._get_tools_by_names(["send_email"], available_tools)
 
         assert len(matched) == 1
         assert matched[0]["name"] == "send_email"
@@ -503,9 +501,7 @@ class TestGetToolsByNames:
         client_name = "litellm_" + canonical
         available_tools = [{"name": client_name, "description": "scrape"}]
 
-        matched = filter_instance._get_tools_by_names(
-            [canonical], available_tools
-        )
+        matched = filter_instance._get_tools_by_names([canonical], available_tools)
 
         assert len(matched) == 1
         # Must return the incoming tool unchanged so the client-facing
@@ -516,13 +512,9 @@ class TestGetToolsByNames:
         """Some clients use dash as alias separator; accept that too."""
         filter_instance = self._make_filter()
         canonical = "weather_svc-get_weather"
-        available_tools = [
-            {"name": "mcp-" + canonical, "description": "weather"}
-        ]
+        available_tools = [{"name": "mcp-" + canonical, "description": "weather"}]
 
-        matched = filter_instance._get_tools_by_names(
-            [canonical], available_tools
-        )
+        matched = filter_instance._get_tools_by_names([canonical], available_tools)
 
         assert len(matched) == 1
         assert matched[0]["name"] == "mcp-" + canonical
@@ -552,9 +544,7 @@ class TestGetToolsByNames:
             {"name": "litellm_" + canonical, "description": "wrapped"},
         ]
 
-        matched = filter_instance._get_tools_by_names(
-            [canonical], available_tools
-        )
+        matched = filter_instance._get_tools_by_names([canonical], available_tools)
 
         assert len(matched) == 1
         assert matched[0]["name"] == canonical
@@ -567,9 +557,7 @@ class TestGetToolsByNames:
         separator-anchored suffixes of ``litellm_api-fs-read_file``.
         """
         filter_instance = self._make_filter()
-        available_tools = [
-            {"name": "litellm_api-fs-read_file", "description": "read"}
-        ]
+        available_tools = [{"name": "litellm_api-fs-read_file", "description": "read"}]
 
         matched = filter_instance._get_tools_by_names(
             ["fs-read_file", "api-fs-read_file"], available_tools
@@ -590,9 +578,7 @@ class TestGetToolsByNames:
             {"name": "my_" + canonical, "description": "plain search"},
         ]
 
-        matched = filter_instance._get_tools_by_names(
-            [canonical], available_tools
-        )
+        matched = filter_instance._get_tools_by_names([canonical], available_tools)
 
         assert len(matched) == 1
         assert matched[0]["name"] == "my_" + canonical
@@ -640,3 +626,103 @@ class TestGetToolsByNames:
         )
 
         assert matched == []
+
+
+# ---------------------------------------------------------------------------
+# SemanticToolFilterHook — anthropic_messages call type allowlist
+# ---------------------------------------------------------------------------
+class _AnthropicMessagesMockFilter:
+    """Lightweight stub used only by the anthropic_messages allowlist tests."""
+
+    def __init__(self, top_k: int = 2):
+        self.enabled = True
+        self.top_k = top_k
+        self.received_query = None
+        self.call_count = 0
+
+    def extract_user_query(self, messages):
+        # Anthropic-style content blocks (list of typed blocks).
+        for m in reversed(messages):
+            if m.get("role") == "user":
+                content = m.get("content", "")
+                if isinstance(content, list):
+                    for block in content:
+                        if isinstance(block, dict) and block.get("type") == "text":
+                            return block.get("text", "")
+                    return ""
+                return content
+        return ""
+
+    async def filter_tools(self, query, available_tools):
+        self.call_count += 1
+        self.received_query = query
+        return list(available_tools)[: self.top_k]
+
+
+@pytest.mark.asyncio
+async def test_semantic_filter_hook_runs_for_anthropic_messages():
+    """
+    /v1/messages requests (call_type='anthropic_messages') used by Claude
+    Code and other Anthropic SDK clients must trigger the semantic filter
+    just like /v1/chat/completions. Before this fix the filter silently
+    skipped them, so every MCP tool was forwarded on every request.
+    """
+    from litellm.proxy.hooks.mcp_semantic_filter import SemanticToolFilterHook
+
+    mock_filter = _AnthropicMessagesMockFilter(top_k=2)
+    hook = SemanticToolFilterHook(mock_filter)
+
+    data = {
+        "model": "claude-3-5-sonnet",
+        "messages": [
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": "send an email"}],
+            }
+        ],
+        "tools": [
+            {"type": "function", "function": {"name": "email_send"}},
+            {"type": "function", "function": {"name": "calendar_create"}},
+            {"type": "function", "function": {"name": "calendar_update"}},
+        ],
+        "metadata": {},
+    }
+
+    result = await hook.async_pre_call_hook(
+        user_api_key_dict=Mock(),
+        cache=Mock(),
+        data=data,
+        call_type="anthropic_messages",
+    )
+
+    assert result is not None, "hook must run for anthropic_messages call type"
+    assert mock_filter.call_count == 1
+    assert mock_filter.received_query == "send an email"
+    assert len(result["tools"]) == 2
+
+
+@pytest.mark.asyncio
+async def test_semantic_filter_hook_skips_non_allowlisted_call_type():
+    """
+    Hook must remain a no-op for call types that are not on the allowlist.
+    Adding `anthropic_messages` must not silently widen the allowlist to
+    every call type.
+    """
+    from litellm.proxy.hooks.mcp_semantic_filter import SemanticToolFilterHook
+
+    mock_filter = _AnthropicMessagesMockFilter()
+    hook = SemanticToolFilterHook(mock_filter)
+
+    data = {
+        "messages": [{"role": "user", "content": "hello"}],
+        "tools": [{"type": "function", "function": {"name": "t1"}}],
+        "metadata": {},
+    }
+    result = await hook.async_pre_call_hook(
+        user_api_key_dict=Mock(),
+        cache=Mock(),
+        data=data,
+        call_type="image_generation",
+    )
+    assert result is None
+    assert mock_filter.call_count == 0

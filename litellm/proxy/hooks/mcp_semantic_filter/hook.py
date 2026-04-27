@@ -150,8 +150,17 @@ class SemanticToolFilterHook(CustomLogger):
         Returns:
             Modified data dict with filtered tools, or None if no changes
         """
-        # Only filter endpoints that support tools
-        if call_type not in ("completion", "acompletion", "aresponses"):
+        # Only filter endpoints that support tools.
+        # `anthropic_messages` is the call type used for /v1/messages requests
+        # (Claude Code, Anthropic SDK clients). Without it on the allowlist,
+        # the filter never runs for those clients and every MCP tool is
+        # forwarded on every request.
+        if call_type not in (
+            "completion",
+            "acompletion",
+            "aresponses",
+            "anthropic_messages",
+        ):
             verbose_proxy_logger.debug(
                 f"Skipping semantic filter for call_type={call_type}"
             )
