@@ -54,6 +54,8 @@ class NomaV2Guardrail(CustomGuardrail):
         application_id: Optional[str] = None,
         monitor_mode: Optional[bool] = None,
         block_failures: Optional[bool] = None,
+        streaming_end_of_stream_only: Optional[bool] = None,
+        streaming_sampling_rate: Optional[int] = None,
         **kwargs: Any,
     ) -> None:
         self.async_handler = get_async_httpx_client(
@@ -78,6 +80,15 @@ class NomaV2Guardrail(CustomGuardrail):
             )
         else:
             self.block_failures = block_failures
+
+        # Streaming configuration. Only set the attribute when a value was passed
+        # so that UnifiedLLMGuardrails.async_post_call_streaming_iterator_hook's
+        # getattr(..., <default>) fallback chain remains the source of truth for
+        # unconfigured deployments. Mirrors the GraySwan pattern.
+        if streaming_end_of_stream_only is not None:
+            self.streaming_end_of_stream_only = streaming_end_of_stream_only
+        if streaming_sampling_rate is not None:
+            self.streaming_sampling_rate = streaming_sampling_rate
 
         if self._requires_api_key(api_base=self.api_base) and not self.api_key:
             raise ValueError(
