@@ -366,10 +366,22 @@ def _update_litellm_params_for_health_check(
     - updates the `voice` param with the `health_check_voice` for `audio_speech` mode if it exists Doc: https://docs.litellm.ai/docs/proxy/health#text-to-speech-models
     - for Bedrock models with region routing (bedrock/region/model), strips the litellm routing prefix but preserves the model ID
     """
+    _NON_CHAT_MODES = {
+        "image_generation",
+        "video_generation",
+        "embedding",
+        "rerank",
+        "transcription",
+        "audio_speech",
+    }
+    _mode = model_info.get("mode", None)
     litellm_params["messages"] = _get_random_llm_message()
-    _resolved_max_tokens = _resolve_health_check_max_tokens(model_info, litellm_params)
-    if _resolved_max_tokens is not None:
-        litellm_params["max_tokens"] = _resolved_max_tokens
+    if _mode not in _NON_CHAT_MODES:
+        _resolved_max_tokens = _resolve_health_check_max_tokens(
+            model_info, litellm_params
+        )
+        if _resolved_max_tokens is not None:
+            litellm_params["max_tokens"] = _resolved_max_tokens
 
     _health_check_model = model_info.get("health_check_model", None)
     if _health_check_model is not None:
