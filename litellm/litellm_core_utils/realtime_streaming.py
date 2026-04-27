@@ -75,6 +75,9 @@ class RealTimeStreaming:
         # When a text message is blocked, hold the guardrail reason so the next
         # response.create can be rewritten to include the failure context.
         self._pending_guardrail_message: Optional[str] = None
+        # Track whether session.created has already been sent to the client
+        # (e.g. synthetic event in deferred setup mode).
+        self._session_created_sent_to_client: bool = False
 
     def _should_store_message(
         self,
@@ -441,6 +444,13 @@ class RealTimeStreaming:
         )
         for event in events:
             event_str = json.dumps(event)
+            if isinstance(event, dict) and event.get("type") == "session.created":
+                if self._session_created_sent_to_client:
+                    verbose_logger.debug(
+                        "Skipping duplicate session.created from provider stream"
+                    )
+                    continue
+                self._session_created_sent_to_client = True
             ## For audio/VAD guardrail path: forward session.created first, then inject.
             if (
                 isinstance(event, dict)

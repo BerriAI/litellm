@@ -968,3 +968,57 @@ async def test_on_violation_end_session_closes_on_first_fail():
     assert streaming._violation_count == 1
 
     litellm.callbacks = []  # cleanup
+
+
+@pytest.mark.asyncio
+async def test_provider_path_suppresses_duplicate_session_created_after_synthetic():
+    client_ws = MagicMock()
+    client_ws.send_text = AsyncMock()
+
+    backend_ws = MagicMock()
+    backend_ws.recv = AsyncMock(
+        side_effect=[b'{"setupComplete": {}}', ConnectionClosed(None, None)]
+    )
+    backend_ws.send = AsyncMock()
+
+    provider_config = MagicMock()
+    provider_config.transform_realtime_response = MagicMock(
+        return_value={
+            "response": [
+                {
+                    "type": "session.created",
+                    "event_id": "event_1",
+                    "session": {"id": "sess_1", "modalities": ["audio"]},
+                }
+            ],
+            "current_output_item_id": None,
+            "current_response_id": None,
+            "current_delta_chunks": [],
+            "current_conversation_id": None,
+            "current_item_chunks": [],
+            "current_delta_type": None,
+            "session_configuration_request": None,
+        }
+    )
+
+    logging_obj = MagicMock()
+    logging_obj.litellm_trace_id = "trace_1"
+    logging_obj.async_success_handler = AsyncMock()
+    logging_obj.success_handler = MagicMock()
+
+    streaming = RealTimeStreaming(
+        websocket=client_ws,
+        backend_ws=backend_ws,
+        logging_obj=logging_obj,
+        provider_config=provider_config,
+        model="gemini-2.5-flash",
+    )
+    # Simulate synthetic session.created already sent by llm_http_handler.
+    streaming._session_created_sent_to_client = True
+
+    await streaming.backend_to_client_send_messages()
+
+    sent_payloads = [json.loads(c.args[0]) for c in client_ws.send_text.call_args_list]
+    assert not any(
+        payload.get("type") == "session.created" for payload in sent_payloads
+    ), f"Expected duplicate session.created to be suppressed, got: {sent_payloads}"
