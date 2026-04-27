@@ -674,3 +674,70 @@ def test_gemini_tool_call_emits_response_created_preamble():
     assert responses[5]["response"]["status"] == "completed"
     assert len(responses[5]["response"]["output"]) == 1
     assert responses[5]["response"]["output"][0]["type"] == "function_call"
+
+
+def test_gemini_function_call_output_includes_name():
+    """Verify function_call_output includes name field from stored mapping."""
+    config = GeminiRealtimeConfig()
+    
+    # First, receive a toolCall from Gemini (this stores the call_id → name mapping)
+    gemini_tool_call = {
+        "toolCall": {
+            "functionCalls": [
+                {
+                    "id": "call_123",
+                    "name": "get_weather",
+                    "args": {"location": "San Francisco"}
+                }
+            ]
+        }
+    }
+    
+    logging_obj = MagicMock()
+    logging_obj.litellm_trace_id = "trace_123"
+    
+    config.transform_realtime_response(
+        json.dumps(gemini_tool_call),
+        "gemini-2.5-flash",
+        logging_obj,
+        realtime_response_transform_input={
+            "session_configuration_request": None,
+            "current_output_item_id": None,
+            "current_response_id": None,
+            "current_conversation_id": None,
+            "current_delta_chunks": [],
+            "current_item_chunks": [],
+            "current_delta_type": None,
+        },
+    )
+    
+    # Verify mapping was stored
+    assert "call_123" in config._tool_call_id_to_name
+    assert config._tool_call_id_to_name["call_123"] == "get_weather"
+    
+    # Now send a function_call_output back (this should include the name)
+    function_output = {
+        "type": "conversation.item.create",
+        "item": {
+            "type": "function_call_output",
+            "call_id": "call_123",
+            "output": json.dumps({"result": "72 degrees"})
+        }
+    }
+    
+    result = config.transform_realtime_request(
+        json.dumps(function_output),
+        "gemini-2.5-flash",
+        session_configuration_request="{}",
+    )
+    
+    assert len(result) == 1
+    tool_response = json.loads(result[0])
+    assert "toolResponse" in tool_response
+    assert "functionResponses" in tool_response["toolResponse"]
+    assert len(tool_response["toolResponse"]["functionResponses"]) == 1
+    
+    function_response = tool_response["toolResponse"]["functionResponses"][0]
+    assert function_response["id"] == "call_123"
+    assert function_response["name"] == "get_weather"  # ✅ Name is included
+    assert "response" in function_response
