@@ -215,7 +215,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
     ) -> ResponsesAPIResponse:
-        """No transform applied since outputs are in OpenAI spec already"""
+        """Transform OpenAI Responses API response with cost calculation"""
         try:
             logging_obj.post_call(
                 original_response=raw_response.text,
@@ -238,6 +238,48 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
                 f"Error constructing ResponsesAPIResponse: {raw_response_json}, using model_construct"
             )
             response = ResponsesAPIResponse.model_construct(**raw_response_json)
+
+        # Calculate costs from usage data (fixes issue #26475)
+        # The Responses API includes usage data but cost calculation was missing
+        try:
+            usage = raw_response_json.get("usage", {})
+            if usage:
+                prompt_tokens = usage.get("prompt_tokens", 0)
+                completion_tokens = usage.get("completion_tokens", 0)
+                cached_tokens = usage.get("prompt_tokens_details", {}).get("cached_tokens", 0)
+
+                # Get pricing from model config
+                try:
+                    model_info = litellm.get_model_info(model)
+                    input_cost_per_token = model_info.get("input_cost_per_token", 0)
+                    output_cost_per_token = model_info.get("output_cost_per_token", 0)
+                except Exception as e:
+                    verbose_logger.warning(
+                        f"Could not get model pricing for {model}: {e}. Defaulting to 0."
+                    )
+                    input_cost_per_token = 0
+                    output_cost_per_token = 0
+
+                # Calculate costs (subtract cached tokens from input cost)
+                non_cached_tokens = max(0, prompt_tokens - cached_tokens)
+                input_cost = non_cached_tokens * input_cost_per_token
+                output_cost = completion_tokens * output_cost_per_token
+                total_cost = input_cost + output_cost
+
+                # Store cost in hidden params (used by LiteLLM for tracking and headers)
+                response._hidden_params["response_cost"] = total_cost
+
+                verbose_logger.debug(
+                    f"Responses API cost calculated for {model}: "
+                    f"input_tokens={non_cached_tokens} (cached={cached_tokens}), "
+                    f"output_tokens={completion_tokens}, "
+                    f"input_cost=${input_cost:.6f}, output_cost=${output_cost:.6f}, "
+                    f"total_cost=${total_cost:.6f}"
+                )
+        except Exception as e:
+            verbose_logger.error(f"Error calculating Responses API cost: {e}")
+            # Don't fail the request if cost calculation errors
+            pass
 
         # Store processed headers in additional_headers so they get returned to the client
         response._hidden_params["additional_headers"] = processed_headers
