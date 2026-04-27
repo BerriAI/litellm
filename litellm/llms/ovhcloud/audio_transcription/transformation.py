@@ -160,7 +160,11 @@ class OVHCloudAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         # `duration` is replaced by `seconds` in STT responses.
         # Prefer `seconds`, fall back to `duration`, normalize to `duration`
         # so downstream consumers see a consistent key.
-        duration = response_json.get("seconds") or response_json.get("duration")
+        duration = (
+            response_json["seconds"]
+            if "seconds" in response_json and response_json["seconds"] is not None
+            else response_json.get("duration")
+        )
         if duration is not None:
             response_json["duration"] = duration
 
