@@ -122,11 +122,17 @@ def map_system_message_pt(messages: list) -> list:
 
                     next_content = next_m["content"]
                     if isinstance(next_content, list):
-                        next_m["content"] = [
-                            {"type": "text", "text": sys_text}
-                        ] + next_content
+                        # Only prepend a text block when sys_text is non-empty;
+                        # otherwise we'd inject an empty {"type":"text","text":""}
+                        if sys_text:
+                            next_m["content"] = [
+                                {"type": "text", "text": sys_text}
+                            ] + next_content
                     else:
-                        next_m["content"] = sys_text + " " + next_content
+                        # Avoid a stray leading space when sys_text is empty
+                        next_m["content"] = (
+                            sys_text + " " + next_content if sys_text else next_content
+                        )
                 elif next_role == "system":  # Next message is a system message
                     # Append a user message instead of the system message
                     new_message = {"role": "user", "content": m["content"]}

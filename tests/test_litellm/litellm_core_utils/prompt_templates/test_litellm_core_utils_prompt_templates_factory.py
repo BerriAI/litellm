@@ -12,6 +12,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     anthropic_messages_pt,
     _convert_to_bedrock_tool_call_invoke,
     convert_to_gemini_tool_call_result,
+    map_system_message_pt,
     ollama_pt,
     sanitize_messages_for_tool_calling,
 )
@@ -2367,3 +2368,174 @@ def test_anthropic_messages_pt_file_block_preserves_cache_control():
     assert text_block["type"] == "text"
     assert "cache_control" in text_block
     assert text_block["cache_control"]["type"] == "ephemeral"
+
+
+# ---------------------------------------------------------------------------
+# map_system_message_pt — list-typed content support (issue #23757)
+# ---------------------------------------------------------------------------
+class TestMapSystemMessagePtListContent:
+    """
+    Verify that map_system_message_pt merges system messages into the next
+    user/assistant message correctly when either side carries a list of
+    typed content blocks (e.g. [{"type": "text", "text": "..."}]) — the
+    shape produced by Anthropic-format adapters such as Claude Code.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/23757.
+    """
+
+    def test_string_system_string_user(self):
+        """Baseline: both sides plain strings — original behaviour preserved."""
+        messages = [
+            {"role": "system", "content": "Be brief."},
+            {"role": "user", "content": "Hello."},
+        ]
+        result = map_system_message_pt(messages)
+        assert len(result) == 1
+        assert result[0]["role"] == "user"
+        assert result[0]["content"] == "Be brief. Hello."
+
+    def test_list_system_list_user(self):
+        """Both sides typed content lists — must NOT raise TypeError."""
+        messages = [
+            {
+                "role": "system",
+                "content": [{"type": "text", "text": "Be brief."}],
+            },
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": "Hello."}],
+            },
+        ]
+        result = map_system_message_pt(messages)
+        assert len(result) == 1
+        assert result[0]["role"] == "user"
+        # System text is prepended as a new text block
+        content = result[0]["content"]
+        assert isinstance(content, list)
+        assert content[0] == {"type": "text", "text": "Be brief."}
+        assert content[1] == {"type": "text", "text": "Hello."}
+
+    def test_list_system_string_user(self):
+        """System list, user string — extract sys_text and concat."""
+        messages = [
+            {
+                "role": "system",
+                "content": [{"type": "text", "text": "Be brief."}],
+            },
+            {"role": "user", "content": "Hello."},
+        ]
+        result = map_system_message_pt(messages)
+        assert len(result) == 1
+        assert result[0]["content"] == "Be brief. Hello."
+
+    def test_string_system_list_user(self):
+        """System string, user list — prepend text block to list."""
+        messages = [
+            {"role": "system", "content": "Be brief."},
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": "Hello."}],
+            },
+        ]
+        result = map_system_message_pt(messages)
+        assert len(result) == 1
+        content = result[0]["content"]
+        assert content[0] == {"type": "text", "text": "Be brief."}
+        assert content[1] == {"type": "text", "text": "Hello."}
+
+    def test_list_system_with_non_text_blocks_only_no_stray_space(self):
+        """
+        Edge case (Greptile P2): when sys_content is a list whose only
+        blocks are non-text (e.g. pure-image system), sys_text is "".
+        Must NOT produce a stray leading space on the string path.
+        """
+        messages = [
+            {
+                "role": "system",
+                "content": [
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": "image/png",
+                            "data": "...",
+                        },
+                    }
+                ],
+            },
+            {"role": "user", "content": "Hello."},
+        ]
+        result = map_system_message_pt(messages)
+        assert len(result) == 1
+        # No leading space when sys_text was ""
+        assert result[0]["content"] == "Hello."
+
+    def test_list_system_with_non_text_blocks_only_no_empty_text_block(self):
+        """
+        Edge case (Greptile P2): when sys_content is a list whose only
+        blocks are non-text and the next message is also a list, must
+        NOT prepend an empty {"type": "text", "text": ""} block.
+        """
+        messages = [
+            {
+                "role": "system",
+                "content": [
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": "image/png",
+                            "data": "...",
+                        },
+                    }
+                ],
+            },
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": "Hello."}],
+            },
+        ]
+        result = map_system_message_pt(messages)
+        assert len(result) == 1
+        content = result[0]["content"]
+        # next_content is preserved as-is — no empty text block prepended
+        assert content == [{"type": "text", "text": "Hello."}]
+
+    def test_multiple_text_blocks_in_system(self):
+        """System with multiple text blocks — joined with space."""
+        messages = [
+            {
+                "role": "system",
+                "content": [
+                    {"type": "text", "text": "Be brief."},
+                    {"type": "text", "text": "Be polite."},
+                ],
+            },
+            {"role": "user", "content": "Hello."},
+        ]
+        result = map_system_message_pt(messages)
+        assert result[0]["content"] == "Be brief. Be polite. Hello."
+
+    def test_system_at_end_of_list(self):
+        """System message as the last message — converts to user message."""
+        messages = [
+            {"role": "user", "content": "Hi."},
+            {"role": "system", "content": "Be brief."},
+        ]
+        result = map_system_message_pt(messages)
+        assert len(result) == 2
+        assert result[1]["role"] == "user"
+        assert result[1]["content"] == "Be brief."
+
+    def test_consecutive_system_messages(self):
+        """system→system→user — first system becomes a user message."""
+        messages = [
+            {"role": "system", "content": "Be brief."},
+            {"role": "system", "content": "Be polite."},
+            {"role": "user", "content": "Hello."},
+        ]
+        result = map_system_message_pt(messages)
+        # First system is appended as user, second is merged into "Hello."
+        assert result[0]["role"] == "user"
+        assert result[0]["content"] == "Be brief."
+        assert result[-1]["content"] == "Be polite. Hello."
