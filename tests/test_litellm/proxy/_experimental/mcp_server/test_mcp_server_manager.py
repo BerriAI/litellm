@@ -859,6 +859,49 @@ class TestMCPServerManager:
         )
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "authority_host",
+        [
+            "login.microsoftonline.us",
+            "login.chinacloudapi.cn",
+        ],
+    )
+    async def test_fetch_single_authorization_server_metadata_derives_azure_sovereign_metadata(
+        self,
+        authority_host: str,
+    ):
+        manager = MCPServerManager()
+        issuer = f"https://{authority_host}/test-tenant-id/v2.0"
+
+        request = httpx.Request("GET", issuer)
+        response_obj = httpx.Response(status_code=404, request=request)
+        mock_response = MagicMock()
+        mock_response.raise_for_status = MagicMock(
+            side_effect=httpx.HTTPStatusError(
+                "not found", request=request, response=response_obj
+            )
+        )
+
+        mock_client = MagicMock()
+        mock_client.get = AsyncMock(return_value=mock_response)
+
+        with patch(
+            "litellm.proxy._experimental.mcp_server.mcp_server_manager.get_async_httpx_client",
+            return_value=mock_client,
+        ):
+            result = await manager._fetch_single_authorization_server_metadata(issuer)
+
+        assert result is not None
+        assert (
+            result.authorization_url
+            == f"https://{authority_host}/test-tenant-id/oauth2/v2.0/authorize"
+        )
+        assert (
+            result.token_url
+            == f"https://{authority_host}/test-tenant-id/oauth2/v2.0/token"
+        )
+
+    @pytest.mark.asyncio
     async def test_descovery_metadata_falls_back_to_origin_when_no_auth_servers(self):
         manager = MCPServerManager()
         server_url = "https://example.com/public/mcp"

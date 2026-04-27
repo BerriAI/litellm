@@ -1542,7 +1542,6 @@ if MCP_AVAILABLE:
     @router.post(
         "/server/oauth/{server_id}/token",
         include_in_schema=False,
-        dependencies=[Depends(user_api_key_auth)],
     )
     async def mcp_token(
         request: Request,
