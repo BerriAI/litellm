@@ -1926,14 +1926,17 @@ async def increment_spend_counters(
         )
 
     if tags is not None:
-        for tag_name in tags:
-            if not tag_name or not isinstance(tag_name, str):
-                continue
-            await _init_and_increment_spend_counter(
+        tag_tasks = [
+            _init_and_increment_spend_counter(
                 counter_key=f"spend:tag:{tag_name}",
                 source_cache_key=f"tag:{tag_name}",
                 increment=response_cost,
             )
+            for tag_name in tags
+            if tag_name and isinstance(tag_name, str)
+        ]
+        if tag_tasks:
+            await asyncio.gather(*tag_tasks)
 
 
 async def _init_and_increment_spend_counter(
@@ -2265,8 +2268,8 @@ async def update_cache(  # noqa: PLR0915
         if org_id is None or response_cost is None:
             return
 
-        try:
-            for cache_key in (f"org_id:{org_id}", f"org_id:{org_id}:with_budget"):
+        for cache_key in (f"org_id:{org_id}", f"org_id:{org_id}:with_budget"):
+            try:
                 existing_org_obj = await user_api_key_cache.async_get_cache(
                     key=cache_key
                 )
@@ -2286,16 +2289,17 @@ async def update_cache(  # noqa: PLR0915
                 else:
                     existing_org_obj.spend = new_spend
                     values_to_update_in_cache.append((cache_key, existing_org_obj))
-        except Exception as e:
-            verbose_proxy_logger.warning(
-                "Spend tracking - failed to update organization spend in cache. "
-                "Budget enforcement may use stale spend values. "
-                "org_id=%s, response_cost=%s - %s\n%s",
-                org_id,
-                response_cost,
-                str(e),
-                traceback.format_exc(),
-            )
+            except Exception as e:
+                verbose_proxy_logger.warning(
+                    "Spend tracking - failed to update organization spend in cache. "
+                    "Budget enforcement may use stale spend values. "
+                    "org_id=%s, cache_key=%s, response_cost=%s - %s\n%s",
+                    org_id,
+                    cache_key,
+                    response_cost,
+                    str(e),
+                    traceback.format_exc(),
+                )
 
     ### UPDATE TAG SPEND ###
     async def _update_tag_cache():
