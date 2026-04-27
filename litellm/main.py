@@ -941,6 +941,14 @@ def responses_api_bridge_check(
     reasoning_effort: Optional[Any] = None,
 ) -> Tuple[dict, str]:
     model_info: Dict[str, Any] = {}
+
+    # Global flag: route ALL OpenAI chat completions through Responses API.
+    # Returns early with minimal model_info; callers only inspect the "mode" key.
+    if litellm.route_all_chat_openai_to_responses and custom_llm_provider == "openai":
+        model = model.replace("responses/", "")
+        model_info["mode"] = "responses"
+        return model_info, model
+
     try:
         model_info = cast(
             dict,
@@ -7389,8 +7397,9 @@ def stream_chunk_builder(  # noqa: PLR0915
         if len(chunks) == 0:
             return None
         ## Route to the text completion logic
-        if isinstance(
-            chunks[0]["choices"][0], litellm.utils.TextChoices
+        first_chunk_with_choices = next((c for c in chunks if c["choices"]), None)
+        if first_chunk_with_choices is not None and isinstance(
+            first_chunk_with_choices["choices"][0], litellm.utils.TextChoices
         ):  # route to the text completion logic
             return stream_chunk_builder_text_completion(
                 chunks=chunks, messages=messages

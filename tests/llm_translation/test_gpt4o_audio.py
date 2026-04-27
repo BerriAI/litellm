@@ -34,8 +34,10 @@ async def check_streaming_response(completion):
     _audio_id = None
     async for chunk in completion:
         print(chunk)
+        if len(chunk.choices) == 0:
+            continue
         _choice: StreamingChoices = chunk.choices[0]
-        if _choice.delta.audio is not None:
+        if _choice.delta is not None and _choice.delta.audio is not None:
             if _choice.delta.audio.get("data") is not None:
                 _audio_bytes = _choice.delta.audio["data"]
             if _choice.delta.audio.get("transcript") is not None:

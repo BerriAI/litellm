@@ -65,12 +65,18 @@ _GIT_SUBDIR_SOURCE = {
 }
 
 
+@pytest.fixture(autouse=True)
+def _patch_proxy_globals(monkeypatch):
+    """Scope prisma_client/master_key mutations to each test via monkeypatch."""
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server, "prisma_client", _make_mock_prisma()
+    )
+    monkeypatch.setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+
+
 @pytest.mark.asyncio
 async def test_register_plugin_git_subdir_success():
     """git-subdir with both url and path fields registers successfully."""
-    setattr(litellm.proxy.proxy_server, "prisma_client", _make_mock_prisma())
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
-
     request = RegisterPluginRequest(
         name="my-monorepo-plugin", source=_GIT_SUBDIR_SOURCE
     )
@@ -86,9 +92,6 @@ async def test_register_plugin_git_subdir_success():
 @pytest.mark.asyncio
 async def test_register_plugin_git_subdir_update():
     """Registering the same git-subdir plugin twice returns action=updated."""
-    setattr(litellm.proxy.proxy_server, "prisma_client", _make_mock_prisma())
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
-
     request = RegisterPluginRequest(
         name="my-monorepo-plugin", source=_GIT_SUBDIR_SOURCE, version="1.0.0"
     )
@@ -106,9 +109,6 @@ async def test_register_plugin_git_subdir_update():
 @pytest.mark.asyncio
 async def test_register_plugin_git_subdir_missing_url():
     """git-subdir without url field raises HTTP 400."""
-    setattr(litellm.proxy.proxy_server, "prisma_client", _make_mock_prisma())
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
-
     request = RegisterPluginRequest(
         name="bad-plugin",
         source={"source": "git-subdir", "path": "plugins/my-plugin"},
@@ -124,9 +124,6 @@ async def test_register_plugin_git_subdir_missing_url():
 @pytest.mark.asyncio
 async def test_register_plugin_git_subdir_empty_url():
     """git-subdir with empty url raises HTTP 400."""
-    setattr(litellm.proxy.proxy_server, "prisma_client", _make_mock_prisma())
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
-
     request = RegisterPluginRequest(
         name="bad-plugin",
         source={"source": "git-subdir", "url": "", "path": "plugins/my-plugin"},
@@ -142,9 +139,6 @@ async def test_register_plugin_git_subdir_empty_url():
 @pytest.mark.asyncio
 async def test_register_plugin_git_subdir_missing_path():
     """git-subdir without path field raises HTTP 400."""
-    setattr(litellm.proxy.proxy_server, "prisma_client", _make_mock_prisma())
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
-
     request = RegisterPluginRequest(
         name="bad-plugin",
         source={"source": "git-subdir", "url": "https://github.com/org/monorepo.git"},
@@ -160,9 +154,6 @@ async def test_register_plugin_git_subdir_missing_path():
 @pytest.mark.asyncio
 async def test_register_plugin_git_subdir_empty_path():
     """git-subdir with empty path raises HTTP 400."""
-    setattr(litellm.proxy.proxy_server, "prisma_client", _make_mock_prisma())
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
-
     request = RegisterPluginRequest(
         name="bad-plugin",
         source={
@@ -182,9 +173,6 @@ async def test_register_plugin_git_subdir_empty_path():
 @pytest.mark.asyncio
 async def test_register_plugin_git_subdir_path_traversal():
     """git-subdir with path traversal segments raises HTTP 400."""
-    setattr(litellm.proxy.proxy_server, "prisma_client", _make_mock_prisma())
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
-
     for bad_path in [
         "../../etc/passwd",
         "../secrets",
@@ -213,9 +201,6 @@ async def test_register_plugin_git_subdir_path_traversal():
 @pytest.mark.asyncio
 async def test_register_plugin_unknown_source_type():
     """Unknown source type raises HTTP 400 listing all valid types."""
-    setattr(litellm.proxy.proxy_server, "prisma_client", _make_mock_prisma())
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
-
     request = RegisterPluginRequest(
         name="bad-plugin",
         source={"source": "ftp", "url": "ftp://example.com/repo"},

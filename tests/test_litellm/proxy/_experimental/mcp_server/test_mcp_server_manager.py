@@ -2610,5 +2610,212 @@ class TestMCPServerManagerUpstreamInstructionsCache:
         assert "srv_b" in by_name and by_name["srv_b"].instructions is None
 
 
+class TestMCPServerManagerExpandPermissionList:
+    """Tests for the alias/name-aware permission list expansion used by team MCP permissions."""
+
+    def _make_server(
+        self,
+        server_id: str,
+        server_name: str,
+        alias=None,
+        name=None,
+    ) -> MCPServer:
+        return MCPServer(
+            server_id=server_id,
+            name=name if name is not None else (alias or server_name),
+            alias=alias,
+            server_name=server_name,
+            url=f"https://{server_id}.example.com",
+            transport=MCPTransport.http,
+        )
+
+    def test_empty_list_returns_empty(self):
+        manager = MCPServerManager()
+        assert manager.expand_permission_list([]) == []
+
+    def test_expands_server_name(self):
+        manager = MCPServerManager()
+        manager.config_mcp_servers["id-usw1"] = self._make_server(
+            "id-usw1", server_name="a"
+        )
+
+        assert manager.expand_permission_list(["a"]) == ["id-usw1"]
+
+    def test_expands_alias(self):
+        manager = MCPServerManager()
+        manager.config_mcp_servers["id-1"] = self._make_server(
+            "id-1", server_name="internal_name", alias="public_alias"
+        )
+
+        assert manager.expand_permission_list(["public_alias"]) == ["id-1"]
+
+    def test_passes_through_unknown_entry(self):
+        """Unresolved entries pass through unchanged (with a debug log) —
+        the downstream access check denies them when compared to the
+        concrete request server_id."""
+        manager = MCPServerManager()
+        manager.config_mcp_servers["id-1"] = self._make_server("id-1", server_name="b")
+
+        assert manager.expand_permission_list(["a"]) == ["a"]
+
+    def test_name_collision_expands_to_all_matches(self):
+        """Two servers sharing a server_name both resolve — the documented behavior."""
+        manager = MCPServerManager()
+        manager.config_mcp_servers["id-config"] = self._make_server(
+            "id-config", server_name="shared"
+        )
+        manager.registry["id-db"] = self._make_server("id-db", server_name="shared")
+
+        assert sorted(manager.expand_permission_list(["shared"])) == [
+            "id-config",
+            "id-db",
+        ]
+
+    def test_searches_config_and_registry_union(self):
+        manager = MCPServerManager()
+        manager.config_mcp_servers["cfg-id"] = self._make_server(
+            "cfg-id", server_name="a"
+        )
+        manager.registry["reg-id"] = self._make_server("reg-id", server_name="b")
+
+        assert manager.expand_permission_list(["a"]) == ["cfg-id"]
+        assert manager.expand_permission_list(["b"]) == ["reg-id"]
+
+    def test_id_match_takes_precedence_over_name_match(self):
+        """
+        If a permission entry matches a server_id directly, don't also add
+        servers whose server_name happens to equal that id.
+        """
+        manager = MCPServerManager()
+        manager.config_mcp_servers["id-1"] = self._make_server(
+            "id-1", server_name="other_name"
+        )
+        manager.config_mcp_servers["id-2"] = self._make_server(
+            "id-2", server_name="id-1"
+        )
+
+        assert manager.expand_permission_list(["id-1"]) == ["id-1"]
+
+    def test_mixed_ids_and_names_in_same_list(self):
+        manager = MCPServerManager()
+        manager.config_mcp_servers["uuid-1"] = self._make_server(
+            "uuid-1", server_name="a"
+        )
+        manager.config_mcp_servers["uuid-2"] = self._make_server(
+            "uuid-2", server_name="b"
+        )
+
+        # ["uuid-1", "b"] -> uuid-1 passes through, "b" resolves to uuid-2
+        assert sorted(manager.expand_permission_list(["uuid-1", "b"])) == [
+            "uuid-1",
+            "uuid-2",
+        ]
+
+    def test_deduplicates_overlapping_id_and_name_entries(self):
+        """If a list references the same server by both id and name, return it once."""
+        manager = MCPServerManager()
+        manager.config_mcp_servers["uuid-1"] = self._make_server(
+            "uuid-1", server_name="a"
+        )
+
+        assert manager.expand_permission_list(["uuid-1", "a"]) == ["uuid-1"]
+
+    def test_simulates_cross_region_portability(self):
+        """
+        Same permission entry "a" resolves to different concrete IDs per region —
+        the cross-region portability the customer is asking for.
+        """
+        usw1 = MCPServerManager()
+        usw1.config_mcp_servers["hash-usw1"] = self._make_server(
+            "hash-usw1", server_name="a"
+        )
+
+        usc1 = MCPServerManager()
+        usc1.config_mcp_servers["hash-usc1"] = self._make_server(
+            "hash-usc1", server_name="a"
+        )
+
+        assert usw1.expand_permission_list(["a"]) == ["hash-usw1"]
+        assert usc1.expand_permission_list(["a"]) == ["hash-usc1"]
+
+
+class TestMCPServerManagerExpandToolPermissions:
+    """Tests for tool-permission dict rewriting — the privilege-escalation guard."""
+
+    def _make_server(self, server_id: str, server_name: str, alias=None) -> MCPServer:
+        return MCPServer(
+            server_id=server_id,
+            name=alias or server_name,
+            alias=alias,
+            server_name=server_name,
+            url=f"https://{server_id}.example.com",
+            transport=MCPTransport.http,
+        )
+
+    def test_empty_or_none_returns_empty_dict(self):
+        manager = MCPServerManager()
+        assert manager.expand_tool_permissions(None) == {}
+        assert manager.expand_tool_permissions({}) == {}
+
+    def test_rewrites_name_key_to_server_id(self):
+        """Privilege-escalation guard: a name-based key must resolve to the
+        concrete server_id, otherwise `.get(server_id)` misses and the tool
+        restriction is silently dropped (caller treats None as allow-all)."""
+        manager = MCPServerManager()
+        manager.config_mcp_servers["uuid-a"] = self._make_server(
+            "uuid-a", server_name="my-alias"
+        )
+
+        result = manager.expand_tool_permissions({"my-alias": ["read_file"]})
+        assert result == {"uuid-a": ["read_file"]}
+
+    def test_passes_through_existing_server_id_key(self):
+        manager = MCPServerManager()
+        manager.config_mcp_servers["uuid-a"] = self._make_server(
+            "uuid-a", server_name="alpha"
+        )
+
+        result = manager.expand_tool_permissions({"uuid-a": ["read_file"]})
+        assert result == {"uuid-a": ["read_file"]}
+
+    def test_unresolved_key_passes_through_unchanged(self):
+        """A stale id-keyed restriction (server since deleted, or just a
+        test-fixture placeholder) must still apply when something looks it
+        up by that same string — dropping would silently remove the
+        restriction."""
+        manager = MCPServerManager()
+
+        result = manager.expand_tool_permissions({"stale-uuid": ["read_file"]})
+        assert result == {"stale-uuid": ["read_file"]}
+
+    def test_name_collision_unions_tool_lists(self):
+        """Two servers sharing a server_name both match; their tool lists get
+        the restriction (matches the list-expansion collision semantics)."""
+        manager = MCPServerManager()
+        manager.config_mcp_servers["uuid-1"] = self._make_server(
+            "uuid-1", server_name="shared"
+        )
+        manager.registry["uuid-2"] = self._make_server("uuid-2", server_name="shared")
+
+        result = manager.expand_tool_permissions({"shared": ["read_file"]})
+        assert sorted(result.keys()) == ["uuid-1", "uuid-2"]
+        assert result["uuid-1"] == ["read_file"]
+        assert result["uuid-2"] == ["read_file"]
+
+    def test_id_and_name_keys_pointing_at_same_server_union_tools(self):
+        """If the admin writes both {"uuid-a": [...], "alias-a": [...]} and
+        both refer to the same server, the tool lists are unioned rather
+        than one overwriting the other."""
+        manager = MCPServerManager()
+        manager.config_mcp_servers["uuid-a"] = self._make_server(
+            "uuid-a", server_name="alias-a"
+        )
+
+        result = manager.expand_tool_permissions(
+            {"uuid-a": ["read_file"], "alias-a": ["write_file"]}
+        )
+        assert sorted(result["uuid-a"]) == ["read_file", "write_file"]
+
+
 if __name__ == "__main__":
     pytest.main([__file__])
