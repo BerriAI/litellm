@@ -3,7 +3,7 @@ Unit tests for VolcEngine Responses API cost calculation.
 Tests coverage for cost calculation in transform_response_api_response and streaming.
 """
 import json
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
@@ -27,8 +27,14 @@ class TestVolcEngineResponsesAPICostCalculation:
         self.logging_obj = MagicMock()
         self.logging_obj.model = self.model
 
-    def test_transform_response_api_response_calculates_cost(self):
+    @patch("litellm.llms.openai.responses.transformation.generic_cost_per_token")
+    def test_transform_response_api_response_calculates_cost(
+        self, mock_generic_cost
+    ):
         """Test that transform_response_api_response calculates cost"""
+        # Mock the cost calculation to return predictable values
+        mock_generic_cost.return_value = (0.002, 0.001)  # prompt_cost, completion_cost
+
         raw_response_json = {
             "id": "resp_volcengine_123",
             "created_at": 1234567890,
@@ -54,13 +60,19 @@ class TestVolcEngineResponsesAPICostCalculation:
             logging_obj=self.logging_obj,
         )
 
-        # Verify cost was calculated (if pricing data available)
+        # Verify cost was calculated
         assert isinstance(result, ResponsesAPIResponse)
-        if "response_cost" in result._hidden_params:
-            assert result._hidden_params["response_cost"] >= 0
+        assert "response_cost" in result._hidden_params
+        assert result._hidden_params["response_cost"] == 0.003  # 0.002 + 0.001
 
-    def test_transform_response_api_response_with_cached_tokens(self):
+    @patch("litellm.llms.openai.responses.transformation.generic_cost_per_token")
+    def test_transform_response_api_response_with_cached_tokens(
+        self, mock_generic_cost
+    ):
         """Test cost calculation with cached tokens"""
+        # Mock cost calculation including cached token discount
+        mock_generic_cost.return_value = (0.005, 0.002)
+
         raw_response_json = {
             "id": "resp_volcengine_cached",
             "created_at": 1234567890,
@@ -89,13 +101,18 @@ class TestVolcEngineResponsesAPICostCalculation:
             logging_obj=self.logging_obj,
         )
 
-        # Verify cost was calculated with caching (if pricing data available)
+        # Verify cost was calculated with caching
         assert isinstance(result, ResponsesAPIResponse)
-        if "response_cost" in result._hidden_params:
-            assert result._hidden_params["response_cost"] >= 0
+        assert "response_cost" in result._hidden_params
+        assert result._hidden_params["response_cost"] == 0.007
 
-    def test_transform_streaming_response_completed_calculates_cost(self):
+    @patch("litellm.llms.openai.responses.transformation.generic_cost_per_token")
+    def test_transform_streaming_response_completed_calculates_cost(
+        self, mock_generic_cost
+    ):
         """Test that streaming response.completed event calculates cost"""
+        mock_generic_cost.return_value = (0.0015, 0.00075)
+
         completed_chunk = {
             "type": "response.completed",
             "response": {
@@ -123,9 +140,9 @@ class TestVolcEngineResponsesAPICostCalculation:
         assert isinstance(result, ResponseCompletedEvent)
         assert result.type == ResponsesAPIStreamEvents.RESPONSE_COMPLETED
 
-        # Verify cost was calculated and stored in the response object (if pricing data available)
-        if "response_cost" in result.response._hidden_params:
-            assert result.response._hidden_params["response_cost"] >= 0
+        # Verify cost was calculated and stored in the response object
+        assert "response_cost" in result.response._hidden_params
+        assert result.response._hidden_params["response_cost"] == 0.00225
 
     def test_transform_streaming_response_non_completed_no_cost(self):
         """Test that non-completed streaming events don't calculate cost"""
@@ -147,8 +164,13 @@ class TestVolcEngineResponsesAPICostCalculation:
         # Just verify it doesn't crash
         assert result.type == ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA
 
-    def test_transform_streaming_response_missing_output_field(self):
+    @patch("litellm.llms.openai.responses.transformation.generic_cost_per_token")
+    def test_transform_streaming_response_missing_output_field(
+        self, mock_generic_cost
+    ):
         """Test streaming response handles missing output field in response"""
+        mock_generic_cost.return_value = (0.001, 0.0005)
+
         chunk_missing_output = {
             "type": "response.completed",
             "response": {
@@ -172,14 +194,16 @@ class TestVolcEngineResponsesAPICostCalculation:
             logging_obj=self.logging_obj,
         )
 
-        # Should patch missing output and still calculate cost (if pricing data available)
+        # Should patch missing output and still calculate cost
         assert isinstance(result, ResponseCompletedEvent)
-        # Cost may not be set if pricing data not available
-        if "response_cost" in result.response._hidden_params:
-            assert result._hidden_params["response_cost"] >= 0
+        assert "response_cost" in result.response._hidden_params
+        assert result.response._hidden_params["response_cost"] == 0.0015
 
-    def test_cost_calculation_with_zero_tokens(self):
+    @patch("litellm.llms.openai.responses.transformation.generic_cost_per_token")
+    def test_cost_calculation_with_zero_tokens(self, mock_generic_cost):
         """Test cost calculation with zero tokens"""
+        mock_generic_cost.return_value = (0.0, 0.0)
+
         raw_response_json = {
             "id": "resp_zero_tokens",
             "created_at": 1234567890,
@@ -205,11 +229,10 @@ class TestVolcEngineResponsesAPICostCalculation:
             logging_obj=self.logging_obj,
         )
 
-        # Should calculate cost (will be 0 if pricing available)
+        # Should calculate cost (will be 0)
         assert isinstance(result, ResponsesAPIResponse)
-        # Cost calculation may fail silently if model pricing not found
-        if "response_cost" in result._hidden_params:
-            assert result._hidden_params["response_cost"] == 0.0
+        assert "response_cost" in result._hidden_params
+        assert result._hidden_params["response_cost"] == 0.0
 
     def test_cost_calculation_error_handling(self):
         """Test that cost calculation errors are handled gracefully"""

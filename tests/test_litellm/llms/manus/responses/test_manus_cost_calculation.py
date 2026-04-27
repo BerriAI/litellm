@@ -3,7 +3,7 @@ Unit tests for Manus Responses API cost calculation.
 Tests coverage for _get_usage_dict helper and cost calculation in transform methods.
 """
 import json
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
@@ -55,8 +55,13 @@ class TestManusResponsesAPICostCalculation:
         result = self.config._get_usage_dict({})
         assert result == {}
 
-    def test_transform_response_api_response_calculates_cost_with_usage_object(self):
+    @patch("litellm.llms.openai.responses.transformation.generic_cost_per_token")
+    def test_transform_response_api_response_calculates_cost_with_usage_object(
+        self, mock_generic_cost
+    ):
         """Test cost calculation when Manus returns ResponseAPIUsage object"""
+        mock_generic_cost.return_value = (0.0015, 0.00075)
+
         raw_response_json = {
             "id": "resp_manus_123",
             "created_at": 1234567890,
@@ -86,13 +91,18 @@ class TestManusResponsesAPICostCalculation:
             logging_obj=self.logging_obj,
         )
 
-        # Verify cost was calculated (if pricing data available)
+        # Verify cost was calculated
         assert isinstance(result, ResponsesAPIResponse)
-        if "response_cost" in result._hidden_params:
-            assert result._hidden_params["response_cost"] >= 0
+        assert "response_cost" in result._hidden_params
+        assert result._hidden_params["response_cost"] == 0.00225
 
-    def test_transform_get_response_api_response_extracts_model_from_response(self):
+    @patch("litellm.llms.openai.responses.transformation.generic_cost_per_token")
+    def test_transform_get_response_api_response_extracts_model_from_response(
+        self, mock_generic_cost
+    ):
         """Test that transform_get_response_api_response gets model from response JSON"""
+        mock_generic_cost.return_value = (0.001, 0.0005)
+
         raw_response_json = {
             "id": "resp_get_123",
             "created_at": 1234567890,
@@ -120,13 +130,18 @@ class TestManusResponsesAPICostCalculation:
             logging_obj=self.logging_obj,
         )
 
-        # Verify cost was calculated using model from response (if pricing data available)
+        # Verify cost was calculated using model from response
         assert isinstance(result, ResponsesAPIResponse)
-        if "response_cost" in result._hidden_params:
-            assert result._hidden_params["response_cost"] >= 0
+        assert "response_cost" in result._hidden_params
+        assert result._hidden_params["response_cost"] == 0.0015
 
-    def test_transform_get_response_api_response_fallback_to_logging_obj(self):
+    @patch("litellm.llms.openai.responses.transformation.generic_cost_per_token")
+    def test_transform_get_response_api_response_fallback_to_logging_obj(
+        self, mock_generic_cost
+    ):
         """Test that transform_get_response_api_response falls back to logging_obj.model"""
+        mock_generic_cost.return_value = (0.001, 0.0005)
+
         raw_response_json = {
             "id": "resp_get_456",
             "created_at": 1234567890,
@@ -156,13 +171,16 @@ class TestManusResponsesAPICostCalculation:
             logging_obj=self.logging_obj,
         )
 
-        # Verify cost was calculated using model from logging_obj (if pricing data available)
+        # Verify cost was calculated using model from logging_obj
         assert isinstance(result, ResponsesAPIResponse)
-        if "response_cost" in result._hidden_params:
-            assert result._hidden_params["response_cost"] >= 0
+        assert "response_cost" in result._hidden_params
+        assert result._hidden_params["response_cost"] == 0.0015
 
-    def test_cost_calculation_with_missing_usage(self):
+    @patch("litellm.llms.openai.responses.transformation.generic_cost_per_token")
+    def test_cost_calculation_with_missing_usage(self, mock_generic_cost):
         """Test that missing usage doesn't crash, just skips cost calculation"""
+        mock_generic_cost.return_value = (0.0, 0.0)
+
         raw_response_json = {
             "id": "resp_no_usage",
             "created_at": 1234567890,
@@ -189,6 +207,6 @@ class TestManusResponsesAPICostCalculation:
         )
 
         assert isinstance(result, ResponsesAPIResponse)
-        # Cost should be 0 or not set for zero tokens
-        if "response_cost" in result._hidden_params:
-            assert result._hidden_params["response_cost"] == 0.0
+        # Cost should be 0 for zero tokens
+        assert "response_cost" in result._hidden_params
+        assert result._hidden_params["response_cost"] == 0.0
