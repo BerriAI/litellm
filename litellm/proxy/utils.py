@@ -5719,11 +5719,17 @@ def create_model_info_response(
         "owned_by": provider,
     }
 
-    if include_model_info and llm_router is not None:
-        try:
-            group_info = llm_router.get_model_group_info(model_group=model_id)
-        except Exception:
-            group_info = None
+    if include_model_info:
+        group_info = None
+        if llm_router is not None:
+            try:
+                group_info = llm_router.get_model_group_info(model_group=model_id)
+            except Exception as e:
+                verbose_proxy_logger.exception(
+                    "failed to fetch model group info for %s: %s",
+                    model_id,
+                    e,
+                )
         model_info["model_info"] = (
             group_info.model_dump(exclude_none=True) if group_info is not None else {}
         )
