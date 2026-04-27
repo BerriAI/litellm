@@ -106,6 +106,12 @@ if not _separator_probe.is_valid:
         SEP_986_URL,
     )
 
+_AZURE_ENTRA_HOSTS = {
+    "login.microsoftonline.com",  # Global
+    "login.microsoftonline.us",  # US Government
+    "login.chinacloudapi.cn",  # China
+}
+
 
 def _warn_on_server_name_fields(
     *,
@@ -1495,6 +1501,16 @@ class MCPServerManager:
             metadata = await self._fetch_authorization_server_metadata(
                 authorization_servers
             )
+            if (
+                metadata is None
+                and not resource_scopes
+                and authorization_servers
+                and response.status_code == 200
+            ):
+                verbose_logger.warning(
+                    "MCP OAuth discovery for %s received 200 OK without RFC 9728 challenge and no discoverable authorization metadata.",
+                    server_url,
+                )
             if metadata is None and resource_scopes:
                 return MCPOAuthMetadata(scopes=resource_scopes)
             if metadata is not None and resource_scopes:
@@ -1733,7 +1749,7 @@ class MCPServerManager:
             part for part in (parsed_issuer_url.path or "").split("/") if part
         ]
         if (
-            parsed_issuer_url.netloc != "login.microsoftonline.com"
+            parsed_issuer_url.netloc not in _AZURE_ENTRA_HOSTS
             or len(path_parts) != 2
             or path_parts[1] != "v2.0"
         ):
