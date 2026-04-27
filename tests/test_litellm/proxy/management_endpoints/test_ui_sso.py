@@ -5537,6 +5537,23 @@ class TestAuthCallbackOAuthError:
         assert "The user denied the request" in str(exc_info.value.detail)
 
     @pytest.mark.asyncio
+    async def test_auth_callback_omits_error_description_when_absent(self):
+        """When the IdP redirects with `?error=...` but no `error_description`,
+        the detail string should not contain the literal substring 'None'."""
+        from litellm.proxy.management_endpoints.ui_sso import auth_callback
+
+        mock_request = MagicMock(spec=Request)
+        mock_request.query_params = {"error": "access_denied"}
+
+        with pytest.raises(HTTPException) as exc_info:
+            await auth_callback(request=mock_request, state=None)
+
+        assert exc_info.value.status_code == 401
+        assert "access_denied" in str(exc_info.value.detail)
+        assert "None" not in str(exc_info.value.detail)
+        assert "error_description" not in str(exc_info.value.detail)
+
+    @pytest.mark.asyncio
     async def test_auth_callback_does_not_raise_when_no_oauth_error(self):
         """Sanity: when no `error` query param is present, the new OAuth-error
         guard does not fire and the function proceeds into the normal flow."""
