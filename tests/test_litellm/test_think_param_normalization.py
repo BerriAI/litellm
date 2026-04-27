@@ -24,6 +24,7 @@ class TestThinkToReasoningEffortHelper:
             think_value=False,
             non_default_params=non_default_params,
             supported_params=supported_params,
+            custom_llm_provider="gemini",
         )
 
         assert non_default_params["reasoning_effort"] == "disable"
@@ -36,6 +37,7 @@ class TestThinkToReasoningEffortHelper:
             think_value=falsy,
             non_default_params=non_default_params,
             supported_params=["reasoning_effort"],
+            custom_llm_provider="gemini",
         )
 
         assert non_default_params["reasoning_effort"] == "disable"
@@ -47,6 +49,7 @@ class TestThinkToReasoningEffortHelper:
             think_value=True,
             non_default_params=non_default_params,
             supported_params=["reasoning_effort"],
+            custom_llm_provider="gemini",
         )
 
         assert "reasoning_effort" not in non_default_params
@@ -60,6 +63,7 @@ class TestThinkToReasoningEffortHelper:
             think_value=False,
             non_default_params=non_default_params,
             supported_params=["temperature", "top_p"],
+            custom_llm_provider="cohere_chat",
         )
 
         assert "reasoning_effort" not in non_default_params
@@ -71,9 +75,47 @@ class TestThinkToReasoningEffortHelper:
             think_value=False,
             non_default_params=non_default_params,
             supported_params=["reasoning_effort"],
+            custom_llm_provider="gemini",
         )
 
         assert non_default_params["reasoning_effort"] == "high"
+
+    def test_think_false_respects_falsy_explicit_reasoning_effort(self):
+        """An explicit ``reasoning_effort=""`` is a present (if empty) value and
+        must NOT be overwritten by ``think=False``. Guards against the falsy
+        membership-vs-presence trap."""
+        non_default_params: dict = {"reasoning_effort": ""}
+
+        _think_to_reasoning_effort(
+            think_value=False,
+            non_default_params=non_default_params,
+            supported_params=["reasoning_effort"],
+            custom_llm_provider="gemini",
+        )
+
+        assert non_default_params["reasoning_effort"] == ""
+
+    @pytest.mark.parametrize(
+        "provider",
+        ["anthropic", "bedrock", "openai", "azure", "vertex_ai_anthropic"],
+    )
+    def test_think_false_dropped_for_providers_that_reject_disable(self, provider):
+        """Providers whose `_map_reasoning_effort` does not accept the literal
+        ``"disable"`` (Anthropic, Bedrock, OpenAI o-series, ...) would raise a
+        runtime ``ValueError`` / ``BadRequestError`` if we injected
+        ``reasoning_effort="disable"``. For these providers, ``think:false``
+        must be silently dropped instead. Regression test for the P1 review
+        comment on PR #26642."""
+        non_default_params: dict = {}
+
+        _think_to_reasoning_effort(
+            think_value=False,
+            non_default_params=non_default_params,
+            supported_params=["reasoning_effort"],
+            custom_llm_provider=provider,
+        )
+
+        assert "reasoning_effort" not in non_default_params
 
     def test_think_unrecognized_string_is_ignored(self):
         non_default_params: dict = {}
@@ -82,6 +124,7 @@ class TestThinkToReasoningEffortHelper:
             think_value="maybe",
             non_default_params=non_default_params,
             supported_params=["reasoning_effort"],
+            custom_llm_provider="gemini",
         )
 
         assert "reasoning_effort" not in non_default_params

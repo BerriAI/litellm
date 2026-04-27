@@ -3683,6 +3683,7 @@ def _think_to_reasoning_effort(
     think_value: Any,
     non_default_params: dict,
     supported_params: List[str],
+    custom_llm_provider: Optional[str] = None,
 ) -> None:
     """
     Translate the Ollama-style ``think`` flag (passed directly in a chat
@@ -3698,9 +3699,14 @@ def _think_to_reasoning_effort(
 
     - ``think`` falsy (``False`` / ``"false"`` / ``0`` / ``"no"`` / ``"off"``):
       set ``reasoning_effort = "disable"`` on ``non_default_params`` -- but only
-      when (a) the caller has not already supplied ``reasoning_effort`` and
-      (b) the provider lists ``reasoning_effort`` as a supported param.
-      Otherwise the flag is silently ignored.
+      when (a) the caller has not already supplied ``reasoning_effort``, (b) the
+      provider lists ``reasoning_effort`` as a supported param, and (c) the
+      provider's transformation layer is known to recognise the literal value
+      ``"disable"`` (currently Gemini / Vertex AI / Ollama). Other providers
+      (Anthropic, Bedrock, OpenAI o-series, ...) advertise ``reasoning_effort``
+      but only accept ``low|medium|high|minimal|none|None``; passing
+      ``"disable"`` to them raises ``ValueError`` / ``BadRequestError``. For
+      those providers, ``think`` is silently dropped (with a debug log).
     - ``think`` truthy: ``reasoning_effort`` is left untouched (callers that
       want to enable reasoning should pass ``reasoning_effort`` explicitly).
     - ``think`` is an unrecognized string: ignored.
@@ -3719,12 +3725,38 @@ def _think_to_reasoning_effort(
     else:
         think_bool = bool(think_value)
 
+    # Providers whose `_map_reasoning_effort` (or equivalent) accepts the
+    # literal "disable" value. Adding to this list is safe; omitting a provider
+    # that *does* accept it just means `think:false` is silently ignored there.
+    _PROVIDERS_SUPPORTING_REASONING_DISABLE = {
+        "gemini",
+        "vertex_ai",
+        "vertex_ai_beta",
+        "ollama",
+        "ollama_chat",
+    }
+
     if (
         think_bool is False
-        and not non_default_params.get("reasoning_effort")
+        and "reasoning_effort" not in non_default_params
         and "reasoning_effort" in supported_params
+        and (custom_llm_provider or "") in _PROVIDERS_SUPPORTING_REASONING_DISABLE
     ):
         non_default_params["reasoning_effort"] = "disable"
+    elif think_bool is False:
+        verbose_logger.debug(
+            "litellm: 'think=False' was passed but provider %r does not accept "
+            "reasoning_effort='disable'; dropping silently. Pass "
+            "reasoning_effort explicitly if your provider supports a "
+            "'disable'-equivalent value.",
+            custom_llm_provider,
+        )
+    elif think_bool is True:
+        verbose_logger.debug(
+            "litellm: 'think=True' was passed but is not an OpenAI-compatible "
+            "param; dropping silently. Pass 'reasoning_effort' explicitly to "
+            "enable reasoning."
+        )
 
 
 class PreProcessNonDefaultParams:
@@ -4126,6 +4158,7 @@ def get_optional_params(  # noqa: PLR0915
             think_value=_think_value,
             non_default_params=non_default_params,
             supported_params=supported_params,
+            custom_llm_provider=custom_llm_provider,
         )
 
     _check_valid_arg(
