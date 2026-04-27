@@ -130,6 +130,7 @@ export const guardrailLogoMap: Record<string, string> = {
   "Lasso Guardrail": `${asset_logos_folder}lasso.png`,
   "Pangea Guardrail": `${asset_logos_folder}pangea.png`,
   "AIM Guardrail": `${asset_logos_folder}aim_security.jpeg`,
+  "Cato Networks Guardrail": `${asset_logos_folder}cato_networks.svg`,
   "OpenAI Moderation": `${asset_logos_folder}openai_small.svg`,
   EnkryptAI: `${asset_logos_folder}enkrypt_ai.avif`,
   "Prompt Security": `${asset_logos_folder}prompt_security.png`,

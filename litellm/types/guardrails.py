@@ -64,6 +64,7 @@ class SupportedGuardrailIntegrations(Enum):
     HIDE_SECRETS = "hide-secrets"
     HIDDENLAYER = "hiddenlayer"
     AIM = "aim"
+    CATO_NETWORKS = "cato_networks"
     PANGEA = "pangea"
     CROWDSTRIKE_AIDR = "crowdstrike_aidr"
     LASSO = "lasso"

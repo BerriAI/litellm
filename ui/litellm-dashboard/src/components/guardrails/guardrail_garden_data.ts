@@ -326,6 +326,14 @@ export const PARTNER_GUARDRAIL_CARDS: GuardrailCardInfo[] = [
     tags: ["Security", "Threat Detection"],
   },
   {
+    id: "cato_networks",
+    name: "Cato Networks Guardrail",
+    description: "Cato Networks guardrails for comprehensive AI threat detection and mitigation.",
+    category: "partner",
+    logo: `${ASSET_PREFIX}cato_networks.svg`,
+    tags: ["Security", "Threat Detection"],
+  },
+  {
     id: "prompt_security",
     name: "Prompt Security",
     description: "Protect against prompt injection attacks, data leakage, and other LLM security threats.",
