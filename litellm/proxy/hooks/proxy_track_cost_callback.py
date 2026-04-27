@@ -214,6 +214,8 @@ class _ProxyDBLogger(CustomLogger):
                         user_id=user_id,
                         response_cost=response_cost,
                         org_id=org_id,
+                        end_user_id=end_user_id,
+                        tags=tags,
                     )
 
                     # update cache (fire-and-forget for backward compat:
@@ -227,6 +229,7 @@ class _ProxyDBLogger(CustomLogger):
                             team_id=team_id,
                             parent_otel_span=parent_otel_span,
                             tags=tags,
+                            org_id=org_id,
                         )
                     )
 
