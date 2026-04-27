@@ -68,6 +68,11 @@ MAP_GEMINI_FIELD_TO_OPENAI_EVENT: Dict[str, Union[OpenAIRealtimeEventTypes, Resp
 
 
 class GeminiRealtimeConfig(BaseRealtimeConfig):
+    def __init__(self):
+        super().__init__()
+        # Store call_id → function_name mapping for tool call round-trip
+        self._tool_call_id_to_name: Dict[str, str] = {}
+    
     def validate_environment(
         self, headers: dict, model: str, api_key: Optional[str] = None
     ) -> dict:
@@ -283,15 +288,25 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         except json.JSONDecodeError:
             output_dict = {"result": output}
         
+        # Look up the function name from stored mapping
+        function_name = self._tool_call_id_to_name.get(call_id)
+        if not function_name:
+            verbose_logger.warning(
+                f"Gemini Realtime: Function name not found for call_id={call_id}. "
+                "This may cause Gemini to reject the response."
+            )
+        
         # Build Gemini toolResponse format
+        function_response = {
+            "id": call_id,
+            "response": output_dict,
+        }
+        if function_name:
+            function_response["name"] = function_name
+        
         tool_response_message = {
             "toolResponse": {
-                "functionResponses": [
-                    {
-                        "id": call_id,
-                        "response": output_dict,
-                    }
-                ]
+                "functionResponses": [function_response]
             }
         }
         
@@ -679,6 +694,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         Transform Gemini toolCall message to OpenAI function call events.
         
         Converts Gemini's functionCalls format to OpenAI's response.function_call_arguments.done events.
+        Also stores call_id → name mapping for later use in function_call_output responses.
         """
         function_calls = tool_call_message.get("functionCalls", [])
         resolved_response_id = response_id or f"resp_{uuid.uuid4()}"
@@ -687,19 +703,28 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         verbose_logger.debug(
             f"Gemini Realtime: Transforming {len(function_calls)} tool call(s) to OpenAI format"
         )
-        return [
-            {
+        
+        events = []
+        for idx, fc in enumerate(function_calls):
+            call_id = fc.get("id", "")
+            name = fc.get("name", "")
+            
+            # Store call_id → name mapping for round-trip
+            if call_id and name:
+                self._tool_call_id_to_name[call_id] = name
+            
+            events.append({
                 "type": "response.function_call_arguments.done",
                 "event_id": f"event_{uuid.uuid4()}",
                 "response_id": resolved_response_id,
                 "item_id": f"{resolved_output_item_id}_tool_{idx}",
                 "output_index": idx,
-                "call_id": fc.get("id", ""),
-                "name": fc.get("name", ""),
+                "call_id": call_id,
+                "name": name,
                 "arguments": json.dumps(fc.get("args", {})),
-            }
-            for idx, fc in enumerate(function_calls)
-        ]
+            })
+        
+        return events
 
     @staticmethod
     def get_nested_value(obj: dict, path: str) -> Any:
