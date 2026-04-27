@@ -35,9 +35,13 @@ class PredibaseConfig(BaseConfig):
     best_of: Optional[int] = None
     decoder_input_details: Optional[bool] = None
     details: bool = True  # enables returning logprobs + best of
-    max_new_tokens: int = DEFAULT_MAX_TOKENS  # openai default - requests hang if max_new_tokens not given
+    max_new_tokens: int = (
+        DEFAULT_MAX_TOKENS  # openai default - requests hang if max_new_tokens not given
+    )
     repetition_penalty: Optional[float] = None
-    return_full_text: Optional[bool] = False  # by default don't return the input as part of the output
+    return_full_text: Optional[bool] = (
+        False  # by default don't return the input as part of the output
+    )
     seed: Optional[int] = None
     stop: Optional[List[str]] = None
     temperature: Optional[float] = None
@@ -104,7 +108,9 @@ class PredibaseConfig(BaseConfig):
                 optional_params["top_p"] = value
             if param == "n":
                 optional_params["best_of"] = value
-                optional_params["do_sample"] = True  # Need to sample if you want best of for hf inference endpoints
+                optional_params["do_sample"] = (
+                    True  # Need to sample if you want best of for hf inference endpoints
+                )
             if param == "stream":
                 optional_params["stream"] = value
             if param == "stop":
@@ -169,8 +175,13 @@ class PredibaseConfig(BaseConfig):
                 completion_response["generated_text"]
             )
 
-        if "details" in completion_response and "tokens" in completion_response["details"]:
-            model_response.choices[0].finish_reason = map_finish_reason(completion_response["details"]["finish_reason"])
+        if (
+            "details" in completion_response
+            and "tokens" in completion_response["details"]
+        ):
+            model_response.choices[0].finish_reason = map_finish_reason(
+                completion_response["details"]["finish_reason"]
+            )
             sum_logprob = 0
             for token in completion_response["details"]["tokens"]:
                 if token["logprob"] is not None:
@@ -190,9 +201,14 @@ class PredibaseConfig(BaseConfig):
             best_of_value = 0
 
         if best_of_value > 1:
-            if "details" in completion_response and "best_of_sequences" in completion_response["details"]:
+            if (
+                "details" in completion_response
+                and "best_of_sequences" in completion_response["details"]
+            ):
                 choices_list = []
-                for idx, item in enumerate(completion_response["details"]["best_of_sequences"]):
+                for idx, item in enumerate(
+                    completion_response["details"]["best_of_sequences"]
+                ):
                     sum_logprob = 0
                     for token in item["tokens"]:
                         if token["logprob"] is not None:
@@ -222,7 +238,11 @@ class PredibaseConfig(BaseConfig):
         if output_text is not None and len(output_text) > 0:
             completion_tokens = 0
             try:
-                completion_tokens = len(encoding.encode(model_response["choices"][0]["message"].get("content", "")))
+                completion_tokens = len(
+                    encoding.encode(
+                        model_response["choices"][0]["message"].get("content", "")
+                    )
+                )
             except Exception:
                 # Keep usage calculation non-blocking if encoding fails.
                 pass
@@ -312,7 +332,9 @@ class PredibaseConfig(BaseConfig):
         litellm_params: dict,
         stream: Optional[bool] = None,
     ) -> str:
-        tenant_id = litellm_params.get("predibase_tenant_id") or litellm_params.get("tenant_id")
+        tenant_id = litellm_params.get("predibase_tenant_id") or litellm_params.get(
+            "tenant_id"
+        )
         if tenant_id is None:
             raise ValueError(
                 "Missing Predibase Tenant ID - Required for making the request. Set dynamically (e.g. `completion(..tenant_id=<MY-ID>)`) or in env - `PREDIBASE_TENANT_ID`."
@@ -325,15 +347,21 @@ class PredibaseConfig(BaseConfig):
             base_url = os.getenv("PREDIBASE_API_BASE", "")
 
         completion_url = f"{base_url}/{tenant_id}/deployments/v2/llms/{model}"
-        should_stream = stream if stream is not None else optional_params.get("stream", False)
+        should_stream = (
+            stream if stream is not None else optional_params.get("stream", False)
+        )
         if should_stream is True:
             completion_url += "/generate_stream"
         else:
             completion_url += "/generate"
         return completion_url
 
-    def get_error_class(self, error_message: str, status_code: int, headers: Union[dict, Headers]) -> BaseLLMException:
-        return PredibaseError(status_code=status_code, message=error_message, headers=headers)
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: Union[dict, Headers]
+    ) -> BaseLLMException:
+        return PredibaseError(
+            status_code=status_code, message=error_message, headers=headers
+        )
 
     def validate_environment(
         self,
