@@ -1079,7 +1079,6 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                     logging_session_id,
                     realtime_response_transform_input["session_configuration_request"],
                 )
-                session_configuration_request = json.dumps(transformed_message)
                 returned_message.append(transformed_message)
             elif openai_event == ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DONE:
                 # Handle toolCall from Gemini

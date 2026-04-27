@@ -49,6 +49,46 @@ def test_gemini_realtime_transformation_session_created():
     assert transformed_message["response"][0]["type"] == "session.created"
 
 
+def test_session_created_does_not_overwrite_session_configuration_request():
+    config = GeminiRealtimeConfig()
+
+    session_configuration_request_str = json.dumps(
+        {
+            "setup": {
+                "model": "models/gemini-2.5-flash-native-audio",
+                "generationConfig": {"responseModalities": ["AUDIO"]},
+            }
+        }
+    )
+    setup_complete_message = {"setupComplete": {}}
+
+    logging_obj = MagicMock()
+    logging_obj.litellm_trace_id = "trace_123"
+
+    transformed = config.transform_realtime_response(
+        json.dumps(setup_complete_message),
+        "gemini-2.5-flash-native-audio",
+        logging_obj,
+        realtime_response_transform_input={
+            "session_configuration_request": session_configuration_request_str,
+            "current_output_item_id": None,
+            "current_response_id": None,
+            "current_conversation_id": None,
+            "current_delta_chunks": [],
+            "current_item_chunks": [],
+            "current_delta_type": None,
+        },
+    )
+
+    # Must keep original setup payload (with "setup"), not overwrite with session.created event.
+    assert transformed["session_configuration_request"] == session_configuration_request_str
+
+    # Also verify emitted session.created reflects audio modality from setup payload.
+    session_created = transformed["response"][0]
+    assert session_created["type"] == "session.created"
+    assert "audio" in session_created["session"]["modalities"]
+
+
 def test_gemini_realtime_transformation_content_delta():
     config = GeminiRealtimeConfig()
     assert config is not None
