@@ -924,7 +924,7 @@ class ProxyBaseLLMRequestProcessing:
         _payload_str = json.dumps(self.data, default=str)
         if len(_payload_str) > MAX_PAYLOAD_SIZE_FOR_DEBUG_LOG:
             verbose_proxy_logger.debug(
-                "Request received by LiteLLM: payload too large to log (%d bytes, limit %d). Dict key count: %d; type: %s",
+                "Request received by LiteLLM: payload too large to log (%d bytes, limit %d). Type: %s",
                 len(_payload_str),
                 MAX_PAYLOAD_SIZE_FOR_DEBUG_LOG,
                 (
