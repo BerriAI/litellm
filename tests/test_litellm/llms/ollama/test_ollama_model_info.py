@@ -73,7 +73,7 @@ class TestOllamaModelInfo:
         info = OllamaModelInfo()
         models = info.get_models()
         # Only 'alpha' and 'zeta' should be returned, sorted alphabetically
-        assert models == ["alpha", "zeta"]
+        assert models == ["ollama/alpha", "ollama/zeta"]
         # Ensure correct endpoint was called
         assert calls and calls[0].endswith("/api/tags")
         assert call_headers and call_headers[0] == {}
@@ -122,7 +122,7 @@ class TestOllamaModelInfo:
         monkeypatch.setattr(httpx, "get", mock_get)
         info = OllamaModelInfo()
         models = info.get_models()
-        assert models == ["m1", "m2"]
+        assert models == ["ollama/m1", "ollama/m2"]
 
     def test_get_models_fallback_on_error(self, monkeypatch):
         """
