@@ -39678,7 +39678,6 @@
         "supports_native_structured_output": true,
         "supports_pdf_input": true
     },
-    {
   "snowflake/claude-sonnet-4-5": {
     "max_tokens": 16384,
     "max_input_tokens": 200000,
@@ -39946,4 +39945,4 @@
     "mode": "embedding"
   }
  }
-}
+
