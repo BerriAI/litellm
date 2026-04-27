@@ -13,6 +13,82 @@ Use this provider to call Bedrock Mantle models with accurate **AWS Bedrock pric
 
 :::
 
+## Claude Mythos
+
+Claude Mythos (`anthropic.claude-mythos-preview`) is available on Bedrock Mantle with **1M token input context**, 128K output, and support for reasoning, vision, and tool use.
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import completion
+import os
+
+os.environ['BEDROCK_MANTLE_API_KEY'] = "your-bedrock-api-key"
+
+response = completion(
+    model="bedrock_mantle/anthropic.claude-mythos-preview",
+    messages=[{"role": "user", "content": "Explain quantum entanglement simply."}],
+)
+print(response)
+```
+
+</TabItem>
+<TabItem value="reasoning" label="SDK (Extended Thinking)">
+
+```python
+from litellm import completion
+import os
+
+os.environ['BEDROCK_MANTLE_API_KEY'] = "your-bedrock-api-key"
+
+response = completion(
+    model="bedrock_mantle/anthropic.claude-mythos-preview",
+    messages=[{"role": "user", "content": "Solve: what is 2 + 2?"}],
+    thinking={"type": "enabled", "budget_tokens": 5000},
+)
+print(response)
+```
+
+</TabItem>
+<TabItem value="proxy" label="LiteLLM Proxy">
+
+**1. Add to config.yaml**
+
+```yaml
+model_list:
+  - model_name: claude-mythos
+    litellm_params:
+      model: bedrock_mantle/anthropic.claude-mythos-preview
+      api_key: os.environ/BEDROCK_MANTLE_API_KEY
+```
+
+**2. Start the proxy**
+
+```shell
+litellm --config /path/to/config.yaml
+```
+
+**3. Call via OpenAI SDK**
+
+```python
+import openai
+
+client = openai.OpenAI(
+    api_key="anything",
+    base_url="http://0.0.0.0:4000",
+)
+
+response = client.chat.completions.create(
+    model="claude-mythos",
+    messages=[{"role": "user", "content": "Explain quantum entanglement simply."}],
+)
+print(response)
+```
+
+</TabItem>
+</Tabs>
+
 ## API Key
 
 ```python
