@@ -256,11 +256,15 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
 
                 # Map input_tokens_details to prompt_tokens_details (for cache hit tracking)
                 if "input_tokens_details" in usage_dict:
-                    mapped_usage["prompt_tokens_details"] = usage_dict["input_tokens_details"]
+                    mapped_usage["prompt_tokens_details"] = usage_dict[
+                        "input_tokens_details"
+                    ]
 
                 # Map output_tokens_details to completion_tokens_details if present
                 if "output_tokens_details" in usage_dict:
-                    mapped_usage["completion_tokens_details"] = usage_dict["output_tokens_details"]
+                    mapped_usage["completion_tokens_details"] = usage_dict[
+                        "output_tokens_details"
+                    ]
 
                 # Convert to Usage object
                 usage_obj = Usage(**mapped_usage)
@@ -692,9 +696,13 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
                     "total_tokens": usage_dict.get("total_tokens", 0),
                 }
                 if "input_tokens_details" in usage_dict:
-                    mapped_usage["prompt_tokens_details"] = usage_dict["input_tokens_details"]
+                    mapped_usage["prompt_tokens_details"] = usage_dict[
+                        "input_tokens_details"
+                    ]
                 if "output_tokens_details" in usage_dict:
-                    mapped_usage["completion_tokens_details"] = usage_dict["output_tokens_details"]
+                    mapped_usage["completion_tokens_details"] = usage_dict[
+                        "output_tokens_details"
+                    ]
 
                 usage_obj = Usage(**mapped_usage)
                 prompt_cost, completion_cost = generic_cost_per_token(
