@@ -90,11 +90,15 @@ async def test_ahealth_check_wildcard_models_respects_max_tokens():
     "mode",
     [
         "image_generation",
+        "image_edit",
         "video_generation",
         "embedding",
         "rerank",
-        "transcription",
+        "audio_transcription",
         "audio_speech",
+        "ocr",
+        "search",
+        "moderation",
     ],
 )
 @pytest.mark.asyncio

@@ -368,11 +368,15 @@ def _update_litellm_params_for_health_check(
     """
     _NON_CHAT_MODES = {
         "image_generation",
+        "image_edit",
         "video_generation",
         "embedding",
         "rerank",
-        "transcription",
+        "audio_transcription",
         "audio_speech",
+        "ocr",
+        "search",
+        "moderation",
     }
     _mode = model_info.get("mode", None)
     litellm_params["messages"] = _get_random_llm_message()
