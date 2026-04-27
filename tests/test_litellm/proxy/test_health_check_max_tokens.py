@@ -13,7 +13,7 @@ from litellm.proxy.health_check import (
 @pytest.mark.asyncio
 async def test_update_litellm_params_max_tokens_default(monkeypatch):
     """
-    Test that max_tokens defaults to 5 for non-wildcard models.
+    Test that max_tokens defaults to 16 for non-wildcard models.
     """
     monkeypatch.setattr(hc_module, "BACKGROUND_HEALTH_CHECK_MAX_TOKENS", None)
     monkeypatch.setattr(hc_module, "BACKGROUND_HEALTH_CHECK_MAX_TOKENS_REASONING", None)
@@ -22,7 +22,7 @@ async def test_update_litellm_params_max_tokens_default(monkeypatch):
 
     updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)
 
-    assert updated_params["max_tokens"] == 5
+    assert updated_params["max_tokens"] == 16
 
 
 @pytest.mark.asyncio
@@ -48,8 +48,7 @@ async def test_update_litellm_params_max_tokens_wildcard():
 
     updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)
 
-    # Should not be set to 1
-    assert "max_tokens" not in updated_params or updated_params["max_tokens"] != 1
+    assert "max_tokens" not in updated_params
 
 
 @pytest.mark.asyncio
@@ -160,14 +159,14 @@ def test_explicit_health_check_max_tokens_beats_reasoning_specific():
 
 
 def test_reasoning_specific_falls_through_when_wrong_branch_only(monkeypatch):
-    """Only non-reasoning key set but model is reasoning → fall back to default 5."""
+    """Only non-reasoning key set but model is reasoning → fall back to default 16."""
     monkeypatch.setattr(hc_module, "BACKGROUND_HEALTH_CHECK_MAX_TOKENS", None)
     monkeypatch.setattr(hc_module, "BACKGROUND_HEALTH_CHECK_MAX_TOKENS_REASONING", None)
     model_info = {"health_check_max_tokens_non_reasoning": 3}
     litellm_params = {"model": "openai/o1"}
 
     with patch.object(hc_module.litellm, "supports_reasoning", return_value=True):
-        assert _resolve_health_check_max_tokens(model_info, litellm_params) == 5
+        assert _resolve_health_check_max_tokens(model_info, litellm_params) == 16
 
 
 @pytest.mark.asyncio
@@ -180,7 +179,7 @@ async def test_background_split_env_reasoning_vs_non_reasoning(monkeypatch):
 
     with patch.object(hc_module.litellm, "supports_reasoning", return_value=False):
         updated = _update_litellm_params_for_health_check(model_info, litellm_params)
-        assert updated["max_tokens"] == 5
+        assert updated["max_tokens"] == 16
 
     litellm_params2 = {"model": "openai/o1"}
     with patch.object(hc_module.litellm, "supports_reasoning", return_value=True):
