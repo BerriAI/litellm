@@ -1,10 +1,9 @@
 #!/bin/sh
+# ⚠️ KEEP IN SYNC: Changes here should be reviewed for docker/*/entrypoint.sh
 
 if [ "$USE_DDTRACE" = "true" ]; then
     export DD_TRACE_OPENAI_ENABLED="False"
     exec ddtrace-run litellm "$@"
-elif [ "$USE_NEWRELIC" = "true" ]; then
-    exec newrelic-admin run-program litellm "$@"
 else
     exec litellm "$@"
 fi
