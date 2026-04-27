@@ -153,6 +153,8 @@ class VertexAIRealtimeConfig(GeminiRealtimeConfig):
         )
         
         # Add Vertex AI specific defaults if not provided
+        generation_config = setup_config.setdefault("generationConfig", {})
+        generation_config.setdefault("responseModalities", ["AUDIO"])
         setup_config.setdefault(
             "realtimeInputConfig",
             {

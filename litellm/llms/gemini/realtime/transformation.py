@@ -348,17 +348,12 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         if msg_type == "response.create":
             return []
 
-        ## HANDLE INPUT AUDIO BUFFER ##
-        if msg_type == "input_audio_buffer.append":
-            realtime_input_dict["audio"] = HttpxBlobType(
-                mimeType=self.get_audio_mime_type(), data=json_message["audio"]
-            )
         ## HANDLE conversation.item.create — extract user text or function call output ##
-        elif msg_type == "conversation.item.create":
+        if msg_type == "conversation.item.create":
             return self._handle_conversation_item(json_message)
         
         ## HANDLE INPUT AUDIO BUFFER - use realtimeInput for audio streaming ##
-        elif msg_type == "input_audio_buffer.append":
+        if msg_type == "input_audio_buffer.append":
             realtime_input_dict["audio"] = HttpxBlobType(
                 mimeType=self.get_audio_mime_type(), data=json_message["audio"]
             )
@@ -372,10 +367,9 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
             verbose_logger.debug("Gemini Realtime: Sending audio realtimeInput to backend")
             messages.append(gemini_msg)
             return messages
-        else:
-            # Unknown/unsupported OpenAI event type — drop silently rather than
-            # forwarding raw JSON as text input to the model.
-            return []
+        # Unknown/unsupported OpenAI event type — drop silently rather than
+        # forwarding raw JSON as text input to the model.
+        return []
 
     def transform_session_created_event(
         self,
@@ -446,14 +440,14 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         delta_type: ALL_DELTA_TYPES,
         session_configuration_request: Optional[str] = None,
     ) -> List[OpenAIRealtimeEvents]:
-        if session_configuration_request is None:
-            raise ValueError(
-                "session_configuration_request is required for Gemini API calls"
-            )
-
-        session_configuration_request_dict: BidiGenerateContentSetup = json.loads(
-            session_configuration_request
-        ).get("setup", {})
+        session_configuration_request_dict: BidiGenerateContentSetup = {}
+        if session_configuration_request is not None:
+            try:
+                session_configuration_request_dict = json.loads(
+                    session_configuration_request
+                ).get("setup", {})
+            except json.JSONDecodeError:
+                session_configuration_request_dict = {}
         generation_config = session_configuration_request_dict.get(
             "generationConfig", {}
         )

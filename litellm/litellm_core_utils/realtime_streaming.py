@@ -224,9 +224,23 @@ class RealTimeStreaming:
                 message, self.model, self.session_configuration_request
             )
             for msg in transformed:
+                # Cache setup immediately once we send it so concurrent client
+                # session.update messages don't emit duplicate setup packets.
+                self._cache_session_configuration_request(msg)
                 await self.backend_ws.send(msg)  # type: ignore[union-attr, attr-defined]
         else:
             await self.backend_ws.send(message)  # type: ignore[union-attr, attr-defined]
+
+    def _cache_session_configuration_request(self, transformed_message: str) -> None:
+        """Store setup payload once sent to backend."""
+        if self.session_configuration_request is not None:
+            return
+        try:
+            message_obj = json.loads(transformed_message)
+            if "setup" in message_obj:
+                self.session_configuration_request = transformed_message
+        except (json.JSONDecodeError, TypeError):
+            return
 
     def _has_realtime_guardrails(self) -> bool:
         """Return True if any callback is registered for realtime guardrail event types."""
@@ -602,10 +616,11 @@ class RealTimeStreaming:
                 ## FORWARD TO BACKEND
                 if self.provider_config:
                     message = self.provider_config.transform_realtime_request(
-                        message, self.model
+                        message, self.model, self.session_configuration_request
                     )
 
                     for msg in message:
+                        self._cache_session_configuration_request(msg)
                         await self.backend_ws.send(msg)  # type: ignore[union-attr]
                 else:
                     await self.backend_ws.send(message)  # type: ignore[union-attr]
