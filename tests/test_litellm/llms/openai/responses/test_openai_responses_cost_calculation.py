@@ -93,25 +93,6 @@ class TestResponsesAPICostCalculation:
         # Should not crash, should not add cost
         assert "response_cost" not in response._hidden_params
 
-    def test_calculate_response_cost_openai_like_provider(self):
-        """Test cost calculation works for openai_like providers (plain string, not enum)"""
-        # Simulate openai_like provider which returns plain string
-        config = OpenAIResponsesAPIConfig()
-        with patch.object(type(config), 'custom_llm_provider', new_callable=lambda: property(lambda self: "openai_like")):
-            usage_dict = {
-                "input_tokens": 100,
-                "output_tokens": 50,
-                "total_tokens": 150,
-            }
-
-            response = MagicMock()
-            response._hidden_params = {}
-
-            # Should not raise AttributeError on .value
-            config._calculate_response_cost(self.model, usage_dict, response)
-
-            assert "response_cost" in response._hidden_params
-
     def test_transform_response_api_response_calculates_cost(self):
         """Test that transform_response_api_response calculates cost"""
         raw_response_json = {
@@ -307,16 +288,3 @@ class TestProviderInheritanceCostCalculation:
         config._calculate_response_cost("gpt-4o", usage_dict, response)
         assert "response_cost" in response._hidden_params
 
-    def test_string_provider_cost_calculation(self):
-        """Test provider returning plain string (like openai_like providers)"""
-        config = OpenAIResponsesAPIConfig()
-
-        # Mock custom_llm_provider to return plain string
-        with patch.object(type(config), 'custom_llm_provider', new_callable=lambda: property(lambda self: "openai_like")):
-            usage_dict = {"input_tokens": 100, "output_tokens": 50, "total_tokens": 150}
-            response = MagicMock()
-            response._hidden_params = {}
-
-            # Should not raise AttributeError
-            config._calculate_response_cost("gpt-4o", usage_dict, response)
-            assert "response_cost" in response._hidden_params

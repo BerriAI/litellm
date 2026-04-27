@@ -257,7 +257,10 @@ class VolcEngineResponsesAPIConfig(OpenAIResponsesAPIConfig):
         # Calculate cost for response.completed event (streaming final chunk with usage)
         if event_type == "response.completed":
             try:
-                from litellm.types.llms.openai import ResponseCompletedEvent, ResponsesAPIStreamEvents
+                from litellm.types.llms.openai import (
+                    ResponseCompletedEvent,
+                    ResponsesAPIStreamEvents,
+                )
                 from typing import cast
 
                 completed_event = cast(ResponseCompletedEvent, event)
