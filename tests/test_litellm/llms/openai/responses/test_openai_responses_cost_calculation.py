@@ -2,6 +2,11 @@
 Unit tests for Responses API cost calculation functionality.
 Tests the fix for issue #26475 - ensuring cost calculation works correctly
 across all 60+ providers inheriting from OpenAIResponsesAPIConfig.
+"""
+from unittest.mock import MagicMock, patch
+
+import httpx
+import pytest
 
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.types.llms.openai import (
@@ -10,7 +15,6 @@ from litellm.types.llms.openai import (
     ResponsesAPIStreamEvents,
 )
 from litellm.types.utils import LlmProviders
-
 
 class TestResponsesAPICostCalculation:
     """Test suite for Responses API cost calculation across transformation paths"""
