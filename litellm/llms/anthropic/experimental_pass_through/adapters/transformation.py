@@ -717,7 +717,9 @@ class LiteLLMAnthropicMessagesAdapter:
         - vertex_ai/*claude* models
         """
         model_lower = model.lower()
-        return "anthropic" in model_lower or "claude" in model_lower
+        return "anthropic" in model_lower or "claude" in model_lower or (
+            "arn:" in model_lower and "bedrock" in model_lower
+        )
 
     @staticmethod
     def translate_thinking_for_model(
