@@ -97,7 +97,7 @@ class TestResponsesAPICostCalculation:
         """Test cost calculation works for openai_like providers (plain string, not enum)"""
         # Simulate openai_like provider which returns plain string
         config = OpenAIResponsesAPIConfig()
-        with patch.object(config, 'custom_llm_provider', "openai_like"):
+        with patch.object(type(config), 'custom_llm_provider', new_callable=lambda: property(lambda self: "openai_like")):
             usage_dict = {
                 "input_tokens": 100,
                 "output_tokens": 50,
@@ -312,7 +312,7 @@ class TestProviderInheritanceCostCalculation:
         config = OpenAIResponsesAPIConfig()
 
         # Mock custom_llm_provider to return plain string
-        with patch.object(config, 'custom_llm_provider', "openai_like"):
+        with patch.object(type(config), 'custom_llm_provider', new_callable=lambda: property(lambda self: "openai_like")):
             usage_dict = {"input_tokens": 100, "output_tokens": 50, "total_tokens": 150}
             response = MagicMock()
             response._hidden_params = {}

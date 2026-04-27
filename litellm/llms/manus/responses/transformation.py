@@ -246,6 +246,10 @@ class ManusResponsesAPIConfig(OpenAIResponsesAPIConfig):
             )
             response = ResponsesAPIResponse.model_construct(**raw_response_json)
 
+        # Calculate costs from usage data (fixes issue #26475)
+        usage_dict = raw_response_json.get("usage", {})
+        self._calculate_response_cost(model, usage_dict, response)
+
         # Store processed headers in additional_headers so they get returned to the client
         response._hidden_params["additional_headers"] = processed_headers
         response._hidden_params["headers"] = raw_response_headers
@@ -346,6 +350,10 @@ class ManusResponsesAPIConfig(OpenAIResponsesAPIConfig):
                 f"Error constructing ResponsesAPIResponse: {raw_response_json}, using model_construct"
             )
             response = ResponsesAPIResponse.model_construct(**raw_response_json)
+
+        # Calculate costs from usage data (fixes issue #26475)
+        usage_dict = raw_response_json.get("usage", {})
+        self._calculate_response_cost(model, usage_dict, response)
 
         # Store processed headers in additional_headers so they get returned to the client
         response._hidden_params["additional_headers"] = processed_headers

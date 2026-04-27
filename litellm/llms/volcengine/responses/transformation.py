@@ -252,7 +252,24 @@ class VolcEngineResponsesAPIConfig(OpenAIResponsesAPIConfig):
 
         patched_chunk = self._fill_missing_fields(chunk, event_pydantic_model)
 
-        return event_pydantic_model(**patched_chunk)
+        event = event_pydantic_model(**patched_chunk)
+
+        # Calculate cost for response.completed event (streaming final chunk with usage)
+        if event_type == "response.completed":
+            try:
+                from litellm.types.llms.openai import ResponseCompletedEvent, ResponsesAPIStreamEvents
+                from typing import cast
+
+                completed_event = cast(ResponseCompletedEvent, event)
+                response_obj = completed_event.response
+                usage_dict = patched_chunk.get("response", {}).get("usage", {})
+                self._calculate_response_cost(model, usage_dict, response_obj)
+            except Exception as e:
+                verbose_logger.debug(
+                    f"Error calculating cost for VolcEngine streaming response.completed: {e}"
+                )
+
+        return event
 
     def transform_response_api_response(
         self,
@@ -285,6 +302,10 @@ class VolcEngineResponsesAPIConfig(OpenAIResponsesAPIConfig):
                 "Volcengine Responses API: falling back to model_construct for response parsing."
             )
             response = ResponsesAPIResponse.model_construct(**raw_response_json)
+
+        # Calculate costs from usage data (fixes issue #26475)
+        usage_dict = raw_response_json.get("usage", {})
+        self._calculate_response_cost(model, usage_dict, response)
 
         response._hidden_params["additional_headers"] = processed_headers
         response._hidden_params["headers"] = raw_response_headers
