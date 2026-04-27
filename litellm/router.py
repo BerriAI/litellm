@@ -2435,6 +2435,18 @@ class Router:
             kwargs=kwargs, metadata_variable_name=metadata_variable_name
         )
 
+        # Forward a small allowlist of deployment-level litellm_params into the
+        # request kwargs so they actually reach the underlying call.
+        _deployment_litellm_params = deployment.get("litellm_params", {}) or {}
+        if not isinstance(_deployment_litellm_params, dict):
+            _deployment_litellm_params = _deployment_litellm_params.model_dump(
+                exclude_none=True
+            )
+        for _key in ("use_chat_completions_api",):
+            _value = _deployment_litellm_params.get(_key)
+            if _value is not None:
+                kwargs.setdefault(_key, _value)
+
     def _get_async_openai_model_client(self, deployment: dict, kwargs: dict):
         """
         Helper to get AsyncOpenAI or AsyncAzureOpenAI client that was created for the deployment
