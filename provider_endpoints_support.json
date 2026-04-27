@@ -1017,7 +1017,7 @@
         "moderations": false,
         "batches": false,
         "rerank": false,
-        "a2a": true,
+        "a2a": false,
         "interactions": true
       }
     },
