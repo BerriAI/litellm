@@ -14,27 +14,23 @@ query-filters:
       id: py/clear-text-logging-sensitive-data  # CWE-312
   - exclude:
       id: py/polynomial-redos                   # CWE-730
-  # py/weak-sensitive-data-hashing (CWE-328): the OCI signing call at
-  # litellm/llms/oci/common_utils.py:100 hashes the HTTP request body to produce
-  # the x-content-sha256 header required by the OCI HTTP signing spec — a
-  # content-integrity hash, not a password or secret hash.  SHA-256 is mandated
-  # by Oracle for this header; see
-  # https://docs.oracle.com/en-us/iaas/Content/API/Concepts/signingrequests.htm
-  #
-  # CodeQL's taint analysis for this query is imprecise and flags this call site
-  # when ANY project code hashes password-like data elsewhere, treating our
-  # content hash as if it were a password hash.  GitHub CodeQL does not honour
-  # `# lgtm[...]` inline comments and query-filters do not support path-based
-  # scoping, so the narrowest available suppression is a project-level exclude.
-  #
-  # Tradeoff acknowledged: this also hides legitimate password-hashing findings
-  # elsewhere (e.g. litellm/proxy/utils.py).  Those are pre-existing in `main`
-  # and should be tracked as a separate hardening task rather than blocking
-  # this PR.  Re-evaluate if CodeQL adds per-path filter support.
-  - exclude:
-      id: py/weak-sensitive-data-hashing        # CWE-328
 
 paths-ignore:
   - tests
   - docs
   - "**/*.md"
+  # py/weak-sensitive-data-hashing (CWE-328): the OCI signing call at
+  # litellm/llms/oci/common_utils.py:100 hashes the HTTP request body to
+  # produce the x-content-sha256 header required by the OCI HTTP signing
+  # spec — a content-integrity hash, not a password or secret hash.
+  # SHA-256 is mandated by Oracle for this header; see
+  # https://docs.oracle.com/en-us/iaas/Content/API/Concepts/signingrequests.htm
+  #
+  # CodeQL has no native per-query path-scope filter, and GitHub Code
+  # Scanning ignores `# lgtm[...]` / `# codeql[...]` inline comments, so
+  # the narrowest available suppression is path-ignoring this single file.
+  # This trades CodeQL coverage on one ~560-line OCI signing-utility file
+  # for restored project-wide coverage of py/weak-sensitive-data-hashing
+  # (and every other security-and-quality query) on every other file —
+  # including litellm/proxy/utils.py, where the rule legitimately applies.
+  - litellm/llms/oci/common_utils.py
