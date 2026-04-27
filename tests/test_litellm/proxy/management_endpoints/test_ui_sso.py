@@ -5512,3 +5512,61 @@ class TestSyncUserRoleFromJwtRoleMap:
         )
 
         prisma.db.litellm_usertable.update.assert_not_called()
+
+
+class TestAuthCallbackOAuthError:
+    """Tests for OAuth error handling in /sso/callback (issue #26403)."""
+
+    @pytest.mark.asyncio
+    async def test_auth_callback_raises_on_oauth_error(self):
+        """When the IdP redirects back with ?error=access_denied, auth_callback
+        should raise HTTPException(401) instead of crashing on missing 'code'."""
+        from litellm.proxy.management_endpoints.ui_sso import auth_callback
+
+        mock_request = MagicMock(spec=Request)
+        mock_request.query_params = {
+            "error": "access_denied",
+            "error_description": "The user denied the request",
+        }
+
+        with pytest.raises(HTTPException) as exc_info:
+            await auth_callback(request=mock_request, state=None)
+
+        assert exc_info.value.status_code == 401
+        assert "access_denied" in str(exc_info.value.detail)
+        assert "The user denied the request" in str(exc_info.value.detail)
+
+    @pytest.mark.asyncio
+    async def test_auth_callback_does_not_raise_when_no_oauth_error(self):
+        """Sanity: when no `error` query param is present, the new OAuth-error
+        guard does not fire and the function proceeds into the normal flow."""
+        from litellm.constants import LITELLM_CLI_SESSION_TOKEN_PREFIX
+        from litellm.proxy.management_endpoints.ui_sso import auth_callback
+
+        mock_request = MagicMock(spec=Request)
+        mock_request.query_params = {"code": "some-auth-code"}
+
+        cli_state = f"{LITELLM_CLI_SESSION_TOKEN_PREFIX}:sk-new-key:sk-existing-key"
+        mock_result = {"user_id": "test-user", "email": "test@example.com"}
+
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.ui_sso.cli_sso_callback"
+            ) as mock_cli_callback,
+            patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+            patch("litellm.proxy.proxy_server.master_key", "test-master-key"),
+            patch("litellm.proxy.proxy_server.general_settings", {}),
+            patch("litellm.proxy.proxy_server.jwt_handler", MagicMock()),
+            patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
+            patch.dict(os.environ, {"GOOGLE_CLIENT_ID": "test-google-id"}, clear=True),
+            patch(
+                "litellm.proxy.management_endpoints.ui_sso.GoogleSSOHandler.get_google_callback_response",
+                return_value=mock_result,
+            ),
+        ):
+            mock_cli_callback.return_value = MagicMock()
+
+            # Should NOT raise the new 401 HTTPException; downstream is mocked.
+            await auth_callback(request=mock_request, state=cli_state)
+
+            mock_cli_callback.assert_called_once()
