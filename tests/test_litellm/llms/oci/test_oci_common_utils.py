@@ -158,6 +158,46 @@ def test_get_oci_base_url_from_region():
     assert url == "https://inference.generativeai.eu-frankfurt-1.oci.oraclecloud.com"
 
 
+@pytest.mark.parametrize(
+    "bad_region",
+    [
+        "evil.com/#",  # SSRF: fragment truncates intended suffix in the URL
+        "evil.com",  # dot escapes the {region} segment
+        "us/ashburn",  # slash injects a path
+        "US-ASHBURN-1",  # uppercase rejected
+        "us ashburn 1",  # whitespace rejected
+        "-leading-hyphen",  # must start with a letter
+        "trailing-hyphen-",  # must not end with a hyphen
+        "a" * 33,  # length cap
+    ],
+)
+def test_get_oci_base_url_rejects_unsafe_region(bad_region):
+    with pytest.raises(OCIError, match="Invalid oci_region"):
+        get_oci_base_url({"oci_region": bad_region})
+
+
+def test_get_oci_base_url_empty_region_falls_back_to_default():
+    # An empty string trips the `or "us-ashburn-1"` fallback in
+    # resolve_oci_credentials, so it's treated as "not supplied" — not as a
+    # validation failure.
+    url = get_oci_base_url({"oci_region": ""})
+    assert url == "https://inference.generativeai.us-ashburn-1.oci.oraclecloud.com"
+
+
+def test_get_oci_base_url_rejects_non_string_region():
+    with pytest.raises(OCIError, match="Invalid oci_region"):
+        get_oci_base_url({"oci_region": 12345})
+
+
+@pytest.mark.parametrize(
+    "good_region",
+    ["us-ashburn-1", "us-chicago-1", "eu-frankfurt-1", "ap-tokyo-1", "sa-saopaulo-1"],
+)
+def test_get_oci_base_url_accepts_real_oci_regions(good_region):
+    url = get_oci_base_url({"oci_region": good_region})
+    assert url == f"https://inference.generativeai.{good_region}.oci.oraclecloud.com"
+
+
 # ---------------------------------------------------------------------------
 # validate_oci_environment
 # ---------------------------------------------------------------------------

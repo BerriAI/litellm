@@ -3,6 +3,7 @@ import datetime
 import hashlib
 import json
 import os
+import re
 from dataclasses import dataclass
 from typing import Any, Dict, Optional, Protocol, Tuple
 from urllib.parse import urlparse
@@ -184,12 +185,33 @@ def resolve_oci_credentials(optional_params: dict) -> dict:
     }
 
 
+# OCI region identifiers are lowercase letters, digits, and hyphens
+# (e.g. "us-ashburn-1", "eu-frankfurt-1"). Anchored to bound length and reject
+# characters that could escape the URL host when interpolated into the
+# inference endpoint URL — without this, a value like "evil.com/#" could
+# redirect a signed request to an attacker-controlled host.
+_OCI_REGION_RE = re.compile(r"^[a-z][a-z0-9-]{0,30}[a-z0-9]$")
+
+
+def _validate_oci_region(region: str) -> str:
+    if not isinstance(region, str) or not _OCI_REGION_RE.match(region):
+        raise OCIError(
+            status_code=400,
+            message=(
+                f"Invalid oci_region value: {region!r}. Expected a lowercase OCI "
+                "region identifier such as 'us-ashburn-1' (letters, digits, and "
+                "hyphens only)."
+            ),
+        )
+    return region
+
+
 def get_oci_base_url(optional_params: dict, api_base: Optional[str] = None) -> str:
     """Return the OCI inference base URL, respecting any explicit api_base override."""
     if api_base:
         return api_base.rstrip("/")
     creds = resolve_oci_credentials(optional_params)
-    region = creds["oci_region"]
+    region = _validate_oci_region(creds["oci_region"])
     return f"https://inference.generativeai.{region}.oci.oraclecloud.com"
 
 
