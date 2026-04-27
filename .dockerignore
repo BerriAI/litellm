@@ -8,6 +8,7 @@ tests
 *.tgz
 log.txt
 docker/Dockerfile.*
+docker/build_from_pip/
 
 # Claude Flow generated files (must be excluded from Docker build)
 .claude/
