@@ -101,7 +101,9 @@ class NewRelicLogger(CustomLogger):
         elif _newrelic_agent is None:
             verbose_logger.error(
                 "New Relic Python agent not installed. "
-                "Install with: pip install newrelic "
+                "Use the litellm/litellm-newrelic Docker image, which includes the agent: "
+                "docker pull litellm/litellm-newrelic:latest. "
+                "Alternatively, install the agent manually with: pip install newrelic. "
                 "Integration will be disabled."
             )
             self.enabled = False
