@@ -923,6 +923,14 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         return thinking_budget is not None and thinking_budget == 0
 
     @staticmethod
+    def _model_supports_thinking_budget_zero(model: Optional[str]) -> bool:
+        """Only Flash-family Gemini 2.x models accept thinkingBudget=0 to disable thinking.
+        Pro models reject it with a 400 INVALID_ARGUMENT error."""
+        if model is None:
+            return False
+        return "flash" in model.lower()
+
+    @staticmethod
     def _validate_thinking_config_conflicts(
         optional_params: Dict,
         param_name: str,
@@ -1005,7 +1013,11 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             ):
                 params["includeThoughts"] = True
             if thinking_budget is not None and isinstance(thinking_budget, int):
-                params["thinkingBudget"] = thinking_budget
+                if (
+                    thinking_budget > 0
+                    or VertexGeminiConfig._model_supports_thinking_budget_zero(model)
+                ):
+                    params["thinkingBudget"] = thinking_budget
 
         return params
 
