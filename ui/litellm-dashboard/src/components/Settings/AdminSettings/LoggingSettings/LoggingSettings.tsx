@@ -18,8 +18,8 @@ import React, { useMemo } from "react";
 
 const LoggingSettings: React.FC = () => {
   const [form] = Form.useForm();
-  const { mutateAsync, isPending } = useStoreRequestInSpendLogs();
-  const { mutateAsync: deleteField, isPending: isDeletingField } = useDeleteProxyConfigField();
+  const { mutate, isPending } = useStoreRequestInSpendLogs();
+  const { mutate: deleteField, isPending: isDeletingField } = useDeleteProxyConfigField();
   const { data: proxyConfigData, isLoading: isLoadingConfig } = useProxyConfig(ConfigType.GENERAL_SETTINGS);
   const storePromptsValue = Form.useWatch("store_prompts_in_spend_logs", form);
 
@@ -42,44 +42,39 @@ const LoggingSettings: React.FC = () => {
     };
   }, [proxyConfigData]);
 
-  const handleFormSubmit = async (formValues: StoreRequestInSpendLogsParams) => {
-    try {
-      const retentionPeriodValue = formValues.maximum_spend_logs_retention_period;
-      const shouldDeleteRetentionPeriod =
-        !retentionPeriodValue ||
-        (typeof retentionPeriodValue === "string" && retentionPeriodValue.trim() === "");
+  const handleFormSubmit = (formValues: StoreRequestInSpendLogsParams) => {
+    const retentionPeriodValue = formValues.maximum_spend_logs_retention_period;
+    const hasRetentionPeriod =
+      typeof retentionPeriodValue === "string" && retentionPeriodValue.trim() !== "";
 
-      if (shouldDeleteRetentionPeriod) {
-        try {
-          await deleteField({
-            config_type: ConfigType.GENERAL_SETTINGS,
-            field_name: GeneralSettingsFieldName.MAXIMUM_SPEND_LOGS_RETENTION_PERIOD,
-          });
-        } catch (deleteError) {
-          console.warn("Failed to delete retention period field (may not exist):", deleteError);
-        }
-      }
+    const updateParams: StoreRequestInSpendLogsParams = {
+      store_prompts_in_spend_logs: formValues.store_prompts_in_spend_logs,
+      ...(hasRetentionPeriod && { maximum_spend_logs_retention_period: retentionPeriodValue }),
+    };
 
-      const updateParams: StoreRequestInSpendLogsParams = {
-        store_prompts_in_spend_logs: formValues.store_prompts_in_spend_logs,
-        ...(retentionPeriodValue &&
-          typeof retentionPeriodValue === "string" &&
-          retentionPeriodValue.trim() !== "" && {
-            maximum_spend_logs_retention_period: retentionPeriodValue,
-          }),
-      };
-
-      await mutateAsync(updateParams, {
-        onSuccess: () => {
-          NotificationsManager.success("Spend logs settings updated successfully");
-        },
-        onError: (error) => {
-          NotificationsManager.fromBackend("Failed to save spend logs settings: " + parseErrorMessage(error));
-        },
+    const submitUpdate = () =>
+      mutate(updateParams, {
+        onSuccess: () => NotificationsManager.success("Spend logs settings updated successfully"),
+        onError: (error) =>
+          NotificationsManager.fromBackend("Failed to save spend logs settings: " + parseErrorMessage(error)),
       });
-    } catch (error) {
-      NotificationsManager.fromBackend("Failed to save spend logs settings: " + parseErrorMessage(error));
+
+    if (hasRetentionPeriod) {
+      submitUpdate();
+      return;
     }
+
+    deleteField(
+      {
+        config_type: ConfigType.GENERAL_SETTINGS,
+        field_name: GeneralSettingsFieldName.MAXIMUM_SPEND_LOGS_RETENTION_PERIOD,
+      },
+      {
+        onError: (deleteError) =>
+          console.warn("Failed to delete retention period field (may not exist):", deleteError),
+        onSettled: submitUpdate,
+      },
+    );
   };
 
   return (
