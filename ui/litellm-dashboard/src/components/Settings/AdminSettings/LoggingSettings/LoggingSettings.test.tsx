@@ -36,18 +36,18 @@ const mockNotificationsManager = vi.mocked(NotificationsManager);
 const mockParseErrorMessage = vi.mocked(parseErrorMessage);
 
 describe("LoggingSettings", () => {
-  const mockMutateAsync = vi.fn();
+  const mockMutate = vi.fn();
   const mockDeleteField = vi.fn();
   const mockRefetch = vi.fn();
 
   beforeEach(() => {
     vi.clearAllMocks();
     mockUseStoreRequestInSpendLogs.mockReturnValue({
-      mutateAsync: mockMutateAsync,
+      mutate: mockMutate,
       isPending: false,
     } as any);
     mockUseDeleteProxyConfigField.mockReturnValue({
-      mutateAsync: mockDeleteField,
+      mutate: mockDeleteField,
       isPending: false,
     } as any);
     mockUseProxyConfig.mockReturnValue({
@@ -94,10 +94,8 @@ describe("LoggingSettings", () => {
 
   it("should submit form with store prompts enabled and retention period", async () => {
     const user = userEvent.setup();
-    mockMutateAsync.mockImplementation(async (_params, options) => {
-      await Promise.resolve();
+    mockMutate.mockImplementation((_params, options) => {
       options?.onSuccess?.();
-      return { message: "Success" };
     });
 
     renderWithProviders(<LoggingSettings />);
@@ -113,7 +111,7 @@ describe("LoggingSettings", () => {
 
     await waitFor(() => {
       expect(mockDeleteField).not.toHaveBeenCalled();
-      expect(mockMutateAsync).toHaveBeenCalledWith(
+      expect(mockMutate).toHaveBeenCalledWith(
         {
           store_prompts_in_spend_logs: true,
           maximum_spend_logs_retention_period: "30d",
@@ -125,11 +123,11 @@ describe("LoggingSettings", () => {
 
   it("should delete retention period field when left empty on submit", async () => {
     const user = userEvent.setup();
-    mockDeleteField.mockResolvedValue({ message: "Field deleted successfully" });
-    mockMutateAsync.mockImplementation(async (_params, options) => {
-      await Promise.resolve();
+    mockDeleteField.mockImplementation((_params, options) => {
+      options?.onSettled?.();
+    });
+    mockMutate.mockImplementation((_params, options) => {
       options?.onSuccess?.();
-      return { message: "Success" };
     });
 
     renderWithProviders(<LoggingSettings />);
@@ -139,7 +137,7 @@ describe("LoggingSettings", () => {
 
     await waitFor(() => {
       expect(mockDeleteField).toHaveBeenCalled();
-      expect(mockMutateAsync).toHaveBeenCalledWith(
+      expect(mockMutate).toHaveBeenCalledWith(
         {
           store_prompts_in_spend_logs: false,
         },
@@ -150,11 +148,11 @@ describe("LoggingSettings", () => {
 
   it("should show success notification on successful submission", async () => {
     const user = userEvent.setup();
-    mockDeleteField.mockResolvedValue({ message: "Field deleted successfully" });
-    mockMutateAsync.mockImplementation(async (_params, options) => {
-      await Promise.resolve();
+    mockDeleteField.mockImplementation((_params, options) => {
+      options?.onSettled?.();
+    });
+    mockMutate.mockImplementation((_params, options) => {
       options?.onSuccess?.();
-      return { message: "Success" };
     });
 
     renderWithProviders(<LoggingSettings />);
@@ -167,30 +165,11 @@ describe("LoggingSettings", () => {
     });
   });
 
-  it("should show error notification when submission throws", async () => {
-    const user = userEvent.setup();
-    const error = new Error("Network error");
-    mockMutateAsync.mockRejectedValue(error);
-    mockParseErrorMessage.mockReturnValue("Network error");
-
-    renderWithProviders(<LoggingSettings />);
-
-    const saveButton = screen.getByRole("button", { name: "Save Settings" });
-    await user.click(saveButton);
-
-    await waitFor(() => {
-      expect(mockNotificationsManager.fromBackend).toHaveBeenCalledWith(
-        "Failed to save spend logs settings: Network error",
-      );
-    });
-  });
-
-  it("should show error notification via onError callback", async () => {
+  it("should show a single error notification via onError callback", async () => {
     const user = userEvent.setup();
     const error = new Error("Backend error");
-    mockMutateAsync.mockImplementation((_params, options) => {
+    mockMutate.mockImplementation((_params, options) => {
       options?.onError?.(error);
-      return Promise.reject(error);
     });
     mockParseErrorMessage.mockReturnValue("Backend error");
 
@@ -204,11 +183,12 @@ describe("LoggingSettings", () => {
         "Failed to save spend logs settings: Backend error",
       );
     });
+    expect(mockNotificationsManager.fromBackend).toHaveBeenCalledTimes(1);
   });
 
   it("should show loading state on save button when update pending", () => {
     mockUseStoreRequestInSpendLogs.mockReturnValue({
-      mutateAsync: mockMutateAsync,
+      mutate: mockMutate,
       isPending: true,
     } as any);
 
@@ -221,7 +201,7 @@ describe("LoggingSettings", () => {
 
   it("should show loading state on save button when delete pending", () => {
     mockUseDeleteProxyConfigField.mockReturnValue({
-      mutateAsync: mockDeleteField,
+      mutate: mockDeleteField,
       isPending: true,
     } as any);
 
@@ -297,11 +277,12 @@ describe("LoggingSettings", () => {
   it("should continue with update even if deleteField fails", async () => {
     const user = userEvent.setup();
     const deleteError = new Error("Field does not exist");
-    mockDeleteField.mockRejectedValue(deleteError);
-    mockMutateAsync.mockImplementation(async (_params, options) => {
-      await Promise.resolve();
+    mockDeleteField.mockImplementation((_params, options) => {
+      options?.onError?.(deleteError);
+      options?.onSettled?.();
+    });
+    mockMutate.mockImplementation((_params, options) => {
       options?.onSuccess?.();
-      return { message: "Success" };
     });
 
     renderWithProviders(<LoggingSettings />);
@@ -311,7 +292,7 @@ describe("LoggingSettings", () => {
 
     await waitFor(() => {
       expect(mockDeleteField).toHaveBeenCalled();
-      expect(mockMutateAsync).toHaveBeenCalledWith(
+      expect(mockMutate).toHaveBeenCalledWith(
         {
           store_prompts_in_spend_logs: false,
         },
@@ -323,11 +304,11 @@ describe("LoggingSettings", () => {
 
   it("should submit with only store prompts enabled when retention is empty", async () => {
     const user = userEvent.setup();
-    mockDeleteField.mockResolvedValue({ message: "Field deleted successfully" });
-    mockMutateAsync.mockImplementation(async (_params, options) => {
-      await Promise.resolve();
+    mockDeleteField.mockImplementation((_params, options) => {
+      options?.onSettled?.();
+    });
+    mockMutate.mockImplementation((_params, options) => {
       options?.onSuccess?.();
-      return { message: "Success" };
     });
 
     renderWithProviders(<LoggingSettings />);
@@ -340,7 +321,7 @@ describe("LoggingSettings", () => {
 
     await waitFor(() => {
       expect(mockDeleteField).toHaveBeenCalled();
-      expect(mockMutateAsync).toHaveBeenCalledWith(
+      expect(mockMutate).toHaveBeenCalledWith(
         {
           store_prompts_in_spend_logs: true,
         },
