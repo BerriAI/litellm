@@ -11,7 +11,7 @@ from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response impo
     _safe_convert_created_field,
 )
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
-from litellm.llms.openai.cost_calculation import cost_per_token
+from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import *
 from litellm.types.responses.main import *
@@ -241,20 +241,36 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
             response = ResponsesAPIResponse.model_construct(**raw_response_json)
 
         # Calculate costs from usage data (fixes issue #26475)
-        # Use OpenAI's cost_per_token utility which properly handles:
-        # - Cached token costs (cache_read_input_token_cost)
-        # - custom_llm_provider for Azure/provider-specific pricing
-        # - Service tiers and all edge cases
+        # Responses API uses input_tokens/output_tokens, but Usage expects prompt_tokens/completion_tokens
         try:
             usage_dict = raw_response_json.get("usage", {})
             if usage_dict:
-                # Convert usage dict to Usage object for cost_per_token
-                usage_obj = Usage(**usage_dict)
+                # Map Responses API field names to Usage field names
+                # ResponseAPIUsage has: input_tokens, output_tokens, input_tokens_details
+                # Usage expects: prompt_tokens, completion_tokens, prompt_tokens_details
+                mapped_usage = {
+                    "prompt_tokens": usage_dict.get("input_tokens", 0),
+                    "completion_tokens": usage_dict.get("output_tokens", 0),
+                    "total_tokens": usage_dict.get("total_tokens", 0),
+                }
 
-                # Use the proper OpenAI cost calculation that handles all edge cases
-                prompt_cost, completion_cost = cost_per_token(
+                # Map input_tokens_details to prompt_tokens_details (for cache hit tracking)
+                if "input_tokens_details" in usage_dict:
+                    mapped_usage["prompt_tokens_details"] = usage_dict["input_tokens_details"]
+
+                # Map output_tokens_details to completion_tokens_details if present
+                if "output_tokens_details" in usage_dict:
+                    mapped_usage["completion_tokens_details"] = usage_dict["output_tokens_details"]
+
+                # Convert to Usage object
+                usage_obj = Usage(**mapped_usage)
+
+                # Use generic_cost_per_token with the correct provider
+                # This properly handles cached tokens, service tiers, and provider-specific pricing
+                prompt_cost, completion_cost = generic_cost_per_token(
                     model=model,
                     usage=usage_obj,
+                    custom_llm_provider=str(self.custom_llm_provider.value),
                     service_tier=None,  # TODO: Extract from request if needed
                 )
                 total_cost = prompt_cost + completion_cost
@@ -663,6 +679,34 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
                 f"Error constructing ResponsesAPIResponse: {raw_response_json}, using model_construct"
             )
             response = ResponsesAPIResponse.model_construct(**raw_response_json)
+
+        # Calculate costs from usage data (same fix as transform_response_api_response)
+        try:
+            usage_dict = raw_response_json.get("usage", {})
+            model = logging_obj.model  # Get model from logging object
+            if usage_dict and model:
+                # Map Responses API field names to Usage field names
+                mapped_usage = {
+                    "prompt_tokens": usage_dict.get("input_tokens", 0),
+                    "completion_tokens": usage_dict.get("output_tokens", 0),
+                    "total_tokens": usage_dict.get("total_tokens", 0),
+                }
+                if "input_tokens_details" in usage_dict:
+                    mapped_usage["prompt_tokens_details"] = usage_dict["input_tokens_details"]
+                if "output_tokens_details" in usage_dict:
+                    mapped_usage["completion_tokens_details"] = usage_dict["output_tokens_details"]
+
+                usage_obj = Usage(**mapped_usage)
+                prompt_cost, completion_cost = generic_cost_per_token(
+                    model=model,
+                    usage=usage_obj,
+                    custom_llm_provider=str(self.custom_llm_provider.value),
+                    service_tier=None,
+                )
+                response._hidden_params["response_cost"] = prompt_cost + completion_cost
+        except Exception as e:
+            verbose_logger.error(f"Error calculating compact Responses API cost: {e}")
+            pass
 
         response._hidden_params["additional_headers"] = processed_headers
         response._hidden_params["headers"] = raw_response_headers
