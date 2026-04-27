@@ -1299,7 +1299,7 @@ class AmazonConverseConfig(BaseConfig):
             )
 
             # Process regular function tools using existing logic
-            bedrock_tools = _bedrock_tools_pt(regular_tools)
+            bedrock_tools = _bedrock_tools_pt(regular_tools, model=model)
 
             # Add computer use tools and anthropic_beta if needed (only when computer use tools are present)
             if computer_use_tools:
@@ -1367,7 +1367,7 @@ class AmazonConverseConfig(BaseConfig):
                 additional_request_params["tools"] = transformed_computer_tools
         else:
             # No computer use tools, process all tools as regular tools
-            bedrock_tools = _bedrock_tools_pt(filtered_tools)
+            bedrock_tools = _bedrock_tools_pt(filtered_tools, model=model)
 
         # Append pre-formatted tools (systemTool etc.) after transformation
         bedrock_tools.extend(pre_formatted_tools)

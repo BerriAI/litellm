@@ -8087,14 +8087,16 @@ class Router:
                 # Get mode from database model_info if available, otherwise default to "chat"
                 db_model_info = model.get("model_info", {})
                 mode = db_model_info.get("mode", "chat")
+                input_cost_per_token = db_model_info.get("input_cost_per_token")
+                output_cost_per_token = db_model_info.get("output_cost_per_token")
 
                 model_info = ModelMapInfo(
                     key=model_group,
                     max_tokens=None,
                     max_input_tokens=None,
                     max_output_tokens=None,
-                    input_cost_per_token=None,
-                    output_cost_per_token=None,
+                    input_cost_per_token=input_cost_per_token,
+                    output_cost_per_token=output_cost_per_token,
                     litellm_provider=llm_provider,
                     mode=mode,
                     supported_openai_params=supported_openai_params,
@@ -8598,13 +8600,20 @@ class Router:
         # No match found
         return None
 
-    def map_team_model(self, team_model_name: str, team_id: str) -> Optional[str]:
+    def map_team_model(
+        self, team_model_name: Optional[str], team_id: str
+    ) -> Optional[str]:
         """
         Check if team_model_name resolves to team-specific deployments.
 
         Returns the public model name (unchanged) so the router can find all
         sibling deployments via team_id filtering, instead of collapsing to a
         single internal model_name.
+
+        When team_model_name is None (e.g. vector store / file endpoints that
+        don't include a model in their request), returns the first matching
+        team deployment's team_public_model_name so the router can inject BYOK
+        credentials from the team-scoped deployment.
 
         Returns:
         - str: the team_model_name if team deployments exist for this team
@@ -8615,6 +8624,13 @@ class Router:
             return None
         for model in models:
             if model.get("model_info", {}).get("team_id") == team_id:
+                if team_model_name is None:
+                    # No model was specified (e.g. vector store endpoints).
+                    # Return the deployment's public model name so the router
+                    # can route to it and inject the BYOK API key.
+                    return model.get("model_info", {}).get(
+                        "team_public_model_name"
+                    ) or model.get("model_name")
                 return team_model_name
 
         # No team-scoped deployment found; wildcard/pattern routes are
