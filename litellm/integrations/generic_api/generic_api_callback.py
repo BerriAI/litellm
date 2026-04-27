@@ -170,7 +170,8 @@ class GenericAPILogger(CustomBatchLogger):
         self.event_types: Optional[List[API_EVENT_TYPES]] = event_types
         self.callback_name: Optional[str] = callback_name
         self.max_retries = max(0, int(max_retries or 0))
-        self.retry_delay = max(0.0, float(retry_delay or 0.0))
+        retry_delay_value = 0.0 if retry_delay is None else retry_delay
+        self.retry_delay = max(0.0, float(retry_delay_value))
         self.timeout = timeout
 
         # Validate and store log_format
@@ -243,8 +244,7 @@ class GenericAPILogger(CustomBatchLogger):
         if isinstance(exception, httpx.HTTPStatusError):
             return exception.response.status_code >= 500
 
-        status_code = getattr(exception, "status_code", None)
-        return status_code is not None and int(status_code) >= 500
+        return False
 
     async def _sleep_before_retry(self, attempt: int) -> None:
         if self.retry_delay <= 0:
@@ -253,8 +253,8 @@ class GenericAPILogger(CustomBatchLogger):
         delay = self.retry_delay * (2**attempt)
         await asyncio.sleep(delay)
 
-    async def _post_with_retries(self, data: str) -> Any:
-        post_kwargs = {
+    async def _post_with_retries(self, data: str) -> httpx.Response:
+        post_kwargs: Dict[str, Any] = {
             "url": self.endpoint,
             "headers": self.headers,
             "data": data,
@@ -281,6 +281,8 @@ class GenericAPILogger(CustomBatchLogger):
                     total_attempts,
                 )
                 await self._sleep_before_retry(attempt)
+
+        raise RuntimeError("Generic API Logger retry loop exited unexpectedly")
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         """

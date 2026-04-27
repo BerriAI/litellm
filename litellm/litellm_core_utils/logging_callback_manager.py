@@ -222,8 +222,10 @@ class LoggingCallbackManager:
             event_types = callback_config.get("event_types")
             log_format = callback_config.get("log_format")
             max_retries = max(0, int(callback_config.get("max_retries", 0) or 0))
+            retry_delay_value = callback_config.get("retry_delay")
             retry_delay = max(
-                0.0, float(callback_config.get("retry_delay", 1.0) or 0.0)
+                0.0,
+                float(0.0 if retry_delay_value is None else retry_delay_value),
             )
             timeout = callback_config.get("timeout")
 
