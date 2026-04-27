@@ -59,11 +59,12 @@ class PrismaWrapper:
 
     @staticmethod
     async def _kill_engine_process(pid: int) -> None:
-        """Force-kill an orphaned engine subprocess to prevent DB connection pool leaks.
+        """Force-kill the query-engine subprocess during a Prisma client reconnect.
 
-        Called when disconnect() fails and the old engine process may still be
-        holding open connections. Sends SIGTERM for graceful shutdown, waits
-        briefly, then SIGKILL as a backstop.
+        Used by the reconnect paths in place of `disconnect()`, whose
+        synchronous `process.wait()` blocks the asyncio event loop for
+        30-120s on DB outages (#26191). Sends SIGTERM for graceful shutdown,
+        waits briefly, then SIGKILL as a backstop.
         """
         if pid <= 0:
             return
@@ -72,7 +73,7 @@ class PrismaWrapper:
         except (ProcessLookupError, PermissionError, OSError):
             return  # Already dead or inaccessible
         verbose_proxy_logger.warning(
-            "Sent SIGTERM to orphaned prisma-query-engine PID %s after failed disconnect.",
+            "Sent SIGTERM to prisma-query-engine PID %s during client reconnect.",
             pid,
         )
         # Brief wait for graceful shutdown, then force-kill
@@ -217,16 +218,18 @@ class PrismaWrapper:
     async def recreate_prisma_client(
         self, new_db_url: str, http_client: Optional[Any] = None
     ):
-        """Disconnect and reconnect the Prisma client with a new database URL."""
+        """Disconnect and reconnect the Prisma client with a new database URL.
+
+        Kills the old engine subprocess directly rather than calling
+        disconnect(). prisma-client-py's disconnect ultimately invokes a
+        synchronous `process.wait()` on the query engine that can block
+        the asyncio event loop for 30-120s when the DB is unreachable,
+        freezing liveness probes. See #26191.
+        """
         from prisma import Prisma  # type: ignore
 
         old_engine_pid = self._get_engine_pid()
-
-        try:
-            await self._original_prisma.disconnect()
-        except Exception as e:
-            verbose_proxy_logger.warning(f"Failed to disconnect Prisma client: {e}")
-            await self._kill_engine_process(old_engine_pid)
+        await self._kill_engine_process(old_engine_pid)
 
         if http_client is not None:
             self._original_prisma = Prisma(http=http_client)

@@ -4134,15 +4134,13 @@ class PrismaClient:
             )
 
             async def _do_direct_reconnect() -> None:
+                # Kill the old engine subprocess directly rather than calling
+                # disconnect(). prisma-client-py's disconnect ultimately invokes
+                # a synchronous `process.wait()` on the query engine that can
+                # block the asyncio event loop for 30-120s when the DB is
+                # unreachable, freezing liveness probes. See #26191.
                 old_pid = self._get_engine_pid()
-                try:
-                    await self.db.disconnect()
-                except Exception as disconnect_err:
-                    verbose_proxy_logger.warning(
-                        "Prisma DB disconnect before reconnect failed: %s",
-                        disconnect_err,
-                    )
-                    await PrismaWrapper._kill_engine_process(old_pid)
+                await PrismaWrapper._kill_engine_process(old_pid)
 
                 await self.db.connect()
                 await self.db.query_raw("SELECT 1")
