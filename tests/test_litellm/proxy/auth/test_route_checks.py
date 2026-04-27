@@ -1198,6 +1198,54 @@ def test_proxy_admin_viewer_can_access_audit_logs(route):
         )
 
 
+@pytest.mark.parametrize(
+    "route",
+    [
+        "/spend/logs",
+        "/spend/logs/ui",
+        "/spend/logs/v2",
+        "/spend/logs/session/ui",
+        "/spend/logs/ui/some-request-id",
+    ],
+)
+def test_proxy_admin_viewer_can_access_spend_logs(route):
+    """
+    Test that proxy_admin_viewer can access /spend/logs endpoints.
+
+    The role description states "view all spend across the platform", so the
+    raw spend log endpoints (which back the admin Logs UI page) must be
+    reachable by proxy_admin_viewer.
+    """
+
+    user_obj = LiteLLM_UserTable(
+        user_id="viewer_user",
+        user_email="viewer@example.com",
+        user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
+    )
+
+    valid_token = UserAPIKeyAuth(
+        user_id="viewer_user",
+        user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
+    )
+
+    request = MagicMock(spec=Request)
+    request.query_params = {}
+
+    try:
+        RouteChecks.non_proxy_admin_allowed_routes_check(
+            user_obj=user_obj,
+            _user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
+            route=route,
+            request=request,
+            valid_token=valid_token,
+            request_data={},
+        )
+    except Exception as e:
+        pytest.fail(
+            f"proxy_admin_viewer should be able to access {route} route. Got error: {str(e)}"
+        )
+
+
 class TestModelsRouteExemptFromDisableLLMEndpoints:
     """
     Test that /models and /v1/models are exempt from DISABLE_LLM_API_ENDPOINTS.
