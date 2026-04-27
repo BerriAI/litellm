@@ -345,6 +345,26 @@ def _safe_read_response(response: httpx.Response) -> bytes:
         return b""
 
 
+def _build_masked_request(
+    original_request: httpx.Request, masked_url: str
+) -> httpx.Request:
+    """Build a masked request without forcing unread streaming bodies into memory."""
+    headers = httpx.Headers(original_request.headers)
+    try:
+        request_content = original_request.content
+    except httpx.RequestNotRead:
+        request_content = b""
+        headers.pop("content-length", None)
+        headers.pop("transfer-encoding", None)
+
+    return httpx.Request(
+        method=original_request.method,
+        url=masked_url,
+        headers=headers,
+        content=request_content,
+    )
+
+
 def _raise_masked_sync_error(e: httpx.HTTPStatusError, stream: bool) -> None:
     """Raise a MaskedHTTPStatusError for sync HTTP handlers."""
     if stream:
@@ -387,12 +407,7 @@ class MaskedHTTPStatusError(httpx.HTTPStatusError):
             if k.lower() not in ("content-encoding", "content-length")
         }
 
-        masked_request = httpx.Request(
-            method=original_error.request.method,
-            url=masked_url,
-            headers=original_error.request.headers,
-            content=original_error.request.content,
-        )
+        masked_request = _build_masked_request(original_error.request, masked_url)
 
         super().__init__(
             message=masked_original_message,

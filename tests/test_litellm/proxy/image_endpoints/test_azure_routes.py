@@ -120,3 +120,34 @@ def test_azure_image_edit_route(client_no_auth):
     assert called_kwargs["prompt"] == "A cute baby sea otter"
     assert response.status_code == 200
     assert response.json()["data"]
+
+
+def test_image_edit_route_with_mask(client_no_auth):
+    client, _, mock_aimage_edit = client_no_auth
+    image_path = os.path.join(
+        os.path.dirname(__file__),
+        "../../../image_gen_tests/test_image.png",
+    )
+    with open(image_path, "rb") as image_file, open(image_path, "rb") as mask_file:
+        files = {
+            "image": ("test_image.png", image_file, "image/png"),
+            "mask": ("mask.png", mask_file, "image/png"),
+        }
+        data = {
+            "model": "dall-e-3",
+            "prompt": "A cute baby sea otter",
+            "response_format": "b64_json",
+            "size": "1024x1024",
+        }
+        response = client.post("/v1/images/edits", files=files, data=data)
+
+    mock_aimage_edit.assert_called_once()
+    called_kwargs = mock_aimage_edit.call_args.kwargs
+    assert "dall-e-3" in called_kwargs["model"]
+    assert called_kwargs["prompt"] == "A cute baby sea otter"
+    assert called_kwargs["response_format"] == "b64_json"
+    assert called_kwargs["size"] == "1024x1024"
+    assert called_kwargs["image"][0].name == "test_image.png"
+    assert called_kwargs["mask"][0].name == "mask.png"
+    assert response.status_code == 200
+    assert response.json()["data"]
