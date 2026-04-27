@@ -1110,7 +1110,7 @@ def test_initialize_skills_endpoints():
 async def test_init_containers_api_endpoints():
     """
     Test that _init_containers_api_endpoints calls the original function
-    directly without model-based routing.
+    directly when there is no managed container ID (no embedded model_id).
     """
     router = Router(model_list=[])
 
@@ -1127,3 +1127,46 @@ async def test_init_containers_api_endpoints():
         custom_llm_provider="openai", name="Test Container"
     )
     assert result == mock_response
+
+
+@pytest.mark.asyncio
+async def test_init_containers_api_endpoints_managed_id_routes_via_generic_fallbacks():
+    """
+    Managed ``cntr_`` IDs embed ``model_id``; router should decode and use
+    ``_ageneric_api_call_with_fallbacks`` so deployment credentials apply.
+    """
+    from litellm.responses.utils import ResponsesAPIRequestUtils
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "azure-router-model",
+                "litellm_params": {
+                    "model": "azure/gpt-4",
+                    "api_key": "fake-key",
+                    "api_base": "https://westus.api.cognitive.microsoft.com",
+                },
+            }
+        ]
+    )
+    router._ageneric_api_call_with_fallbacks = AsyncMock()
+
+    managed_id = ResponsesAPIRequestUtils._build_container_id(
+        custom_llm_provider="azure",
+        model_id="azure-router-model",
+        container_id="cfile_upstream_abc",
+    )
+
+    await router._init_containers_api_endpoints(
+        original_function=AsyncMock(),
+        custom_llm_provider="openai",
+        container_id=managed_id,
+        file_id="cfile_xyz",
+    )
+
+    router._ageneric_api_call_with_fallbacks.assert_called_once()
+    call_kw = router._ageneric_api_call_with_fallbacks.call_args.kwargs
+    assert call_kw["model"] == "azure-router-model"
+    assert call_kw["container_id"] == "cfile_upstream_abc"
+    assert call_kw["file_id"] == "cfile_xyz"
+    assert call_kw["custom_llm_provider"] == "azure"

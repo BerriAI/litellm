@@ -19,51 +19,6 @@ from litellm.proxy.common_utils.openai_endpoint_utils import (
     get_custom_llm_provider_from_request_headers,
     get_custom_llm_provider_from_request_query,
 )
-from litellm.responses.utils import ResponsesAPIRequestUtils
-
-
-def _decode_container_routing_metadata(
-    container_id: str,
-    custom_llm_provider: str,
-) -> tuple[str, str, Any]:
-    """
-    Decode managed container IDs into original ID + routing metadata.
-    """
-    decoded = ResponsesAPIRequestUtils._decode_container_id(container_id)
-    original_container_id = decoded.get("response_id", container_id)
-    decoded_provider = decoded.get("custom_llm_provider")
-    decoded_model_id = decoded.get("model_id")
-
-    if decoded_provider and custom_llm_provider == "openai":
-        custom_llm_provider = decoded_provider
-
-    return original_container_id, custom_llm_provider, decoded_model_id
-
-
-def _get_deployment_credentials_for_model_id(model_id: Any) -> Dict[str, Any]:
-    """
-    Fetch router deployment credentials for a decoded model_id when available.
-    """
-    if not model_id:
-        return {}
-
-    from litellm.proxy.proxy_server import llm_router
-
-    if llm_router is None:
-        return {}
-
-    deployment_creds = llm_router.get_deployment_credentials(model_id=model_id)
-    if deployment_creds:
-        return deployment_creds
-
-    # Fallback: some ids may map via model group name instead of explicit model id.
-    deployment = llm_router.get_deployment_by_model_group_name(
-        model_group_name=str(model_id)
-    )
-    if deployment and deployment.litellm_params:
-        return deployment.litellm_params.model_dump(exclude_none=True)
-
-    return {}
 
 
 def _load_endpoints_config() -> Dict:
@@ -108,10 +63,12 @@ def _create_handler_for_path_params(
             request: Request,
             container_id: str,
             file_id: str,
+            fastapi_response: Response,
             user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
         ):
             return await _process_binary_request(
                 request=request,
+                fastapi_response=fastapi_response,
                 container_id=container_id,
                 file_id=file_id,
                 user_api_key_dict=user_api_key_dict,
@@ -196,77 +153,61 @@ def _create_handler_for_path_params(
 
 async def _process_binary_request(
     request: Request,
+    fastapi_response: Response,
     container_id: str,
     file_id: str,
     user_api_key_dict: UserAPIKeyAuth,
 ):
     """
-    Process binary content requests using the proper transformation pattern.
+    Process binary content requests through the standard proxy/router pipeline.
 
-    This uses the provider config transformations and llm_http_handler
-    to maintain consistency with the established pattern.
+    The router owns managed container ID decoding and deployment selection. This
+    handler only adapts the byte response to FastAPI.
     """
-    from litellm.litellm_core_utils.litellm_logging import Logging
-    from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
-    from litellm.types.router import GenericLiteLLMParams
+    from litellm.proxy.proxy_server import (
+        general_settings,
+        llm_router,
+        proxy_config,
+        proxy_logging_obj,
+        select_data_generator,
+        user_api_base,
+        user_max_tokens,
+        user_model,
+        user_request_timeout,
+        user_temperature,
+        version,
+    )
 
-    # Extract custom_llm_provider
     custom_llm_provider = (
         get_custom_llm_provider_from_request_headers(request=request)
         or get_custom_llm_provider_from_request_query(request=request)
         or "openai"
     )
-
-    # Build litellm_params - credentials are resolved by provider config from env
-    litellm_params = GenericLiteLLMParams()
-
-    (
-        original_container_id,
-        custom_llm_provider,
-        decoded_model_id,
-    ) = _decode_container_routing_metadata(
-        container_id=container_id,
-        custom_llm_provider=custom_llm_provider,
-    )
-
-    if decoded_model_id:
-        litellm_params["model_id"] = decoded_model_id
-
-    # Resolve provider credentials for routed deployment, e.g. Azure multi-region api_base.
-    deployment_creds = _get_deployment_credentials_for_model_id(
-        model_id=decoded_model_id
-    )
-    if deployment_creds.get("api_base"):
-        litellm_params["api_base"] = deployment_creds["api_base"]
-    if deployment_creds.get("api_key"):
-        litellm_params["api_key"] = deployment_creds["api_key"]
-    if deployment_creds.get("api_version"):
-        litellm_params["api_version"] = deployment_creds["api_version"]
-
-    # Get the provider config
-    container_provider_config = _get_container_provider_config(custom_llm_provider)
-
-    # Create logging object
-    logging_obj = Logging(
-        model="container-file-content",
-        messages=[],
-        stream=False,
-        call_type="container_file_content",
-        start_time=None,
-        litellm_call_id="",
-        function_id="",
-    )
-
-    # Use the HTTP handler to make the request
-    handler = BaseLLMHTTPHandler()
+    data: Dict[str, Any] = {
+        "container_id": container_id,
+        "file_id": file_id,
+        "custom_llm_provider": custom_llm_provider,
+    }
+    processor = ProxyBaseLLMRequestProcessing(data=data)
 
     try:
-        content = await handler.async_container_file_content_handler(
-            container_id=original_container_id,  # Use decoded original ID
-            file_id=file_id,
-            container_provider_config=container_provider_config,
-            litellm_params=litellm_params,
-            logging_obj=logging_obj,
+        content = await processor.base_process_llm_request(
+            request=request,
+            fastapi_response=fastapi_response,
+            user_api_key_dict=user_api_key_dict,
+            route_type="aretrieve_container_file_content",
+            proxy_logging_obj=proxy_logging_obj,
+            llm_router=llm_router,
+            general_settings=general_settings,
+            proxy_config=proxy_config,
+            select_data_generator=select_data_generator,
+            model=None,
+            user_model=user_model,
+            user_temperature=user_temperature,
+            user_request_timeout=user_request_timeout,
+            user_max_tokens=user_max_tokens,
+            user_api_base=user_api_base,
+            version=version,
         )
 
         # Determine content type based on common file extensions in the file_id
@@ -293,7 +234,12 @@ async def _process_binary_request(
         )
 
     except Exception as e:
-        raise e
+        raise await processor._handle_llm_api_exception(
+            e=e,
+            user_api_key_dict=user_api_key_dict,
+            proxy_logging_obj=proxy_logging_obj,
+            version=version,
+        )
 
 
 async def _process_multipart_upload_request(
@@ -342,19 +288,8 @@ async def _process_multipart_upload_request(
         or "openai"
     )
 
-    (
-        original_container_id,
-        custom_llm_provider,
-        decoded_model_id,
-    ) = _decode_container_routing_metadata(
-        container_id=container_id,
-        custom_llm_provider=custom_llm_provider,
-    )
-
-    data["container_id"] = original_container_id  # Use decoded original ID
+    data["container_id"] = container_id
     data["custom_llm_provider"] = custom_llm_provider
-    if decoded_model_id:
-        data["model_id"] = decoded_model_id
 
     processor = ProxyBaseLLMRequestProcessing(data=data)
     try:
@@ -418,22 +353,6 @@ async def _process_request(
         or get_custom_llm_provider_from_request_query(request=request)
         or "openai"
     )
-
-    # Decode container_id if present in path_params
-    if "container_id" in path_params:
-        (
-            original_container_id,
-            custom_llm_provider,
-            decoded_model_id,
-        ) = _decode_container_routing_metadata(
-            container_id=path_params["container_id"],
-            custom_llm_provider=custom_llm_provider,
-        )
-
-        # Update path_params with decoded original ID
-        data["container_id"] = original_container_id
-        if decoded_model_id:
-            data["model_id"] = decoded_model_id
 
     data["custom_llm_provider"] = custom_llm_provider
 
