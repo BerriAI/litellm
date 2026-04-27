@@ -7025,6 +7025,7 @@ async def model_list(
     include_metadata: Optional[bool] = False,
     fallback_type: Optional[str] = None,
     scope: Optional[str] = None,
+    include_model_info: Optional[bool] = False,
 ):
     """
     Use `/model/info` - to get detailed model information, example - pricing, mode, etc.
@@ -7038,6 +7039,11 @@ async def model_list(
     - scope: Optional scope parameter. Currently only accepts "expand".
              When scope=expand is passed, proxy admins, team admins, and org admins
              will receive all proxy models as if they are a proxy admin.
+    - include_model_info: When true, embeds per-model-group info under a
+             "model_info" key on each entry (mode, max_input_tokens,
+             max_output_tokens, input/output cost per token, supports_*
+             flags, tpm/rpm). Sourced from the same router data as
+             /model_group/info.
     """
     global llm_model_list, general_settings, llm_router, prisma_client, user_api_key_cache, proxy_logging_obj
 
@@ -7107,6 +7113,7 @@ async def model_list(
                 include_metadata=include_metadata or False,
                 fallback_type=fallback_type,
                 llm_router=llm_router,
+                include_model_info=include_model_info or False,
             )
             model_data.append(model_info)
 
@@ -7140,6 +7147,7 @@ async def model_list(
             include_metadata=include_metadata or False,
             fallback_type=fallback_type,
             llm_router=llm_router,
+            include_model_info=include_model_info or False,
         )
         model_data.append(model_info)
 
@@ -7162,6 +7170,7 @@ async def model_list(
 async def model_info(
     model_id: str,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    include_model_info: Optional[bool] = False,
 ):
     """
     Retrieve information about a specific model accessible to your API key.
@@ -7219,6 +7228,7 @@ async def model_info(
         include_metadata=False,
         fallback_type=None,
         llm_router=llm_router,
+        include_model_info=include_model_info or False,
     )
 
 

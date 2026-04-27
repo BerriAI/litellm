@@ -5691,6 +5691,7 @@ def create_model_info_response(
     include_metadata: bool = False,
     fallback_type: Optional[str] = None,
     llm_router: Optional["Router"] = None,
+    include_model_info: bool = False,
 ) -> dict:
     """
     Create a standardized model info response.
@@ -5701,6 +5702,10 @@ def create_model_info_response(
         include_metadata: Whether to include metadata
         fallback_type: Type of fallbacks to include
         llm_router: LiteLLM router instance
+        include_model_info: When true, merges per-model-group info
+            (mode, max_input_tokens, max_output_tokens, input/output cost,
+            supports_* flags, tpm/rpm, etc.) under a top-level "model_info"
+            key. Pulled from llm_router.get_model_group_info().
 
     Returns:
         Dictionary containing model information
@@ -5713,6 +5718,15 @@ def create_model_info_response(
         "created": DEFAULT_MODEL_CREATED_AT_TIME,
         "owned_by": provider,
     }
+
+    if include_model_info and llm_router is not None:
+        try:
+            group_info = llm_router.get_model_group_info(model_group=model_id)
+        except Exception:
+            group_info = None
+        model_info["model_info"] = (
+            group_info.model_dump(exclude_none=True) if group_info is not None else {}
+        )
 
     # Add metadata if requested
     if include_metadata:
