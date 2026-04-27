@@ -273,6 +273,185 @@ def test_arize_set_attributes_responses_api():
     )
 
 
+def test_arize_set_attributes_anthropic_cache_tokens():
+    """
+    Anthropic prompt-caching populates both cache_read and cache_creation;
+    LiteLLM normalizes them onto `prompt_tokens_details`, and they should be
+    emitted as OpenInference cache_read / cache_write span attributes so
+    observability backends can display the cache breakdown and apply correct
+    cost calculation (cache reads at 0.1x, cache writes at 1.25x).
+    """
+    from unittest.mock import MagicMock
+
+    from litellm.types.utils import Choices, ModelResponse, Usage
+
+    span = MagicMock()
+    kwargs = {
+        "model": "claude-sonnet-4",
+        "messages": [{"role": "user", "content": "Hi"}],
+        "standard_logging_object": {
+            "model_parameters": {"user": "test_user"},
+            "metadata": {},
+            "call_type": "completion",
+        },
+        "optional_params": {"stream": False},
+        "litellm_params": {"custom_llm_provider": "anthropic"},
+    }
+    response_obj = ModelResponse(
+        usage=Usage(
+            prompt_tokens=4276,
+            completion_tokens=50,
+            total_tokens=4326,
+            cache_read_input_tokens=4000,
+            cache_creation_input_tokens=261,
+        ),
+        choices=[Choices(message={"role": "assistant", "content": "Hello"})],
+        model="claude-sonnet-4",
+        id="msg-cache-1",
+    )
+
+    ArizeLogger.set_arize_attributes(span, kwargs, response_obj)
+
+    span.set_attribute.assert_any_call(SpanAttributes.LLM_TOKEN_COUNT_TOTAL, 4326)
+    span.set_attribute.assert_any_call(SpanAttributes.LLM_TOKEN_COUNT_COMPLETION, 50)
+    span.set_attribute.assert_any_call(SpanAttributes.LLM_TOKEN_COUNT_PROMPT, 4276)
+    span.set_attribute.assert_any_call(
+        SpanAttributes.LLM_TOKEN_COUNT_PROMPT_DETAILS_CACHE_READ, 4000
+    )
+    span.set_attribute.assert_any_call(
+        SpanAttributes.LLM_TOKEN_COUNT_PROMPT_DETAILS_CACHE_WRITE, 261
+    )
+
+
+def test_arize_set_attributes_openai_cached_tokens():
+    """
+    OpenAI's native cache surfaces only cached_tokens (no creation). The
+    cache_read attribute must still be emitted; cache_write should be omitted.
+    """
+    from unittest.mock import MagicMock
+
+    from litellm.types.utils import (
+        Choices,
+        ModelResponse,
+        PromptTokensDetailsWrapper,
+        Usage,
+    )
+
+    span = MagicMock()
+    kwargs = {
+        "model": "gpt-4o",
+        "messages": [{"role": "user", "content": "Hi"}],
+        "standard_logging_object": {
+            "model_parameters": {"user": "test_user"},
+            "metadata": {},
+            "call_type": "completion",
+        },
+        "optional_params": {"stream": False},
+        "litellm_params": {"custom_llm_provider": "openai"},
+    }
+    response_obj = ModelResponse(
+        usage=Usage(
+            prompt_tokens=1000,
+            completion_tokens=100,
+            total_tokens=1100,
+            prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=500),
+        ),
+        choices=[Choices(message={"role": "assistant", "content": "Hello"})],
+        model="gpt-4o",
+        id="msg-openai-cache",
+    )
+
+    ArizeLogger.set_arize_attributes(span, kwargs, response_obj)
+
+    span.set_attribute.assert_any_call(
+        SpanAttributes.LLM_TOKEN_COUNT_PROMPT_DETAILS_CACHE_READ, 500
+    )
+    attribute_keys = [c.args[0] for c in span.set_attribute.call_args_list]
+    assert (
+        SpanAttributes.LLM_TOKEN_COUNT_PROMPT_DETAILS_CACHE_WRITE not in attribute_keys
+    )
+
+
+def test_arize_set_attributes_deepseek_cache_hit_tokens():
+    """
+    DeepSeek surfaces cache hits via `prompt_cache_hit_tokens`; LiteLLM
+    normalizes this onto `prompt_tokens_details.cached_tokens`, which the
+    OTEL emitter must pick up.
+    """
+    from unittest.mock import MagicMock
+
+    from litellm.types.utils import Choices, ModelResponse, Usage
+
+    span = MagicMock()
+    kwargs = {
+        "model": "deepseek-chat",
+        "messages": [{"role": "user", "content": "Hi"}],
+        "standard_logging_object": {
+            "model_parameters": {"user": "test_user"},
+            "metadata": {},
+            "call_type": "completion",
+        },
+        "optional_params": {"stream": False},
+        "litellm_params": {"custom_llm_provider": "deepseek"},
+    }
+    response_obj = ModelResponse(
+        usage=Usage(
+            prompt_tokens=2000,
+            completion_tokens=100,
+            total_tokens=2100,
+            prompt_cache_hit_tokens=1500,
+        ),
+        choices=[Choices(message={"role": "assistant", "content": "Hello"})],
+        model="deepseek-chat",
+        id="msg-deepseek-cache",
+    )
+
+    ArizeLogger.set_arize_attributes(span, kwargs, response_obj)
+
+    span.set_attribute.assert_any_call(
+        SpanAttributes.LLM_TOKEN_COUNT_PROMPT_DETAILS_CACHE_READ, 1500
+    )
+
+
+def test_arize_set_attributes_no_cache_tokens_omits_attributes():
+    """
+    Without cache tokens (no caching, or first-time prompt below threshold),
+    cache_read / cache_write attributes must not be emitted.
+    """
+    from unittest.mock import MagicMock
+
+    from litellm.types.utils import Choices, ModelResponse, Usage
+
+    span = MagicMock()
+    kwargs = {
+        "model": "gpt-4o",
+        "messages": [{"role": "user", "content": "Hi"}],
+        "standard_logging_object": {
+            "model_parameters": {"user": "test_user"},
+            "metadata": {},
+            "call_type": "completion",
+        },
+        "optional_params": {"stream": False},
+        "litellm_params": {"custom_llm_provider": "openai"},
+    }
+    response_obj = ModelResponse(
+        usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15),
+        choices=[Choices(message={"role": "assistant", "content": "Hi"})],
+        model="gpt-4o",
+        id="resp-no-cache",
+    )
+
+    ArizeLogger.set_arize_attributes(span, kwargs, response_obj)
+
+    attribute_keys = [c.args[0] for c in span.set_attribute.call_args_list]
+    assert (
+        SpanAttributes.LLM_TOKEN_COUNT_PROMPT_DETAILS_CACHE_READ not in attribute_keys
+    )
+    assert (
+        SpanAttributes.LLM_TOKEN_COUNT_PROMPT_DETAILS_CACHE_WRITE not in attribute_keys
+    )
+
+
 class TestArizeLogger(CustomLogger):
     """
     Custom logger implementation to capture standard_callback_dynamic_params.
