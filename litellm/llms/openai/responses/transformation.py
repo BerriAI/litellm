@@ -36,6 +36,78 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
     def supports_native_file_search(self) -> bool:
         return True
 
+    def _calculate_response_cost(
+        self, model: str, usage_dict: dict, response_obj: Any
+    ) -> None:
+        """
+        Calculate cost from Responses API usage data and store in response._hidden_params.
+
+        Args:
+            model: Model name
+            usage_dict: Usage dictionary from Responses API (uses input_tokens/output_tokens)
+            response_obj: Response object to store cost in (via _hidden_params)
+        """
+        if not usage_dict:
+            return
+
+        try:
+            # Map Responses API field names to Usage field names
+            # ResponseAPIUsage has: input_tokens, output_tokens, input_tokens_details
+            # Usage expects: prompt_tokens, completion_tokens, prompt_tokens_details
+            mapped_usage = {
+                "prompt_tokens": usage_dict.get("input_tokens", 0),
+                "completion_tokens": usage_dict.get("output_tokens", 0),
+                "total_tokens": usage_dict.get("total_tokens", 0),
+            }
+
+            # Map input_tokens_details to prompt_tokens_details (for cache hit tracking)
+            if "input_tokens_details" in usage_dict:
+                mapped_usage["prompt_tokens_details"] = usage_dict[
+                    "input_tokens_details"
+                ]
+
+            # Map output_tokens_details to completion_tokens_details if present
+            if "output_tokens_details" in usage_dict:
+                mapped_usage["completion_tokens_details"] = usage_dict[
+                    "output_tokens_details"
+                ]
+
+            # Convert to Usage object
+            usage_obj = Usage(**mapped_usage)
+
+            # Get provider string safely - handles both enum and plain string
+            provider_val = self.custom_llm_provider
+            custom_llm_provider_str = (
+                provider_val.value
+                if isinstance(provider_val, LlmProviders)
+                else str(provider_val)
+            )
+
+            # Use generic_cost_per_token with the correct provider
+            # This properly handles cached tokens, service tiers, and provider-specific pricing
+            prompt_cost, completion_cost = generic_cost_per_token(
+                model=model,
+                usage=usage_obj,
+                custom_llm_provider=custom_llm_provider_str,
+                service_tier=None,  # TODO: Extract from request if needed
+            )
+            total_cost = prompt_cost + completion_cost
+
+            # Store cost in hidden params (used by LiteLLM for tracking and headers)
+            response_obj._hidden_params["response_cost"] = total_cost
+
+            verbose_logger.debug(
+                f"Responses API cost calculated for {model}: "
+                f"prompt_cost=${prompt_cost:.6f}, completion_cost=${completion_cost:.6f}, "
+                f"total_cost=${total_cost:.6f}"
+            )
+        except Exception as e:
+            verbose_logger.error(
+                f"Error calculating Responses API cost for model {model}: {e}"
+            )
+            # Don't fail the request if cost calculation errors
+            pass
+
     @staticmethod
     def _is_gpt_5_model(model: str) -> bool:
         """Return True only for actual OpenAI GPT-5 models.
@@ -241,56 +313,8 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
             response = ResponsesAPIResponse.model_construct(**raw_response_json)
 
         # Calculate costs from usage data (fixes issue #26475)
-        # Responses API uses input_tokens/output_tokens, but Usage expects prompt_tokens/completion_tokens
-        try:
-            usage_dict = raw_response_json.get("usage", {})
-            if usage_dict:
-                # Map Responses API field names to Usage field names
-                # ResponseAPIUsage has: input_tokens, output_tokens, input_tokens_details
-                # Usage expects: prompt_tokens, completion_tokens, prompt_tokens_details
-                mapped_usage = {
-                    "prompt_tokens": usage_dict.get("input_tokens", 0),
-                    "completion_tokens": usage_dict.get("output_tokens", 0),
-                    "total_tokens": usage_dict.get("total_tokens", 0),
-                }
-
-                # Map input_tokens_details to prompt_tokens_details (for cache hit tracking)
-                if "input_tokens_details" in usage_dict:
-                    mapped_usage["prompt_tokens_details"] = usage_dict[
-                        "input_tokens_details"
-                    ]
-
-                # Map output_tokens_details to completion_tokens_details if present
-                if "output_tokens_details" in usage_dict:
-                    mapped_usage["completion_tokens_details"] = usage_dict[
-                        "output_tokens_details"
-                    ]
-
-                # Convert to Usage object
-                usage_obj = Usage(**mapped_usage)
-
-                # Use generic_cost_per_token with the correct provider
-                # This properly handles cached tokens, service tiers, and provider-specific pricing
-                prompt_cost, completion_cost = generic_cost_per_token(
-                    model=model,
-                    usage=usage_obj,
-                    custom_llm_provider=str(self.custom_llm_provider.value),
-                    service_tier=None,  # TODO: Extract from request if needed
-                )
-                total_cost = prompt_cost + completion_cost
-
-                # Store cost in hidden params (used by LiteLLM for tracking and headers)
-                response._hidden_params["response_cost"] = total_cost
-
-                verbose_logger.debug(
-                    f"Responses API cost calculated for {model}: "
-                    f"prompt_cost=${prompt_cost:.6f}, completion_cost=${completion_cost:.6f}, "
-                    f"total_cost=${total_cost:.6f}"
-                )
-        except Exception as e:
-            verbose_logger.error(f"Error calculating Responses API cost: {e}")
-            # Don't fail the request if cost calculation errors
-            pass
+        usage_dict = raw_response_json.get("usage", {})
+        self._calculate_response_cost(model, usage_dict, response)
 
         # Store processed headers in additional_headers so they get returned to the client
         response._hidden_params["additional_headers"] = processed_headers
@@ -361,7 +385,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
             verbose_logger.debug("Failed to coalesce error.code in parsed_chunk")
 
         try:
-            return event_pydantic_model(**parsed_chunk)
+            event = event_pydantic_model(**parsed_chunk)
         except ValidationError:
             verbose_logger.debug(
                 "Pydantic validation failed for %s with chunk %s, "
@@ -369,7 +393,22 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
                 event_pydantic_model.__name__,
                 parsed_chunk,
             )
-            return event_pydantic_model.model_construct(**parsed_chunk)
+            event = event_pydantic_model.model_construct(**parsed_chunk)
+
+        # Calculate cost for response.completed event (streaming final chunk with usage)
+        if event_type == ResponsesAPIStreamEvents.RESPONSE_COMPLETED:
+            try:
+                # ResponseCompletedEvent.response is a ResponsesAPIResponse with usage
+                completed_event = cast(ResponseCompletedEvent, event)
+                response_obj = completed_event.response
+                usage_dict = parsed_chunk.get("response", {}).get("usage", {})
+                self._calculate_response_cost(model, usage_dict, response_obj)
+            except Exception as e:
+                verbose_logger.debug(
+                    f"Error calculating cost for streaming response.completed: {e}"
+                )
+
+        return event
 
     @staticmethod
     def get_event_model_class(event_type: str) -> Any:
@@ -685,36 +724,10 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
             response = ResponsesAPIResponse.model_construct(**raw_response_json)
 
         # Calculate costs from usage data (same fix as transform_response_api_response)
-        try:
-            usage_dict = raw_response_json.get("usage", {})
-            model = logging_obj.model  # Get model from logging object
-            if usage_dict and model:
-                # Map Responses API field names to Usage field names
-                mapped_usage = {
-                    "prompt_tokens": usage_dict.get("input_tokens", 0),
-                    "completion_tokens": usage_dict.get("output_tokens", 0),
-                    "total_tokens": usage_dict.get("total_tokens", 0),
-                }
-                if "input_tokens_details" in usage_dict:
-                    mapped_usage["prompt_tokens_details"] = usage_dict[
-                        "input_tokens_details"
-                    ]
-                if "output_tokens_details" in usage_dict:
-                    mapped_usage["completion_tokens_details"] = usage_dict[
-                        "output_tokens_details"
-                    ]
-
-                usage_obj = Usage(**mapped_usage)
-                prompt_cost, completion_cost = generic_cost_per_token(
-                    model=model,
-                    usage=usage_obj,
-                    custom_llm_provider=str(self.custom_llm_provider.value),
-                    service_tier=None,
-                )
-                response._hidden_params["response_cost"] = prompt_cost + completion_cost
-        except Exception as e:
-            verbose_logger.error(f"Error calculating compact Responses API cost: {e}")
-            pass
+        usage_dict = raw_response_json.get("usage", {})
+        model = logging_obj.model  # Get model from logging object
+        if model:
+            self._calculate_response_cost(model, usage_dict, response)
 
         response._hidden_params["additional_headers"] = processed_headers
         response._hidden_params["headers"] = raw_response_headers
