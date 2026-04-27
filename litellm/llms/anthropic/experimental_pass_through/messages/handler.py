@@ -368,10 +368,21 @@ def anthropic_messages_handler(
     # Store agentic loop params in logging object for agentic hooks
     # This provides original request context needed for follow-up calls
     if litellm_logging_obj is not None:
-        litellm_logging_obj.model_call_details["agentic_loop_params"] = {
+        agentic_loop_params: Dict[str, Any] = {
             "model": original_model,
             "custom_llm_provider": custom_llm_provider,
         }
+        # Preserve the deployment-specific credentials resolved by
+        # get_llm_provider() so agentic follow-up requests (e.g. websearch
+        # interception) target the same api_base / api_key as the initial
+        # call, instead of falling back to provider env vars (#26389).
+        if dynamic_api_key is not None:
+            agentic_loop_params["api_key"] = dynamic_api_key
+        if dynamic_api_base is not None:
+            agentic_loop_params["api_base"] = dynamic_api_base
+        litellm_logging_obj.model_call_details["agentic_loop_params"] = (
+            agentic_loop_params
+        )
 
         # Check if stream was converted for WebSearch interception
         # This is set in the async wrapper above when stream=True is converted to stream=False

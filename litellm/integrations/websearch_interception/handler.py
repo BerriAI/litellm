@@ -851,6 +851,17 @@ class WebSearchInterceptionLogger(CustomLogger):
                 "agentic_loop_params", {}
             )
             full_model_name = agentic_params.get("model", model)
+            # Preserve deployment-specific credentials in the follow-up
+            # request. Without these, the follow-up call falls back to
+            # provider env vars (e.g. ANTHROPIC_API_KEY) and the default
+            # public api_base, causing 401s and deployment cooldown
+            # cascades for routed deployments (#26389).
+            agentic_api_key = agentic_params.get("api_key")
+            agentic_api_base = agentic_params.get("api_base")
+            if agentic_api_key is not None and "api_key" not in kwargs_for_followup:
+                kwargs_for_followup["api_key"] = agentic_api_key
+            if agentic_api_base is not None and "api_base" not in kwargs_for_followup:
+                kwargs_for_followup["api_base"] = agentic_api_base
         verbose_logger.debug(
             "WebSearchInterception: Built anthropic request patch "
             "[call_id=%s model=%s messages=%d searches=%d]",

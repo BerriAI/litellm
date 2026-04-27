@@ -380,3 +380,120 @@ async def test_deployment_hook_converts_stream_and_logging_obj_syncs():
         logging_obj.stream = _hook_stream
 
     assert logging_obj.stream is False
+
+
+@pytest.mark.asyncio
+async def test_followup_request_preserves_custom_api_base_and_api_key():
+    """
+    Regression test for #26389.
+
+    When the initial request was routed to a deployment with custom
+    api_base / api_key, the websearch interception follow-up call must
+    preserve those credentials. Without this, the follow-up falls back
+    to provider env vars and the default api_base, causing 401 and
+    deployment cooldown cascade.
+    """
+    logger = WebSearchInterceptionLogger(enabled_providers=["anthropic"])
+    logger._execute_search = AsyncMock(  # type: ignore
+        return_value="Title: LiteLLM\nURL: docs\nSnippet: test"
+    )
+
+    tools_dict = {
+        "tool_calls": [
+            {
+                "id": "toolu_xyz",
+                "type": "tool_use",
+                "name": "litellm_web_search",
+                "input": {"query": "what is litellm"},
+            }
+        ],
+        "response_format": "anthropic",
+    }
+    logging_obj = MagicMock()
+    logging_obj.model_call_details = {
+        "agentic_loop_params": {
+            "model": "anthropic/claude-3-5-sonnet",
+            "custom_llm_provider": "anthropic",
+            "api_key": "deployment-specific-key",
+            "api_base": "https://my-proxy.example.com/v1",
+        }
+    }
+
+    plan = await logger.async_build_agentic_loop_plan(
+        tools=tools_dict,
+        model="claude-3-5-sonnet",
+        messages=[{"role": "user", "content": "search"}],
+        response=None,
+        anthropic_messages_provider_config=None,
+        anthropic_messages_optional_request_params={
+            "max_tokens": 1024,
+            "tools": [{"name": "litellm_web_search"}],
+        },
+        logging_obj=logging_obj,
+        stream=False,
+        kwargs={"temperature": 0.2},
+    )
+
+    assert plan.run_agentic_loop is True
+    assert plan.request_patch is not None
+    followup_kwargs = plan.request_patch.kwargs
+    assert followup_kwargs.get("api_key") == "deployment-specific-key"
+    assert followup_kwargs.get("api_base") == "https://my-proxy.example.com/v1"
+
+
+@pytest.mark.asyncio
+async def test_followup_request_does_not_override_user_provided_api_credentials():
+    """
+    If the caller already explicitly passed api_key / api_base in kwargs,
+    those values should win over the agentic_loop_params copies (caller
+    intent is preserved).
+    """
+    logger = WebSearchInterceptionLogger(enabled_providers=["anthropic"])
+    logger._execute_search = AsyncMock(  # type: ignore
+        return_value="Title: LiteLLM\nURL: docs\nSnippet: test"
+    )
+
+    tools_dict = {
+        "tool_calls": [
+            {
+                "id": "toolu_abc",
+                "type": "tool_use",
+                "name": "litellm_web_search",
+                "input": {"query": "x"},
+            }
+        ],
+        "response_format": "anthropic",
+    }
+    logging_obj = MagicMock()
+    logging_obj.model_call_details = {
+        "agentic_loop_params": {
+            "model": "anthropic/claude-3-5-sonnet",
+            "custom_llm_provider": "anthropic",
+            "api_key": "from-agentic-params",
+            "api_base": "https://from-agentic-params.example.com/v1",
+        }
+    }
+
+    plan = await logger.async_build_agentic_loop_plan(
+        tools=tools_dict,
+        model="claude-3-5-sonnet",
+        messages=[{"role": "user", "content": "search"}],
+        response=None,
+        anthropic_messages_provider_config=None,
+        anthropic_messages_optional_request_params={
+            "max_tokens": 1024,
+            "tools": [{"name": "litellm_web_search"}],
+        },
+        logging_obj=logging_obj,
+        stream=False,
+        kwargs={
+            "temperature": 0.2,
+            "api_key": "explicit-caller-key",
+            "api_base": "https://explicit-caller.example.com/v1",
+        },
+    )
+
+    assert plan.request_patch is not None
+    followup_kwargs = plan.request_patch.kwargs
+    assert followup_kwargs.get("api_key") == "explicit-caller-key"
+    assert followup_kwargs.get("api_base") == "https://explicit-caller.example.com/v1"

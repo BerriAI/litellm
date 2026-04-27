@@ -499,3 +499,91 @@ class TestThinkingSummaryPreservation:
         assert result == {
             "reasoning_effort": {"effort": "medium", "summary": "concise"}
         }
+
+
+def test_agentic_loop_params_preserves_dynamic_api_key_and_api_base():
+    """
+    Regression test for #26389.
+
+    When get_llm_provider() returns deployment-specific dynamic_api_key /
+    dynamic_api_base, those values must be stored in
+    logging_obj.model_call_details["agentic_loop_params"] so agentic
+    follow-up calls (e.g. websearch interception) reuse the same
+    credentials instead of falling back to provider env vars.
+    """
+    from litellm.llms.anthropic.experimental_pass_through.messages.handler import (
+        anthropic_messages_handler,
+    )
+
+    logging_obj = MagicMock()
+    logging_obj.model_call_details = {}
+
+    with (
+        patch(
+            "litellm.get_llm_provider",
+            return_value=(
+                "claude-3-5-sonnet",
+                "anthropic",
+                "deployment-specific-key",
+                "https://my-proxy.example.com/v1",
+            ),
+        ),
+        patch("litellm.completion", return_value="test-response"),
+    ):
+        try:
+            anthropic_messages_handler(
+                max_tokens=100,
+                messages=[{"role": "user", "content": "hi"}],
+                model="anthropic/claude-3-5-sonnet",
+                custom_llm_provider="anthropic",
+                api_key="deployment-specific-key",
+                api_base="https://my-proxy.example.com/v1",
+                litellm_logging_obj=logging_obj,
+            )
+        except (ValueError, TypeError, AttributeError):
+            pass
+
+    agentic_loop_params = logging_obj.model_call_details.get("agentic_loop_params")
+    assert agentic_loop_params is not None
+    assert agentic_loop_params["model"] == "anthropic/claude-3-5-sonnet"
+    assert agentic_loop_params["custom_llm_provider"] == "anthropic"
+    assert agentic_loop_params["api_key"] == "deployment-specific-key"
+    assert agentic_loop_params["api_base"] == "https://my-proxy.example.com/v1"
+
+
+def test_agentic_loop_params_omits_keys_when_dynamic_values_are_none():
+    """
+    When get_llm_provider() returns no dynamic_api_key / dynamic_api_base
+    (typical for default provider config), the agentic_loop_params dict
+    should NOT contain api_key / api_base keys, so downstream code can
+    fall back to its existing resolution logic.
+    """
+    from litellm.llms.anthropic.experimental_pass_through.messages.handler import (
+        anthropic_messages_handler,
+    )
+
+    logging_obj = MagicMock()
+    logging_obj.model_call_details = {}
+
+    with (
+        patch(
+            "litellm.get_llm_provider",
+            return_value=("claude-3-5-sonnet", "anthropic", None, None),
+        ),
+        patch("litellm.completion", return_value="test-response"),
+    ):
+        try:
+            anthropic_messages_handler(
+                max_tokens=100,
+                messages=[{"role": "user", "content": "hi"}],
+                model="anthropic/claude-3-5-sonnet",
+                custom_llm_provider="anthropic",
+                litellm_logging_obj=logging_obj,
+            )
+        except (ValueError, TypeError, AttributeError):
+            pass
+
+    agentic_loop_params = logging_obj.model_call_details.get("agentic_loop_params")
+    assert agentic_loop_params is not None
+    assert "api_key" not in agentic_loop_params
+    assert "api_base" not in agentic_loop_params

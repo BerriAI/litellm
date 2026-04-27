@@ -164,6 +164,17 @@ class AgenticLoopParams(TypedDict, total=False):
     custom_llm_provider: str
     """The LLM provider name (e.g., 'bedrock', 'anthropic')"""
 
+    api_key: str
+    """Deployment-specific API key resolved by get_llm_provider() (optional).
+
+    Stored so agentic follow-up calls (e.g. websearch interception) reuse the
+    same credentials as the initial request instead of falling back to
+    provider env vars.
+    """
+
+    api_base: str
+    """Deployment-specific API base URL resolved by get_llm_provider() (optional)."""
+
 
 class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     key: Required[str]  # the key in litellm.model_cost which is returned
