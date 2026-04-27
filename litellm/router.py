@@ -1537,6 +1537,7 @@ class Router:
 
             self._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
             kwargs.pop("silent_model", None)  # Ensure it's not in kwargs either
+            kwargs.pop("routing_strategy", None)  # Ensure it's not forwarded to LLM API
             model_name = litellm_params["model"]
             potential_model_client = self._get_client(
                 deployment=deployment, kwargs=kwargs
@@ -2169,6 +2170,7 @@ class Router:
 
             self._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
             kwargs.pop("silent_model", None)  # Ensure it's not in kwargs either
+            kwargs.pop("routing_strategy", None)  # Ensure it's not forwarded to LLM API
 
             model_name = litellm_params["model"]
 
@@ -9460,7 +9462,7 @@ class Router:
         """
         # Support per-request routing_strategy override from key/team config
         routing_strategy_to_use = (
-            request_kwargs.pop("routing_strategy", None) or self.routing_strategy
+            request_kwargs.get("routing_strategy") or self.routing_strategy
         )
 
         if (
@@ -9849,7 +9851,7 @@ class Router:
         # Support per-request routing_strategy override from key/team config
         if request_kwargs is not None:
             routing_strategy_to_use = (
-                request_kwargs.pop("routing_strategy", None) or self.routing_strategy
+                request_kwargs.get("routing_strategy") or self.routing_strategy
             )
         else:
             routing_strategy_to_use = self.routing_strategy

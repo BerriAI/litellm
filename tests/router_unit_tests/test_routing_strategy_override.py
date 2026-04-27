@@ -11,7 +11,7 @@ Tests verify:
 import sys
 import os
 import pytest
-from unittest.mock import patch
+from unittest.mock import patch, AsyncMock, Mock
 
 sys.path.insert(0, os.path.abspath("../.."))
 
@@ -398,43 +398,6 @@ class TestOverrideDeterminism:
                 "Override should deterministically select fastest, not random."
             )
 
-    @pytest.mark.asyncio
-    async def test_request_body_routing_strategy_is_popped(self, base_model_list):
-        """
-        Test that routing_strategy is popped from request_kwargs after use.
-
-        Ensures routing_strategy doesn't leak to downstream LLM provider calls.
-        """
-        router = Router(
-            model_list=base_model_list,
-            routing_strategy="simple-shuffle",
-        )
-
-        request_kwargs = {
-            "routing_strategy": "latency-based-routing",
-            "temperature": 0.7,  # Other param that should remain
-        }
-
-        # Simulate curl request body
-        deployment = await router.async_get_available_deployment(
-            model="gpt-3.5-turbo",
-            request_kwargs=request_kwargs,
-            messages=[{"role": "user", "content": "test"}],
-        )
-
-        # Verify deployment is selected
-        assert deployment is not None
-
-        # Verify routing_strategy was popped from request_kwargs
-        assert "routing_strategy" not in request_kwargs, (
-            "routing_strategy should be popped from request_kwargs "
-            "to prevent it from being passed to LLM provider"
-        )
-
-        # Verify other params remain
-        assert "temperature" in request_kwargs
-        assert request_kwargs["temperature"] == 0.7
-
 
 class TestRegressionFixes:
     """Test specific regression fixes for critical bugs."""
@@ -461,6 +424,115 @@ class TestRegressionFixes:
 
         assert deployment is not None
         assert deployment.get("litellm_params", {}).get("use_in_pass_through") is True
+
+    @pytest.mark.asyncio
+    async def test_routing_strategy_not_forwarded_to_llm_backend(self, base_model_list):
+        """
+        Regression test: routing_strategy is not forwarded to LLM backend APIs.
+
+        Security boundary test - ensures routing_strategy override doesn't leak
+        to downstream LLM provider calls. We don't want custom parameters leaking
+        to third-party APIs.
+        """
+        router = Router(
+            model_list=base_model_list,
+            routing_strategy="simple-shuffle",
+        )
+
+        request_kwargs = {
+            "routing_strategy": "latency-based-routing",
+            "temperature": 0.7,
+        }
+
+        with patch("litellm.acompletion", new_callable=AsyncMock) as mock_acompletion:
+            from litellm import ModelResponse
+
+            mock_acompletion.return_value = ModelResponse(
+                id="test",
+                choices=[
+                    {"message": {"role": "assistant", "content": "test"}, "index": 0}
+                ],
+                model="gpt-3.5-turbo",
+                usage={
+                    "prompt_tokens": 10,
+                    "completion_tokens": 20,
+                    "total_tokens": 30,
+                },
+            )
+
+            # Make actual completion call (not just get_available_deployment)
+            response = await router.acompletion(
+                model="gpt-3.5-turbo",
+                messages=[{"role": "user", "content": "test"}],
+                **request_kwargs,
+            )
+
+            # Verify completion succeeded
+            assert response is not None
+
+            # CRITICAL: Verify routing_strategy was NOT passed to litellm.acompletion
+            call_kwargs = mock_acompletion.call_args[1]
+            assert (
+                "routing_strategy" not in call_kwargs
+            ), "routing_strategy should not be forwarded to LLM provider"
+
+            # Verify other params WERE passed correctly
+            assert "temperature" in call_kwargs
+            assert call_kwargs["temperature"] == 0.7
+
+    def test_routing_strategy_not_forwarded_to_llm_backend_sync(self, base_model_list):
+        """
+        Regression test: routing_strategy is not forwarded to LLM backend APIs (sync).
+
+        Security boundary test - ensures routing_strategy override doesn't leak
+        to downstream LLM provider calls. We don't want custom parameters leaking
+        to third-party APIs.
+        """
+        router = Router(
+            model_list=base_model_list,
+            routing_strategy="simple-shuffle",
+        )
+
+        request_kwargs = {
+            "routing_strategy": "latency-based-routing",
+            "temperature": 0.7,
+        }
+
+        with patch("litellm.completion", new_callable=Mock) as mock_completion:
+            from litellm import ModelResponse
+
+            mock_completion.return_value = ModelResponse(
+                id="test",
+                choices=[
+                    {"message": {"role": "assistant", "content": "test"}, "index": 0}
+                ],
+                model="gpt-3.5-turbo",
+                usage={
+                    "prompt_tokens": 10,
+                    "completion_tokens": 20,
+                    "total_tokens": 30,
+                },
+            )
+
+            # Make actual completion call
+            response = router.completion(
+                model="gpt-3.5-turbo",
+                messages=[{"role": "user", "content": "test"}],
+                **request_kwargs,
+            )
+
+            # Verify completion succeeded
+            assert response is not None
+
+            # CRITICAL: Verify routing_strategy was NOT passed to litellm.completion
+            call_kwargs = mock_completion.call_args[1]
+            assert (
+                "routing_strategy" not in call_kwargs
+            ), "routing_strategy should not be forwarded to LLM provider"
+
+            # Verify other params WERE passed correctly
+            assert "temperature" in call_kwargs
+            assert call_kwargs["temperature"] == 0.7
 
     def test_sync_latency_uses_override_variable(self, base_model_list):
         """
@@ -696,3 +768,197 @@ class TestOverridePrecedence:
 
         # Should use latency-based routing (deployment-2), not least-busy
         assert deployment["model_info"]["id"] == "deployment-2"
+
+
+class TestRoutingStrategyWithMockTestingFallbacks:
+    """Test that per-request routing_strategy is preserved during mock testing fallbacks."""
+
+    @pytest.mark.asyncio
+    async def test_routing_strategy_preserved_in_mock_testing_fallbacks(self):
+        """
+        Test that routing_strategy override is preserved when simulating fallback scenarios.
+
+        This verifies that the fix (using get() instead of pop()) works correctly by
+        simulating what happens during fallbacks: multiple calls to get_available_deployment
+        with the same request_kwargs.
+
+        Scenario:
+        1. Request model="gpt-4" with routing_strategy="cost-based-routing"
+        2. First call to get_available_deployment (simulated initial request)
+        3. Second call to get_available_deployment (simulated fallback to gpt-3.5-turbo)
+        4. KEY: routing_strategy should be preserved in request_kwargs for both calls
+        5. Second call selects the CHEAPEST gpt-3.5-turbo installation (proves cost-based routing)
+        """
+        model_list = [
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {
+                    "model": "gpt-4",
+                    "api_key": "test-key-1",
+                    "input_cost_per_token": 0.03,
+                    "output_cost_per_token": 0.06,
+                },
+                "model_info": {"id": "gpt4-inst"},
+            },
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo",
+                    "api_key": "test-key-2",
+                    "input_cost_per_token": 0.003,
+                    "output_cost_per_token": 0.006,
+                },
+                "model_info": {"id": "expensive-gpt35-inst"},
+            },
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo",
+                    "api_key": "test-key-3",
+                    "input_cost_per_token": 0.002,
+                    "output_cost_per_token": 0.004,
+                },
+                "model_info": {"id": "medium-gpt35-inst"},
+            },
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo",
+                    "api_key": "test-key-4",
+                    "input_cost_per_token": 0.001,
+                    "output_cost_per_token": 0.002,
+                },
+                "model_info": {"id": "cheap-gpt35-inst"},
+            },
+        ]
+
+        router = Router(
+            model_list=model_list,
+            routing_strategy="simple-shuffle",
+        )
+
+        # Simulate what happens during fallback: multiple calls with same request_kwargs
+        request_kwargs = {
+            "routing_strategy": "cost-based-routing",
+        }
+
+        # First call: gpt-4 (initial request)
+        deployment1 = await router.async_get_available_deployment(
+            model="gpt-4",
+            request_kwargs=request_kwargs,
+            messages=[{"role": "user", "content": "test"}],
+        )
+
+        # Verify routing_strategy is still in request_kwargs (not popped)
+        assert "routing_strategy" in request_kwargs
+        assert request_kwargs["routing_strategy"] == "cost-based-routing"
+
+        # Second call: gpt-3.5-turbo (fallback - simulating router switching models)
+        deployment2 = await router.async_get_available_deployment(
+            model="gpt-3.5-turbo",
+            request_kwargs=request_kwargs,
+            messages=[{"role": "user", "content": "test"}],
+        )
+
+        # Verify routing_strategy is STILL in request_kwargs after second call
+        assert (
+            "routing_strategy" in request_kwargs
+        ), "routing_strategy should be preserved in request_kwargs for fallbacks"
+        assert request_kwargs["routing_strategy"] == "cost-based-routing"
+
+        # KEY ASSERTION: Second call selected the cheapest gpt-3.5-turbo installation
+        # This proves cost-based routing was used (not global simple-shuffle)
+        assert deployment2["model_info"]["id"] == "cheap-gpt35-inst", (
+            f"Expected cheapest gpt-3.5-turbo installation (cheap-gpt35-inst $0.001), "
+            f"got {deployment2['model_info']['id']}. "
+            "This proves routing_strategy='cost-based-routing' was preserved and worked correctly."
+        )
+
+    def test_routing_strategy_preserved_in_mock_testing_fallbacks_sync(self):
+        """
+        Test that routing_strategy override is preserved during sync fallback scenarios.
+
+        Scenario:
+        1. Request model="gpt-4" with routing_strategy="cost-based-routing"
+        2. First call to get_available_deployment (simulated initial request)
+        3. Second call to get_available_deployment (simulated fallback to gpt-3.5-turbo)
+        4. KEY: routing_strategy should be preserved in request_kwargs for both calls
+        5. Second call selects the CHEAPEST gpt-3.5-turbo installation (proves cost-based routing)
+        """
+        model_list = [
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {
+                    "model": "gpt-4",
+                    "api_key": "test-key-1",
+                    "input_cost_per_token": 0.03,
+                    "output_cost_per_token": 0.06,
+                },
+                "model_info": {"id": "gpt4-inst"},
+            },
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo",
+                    "api_key": "test-key-2",
+                    "input_cost_per_token": 0.003,
+                    "output_cost_per_token": 0.006,
+                },
+                "model_info": {"id": "expensive-gpt35-inst"},
+            },
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo",
+                    "api_key": "test-key-3",
+                    "input_cost_per_token": 0.002,
+                    "output_cost_per_token": 0.004,
+                },
+                "model_info": {"id": "medium-gpt35-inst"},
+            },
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo",
+                    "api_key": "test-key-4",
+                    "input_cost_per_token": 0.001,
+                    "output_cost_per_token": 0.002,
+                },
+                "model_info": {"id": "cheap-gpt35-inst"},
+            },
+        ]
+
+        router = Router(
+            model_list=model_list,
+            routing_strategy="simple-shuffle",
+        )
+
+        request_kwargs = {
+            "routing_strategy": "cost-based-routing",
+        }
+
+        deployment1 = router.get_available_deployment(
+            model="gpt-4",
+            request_kwargs=request_kwargs,
+            messages=[{"role": "user", "content": "test"}],
+        )
+
+        assert "routing_strategy" in request_kwargs
+        assert request_kwargs["routing_strategy"] == "cost-based-routing"
+
+        deployment2 = router.get_available_deployment(
+            model="gpt-3.5-turbo",
+            request_kwargs=request_kwargs,
+            messages=[{"role": "user", "content": "test"}],
+        )
+
+        assert (
+            "routing_strategy" in request_kwargs
+        ), "routing_strategy should be preserved in request_kwargs for fallbacks"
+        assert request_kwargs["routing_strategy"] == "cost-based-routing"
+
+        assert deployment2["model_info"]["id"] == "cheap-gpt35-inst", (
+            f"Expected cheapest gpt-3.5-turbo installation (cheap-gpt35-inst $0.001), "
+            f"got {deployment2['model_info']['id']}. "
+            "This proves routing_strategy='cost-based-routing' was preserved and worked correctly."
+        )
