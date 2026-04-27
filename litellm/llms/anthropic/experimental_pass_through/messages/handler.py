@@ -323,7 +323,7 @@ async def anthropic_messages(
         response = await init_response
     else:
         response = init_response
-    return response
+    return _sanitize_think_tag_text_blocks(response)
 
 
 def validate_anthropic_api_metadata(metadata: Optional[Dict] = None) -> Optional[Dict]:
@@ -458,10 +458,12 @@ def anthropic_messages_handler(
             **kwargs,
         )
         if _should_route_to_responses_api(custom_llm_provider):
-            return LiteLLMMessagesToResponsesAPIHandler.anthropic_messages_handler(
-                **_shared_kwargs
+            return _sanitize_think_tag_text_blocks(
+                LiteLLMMessagesToResponsesAPIHandler.anthropic_messages_handler(
+                    **_shared_kwargs
+                )
             )
-        return (
+        return _sanitize_think_tag_text_blocks(
             LiteLLMMessagesToCompletionTransformationHandler.anthropic_messages_handler(
                 **_shared_kwargs
             )
