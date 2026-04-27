@@ -509,6 +509,52 @@ class ChunkProcessor:
             "prompt_tokens_details": prompt_tokens_details,
         }
 
+    def chunks_have_reasoning_tokens(
+        self,
+        chunks: List[Union[Dict[str, Any], ModelResponse]],
+    ) -> bool:
+        """
+        Return True if any streaming usage chunk already reports
+        completion_tokens_details.reasoning_tokens.
+
+        When the provider supplies this value, calculate_usage uses it
+        directly and discards any locally recomputed value (see
+        calculate_usage: reasoning_tokens is only applied when
+        completion_tokens_details.reasoning_tokens is None). The local
+        recount via count_reasoning_tokens calls tiktoken.encode() which
+        holds the GIL and blocks the asyncio event loop on large reasoning
+        responses, so skipping it in this common case avoids liveness-probe
+        timeouts without changing any observable output.
+        """
+        for chunk in chunks:
+            usage: Any = None
+            if isinstance(chunk, dict):
+                usage = chunk.get("usage")
+            else:
+                usage = getattr(chunk, "usage", None)
+                if usage is None and hasattr(chunk, "_hidden_params"):
+                    hidden = chunk._hidden_params
+                    if isinstance(hidden, dict):
+                        usage = hidden.get("usage")
+            if usage is None:
+                continue
+
+            details: Any = None
+            if isinstance(usage, dict):
+                details = usage.get("completion_tokens_details")
+            elif hasattr(usage, "completion_tokens_details"):
+                details = usage.completion_tokens_details
+            if details is None:
+                continue
+
+            if isinstance(details, dict):
+                reasoning_tokens = details.get("reasoning_tokens")
+            else:
+                reasoning_tokens = getattr(details, "reasoning_tokens", None)
+            if reasoning_tokens is not None:
+                return True
+        return False
+
     def count_reasoning_tokens(self, response: ModelResponse) -> Optional[int]:
         reasoning_tokens: Optional[int] = None
         for choice in response.choices:
