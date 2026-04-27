@@ -2642,27 +2642,11 @@ async def bulk_update_team_keys(
     """
     Apply one update payload to many keys inside a single team.
 
-    Scoped to a single team — pass `team_id` plus either `key_ids` (specific
-    keys in that team) or `all_keys_in_team=True`. The same `update_fields`
-    payload is applied to every selected key.
+    Pass `team_id` plus either `key_ids` or `all_keys_in_team=True`. The
+    `update_fields` payload is broadcast to every selected key. Per-key
+    failures are returned in `failed_updates` rather than aborting the batch.
 
-    Callable by proxy admins, or by team admins with `KEY_UPDATE` permission
-    for the target team.
-
-    Each key update is processed independently — partial failures are returned
-    in `failed_updates` rather than aborting the whole batch.
-
-    Example request:
-    ```bash
-    curl --location 'http://0.0.0.0:4000/team/key/bulk_update' \\
-      --header 'Authorization: Bearer sk-1234' \\
-      --header 'Content-Type: application/json' \\
-      --data '{
-        "team_id": "team-123",
-        "all_keys_in_team": true,
-        "update_fields": {"max_budget": 50.0, "budget_duration": "30d"}
-      }'
-    ```
+    Callable by proxy admins, or by team admins with `KEY_UPDATE` permission.
     """
     from litellm.proxy.proxy_server import (
         llm_router,
@@ -2693,10 +2677,19 @@ async def bulk_update_team_keys(
             },
         )
 
-    # Resolve which keys to update (single batched query, scoped to team).
     if data.all_keys_in_team:
+        # "all" excludes blocked/expired — bulk refresh shouldn't revive a key an admin disabled.
+        # `blocked` is Boolean? with no default; `/key/generate` writes NULL. Prisma's `NOT`
+        # excludes NULLs, so explicitly OR `false` with `null` to include them.
+        now = datetime.now(timezone.utc)
         existing_keys = await prisma_client.db.litellm_verificationtoken.find_many(
-            where={"team_id": data.team_id},
+            where={
+                "team_id": data.team_id,
+                "AND": [
+                    {"OR": [{"blocked": False}, {"blocked": None}]},
+                    {"OR": [{"expires": None}, {"expires": {"gt": now}}]},
+                ],
+            },
             order={"token": "asc"},
             take=MAX_BATCH_SIZE + 1,
         )
@@ -2709,33 +2702,51 @@ async def bulk_update_team_keys(
             )
         requested_tokens = [row.token for row in existing_keys]
     else:
-        # validator guarantees key_ids is set and non-empty when all_keys_in_team=False
-        assert data.key_ids is not None
+        if data.key_ids is None or len(data.key_ids) == 0:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "key_ids must be provided when all_keys_in_team is False"
+                },
+            )
+        # Dedupe by hashed form — duplicates collapse to one update.
+        requested_tokens = []
+        hashed_key_ids = []
+        seen_hashes = set()
+        for k in data.key_ids:
+            h = _hash_token_if_needed(k)
+            if h in seen_hashes:
+                continue
+            seen_hashes.add(h)
+            requested_tokens.append(k)
+            hashed_key_ids.append(h)
         existing_keys = await prisma_client.db.litellm_verificationtoken.find_many(
-            where={"team_id": data.team_id, "token": {"in": data.key_ids}}
+            where={"team_id": data.team_id, "token": {"in": hashed_key_ids}}
         )
-        requested_tokens = list(data.key_ids)
+
+    # Anchor membership check on data.team_id (not existing_keys[0]); empty result must still gate non-admins.
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value:
+        auth_anchor = (
+            existing_keys[0]
+            if existing_keys
+            else LiteLLM_VerificationToken(
+                token="__team_scope_auth_check__",
+                team_id=data.team_id,
+                models=[],
+            )
+        )
+        await TeamMemberPermissionChecks.can_team_member_execute_key_management_endpoint(
+            user_api_key_dict=user_api_key_dict,
+            route=KeyManagementRoutes.KEY_UPDATE,
+            prisma_client=prisma_client,
+            existing_key_row=auth_anchor,
+            user_api_key_cache=user_api_key_cache,
+        )
 
     if not requested_tokens:
         raise HTTPException(
             status_code=404,
             detail={"error": f"No keys found for team {data.team_id}"},
-        )
-
-    # Fail-fast auth: if caller is not proxy admin, verify they have KEY_UPDATE
-    # permission for this team once (using any in-team key as the auth subject).
-    # Per-key checks inside _process_single_key_update will short-circuit on the
-    # cached team object after this.
-    if (
-        user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value
-        and existing_keys
-    ):
-        await TeamMemberPermissionChecks.can_team_member_execute_key_management_endpoint(
-            user_api_key_dict=user_api_key_dict,
-            route=KeyManagementRoutes.KEY_UPDATE,
-            prisma_client=prisma_client,
-            existing_key_row=existing_keys[0],
-            user_api_key_cache=user_api_key_cache,
         )
 
     existing_by_token = {row.token: row for row in existing_keys}
@@ -2745,15 +2756,18 @@ async def bulk_update_team_keys(
     failed_updates: List[FailedKeyUpdate] = []
 
     for token in requested_tokens:
+        db_token = _hash_token_if_needed(token)
         try:
-            if token not in existing_by_token:
+            if db_token not in existing_by_token:
                 raise HTTPException(
                     status_code=404,
                     detail={"error": f"Key not found in team {data.team_id}"},
                 )
 
+            # team_id from validated scope, never user payload — drives _check_team_key_limits.
             update_key_request = UpdateKeyRequest(
                 key=token,
+                team_id=data.team_id,
                 **update_field_dict,
             )
             updated_key_info = await _process_single_key_update(
@@ -2772,14 +2786,15 @@ async def bulk_update_team_keys(
             )
 
         except Exception as e:
+            # Log the hashed prefix — `token` may be a raw sk-... and ERROR logs persist.
             verbose_proxy_logger.exception(
-                f"Failed to update key {token} in team {data.team_id}: {e}"
+                f"Failed to update key {db_token[:12]}... in team {data.team_id}: {e}"
             )
             failed_updates.append(
                 _build_failed_team_key_update(
                     token=token,
                     exception=e,
-                    existing_key_row=existing_by_token.get(token),
+                    existing_key_row=existing_by_token.get(db_token),
                 )
             )
 
