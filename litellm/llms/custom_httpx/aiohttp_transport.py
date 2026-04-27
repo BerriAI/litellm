@@ -339,9 +339,29 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
                 # Re-raise if it's a different RuntimeError
                 raise
 
+        # Sanitize response headers: aiohttp decodes header values into
+        # Python str that may contain non-ASCII characters (e.g. Chinese
+        # text in Volcengine Ark's x-tos-expiration header).
+        # httpx.Headers normalizes values via value.encode("ascii") which
+        # raises UnicodeEncodeError for such headers.  For non-ASCII
+        # values, we pass the UTF-8 encoded bytes directly to httpx,
+        # which stores them as-is and avoids the str->ascii encoding
+        # step.  When later accessed via response.headers[key], httpx
+        # decodes the stored bytes (typically with latin-1), so
+        # multi-byte UTF-8 sequences may appear garbled — but the
+        # request completes successfully instead of crashing.
+        sanitized_headers: typing.List[typing.Any] = []
+        for key, value in response.headers.items():
+            try:
+                value.encode("ascii")
+                sanitized_headers.append((key, value))
+            except UnicodeEncodeError:
+                # Pass as bytes so httpx skips the str→ascii encoding step
+                sanitized_headers.append((key, value.encode("utf-8")))
+
         return httpx.Response(
             status_code=response.status,
-            headers=response.headers,
+            headers=sanitized_headers,  # type: ignore[arg-type]
             stream=AiohttpResponseStream(response),
             request=request,
         )

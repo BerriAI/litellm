@@ -558,3 +558,78 @@ async def test_handle_session_closed_during_request():
     assert counts["requests"] == 2  # First request failed, second succeeded
     assert counts["sessions"] == 2  # Created 2 sessions for retry
     assert response.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_handle_async_request_non_ascii_headers():
+    """
+    Regression test for issue #26548: aiohttp transport fails when
+    response headers contain non-ASCII characters.
+
+    aiohttp decodes header values into Python str with non-ASCII
+    characters (e.g. Chinese text in Volcengine Ark's x-tos-expiration
+    header).  httpx.Headers tries to encode values as ASCII and raises
+    UnicodeEncodeError.  The fix sanitizes non-ASCII values before
+    passing them to httpx.Response.
+    """
+
+    class MockSession:
+        def __init__(self):
+            self.closed = False
+            try:
+                self._loop = asyncio.get_running_loop()
+            except RuntimeError:
+                self._loop = None
+
+        def request(self, *args, **kwargs):
+            class Resp:
+                status = 200
+                # Simulate aiohttp returning non-ASCII header values
+                headers = {
+                    "content-type": "application/octet-stream",
+                    "x-tos-expiration": 'expiry-date="Fri, 23 Oct 2026", rule-id="180day自动清理"',
+                    "x-ark-message": "视频生成成功",
+                }
+
+                async def __aenter__(self):
+                    return self
+
+                async def __aexit__(self, *args):
+                    pass
+
+                @property
+                def content(self):
+                    class C:
+                        async def iter_chunked(self, size):
+                            yield b"ok"
+
+                    return C()
+
+            return Resp()
+
+    transport = LiteLLMAiohttpTransport(client=lambda: MockSession())  # type: ignore
+    request = httpx.Request("GET", "http://example.com/asset")
+
+    # This should NOT raise UnicodeEncodeError
+    response = await transport.handle_async_request(request)
+
+    assert response.status_code == 200
+
+    # ASCII-safe headers should be preserved as-is
+    assert response.headers["content-type"] == "application/octet-stream"
+
+    # Non-ASCII headers should be present (not crash the request)
+    assert "x-tos-expiration" in response.headers
+    assert "x-ark-message" in response.headers
+
+    # Verify ASCII portions of non-ASCII headers are preserved
+    tos_value = response.headers["x-tos-expiration"]
+    assert "180day" in tos_value  # ASCII portion preserved
+    assert "rule-id" in tos_value  # ASCII portion preserved
+
+    # Verify non-ASCII content is preserved as UTF-8 bytes in the
+    # raw header value (httpx stores the bytes we passed through).
+    # The raw bytes should contain the original UTF-8 encoded Chinese.
+    raw_headers = dict(response.headers.raw)
+    assert "自动清理".encode("utf-8") in raw_headers[b"x-tos-expiration"]
+    assert "视频生成成功".encode("utf-8") in raw_headers[b"x-ark-message"]
