@@ -22,6 +22,7 @@ from litellm.integrations.datadog.datadog import DataDogLogger
 from litellm.integrations.datadog.datadog_llm_obs import DataDogLLMObsLogger
 from litellm.integrations.datadog.datadog_metrics import DatadogMetricsLogger
 from litellm.integrations.deepeval import DeepEvalLogger
+from litellm.integrations.mavvrik import Logger as MavvrikLogger
 from litellm.integrations.dotprompt import DotpromptManager
 from litellm.integrations.focus.focus_logger import FocusLogger
 from litellm.integrations.vantage.vantage_logger import VantageLogger
@@ -100,6 +101,7 @@ class CustomLoggerRegistry:
         "gitlab": GitLabPromptManager,
         "cloudzero": CloudZeroLogger,
         "focus": FocusLogger,
+        "mavvrik": MavvrikLogger,
         "vantage": VantageLogger,
         "posthog": PostHogLogger,
     }
