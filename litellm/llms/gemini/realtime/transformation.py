@@ -1152,6 +1152,30 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                             "arguments": tool_call["arguments"],
                         },
                     })
+                
+                # response.done - close the response so clients can submit tool results
+                returned_message.append({
+                    "type": "response.done",
+                    "event_id": f"event_{uuid.uuid4()}",
+                    "response": {
+                        "id": current_response_id,
+                        "object": "realtime.response",
+                        "status": "completed",
+                        "output": [
+                            {
+                                "id": te["item_id"],
+                                "object": "realtime.item",
+                                "type": "function_call",
+                                "status": "completed",
+                                "call_id": te["call_id"],
+                                "name": te["name"],
+                                "arguments": te["arguments"],
+                            }
+                            for te in tool_call_events
+                        ],
+                        "usage": None,
+                    },
+                })
             elif openai_event == OpenAIRealtimeEventTypes.RESPONSE_DONE:
                 transformed_response_done_event = self.transform_response_done_event(
                     message=BidiGenerateContentServerMessage(**json_message),  # type: ignore
