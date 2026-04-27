@@ -1,8 +1,8 @@
 import { Member } from "@/components/networking";
 import { CrownOutlined, InfoCircleOutlined, UserAddOutlined, UserOutlined } from "@ant-design/icons";
-import { Button, Space, Table, Tag, Tooltip, Typography } from "antd";
+import { Button, Pagination, Space, Table, Tag, Tooltip, Typography } from "antd";
 import type { ColumnsType } from "antd/es/table";
-import React from "react";
+import React, { useState } from "react";
 import TableIconActionButton from "./IconActionButton/TableIconActionButtons/TableIconActionButton";
 
 const { Text } = Typography;
@@ -18,6 +18,10 @@ export interface MemberTableProps {
   extraColumns?: ColumnsType<Member>;
   showDeleteForMember?: (member: Member) => boolean;
   emptyText?: string;
+  loading?: boolean;
+  /** When true, renders top-right pagination controls instead of the default antd bottom pagination. */
+  withPagination?: boolean;
+  defaultPageSize?: number;
 }
 
 export default function MemberTable({
@@ -31,7 +35,17 @@ export default function MemberTable({
   extraColumns = [],
   showDeleteForMember,
   emptyText,
+  loading,
+  withPagination = false,
+  defaultPageSize = 50,
 }: MemberTableProps) {
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(defaultPageSize);
+
+  const total = members.length;
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const safePage = Math.min(page, totalPages);
+  const pagedMembers = withPagination ? members.slice((safePage - 1) * pageSize, safePage * pageSize) : members;
   const baseColumns: ColumnsType<Member> = [
     {
       title: "User Email",
@@ -104,14 +118,29 @@ export default function MemberTable({
 
   return (
     <Space direction="vertical" style={{ width: "100%" }}>
-      <span className="inline-flex text-sm text-gray-700">
-        {members.length} Member{members.length !== 1 ? "s" : ""}
-      </span>
+      <div className="flex items-center justify-between w-full">
+        <span className="text-sm text-gray-700">
+          {total} Member{total !== 1 ? "s" : ""}
+        </span>
+        {withPagination && (
+          <Pagination
+            size="small"
+            current={safePage}
+            pageSize={pageSize}
+            total={total}
+            showSizeChanger
+            pageSizeOptions={["10", "25", "50", "100"]}
+            showQuickJumper
+            onChange={(p, ps) => { setPage(p); if (ps !== pageSize) { setPageSize(ps); setPage(1); } }}
+          />
+        )}
+      </div>
       <Table
         columns={baseColumns}
-        dataSource={members}
+        dataSource={pagedMembers}
         rowKey={(record) => record.user_id ?? record.user_email ?? JSON.stringify(record)}
         pagination={false}
+        loading={loading}
         size="small"
         scroll={{ x: "max-content" }}
         locale={emptyText ? { emptyText } : undefined}

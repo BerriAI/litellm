@@ -5,10 +5,11 @@ import { formatBudgetReset } from "@/utils/budgetUtils";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { isProxyAdminRole, isUserTeamAdminForSingleTeam } from "@/utils/roles";
 import { InfoCircleOutlined } from "@ant-design/icons";
-import { Space, Tooltip, Typography } from "antd";
+import { Input, Select, Space, Tooltip, Typography } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import MemberTable from "@/components/common_components/MemberTable";
-import { TeamData } from "./TeamInfo";
+import { TeamData, TeamMembership } from "./TeamInfo";
+import { useMemo, useState } from "react";
 
 interface TeamMemberTabProps {
   teamData: TeamData;
@@ -19,6 +20,7 @@ interface TeamMemberTabProps {
   setIsAddMemberModalVisible: (visible: boolean) => void;
 }
 
+
 export default function TeamMemberTab({
   teamData,
   canEditTeam,
@@ -27,59 +29,79 @@ export default function TeamMemberTab({
   setIsEditMemberModalVisible,
   setIsAddMemberModalVisible,
 }: TeamMemberTabProps) {
+  const [searchText, setSearchText] = useState("");
+  const [roleFilter, setRoleFilter] = useState<string | null>(null);
+
+  // O(1) lookup instead of O(n) find() per member per column
+  const membershipsMap = useMemo(
+    () =>
+      new Map<string, TeamMembership>(
+        teamData.team_memberships
+          .filter((tm) => tm.user_id)
+          .map((tm) => [tm.user_id, tm]),
+      ),
+    [teamData.team_memberships],
+  );
+
+  const filteredMembers = useMemo(() => {
+    const q = searchText.trim().toLowerCase();
+    return teamData.team_info.members_with_roles.filter((m) => {
+      if (roleFilter && m.role?.toLowerCase() !== roleFilter) return false;
+      if (!q) return true;
+      return (
+        m.user_email?.toLowerCase().includes(q) ||
+        m.user_id?.toLowerCase().includes(q)
+      );
+    });
+  }, [teamData.team_info.members_with_roles, searchText, roleFilter]);
+
   const formatNumber = (value: number | null): string => {
     if (value === null || value === undefined) return "0";
-
     if (typeof value === "number") {
-      // Convert scientific notation to normal decimal
       const normalNumber = Number(value);
-
-      // If it's a whole number, return it without decimals
-      if (normalNumber === Math.floor(normalNumber)) {
-        return normalNumber.toString();
-      }
-
-      // For decimal numbers, use toFixed and remove trailing zeros
+      if (normalNumber === Math.floor(normalNumber)) return normalNumber.toString();
       return formatNumberWithCommas(normalNumber, 8).replace(/\.?0+$/, "");
     }
-
     return "0";
   };
 
   const getUserCurrentCycleSpend = (userId: string | null): number => {
     if (!userId) return 0;
-    const membership = teamData.team_memberships.find((tm) => tm.user_id === userId);
-    return membership?.spend ?? 0;
+    return membershipsMap.get(userId)?.spend ?? 0;
   };
 
   const getUserTotalSpend = (userId: string | null): number => {
     if (!userId) return 0;
-    const membership = teamData.team_memberships.find((tm) => tm.user_id === userId);
-    return membership?.total_spend ?? 0;
+    return membershipsMap.get(userId)?.total_spend ?? 0;
   };
 
   const getUserBudget = (userId: string | null): string | null => {
     if (!userId) return null;
-    const membership = teamData.team_memberships.find((tm) => tm.user_id === userId);
-    const maxBudget = membership?.litellm_budget_table?.max_budget;
-    if (maxBudget === null || maxBudget === undefined) {
-      return null;
-    }
+    const maxBudget = membershipsMap.get(userId)?.litellm_budget_table?.max_budget;
+    if (maxBudget === null || maxBudget === undefined) return null;
     return formatNumber(maxBudget);
   };
 
-  // Helper function to get rate limits for a user
   const getUserRateLimits = (userId: string | null): string => {
     if (!userId) return "No Limits";
-    const membership = teamData.team_memberships.find((tm) => tm.user_id === userId);
+    const membership = membershipsMap.get(userId);
     const rpmLimit = membership?.litellm_budget_table?.rpm_limit;
     const tpmLimit = membership?.litellm_budget_table?.tpm_limit;
-
     const rpmText = rpmLimit ? `${formatNumber(rpmLimit)} RPM` : null;
     const tpmText = tpmLimit ? `${formatNumber(tpmLimit)} TPM` : null;
-
     const limits = [rpmText, tpmText].filter(Boolean);
     return limits.length > 0 ? limits.join(" / ") : "No Limits";
+  };
+
+  const getUserAllowedModels = (userId: string | null): string[] | null => {
+    if (!userId) return null;
+    const models = membershipsMap.get(userId)?.litellm_budget_table?.allowed_models;
+    return models && models.length > 0 ? models : null;
+  };
+
+  const getUserBudgetReset = (userId: string | null): string | null => {
+    if (!userId) return null;
+    return formatBudgetReset(membershipsMap.get(userId)?.litellm_budget_table?.budget_reset_at);
   };
 
   const { data: uiSettingsData } = useUISettings();
@@ -87,19 +109,6 @@ export default function TeamMemberTab({
   const disableTeamAdminDeleteTeamUser = Boolean(uiSettingsData?.values?.disable_team_admin_delete_team_user);
   const isUserTeamAdmin = isUserTeamAdminForSingleTeam(teamData.team_info.members_with_roles, userId || "");
   const isProxyAdmin = isProxyAdminRole(userRole || "");
-
-  const getUserAllowedModels = (userId: string | null): string[] | null => {
-    if (!userId) return null;
-    const membership = teamData.team_memberships.find((tm) => tm.user_id === userId);
-    const models = membership?.litellm_budget_table?.allowed_models;
-    return models && models.length > 0 ? models : null;
-  };
-
-  const getUserBudgetReset = (userId: string | null): string | null => {
-    if (!userId) return null;
-    const membership = teamData.team_memberships.find((tm) => tm.user_id === userId);
-    return formatBudgetReset(membership?.litellm_budget_table?.budget_reset_at);
-  };
 
   const extraColumns: ColumnsType<Member> = [
     {
@@ -202,31 +211,52 @@ export default function TeamMemberTab({
   ];
 
   return (
-    <MemberTable
-      members={teamData.team_info.members_with_roles}
-      canEdit={canEditTeam}
-      onEdit={(record) => {
-        const membership = teamData.team_memberships.find(
-          (tm) => tm.user_id === record.user_id
-        );
-        const enhancedMember = {
-          ...record,
-          max_budget_in_team: membership?.litellm_budget_table?.max_budget || null,
-          tpm_limit: membership?.litellm_budget_table?.tpm_limit || null,
-          rpm_limit: membership?.litellm_budget_table?.rpm_limit || null,
-          allowed_models: membership?.litellm_budget_table?.allowed_models || [],
-        };
-        setSelectedEditMember(enhancedMember);
-        setIsEditMemberModalVisible(true);
-      }}
-      onDelete={handleMemberDelete}
-      onAddMember={() => setIsAddMemberModalVisible(true)}
-      roleColumnTitle="Team Role"
-      roleTooltip="This role applies only to this team and is independent from the user's proxy-level role."
-      extraColumns={extraColumns}
-      showDeleteForMember={() =>
-        isProxyAdmin || (canEditTeam && !isUserTeamAdmin) || (isUserTeamAdmin && !disableTeamAdminDeleteTeamUser)
-      }
-    />
+    <Space direction="vertical" style={{ width: "100%" }}>
+      <Space wrap>
+        <Input.Search
+          placeholder="Search by email or user ID"
+          allowClear
+          style={{ width: 280 }}
+          onChange={(e) => setSearchText(e.target.value)}
+          onSearch={(v) => setSearchText(v)}
+        />
+        <Select
+          placeholder="Filter by role"
+          allowClear
+          style={{ width: 160 }}
+          options={[
+            { value: "admin", label: "Admin" },
+            { value: "user", label: "User" },
+          ]}
+          onChange={(v) => setRoleFilter(v ?? null)}
+        />
+      </Space>
+      <MemberTable
+        key={`${searchText}::${roleFilter}`}
+        members={filteredMembers}
+        canEdit={canEditTeam}
+        withPagination
+        onEdit={(record) => {
+          const membership = membershipsMap.get(record.user_id ?? "");
+          const enhancedMember = {
+            ...record,
+            max_budget_in_team: membership?.litellm_budget_table?.max_budget || null,
+            tpm_limit: membership?.litellm_budget_table?.tpm_limit || null,
+            rpm_limit: membership?.litellm_budget_table?.rpm_limit || null,
+            allowed_models: membership?.litellm_budget_table?.allowed_models || [],
+          };
+          setSelectedEditMember(enhancedMember);
+          setIsEditMemberModalVisible(true);
+        }}
+        onDelete={handleMemberDelete}
+        onAddMember={() => setIsAddMemberModalVisible(true)}
+        roleColumnTitle="Team Role"
+        roleTooltip="This role applies only to this team and is independent from the user's proxy-level role."
+        extraColumns={extraColumns}
+        showDeleteForMember={() =>
+          isProxyAdmin || (canEditTeam && !isUserTeamAdmin) || (isUserTeamAdmin && !disableTeamAdminDeleteTeamUser)
+        }
+      />
+    </Space>
   );
 }
