@@ -107,6 +107,56 @@ class TestChatGPTResponsesAPITransformation:
         assert request["instructions"].startswith("You are Codex, based on GPT-5.")
 
     @pytest.mark.parametrize(
+        "text_value",
+        [
+            {
+                "format": {
+                    "type": "json_schema",
+                    "name": "answer_schema",
+                    "schema": {
+                        "type": "object",
+                        "properties": {"answer": {"type": "string"}},
+                        "required": ["answer"],
+                        "additionalProperties": False,
+                    },
+                    "strict": True,
+                }
+            },
+            {"format": {"type": "json_object"}},
+            {"format": {"type": "text"}},
+        ],
+        ids=["json_schema", "json_object", "text"],
+    )
+    def test_chatgpt_preserves_text_param(self, text_value):
+        config = ChatGPTResponsesAPIConfig()
+        request = config.transform_responses_api_request(
+            model="chatgpt/gpt-5.2-codex",
+            input="hi",
+            response_api_optional_request_params={"text": text_value},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        assert request["text"] == text_value
+        assert request["stream"] is True
+        assert "reasoning.encrypted_content" in request["include"]
+        assert request["instructions"].startswith("You are Codex, based on GPT-5.")
+
+    def test_chatgpt_preserves_parallel_tool_calls(self):
+        config = ChatGPTResponsesAPIConfig()
+        request = config.transform_responses_api_request(
+            model="chatgpt/gpt-5.2-codex",
+            input="hi",
+            response_api_optional_request_params={"parallel_tool_calls": False},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        assert request["parallel_tool_calls"] is False
+        assert request["stream"] is True
+        assert "reasoning.encrypted_content" in request["include"]
+
+    @pytest.mark.parametrize(
         "model_name",
         [
             "chatgpt/gpt-5.2-codex",
@@ -132,7 +182,9 @@ class TestChatGPTResponsesAPITransformation:
                 # supported and should be preserved
                 "truncation": "auto",
                 "previous_response_id": "resp_123",
+                "parallel_tool_calls": False,
                 "reasoning": {"effort": "medium"},
+                "text": {"format": {"type": "json_object"}},
                 "tools": [{"type": "function", "function": {"name": "hello"}}],
                 "tool_choice": {"type": "function", "function": {"name": "hello"}},
             },
@@ -150,7 +202,9 @@ class TestChatGPTResponsesAPITransformation:
 
         assert request["truncation"] == "auto"
         assert request["previous_response_id"] == "resp_123"
+        assert request["parallel_tool_calls"] is False
         assert request["reasoning"] == {"effort": "medium"}
+        assert request["text"] == {"format": {"type": "json_object"}}
         assert request["tools"] == [{"type": "function", "function": {"name": "hello"}}]
         assert request["tool_choice"] == {
             "type": "function",
