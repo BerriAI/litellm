@@ -1725,12 +1725,13 @@ class Logging(LiteLLMLoggingBaseClass):
             return
         if self.model_call_details.get("litellm_params") is None:
             return
+        response_cost = self.model_call_details.get("response_cost")
+        if hidden_params.get("response_cost") is None and response_cost is not None:
+            hidden_params["response_cost"] = response_cost
         self.model_call_details["litellm_params"].setdefault("metadata", {})
         if self.model_call_details["litellm_params"]["metadata"] is None:
             self.model_call_details["litellm_params"]["metadata"] = {}
-        self.model_call_details["litellm_params"]["metadata"]["hidden_params"] = (
-            getattr(logging_result, "_hidden_params", {})
-        )
+        self.model_call_details["litellm_params"]["metadata"]["hidden_params"] = hidden_params
 
     def _process_hidden_params_and_response_cost(
         self,

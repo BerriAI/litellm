@@ -2337,6 +2337,60 @@ def test_merge_hidden_params_from_response_into_metadata_populates_metadata():
     assert meta["hidden_params"]["model_id"] == "mid-test"
 
 
+def test_merge_hidden_params_from_response_into_metadata_backfills_response_cost():
+    """Streaming metadata should include the already-calculated response cost."""
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+
+    logging_obj = LiteLLMLoggingObj(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        call_type="acompletion",
+        start_time=time.time(),
+        litellm_call_id="merge-hp-cost-test",
+        function_id="merge-hp-cost-fn",
+    )
+    logging_obj.model_call_details = {
+        "litellm_params": {"metadata": {}},
+        "response_cost": 0.002,
+    }
+
+    class _Resp:
+        _hidden_params = {"response_cost": None, "model_id": "mid-test"}
+
+    logging_obj._merge_hidden_params_from_response_into_metadata(_Resp())
+    meta = logging_obj.model_call_details["litellm_params"]["metadata"]
+    assert meta["hidden_params"]["response_cost"] == 0.002
+    assert meta["hidden_params"]["model_id"] == "mid-test"
+
+
+def test_merge_hidden_params_from_response_into_metadata_preserves_response_cost():
+    """Do not overwrite provider-supplied response cost when it already exists."""
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+
+    logging_obj = LiteLLMLoggingObj(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        call_type="acompletion",
+        start_time=time.time(),
+        litellm_call_id="merge-hp-preserve-cost-test",
+        function_id="merge-hp-preserve-cost-fn",
+    )
+    logging_obj.model_call_details = {
+        "litellm_params": {"metadata": {}},
+        "response_cost": 0.002,
+    }
+
+    class _Resp:
+        _hidden_params = {"response_cost": 0.001, "model_id": "mid-test"}
+
+    logging_obj._merge_hidden_params_from_response_into_metadata(_Resp())
+    meta = logging_obj.model_call_details["litellm_params"]["metadata"]
+    assert meta["hidden_params"]["response_cost"] == 0.001
+    assert meta["hidden_params"]["model_id"] == "mid-test"
+
+
 def test_merge_hidden_params_from_response_into_metadata_no_op_when_empty():
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
