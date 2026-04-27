@@ -729,6 +729,136 @@ class TestMCPServerManager:
         assert scopes == ["read", "write"]
 
     @pytest.mark.asyncio
+    async def test_descovery_metadata_probes_well_known_when_server_does_not_challenge(
+        self,
+    ):
+        manager = MCPServerManager()
+
+        mock_response = MagicMock()
+        mock_response.raise_for_status = MagicMock()
+
+        mock_client = MagicMock()
+        mock_client.get = AsyncMock(return_value=mock_response)
+
+        mock_metadata = MCPOAuthMetadata(
+            scopes=None,
+            authorization_url="https://login.microsoftonline.com/tenant/oauth2/v2.0/authorize",
+            token_url="https://login.microsoftonline.com/tenant/oauth2/v2.0/token",
+            registration_url=None,
+        )
+
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.get_async_httpx_client",
+                return_value=mock_client,
+            ),
+            patch.object(
+                manager,
+                "_attempt_well_known_discovery",
+                AsyncMock(
+                    return_value=(
+                        ["https://login.microsoftonline.com/test-tenant-id/v2.0"],
+                        ["api://some-scope/.default"],
+                    )
+                ),
+            ) as mock_well_known,
+            patch.object(
+                manager,
+                "_fetch_authorization_server_metadata",
+                AsyncMock(return_value=mock_metadata),
+            ) as mock_fetch_auth,
+        ):
+            result = await manager._descovery_metadata("http://localhost:8001/mcp")
+
+        mock_well_known.assert_awaited_once_with("http://localhost:8001/mcp")
+        mock_fetch_auth.assert_awaited_once_with(
+            ["https://login.microsoftonline.com/test-tenant-id/v2.0"]
+        )
+        assert result is mock_metadata
+        assert result.scopes == ["api://some-scope/.default"]
+
+    @pytest.mark.asyncio
+    async def test_fetch_single_authorization_server_metadata_supports_azure_issuer_path(
+        self,
+    ):
+        manager = MCPServerManager()
+        issuer = "https://login.microsoftonline.com/test-tenant-id/v2.0"
+
+        def build_response(url: str):
+            mock_response = MagicMock()
+            if url == f"{issuer}/.well-known/openid-configuration":
+                mock_response.json.return_value = {
+                    "authorization_endpoint": "https://login.microsoftonline.com/test-tenant-id/oauth2/v2.0/authorize",
+                    "token_endpoint": "https://login.microsoftonline.com/test-tenant-id/oauth2/v2.0/token",
+                    "scopes_supported": ["api://some-scope/.default"],
+                }
+                mock_response.raise_for_status = MagicMock()
+            else:
+                request = httpx.Request("GET", url)
+                response_obj = httpx.Response(status_code=404, request=request)
+                mock_response.raise_for_status = MagicMock(
+                    side_effect=httpx.HTTPStatusError(
+                        "not found", request=request, response=response_obj
+                    )
+                )
+            return mock_response
+
+        mock_client = MagicMock()
+        mock_client.get = AsyncMock(side_effect=build_response)
+
+        with patch(
+            "litellm.proxy._experimental.mcp_server.mcp_server_manager.get_async_httpx_client",
+            return_value=mock_client,
+        ):
+            result = await manager._fetch_single_authorization_server_metadata(issuer)
+
+        assert result is not None
+        assert (
+            result.authorization_url
+            == "https://login.microsoftonline.com/test-tenant-id/oauth2/v2.0/authorize"
+        )
+        assert (
+            result.token_url
+            == "https://login.microsoftonline.com/test-tenant-id/oauth2/v2.0/token"
+        )
+        assert result.scopes == ["api://some-scope/.default"]
+
+    @pytest.mark.asyncio
+    async def test_fetch_single_authorization_server_metadata_derives_azure_metadata(
+        self,
+    ):
+        manager = MCPServerManager()
+        issuer = "https://login.microsoftonline.com/test-tenant-id/v2.0"
+
+        request = httpx.Request("GET", issuer)
+        response_obj = httpx.Response(status_code=404, request=request)
+        mock_response = MagicMock()
+        mock_response.raise_for_status = MagicMock(
+            side_effect=httpx.HTTPStatusError(
+                "not found", request=request, response=response_obj
+            )
+        )
+
+        mock_client = MagicMock()
+        mock_client.get = AsyncMock(return_value=mock_response)
+
+        with patch(
+            "litellm.proxy._experimental.mcp_server.mcp_server_manager.get_async_httpx_client",
+            return_value=mock_client,
+        ):
+            result = await manager._fetch_single_authorization_server_metadata(issuer)
+
+        assert result is not None
+        assert (
+            result.authorization_url
+            == "https://login.microsoftonline.com/test-tenant-id/oauth2/v2.0/authorize"
+        )
+        assert (
+            result.token_url
+            == "https://login.microsoftonline.com/test-tenant-id/oauth2/v2.0/token"
+        )
+
+    @pytest.mark.asyncio
     async def test_descovery_metadata_falls_back_to_origin_when_no_auth_servers(self):
         manager = MCPServerManager()
         server_url = "https://example.com/public/mcp"
