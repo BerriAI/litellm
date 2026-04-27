@@ -1729,11 +1729,17 @@ class MCPServerManager:
     def _build_azure_authorization_server_metadata(
         parsed_issuer_url: Any,
     ) -> Optional[MCPOAuthMetadata]:
+        azure_authority_hosts = {
+            "login.microsoftonline.com",
+            "login.microsoftonline.us",
+            "login.chinacloudapi.cn",
+        }
+        issuer_hostname = getattr(parsed_issuer_url, "hostname", None)
         path_parts = [
             part for part in (parsed_issuer_url.path or "").split("/") if part
         ]
         if (
-            parsed_issuer_url.netloc != "login.microsoftonline.com"
+            issuer_hostname not in azure_authority_hosts
             or len(path_parts) != 2
             or path_parts[1] != "v2.0"
         ):
