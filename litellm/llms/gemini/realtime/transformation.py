@@ -686,18 +686,12 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         verbose_logger.debug(
             f"Gemini Realtime: Transforming {len(function_calls)} tool call(s) to OpenAI format"
         )
-        has_multiple_calls = len(function_calls) > 1
-        
         return [
             {
                 "type": "response.function_call_arguments.done",
                 "event_id": f"event_{uuid.uuid4()}",
                 "response_id": resolved_response_id,
-                "item_id": (
-                    f"{resolved_output_item_id}_tool_{idx}"
-                    if has_multiple_calls
-                    else resolved_output_item_id
-                ),
+                "item_id": f"{resolved_output_item_id}_tool_{idx}",
                 "output_index": idx,
                 "call_id": fc.get("id", ""),
                 "name": fc.get("name", ""),

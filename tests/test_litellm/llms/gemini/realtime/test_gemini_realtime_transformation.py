@@ -338,7 +338,7 @@ def test_gemini_realtime_tool_call_transformation():
     assert function_call_event["call_id"] == "call_123"
     assert function_call_event["name"] == "get_weather"
     assert function_call_event["response_id"] == "resp_123"
-    assert function_call_event["item_id"] == "item_123"
+    assert function_call_event["item_id"] == "item_123_tool_0"
     assert function_call_event["output_index"] == 0
     
     # Verify arguments are properly serialized as JSON string
@@ -579,6 +579,8 @@ def test_gemini_realtime_multi_tool_calls_have_unique_item_ids():
     assert len(responses) == 2
     assert responses[0]["response_id"] == "resp_123"
     assert responses[1]["response_id"] == "resp_123"
+    assert responses[0]["item_id"] == "item_123_tool_0"
+    assert responses[1]["item_id"] == "item_123_tool_1"
     assert responses[0]["item_id"] != responses[1]["item_id"]
     assert responses[0]["output_index"] == 0
     assert responses[1]["output_index"] == 1
