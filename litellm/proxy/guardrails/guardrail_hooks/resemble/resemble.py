@@ -499,6 +499,7 @@ class ResembleGuardrail(CustomGuardrail):
             response = await self.async_handler.get(
                 url=poll_url,
                 headers=headers,
+                timeout=10.0,
             )
             response.raise_for_status()
             body = response.json()
