@@ -72,7 +72,9 @@ class TestCoherePassthroughLoggingHandler:
     @patch(
         "litellm.litellm_core_utils.litellm_logging.get_standard_logging_object_payload"
     )
-    @patch("litellm.llms.cohere.embed.v1_transformation.CohereEmbeddingConfig._transform_response")
+    @patch(
+        "litellm.llms.cohere.embed.v1_transformation.CohereEmbeddingConfig._transform_response"
+    )
     def test_cohere_embed_passthrough_cost_tracking(
         self, mock_transform_response, mock_get_standard_logging, mock_completion_cost
     ):
@@ -89,6 +91,7 @@ class TestCoherePassthroughLoggingHandler:
         mock_embedding_response.model = "embed-english-v3.0"
         mock_embedding_response.object = "list"
         from litellm.types.utils import Usage
+
         mock_embedding_response.usage = Usage(
             prompt_tokens=3, completion_tokens=0, total_tokens=3
         )
@@ -151,4 +154,3 @@ class TestCoherePassthroughLoggingHandler:
 
 if __name__ == "__main__":
     pytest.main([__file__])
-
