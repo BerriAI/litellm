@@ -1573,6 +1573,12 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 )
         return _message
 
+    @staticmethod
+    def _strip_leaked_think_prefix(text_content: str) -> str:
+        if "</think>" not in text_content:
+            return text_content
+        return text_content.split("</think>", 1)[1].lstrip()
+
     def extract_response_content(self, completion_response: dict) -> Tuple[
         str,
         Optional[List[Any]],
@@ -1667,8 +1673,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 if thinking_content is not None:
                     reasoning_content += thinking_content
 
-        if "</think>" in text_content:
-            text_content = text_content.split("</think>", 1)[1].lstrip()
+        text_content = self._strip_leaked_think_prefix(text_content)
 
         return (
             text_content,

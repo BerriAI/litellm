@@ -1385,12 +1385,12 @@ class LiteLLMAnthropicMessagesAdapter:
                 raw_id = choice.delta.tool_calls[0].id or str(uuid.uuid4())
                 tool_name = choice.delta.tool_calls[0].function.name or ""
                 base_id = raw_id
-                thought_sig: Optional[str] = None
+                thought_sig: str | None = None
                 if THOUGHT_SIGNATURE_SEPARATOR in raw_id:
                     parts = raw_id.split(THOUGHT_SIGNATURE_SEPARATOR, 1)
                     base_id = parts[0]
                     thought_sig = parts[1] if len(parts) > 1 else None
-                tool_block: Dict[str, Any] = {
+                tool_block: dict[str, Any] = {
                     "type": "tool_use",
                     "id": base_id,
                     "name": tool_name,
