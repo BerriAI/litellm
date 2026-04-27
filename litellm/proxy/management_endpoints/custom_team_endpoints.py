@@ -9,8 +9,13 @@ from typing import Optional
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy._types import (
+    UserAPIKeyAuth,
+    LiteLLM_ManagementEndpoint_MetadataFields,
+    LiteLLM_ManagementEndpoint_MetadataFields_Premium,
+)
 from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
+from litellm.proxy.management_endpoints.common_utils import _update_metadata_field
 from litellm.proxy.management_endpoints.team_endpoints import UpdateTeamRequest
 
 router = APIRouter()
@@ -125,9 +130,21 @@ async def update_team_custom(  # noqa: PLR0915
                 existing_team_row=existing_team_row,
             )
 
-        # SKIPPED: _update_metadata_fields - This has premium checks that we want to bypass
-        # The premium fields (guardrails, policies, tags, etc.) are saved directly to the team table
-        # without requiring premium user status
+        # Move metadata-stored fields out of the top-level dict and into the metadata JSON column.
+        # Non-premium fields (model_rpm_limit, model_tpm_limit, etc.) go through the standard
+        # helper which simply relocates them — no premium check involved.
+        # Premium fields (guardrails, logging, policies, etc.) are also moved to metadata but
+        # without calling _premium_user_check(), which is the whole point of this custom endpoint.
+        for field in LiteLLM_ManagementEndpoint_MetadataFields:
+            _update_metadata_field(updated_kv=updated_kv, field_name=field)
+
+        for field in LiteLLM_ManagementEndpoint_MetadataFields_Premium:
+            if field in updated_kv and updated_kv[field] is not None:
+                _value = updated_kv.pop(field)
+                if updated_kv.get("metadata") is not None:
+                    updated_kv["metadata"][field] = _value
+                else:
+                    updated_kv["metadata"] = {field: _value}
 
         # Handle model_aliases
         if "model_aliases" in updated_kv:
