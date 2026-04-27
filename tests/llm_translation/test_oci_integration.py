@@ -43,9 +43,18 @@ pytestmark = pytest.mark.skipif(
 
 @pytest.fixture(scope="module")
 def oci_signer():
-    """Return an oci.Signer built from ~/.oci/config [<profile>]."""
+    """Return an OCI request signer built from ~/.oci/config [<profile>].
+
+    Supports both API-key profiles and session-token (`oci session authenticate`)
+    profiles — the latter are detected by the presence of `security_token_file`.
+    """
     oci = pytest.importorskip("oci")
     config = oci.config.from_file(profile_name=OCI_PROFILE)
+    if config.get("security_token_file"):
+        with open(os.path.expanduser(config["security_token_file"]), "r") as f:
+            token = f.read().strip()
+        private_key = oci.signer.load_private_key_from_file(config["key_file"])
+        return oci.auth.signers.SecurityTokenSigner(token, private_key)
     return oci.Signer(
         tenancy=config["tenancy"],
         user=config["user"],
