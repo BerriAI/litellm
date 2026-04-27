@@ -1734,10 +1734,8 @@ class Logging(LiteLLMLoggingBaseClass):
             metadata_hidden_params["response_cost"] = response_cost
 
         litellm_params = self.model_call_details["litellm_params"]
-        metadata = litellm_params.setdefault("metadata", {})
-        if metadata is None:
-            metadata = {}
-            litellm_params["metadata"] = metadata
+        metadata = litellm_params.get("metadata") or {}
+        litellm_params["metadata"] = metadata
         metadata["hidden_params"] = metadata_hidden_params
 
     def _process_hidden_params_and_response_cost(
@@ -5479,7 +5477,8 @@ def get_standard_logging_object_payload(
         ## Get model cost information ##
         base_model = _get_base_model_from_metadata(model_call_details=kwargs)
         custom_pricing = use_custom_pricing_for_model(litellm_params=litellm_params)
-        response_cost: float = kwargs.get("response_cost", 0) or 0.0
+        raw_response_cost = kwargs.get("response_cost")
+        response_cost: float = raw_response_cost or 0.0
 
         # clean up litellm hidden params
         clean_hidden_params = StandardLoggingPayloadSetup.get_hidden_params(
@@ -5487,7 +5486,7 @@ def get_standard_logging_object_payload(
         )
         if (
             clean_hidden_params["response_cost"] is None
-            and kwargs.get("response_cost") is not None
+            and raw_response_cost is not None
         ):
             clean_hidden_params["response_cost"] = response_cost
 
