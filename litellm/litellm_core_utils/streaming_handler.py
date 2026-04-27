@@ -1055,8 +1055,17 @@ class CustomStreamWrapper:
                 )
 
             if _is_delta_empty:
+                # If no chunk has carried the assistant role yet (e.g.
+                # immediate-EOS streams from SGLang where the only role-bearing
+                # chunk had empty content and was filtered upstream), surface
+                # it on this finish chunk so callers can still identify the
+                # message role. See issue #26428.
+                delta_kwargs: Dict[str, Any] = {"content": None}
+                if self.sent_first_chunk is False:
+                    delta_kwargs["role"] = "assistant"
+                    self.sent_first_chunk = True
                 model_response.choices[0].delta = Delta(
-                    content=None
+                    **delta_kwargs
                 )  # ensure empty delta chunk returned
                 # get any function call arguments
                 model_response.choices[0].finish_reason = map_finish_reason(
