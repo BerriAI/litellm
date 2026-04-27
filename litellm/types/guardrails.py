@@ -26,11 +26,17 @@ from litellm.types.proxy.guardrails.guardrail_hooks.litellm_content_filter impor
 from litellm.types.proxy.guardrails.guardrail_hooks.promptguard import (
     PromptGuardConfigModel,
 )
+from litellm.types.proxy.guardrails.guardrail_hooks.xecguard import (
+    XecGuardConfigModel,
+)
 from litellm.types.proxy.guardrails.guardrail_hooks.qualifire import (
     QualifireGuardrailConfigModel,
 )
 from litellm.types.proxy.guardrails.guardrail_hooks.tool_permission import (
     ToolPermissionGuardrailConfigModel,
+)
+from litellm.types.proxy.guardrails.guardrail_hooks.hiddenlayer import (
+    HiddenlayerGuardrailConfigModel,
 )
 
 """
@@ -79,6 +85,7 @@ class SupportedGuardrailIntegrations(Enum):
     MCP_SECURITY = "mcp_security"
     ONYX = "onyx"
     PROMPTGUARD = "promptguard"
+    XECGUARD = "xecguard"
     PROMPT_SECURITY = "prompt_security"
     GENERIC_GUARDRAIL_API = "generic_guardrail_api"
     QUALIFIRE = "qualifire"
@@ -88,6 +95,7 @@ class SupportedGuardrailIntegrations(Enum):
     BLOCK_CODE_EXECUTION = "block_code_execution"
     AKTO = "akto"
     MCP_JWT_SIGNER = "mcp_jwt_signer"
+    LLM_AS_A_JUDGE = "llm_as_a_judge"
 
 
 class Role(Enum):
@@ -754,6 +762,7 @@ class LitellmParams(
     GraySwanGuardrailConfigModel,
     NomaGuardrailConfigModel,
     PromptGuardConfigModel,
+    XecGuardConfigModel,
     ToolPermissionGuardrailConfigModel,
     ZscalerAIGuardConfigModel,
     AktoConfigModel,
@@ -763,6 +772,7 @@ class LitellmParams(
     IBMGuardrailsBaseConfigModel,
     QualifireGuardrailConfigModel,
     BlockCodeExecutionGuardrailConfigModel,
+    HiddenlayerGuardrailConfigModel,
 ):
     guardrail: str = Field(description="The type of guardrail integration to use")
     mode: Union[str, List[str], Mode] = Field(
@@ -882,6 +892,8 @@ class ApplyGuardrailRequest(BaseModel):
     text: str
     language: Optional[str] = None
     entities: Optional[List[PiiEntityType]] = None
+    input_type: str = "request"
+    messages: Optional[List[Dict[str, Any]]] = None
 
 
 class ApplyGuardrailResponse(BaseModel):

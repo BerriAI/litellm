@@ -65,7 +65,7 @@ def test_completion_custom_provider_model_name():
     try:
         litellm.cache = None
         response = completion(
-            model="together_ai/mistralai/Mixtral-8x7B-Instruct-v0.1",
+            model="together_ai/Qwen/Qwen2.5-7B-Instruct-Turbo",
             messages=messages,
             logger_fn=logger_fn,
         )
@@ -1759,8 +1759,14 @@ def test_completion_logprobs_stream():
         for chunk in response:
             # check if atleast one chunk has log probs
             print(chunk)
+            if len(chunk.choices) == 0:
+                continue
             print(f"chunk.choices[0]: {chunk.choices[0]}")
-            if "logprobs" in chunk.choices[0]:
+            if (
+                "logprobs" in chunk.choices[0]
+                and chunk.choices[0].logprobs is not None
+                and len(chunk.choices[0].logprobs.content) > 0
+            ):
                 # assert we got a valid logprob in the choices
                 assert len(chunk.choices[0].logprobs.content[0].top_logprobs) == 3
                 found_logprob = True
@@ -2366,7 +2372,6 @@ def test_azure_openai_ad_token():
 # test_azure_openai_ad_token()
 
 
-
 def test_completion_azure2():
     # test if we can pass api_base, api_version and api_key in compleition()
     try:
@@ -2486,8 +2491,6 @@ def test_completion_azure_with_litellm_key():
 
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-
-
 
 
 import asyncio
@@ -2815,7 +2818,7 @@ def test_customprompt_together_ai():
         print(litellm.success_callback)
         print(litellm._async_success_callback)
         response = completion(
-            model="together_ai/mistralai/Mixtral-8x7B-Instruct-v0.1",
+            model="together_ai/Qwen/Qwen2.5-7B-Instruct-Turbo",
             messages=messages,
             roles={
                 "system": {
@@ -3261,9 +3264,7 @@ def test_completion_deep_infra(drop_params):
             Choice(
                 finish_reason="stop",
                 index=0,
-                message=ChatCompletionMessage(
-                    content="It's sunny.", role="assistant"
-                ),
+                message=ChatCompletionMessage(content="It's sunny.", role="assistant"),
             )
         ],
         created=1234567890,
@@ -3345,9 +3346,7 @@ def test_completion_deep_infra_mistral():
             Choice(
                 finish_reason="stop",
                 index=0,
-                message=ChatCompletionMessage(
-                    content="Hello!", role="assistant"
-                ),
+                message=ChatCompletionMessage(content="Hello!", role="assistant"),
             )
         ],
         created=1234567890,
@@ -3682,7 +3681,7 @@ def test_completion_together_ai_stream():
     messages = [{"content": user_message, "role": "user"}]
     try:
         response = completion(
-            model="together_ai/mistralai/Mixtral-8x7B-Instruct-v0.1",
+            model="together_ai/Qwen/Qwen2.5-7B-Instruct-Turbo",
             messages=messages,
             stream=True,
             max_tokens=5,

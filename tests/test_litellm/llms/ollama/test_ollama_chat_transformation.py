@@ -10,10 +10,19 @@ sys.path.insert(
     0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../.."))
 )
 
-from litellm.llms.ollama.chat.transformation import OllamaChatConfig, OllamaChatCompletionResponseIterator
+from litellm.llms.ollama.chat.transformation import (
+    OllamaChatConfig,
+    OllamaChatCompletionResponseIterator,
+)
 
 from litellm.types.llms.openai import AllMessageValues
 from litellm.utils import get_optional_params
+
+import json
+from unittest.mock import MagicMock
+
+import litellm
+from litellm.types.utils import Choices, Message, ModelResponse
 
 
 class TestEvent(BaseModel):
@@ -361,7 +370,9 @@ class TestOllamaToolCalling:
         assert optional_params["tools"] == tools
         # Should NOT trigger the broken fallback
         assert "functions_unsupported_model" not in optional_params
-        assert "format" not in optional_params or optional_params.get("format") != "json"
+        assert (
+            "format" not in optional_params or optional_params.get("format") != "json"
+        )
 
     def test_finish_reason_tool_calls_non_streaming(self):
         """Test that finish_reason is set to 'tool_calls' when tool_calls present.
@@ -427,12 +438,6 @@ class TestOllamaToolCalling:
 
     def test_finish_reason_stop_when_no_tool_calls(self):
         """Test that finish_reason remains 'stop' when no tool_calls present."""
-        import json
-        from unittest.mock import MagicMock
-
-        import litellm
-        from litellm.types.utils import Choices, Message, ModelResponse
-
         config = OllamaChatConfig()
 
         # Simulated Ollama response without tool_calls
@@ -476,13 +481,150 @@ class TestOllamaToolCalling:
         assert result.choices[0].message.tool_calls is None
 
 
+class TestOllamaFinishReasonLength:
+    """Tests for done_reason 'length' → finish_reason 'length' mapping.
+
+    Ollama returns done_reason='length' when a response is truncated by num_predict
+    (max_tokens). Previously finish_reason was hardcoded to 'stop', hiding truncation.
+    The Anthropic pass-through adapter then maps OpenAI 'length' → 'max_tokens'.
+    """
+
+    def test_finish_reason_length_non_streaming(self):
+        """Non-streaming: done_reason='length' must propagate as finish_reason='length'."""
+        config = OllamaChatConfig()
+
+        ollama_response = {
+            "model": "qwen3:2b",
+            "created_at": "2025-01-11T00:00:00.000000Z",
+            "message": {
+                "role": "assistant",
+                "content": "A neural network learns through",
+            },
+            "done": True,
+            "done_reason": "length",
+            "prompt_eval_count": 20,
+            "eval_count": 20,
+        }
+
+        mock_response = MagicMock()
+        mock_response.json.return_value = ollama_response
+        mock_response.text = json.dumps(ollama_response)
+
+        mock_logging = MagicMock()
+
+        model_response = ModelResponse()
+        model_response.choices = [Choices(message=Message(content=""), index=0)]
+
+        result = config.transform_response(
+            model="qwen3:2b",
+            raw_response=mock_response,
+            model_response=model_response,
+            logging_obj=mock_logging,
+            request_data={},
+            messages=[{"role": "user", "content": "Explain neural networks."}],
+            optional_params={},
+            litellm_params={},
+            encoding=None,
+            api_key=None,
+            json_mode=False,
+        )
+
+        assert (
+            result.choices[0].finish_reason == "length"
+        ), f"Expected 'length' when done_reason='length', got '{result.choices[0].finish_reason}'"
+
+    def test_finish_reason_stop_non_streaming(self):
+        """Non-streaming: done_reason='stop' (natural finish) must stay 'stop'."""
+        config = OllamaChatConfig()
+
+        ollama_response = {
+            "model": "qwen3:2b",
+            "created_at": "2025-01-11T00:00:00.000000Z",
+            "message": {"role": "assistant", "content": "2 + 2 = 4."},
+            "done": True,
+            "done_reason": "stop",
+            "prompt_eval_count": 10,
+            "eval_count": 8,
+        }
+
+        mock_response = MagicMock()
+        mock_response.json.return_value = ollama_response
+        mock_response.text = json.dumps(ollama_response)
+
+        mock_logging = MagicMock()
+
+        model_response = ModelResponse()
+        model_response.choices = [Choices(message=Message(content=""), index=0)]
+
+        result = config.transform_response(
+            model="qwen3:2b",
+            raw_response=mock_response,
+            model_response=model_response,
+            logging_obj=mock_logging,
+            request_data={},
+            messages=[{"role": "user", "content": "What is 2+2?"}],
+            optional_params={},
+            litellm_params={},
+            encoding=None,
+            api_key=None,
+            json_mode=False,
+        )
+
+        assert (
+            result.choices[0].finish_reason == "stop"
+        ), f"Expected 'stop' for natural finish, got '{result.choices[0].finish_reason}'"
+
+    def test_finish_reason_length_streaming(self):
+        """Streaming: done_reason='length' in final chunk must produce finish_reason='length'."""
+        iterator = OllamaChatCompletionResponseIterator(
+            streaming_response=iter([]),
+            sync_stream=True,
+        )
+
+        done_chunk = {
+            "model": "qwen3:2b",
+            "message": {
+                "role": "assistant",
+                "content": "A neural network learns through",
+            },
+            "done": True,
+            "done_reason": "length",
+        }
+
+        result = iterator.chunk_parser(done_chunk)
+
+        assert (
+            result.choices[0].finish_reason == "length"
+        ), f"Expected 'length' when done_reason='length', got '{result.choices[0].finish_reason}'"
+
+    def test_finish_reason_stop_streaming(self):
+        """Streaming: done_reason='stop' in final chunk must produce finish_reason='stop'."""
+        iterator = OllamaChatCompletionResponseIterator(
+            streaming_response=iter([]),
+            sync_stream=True,
+        )
+
+        done_chunk = {
+            "model": "qwen3:2b",
+            "message": {"role": "assistant", "content": "2 + 2 = 4."},
+            "done": True,
+            "done_reason": "stop",
+        }
+
+        result = iterator.chunk_parser(done_chunk)
+
+        assert (
+            result.choices[0].finish_reason == "stop"
+        ), f"Expected 'stop' for natural finish, got '{result.choices[0].finish_reason}'"
+
+
 class TestOllamaReasoningContentStreaming:
     """Test that reasoning_content is properly extracted from all thinking chunks."""
 
     def test_multiple_thinking_chunks_all_returned_as_reasoning_content(self):
         """
         Test that more than 2 consecutive thinking chunks are all returned as reasoning_content.
-        
+
         Previously, the code had a bug where finished_reasoning_content was set to True
         after just 2 chunks with 'thinking', causing subsequent thinking content to be lost.
         """
@@ -536,7 +678,9 @@ class TestOllamaReasoningContentStreaming:
             "done": False,
         }
         result1 = iterator.chunk_parser(thinking_chunk)
-        assert result1.choices[0].delta.reasoning_content == "Let me think about this..."
+        assert (
+            result1.choices[0].delta.reasoning_content == "Let me think about this..."
+        )
         assert result1.choices[0].delta.content is None
 
         # Then: regular content chunk
@@ -548,7 +692,7 @@ class TestOllamaReasoningContentStreaming:
         result2 = iterator.chunk_parser(content_chunk)
         assert result2.choices[0].delta.content == "Here is my answer."
         # reasoning_content is not set when there's no thinking in the chunk
-        assert getattr(result2.choices[0].delta, 'reasoning_content', None) is None
+        assert getattr(result2.choices[0].delta, "reasoning_content", None) is None
 
     def test_think_tags_in_content(self):
         """
@@ -562,7 +706,10 @@ class TestOllamaReasoningContentStreaming:
         # Content with <think> tag
         chunk1 = {
             "model": "deepseek-r1",
-            "message": {"role": "assistant", "content": "<think>I need to analyze this"},
+            "message": {
+                "role": "assistant",
+                "content": "<think>I need to analyze this",
+            },
             "done": False,
         }
         result1 = iterator.chunk_parser(chunk1)
@@ -578,7 +725,7 @@ class TestOllamaReasoningContentStreaming:
         result2 = iterator.chunk_parser(chunk2)
         assert result2.choices[0].delta.content == "The answer is 42."
         # reasoning_content is not set when it's regular content
-        assert getattr(result2.choices[0].delta, 'reasoning_content', None) is None
+        assert getattr(result2.choices[0].delta, "reasoning_content", None) is None
 
     def test_done_chunk_with_thinking(self):
         """
@@ -601,3 +748,96 @@ class TestOllamaReasoningContentStreaming:
         assert result.choices[0].finish_reason == "stop"
 
 
+class TestOllamaToolCallTransformation:
+    def test_transform_request_preserves_tool_calls(self):
+        """
+        tool_calls on assistant messages must survive transform_request.
+        Previously the translated OllamaToolCall list was built but never
+        copied into the outgoing OllamaChatCompletionMessage, so Ollama
+        received {role: assistant, content: ''} with no tool_calls and
+        the model re-issued the same call on every turn.
+        Regression: https://github.com/BerriAI/litellm/issues/26094
+        """
+        config = OllamaChatConfig()
+        messages = cast(
+            list[AllMessageValues],
+            [
+                {"role": "user", "content": "What's the weather in SF?"},
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": "call_abc123",
+                            "type": "function",
+                            "function": {
+                                "name": "get_weather",
+                                "arguments": '{"location": "San Francisco, CA"}',
+                            },
+                        }
+                    ],
+                },
+            ],
+        )
+
+        result = config.transform_request(
+            model="gemma4:27b",
+            messages=messages,
+            optional_params={},
+            litellm_params={},
+            headers={},
+        )
+
+        assistant_msg = result["messages"][1]
+        assert "tool_calls" in assistant_msg, "tool_calls must be forwarded to Ollama"
+        assert len(assistant_msg["tool_calls"]) == 1
+        tc = assistant_msg["tool_calls"][0]
+        assert tc["function"]["name"] == "get_weather"
+        assert tc["function"]["arguments"] == {"location": "San Francisco, CA"}
+
+    def test_transform_request_forwards_tool_call_id(self):
+        """
+        tool_call_id on role:tool messages must be forwarded so Ollama can
+        resolve the tool name from the conversation history.
+        Regression: https://github.com/BerriAI/litellm/issues/26094
+        """
+        config = OllamaChatConfig()
+        messages = cast(
+            list[AllMessageValues],
+            [
+                {"role": "user", "content": "What's the weather in SF?"},
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": "call_abc123",
+                            "type": "function",
+                            "function": {
+                                "name": "get_weather",
+                                "arguments": '{"location": "San Francisco, CA"}',
+                            },
+                        }
+                    ],
+                },
+                {
+                    "role": "tool",
+                    "tool_call_id": "call_abc123",
+                    "content": "Sunny, 72°F",
+                },
+            ],
+        )
+
+        result = config.transform_request(
+            model="gemma4:27b",
+            messages=messages,
+            optional_params={},
+            litellm_params={},
+            headers={},
+        )
+
+        tool_msg = result["messages"][2]
+        assert tool_msg["role"] == "tool"
+        assert tool_msg["content"] == "Sunny, 72°F"
+        assert "tool_call_id" in tool_msg, "tool_call_id must be forwarded to Ollama"
+        assert tool_msg["tool_call_id"] == "call_abc123"

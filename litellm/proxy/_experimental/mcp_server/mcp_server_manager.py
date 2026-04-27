@@ -184,6 +184,16 @@ class MCPServerManager:
             "gmail_send_email": "zapier_mcp_server",
         }
         """
+        self._upstream_initialize_instructions_by_server_id: Dict[str, str] = {}
+
+    def _remember_upstream_initialize_instructions(
+        self, server: MCPServer, client: MCPClient
+    ) -> None:
+        raw = getattr(client, "_last_initialize_instructions", None)
+        if raw and str(raw).strip():
+            self._upstream_initialize_instructions_by_server_id[server.server_id] = str(
+                raw
+            ).strip()
 
     def get_registry(self) -> Dict[str, MCPServer]:
         """
@@ -204,6 +214,7 @@ class MCPServerManager:
             mcp_aliases: Optional dictionary mapping aliases to server names from litellm_settings
         """
         verbose_logger.debug("Loading MCP Servers from config-----")
+        self._upstream_initialize_instructions_by_server_id.clear()
 
         # Track which aliases have been used to ensure only first occurrence is used
         used_aliases = set()
@@ -351,6 +362,7 @@ class MCPServerManager:
                 aws_service_name=server_config.get("aws_service_name", None),
                 aws_role_name=server_config.get("aws_role_name", None),
                 aws_session_name=server_config.get("aws_session_name", None),
+                instructions=server_config.get("instructions", None),
             )
             self.config_mcp_servers[server_id] = new_server
 
@@ -693,6 +705,7 @@ class MCPServerManager:
             aws_service_name=aws_creds.get("aws_service_name"),
             aws_role_name=aws_creds.get("aws_role_name"),
             aws_session_name=aws_creds.get("aws_session_name"),
+            instructions=mcp_server.instructions,
         )
         return new_server
 
@@ -1247,6 +1260,7 @@ class MCPServerManager:
                 return tools
             else:
                 tools = await self._fetch_tools_with_timeout(client, server.name)
+                self._remember_upstream_initialize_instructions(server, client)
 
             prefixed_or_original_tools = self._create_prefixed_tools(
                 tools, server, add_prefix=add_prefix
@@ -2383,6 +2397,7 @@ class MCPServerManager:
         # If proxy_logging_obj is not None, the tool call result is at index 1 (after the during hook task)
         result_index = 1 if proxy_logging_obj else 0
         result = mcp_responses[result_index]
+        self._remember_upstream_initialize_instructions(mcp_server, client)
 
         return cast(CallToolResult, result)
 
@@ -2627,6 +2642,7 @@ class MCPServerManager:
         )
 
         verbose_logger.debug("Loading MCP servers from database into registry...")
+        self._upstream_initialize_instructions_by_server_id.clear()
 
         # perform authz check to filter the mcp servers user has access to
         prisma_client = get_prisma_client_or_throw(
@@ -2748,6 +2764,72 @@ class MCPServerManager:
             if server.available_on_public_internet or server.server_id in public_ids:
                 servers.append(server)
         return servers
+
+    def expand_permission_list(self, identifiers: List[str]) -> List[str]:
+        """
+        Expand a permission list of server_ids/names/aliases into concrete
+        server_ids against the current region's config + DB registry union.
+
+        Entries that match a server_id pass through unchanged. Entries that
+        match an alias/server_name/name are replaced with every matching
+        server_id (duplicate names grant access to all matches). Entries
+        that resolve to nothing pass through as-is and a debug log is
+        emitted so admins can diagnose stale/typo permission entries — the
+        downstream access-check denies them when compared against the
+        concrete request server_id.
+        """
+        if not identifiers:
+            return []
+        registry = self.get_registry()
+        expanded: Set[str] = set()
+        for identifier in identifiers:
+            if identifier in registry:
+                expanded.add(identifier)
+                continue
+            matches: List[str] = [
+                server_id
+                for server_id, server in registry.items()
+                if server.alias == identifier
+                or server.server_name == identifier
+                or server.name == identifier
+            ]
+            if matches:
+                expanded.update(matches)
+            else:
+                # %r quotes and escapes control chars so an admin-controlled
+                # identifier with newlines cannot forge log lines.
+                verbose_logger.debug(
+                    "MCP permission entry %r does not resolve to any known "
+                    "server (config + DB union). Passing through — the "
+                    "downstream access check will deny it if it's stale.",
+                    identifier,
+                )
+                expanded.add(identifier)
+        return list(expanded)
+
+    def expand_tool_permissions(
+        self,
+        tool_permissions: Optional[Dict[str, List[str]]],
+    ) -> Dict[str, List[str]]:
+        """
+        Rewrite an ``mcp_tool_permissions`` dict keyed by id/name/alias so
+        every key is a concrete server_id where possible. Tool lists from
+        keys that point at the same server are unioned, matching the
+        "duplicate names grant access to all matches" semantics of
+        ``expand_permission_list``.
+
+        Required so name-based keys don't silently drop their tool
+        restrictions when the lookup uses the resolved server_id. Unresolved
+        keys pass through via ``expand_permission_list`` so stale id-keyed
+        restrictions still apply when the same string is used for lookup.
+        """
+        if not tool_permissions:
+            return {}
+        result: Dict[str, List[str]] = {}
+        for key, tools in tool_permissions.items():
+            for server_id in self.expand_permission_list([key]):
+                result.setdefault(server_id, []).extend(tools or [])
+        return result
 
     def get_mcp_server_by_name(
         self, server_name: str, client_ip: Optional[str] = None
@@ -2910,6 +2992,7 @@ class MCPServerManager:
                 await asyncio.wait_for(
                     client.run_with_session(_noop), timeout=MCP_HEALTH_CHECK_TIMEOUT
                 )
+                self._remember_upstream_initialize_instructions(server, client)
                 status = "healthy"
             except asyncio.TimeoutError:
                 health_check_error = (
@@ -2951,6 +3034,7 @@ class MCPServerManager:
             token_url=server.token_url,
             registration_url=server.registration_url,
             allow_all_keys=server.allow_all_keys,
+            instructions=server.instructions,
         )
 
     async def get_all_mcp_servers_with_health_and_teams(
@@ -3046,6 +3130,7 @@ class MCPServerManager:
             is_byok=server.is_byok,
             byok_description=server.byok_description,
             byok_api_key_help_url=server.byok_api_key_help_url,
+            instructions=server.instructions,
         )
 
     async def get_all_mcp_servers_unfiltered(self) -> List[LiteLLM_MCPServerTable]:

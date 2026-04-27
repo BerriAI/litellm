@@ -1,6 +1,6 @@
 import os
 import sys
-from typing import List, Literal
+from typing import List, Literal, Optional
 
 from litellm.litellm_core_utils.env_utils import get_env_int
 
@@ -164,6 +164,7 @@ MCP_STDIO_ALLOWED_COMMANDS: frozenset = frozenset(
 LITELLM_UI_ALLOW_HEADERS = [
     "x-litellm-semantic-filter",
     "x-litellm-semantic-filter-tools",
+    "x-litellm-adaptive-router-model",
 ]
 
 # Gemini model-specific minimal thinking budget constants
@@ -413,7 +414,20 @@ MAX_SIZE_PER_ITEM_IN_MEMORY_CACHE_IN_KB = int(
 )
 DEFAULT_MAX_TOKENS_FOR_TRITON = int(os.getenv("DEFAULT_MAX_TOKENS_FOR_TRITON", 2000))
 #### Networking settings ####
-request_timeout: float = float(os.getenv("REQUEST_TIMEOUT", 6000))  # time in seconds
+# Sentinel used when `REQUEST_TIMEOUT` is unset: `litellm.request_timeout` keeps this
+# value so longer-running surfaces (Router `timeout or litellm.request_timeout`,
+# speech/TTS, responses, vector stores, etc.) get a long HTTP deadline. Chat
+# `completion()` maps this sentinel down to 600s when the caller did not set a
+# per-request/model timeout—see ``CompletionTimeout.resolve`` in completion_timeout.py. MCP uses
+# dedicated timeouts (e.g. `MCP_CLIENT_TIMEOUT`), not `request_timeout`.
+DEFAULT_REQUEST_TIMEOUT_SECONDS: float = 6000.0
+# Pair used for default httpx clients when no custom timeout is passed: read/write
+# deadline and connect handshake (see ``http_handler`` cached handler paths).
+COMPLETION_HTTP_FALLBACK_SECONDS: float = 600.0
+HTTP_HANDLER_CONNECT_TIMEOUT_SECONDS: float = 5.0
+request_timeout: float = float(
+    os.getenv("REQUEST_TIMEOUT", str(int(DEFAULT_REQUEST_TIMEOUT_SECONDS)))
+)
 DEFAULT_A2A_AGENT_TIMEOUT: float = float(
     os.getenv("DEFAULT_A2A_AGENT_TIMEOUT", 6000)
 )  # 10 minutes
@@ -1113,6 +1127,7 @@ BEDROCK_CONVERSE_MODELS = [
     "openai.gpt-oss-120b-1:0",
     "anthropic.claude-haiku-4-5-20251001-v1:0",
     "anthropic.claude-sonnet-4-5-20250929-v1:0",
+    "anthropic.claude-opus-4-7",
     "anthropic.claude-opus-4-6-v1:0",
     "anthropic.claude-opus-4-6-v1",
     "anthropic.claude-sonnet-4-6",
@@ -1330,6 +1345,41 @@ BATCH_STATUS_POLL_MAX_ATTEMPTS = int(
 HEALTH_CHECK_TIMEOUT_SECONDS = int(
     os.getenv("HEALTH_CHECK_TIMEOUT_SECONDS", 60)
 )  # 60 seconds
+_background_health_check_max_tokens_env = os.getenv(
+    "BACKGROUND_HEALTH_CHECK_MAX_TOKENS"
+)
+try:
+    _raw_background_health_check_max_tokens = (
+        _background_health_check_max_tokens_env.strip()
+        if _background_health_check_max_tokens_env is not None
+        else ""
+    )
+    BACKGROUND_HEALTH_CHECK_MAX_TOKENS: Optional[int] = (
+        int(_raw_background_health_check_max_tokens)
+        if _raw_background_health_check_max_tokens
+        else None
+    )
+except (ValueError, TypeError):
+    BACKGROUND_HEALTH_CHECK_MAX_TOKENS = None
+
+
+_background_health_check_max_tokens_reasoning_env = os.getenv(
+    "BACKGROUND_HEALTH_CHECK_MAX_TOKENS_REASONING"
+)
+try:
+    _raw_background_health_check_max_tokens_reasoning = (
+        _background_health_check_max_tokens_reasoning_env.strip()
+        if _background_health_check_max_tokens_reasoning_env is not None
+        else ""
+    )
+    BACKGROUND_HEALTH_CHECK_MAX_TOKENS_REASONING: Optional[int] = (
+        int(_raw_background_health_check_max_tokens_reasoning)
+        if _raw_background_health_check_max_tokens_reasoning
+        else None
+    )
+except (ValueError, TypeError):
+    BACKGROUND_HEALTH_CHECK_MAX_TOKENS_REASONING = None
+
 LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME = "litellm-internal-health-check"
 LITTELM_CLI_SERVICE_ACCOUNT_NAME = "litellm-cli"
 LITELLM_INTERNAL_JOBS_SERVICE_ACCOUNT_NAME = "litellm_internal_jobs"
@@ -1379,6 +1429,9 @@ SPEND_LOG_RUN_LOOPS = int(os.getenv("SPEND_LOG_RUN_LOOPS", 500))
 SPEND_LOG_CLEANUP_BATCH_SIZE = int(os.getenv("SPEND_LOG_CLEANUP_BATCH_SIZE", 1000))
 SPEND_LOG_QUEUE_SIZE_THRESHOLD = int(os.getenv("SPEND_LOG_QUEUE_SIZE_THRESHOLD", 100))
 SPEND_LOG_QUEUE_POLL_INTERVAL = float(os.getenv("SPEND_LOG_QUEUE_POLL_INTERVAL", 2.0))
+SPEND_COUNTER_RESEED_LOCKS_MAX_SIZE = int(
+    os.getenv("SPEND_COUNTER_RESEED_LOCKS_MAX_SIZE", 10000)
+)
 DEFAULT_CRON_JOB_LOCK_TTL_SECONDS = int(
     os.getenv("DEFAULT_CRON_JOB_LOCK_TTL_SECONDS", 60)
 )  # 1 minute

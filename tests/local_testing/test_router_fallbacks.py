@@ -1509,7 +1509,7 @@ def test_router_fallbacks_with_wildcard_model_name():
             {
                 "model_name": "claude-3-haiku",
                 "litellm_params": {
-                    "model": "claude-3-haiku-20240307",
+                    "model": "claude-haiku-4-5-20251001",
                     "api_key": os.getenv("ANTHROPIC_API_KEY"),
                     "mock_response": "Hi this is claude!",
                 },
@@ -1555,7 +1555,7 @@ def test_fallbacks_with_different_messages():
             {
                 "model_name": "claude-3-haiku",
                 "litellm_params": {
-                    "model": "claude-3-haiku-20240307",
+                    "model": "claude-haiku-4-5-20251001",
                     "api_key": os.getenv("ANTHROPIC_API_KEY"),
                 },
             },

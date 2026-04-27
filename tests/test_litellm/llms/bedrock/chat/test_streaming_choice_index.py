@@ -49,11 +49,7 @@ class TestBedrockStreamingChoiceIndex:
 
         # Now simulate tool use delta on contentBlockIndex 1
         delta_chunk = {
-            "delta": {
-                "toolUse": {
-                    "input": '{"location": "San Francisco"}'
-                }
-            },
+            "delta": {"toolUse": {"input": '{"location": "San Francisco"}'}},
             "contentBlockIndex": 1,  # Tool calls are on index 1
         }
 
@@ -62,7 +58,10 @@ class TestBedrockStreamingChoiceIndex:
         # Choice index should still be 0, NOT contentBlockIndex (1)
         assert delta_result.choices[0].index == 0
         assert delta_result.choices[0].delta.tool_calls is not None
-        assert delta_result.choices[0].delta.tool_calls[0]["function"]["arguments"] == '{"location": "San Francisco"}'
+        assert (
+            delta_result.choices[0].delta.tool_calls[0]["function"]["arguments"]
+            == '{"location": "San Francisco"}'
+        )
 
     def test_mixed_content_blocks_all_use_choice_index_zero(self):
         """
@@ -92,19 +91,19 @@ class TestBedrockStreamingChoiceIndex:
             "contentBlockIndex": 1,
         }
         result2 = handler.converse_chunk_parser(tool_start_chunk)
-        assert result2.choices[0].index == 0, "Tool start should have index=0, not contentBlockIndex=1"
+        assert (
+            result2.choices[0].index == 0
+        ), "Tool start should have index=0, not contentBlockIndex=1"
 
         # Chunk 3: Tool call delta on contentBlockIndex 1
         tool_delta_chunk = {
-            "delta": {
-                "toolUse": {
-                    "input": '{"city": "NYC"}'
-                }
-            },
+            "delta": {"toolUse": {"input": '{"city": "NYC"}'}},
             "contentBlockIndex": 1,
         }
         result3 = handler.converse_chunk_parser(tool_delta_chunk)
-        assert result3.choices[0].index == 0, "Tool delta should have index=0, not contentBlockIndex=1"
+        assert (
+            result3.choices[0].index == 0
+        ), "Tool delta should have index=0, not contentBlockIndex=1"
 
         # Chunk 4: Finish reason
         finish_chunk = {

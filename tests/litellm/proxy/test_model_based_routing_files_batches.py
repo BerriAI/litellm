@@ -31,16 +31,16 @@ class TestEncodeFileIdWithModel:
         result = encode_file_id_with_model(
             "3814889423749775360", "gemini-2.5-pro", id_type="batch"
         )
-        assert result.startswith("batch_"), (
-            f"Expected batch_ prefix for Vertex numeric batch ID, got: {result[:10]}"
-        )
+        assert result.startswith(
+            "batch_"
+        ), f"Expected batch_ prefix for Vertex numeric batch ID, got: {result[:10]}"
 
     def test_vertex_numeric_id_defaults_to_file_prefix(self):
         """Vertex AI numeric IDs should default to file- prefix when id_type is not specified."""
         result = encode_file_id_with_model("3814889423749775360", "gemini-2.5-pro")
-        assert result.startswith("file-"), (
-            "Default id_type should produce file- prefix for backward compatibility"
-        )
+        assert result.startswith(
+            "file-"
+        ), "Default id_type should produce file- prefix for backward compatibility"
 
     def test_gcs_uri_gets_file_prefix(self):
         """GCS URIs (output_file_id) should produce file- prefix."""

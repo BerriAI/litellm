@@ -5,7 +5,6 @@
 # +-------------------------------------------------------------+
 #  Thank you users! We ❤️ you! - Krrish & Ishaan
 
-import copy
 import os
 import sys
 
@@ -18,6 +17,7 @@ from typing import (
     TYPE_CHECKING,
     Any,
     AsyncGenerator,
+    ClassVar,
     Dict,
     List,
     Literal,
@@ -33,6 +33,7 @@ from fastapi import HTTPException
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.litellm_core_utils.core_helpers import redact_nested_match_and_regex_keys
 from litellm.caching import DualCache
 from litellm.exceptions import GuardrailInterventionNormalStringError
 from litellm.integrations.custom_guardrail import CustomGuardrail
@@ -62,6 +63,7 @@ from litellm.types.utils import (
     CallTypesLiteral,
     Choices,
     GuardrailStatus,
+    Message,
     ModelResponse,
     ModelResponseStream,
     StreamingChoices,
@@ -78,51 +80,33 @@ class GuardrailMessageFilterResult(NamedTuple):
 
 
 def _redact_pii_matches(response_json: dict) -> dict:
-    try:
-        # Create a deep copy to avoid modifying the original response
-        redacted_response = copy.deepcopy(response_json)
+    """
+    Redact match-like fields from a Bedrock ApplyGuardrail JSON payload.
 
-        # Get assessments from the response
-        assessments = redacted_response.get("assessments", [])
-        if not assessments:
-            return redacted_response
+    Delegates to :func:`redact_nested_match_and_regex_keys` (same rules as spend
+    logging). Kept as a Bedrock-module entry point for existing unit tests.
+    """
+    redacted = redact_nested_match_and_regex_keys(response_json)
+    return redacted if isinstance(redacted, dict) else response_json
 
-        for assessment in assessments:
-            # Redact PII entities in sensitive information policy
-            sensitive_info_policy = assessment.get("sensitiveInformationPolicy")
-            if sensitive_info_policy:
-                pii_entities = sensitive_info_policy.get("piiEntities", [])
-                for pii_entity in pii_entities:
-                    if "match" in pii_entity:
-                        pii_entity["match"] = "[REDACTED]"
 
-                # Redact regex matches
-                regexes = sensitive_info_policy.get("regexes", [])
-                for regex_match in regexes:
-                    if "match" in regex_match:
-                        regex_match["match"] = "[REDACTED]"
+def _redact_assessment_match_fields(assessments: List[dict]) -> List[dict]:
+    """
+    Redact sensitive match-like fields from blocked assessment summaries.
 
-            # Redact custom word matches in word policy
-            word_policy = assessment.get("wordPolicy")
-            if word_policy:
-                custom_words = word_policy.get("customWords", [])
-                for custom_word in custom_words:
-                    if "match" in custom_word:
-                        custom_word["match"] = "[REDACTED]"
-
-                managed_words = word_policy.get("managedWordLists", [])
-                for managed_word in managed_words:
-                    if "match" in managed_word:
-                        managed_word["match"] = "[REDACTED]"
-
-        return redacted_response
-    except Exception as e:
-        # We do not want to fail in any case so this is just a warning
-        verbose_proxy_logger.warning("Guardrail log redaction failed: %s", str(e))
-        return response_json
+    This is used for customer-visible error payloads (HTTPException.detail) where
+    we want to preserve policy/type/action metadata without echoing raw matched
+    content.
+    """
+    redacted = redact_nested_match_and_regex_keys(assessments)
+    return redacted if isinstance(redacted, list) else assessments
 
 
 class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
+    # During-call must use async_moderation_hook (not unified apply_guardrail), otherwise
+    # OpenAI translation always passes input_type="request" and spend/UI show PRE-CALL.
+    use_native_during_call_hook: ClassVar[bool] = True
+
     def __init__(
         self,
         guardrailIdentifier: Optional[str] = None,
@@ -413,6 +397,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         messages: Optional[List[AllMessageValues]] = None,
         response: Optional[Union[Any, litellm.ModelResponse]] = None,
         request_data: Optional[dict] = None,
+        logging_event_type: Optional[GuardrailEventHooks] = None,
     ) -> BedrockGuardrailResponse:
         from datetime import datetime
 
@@ -450,11 +435,17 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             prepared_request.headers,
         )
 
-        event_type = (
-            GuardrailEventHooks.pre_call
-            if source == "INPUT"
-            else GuardrailEventHooks.post_call
-        )
+        # UI / spend logs use event_type. Bedrock's `source` is INPUT vs OUTPUT for the API
+        # body, which must not be confused with the proxy hook (pre_call / during_call /
+        # post_call). When omitted, keep legacy mapping for backward compatibility.
+        if logging_event_type is not None:
+            event_type = logging_event_type
+        else:
+            event_type = (
+                GuardrailEventHooks.pre_call
+                if source == "INPUT"
+                else GuardrailEventHooks.post_call
+            )
 
         try:
             httpx_response = await self.async_handler.post(
@@ -509,9 +500,12 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         #########################################################
         # Add guardrail information to request trace
         #########################################################
+        _json_response = httpx_response.json()
+        # Raw Bedrock JSON is passed here; match/regex redaction runs once inside
+        # CustomGuardrail.add_standard_logging_guardrail_information_to_request_data.
         self.add_standard_logging_guardrail_information_to_request_data(
             guardrail_provider=self.guardrail_provider,
-            guardrail_json_response=httpx_response.json(),
+            guardrail_json_response=_json_response,
             request_data=request_data or {},
             guardrail_status=self._get_bedrock_guardrail_response_status(
                 response=httpx_response
@@ -524,9 +518,10 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         #########################################################
         if httpx_response.status_code == 200:
             # check if the response was flagged
-            _json_response = httpx_response.json()
-            redacted_response = _redact_pii_matches(_json_response)
-            verbose_proxy_logger.debug("Bedrock AI response : %s", redacted_response)
+            verbose_proxy_logger.debug(
+                "Bedrock AI response : %s",
+                redact_nested_match_and_regex_keys(_json_response),
+            )
             bedrock_guardrail_response = BedrockGuardrailResponse(**_json_response)
             if self._should_raise_guardrail_blocked_exception(
                 bedrock_guardrail_response
@@ -803,7 +798,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
 
         assessments = self._extract_blocked_assessments(response)
         if assessments:
-            detail["assessments"] = assessments
+            detail["assessments"] = _redact_assessment_match_fields(assessments)
 
         return HTTPException(status_code=400, detail=detail)
 
@@ -825,7 +820,9 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             return False
 
         # Check assessments to determine if any actions were BLOCKED (vs ANONYMIZED)
-        assessments = response.get("assessments", [])
+        # NOTE: Use `.get("k") or []` not `.get("k", [])` — Bedrock can return explicit
+        # JSON null; dict.get("k", []) then yields None, and `for x in None` raises.
+        assessments = response.get("assessments") or []
         if not assessments:
             return False
 
@@ -833,7 +830,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             # Check topic policy
             topic_policy = assessment.get("topicPolicy")
             if topic_policy:
-                topics = topic_policy.get("topics", [])
+                topics = topic_policy.get("topics") or []
                 for topic in topics:
                     if topic.get("action") == "BLOCKED":
                         return True
@@ -841,7 +838,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             # Check content policy
             content_policy = assessment.get("contentPolicy")
             if content_policy:
-                filters = content_policy.get("filters", [])
+                filters = content_policy.get("filters") or []
                 for filter_item in filters:
                     if filter_item.get("action") == "BLOCKED":
                         return True
@@ -849,11 +846,11 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             # Check word policy
             word_policy = assessment.get("wordPolicy")
             if word_policy:
-                custom_words = word_policy.get("customWords", [])
+                custom_words = word_policy.get("customWords") or []
                 for custom_word in custom_words:
                     if custom_word.get("action") == "BLOCKED":
                         return True
-                managed_words = word_policy.get("managedWordLists", [])
+                managed_words = word_policy.get("managedWordLists") or []
                 for managed_word in managed_words:
                     if managed_word.get("action") == "BLOCKED":
                         return True
@@ -861,12 +858,12 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             # Check sensitive information policy
             sensitive_info_policy = assessment.get("sensitiveInformationPolicy")
             if sensitive_info_policy:
-                pii_entities = sensitive_info_policy.get("piiEntities", [])
+                pii_entities = sensitive_info_policy.get("piiEntities") or []
                 if pii_entities:
                     for pii_entity in pii_entities:
                         if pii_entity.get("action") == "BLOCKED":
                             return True
-                regexes = sensitive_info_policy.get("regexes", [])
+                regexes = sensitive_info_policy.get("regexes") or []
                 if regexes:
                     for regex in regexes:
                         if regex.get("action") == "BLOCKED":
@@ -875,7 +872,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             # Check contextual grounding policy
             contextual_grounding_policy = assessment.get("contextualGroundingPolicy")
             if contextual_grounding_policy:
-                grounding_filters = contextual_grounding_policy.get("filters", [])
+                grounding_filters = contextual_grounding_policy.get("filters") or []
                 for grounding_filter in grounding_filters:
                     if grounding_filter.get("action") == "BLOCKED":
                         return True
@@ -939,12 +936,15 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         #########################################################
         ########## 1. Make the Bedrock API request ##########
         #########################################################
-        bedrock_guardrail_response: Optional[
-            Union[BedrockGuardrailResponse, str]
-        ] = None
+        bedrock_guardrail_response: Optional[Union[BedrockGuardrailResponse, str]] = (
+            None
+        )
         try:
             bedrock_guardrail_response = await self.make_bedrock_api_request(
-                source="INPUT", messages=filtered_messages, request_data=data
+                source="INPUT",
+                messages=filtered_messages,
+                request_data=data,
+                logging_event_type=GuardrailEventHooks.pre_call,
             )
         except GuardrailInterventionNormalStringError as e:
             bedrock_guardrail_response = e.message
@@ -1011,12 +1011,15 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         #########################################################
         ########## 1. Make the Bedrock API request ##########
         #########################################################
-        bedrock_guardrail_response: Optional[
-            Union[BedrockGuardrailResponse, str]
-        ] = None
+        bedrock_guardrail_response: Optional[Union[BedrockGuardrailResponse, str]] = (
+            None
+        )
         try:
             bedrock_guardrail_response = await self.make_bedrock_api_request(
-                source="INPUT", messages=filtered_messages, request_data=data
+                source="INPUT",
+                messages=filtered_messages,
+                request_data=data,
+                logging_event_type=GuardrailEventHooks.during_call,
             )
         except GuardrailInterventionNormalStringError as e:
             bedrock_guardrail_response = e.message
@@ -1095,51 +1098,21 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         #########################################################
         ########## 1. Make Bedrock API requests ##########
         #########################################################
-        # Import asyncio for parallel execution
-        import asyncio
-
-        # Determine if INPUT validation is needed in post_call
-        # Skip INPUT validation if pre_call or during_call is already enabled
-        # (to avoid redundant validation - those hooks would have already validated INPUT)
-        should_validate_input = not (
-            self._event_hook_is_event_type(GuardrailEventHooks.pre_call)
-            or self._event_hook_is_event_type(GuardrailEventHooks.during_call)
-        )
-
+        # post_call is the response-validation hook by definition — only scan
+        # OUTPUT. Input scanning belongs to pre_call / during_call hooks, which
+        # users should configure if they want input validation. Running an
+        # extra INPUT scan here produced a duplicate post-call entry in the
+        # trace and made no semantic sense for a "post-call" event.
         output_content_bedrock: Optional[Union[BedrockGuardrailResponse, str]] = None
-
-        if should_validate_input:
-            # Prepare input messages (with optional filtering for latest role message)
-            input_filter = self._prepare_guardrail_messages_for_role(
-                messages=new_messages
-            )
-            input_messages = input_filter.payload_messages or new_messages
-
-            # Create tasks for parallel execution of both INPUT and OUTPUT validation
-            input_task = self.make_bedrock_api_request(
-                source="INPUT",
-                messages=input_messages,
+        try:
+            output_content_bedrock = await self.make_bedrock_api_request(
+                source="OUTPUT",
+                response=response,
                 request_data=data,
+                logging_event_type=GuardrailEventHooks.post_call,
             )
-            output_task = self.make_bedrock_api_request(
-                source="OUTPUT", response=response, request_data=data
-            )
-
-            # Execute both requests in parallel
-            try:
-                _, output_content_bedrock = await asyncio.gather(
-                    input_task, output_task
-                )
-            except GuardrailInterventionNormalStringError as e:
-                output_content_bedrock = e.message
-        else:
-            # Only run OUTPUT validation (INPUT was already validated in pre_call or during_call)
-            try:
-                output_content_bedrock = await self.make_bedrock_api_request(
-                    source="OUTPUT", response=response, request_data=data
-                )
-            except GuardrailInterventionNormalStringError as e:
-                output_content_bedrock = e.message
+        except GuardrailInterventionNormalStringError as e:
+            output_content_bedrock = e.message
 
         #########################################################
         ########## 2. Apply masking to response with output guardrail response ##########
@@ -1214,11 +1187,10 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         """
         Process streaming response chunks.
 
-        Collect content from the stream and make parallel bedrock api requests to get the guardrail responses.
+        Collect content from the stream and run the bedrock OUTPUT scan
+        (post_call only validates the response).
         """
         # Import here to avoid circular imports
-        import asyncio
-
         from litellm.llms.base_llm.base_model_iterator import MockResponseIterator
         from litellm.main import stream_chunk_builder
         from litellm.types.utils import TextCompletionResponse
@@ -1235,54 +1207,24 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         )
         if isinstance(assembled_model_response, ModelResponse):
             ####################################################################
-            ########## 1. Make Bedrock Apply Guardrail API requests ##########
-
-            # Bedrock will raise an exception if this violates the guardrail policy
+            ########## 1. Make Bedrock Apply Guardrail API request ##########
+            #
+            # post_call only scans OUTPUT — input scanning belongs to
+            # pre_call / during_call. Bedrock will raise if the response
+            # violates the guardrail policy.
             ###################################################################
-            # Determine if INPUT validation is needed in post_call
-            # Skip INPUT validation if pre_call or during_call is already enabled
-            # (to avoid redundant validation - those hooks would have already validated INPUT)
-            should_validate_input = not (
-                self._event_hook_is_event_type(GuardrailEventHooks.pre_call)
-                or self._event_hook_is_event_type(GuardrailEventHooks.during_call)
-            )
-
             output_guardrail_response: Optional[
                 Union[BedrockGuardrailResponse, str]
             ] = None
-
-            if should_validate_input:
-                # Create tasks for parallel execution
-                input_filter = self._prepare_guardrail_messages_for_role(
-                    messages=request_data.get("messages")
-                )
-                input_messages = input_filter.payload_messages or request_data.get(
-                    "messages"
-                )
-                input_task = self.make_bedrock_api_request(
-                    source="INPUT",
-                    messages=input_messages,
+            try:
+                output_guardrail_response = await self.make_bedrock_api_request(
+                    source="OUTPUT",
+                    response=assembled_model_response,
                     request_data=request_data,
-                )  # Only input messages
-                output_task = self.make_bedrock_api_request(
-                    source="OUTPUT", response=assembled_model_response
-                )  # Only response
-
-                # Execute both requests in parallel
-                try:
-                    _, output_guardrail_response = await asyncio.gather(
-                        input_task, output_task
-                    )
-                except GuardrailInterventionNormalStringError as e:
-                    output_guardrail_response = e.message
-            else:
-                # Only run OUTPUT validation (INPUT was already validated in pre_call or during_call)
-                try:
-                    output_guardrail_response = await self.make_bedrock_api_request(
-                        source="OUTPUT", response=assembled_model_response
-                    )
-                except GuardrailInterventionNormalStringError as e:
-                    output_guardrail_response = e.message
+                    logging_event_type=GuardrailEventHooks.post_call,
+                )
+            except GuardrailInterventionNormalStringError as e:
+                output_guardrail_response = e.message
 
             #########################################################################
             ########## 2. Apply masking to response with output guardrail response ##########
@@ -1534,7 +1476,9 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         Raises:
             Exception: If content is blocked by Bedrock guardrail
         """
-        texts = inputs.get("texts", [])
+        # NOTE: Use `or []` to handle case where inputs["texts"] is explicitly None.
+        # dict.get("texts", []) would return None if the key exists with a None value.
+        texts = inputs.get("texts") or []
         try:
             verbose_proxy_logger.debug(
                 f"Bedrock Guardrail: Applying guardrail to {len(texts)} text(s)"
@@ -1554,11 +1498,50 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
 
             # Bedrock will throw an error if there is no text to process
             if filtered_messages:
-                bedrock_response = await self.make_bedrock_api_request(
-                    source="INPUT",
-                    messages=filtered_messages,
-                    request_data=request_data,
+                _log_hook = (
+                    GuardrailEventHooks.pre_call
+                    if input_type == "request"
+                    else GuardrailEventHooks.post_call
                 )
+                # Map the abstract input_type to the Bedrock source parameter.
+                # "request"  -> INPUT  (scan user-supplied content)
+                # "response" -> OUTPUT (scan model-generated content)
+                # Bedrock guardrail policies are often configured differently
+                # for Input vs Output (e.g. PII blocking only on Output), so
+                # the source MUST match where the text originated.
+                bedrock_source: Literal["INPUT", "OUTPUT"] = (
+                    "OUTPUT" if input_type == "response" else "INPUT"
+                )
+                if bedrock_source == "OUTPUT":
+                    # Build a synthetic ModelResponse whose choices carry the
+                    # text(s) to scan, so _create_bedrock_output_content_request
+                    # can produce the correct Bedrock OUTPUT payload.
+                    synthetic_response = ModelResponse(
+                        choices=[
+                            Choices(
+                                index=_idx,
+                                message=Message(
+                                    role="assistant",
+                                    content=str(_msg.get("content") or ""),
+                                ),
+                                finish_reason="stop",
+                            )
+                            for _idx, _msg in enumerate(filtered_messages)
+                        ]
+                    )
+                    bedrock_response = await self.make_bedrock_api_request(
+                        source="OUTPUT",
+                        response=synthetic_response,
+                        request_data=request_data,
+                        logging_event_type=_log_hook,
+                    )
+                else:
+                    bedrock_response = await self.make_bedrock_api_request(
+                        source="INPUT",
+                        messages=filtered_messages,
+                        request_data=request_data,
+                        logging_event_type=_log_hook,
+                    )
 
                 # Apply any masking that was applied by the guardrail
                 output_list = bedrock_response.get("output")

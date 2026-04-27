@@ -139,7 +139,9 @@ class ProviderSpecificModelInfo(TypedDict, total=False):
     supports_reasoning: Optional[bool]
     supports_url_context: Optional[bool]
     supports_none_reasoning_effort: Optional[bool]
+    supports_minimal_reasoning_effort: Optional[bool]
     supports_xhigh_reasoning_effort: Optional[bool]
+    supports_max_reasoning_effort: Optional[bool]
 
 
 class SearchContextCostPerQuery(TypedDict, total=False):
@@ -2647,6 +2649,8 @@ class StandardLoggingAdditionalHeaders(TypedDict, total=False):
     x_ratelimit_limit_tokens: int
     x_ratelimit_remaining_requests: int
     x_ratelimit_remaining_tokens: int
+    x_ratelimit_reset_requests: str
+    x_ratelimit_reset_tokens: str
 
 
 class StandardLoggingHiddenParams(TypedDict):
@@ -2756,6 +2760,29 @@ class StandardLoggingGuardrailInformation(TypedDict, total=False):
     """Risk score 0-10 indicating how risky the request was (higher = riskier). Computed by the guardrail provider."""
 
 
+class EvalVerdict(TypedDict, total=False):
+    criterion_name: str
+    score: float  # 0-100
+    reasoning: str
+    passed: bool
+    weight: int  # criterion weight (0-100) as configured in the guardrail
+
+
+class StandardLoggingEvalInformation(TypedDict, total=False):
+    eval_id: Optional[str]
+    eval_name: str
+    overall_score: float
+    passed: bool
+    judge_model: str
+    iteration: int
+    eval_error: Optional[str]
+    start_time: str
+    end_time: str
+    duration: float
+    verdicts: List[Any]
+    threshold: Optional[float]
+
+
 class GuardrailTracingDetail(TypedDict, total=False):
     """
     Typed fields for guardrail tracing metadata.
@@ -2798,7 +2825,9 @@ class CostBreakdown(TypedDict, total=False):
     Detailed cost breakdown for a request
     """
 
-    input_cost: float  # Cost of input/prompt tokens
+    input_cost: float  # Cost of raw (non-cached) input tokens only
+    cache_read_cost: float  # Cost of cache-read tokens (discounted rate)
+    cache_creation_cost: float  # Cost of cache-write tokens (premium rate)
     output_cost: (
         float  # Cost of output/completion tokens (includes reasoning if applicable)
     )
@@ -2847,6 +2876,7 @@ class StandardAuditLogPayload(TypedDict):
 class StandardLoggingPayload(TypedDict):
     id: str
     trace_id: str  # Trace multiple LLM calls belonging to same overall request (e.g. fallbacks/retries)
+    litellm_call_id: Optional[str]  # UUID returned in x-litellm-call-id response header
     call_type: str
     stream: Optional[bool]
     response_cost: float
@@ -3286,6 +3316,7 @@ class LlmProviders(str, Enum):
     MANUS = "manus"
     WANDB = "wandb"
     OVHCLOUD = "ovhcloud"
+    SCALEWAY = "scaleway"
     LEMONADE = "lemonade"
     AMAZON_NOVA = "amazon_nova"
     A2A_AGENT = "a2a_agent"
