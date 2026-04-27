@@ -28876,21 +28876,32 @@
         "supports_reasoning": true,
         "source": "https://cloud.sambanova.ai/plans/pricing"
     },
-    "snowflake/claude-3-5-sonnet": {
+      "snowflake/claude-3-5-sonnet": {
         "litellm_provider": "snowflake",
-        "max_input_tokens": 18000,
-        "max_output_tokens": 8192,
-        "max_tokens": 8192,
+        "max_input_tokens": 200000,
+        "max_output_tokens": 16384,
+        "max_tokens": 16384,
         "mode": "chat",
-        "supports_computer_use": true
+        "input_cost_per_token": 0.000003,
+        "output_cost_per_token": 0.000015,
+        "cache_read_input_token_cost": 0.0000003,
+        "supports_computer_use": true,
+        "supports_function_calling": true,
+        "supports_vision": true,
+        "supports_prompt_caching": true,
+        "supports_system_messages": true,
+        "supports_response_schema": true
     },
-    "snowflake/deepseek-r1": {
+      "snowflake/deepseek-r1": {
         "litellm_provider": "snowflake",
-        "max_input_tokens": 32768,
-        "max_output_tokens": 8192,
-        "max_tokens": 8192,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 16384,
+        "max_tokens": 16384,
         "mode": "chat",
-        "supports_reasoning": true
+        "input_cost_per_token": 0.00000135,
+        "output_cost_per_token": 0.0000054,
+        "supports_reasoning": true,
+        "supports_system_messages": true
     },
     "snowflake/gemma-7b": {
         "litellm_provider": "snowflake",
@@ -28944,23 +28955,34 @@
     "snowflake/llama3.1-405b": {
         "litellm_provider": "snowflake",
         "max_input_tokens": 128000,
-        "max_output_tokens": 8192,
-        "max_tokens": 8192,
-        "mode": "chat"
+        "max_output_tokens": 16384,
+        "max_tokens": 16384,
+        "mode": "chat",
+        "input_cost_per_token": 0.0000012,
+        "output_cost_per_token": 0.0000012,
+        "supports_function_calling": true,
+        "supports_system_messages": true
     },
     "snowflake/llama3.1-70b": {
         "litellm_provider": "snowflake",
         "max_input_tokens": 128000,
-        "max_output_tokens": 8192,
-        "max_tokens": 8192,
-        "mode": "chat"
+        "max_output_tokens": 16384,
+        "max_tokens": 16384,
+        "mode": "chat",
+        "input_cost_per_token": 0.00000072,
+        "output_cost_per_token": 0.00000072,
+        "supports_function_calling": true,
+        "supports_system_messages": true
     },
     "snowflake/llama3.1-8b": {
         "litellm_provider": "snowflake",
         "max_input_tokens": 128000,
-        "max_output_tokens": 8192,
-        "max_tokens": 8192,
-        "mode": "chat"
+        "max_output_tokens": 16384,
+        "max_tokens": 16384,
+        "mode": "chat",
+        "input_cost_per_token": 0.00000024,
+        "output_cost_per_token": 0.00000024,
+        "supports_system_messages": true
     },
     "snowflake/llama3.2-1b": {
         "litellm_provider": "snowflake",
@@ -28976,13 +28998,17 @@
         "max_tokens": 8192,
         "mode": "chat"
     },
-    "snowflake/llama3.3-70b": {
-        "litellm_provider": "snowflake",
+      "snowflake/llama3.3-70b": {
+        "max_tokens": 16384,
         "max_input_tokens": 128000,
-        "max_output_tokens": 8192,
-        "max_tokens": 8192,
-        "mode": "chat"
-    },
+        "max_output_tokens": 16384,
+        "input_cost_per_token": 0.00000072,
+        "output_cost_per_token": 0.00000072,
+        "litellm_provider": "snowflake",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_system_messages": true
+      },
     "snowflake/mistral-7b": {
         "litellm_provider": "snowflake",
         "max_input_tokens": 32000,
@@ -28997,12 +29023,17 @@
         "max_tokens": 8192,
         "mode": "chat"
     },
-    "snowflake/mistral-large2": {
+     "snowflake/mistral-large2": {
         "litellm_provider": "snowflake",
         "max_input_tokens": 128000,
-        "max_output_tokens": 8192,
-        "max_tokens": 8192,
-        "mode": "chat"
+        "max_output_tokens": 16384,
+        "max_tokens": 16384,
+        "mode": "chat",
+        "input_cost_per_token": 0.000002,
+        "output_cost_per_token": 0.000006,
+        "supports_function_calling": true,
+        "supports_system_messages": true,
+        "supports_response_schema": true
     },
     "snowflake/mixtral-8x7b": {
         "litellm_provider": "snowflake",
@@ -29039,13 +29070,17 @@
         "max_tokens": 8192,
         "mode": "chat"
     },
-    "snowflake/snowflake-llama-3.3-70b": {
+      "snowflake/snowflake-llama-3.3-70b": {
+        "max_tokens": 16384,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 16384,
+        "input_cost_per_token": 0.00000072,
+        "output_cost_per_token": 0.00000072,
         "litellm_provider": "snowflake",
-        "max_input_tokens": 8000,
-        "max_output_tokens": 8192,
-        "max_tokens": 8192,
-        "mode": "chat"
-    },
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_system_messages": true
+      },
     "stability/sd3": {
         "litellm_provider": "stability",
         "mode": "image_generation",
@@ -39770,21 +39805,6 @@
     "supports_reasoning": true,
     "supports_response_schema": true
   },
-  "snowflake/claude-3-5-sonnet": {
-    "max_tokens": 16384,
-    "max_input_tokens": 200000,
-    "max_output_tokens": 16384,
-    "input_cost_per_token": 0.000003,
-    "output_cost_per_token": 0.000015,
-    "cache_read_input_token_cost": 0.0000003,
-    "litellm_provider": "snowflake",
-    "mode": "chat",
-    "supports_function_calling": true,
-    "supports_vision": true,
-    "supports_prompt_caching": true,
-    "supports_system_messages": true,
-    "supports_response_schema": true
-  },
   "snowflake/openai-gpt-4.1": {
     "max_tokens": 16384,
     "max_input_tokens": 300000,
@@ -39840,89 +39860,12 @@
     "supports_system_messages": true,
     "supports_response_schema": true
   },
-  "snowflake/deepseek-r1": {
-    "max_tokens": 16384,
-    "max_input_tokens": 128000,
-    "max_output_tokens": 16384,
-    "input_cost_per_token": 0.00000135,
-    "output_cost_per_token": 0.0000054,
-    "litellm_provider": "snowflake",
-    "mode": "chat",
-    "supports_reasoning": true,
-    "supports_system_messages": true
-  },
-  "snowflake/mistral-large2": {
-    "max_tokens": 16384,
-    "max_input_tokens": 128000,
-    "max_output_tokens": 16384,
-    "input_cost_per_token": 0.000002,
-    "output_cost_per_token": 0.000006,
-    "litellm_provider": "snowflake",
-    "mode": "chat",
-    "supports_function_calling": true,
-    "supports_system_messages": true,
-    "supports_response_schema": true
-  },
-  "snowflake/llama3.1-8b": {
-    "max_tokens": 16384,
-    "max_input_tokens": 128000,
-    "max_output_tokens": 16384,
-    "input_cost_per_token": 0.00000024,
-    "output_cost_per_token": 0.00000024,
-    "litellm_provider": "snowflake",
-    "mode": "chat",
-    "supports_system_messages": true
-  },
-  "snowflake/llama3.1-70b": {
-    "max_tokens": 16384,
-    "max_input_tokens": 128000,
-    "max_output_tokens": 16384,
-    "input_cost_per_token": 0.00000072,
-    "output_cost_per_token": 0.00000072,
-    "litellm_provider": "snowflake",
-    "mode": "chat",
-    "supports_function_calling": true,
-    "supports_system_messages": true
-  },
-  "snowflake/llama3.1-405b": {
-    "max_tokens": 16384,
-    "max_input_tokens": 128000,
-    "max_output_tokens": 16384,
-    "input_cost_per_token": 0.0000012,
-    "output_cost_per_token": 0.0000012,
-    "litellm_provider": "snowflake",
-    "mode": "chat",
-    "supports_function_calling": true,
-    "supports_system_messages": true
-  },
-  "snowflake/llama3.3-70b": {
-    "max_tokens": 16384,
-    "max_input_tokens": 128000,
-    "max_output_tokens": 16384,
-    "input_cost_per_token": 0.00000072,
-    "output_cost_per_token": 0.00000072,
-    "litellm_provider": "snowflake",
-    "mode": "chat",
-    "supports_function_calling": true,
-    "supports_system_messages": true
-  },
   "snowflake/llama4-maverick": {
     "max_tokens": 16384,
     "max_input_tokens": 128000,
     "max_output_tokens": 16384,
     "input_cost_per_token": 0.00000024,
     "output_cost_per_token": 0.00000097,
-    "litellm_provider": "snowflake",
-    "mode": "chat",
-    "supports_function_calling": true,
-    "supports_system_messages": true
-  },
-  "snowflake/snowflake-llama-3.3-70b": {
-    "max_tokens": 16384,
-    "max_input_tokens": 128000,
-    "max_output_tokens": 16384,
-    "input_cost_per_token": 0.00000072,
-    "output_cost_per_token": 0.00000072,
     "litellm_provider": "snowflake",
     "mode": "chat",
     "supports_function_calling": true,
