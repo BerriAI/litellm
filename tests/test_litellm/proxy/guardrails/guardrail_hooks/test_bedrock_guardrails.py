@@ -1810,14 +1810,19 @@ async def test_make_bedrock_api_request_logging_event_type_for_spend_logs():
         "messages": [{"role": "user", "content": "hi"}],
     }
 
-    with patch.object(
-        guardrail.async_handler, "post", new_callable=AsyncMock
-    ) as mock_post, patch.object(
-        guardrail, "_load_credentials", return_value=(mock_credentials, "us-east-1")
-    ), patch.object(guardrail, "_prepare_request", return_value=MagicMock()), patch.object(
-        guardrail,
-        "add_standard_logging_guardrail_information_to_request_data",
-    ) as mock_log:
+    with (
+        patch.object(
+            guardrail.async_handler, "post", new_callable=AsyncMock
+        ) as mock_post,
+        patch.object(
+            guardrail, "_load_credentials", return_value=(mock_credentials, "us-east-1")
+        ),
+        patch.object(guardrail, "_prepare_request", return_value=MagicMock()),
+        patch.object(
+            guardrail,
+            "add_standard_logging_guardrail_information_to_request_data",
+        ) as mock_log,
+    ):
         mock_post.return_value = mock_bedrock_response
 
         await guardrail.make_bedrock_api_request(
@@ -1826,7 +1831,9 @@ async def test_make_bedrock_api_request_logging_event_type_for_spend_logs():
             request_data=request_data,
             logging_event_type=GuardrailEventHooks.during_call,
         )
-        assert mock_log.call_args.kwargs["event_type"] == GuardrailEventHooks.during_call
+        assert (
+            mock_log.call_args.kwargs["event_type"] == GuardrailEventHooks.during_call
+        )
         # Raw Bedrock JSON is forwarded; redaction runs once in
         # CustomGuardrail.add_standard_logging_guardrail_information_to_request_data.
         assert (
@@ -2035,11 +2042,13 @@ def test_get_http_exception_no_blocked_assessments_omits_field():
 
 
 @pytest.mark.asyncio
-async def test_streaming_post_call_parallel_output_passes_request_data_to_make_bedrock():
+async def test_streaming_post_call_only_runs_output_scan():
     """
     async_post_call_streaming_iterator_hook must pass request_data into OUTPUT
     make_bedrock_api_request so spend/standard_logging attaches to the real request
     (Greptile: previously OUTPUT used request_data=None / ephemeral {}).
+
+    post_call only validates the response — no INPUT scan should run here.
     """
     request_data = {
         "model": "gpt-4o-mini",
@@ -2111,8 +2120,7 @@ async def test_streaming_post_call_parallel_output_passes_request_data_to_make_b
     input_calls = [
         c for c in mock_make.call_args_list if c.kwargs.get("source") == "INPUT"
     ]
-    assert len(input_calls) == 1
-    assert input_calls[0].kwargs.get("request_data") is request_data
+    assert len(input_calls) == 0
 
 
 @pytest.mark.asyncio
