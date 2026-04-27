@@ -1489,16 +1489,16 @@ class MCPServerManager:
             response = await client.get(server_url)
             response.raise_for_status()
             (
-                authorization_servers,
-                resource_scopes,
+                well_known_authorization_servers,
+                well_known_resource_scopes,
             ) = await self._attempt_well_known_discovery(server_url)
             metadata = await self._fetch_authorization_server_metadata(
-                authorization_servers
+                well_known_authorization_servers
             )
-            if metadata is None and resource_scopes:
-                return MCPOAuthMetadata(scopes=resource_scopes)
-            if metadata is not None and resource_scopes:
-                metadata.scopes = resource_scopes
+            if metadata is None and well_known_resource_scopes:
+                return MCPOAuthMetadata(scopes=well_known_resource_scopes)
+            if metadata is not None and well_known_resource_scopes:
+                metadata.scopes = well_known_resource_scopes
             return metadata
         except HTTPStatusError as exc:
             verbose_logger.debug(

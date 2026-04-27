@@ -1560,9 +1560,6 @@ class TestTemporaryMCPSessionEndpoints:
         request = MagicMock()
         server = generate_mock_mcp_server_config_record(server_id="server-1")
         authorize_response = MagicMock()
-        admin_auth = generate_mock_user_api_key_auth(
-            user_role=LitellmUserRoles.PROXY_ADMIN,
-        )
 
         with (
             patch(
@@ -1577,7 +1574,6 @@ class TestTemporaryMCPSessionEndpoints:
             result = await mcp_authorize(
                 request=request,
                 server_id="server-1",
-                user_api_key_dict=admin_auth,
                 client_id="client-id",
                 redirect_uri="https://example.com/callback",
                 state="state123",
@@ -1588,7 +1584,7 @@ class TestTemporaryMCPSessionEndpoints:
             )
 
         assert result is authorize_response
-        get_server.assert_awaited_once_with("server-1", admin_auth, request=request)
+        get_server.assert_awaited_once_with("server-1", None, request=request)
         authorize_mock.assert_awaited_once_with(
             request=request,
             mcp_server=server,
@@ -1601,6 +1597,36 @@ class TestTemporaryMCPSessionEndpoints:
             scope="scope1",
         )
 
+    def test_mcp_authorize_and_token_routes_are_browser_callable(self):
+        import inspect
+
+        from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+            mcp_authorize,
+            mcp_token,
+            router,
+            user_api_key_auth,
+        )
+
+        assert "user_api_key_dict" not in inspect.signature(mcp_authorize).parameters
+        assert "user_api_key_dict" not in inspect.signature(mcp_token).parameters
+
+        oauth_routes = [
+            route
+            for route in router.routes
+            if getattr(route, "path", "")
+            in {
+                "/v1/mcp/server/oauth/{server_id}/authorize",
+                "/v1/mcp/server/oauth/{server_id}/token",
+            }
+        ]
+        assert len(oauth_routes) == 2
+        for route in oauth_routes:
+            assert all(
+                getattr(dependency.dependency, "__name__", None)
+                != user_api_key_auth.__name__
+                for dependency in route.dependencies
+            )
+
     @pytest.mark.asyncio
     async def test_mcp_token_proxies_to_exchange_endpoint(self):
         from litellm.proxy.management_endpoints.mcp_management_endpoints import (
@@ -1610,9 +1636,6 @@ class TestTemporaryMCPSessionEndpoints:
         request = MagicMock()
         server = generate_mock_mcp_server_config_record(server_id="server-1")
         exchange_response = {"access_token": "token"}
-        admin_auth = generate_mock_user_api_key_auth(
-            user_role=LitellmUserRoles.PROXY_ADMIN,
-        )
 
         with (
             patch(
@@ -1627,7 +1650,6 @@ class TestTemporaryMCPSessionEndpoints:
             result = await mcp_token(
                 request=request,
                 server_id="server-1",
-                user_api_key_dict=admin_auth,
                 grant_type="authorization_code",
                 code="code-123",
                 redirect_uri="https://example.com/callback",
@@ -1639,7 +1661,7 @@ class TestTemporaryMCPSessionEndpoints:
             )
 
         assert result is exchange_response
-        get_server.assert_awaited_once_with("server-1", admin_auth, request=request)
+        get_server.assert_awaited_once_with("server-1", None, request=request)
         exchange_mock.assert_awaited_once_with(
             request=request,
             mcp_server=server,
@@ -1662,9 +1684,6 @@ class TestTemporaryMCPSessionEndpoints:
         request = MagicMock()
         server = generate_mock_mcp_server_config_record(server_id="server-1")
         exchange_response = {"access_token": "new-token", "refresh_token": "new-rt"}
-        admin_auth = generate_mock_user_api_key_auth(
-            user_role=LitellmUserRoles.PROXY_ADMIN,
-        )
 
         with (
             patch(
@@ -1679,7 +1698,6 @@ class TestTemporaryMCPSessionEndpoints:
             result = await mcp_token(
                 request=request,
                 server_id="server-1",
-                user_api_key_dict=admin_auth,
                 grant_type="refresh_token",
                 code=None,
                 redirect_uri=None,
@@ -1691,7 +1709,7 @@ class TestTemporaryMCPSessionEndpoints:
             )
 
         assert result is exchange_response
-        get_server.assert_awaited_once_with("server-1", admin_auth, request=request)
+        get_server.assert_awaited_once_with("server-1", None, request=request)
         exchange_mock.assert_awaited_once_with(
             request=request,
             mcp_server=server,
