@@ -1311,19 +1311,20 @@ async def auth_callback(request: Request, state: Optional[str] = None):  # noqa:
     oauth_error = request.query_params.get("error")
     oauth_error_description = request.query_params.get("error_description")
 
-    if oauth_error:
+    if isinstance(oauth_error, str) and oauth_error:
+        _err_desc = (
+            oauth_error_description
+            if isinstance(oauth_error_description, str)
+            else None
+        )
         verbose_proxy_logger.warning(
             f"SSO callback received OAuth error: {oauth_error!r}, "
-            f"description: {oauth_error_description!r}"
+            f"description: {_err_desc!r}"
         )
         raise HTTPException(
             status_code=401,
             detail=f"OAuth error: {oauth_error}"
-            + (
-                f", error_description: {oauth_error_description}"
-                if oauth_error_description
-                else ""
-            ),
+            + (f", error_description: {_err_desc}" if _err_desc else ""),
         )
 
     # Check if this is a CLI login (state starts with our CLI prefix)
