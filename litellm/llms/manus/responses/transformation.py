@@ -179,9 +179,15 @@ class ManusResponsesAPIConfig(OpenAIResponsesAPIConfig):
                 "output_tokens": usage_obj.output_tokens,
                 "total_tokens": usage_obj.total_tokens,
             }
-            if hasattr(usage_obj, "input_tokens_details") and usage_obj.input_tokens_details:
+            if (
+                hasattr(usage_obj, "input_tokens_details")
+                and usage_obj.input_tokens_details
+            ):
                 usage_dict["input_tokens_details"] = usage_obj.input_tokens_details
-            if hasattr(usage_obj, "output_tokens_details") and usage_obj.output_tokens_details:
+            if (
+                hasattr(usage_obj, "output_tokens_details")
+                and usage_obj.output_tokens_details
+            ):
                 usage_dict["output_tokens_details"] = usage_obj.output_tokens_details
             return usage_dict
         elif isinstance(usage_obj, dict):
