@@ -29,14 +29,21 @@ from litellm.types.utils import (
 )
 
 
-def _use_local_model_cost_map():
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+@pytest.fixture(autouse=True)
+def _use_local_model_cost_map(monkeypatch):
+    original_model_cost = litellm.model_cost
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
     litellm.get_model_info.cache_clear()
+    try:
+        yield
+    finally:
+        litellm.model_cost = original_model_cost
+        litellm.get_model_info.cache_clear()
 
 
 class TestGPTImageCostCalculator:
-    """Test the OpenAI gpt-image-1 cost calculator"""
+    """Test the OpenAI gpt-image cost calculator"""
 
     def test_gpt_image_1_cost_with_text_only(self):
         """Test cost calculation with only text input tokens"""
@@ -159,8 +166,6 @@ class TestGPTImageCostCalculator:
         """Test cost calculation for gpt-image-2 token pricing"""
         from litellm.llms.openai.image_generation.cost_calculator import cost_calculator
 
-        _use_local_model_cost_map()
-
         usage = Usage(
             prompt_tokens=600,
             completion_tokens=5000,
@@ -231,8 +236,6 @@ class TestGPTImageCostRouting:
     def test_openai_gpt_image_2_routes_to_token_calculator(self):
         """Test that OpenAI gpt-image-2 routes to token-based calculator"""
         from litellm.litellm_core_utils.llm_cost_calc.utils import CostCalculatorUtils
-
-        _use_local_model_cost_map()
 
         usage = Usage(
             prompt_tokens=100,
