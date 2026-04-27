@@ -28,6 +28,7 @@ from litellm.types.utils import (
     ChatCompletionMessageToolCall,
     Choices,
     ModelResponse,
+    ModelResponseStream,
 )
 
 
@@ -490,6 +491,45 @@ class TestToolPermissionGuardrail:
         tool_names = [t["function"]["name"] for t in new_data["tools"]]
         assert "Bash" in tool_names
         assert "Read" not in tool_names
+
+    @pytest.mark.asyncio
+    async def test_async_post_call_streaming_iterator_hook_plain_text_yields_chunks(
+        self,
+    ):
+        """Regression test: hook must re-emit chunks when LLM replies with plain text.
+
+        Before the fix, the `if not tool_calls:` branch did a bare `return` inside
+        the async generator, which yielded nothing.  Clients received only
+        `data: [DONE]` with no content.
+        """
+        text_chunk = ModelResponseStream(
+            id="chatcmpl-plain-text",
+            created=1700000000,
+            model="gpt-4",
+            object="chat.completion.chunk",
+            choices=[],
+        )
+
+        async def _fake_stream():
+            yield text_chunk
+
+        assembled = ModelResponse(
+            choices=[Choices(message={"content": "Hello, world!"})]
+        )
+
+        with patch("litellm.main.stream_chunk_builder", return_value=assembled):
+            chunks = []
+            async for chunk in self.guardrail.async_post_call_streaming_iterator_hook(
+                user_api_key_dict=UserAPIKeyAuth(),
+                response=_fake_stream(),
+                request_data={},
+            ):
+                chunks.append(chunk)
+
+        assert len(chunks) >= 1, (
+            "Hook must yield at least one chunk for plain-text responses; "
+            "got none — bare return bug"
+        )
 
     def test_modify_response_with_permission_errors(self):
         # Setup a response with one tool_call

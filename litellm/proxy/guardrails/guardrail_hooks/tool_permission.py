@@ -683,6 +683,11 @@ class ToolPermissionGuardrail(CustomGuardrail):
                 verbose_proxy_logger.debug(
                     "Tool Permission Guardrail: No tool uses found"
                 )
+                mock_response = MockResponseIterator(
+                    model_response=assembled_model_response
+                )
+                async for chunk in mock_response:
+                    yield chunk
                 return
 
             verbose_proxy_logger.debug(
