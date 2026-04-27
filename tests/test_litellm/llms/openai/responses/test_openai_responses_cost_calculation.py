@@ -6,6 +6,7 @@ across all 60+ providers inheriting from OpenAIResponsesAPIConfig.
 from unittest.mock import MagicMock, patch
 
 import httpx
+import json
 import pytest
 
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
