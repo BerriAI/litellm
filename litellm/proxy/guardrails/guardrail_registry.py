@@ -487,6 +487,7 @@ class InMemoryGuardrailHandler:
             guardrail_id=guardrail.get("guardrail_id"),
             guardrail_name=guardrail["guardrail_name"],
             litellm_params=litellm_params,
+            guardrail_info=guardrail.get("guardrail_info"),
         )
 
         # store references to the guardrail in memory

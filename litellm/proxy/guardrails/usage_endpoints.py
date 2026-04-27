@@ -137,22 +137,18 @@ def _chart_from_metrics(metrics: Any) -> List[Dict[str, Any]]:
     ]
 
 
-def _get_guardrail_attrs(g: Any) -> tuple[Any, str]:
-    """Get (guardrail_id, display_name) from guardrail - handles Prisma model or dict."""
-    gid = getattr(g, "guardrail_id", None) or (
-        g.get("guardrail_id") if isinstance(g, dict) else None
-    )
-    name = getattr(g, "guardrail_name", None) or (
-        g.get("guardrail_name") if isinstance(g, dict) else None
-    )
-    return gid, (name or gid or "")
-
-
 def _get_guardrail_field(g: Any, field: str) -> Any:
     """Read `field` off a guardrail (Prisma row attr or dict/TypedDict key)."""
     if isinstance(g, dict):
         return g.get(field)
     return getattr(g, field, None)
+
+
+def _get_guardrail_attrs(g: Any) -> tuple[Any, str]:
+    """Get (guardrail_id, display_name) from guardrail - handles Prisma model or dict."""
+    gid = _get_guardrail_field(g, "guardrail_id")
+    name = _get_guardrail_field(g, "guardrail_name")
+    return gid, (name or gid or "")
 
 
 def _to_dict(value: Any) -> Dict[str, Any]:

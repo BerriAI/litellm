@@ -304,3 +304,57 @@ async def test_usage_logs_includes_logical_name_for_yaml_guardrail(
     ), f"Expected 'in' filter to include UUID + logical name, got {gid_filter}"
     assert "yaml-uuid-xyz" in gid_filter["in"]
     assert "my-yaml-pii" in gid_filter["in"]
+
+
+# ---- Integration: real InMemoryGuardrailHandler ----------------------------
+
+
+@pytest.mark.asyncio
+async def test_usage_detail_with_real_in_memory_handler_preserves_guardrail_info(
+    mock_prisma, mocker
+):
+    """
+    Regression: `initialize_guardrail` must persist `guardrail_info` into
+    IN_MEMORY_GUARDRAILS so that /usage/detail can render `type` and `description`
+    for YAML-defined guardrails. Exercises the real handler (not a Mock).
+    """
+    from litellm.proxy.guardrails.guardrail_registry import (
+        IN_MEMORY_GUARDRAIL_HANDLER,
+    )
+
+    # Bypass callback initialization; we only care about what gets stored.
+    mocker.patch.object(
+        IN_MEMORY_GUARDRAIL_HANDLER,
+        "initialize_custom_guardrail",
+        return_value=None,
+    )
+
+    yaml_input = {
+        "guardrail_id": "real-handler-yaml",
+        "guardrail_name": "real-handler-pii",
+        # `module.Class` form routes to initialize_custom_guardrail (mocked above)
+        "litellm_params": {
+            "guardrail": "my_module.MyCustomGuardrail",
+            "mode": "pre_call",
+        },
+        "guardrail_info": {"type": "PII", "description": "Real-handler-defined"},
+    }
+    try:
+        IN_MEMORY_GUARDRAIL_HANDLER.initialize_guardrail(guardrail=yaml_input)
+
+        response = await guardrails_usage_detail(
+            guardrail_id="real-handler-yaml",
+            start_date=START_DATE,
+            end_date=END_DATE,
+            user_api_key_dict=ADMIN_AUTH,
+        )
+
+        assert response.guardrail_id == "real-handler-yaml"
+        assert response.provider == "my_module.MyCustomGuardrail"
+        assert response.type == "PII"
+        assert response.description == "Real-handler-defined"
+    finally:
+        IN_MEMORY_GUARDRAIL_HANDLER.IN_MEMORY_GUARDRAILS.pop("real-handler-yaml", None)
+        IN_MEMORY_GUARDRAIL_HANDLER.guardrail_id_to_custom_guardrail.pop(
+            "real-handler-yaml", None
+        )
