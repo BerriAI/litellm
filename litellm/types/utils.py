@@ -40,7 +40,7 @@ from pydantic import (
     field_validator,
     model_validator,
 )
-from typing_extensions import Required, TypedDict
+from typing_extensions import NotRequired, Required, TypedDict
 
 from litellm._uuid import uuid
 from litellm.types.llms.base import (
@@ -164,7 +164,7 @@ class AgenticLoopParams(TypedDict, total=False):
     custom_llm_provider: str
     """The LLM provider name (e.g., 'bedrock', 'anthropic')"""
 
-    api_key: str
+    api_key: NotRequired[Optional[str]]
     """Deployment-specific API key resolved by get_llm_provider() (optional).
 
     Stored so agentic follow-up calls (e.g. websearch interception) reuse the
@@ -172,7 +172,7 @@ class AgenticLoopParams(TypedDict, total=False):
     provider env vars.
     """
 
-    api_base: str
+    api_base: NotRequired[Optional[str]]
     """Deployment-specific API base URL resolved by get_llm_provider() (optional)."""
 
 

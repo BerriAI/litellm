@@ -530,7 +530,7 @@ def test_agentic_loop_params_preserves_dynamic_api_key_and_api_base():
         ),
         patch("litellm.completion", return_value="test-response"),
     ):
-        try:
+        with pytest.raises(Exception):
             anthropic_messages_handler(
                 max_tokens=100,
                 messages=[{"role": "user", "content": "hi"}],
@@ -540,8 +540,6 @@ def test_agentic_loop_params_preserves_dynamic_api_key_and_api_base():
                 api_base="https://my-proxy.example.com/v1",
                 litellm_logging_obj=logging_obj,
             )
-        except (ValueError, TypeError, AttributeError):
-            pass
 
     agentic_loop_params = logging_obj.model_call_details.get("agentic_loop_params")
     assert agentic_loop_params is not None
@@ -572,7 +570,7 @@ def test_agentic_loop_params_omits_keys_when_dynamic_values_are_none():
         ),
         patch("litellm.completion", return_value="test-response"),
     ):
-        try:
+        with pytest.raises(Exception):
             anthropic_messages_handler(
                 max_tokens=100,
                 messages=[{"role": "user", "content": "hi"}],
@@ -580,8 +578,6 @@ def test_agentic_loop_params_omits_keys_when_dynamic_values_are_none():
                 custom_llm_provider="anthropic",
                 litellm_logging_obj=logging_obj,
             )
-        except (ValueError, TypeError, AttributeError):
-            pass
 
     agentic_loop_params = logging_obj.model_call_details.get("agentic_loop_params")
     assert agentic_loop_params is not None
