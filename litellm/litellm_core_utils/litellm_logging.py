@@ -1467,6 +1467,8 @@ class Logging(LiteLLMLoggingBaseClass):
             LiteLLMRealtimeStreamLoggingObject,
             OpenAIModerationResponse,
             "SearchResponse",
+            dict,
+            list,
         ],
         cache_hit: Optional[bool] = None,
         litellm_model_name: Optional[str] = None,
@@ -1476,6 +1478,10 @@ class Logging(LiteLLMLoggingBaseClass):
         Calculate response cost using result + logging object variables.
 
         used for consistent cost calculation across response headers + logging integrations.
+
+        `dict`/`list` results (e.g. non-streaming vertex rawPredict) are
+        accepted - the underlying calculator duck-types over the response
+        shape via `usage` extraction.
         """
 
         if cache_hit is None:
@@ -1744,6 +1750,13 @@ class Logging(LiteLLMLoggingBaseClass):
         start_time,
         end_time,
     ):
+        """
+        Compute response_cost, build the standard logging payload, and emit
+        it. Handles both typed responses (ModelResponse, etc.) and raw dict
+        / list results (e.g. non-streaming vertex rawPredict, anthropic
+        passthrough). Without this, the dict path skipped cost calculation
+        and spend was logged as $0.00.
+        """
         hidden_params = getattr(logging_result, "_hidden_params", {})
         if hidden_params:
             if self.model_call_details.get("litellm_params") is not None:
@@ -1875,26 +1888,18 @@ class Logging(LiteLLMLoggingBaseClass):
                 and result is not None
                 and self.stream is not True
             ):
+                # Single path for both typed responses (ModelResponse, etc.)
+                # and raw dict/list results. Previously the dict branch
+                # skipped cost calculation, which caused non-streaming
+                # rawPredict spend to log as $0.00.
                 if self._is_recognized_call_type_for_logging(
                     logging_result=logging_result
-                ):
+                ) or isinstance(logging_result, (dict, list)):
                     self._process_hidden_params_and_response_cost(
                         logging_result=logging_result,
                         start_time=start_time,
                         end_time=end_time,
                     )
-                elif isinstance(result, dict) or isinstance(result, list):
-                    self.model_call_details["standard_logging_object"] = (
-                        self._build_standard_logging_payload(
-                            result, start_time, end_time
-                        )
-                    )
-                    if (
-                        standard_logging_payload := self.model_call_details.get(
-                            "standard_logging_object"
-                        )
-                    ) is not None:
-                        emit_standard_logging_payload(standard_logging_payload)
             elif standard_logging_object is not None:
                 self.model_call_details["standard_logging_object"] = (
                     standard_logging_object
