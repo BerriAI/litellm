@@ -128,6 +128,36 @@ class SemanticToolFilterHook(CustomLogger):
             return "litellm_metadata"
         return "metadata"
 
+    @staticmethod
+    def _recombine_preserving_order(
+        original_count: int,
+        filtered_mcp_tools: List[Any],
+        passthrough_with_positions: List[Any],
+    ) -> List[Any]:
+        """
+        Rebuild the tool list so that:
+
+        - non-MCP tools keep their original relative ordering, and
+        - the filtered MCP block is anchored at the position of the first
+          MCP tool in the input (subsequent MCP slots are absorbed into the
+          filtered block).
+
+        ``passthrough_with_positions`` is a list of ``(original_index, tool)``
+        pairs sorted by original_index.
+        """
+        recombined: List[Any] = []
+        mcp_inserted = False
+        pt_iter = iter(passthrough_with_positions)
+        next_pt = next(pt_iter, None)
+        for idx in range(original_count):
+            if next_pt is not None and next_pt[0] == idx:
+                recombined.append(next_pt[1])
+                next_pt = next(pt_iter, None)
+            elif not mcp_inserted:
+                recombined.extend(filtered_mcp_tools)
+                mcp_inserted = True
+        return recombined
+
     async def async_pre_call_hook(
         self,
         user_api_key_dict: "UserAPIKeyAuth",
@@ -151,7 +181,12 @@ class SemanticToolFilterHook(CustomLogger):
             Modified data dict with filtered tools, or None if no changes
         """
         # Only filter endpoints that support tools
-        if call_type not in ("completion", "acompletion", "aresponses", "anthropic_messages"):
+        if call_type not in (
+            "completion",
+            "acompletion",
+            "aresponses",
+            "anthropic_messages",
+        ):
             verbose_proxy_logger.debug(
                 f"Skipping semantic filter for call_type={call_type}"
             )
@@ -162,8 +197,6 @@ class SemanticToolFilterHook(CustomLogger):
         if not tools:
             verbose_proxy_logger.debug("No tools in request, skipping semantic filter")
             return None
-
-        original_tool_count = len(tools)
 
         # Check for MCP references (server_url="litellm_proxy") and expand them
         if self._should_expand_mcp_tools(tools):
@@ -186,7 +219,6 @@ class SemanticToolFilterHook(CustomLogger):
 
                 # Update tools for filtering
                 tools = expanded_tools
-                original_tool_count = len(tools)
 
             except Exception as e:
                 verbose_proxy_logger.error(
@@ -222,9 +254,11 @@ class SemanticToolFilterHook(CustomLogger):
             # "mcp__" name prefix assigned by the LiteLLM proxy. Non-MCP tools
             # (user-defined function tools, model-specific tool schemas) are
             # passed through untouched so they are never inadvertently dropped.
+            # Track original positions so the recombined list preserves the
+            # caller's tool ordering for any model that is order-sensitive.
             mcp_tools = []
-            passthrough_tools = []
-            for t in tools:
+            passthrough_with_positions = []
+            for idx, t in enumerate(tools):
                 name = (
                     t.get("function", {}).get("name", "") or t.get("name", "")
                     if isinstance(t, dict)
@@ -233,7 +267,7 @@ class SemanticToolFilterHook(CustomLogger):
                 if name.startswith("mcp__"):
                     mcp_tools.append(t)
                 else:
-                    passthrough_tools.append(t)
+                    passthrough_with_positions.append((idx, t))
 
             if not mcp_tools:
                 verbose_proxy_logger.debug(
@@ -243,7 +277,7 @@ class SemanticToolFilterHook(CustomLogger):
 
             verbose_proxy_logger.debug(
                 f"Applying semantic filter to {len(mcp_tools)} MCP tools "
-                f"({len(passthrough_tools)} non-MCP tools passed through) "
+                f"({len(passthrough_with_positions)} non-MCP tools passed through) "
                 f"with query: '{user_query[:50]}...'"
             )
 
@@ -253,8 +287,12 @@ class SemanticToolFilterHook(CustomLogger):
                 available_tools=mcp_tools,  # type: ignore
             )
 
-            # Recombine: filtered MCP tools + all passthrough tools
-            data["tools"] = filtered_tools + passthrough_tools
+            # Recombine while preserving the caller's original ordering.
+            data["tools"] = self._recombine_preserving_order(
+                original_count=len(tools),
+                filtered_mcp_tools=filtered_tools,
+                passthrough_with_positions=passthrough_with_positions,
+            )
 
             # Store filter stats and tool names for response header (MCP tools only)
             filter_stats = f"{len(mcp_tools)}->{len(filtered_tools)}"
