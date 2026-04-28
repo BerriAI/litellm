@@ -13,6 +13,7 @@ Usage::
 """
 
 from litellm._logging import verbose_proxy_logger
+from litellm.types.integrations.prometheus import UserAPIKeyLabelValues
 
 
 class AuthMetrics:
@@ -42,9 +43,16 @@ class AuthMetrics:
         try:
             prom = AuthMetrics._get_prom()
             if prom is not None:
-                prom.litellm_auth_combined_view_queries_total.labels(
-                    hashed_api_key=hashed_token
-                ).inc()
+                # Counter labelnames include ``hashed_api_key`` plus any
+                # ``custom_prometheus_metadata_labels`` / ``custom_prometheus_tags``
+                # (see ``PrometheusMetricLabels.get_labels``). Use the same
+                # ``_inc_labeled_counter`` + ``prometheus_label_factory`` path as
+                # other metrics so label cardinality always matches registration.
+                prom._inc_labeled_counter(
+                    prom.litellm_auth_combined_view_queries_total,
+                    "litellm_auth_combined_view_queries_total",
+                    UserAPIKeyLabelValues(hashed_api_key=hashed_token),
+                )
         except Exception as e:
             verbose_proxy_logger.debug(
                 "AuthMetrics.inc_combined_view_query: failed to increment counter: %s",
