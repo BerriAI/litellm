@@ -4,10 +4,10 @@ import os
 import sys
 from datetime import datetime, timezone
 from typing import Optional, cast
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 from fastapi.testclient import TestClient
 
 from litellm._uuid import uuid
@@ -44,6 +44,7 @@ from litellm.proxy.management_endpoints.team_endpoints import (
     _verify_team_access,
     delete_team,
     list_available_teams,
+    list_team,
     router,
     team_member_add_duplication_check,
     team_member_delete,
@@ -2264,13 +2265,6 @@ async def test_list_team_v1_internal_user_scoped_to_user_table_teams():
     Test that v1 /team/list scopes internal users to the canonical teams on
     LiteLLM_UserTable.teams, matching /v2/team/list behavior.
     """
-    from unittest.mock import AsyncMock, Mock, patch
-
-    from fastapi import Request
-
-    from litellm.proxy._types import LiteLLM_UserTable, LitellmUserRoles, UserAPIKeyAuth
-    from litellm.proxy.management_endpoints.team_endpoints import list_team
-
     mock_request = Mock(spec=Request)
     mock_user_api_key_dict = UserAPIKeyAuth(
         user_role=LitellmUserRoles.INTERNAL_USER,
@@ -2326,13 +2320,6 @@ async def test_list_team_v1_internal_user_without_user_id_scopes_to_self():
     Test that v1 /team/list auto-scopes internal users without an explicit
     user_id to their own user_id instead of listing all teams.
     """
-    from unittest.mock import AsyncMock, Mock, patch
-
-    from fastapi import Request
-
-    from litellm.proxy._types import LiteLLM_UserTable, LitellmUserRoles, UserAPIKeyAuth
-    from litellm.proxy.management_endpoints.team_endpoints import list_team
-
     mock_request = Mock(spec=Request)
     mock_user_api_key_dict = UserAPIKeyAuth(
         user_role=LitellmUserRoles.INTERNAL_USER,
@@ -2387,13 +2374,6 @@ async def test_list_team_v1_internal_user_cannot_query_other_user():
     """
     Test that v1 /team/list rejects internal users querying another user's teams.
     """
-    from unittest.mock import AsyncMock, Mock, patch
-
-    from fastapi import HTTPException, Request
-
-    from litellm.proxy._types import LiteLLM_UserTable, LitellmUserRoles, UserAPIKeyAuth
-    from litellm.proxy.management_endpoints.team_endpoints import list_team
-
     mock_request = Mock(spec=Request)
     mock_user_api_key_dict = UserAPIKeyAuth(
         user_role=LitellmUserRoles.INTERNAL_USER,
@@ -2435,13 +2415,6 @@ async def test_list_team_v1_proxy_admin_can_query_all_teams():
     """
     Test that v1 /team/list keeps proxy admin behavior unchanged.
     """
-    from unittest.mock import AsyncMock, Mock, patch
-
-    from fastapi import Request
-
-    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
-    from litellm.proxy.management_endpoints.team_endpoints import list_team
-
     mock_request = Mock(spec=Request)
     mock_user_api_key_dict = UserAPIKeyAuth(
         user_role=LitellmUserRoles.PROXY_ADMIN,
@@ -7101,19 +7074,6 @@ async def test_list_team_v1_batches_key_queries():
     Test that list_team fetches all keys in a single batched query
     instead of issuing one query per team (N+1).
     """
-    from unittest.mock import AsyncMock, MagicMock, Mock, patch
-
-    from fastapi import Request
-
-    from litellm.proxy._types import (
-        LiteLLM_TeamMembership,
-        LiteLLM_TeamTable,
-        LitellmUserRoles,
-        TeamListResponseObject,
-        UserAPIKeyAuth,
-    )
-    from litellm.proxy.management_endpoints.team_endpoints import list_team
-
     mock_request = Mock(spec=Request)
 
     mock_user_api_key_dict = UserAPIKeyAuth(
