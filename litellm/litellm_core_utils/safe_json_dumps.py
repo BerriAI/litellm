@@ -6,10 +6,26 @@ from pydantic import BaseModel
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 
 
+def strip_null_bytes(data: Any) -> Any:
+    """Recursively remove \\x00 null bytes from strings to prevent PostgreSQL 22P05 errors."""
+    if isinstance(data, str):
+        return data.replace("\x00", "")
+    if isinstance(data, dict):
+        return {k: strip_null_bytes(v) for k, v in data.items()}
+    if isinstance(data, list):
+        return [strip_null_bytes(item) for item in data]
+    if isinstance(data, tuple):
+        return tuple(strip_null_bytes(item) for item in data)
+    if isinstance(data, set):
+        return {strip_null_bytes(item) for item in data}
+    return data
+
+
 def safe_dumps(data: Any, max_depth: int = DEFAULT_MAX_RECURSE_DEPTH) -> str:
     """
     Recursively serialize data while detecting circular references.
     If a circular reference is detected then a marker string is returned.
+    Null bytes are stripped from strings to prevent PostgreSQL 22P05 errors.
     """
 
     def _serialize(obj: Any, seen: set, depth: int) -> Any:
@@ -17,7 +33,9 @@ def safe_dumps(data: Any, max_depth: int = DEFAULT_MAX_RECURSE_DEPTH) -> str:
         if depth > max_depth:
             return "MaxDepthExceeded"
         # Base-case: if it is a primitive, simply return it.
-        if isinstance(obj, (str, int, float, bool, type(None))):
+        if isinstance(obj, str):
+            return obj.replace("\x00", "")
+        if isinstance(obj, (int, float, bool, type(None))):
             return obj
         # Check for circular reference.
         if id(obj) in seen:
@@ -51,7 +69,7 @@ def safe_dumps(data: Any, max_depth: int = DEFAULT_MAX_RECURSE_DEPTH) -> str:
         else:
             # Fall back to string conversion for non-serializable objects.
             try:
-                return str(obj)
+                return str(obj).replace("\x00", "")
             except Exception:
                 return "Unserializable Object"
 
