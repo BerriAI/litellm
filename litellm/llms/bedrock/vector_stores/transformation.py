@@ -1,8 +1,10 @@
+from copy import deepcopy
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union, cast
 from urllib.parse import urlparse
 
 import httpx
 
+from litellm._logging import verbose_logger
 from litellm.llms.base_llm.vector_store.transformation import BaseVectorStoreConfig
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.types.integrations.rag.bedrock_knowledgebase import (
@@ -214,21 +216,39 @@ class BedrockVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
         }
 
         retrieval_config: Dict[str, Any] = {}
-        from litellm import verbose_logger
 
         if isinstance(extra_body, dict):
-            retrieval_config = dict(
+            retrieval_config = deepcopy(
                 extra_body.get("retrievalConfiguration")
                 or extra_body.get("retrieval_configuration")
                 or {}
             )
         max_results = vector_store_search_optional_params.get("max_num_results")
         if max_results is not None:
+            existing_number_of_results = retrieval_config.get(
+                "vectorSearchConfiguration", {}
+            ).get("numberOfResults")
+            if (
+                existing_number_of_results is not None
+                and existing_number_of_results != max_results
+            ):
+                verbose_logger.debug(
+                    "Overriding extra_body retrievalConfiguration.vectorSearchConfiguration.numberOfResults (%s) with max_num_results=%s",
+                    existing_number_of_results,
+                    max_results,
+                )
             retrieval_config.setdefault("vectorSearchConfiguration", {})[
                 "numberOfResults"
             ] = max_results
         filters = vector_store_search_optional_params.get("filters")
         if filters is not None:
+            existing_filter = retrieval_config.get("vectorSearchConfiguration", {}).get(
+                "filter"
+            )
+            if existing_filter is not None and existing_filter != filters:
+                verbose_logger.debug(
+                    "Overriding extra_body retrievalConfiguration.vectorSearchConfiguration.filter with filters from vector_store_search_optional_params"
+                )
             retrieval_config.setdefault("vectorSearchConfiguration", {})[
                 "filter"
             ] = filters

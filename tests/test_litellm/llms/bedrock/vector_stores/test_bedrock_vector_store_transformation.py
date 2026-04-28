@@ -60,3 +60,73 @@ def test_transform_search_request_uses_only_retrieval_config_from_extra_body():
         == "HYBRID"
     )
     assert "unrelatedField" not in body
+
+
+def test_transform_search_request_does_not_mutate_extra_body_and_overrides_number_of_results():
+    config = BedrockVectorStoreConfig()
+    mock_log = MagicMock()
+    mock_log.model_call_details = {}
+    extra_body = {
+        "retrievalConfiguration": {
+            "vectorSearchConfiguration": {
+                "overrideSearchType": "HYBRID",
+                "numberOfResults": 8,
+            }
+        }
+    }
+
+    _, body = config.transform_search_vector_store_request(
+        vector_store_id="kb123",
+        query="hello",
+        vector_store_search_optional_params={"max_num_results": 10},
+        extra_body=extra_body,
+        api_base="https://bedrock-agent-runtime.us-west-2.amazonaws.com/knowledgebases",
+        litellm_logging_obj=mock_log,
+        litellm_params={},
+    )
+
+    assert (
+        body["retrievalConfiguration"]["vectorSearchConfiguration"]["numberOfResults"]
+        == 10
+    )
+    assert (
+        extra_body["retrievalConfiguration"]["vectorSearchConfiguration"][
+            "numberOfResults"
+        ]
+        == 8
+    )
+
+
+def test_transform_search_request_overrides_filter_without_mutating_extra_body():
+    config = BedrockVectorStoreConfig()
+    mock_log = MagicMock()
+    mock_log.model_call_details = {}
+    extra_body = {
+        "retrievalConfiguration": {
+            "vectorSearchConfiguration": {
+                "filter": {"equals": {"key": "tenant", "value": "a"}}
+            }
+        }
+    }
+    new_filter = {"equals": {"key": "tenant", "value": "b"}}
+
+    _, body = config.transform_search_vector_store_request(
+        vector_store_id="kb123",
+        query="hello",
+        vector_store_search_optional_params={"filters": new_filter},
+        extra_body=extra_body,
+        api_base="https://bedrock-agent-runtime.us-west-2.amazonaws.com/knowledgebases",
+        litellm_logging_obj=mock_log,
+        litellm_params={},
+    )
+
+    assert (
+        body["retrievalConfiguration"]["vectorSearchConfiguration"]["filter"]
+        == new_filter
+    )
+    assert (
+        extra_body["retrievalConfiguration"]["vectorSearchConfiguration"]["filter"][
+            "equals"
+        ]["value"]
+        == "a"
+    )
