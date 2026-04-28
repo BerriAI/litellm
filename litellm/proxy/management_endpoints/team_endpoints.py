@@ -59,7 +59,6 @@ from litellm.proxy._types import (
     TeamMemberUpdateResponse,
     TeamModelAddRequest,
     TeamModelDeleteRequest,
-    TeamSearchProviderConfigUpdateRequest,
     UpdateTeamRequest,
     UserAPIKeyAuth,
 )
@@ -1855,108 +1854,6 @@ async def update_team(  # noqa: PLR0915
         return {"team_id": team_row.team_id, "data": team_row}
     except Exception as e:
         raise handle_exception_on_proxy(e)
-
-
-@router.post(
-    "/team/search_provider_config/update",
-    tags=["team management"],
-    dependencies=[Depends(user_api_key_auth)],
-)
-@management_endpoint_wrapper
-async def update_team_search_provider_config(
-    data: TeamSearchProviderConfigUpdateRequest,
-    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-):
-    """
-    Update per-team search provider credentials in team metadata.
-
-    Stored under:
-    metadata.search_provider_config.<provider>.{api_key, api_base}
-    """
-    from litellm.proxy.auth.auth_checks import _cache_team_object
-    from litellm.proxy.proxy_server import (
-        prisma_client,
-        proxy_logging_obj,
-        user_api_key_cache,
-    )
-
-    if prisma_client is None:
-        raise HTTPException(
-            status_code=500,
-            detail={"error": CommonProxyErrors.db_not_connected_error.value},
-        )
-
-    provider = data.provider.strip().lower()
-    if provider == "":
-        raise HTTPException(
-            status_code=400, detail={"error": "provider cannot be empty"}
-        )
-
-    existing_team_row = await prisma_client.db.litellm_teamtable.find_unique(
-        where={"team_id": data.team_id}
-    )
-    if existing_team_row is None:
-        raise HTTPException(
-            status_code=404,
-            detail={"error": f"Team not found, passed team_id={data.team_id}"},
-        )
-
-    await _verify_team_access(
-        team_obj=LiteLLM_TeamTable(**existing_team_row.model_dump()),
-        user_api_key_dict=user_api_key_dict,
-    )
-
-    metadata: Dict[str, Any] = {}
-    if isinstance(existing_team_row.metadata, dict):
-        metadata = dict(existing_team_row.metadata)
-
-    search_provider_config = metadata.get("search_provider_config")
-    if not isinstance(search_provider_config, dict):
-        search_provider_config = {}
-
-    provider_config = search_provider_config.get(provider)
-    if not isinstance(provider_config, dict):
-        provider_config = {}
-
-    if data.api_key is not None:
-        provider_config["api_key"] = data.api_key
-    if data.api_base is not None:
-        provider_config["api_base"] = data.api_base
-
-    if provider_config.get("api_key") in (None, "") and provider_config.get(
-        "api_base"
-    ) in (
-        None,
-        "",
-    ):
-        search_provider_config.pop(provider, None)
-    else:
-        search_provider_config[provider] = provider_config
-
-    metadata["search_provider_config"] = search_provider_config
-
-    team_row: Optional[LiteLLM_TeamTable] = (
-        await prisma_client.db.litellm_teamtable.update(
-            where={"team_id": data.team_id},
-            data={"metadata": metadata},
-            include={"litellm_model_table": True},  # type: ignore
-        )
-    )
-
-    if team_row is not None and team_row.team_id is not None:
-        await _cache_team_object(
-            team_id=team_row.team_id,
-            team_table=LiteLLM_TeamTableCachedObj(**team_row.model_dump()),
-            user_api_key_cache=user_api_key_cache,
-            proxy_logging_obj=proxy_logging_obj,
-        )
-
-    return {
-        "message": "Team search provider configuration updated",
-        "team_id": data.team_id,
-        "provider": provider,
-        "search_provider_config": search_provider_config,
-    }
 
 
 def _set_budget_reset_at(data: UpdateTeamRequest, updated_kv: dict) -> None:

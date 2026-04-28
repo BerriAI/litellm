@@ -3725,40 +3725,6 @@ export const teamUpdateCall = async (
   }
 };
 
-export const updateTeamSearchProviderConfigCall = async (
-  accessToken: string,
-  formValues: {
-    team_id: string;
-    provider: string;
-    api_key?: string | null;
-    api_base?: string | null;
-  },
-) => {
-  try {
-    const url = proxyBaseUrl
-      ? `${proxyBaseUrl}/team/search_provider_config/update`
-      : `/team/search_provider_config/update`;
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(formValues),
-    });
-
-    if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error(errorData);
-    }
-    return await response.json();
-  } catch (error) {
-    console.error("Failed to update team search provider config:", error);
-    throw error;
-  }
-};
-
 /**
  * Patch update a model
  *

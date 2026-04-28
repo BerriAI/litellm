@@ -1725,7 +1725,7 @@ class TeamBase(LiteLLMPydanticObjectBase):
     members: list = []
     members_with_roles: List[Member] = []
     team_member_permissions: Optional[List[str]] = None
-    metadata: Optional[dict] = None  # may include search_provider_config
+    metadata: Optional[dict] = None
     tpm_limit: Optional[int] = None
     rpm_limit: Optional[int] = None
 
@@ -1738,6 +1738,7 @@ class TeamBase(LiteLLMPydanticObjectBase):
     )
 
     models: list = []
+    allowed_search_tools: list = []  # list of search_tool_name values team can access
     blocked: bool = False
     router_settings: Optional[dict] = None
     access_group_ids: Optional[List[str]] = None
@@ -1843,13 +1844,6 @@ class UpdateTeamRequest(LiteLLMPydanticObjectBase):
     default_team_member_models: Optional[List[str]] = (
         None  # default allowed_models seeded onto new team members
     )
-
-
-class TeamSearchProviderConfigUpdateRequest(LiteLLMPydanticObjectBase):
-    team_id: str
-    provider: str
-    api_key: Optional[str] = None
-    api_base: Optional[str] = None
 
 
 class ResetTeamBudgetRequest(LiteLLMPydanticObjectBase):
@@ -2451,6 +2445,7 @@ class LiteLLM_VerificationToken(LiteLLMPydanticObjectBase):
     max_budget: Optional[float] = None
     expires: Optional[Union[str, datetime]] = None
     models: List = []
+    allowed_search_tools: List = []  # list of search_tool_name values key can access
     aliases: Dict = {}
     config: Dict = {}
     user_id: Optional[str] = None

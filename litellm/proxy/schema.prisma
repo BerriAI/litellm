@@ -127,6 +127,7 @@ model LiteLLM_TeamTable {
     soft_budget Float?
     spend      Float    @default(0.0)
     models     String[]
+    allowed_search_tools String[] @default([]) // search_tool_name values team can access
     max_parallel_requests Int?
     tpm_limit     BigInt?
     rpm_limit     BigInt?
@@ -369,6 +370,7 @@ model LiteLLM_VerificationToken {
     spend      Float    @default(0.0)
     expires    DateTime?
     models     String[]
+    allowed_search_tools String[] @default([]) // search_tool_name values key can access
     aliases    Json  @default("{}")
     config     Json  @default("{}")
     router_settings Json? @default("{}")

@@ -15,7 +15,15 @@ import ModelAliasManager from "@/components/common_components/ModelAliasManager"
 import React, { useEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import NotificationsManager from "@/components/molecules/notifications_manager";
-import { fetchMCPAccessGroups, getGuardrailsList, getPoliciesList, Organization, Team, teamCreateCall } from "@/components/networking";
+import {
+  fetchMCPAccessGroups,
+  fetchSearchTools,
+  getGuardrailsList,
+  getPoliciesList,
+  Organization,
+  Team,
+  teamCreateCall,
+} from "@/components/networking";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { organizationKeys } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 import MCPToolPermissions from "@/components/mcp_server_management/MCPToolPermissions";
@@ -80,6 +88,7 @@ const CreateTeamModal = ({
   const [modelsToPick, setModelsToPick] = useState<string[]>([]);
   const [guardrailsList, setGuardrailsList] = useState<string[]>([]);
   const [policiesList, setPoliciesList] = useState<string[]>([]);
+  const [searchToolNames, setSearchToolNames] = useState<string[]>([]);
   const [mcpAccessGroups, setMcpAccessGroups] = useState<string[]>([]);
   const [mcpAccessGroupsLoaded, setMcpAccessGroupsLoaded] = useState(false);
 
@@ -156,6 +165,24 @@ const CreateTeamModal = ({
 
     fetchGuardrails();
     fetchPolicies();
+  }, [accessToken]);
+
+  useEffect(() => {
+    const loadSearchTools = async () => {
+      try {
+        if (!accessToken) return;
+        const response = await fetchSearchTools(accessToken);
+        const tools = Array.isArray(response?.data) ? response.data : [];
+        setSearchToolNames(
+          tools
+            .map((tool: any) => tool?.search_tool_name)
+            .filter((name: unknown): name is string => typeof name === "string" && name.length > 0),
+        );
+      } catch (error) {
+        console.error("Failed to fetch search tools for team create modal:", error);
+      }
+    };
+    loadSearchTools();
   }, [accessToken]);
 
   const handleCreate = async (formValues: Record<string, any>) => {
@@ -393,6 +420,27 @@ const CreateTeamModal = ({
                 </Select2.Option>
               ))}
             </Select2>
+          </Form.Item>
+
+          <Form.Item
+            label={
+              <span>
+                Allowed Search Tools{" "}
+                <Tooltip title="Select which search tools this team can access. Leave empty to allow all search tools.">
+                  <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                </Tooltip>
+              </span>
+            }
+            name="allowed_search_tools"
+          >
+            <Select2
+              mode="multiple"
+              placeholder="Select search tools (empty = all search tools allowed)"
+              style={{ width: "100%" }}
+              options={searchToolNames.map((name) => ({ label: name, value: name }))}
+              showSearch
+              optionFilterProp="label"
+            />
           </Form.Item>
 
           <Accordion className="mt-8 mb-8">

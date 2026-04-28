@@ -1,0 +1,659 @@
+<frozen runpy>:128: RuntimeWarning: 'litellm.proxy.proxy_cli' found in sys.modules after import of package 'litellm.proxy', but prior to execution of 'litellm.proxy.proxy_cli'; this may result in unpredictable behaviour
+2026-04-28 18:52:10,288 - litellm_proxy_extras - INFO - Running prisma migrate deploy
+2026-04-28 18:52:13,736 - litellm_proxy_extras - INFO - prisma migrate deploy stdout: Environment variables loaded from ../../.env
+Prisma schema loaded from schema.prisma
+Datasource "client": PostgreSQL database "litellm", schema "public" at "localhost:5432"
+
+118 migrations found in prisma/migrations
+
+
+No pending migrations to apply.
+
+2026-04-28 18:52:13,737 - litellm_proxy_extras - INFO - prisma migrate deploy completed
+2026-04-28 18:52:13,737 - litellm_proxy_extras - INFO - No pending migrations — skipping post-migration sanity check
+INFO:     Started server process [19856]
+INFO:     Waiting for application startup.
+[92m18:52:13 - LiteLLM Proxy:DEBUG[0m: proxy_server.py:803 - litellm.proxy.proxy_server.py::startup() - CHECKING PREMIUM USER - True
+[92m18:52:13 - LiteLLM Proxy:DEBUG[0m: proxy_server.py:816 - worker_config: {"model": null, "alias": null, "api_base": null, "api_version": "2025-02-01-preview", "debug": false, "detailed_debug": true, "temperature": null, "max_tokens": null, "request_timeout": null, "max_budget": null, "telemetry": true, "drop_params": false, "add_function_to_prompt": false, "headers": null, "save": false, "config": "proxy_server_config.yaml", "use_queue": false}
+[1;33mLiteLLM Proxy: Using default (v1) migration resolver. If your deployment has seen schema thrashing during rolling deploys, try --use_v2_migration_resolver (safer: avoids the diff-and-force recovery that caused the thrash).[0m
+
+   ██╗     ██╗████████╗███████╗██╗     ██╗     ███╗   ███╗
+   ██║     ██║╚══██╔══╝██╔════╝██║     ██║     ████╗ ████║
+   ██║     ██║   ██║   █████╗  ██║     ██║     ██╔████╔██║
+   ██║     ██║   ██║   ██╔══╝  ██║     ██║     ██║╚██╔╝██║
+   ███████╗██║   ██║   ███████╗███████╗███████╗██║ ╚═╝ ██║
+   ╚══════╝╚═╝   ╚═╝   ╚══════╝╚══════╝╚══════╝╚═╝     ╚═╝
+
+[92m18:52:13 - LiteLLM:DEBUG[0m: utils.py:5620 - checking potential_model_names in litellm.model_cost: {'split_model': '170fb9c8e18f87663825b69e7e54393b7a3392d1ecbfb0d6a8a543f0723173fd', 'combined_model_name': '170fb9c8e18f87663825b69e7e54393b7a3392d1ecbfb0d6a8a543f0723173fd', 'stripped_model_name': '170fb9c8e18f87663825b69e7e54393b7a3392d1ecbfb0d6a8a543f0723173fd', 'combined_stripped_model_name': '170fb9c8e18f87663825b69e7e54393b7a3392d1ecbfb0d6a8a543f0723173fd', 'custom_llm_provider': None}
+[92m18:52:13 - LiteLLM:DEBUG[0m: utils.py:5921 - Error getting model info: This model isn't mapped yet. Add it here - https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json
+[92m18:52:13 - LiteLLM:DEBUG[0m: utils.py:2900 - added/updated model=170fb9c8e18f87663825b69e7e54393b7a3392d1ecbfb0d6a8a543f0723173fd in litellm.model_cost: 170fb9c8e18f87663825b69e7e54393b7a3392d1ecbfb0d6a8a543f0723173fd
+[92m18:52:13 - LiteLLM:DEBUG[0m: utils.py:5620 - checking potential_model_names in litellm.model_cost: {'split_model': 'gpt-5.3-codex', 'combined_model_name': 'openai/gpt-5.3-codex', 'stripped_model_name': 'gpt-5.3-codex', 'combined_stripped_model_name': 'openai/gpt-5.3-codex', 'custom_llm_provider': 'openai'}
+[92m18:52:13 - LiteLLM:DEBUG[0m: utils.py:5620 - checking potential_model_names in litellm.model_cost: {'split_model': 'gpt-5.3-codex', 'combined_model_name': 'openai/gpt-5.3-codex', 'stripped_model_name': 'gpt-5.3-codex', 'combined_stripped_model_name': 'openai/gpt-5.3-codex', 'custom_llm_provider': 'openai'}
+[92m18:52:13 - LiteLLM:DEBUG[0m: utils.py:5620 - checking potential_model_names in litellm.model_cost: {'split_model': 'gpt-5.3-codex', 'combined_model_name': 'openai/gpt-5.3-codex', 'stripped_model_name': 'openai/gpt-5.3-codex', 'combined_stripped_model_name': 'openai/gpt-5.3-codex', 'custom_llm_provider': 'openai'}
+[92m18:52:13 - LiteLLM:DEBUG[0m: utils.py:2900 - added/updated model=gpt-5.3-codex in litellm.model_cost: gpt-5.3-codex
+[92m18:52:13 - LiteLLM Router:DEBUG[0m: router.py:7223 - 
+Initialized Model List ['gpt-5.3-codex']
+[92m18:52:13 - LiteLLM Router:INFO[0m: router.py:812 - Routing strategy: simple-shuffle
+[92m18:52:13 - LiteLLM Proxy:DEBUG[0m: proxy_server.py:3915 - Policy engine: no policies in config, skipping
+[92m18:52:13 - LiteLLM Proxy:DEBUG[0m: utils.py:2460 - Creating Prisma Client..
+[92m18:52:13 - LiteLLM Proxy:DEBUG[0m: utils.py:2527 - Success - Created Prisma Client
+[92m18:52:13 - LiteLLM Proxy:DEBUG[0m: utils.py:3745 - PrismaClient: connect() called Attempting to Connect to DB
+[92m18:52:13 - LiteLLM Proxy:DEBUG[0m: utils.py:3749 - PrismaClient: DB not connected, Attempting to Connect to DB
+query-engine ac9d7041ed77bcc8a8dbd2ab6616b39013829574
+[92m18:52:13 - LiteLLM Proxy:DEBUG[0m: prisma_client.py:247 - IAM token auth not enabled, skipping token refresh task
+[92m18:52:13 - LiteLLM Proxy:INFO[0m: utils.py:4307 - Started Prisma DB health watchdog (interval=30s, reconnect_cooldown=15s, probe_timeout=5.0s, reconnect_timeout=30.0s)
+[92m18:52:13 - LiteLLM Proxy:INFO[0m: utils.py:4062 - Found prisma-query-engine at PID 20355.
+[92m18:52:13 - LiteLLM Proxy:INFO[0m: utils.py:4066 - Watching engine PID 20355 via waitpid thread.
+[92m18:52:13 - LiteLLM:DEBUG[0m: logging_callback_manager.py:336 - Custom logger of type SkillsInjectionHook, key: SkillsInjectionHook-max_iterations=10-sandbox_timeout=120-message_logging=True-turn_off_message_logging=False already exists in [<litellm.proxy.hooks.litellm_skills.main.SkillsInjectionHook object at 0x114eb7620>, <litellm.proxy.hooks.model_max_budget_limiter._PROXY_VirtualKeyModelMaxBudgetLimiter object at 0x1561309e0>, <litellm.proxy.hooks.proxy_track_cost_callback._ProxyDBLogger object at 0x16f90b9e0>, <litellm.proxy.hooks.max_budget_limiter._PROXY_MaxBudgetLimiter object at 0x16f90ba40>, <litellm.proxy.hooks.parallel_request_limiter_v3._PROXY_MaxParallelRequestsHandler_v3 object at 0x16f909040>, <litellm.proxy.hooks.cache_control_check._PROXY_CacheControlCheck object at 0x16f90bd10>, <litellm.proxy.hooks.responses_id_security.ResponsesIDSecurity object at 0x16f77fc50>], not adding again..
+[92m18:52:13 - LiteLLM Proxy:DEBUG[0m: proxy_server.py:895 - About to initialize semantic tool filter
+[92m18:52:13 - LiteLLM Proxy:DEBUG[0m: proxy_server.py:898 - litellm_settings keys = []
+[92m18:52:13 - LiteLLM Proxy:DEBUG[0m: proxy_server.py:6220 - Semantic tool filter not configured or not enabled, skipping initialization
+[92m18:52:13 - LiteLLM Proxy:DEBUG[0m: proxy_server.py:905 - After semantic tool filter initialization
+[92m18:52:13 - LiteLLM Proxy:DEBUG[0m: proxy_server.py:919 - prisma_client: <litellm.proxy.utils.PrismaClient object at 0x16f787950>
+[92m18:52:13 - LiteLLM Proxy:INFO[0m: proxy_server.py:6467 - Tag spend update job scheduled at 25s interval (2.3x main job interval)
+[92m18:52:13 - LiteLLM Proxy:DEBUG[0m: hanging_request_check.py:148 - Checking for hanging requests....
+[92m18:52:13 - LiteLLM Proxy:INFO[0m: utils.py:5083 - Starting spend logs queue monitor (threshold: 100, poll_interval: 2.0s)
+[92m18:52:14 - LiteLLM Proxy:INFO[0m: utils.py:2634 - All necessary views exist!
+[92m18:52:14 - LiteLLM Proxy:INFO[0m: proxy_server.py:874 - Password migration: No plaintext passwords found
+[92m18:52:14 - LiteLLM Proxy:DEBUG[0m: proxy_server.py:4256 - len new_models: 2
+[92m18:52:14 - LiteLLM:DEBUG[0m: utils.py:5620 - checking potential_model_names in litellm.model_cost: {'split_model': '88d4dde8-817a-4c20-9bec-442961096d25', 'combined_model_name': '88d4dde8-817a-4c20-9bec-442961096d25', 'stripped_model_name': '88d4dde8-817a-4c20-9bec-442961096d25', 'combined_stripped_model_name': '88d4dde8-817a-4c20-9bec-442961096d25', 'custom_llm_provider': None}
+[92m18:52:14 - LiteLLM:DEBUG[0m: utils.py:5921 - Error getting model info: This model isn't mapped yet. Add it here - https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json
+[92m18:52:14 - LiteLLM:DEBUG[0m: utils.py:2900 - added/updated model=88d4dde8-817a-4c20-9bec-442961096d25 in litellm.model_cost: 88d4dde8-817a-4c20-9bec-442961096d25
+[92m18:52:14 - LiteLLM:DEBUG[0m: utils.py:5620 - checking potential_model_names in litellm.model_cost: {'split_model': '2ab3179b-62e9-4720-9ba7-0a2f12536cfa', 'combined_model_name': '2ab3179b-62e9-4720-9ba7-0a2f12536cfa', 'stripped_model_name': '2ab3179b-62e9-4720-9ba7-0a2f12536cfa', 'combined_stripped_model_name': '2ab3179b-62e9-4720-9ba7-0a2f12536cfa', 'custom_llm_provider': None}
+[92m18:52:14 - LiteLLM:DEBUG[0m: utils.py:5921 - Error getting model info: This model isn't mapped yet. Add it here - https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json
+[92m18:52:14 - LiteLLM:DEBUG[0m: utils.py:2900 - added/updated model=2ab3179b-62e9-4720-9ba7-0a2f12536cfa in litellm.model_cost: 2ab3179b-62e9-4720-9ba7-0a2f12536cfa
+[92m18:52:14 - LiteLLM Proxy:DEBUG[0m: proxy_server.py:5461 - guardrails from the DB []
+[92m18:52:14 - LiteLLM Proxy:INFO[0m: policy_registry.py:577 - Synced 0 production policies and 0 draft/published (by ID) from DB to in-memory registry
+[92m18:52:14 - LiteLLM Proxy:INFO[0m: attachment_registry.py:481 - Synced 0 attachments from DB to in-memory registry
+[92m18:52:14 - LiteLLM Proxy:DEBUG[0m: proxy_server.py:5497 - Successfully synced policies and attachments from DB
+[92m18:52:14 - LiteLLM:DEBUG[0m: mcp_server_manager.py:2644 - Loading MCP servers from database into registry...
+[92m18:52:14 - LiteLLM:INFO[0m: mcp_server_manager.py:2664 - Found 1 MCP servers in database
+[92m18:52:14 - LiteLLM:DEBUG[0m: mcp_server_manager.py:2688 - Building server from DB: 28a195c6-0224-4765-af9b-46f7a7f65ccb (deepwiki)
+[92m18:52:14 - LiteLLM:DEBUG[0m: mcp_server_manager.py:2697 - MCP registry refreshed (1 servers in registry)
+[92m18:52:14 - LiteLLM Proxy:DEBUG[0m: pass_through_endpoints.py:2409 - initializing pass through endpoints
+[92m18:52:14 - LiteLLM Proxy:DEBUG[0m: prompt_registry.py:54 - Discovering prompt integrations in: litellm.integrations.weave
+[92m18:52:14 - LiteLLM Proxy:DEBUG[0m: prompt_registry.py:54 - Discovering prompt integrations in: litellm.integrations.litellm_agent
+[92m18:52:14 - LiteLLM Proxy:DEBUG[0m: prompt_registry.py:54 - Discovering prompt integrations in: litellm.integrations.dotprompt
+[92m18:52:14 - LiteLLM Proxy:DEBUG[0m: prompt_registry.py:65 - Found prompt_initializer_registry in litellm.integrations.dotprompt: ['dotprompt']
+[92m18:52:14 - LiteLLM Proxy:DEBUG[0m: prompt_registry.py:54 - Discovering prompt integrations in: litellm.integrations.gitlab
+[92m18:52:14 - LiteLLM Proxy:DEBUG[0m: prompt_registry.py:65 - Found prompt_initializer_registry in litellm.integrations.gitlab: ['gitlab']
+[92m18:52:14 - LiteLLM Proxy:DEBUG[0m: prompt_registry.py:54 - Discovering prompt integrations in: litellm.integrations.azure_sentinel
+[92m18:52:14 - LiteLLM Proxy:DEBUG[0m: prompt_registry.py:54 - Discovering prompt integrations in: litellm.integrations.arize
+[92m18:52:14 - LiteLLM Proxy:DEBUG[0m: prompt_registry.py:65 - Found prompt_initializer_registry in litellm.integrations.arize: ['arize_phoenix']
+[92m18:52:14 - LiteLLM Proxy:DEBUG[0m: prompt_registry.py:54 - Discovering prompt integrations in: litellm.integrations.agentops
+[92m18:52:14 - LiteLLM Proxy:DEBUG[0m: prompt_registry.py:54 - Discovering prompt integrations in: litellm.integrations.compression_interception
+[92m18:52:14 - LiteLLM Proxy:DEBUG[0m: prompt_registry.py:54 - Discovering prompt integrations in: litellm.integrations.focus
+[92m18:52:14 - LiteLLM Proxy:DEBUG[0m: prompt_registry.py:54 - Discovering prompt integrations in: litellm.integrations.prometheus_helpers
+[92m18:52:14 - LiteLLM Proxy:DEBUG[0m: prompt_registry.py:54 - Discovering prompt integrations in: litellm.integrations.generic_prompt_management
+[92m18:52:14 - LiteLLM Proxy:DEBUG[0m: prompt_registry.py:65 - Found prompt_initializer_registry in litellm.integrations.generic_prompt_management: ['generic_prompt_management']
+[92m18:52:14 - LiteLLM Proxy:DEBUG[0m: prompt_registry.py:54 - Discovering prompt integrations in: litellm.integrations.levo
+[92m18:52:14 - LiteLLM Proxy:DEBUG[0m: prompt_registry.py:54 - Discovering prompt integrations in: litellm.integrations.websearch_interception
+[92m18:52:14 - LiteLLM Proxy:DEBUG[0m: prompt_registry.py:54 - Discovering prompt integrations in: litellm.integrations.deepeval
+[92m18:52:14 - LiteLLM Proxy:DEBUG[0m: prompt_registry.py:54 - Discovering prompt integrations in: litellm.integrations.bitbucket
+[92m18:52:14 - LiteLLM Proxy:DEBUG[0m: prompt_registry.py:65 - Found prompt_initializer_registry in litellm.integrations.bitbucket: ['bitbucket']
+[92m18:52:14 - LiteLLM Proxy:DEBUG[0m: prompt_registry.py:54 - Discovering prompt integrations in: litellm.integrations.vantage
+[92m18:52:14 - LiteLLM Proxy:DEBUG[0m: prompt_registry.py:76 - Discovered 5 prompt initializers: ['dotprompt', 'gitlab', 'arize_phoenix', 'generic_prompt_management', 'bitbucket']
+[92m18:52:14 - LiteLLM Proxy:INFO[0m: proxy_server.py:5640 - Loading 0 search tool(s) from database into router
+[92m18:52:14 - LiteLLM Proxy:DEBUG[0m: proxy_server.py:5660 - No search tools found in database, keeping config-loaded search tools (if any)
+[92m18:52:14 - LiteLLM Proxy:INFO[0m: tool_registry_writer.py:329 - ToolPolicyRegistry: synced 17 tool policies and 1 object permissions from DB
+[92m18:52:14 - LiteLLM Proxy:DEBUG[0m: proxy_server.py:5517 - Successfully synced tool policy from DB
+[92m18:52:14 - LiteLLM:DEBUG[0m: focus_logger.py:167 - No Focus export logger registered; skipping scheduler
+[92m18:52:14 - LiteLLM Proxy:DEBUG[0m: proxy_server.py:6759 - key_rotation_enabled: False
+[92m18:52:14 - LiteLLM Proxy:DEBUG[0m: proxy_server.py:6793 - Key rotation disabled (set LITELLM_KEY_ROTATION_ENABLED=true to enable)
+[92m18:52:14 - LiteLLM Proxy:DEBUG[0m: proxy_server.py:6824 - expired_ui_session_key_cleanup_enabled: False
+[92m18:52:14 - LiteLLM Proxy:DEBUG[0m: proxy_server.py:6869 - Expired UI session key cleanup disabled (set LITELLM_EXPIRED_UI_SESSION_KEY_CLEANUP_ENABLED=true to enable)
+[92m18:52:14 - LiteLLM Proxy:INFO[0m: proxy_server.py:6622 - Batch cost check job scheduled successfully
+[92m18:52:14 - LiteLLM Proxy:INFO[0m: proxy_server.py:6653 - Responses cost check job scheduled successfully
+[92m18:52:14 - LiteLLM Proxy:INFO[0m: proxy_server.py:6672 - APScheduler started with memory leak prevention settings: removed jitter, increased intervals, misfire_grace_time=3600
+[92m18:52:14 - LiteLLM Proxy:DEBUG[0m: proxy_server.py:7036 - LiteLLM: Pyroscope profiling is disabled (set LITELLM_ENABLE_PYROSCOPE=true to enable).
+[92m18:52:14 - LiteLLM Proxy:INFO[0m: proxy_server.py:755 - SESSION REUSE: Created shared aiohttp session for connection pooling (ID: 6165409104, limit=1000, limit_per_host=500)
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:4000 (Press CTRL+C to quit)
+[92m18:52:21 - LiteLLM Proxy:DEBUG[0m: http_parsing_utils.py:529 - populate_request_with_path_params: No vector_store_id present in path=/organization/list
+[92m18:52:21 - LiteLLM:DEBUG[0m: user_api_key_auth.py:1023 - api key not found in cache.
+[92m18:52:21 - LiteLLM Proxy:DEBUG[0m: utils.py:3061 - PrismaClient: find_unique for token: 00f60cfa9df317dade7cb93c0bdb83b44250c865daf6920ea0de433d523a894e
+[92m18:52:21 - LiteLLM Proxy:DEBUG[0m: http_parsing_utils.py:529 - populate_request_with_path_params: No vector_store_id present in path=/team/list
+[92m18:52:21 - LiteLLM:DEBUG[0m: user_api_key_auth.py:1023 - api key not found in cache.
+[92m18:52:21 - LiteLLM Proxy:DEBUG[0m: utils.py:3061 - PrismaClient: find_unique for token: 00f60cfa9df317dade7cb93c0bdb83b44250c865daf6920ea0de433d523a894e
+[92m18:52:21 - LiteLLM Proxy:DEBUG[0m: http_parsing_utils.py:529 - populate_request_with_path_params: No vector_store_id present in path=/tag/list
+[92m18:52:21 - LiteLLM:DEBUG[0m: user_api_key_auth.py:1023 - api key not found in cache.
+[92m18:52:21 - LiteLLM Proxy:DEBUG[0m: utils.py:3061 - PrismaClient: find_unique for token: 00f60cfa9df317dade7cb93c0bdb83b44250c865daf6920ea0de433d523a894e
+[92m18:52:21 - LiteLLM Proxy:DEBUG[0m: http_parsing_utils.py:529 - populate_request_with_path_params: No vector_store_id present in path=/key/list
+[92m18:52:21 - LiteLLM:DEBUG[0m: user_api_key_auth.py:1023 - api key not found in cache.
+[92m18:52:21 - LiteLLM Proxy:DEBUG[0m: utils.py:3061 - PrismaClient: find_unique for token: 00f60cfa9df317dade7cb93c0bdb83b44250c865daf6920ea0de433d523a894e
+
+[1;37m#------------------------------------------------------------#[0m
+[1;37m#                                                            #[0m
+[1;37m#            'The thing I wish you improved is...'            #[0m
+[1;37m#        https://github.com/BerriAI/litellm/issues/new        #[0m
+[1;37m#                                                            #[0m
+[1;37m#------------------------------------------------------------#[0m
+
+ Thank you for using LiteLLM! - Krrish & Ishaan
+
+
+
+[1;31mGive Feedback / Get Help: https://github.com/BerriAI/litellm/issues/new[0m
+
+
+[32mLiteLLM: Proxy initialized with Config, Set models:[0m
+[32m    gpt-5.3-codex[0m
+INFO:     127.0.0.1:65291 - "GET /project/list HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:65293 - "HEAD / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65293 - "GET /__next._tree.txt?_rsc=1r34m HTTP/1.1" 404 Not Found
+[92m18:52:21 - LiteLLM Proxy:DEBUG[0m: user_api_key_auth.py:1348 - Checking if token expired, expiry time 2026-04-29 11:16:22.190000+00:00 and current time 2026-04-28 13:22:21.984645+00:00
+[92m18:52:21 - LiteLLM Proxy:DEBUG[0m: user_api_key_auth.py:1348 - Checking if token expired, expiry time 2026-04-29 11:16:22.190000+00:00 and current time 2026-04-28 13:22:21.987707+00:00
+[92m18:52:21 - LiteLLM Proxy:DEBUG[0m: user_api_key_auth.py:1348 - Checking if token expired, expiry time 2026-04-29 11:16:22.190000+00:00 and current time 2026-04-28 13:22:21.988286+00:00
+[92m18:52:21 - LiteLLM Proxy:DEBUG[0m: user_api_key_auth.py:1348 - Checking if token expired, expiry time 2026-04-29 11:16:22.190000+00:00 and current time 2026-04-28 13:22:21.988897+00:00
+[92m18:52:21 - LiteLLM Proxy:DEBUG[0m: user_api_key_auth.py:1567 - centralized auth: team fetch failed (HTTPException: 404: {'error': "Team doesn't exist in db. Team=litellm-dashboard. Create team via `/team/new` call."})
+[92m18:52:22 - LiteLLM Proxy:DEBUG[0m: user_api_key_auth.py:1567 - centralized auth: team fetch failed (HTTPException: 404: {'error': "Team doesn't exist in db. Team=litellm-dashboard. Create team via `/team/new` call."})
+[92m18:52:22 - LiteLLM Proxy:DEBUG[0m: user_api_key_auth.py:1567 - centralized auth: team fetch failed (HTTPException: 404: {'error': "Team doesn't exist in db. Team=litellm-dashboard. Create team via `/team/new` call."})
+[92m18:52:22 - LiteLLM Proxy:DEBUG[0m: user_api_key_auth.py:1567 - centralized auth: team fetch failed (HTTPException: 404: {'error': "Team doesn't exist in db. Team=litellm-dashboard. Create team via `/team/new` call."})
+[92m18:52:22 - LiteLLM Proxy:DEBUG[0m: auth_checks.py:4036 - Vector store registry not found, skipping vector store access check
+[92m18:52:22 - LiteLLM Proxy:DEBUG[0m: auth_checks.py:4036 - Vector store registry not found, skipping vector store access check
+[92m18:52:22 - LiteLLM Proxy:DEBUG[0m: auth_checks.py:4036 - Vector store registry not found, skipping vector store access check
+[92m18:52:22 - LiteLLM Proxy:DEBUG[0m: key_management_endpoints.py:4526 - Entering list_keys function
+[92m18:52:22 - LiteLLM Proxy:DEBUG[0m: key_management_endpoints.py:4950 - Filter conditions: {'OR': [{'team_id': None}, {'team_id': {'not': 'litellm-dashboard'}}]}
+[92m18:52:22 - LiteLLM Proxy:DEBUG[0m: key_management_endpoints.py:5020 - Pagination: skip=0, take=50
+[92m18:52:22 - LiteLLM Proxy:DEBUG[0m: auth_checks.py:4036 - Vector store registry not found, skipping vector store access check
+INFO:     127.0.0.1:65283 - "GET /organization/list HTTP/1.1" 200 OK
+[92m18:52:22 - LiteLLM Proxy:DEBUG[0m: key_management_endpoints.py:5062 - Fetched 4 keys
+[92m18:52:22 - LiteLLM Proxy:DEBUG[0m: key_management_endpoints.py:5074 - Total count of keys: 4
+INFO:     127.0.0.1:65285 - "GET /team/list HTTP/1.1" 200 OK
+[92m18:52:22 - LiteLLM Proxy:DEBUG[0m: key_management_endpoints.py:4604 - Successfully prepared response
+INFO:     127.0.0.1:65290 - "GET /key/list?page=1&size=50&sort_by=created_at&sort_order=desc&expand=user&return_full_object=true&include_team_keys=true&include_created_by_keys=true HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65288 - "GET /tag/list HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65290 - "GET /project/list HTTP/1.1" 404 Not Found
+[92m18:52:24 - LiteLLM Proxy:DEBUG[0m: spend_update_queue.py:39 - Aggregating updates by entity type: []
+[92m18:52:24 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1122 - User Spend transactions: {}
+[92m18:52:24 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1165 - End-User Spend transactions: {}
+[92m18:52:24 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1180 - KEY Spend transactions: {}
+[92m18:52:24 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1221 - Team Spend transactions: {}
+[92m18:52:24 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1269 - Team Membership Spend transactions: {}
+[92m18:52:24 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1342 - Org Spend transactions: {}
+[92m18:52:24 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1435 - Tag Spend transactions: {}
+[92m18:52:24 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1435 - Agent Spend transactions: {}
+[92m18:52:24 - LiteLLM Proxy:DEBUG[0m: daily_spend_update_queue.py:99 - Aggregated daily spend update transactions: {}
+[92m18:52:24 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1576 - Daily User Spend transactions: 0
+[92m18:52:24 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1609 - No new transactions to process for daily user spend update
+[92m18:52:24 - LiteLLM Proxy:DEBUG[0m: daily_spend_update_queue.py:99 - Aggregated daily spend update transactions: {}
+[92m18:52:24 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1576 - Daily Team Spend transactions: 0
+[92m18:52:24 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1609 - No new transactions to process for daily team spend update
+[92m18:52:24 - LiteLLM Proxy:DEBUG[0m: daily_spend_update_queue.py:99 - Aggregated daily spend update transactions: {}
+[92m18:52:24 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1576 - Daily Org Spend transactions: 0
+[92m18:52:24 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1609 - No new transactions to process for daily org spend update
+[92m18:52:24 - LiteLLM Proxy:DEBUG[0m: daily_spend_update_queue.py:99 - Aggregated daily spend update transactions: {}
+[92m18:52:24 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1576 - Daily End_user Spend transactions: 0
+[92m18:52:24 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1609 - No new transactions to process for daily end_user spend update
+[92m18:52:24 - LiteLLM Proxy:DEBUG[0m: daily_spend_update_queue.py:99 - Aggregated daily spend update transactions: {}
+[92m18:52:24 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1576 - Daily Agent Spend transactions: 0
+[92m18:52:24 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1609 - No new transactions to process for daily agent spend update
+[92m18:52:24 - LiteLLM Proxy:DEBUG[0m: utils.py:4936 - Spend Logs transactions: 0
+INFO:     127.0.0.1:65290 - "GET /project/list HTTP/1.1" 404 Not Found
+[92m18:52:28 - LiteLLM Proxy:DEBUG[0m: http_parsing_utils.py:529 - populate_request_with_path_params: No vector_store_id present in path=/organization/list
+[92m18:52:28 - LiteLLM:DEBUG[0m: user_api_key_auth.py:1099 - 404: {'error': "Team doesn't exist in cache + check_cache_only=True. Team=litellm-dashboard."}
+[92m18:52:28 - LiteLLM Proxy:DEBUG[0m: user_api_key_auth.py:1348 - Checking if token expired, expiry time 2026-04-29 11:16:22.190000+00:00 and current time 2026-04-28 13:22:28.414705+00:00
+[92m18:52:28 - LiteLLM Proxy:DEBUG[0m: http_parsing_utils.py:529 - populate_request_with_path_params: No vector_store_id present in path=/team/list
+[92m18:52:28 - LiteLLM:DEBUG[0m: user_api_key_auth.py:1099 - 404: {'error': "Team doesn't exist in cache + check_cache_only=True. Team=litellm-dashboard."}
+[92m18:52:28 - LiteLLM Proxy:DEBUG[0m: user_api_key_auth.py:1348 - Checking if token expired, expiry time 2026-04-29 11:16:22.190000+00:00 and current time 2026-04-28 13:22:28.416982+00:00
+[92m18:52:28 - LiteLLM Proxy:DEBUG[0m: http_parsing_utils.py:529 - populate_request_with_path_params: No vector_store_id present in path=/models
+[92m18:52:28 - LiteLLM:DEBUG[0m: user_api_key_auth.py:1099 - 404: {'error': "Team doesn't exist in cache + check_cache_only=True. Team=litellm-dashboard."}
+[92m18:52:28 - LiteLLM Proxy:DEBUG[0m: user_api_key_auth.py:1348 - Checking if token expired, expiry time 2026-04-29 11:16:22.190000+00:00 and current time 2026-04-28 13:22:28.426995+00:00
+[92m18:52:28 - LiteLLM Proxy:DEBUG[0m: http_parsing_utils.py:529 - populate_request_with_path_params: No vector_store_id present in path=/v2/user/info
+[92m18:52:28 - LiteLLM:DEBUG[0m: user_api_key_auth.py:1099 - 404: {'error': "Team doesn't exist in cache + check_cache_only=True. Team=litellm-dashboard."}
+[92m18:52:28 - LiteLLM Proxy:DEBUG[0m: user_api_key_auth.py:1348 - Checking if token expired, expiry time 2026-04-29 11:16:22.190000+00:00 and current time 2026-04-28 13:22:28.430882+00:00
+[92m18:52:28 - LiteLLM Proxy:DEBUG[0m: http_parsing_utils.py:529 - populate_request_with_path_params: No vector_store_id present in path=/v1/access_group
+[92m18:52:28 - LiteLLM:DEBUG[0m: user_api_key_auth.py:1099 - 404: {'error': "Team doesn't exist in cache + check_cache_only=True. Team=litellm-dashboard."}
+[92m18:52:28 - LiteLLM Proxy:DEBUG[0m: user_api_key_auth.py:1348 - Checking if token expired, expiry time 2026-04-29 11:16:22.190000+00:00 and current time 2026-04-28 13:22:28.434375+00:00
+[92m18:52:28 - LiteLLM Proxy:DEBUG[0m: http_parsing_utils.py:529 - populate_request_with_path_params: No vector_store_id present in path=/v1/mcp/server
+[92m18:52:28 - LiteLLM:DEBUG[0m: user_api_key_auth.py:1099 - 404: {'error': "Team doesn't exist in cache + check_cache_only=True. Team=litellm-dashboard."}
+[92m18:52:28 - LiteLLM Proxy:DEBUG[0m: user_api_key_auth.py:1348 - Checking if token expired, expiry time 2026-04-29 11:16:22.190000+00:00 and current time 2026-04-28 13:22:28.437819+00:00
+[92m18:52:28 - LiteLLM Proxy:DEBUG[0m: user_api_key_auth.py:1567 - centralized auth: team fetch failed (HTTPException: 404: {'error': "Team doesn't exist in db. Team=litellm-dashboard. Create team via `/team/new` call."})
+[92m18:52:28 - LiteLLM Proxy:DEBUG[0m: user_api_key_auth.py:1567 - centralized auth: team fetch failed (HTTPException: 404: {'error': "Team doesn't exist in db. Team=litellm-dashboard. Create team via `/team/new` call."})
+[92m18:52:28 - LiteLLM Proxy:DEBUG[0m: user_api_key_auth.py:1567 - centralized auth: team fetch failed (HTTPException: 404: {'error': "Team doesn't exist in db. Team=litellm-dashboard. Create team via `/team/new` call."})
+[92m18:52:28 - LiteLLM Proxy:DEBUG[0m: auth_checks.py:4036 - Vector store registry not found, skipping vector store access check
+[92m18:52:28 - LiteLLM Proxy:DEBUG[0m: user_api_key_auth.py:1567 - centralized auth: team fetch failed (HTTPException: 404: {'error': "Team doesn't exist in db. Team=litellm-dashboard. Create team via `/team/new` call."})
+[92m18:52:28 - LiteLLM Proxy:DEBUG[0m: user_api_key_auth.py:1567 - centralized auth: team fetch failed (HTTPException: 404: {'error': "Team doesn't exist in db. Team=litellm-dashboard. Create team via `/team/new` call."})
+[92m18:52:28 - LiteLLM Proxy:DEBUG[0m: auth_checks.py:4036 - Vector store registry not found, skipping vector store access check
+[92m18:52:28 - LiteLLM Proxy:DEBUG[0m: auth_checks.py:4036 - Vector store registry not found, skipping vector store access check
+[92m18:52:28 - LiteLLM Proxy:DEBUG[0m: user_api_key_auth.py:1567 - centralized auth: team fetch failed (HTTPException: 404: {'error': "Team doesn't exist in db. Team=litellm-dashboard. Create team via `/team/new` call."})
+INFO:     127.0.0.1:65326 - "GET /v2/user/info HTTP/1.1" 200 OK
+[92m18:52:28 - LiteLLM Proxy:DEBUG[0m: auth_checks.py:4036 - Vector store registry not found, skipping vector store access check
+[92m18:52:28 - LiteLLM Proxy:DEBUG[0m: http_parsing_utils.py:529 - populate_request_with_path_params: No vector_store_id present in path=/v1/mcp/access_groups
+[92m18:52:28 - LiteLLM:DEBUG[0m: user_api_key_auth.py:1099 - 404: {'error': "Team doesn't exist in cache + check_cache_only=True. Team=litellm-dashboard."}
+[92m18:52:28 - LiteLLM Proxy:DEBUG[0m: user_api_key_auth.py:1348 - Checking if token expired, expiry time 2026-04-29 11:16:22.190000+00:00 and current time 2026-04-28 13:22:28.460826+00:00
+[92m18:52:28 - LiteLLM Proxy:DEBUG[0m: auth_checks.py:4036 - Vector store registry not found, skipping vector store access check
+INFO:     127.0.0.1:65324 - "GET /models?include_model_access_groups=True&return_wildcard_routes=True&scope=expand HTTP/1.1" 200 OK
+[92m18:52:28 - LiteLLM Proxy:DEBUG[0m: http_parsing_utils.py:529 - populate_request_with_path_params: No vector_store_id present in path=/v1/mcp/toolset
+[92m18:52:28 - LiteLLM:DEBUG[0m: user_api_key_auth.py:1099 - 404: {'error': "Team doesn't exist in cache + check_cache_only=True. Team=litellm-dashboard."}
+[92m18:52:28 - LiteLLM Proxy:DEBUG[0m: user_api_key_auth.py:1348 - Checking if token expired, expiry time 2026-04-29 11:16:22.190000+00:00 and current time 2026-04-28 13:22:28.463333+00:00
+INFO:     127.0.0.1:65290 - "GET /organization/list HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65328 - "GET /v1/access_group HTTP/1.1" 200 OK
+[92m18:52:28 - LiteLLM Proxy:DEBUG[0m: auth_checks.py:4036 - Vector store registry not found, skipping vector store access check
+[92m18:52:28 - LiteLLM:DEBUG[0m: mcp_server_manager.py:796 - Admin user without explicit object_permission - returning all servers
+INFO:     127.0.0.1:65329 - "GET /v1/mcp/server HTTP/1.1" 200 OK
+[92m18:52:28 - LiteLLM Proxy:DEBUG[0m: user_api_key_auth.py:1567 - centralized auth: team fetch failed (HTTPException: 404: {'error': "Team doesn't exist in db. Team=litellm-dashboard. Create team via `/team/new` call."})
+[92m18:52:28 - LiteLLM Proxy:DEBUG[0m: user_api_key_auth.py:1567 - centralized auth: team fetch failed (HTTPException: 404: {'error': "Team doesn't exist in db. Team=litellm-dashboard. Create team via `/team/new` call."})
+INFO:     127.0.0.1:65321 - "GET /team/list HTTP/1.1" 200 OK
+[92m18:52:28 - LiteLLM Proxy:DEBUG[0m: auth_checks.py:4036 - Vector store registry not found, skipping vector store access check
+[92m18:52:28 - LiteLLM Proxy:DEBUG[0m: auth_checks.py:4036 - Vector store registry not found, skipping vector store access check
+[92m18:52:28 - LiteLLM Proxy:WARNING[0m: toolset_db.py:60 - litellm.proxy._experimental.mcp_server.toolset_db::list_mcp_toolsets - 'Prisma' object has no attribute 'litellm_mcptoolsettable'
+INFO:     127.0.0.1:65324 - "GET /v1/mcp/toolset HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65326 - "GET /v1/mcp/access_groups HTTP/1.1" 200 OK
+[92m18:52:30 - LiteLLM Proxy:DEBUG[0m: http_parsing_utils.py:529 - populate_request_with_path_params: No vector_store_id present in path=/organization/list
+[92m18:52:30 - LiteLLM:DEBUG[0m: user_api_key_auth.py:1099 - 404: {'error': "Team doesn't exist in cache + check_cache_only=True. Team=litellm-dashboard."}
+[92m18:52:30 - LiteLLM Proxy:DEBUG[0m: user_api_key_auth.py:1348 - Checking if token expired, expiry time 2026-04-29 11:16:22.190000+00:00 and current time 2026-04-28 13:22:30.307066+00:00
+[92m18:52:30 - LiteLLM Proxy:DEBUG[0m: http_parsing_utils.py:529 - populate_request_with_path_params: No vector_store_id present in path=/team/list
+[92m18:52:30 - LiteLLM:DEBUG[0m: user_api_key_auth.py:1099 - 404: {'error': "Team doesn't exist in cache + check_cache_only=True. Team=litellm-dashboard."}
+[92m18:52:30 - LiteLLM Proxy:DEBUG[0m: user_api_key_auth.py:1348 - Checking if token expired, expiry time 2026-04-29 11:16:22.190000+00:00 and current time 2026-04-28 13:22:30.310005+00:00
+INFO:     127.0.0.1:65321 - "GET /project/list HTTP/1.1" 404 Not Found
+[92m18:52:30 - LiteLLM Proxy:DEBUG[0m: http_parsing_utils.py:529 - populate_request_with_path_params: No vector_store_id present in path=/tag/list
+[92m18:52:30 - LiteLLM:DEBUG[0m: user_api_key_auth.py:1099 - 404: {'error': "Team doesn't exist in cache + check_cache_only=True. Team=litellm-dashboard."}
+[92m18:52:30 - LiteLLM Proxy:DEBUG[0m: user_api_key_auth.py:1348 - Checking if token expired, expiry time 2026-04-29 11:16:22.190000+00:00 and current time 2026-04-28 13:22:30.314509+00:00
+[92m18:52:30 - LiteLLM Proxy:DEBUG[0m: user_api_key_auth.py:1567 - centralized auth: team fetch failed (HTTPException: 404: {'error': "Team doesn't exist in db. Team=litellm-dashboard. Create team via `/team/new` call."})
+[92m18:52:30 - LiteLLM Proxy:DEBUG[0m: user_api_key_auth.py:1567 - centralized auth: team fetch failed (HTTPException: 404: {'error': "Team doesn't exist in db. Team=litellm-dashboard. Create team via `/team/new` call."})
+[92m18:52:30 - LiteLLM Proxy:DEBUG[0m: user_api_key_auth.py:1567 - centralized auth: team fetch failed (HTTPException: 404: {'error': "Team doesn't exist in db. Team=litellm-dashboard. Create team via `/team/new` call."})
+[92m18:52:30 - LiteLLM Proxy:DEBUG[0m: auth_checks.py:4036 - Vector store registry not found, skipping vector store access check
+[92m18:52:30 - LiteLLM Proxy:DEBUG[0m: auth_checks.py:4036 - Vector store registry not found, skipping vector store access check
+[92m18:52:30 - LiteLLM Proxy:DEBUG[0m: auth_checks.py:4036 - Vector store registry not found, skipping vector store access check
+INFO:     127.0.0.1:65326 - "GET /organization/list HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65324 - "GET /team/list HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65329 - "GET /tag/list HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65329 - "GET /project/list HTTP/1.1" 404 Not Found
+[92m18:52:34 - LiteLLM Proxy:DEBUG[0m: http_parsing_utils.py:529 - populate_request_with_path_params: No vector_store_id present in path=/organization/list
+[92m18:52:34 - LiteLLM:DEBUG[0m: user_api_key_auth.py:1099 - 404: {'error': "Team doesn't exist in cache + check_cache_only=True. Team=litellm-dashboard."}
+[92m18:52:34 - LiteLLM Proxy:DEBUG[0m: user_api_key_auth.py:1348 - Checking if token expired, expiry time 2026-04-29 11:16:22.190000+00:00 and current time 2026-04-28 13:22:34.018157+00:00
+[92m18:52:34 - LiteLLM Proxy:DEBUG[0m: http_parsing_utils.py:529 - populate_request_with_path_params: No vector_store_id present in path=/team/list
+[92m18:52:34 - LiteLLM:DEBUG[0m: user_api_key_auth.py:1099 - 404: {'error': "Team doesn't exist in cache + check_cache_only=True. Team=litellm-dashboard."}
+[92m18:52:34 - LiteLLM Proxy:DEBUG[0m: user_api_key_auth.py:1348 - Checking if token expired, expiry time 2026-04-29 11:16:22.190000+00:00 and current time 2026-04-28 13:22:34.038105+00:00
+[92m18:52:34 - LiteLLM Proxy:DEBUG[0m: http_parsing_utils.py:529 - populate_request_with_path_params: No vector_store_id present in path=/tag/list
+[92m18:52:34 - LiteLLM:DEBUG[0m: user_api_key_auth.py:1099 - 404: {'error': "Team doesn't exist in cache + check_cache_only=True. Team=litellm-dashboard."}
+[92m18:52:34 - LiteLLM Proxy:DEBUG[0m: user_api_key_auth.py:1348 - Checking if token expired, expiry time 2026-04-29 11:16:22.190000+00:00 and current time 2026-04-28 13:22:34.045120+00:00
+INFO:     127.0.0.1:65321 - "GET /project/list HTTP/1.1" 404 Not Found
+[92m18:52:34 - LiteLLM Proxy:DEBUG[0m: user_api_key_auth.py:1567 - centralized auth: team fetch failed (HTTPException: 404: {'error': "Team doesn't exist in db. Team=litellm-dashboard. Create team via `/team/new` call."})
+[92m18:52:34 - LiteLLM Proxy:DEBUG[0m: user_api_key_auth.py:1567 - centralized auth: team fetch failed (HTTPException: 404: {'error': "Team doesn't exist in db. Team=litellm-dashboard. Create team via `/team/new` call."})
+[92m18:52:34 - LiteLLM Proxy:DEBUG[0m: user_api_key_auth.py:1567 - centralized auth: team fetch failed (HTTPException: 404: {'error': "Team doesn't exist in db. Team=litellm-dashboard. Create team via `/team/new` call."})
+[92m18:52:34 - LiteLLM Proxy:DEBUG[0m: auth_checks.py:4036 - Vector store registry not found, skipping vector store access check
+[92m18:52:34 - LiteLLM Proxy:DEBUG[0m: auth_checks.py:4036 - Vector store registry not found, skipping vector store access check
+[92m18:52:34 - LiteLLM Proxy:DEBUG[0m: auth_checks.py:4036 - Vector store registry not found, skipping vector store access check
+INFO:     127.0.0.1:65329 - "GET /organization/list HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65324 - "GET /team/list HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65326 - "GET /tag/list HTTP/1.1" 200 OK
+[92m18:52:35 - LiteLLM Proxy:DEBUG[0m: spend_update_queue.py:39 - Aggregating updates by entity type: []
+[92m18:52:35 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1122 - User Spend transactions: {}
+[92m18:52:35 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1165 - End-User Spend transactions: {}
+[92m18:52:35 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1180 - KEY Spend transactions: {}
+[92m18:52:35 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1221 - Team Spend transactions: {}
+[92m18:52:35 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1269 - Team Membership Spend transactions: {}
+[92m18:52:35 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1342 - Org Spend transactions: {}
+[92m18:52:35 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1435 - Tag Spend transactions: {}
+[92m18:52:35 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1435 - Agent Spend transactions: {}
+[92m18:52:35 - LiteLLM Proxy:DEBUG[0m: daily_spend_update_queue.py:99 - Aggregated daily spend update transactions: {}
+[92m18:52:35 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1576 - Daily User Spend transactions: 0
+[92m18:52:35 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1609 - No new transactions to process for daily user spend update
+[92m18:52:35 - LiteLLM Proxy:DEBUG[0m: daily_spend_update_queue.py:99 - Aggregated daily spend update transactions: {}
+[92m18:52:35 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1576 - Daily Team Spend transactions: 0
+[92m18:52:35 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1609 - No new transactions to process for daily team spend update
+[92m18:52:35 - LiteLLM Proxy:DEBUG[0m: daily_spend_update_queue.py:99 - Aggregated daily spend update transactions: {}
+[92m18:52:35 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1576 - Daily Org Spend transactions: 0
+[92m18:52:35 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1609 - No new transactions to process for daily org spend update
+[92m18:52:35 - LiteLLM Proxy:DEBUG[0m: daily_spend_update_queue.py:99 - Aggregated daily spend update transactions: {}
+[92m18:52:35 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1576 - Daily End_user Spend transactions: 0
+[92m18:52:35 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1609 - No new transactions to process for daily end_user spend update
+[92m18:52:35 - LiteLLM Proxy:DEBUG[0m: daily_spend_update_queue.py:99 - Aggregated daily spend update transactions: {}
+[92m18:52:35 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1576 - Daily Agent Spend transactions: 0
+[92m18:52:35 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1609 - No new transactions to process for daily agent spend update
+[92m18:52:35 - LiteLLM Proxy:DEBUG[0m: utils.py:4936 - Spend Logs transactions: 0
+INFO:     127.0.0.1:65326 - "GET /project/list HTTP/1.1" 404 Not Found
+[92m18:52:39 - LiteLLM Proxy:DEBUG[0m: daily_spend_update_queue.py:99 - Aggregated daily spend update transactions: {}
+[92m18:52:44 - LiteLLM Proxy:DEBUG[0m: proxy_server.py:4256 - len new_models: 2
+[92m18:52:44 - LiteLLM Proxy:DEBUG[0m: proxy_server.py:5461 - guardrails from the DB []
+[92m18:52:44 - LiteLLM Proxy:INFO[0m: policy_registry.py:577 - Synced 0 production policies and 0 draft/published (by ID) from DB to in-memory registry
+[92m18:52:44 - LiteLLM Proxy:INFO[0m: attachment_registry.py:481 - Synced 0 attachments from DB to in-memory registry
+[92m18:52:44 - LiteLLM Proxy:DEBUG[0m: proxy_server.py:5497 - Successfully synced policies and attachments from DB
+[92m18:52:44 - LiteLLM:DEBUG[0m: mcp_server_manager.py:2644 - Loading MCP servers from database into registry...
+[92m18:52:44 - LiteLLM:INFO[0m: mcp_server_manager.py:2664 - Found 1 MCP servers in database
+[92m18:52:44 - LiteLLM:DEBUG[0m: mcp_server_manager.py:2697 - MCP registry refreshed (1 servers in registry)
+[92m18:52:44 - LiteLLM Proxy:DEBUG[0m: pass_through_endpoints.py:2409 - initializing pass through endpoints
+[92m18:52:44 - LiteLLM Proxy:INFO[0m: proxy_server.py:5640 - Loading 0 search tool(s) from database into router
+[92m18:52:44 - LiteLLM Proxy:DEBUG[0m: proxy_server.py:5660 - No search tools found in database, keeping config-loaded search tools (if any)
+[92m18:52:44 - LiteLLM Proxy:INFO[0m: tool_registry_writer.py:329 - ToolPolicyRegistry: synced 17 tool policies and 1 object permissions from DB
+[92m18:52:44 - LiteLLM Proxy:DEBUG[0m: proxy_server.py:5517 - Successfully synced tool policy from DB
+[92m18:52:46 - LiteLLM Proxy:DEBUG[0m: spend_update_queue.py:39 - Aggregating updates by entity type: []
+[92m18:52:46 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1122 - User Spend transactions: {}
+[92m18:52:46 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1165 - End-User Spend transactions: {}
+[92m18:52:46 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1180 - KEY Spend transactions: {}
+[92m18:52:46 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1221 - Team Spend transactions: {}
+[92m18:52:46 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1269 - Team Membership Spend transactions: {}
+[92m18:52:46 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1342 - Org Spend transactions: {}
+[92m18:52:46 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1435 - Tag Spend transactions: {}
+[92m18:52:46 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1435 - Agent Spend transactions: {}
+[92m18:52:46 - LiteLLM Proxy:DEBUG[0m: daily_spend_update_queue.py:99 - Aggregated daily spend update transactions: {}
+[92m18:52:46 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1576 - Daily User Spend transactions: 0
+[92m18:52:46 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1609 - No new transactions to process for daily user spend update
+[92m18:52:46 - LiteLLM Proxy:DEBUG[0m: daily_spend_update_queue.py:99 - Aggregated daily spend update transactions: {}
+[92m18:52:46 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1576 - Daily Team Spend transactions: 0
+[92m18:52:46 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1609 - No new transactions to process for daily team spend update
+[92m18:52:46 - LiteLLM Proxy:DEBUG[0m: daily_spend_update_queue.py:99 - Aggregated daily spend update transactions: {}
+[92m18:52:46 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1576 - Daily Org Spend transactions: 0
+[92m18:52:46 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1609 - No new transactions to process for daily org spend update
+[92m18:52:46 - LiteLLM Proxy:DEBUG[0m: daily_spend_update_queue.py:99 - Aggregated daily spend update transactions: {}
+[92m18:52:46 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1576 - Daily End_user Spend transactions: 0
+[92m18:52:46 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1609 - No new transactions to process for daily end_user spend update
+[92m18:52:46 - LiteLLM Proxy:DEBUG[0m: daily_spend_update_queue.py:99 - Aggregated daily spend update transactions: {}
+[92m18:52:46 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1576 - Daily Agent Spend transactions: 0
+[92m18:52:46 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1609 - No new transactions to process for daily agent spend update
+[92m18:52:46 - LiteLLM Proxy:DEBUG[0m: utils.py:4936 - Spend Logs transactions: 0
+[92m18:52:54 - LiteLLM Proxy:DEBUG[0m: http_parsing_utils.py:529 - populate_request_with_path_params: No vector_store_id present in path=/organization/list
+[92m18:52:54 - LiteLLM:DEBUG[0m: user_api_key_auth.py:1099 - 404: {'error': "Team doesn't exist in cache + check_cache_only=True. Team=litellm-dashboard."}
+[92m18:52:54 - LiteLLM Proxy:DEBUG[0m: user_api_key_auth.py:1348 - Checking if token expired, expiry time 2026-04-29 11:16:22.190000+00:00 and current time 2026-04-28 13:22:54.075515+00:00
+[92m18:52:54 - LiteLLM Proxy:DEBUG[0m: http_parsing_utils.py:529 - populate_request_with_path_params: No vector_store_id present in path=/team/list
+[92m18:52:54 - LiteLLM:DEBUG[0m: user_api_key_auth.py:1099 - 404: {'error': "Team doesn't exist in cache + check_cache_only=True. Team=litellm-dashboard."}
+[92m18:52:54 - LiteLLM Proxy:DEBUG[0m: user_api_key_auth.py:1348 - Checking if token expired, expiry time 2026-04-29 11:16:22.190000+00:00 and current time 2026-04-28 13:22:54.133027+00:00
+INFO:     127.0.0.1:65389 - "GET /project/list HTTP/1.1" 404 Not Found
+[92m18:52:54 - LiteLLM Proxy:DEBUG[0m: http_parsing_utils.py:529 - populate_request_with_path_params: No vector_store_id present in path=/tag/list
+[92m18:52:54 - LiteLLM:DEBUG[0m: user_api_key_auth.py:1099 - 404: {'error': "Team doesn't exist in cache + check_cache_only=True. Team=litellm-dashboard."}
+[92m18:52:54 - LiteLLM Proxy:DEBUG[0m: user_api_key_auth.py:1348 - Checking if token expired, expiry time 2026-04-29 11:16:22.190000+00:00 and current time 2026-04-28 13:22:54.284965+00:00
+[92m18:52:54 - LiteLLM Proxy:DEBUG[0m: http_parsing_utils.py:529 - populate_request_with_path_params: No vector_store_id present in path=/key/list
+[92m18:52:54 - LiteLLM:DEBUG[0m: user_api_key_auth.py:1099 - 404: {'error': "Team doesn't exist in cache + check_cache_only=True. Team=litellm-dashboard."}
+[92m18:52:54 - LiteLLM Proxy:DEBUG[0m: user_api_key_auth.py:1348 - Checking if token expired, expiry time 2026-04-29 11:16:22.190000+00:00 and current time 2026-04-28 13:22:54.295543+00:00
+[92m18:52:54 - LiteLLM Proxy:DEBUG[0m: user_api_key_auth.py:1567 - centralized auth: team fetch failed (HTTPException: 404: {'error': "Team doesn't exist in db. Team=litellm-dashboard. Create team via `/team/new` call."})
+[92m18:52:54 - LiteLLM Proxy:DEBUG[0m: user_api_key_auth.py:1567 - centralized auth: team fetch failed (HTTPException: 404: {'error': "Team doesn't exist in db. Team=litellm-dashboard. Create team via `/team/new` call."})
+[92m18:52:54 - LiteLLM Proxy:DEBUG[0m: user_api_key_auth.py:1567 - centralized auth: team fetch failed (HTTPException: 404: {'error': "Team doesn't exist in db. Team=litellm-dashboard. Create team via `/team/new` call."})
+[92m18:52:54 - LiteLLM Proxy:DEBUG[0m: user_api_key_auth.py:1567 - centralized auth: team fetch failed (HTTPException: 404: {'error': "Team doesn't exist in db. Team=litellm-dashboard. Create team via `/team/new` call."})
+[92m18:52:54 - LiteLLM Proxy:DEBUG[0m: auth_checks.py:4036 - Vector store registry not found, skipping vector store access check
+[92m18:52:54 - LiteLLM Proxy:DEBUG[0m: auth_checks.py:4036 - Vector store registry not found, skipping vector store access check
+[92m18:52:54 - LiteLLM Proxy:DEBUG[0m: key_management_endpoints.py:4526 - Entering list_keys function
+[92m18:52:54 - LiteLLM Proxy:DEBUG[0m: key_management_endpoints.py:4950 - Filter conditions: {'OR': [{'team_id': None}, {'team_id': {'not': 'litellm-dashboard'}}]}
+[92m18:52:54 - LiteLLM Proxy:DEBUG[0m: key_management_endpoints.py:5020 - Pagination: skip=0, take=50
+[92m18:52:54 - LiteLLM Proxy:DEBUG[0m: auth_checks.py:4036 - Vector store registry not found, skipping vector store access check
+[92m18:52:54 - LiteLLM Proxy:DEBUG[0m: auth_checks.py:4036 - Vector store registry not found, skipping vector store access check
+INFO:     127.0.0.1:65385 - "GET /organization/list HTTP/1.1" 200 OK
+[92m18:52:54 - LiteLLM Proxy:DEBUG[0m: key_management_endpoints.py:5062 - Fetched 4 keys
+INFO:     127.0.0.1:65392 - "GET /tag/list HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65387 - "GET /team/list HTTP/1.1" 200 OK
+[92m18:52:54 - LiteLLM Proxy:DEBUG[0m: key_management_endpoints.py:5074 - Total count of keys: 4
+[92m18:52:54 - LiteLLM Proxy:DEBUG[0m: key_management_endpoints.py:4604 - Successfully prepared response
+INFO:     127.0.0.1:65393 - "GET /key/list?page=1&size=50&sort_by=created_at&sort_order=desc&expand=user&return_full_object=true&include_team_keys=true&include_created_by_keys=true HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65393 - "GET /project/list HTTP/1.1" 404 Not Found
+[92m18:52:58 - LiteLLM Proxy:DEBUG[0m: spend_update_queue.py:39 - Aggregating updates by entity type: []
+[92m18:52:58 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1122 - User Spend transactions: {}
+[92m18:52:58 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1165 - End-User Spend transactions: {}
+[92m18:52:58 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1180 - KEY Spend transactions: {}
+[92m18:52:58 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1221 - Team Spend transactions: {}
+[92m18:52:58 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1269 - Team Membership Spend transactions: {}
+[92m18:52:58 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1342 - Org Spend transactions: {}
+[92m18:52:58 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1435 - Tag Spend transactions: {}
+[92m18:52:58 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1435 - Agent Spend transactions: {}
+[92m18:52:58 - LiteLLM Proxy:DEBUG[0m: daily_spend_update_queue.py:99 - Aggregated daily spend update transactions: {}
+[92m18:52:58 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1576 - Daily User Spend transactions: 0
+[92m18:52:58 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1609 - No new transactions to process for daily user spend update
+[92m18:52:58 - LiteLLM Proxy:DEBUG[0m: daily_spend_update_queue.py:99 - Aggregated daily spend update transactions: {}
+[92m18:52:58 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1576 - Daily Team Spend transactions: 0
+[92m18:52:58 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1609 - No new transactions to process for daily team spend update
+[92m18:52:58 - LiteLLM Proxy:DEBUG[0m: daily_spend_update_queue.py:99 - Aggregated daily spend update transactions: {}
+[92m18:52:58 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1576 - Daily Org Spend transactions: 0
+[92m18:52:58 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1609 - No new transactions to process for daily org spend update
+[92m18:52:58 - LiteLLM Proxy:DEBUG[0m: daily_spend_update_queue.py:99 - Aggregated daily spend update transactions: {}
+[92m18:52:58 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1576 - Daily End_user Spend transactions: 0
+[92m18:52:58 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1609 - No new transactions to process for daily end_user spend update
+[92m18:52:58 - LiteLLM Proxy:DEBUG[0m: daily_spend_update_queue.py:99 - Aggregated daily spend update transactions: {}
+[92m18:52:58 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1576 - Daily Agent Spend transactions: 0
+[92m18:52:58 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1609 - No new transactions to process for daily agent spend update
+[92m18:52:58 - LiteLLM Proxy:DEBUG[0m: utils.py:4936 - Spend Logs transactions: 0
+[92m18:53:04 - LiteLLM Proxy:DEBUG[0m: daily_spend_update_queue.py:99 - Aggregated daily spend update transactions: {}
+[92m18:53:05 - LiteLLM Proxy:DEBUG[0m: http_parsing_utils.py:529 - populate_request_with_path_params: No vector_store_id present in path=/health/readiness
+[92m18:53:05 - LiteLLM Proxy:DEBUG[0m: http_parsing_utils.py:529 - populate_request_with_path_params: No vector_store_id present in path=/organization/list
+[92m18:53:05 - LiteLLM:DEBUG[0m: user_api_key_auth.py:1099 - 404: {'error': "Team doesn't exist in cache + check_cache_only=True. Team=litellm-dashboard."}
+[92m18:53:05 - LiteLLM Proxy:DEBUG[0m: user_api_key_auth.py:1348 - Checking if token expired, expiry time 2026-04-29 11:16:22.190000+00:00 and current time 2026-04-28 13:23:05.652862+00:00
+[92m18:53:06 - LiteLLM Proxy:DEBUG[0m: http_parsing_utils.py:529 - populate_request_with_path_params: No vector_store_id present in path=/team/list
+[92m18:53:06 - LiteLLM:DEBUG[0m: user_api_key_auth.py:1099 - 404: {'error': "Team doesn't exist in cache + check_cache_only=True. Team=litellm-dashboard."}
+[92m18:53:06 - LiteLLM Proxy:DEBUG[0m: user_api_key_auth.py:1348 - Checking if token expired, expiry time 2026-04-29 11:16:22.190000+00:00 and current time 2026-04-28 13:23:06.042541+00:00
+[92m18:53:06 - LiteLLM Proxy:DEBUG[0m: http_parsing_utils.py:529 - populate_request_with_path_params: No vector_store_id present in path=/tag/list
+[92m18:53:06 - LiteLLM:DEBUG[0m: user_api_key_auth.py:1099 - 404: {'error': "Team doesn't exist in cache + check_cache_only=True. Team=litellm-dashboard."}
+[92m18:53:06 - LiteLLM Proxy:DEBUG[0m: user_api_key_auth.py:1348 - Checking if token expired, expiry time 2026-04-29 11:16:22.190000+00:00 and current time 2026-04-28 13:23:06.085990+00:00
+INFO:     127.0.0.1:65443 - "GET /project/list HTTP/1.1" 404 Not Found
+[92m18:53:06 - LiteLLM:DEBUG[0m: http_handler.py:840 - Using AiohttpTransport...
+INFO:     127.0.0.1:65436 - "GET /health/readiness HTTP/1.1" 200 OK
+[92m18:53:06 - LiteLLM Proxy:DEBUG[0m: user_api_key_auth.py:1567 - centralized auth: team fetch failed (HTTPException: 404: {'error': "Team doesn't exist in db. Team=litellm-dashboard. Create team via `/team/new` call."})
+[92m18:53:06 - LiteLLM Proxy:DEBUG[0m: user_api_key_auth.py:1567 - centralized auth: team fetch failed (HTTPException: 404: {'error': "Team doesn't exist in db. Team=litellm-dashboard. Create team via `/team/new` call."})
+[92m18:53:06 - LiteLLM Proxy:DEBUG[0m: user_api_key_auth.py:1567 - centralized auth: team fetch failed (HTTPException: 404: {'error': "Team doesn't exist in db. Team=litellm-dashboard. Create team via `/team/new` call."})
+[92m18:53:06 - LiteLLM Proxy:DEBUG[0m: auth_checks.py:4036 - Vector store registry not found, skipping vector store access check
+[92m18:53:06 - LiteLLM Proxy:DEBUG[0m: auth_checks.py:4036 - Vector store registry not found, skipping vector store access check
+[92m18:53:06 - LiteLLM Proxy:DEBUG[0m: auth_checks.py:4036 - Vector store registry not found, skipping vector store access check
+INFO:     127.0.0.1:65438 - "GET /organization/list HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65442 - "GET /tag/list HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65440 - "GET /team/list HTTP/1.1" 200 OK
+[92m18:53:08 - LiteLLM Proxy:DEBUG[0m: spend_update_queue.py:39 - Aggregating updates by entity type: []
+[92m18:53:09 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1122 - User Spend transactions: {}
+[92m18:53:09 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1165 - End-User Spend transactions: {}
+[92m18:53:09 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1180 - KEY Spend transactions: {}
+[92m18:53:09 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1221 - Team Spend transactions: {}
+[92m18:53:09 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1269 - Team Membership Spend transactions: {}
+[92m18:53:09 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1342 - Org Spend transactions: {}
+[92m18:53:09 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1435 - Tag Spend transactions: {}
+[92m18:53:09 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1435 - Agent Spend transactions: {}
+[92m18:53:09 - LiteLLM Proxy:DEBUG[0m: daily_spend_update_queue.py:99 - Aggregated daily spend update transactions: {}
+[92m18:53:09 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1576 - Daily User Spend transactions: 0
+[92m18:53:09 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1609 - No new transactions to process for daily user spend update
+[92m18:53:09 - LiteLLM Proxy:DEBUG[0m: daily_spend_update_queue.py:99 - Aggregated daily spend update transactions: {}
+[92m18:53:09 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1576 - Daily Team Spend transactions: 0
+[92m18:53:09 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1609 - No new transactions to process for daily team spend update
+[92m18:53:09 - LiteLLM Proxy:DEBUG[0m: daily_spend_update_queue.py:99 - Aggregated daily spend update transactions: {}
+[92m18:53:09 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1576 - Daily Org Spend transactions: 0
+[92m18:53:09 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1609 - No new transactions to process for daily org spend update
+[92m18:53:09 - LiteLLM Proxy:DEBUG[0m: daily_spend_update_queue.py:99 - Aggregated daily spend update transactions: {}
+[92m18:53:09 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1576 - Daily End_user Spend transactions: 0
+[92m18:53:09 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1609 - No new transactions to process for daily end_user spend update
+[92m18:53:09 - LiteLLM Proxy:DEBUG[0m: daily_spend_update_queue.py:99 - Aggregated daily spend update transactions: {}
+[92m18:53:09 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1576 - Daily Agent Spend transactions: 0
+[92m18:53:09 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1609 - No new transactions to process for daily agent spend update
+[92m18:53:09 - LiteLLM Proxy:DEBUG[0m: utils.py:4936 - Spend Logs transactions: 0
+[92m18:53:09 - LiteLLM Proxy:DEBUG[0m: http_parsing_utils.py:529 - populate_request_with_path_params: No vector_store_id present in path=/v1/mcp/server
+[92m18:53:09 - LiteLLM:DEBUG[0m: user_api_key_auth.py:1099 - 404: {'error': "Team doesn't exist in cache + check_cache_only=True. Team=litellm-dashboard."}
+[92m18:53:09 - LiteLLM Proxy:DEBUG[0m: user_api_key_auth.py:1348 - Checking if token expired, expiry time 2026-04-29 11:16:22.190000+00:00 and current time 2026-04-28 13:23:09.447694+00:00
+[92m18:53:09 - LiteLLM Proxy:DEBUG[0m: http_parsing_utils.py:529 - populate_request_with_path_params: No vector_store_id present in path=/v1/mcp/toolset
+[92m18:53:09 - LiteLLM:DEBUG[0m: user_api_key_auth.py:1099 - 404: {'error': "Team doesn't exist in cache + check_cache_only=True. Team=litellm-dashboard."}
+[92m18:53:09 - LiteLLM Proxy:DEBUG[0m: user_api_key_auth.py:1348 - Checking if token expired, expiry time 2026-04-29 11:16:22.190000+00:00 and current time 2026-04-28 13:23:09.480143+00:00
+[92m18:53:09 - LiteLLM Proxy:DEBUG[0m: http_parsing_utils.py:529 - populate_request_with_path_params: No vector_store_id present in path=/get/mcp_semantic_filter_settings
+[92m18:53:09 - LiteLLM:DEBUG[0m: user_api_key_auth.py:1099 - 404: {'error': "Team doesn't exist in cache + check_cache_only=True. Team=litellm-dashboard."}
+[92m18:53:09 - LiteLLM Proxy:DEBUG[0m: user_api_key_auth.py:1348 - Checking if token expired, expiry time 2026-04-29 11:16:22.190000+00:00 and current time 2026-04-28 13:23:09.511525+00:00
+[92m18:53:09 - LiteLLM Proxy:DEBUG[0m: http_parsing_utils.py:529 - populate_request_with_path_params: No vector_store_id present in path=/model_group/info
+[92m18:53:09 - LiteLLM:DEBUG[0m: user_api_key_auth.py:1099 - 404: {'error': "Team doesn't exist in cache + check_cache_only=True. Team=litellm-dashboard."}
+[92m18:53:09 - LiteLLM Proxy:DEBUG[0m: user_api_key_auth.py:1348 - Checking if token expired, expiry time 2026-04-29 11:16:22.190000+00:00 and current time 2026-04-28 13:23:09.521031+00:00
+[92m18:53:09 - LiteLLM Proxy:DEBUG[0m: http_parsing_utils.py:529 - populate_request_with_path_params: No vector_store_id present in path=/config/list
+[92m18:53:09 - LiteLLM:DEBUG[0m: user_api_key_auth.py:1099 - 404: {'error': "Team doesn't exist in cache + check_cache_only=True. Team=litellm-dashboard."}
+[92m18:53:09 - LiteLLM Proxy:DEBUG[0m: user_api_key_auth.py:1348 - Checking if token expired, expiry time 2026-04-29 11:16:22.190000+00:00 and current time 2026-04-28 13:23:09.525741+00:00
+[92m18:53:09 - LiteLLM Proxy:DEBUG[0m: http_parsing_utils.py:529 - populate_request_with_path_params: No vector_store_id present in path=/v1/mcp/network/client-ip
+[92m18:53:09 - LiteLLM:DEBUG[0m: user_api_key_auth.py:1099 - 404: {'error': "Team doesn't exist in cache + check_cache_only=True. Team=litellm-dashboard."}
+[92m18:53:09 - LiteLLM Proxy:DEBUG[0m: user_api_key_auth.py:1348 - Checking if token expired, expiry time 2026-04-29 11:16:22.190000+00:00 and current time 2026-04-28 13:23:09.533092+00:00
+[92m18:53:09 - LiteLLM Proxy:DEBUG[0m: user_api_key_auth.py:1567 - centralized auth: team fetch failed (HTTPException: 404: {'error': "Team doesn't exist in db. Team=litellm-dashboard. Create team via `/team/new` call."})
+[92m18:53:09 - LiteLLM Proxy:DEBUG[0m: user_api_key_auth.py:1567 - centralized auth: team fetch failed (HTTPException: 404: {'error': "Team doesn't exist in db. Team=litellm-dashboard. Create team via `/team/new` call."})
+[92m18:53:09 - LiteLLM Proxy:DEBUG[0m: user_api_key_auth.py:1567 - centralized auth: team fetch failed (HTTPException: 404: {'error': "Team doesn't exist in db. Team=litellm-dashboard. Create team via `/team/new` call."})
+[92m18:53:09 - LiteLLM Proxy:DEBUG[0m: user_api_key_auth.py:1567 - centralized auth: team fetch failed (HTTPException: 404: {'error': "Team doesn't exist in db. Team=litellm-dashboard. Create team via `/team/new` call."})
+[92m18:53:09 - LiteLLM Proxy:DEBUG[0m: user_api_key_auth.py:1567 - centralized auth: team fetch failed (HTTPException: 404: {'error': "Team doesn't exist in db. Team=litellm-dashboard. Create team via `/team/new` call."})
+[92m18:53:09 - LiteLLM Proxy:DEBUG[0m: user_api_key_auth.py:1567 - centralized auth: team fetch failed (HTTPException: 404: {'error': "Team doesn't exist in db. Team=litellm-dashboard. Create team via `/team/new` call."})
+[92m18:53:09 - LiteLLM Proxy:DEBUG[0m: auth_checks.py:4036 - Vector store registry not found, skipping vector store access check
+INFO:     127.0.0.1:65461 - "GET /v1/mcp/network/client-ip HTTP/1.1" 200 OK
+[92m18:53:09 - LiteLLM Proxy:DEBUG[0m: auth_checks.py:4036 - Vector store registry not found, skipping vector store access check
+[92m18:53:09 - LiteLLM Proxy:DEBUG[0m: model_checks.py:131 - ALL KEY MODELS - 0
+[92m18:53:09 - LiteLLM Proxy:DEBUG[0m: model_checks.py:166 - ALL TEAM MODELS - 0
+[92m18:53:09 - LiteLLM:DEBUG[0m: utils.py:5620 - checking potential_model_names in litellm.model_cost: {'split_model': 'gpt-5.3-codex', 'combined_model_name': 'openai/gpt-5.3-codex', 'stripped_model_name': 'gpt-5.3-codex', 'combined_stripped_model_name': 'openai/gpt-5.3-codex', 'custom_llm_provider': 'openai'}
+[92m18:53:09 - LiteLLM:DEBUG[0m: utils.py:5620 - checking potential_model_names in litellm.model_cost: {'split_model': 'gpt-5.3-codex', 'combined_model_name': 'openai/gpt-5.3-codex', 'stripped_model_name': 'gpt-5.3-codex', 'combined_stripped_model_name': 'openai/gpt-5.3-codex', 'custom_llm_provider': 'openai'}
+[92m18:53:09 - LiteLLM:DEBUG[0m: utils.py:5620 - checking potential_model_names in litellm.model_cost: {'split_model': 'gpt-5.3-codex', 'combined_model_name': 'openai/gpt-5.3-codex', 'stripped_model_name': 'openai/gpt-5.3-codex', 'combined_stripped_model_name': 'openai/gpt-5.3-codex', 'custom_llm_provider': 'openai'}
+[92m18:53:09 - LiteLLM:DEBUG[0m: utils.py:5620 - checking potential_model_names in litellm.model_cost: {'split_model': 'oia-gpt-realtime', 'combined_model_name': 'azure/oia-gpt-realtime', 'stripped_model_name': 'azure/oia-gpt-realtime', 'combined_stripped_model_name': 'azure/oia-gpt-realtime', 'custom_llm_provider': 'azure'}
+[92m18:53:09 - LiteLLM:DEBUG[0m: utils.py:5921 - Error getting model info: This model isn't mapped yet. Add it here - https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json
+[92m18:53:09 - LiteLLM:DEBUG[0m: utils.py:5620 - checking potential_model_names in litellm.model_cost: {'split_model': 'oia-gpt-realtime', 'combined_model_name': 'azure/oia-gpt-realtime', 'stripped_model_name': 'azure/oia-gpt-realtime', 'combined_stripped_model_name': 'azure/oia-gpt-realtime', 'custom_llm_provider': 'azure'}
+[92m18:53:09 - LiteLLM:DEBUG[0m: utils.py:5921 - Error getting model info: This model isn't mapped yet. Add it here - https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json
+[92m18:53:09 - LiteLLM:DEBUG[0m: utils.py:5620 - checking potential_model_names in litellm.model_cost: {'split_model': 'gemini-3.1-flash-image-preview', 'combined_model_name': 'vertex_ai/gemini-3.1-flash-image-preview', 'stripped_model_name': 'gemini-3.1-flash-image-preview', 'combined_stripped_model_name': 'vertex_ai/gemini-3.1-flash-image-preview', 'custom_llm_provider': 'vertex_ai'}
+[92m18:53:09 - LiteLLM:DEBUG[0m: utils.py:5620 - checking potential_model_names in litellm.model_cost: {'split_model': 'gemini-3.1-flash-image-preview', 'combined_model_name': 'gemini-3.1-flash-image-preview', 'stripped_model_name': 'gemini-3.1-flash-image-preview', 'combined_stripped_model_name': 'gemini-3.1-flash-image-preview', 'custom_llm_provider': 'vertex_ai'}
+[92m18:53:09 - LiteLLM Proxy:DEBUG[0m: http_parsing_utils.py:529 - populate_request_with_path_params: No vector_store_id present in path=/v1/mcp/server/submissions
+[92m18:53:09 - LiteLLM:DEBUG[0m: user_api_key_auth.py:1099 - 404: {'error': "Team doesn't exist in cache + check_cache_only=True. Team=litellm-dashboard."}
+[92m18:53:09 - LiteLLM Proxy:DEBUG[0m: user_api_key_auth.py:1348 - Checking if token expired, expiry time 2026-04-29 11:16:22.190000+00:00 and current time 2026-04-28 13:23:09.669506+00:00
+[92m18:53:09 - LiteLLM Proxy:DEBUG[0m: auth_checks.py:4036 - Vector store registry not found, skipping vector store access check
+[92m18:53:09 - LiteLLM Proxy:DEBUG[0m: auth_checks.py:4036 - Vector store registry not found, skipping vector store access check
+[92m18:53:09 - LiteLLM:DEBUG[0m: mcp_server_manager.py:796 - Admin user without explicit object_permission - returning all servers
+INFO:     127.0.0.1:65440 - "GET /v1/mcp/server HTTP/1.1" 200 OK
+[92m18:53:09 - LiteLLM Proxy:DEBUG[0m: auth_checks.py:4036 - Vector store registry not found, skipping vector store access check
+[92m18:53:09 - LiteLLM Proxy:WARNING[0m: toolset_db.py:60 - litellm.proxy._experimental.mcp_server.toolset_db::list_mcp_toolsets - 'Prisma' object has no attribute 'litellm_mcptoolsettable'
+INFO:     127.0.0.1:65442 - "GET /v1/mcp/toolset HTTP/1.1" 200 OK
+[92m18:53:09 - LiteLLM Proxy:DEBUG[0m: auth_checks.py:4036 - Vector store registry not found, skipping vector store access check
+[92m18:53:09 - LiteLLM Proxy:DEBUG[0m: http_parsing_utils.py:529 - populate_request_with_path_params: No vector_store_id present in path=/v1/mcp/server/health
+[92m18:53:09 - LiteLLM:DEBUG[0m: user_api_key_auth.py:1099 - 404: {'error': "Team doesn't exist in cache + check_cache_only=True. Team=litellm-dashboard."}
+[92m18:53:09 - LiteLLM Proxy:DEBUG[0m: user_api_key_auth.py:1348 - Checking if token expired, expiry time 2026-04-29 11:16:22.190000+00:00 and current time 2026-04-28 13:23:09.692446+00:00
+INFO:     127.0.0.1:65442 - "HEAD / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65436 - "GET /model_group/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65443 - "GET /config/list?config_type=general_settings HTTP/1.1" 200 OK
+[92m18:53:09 - LiteLLM Proxy:DEBUG[0m: http_parsing_utils.py:529 - populate_request_with_path_params: No vector_store_id present in path=/config/list
+[92m18:53:09 - LiteLLM:DEBUG[0m: user_api_key_auth.py:1099 - 404: {'error': "Team doesn't exist in cache + check_cache_only=True. Team=litellm-dashboard."}
+[92m18:53:09 - LiteLLM Proxy:DEBUG[0m: user_api_key_auth.py:1348 - Checking if token expired, expiry time 2026-04-29 11:16:22.190000+00:00 and current time 2026-04-28 13:23:09.731878+00:00
+INFO:     127.0.0.1:65436 - "GET /ui/assets/logos/github.svg HTTP/1.1" 304 Not Modified
+INFO:     127.0.0.1:65443 - "GET /ui/assets/logos/slack.svg HTTP/1.1" 304 Not Modified
+[92m18:53:09 - LiteLLM Proxy:DEBUG[0m: user_api_key_auth.py:1567 - centralized auth: team fetch failed (HTTPException: 404: {'error': "Team doesn't exist in db. Team=litellm-dashboard. Create team via `/team/new` call."})
+INFO:     127.0.0.1:65436 - "GET /ui/assets/logos/notion.svg HTTP/1.1" 304 Not Modified
+INFO:     127.0.0.1:65443 - "GET /ui/assets/logos/linear.svg HTTP/1.1" 304 Not Modified
+[92m18:53:09 - LiteLLM Proxy:DEBUG[0m: user_api_key_auth.py:1567 - centralized auth: team fetch failed (HTTPException: 404: {'error': "Team doesn't exist in db. Team=litellm-dashboard. Create team via `/team/new` call."})
+[92m18:53:09 - LiteLLM Proxy:DEBUG[0m: user_api_key_auth.py:1567 - centralized auth: team fetch failed (HTTPException: 404: {'error': "Team doesn't exist in db. Team=litellm-dashboard. Create team via `/team/new` call."})
+INFO:     127.0.0.1:65436 - "GET /ui/assets/logos/jira.svg HTTP/1.1" 304 Not Modified
+INFO:     127.0.0.1:65438 - "GET /get/mcp_semantic_filter_settings HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65443 - "GET /ui/assets/logos/figma.svg HTTP/1.1" 304 Not Modified
+[92m18:53:09 - LiteLLM Proxy:DEBUG[0m: auth_checks.py:4036 - Vector store registry not found, skipping vector store access check
+[92m18:53:09 - LiteLLM:DEBUG[0m: mcp_server_manager.py:796 - Admin user without explicit object_permission - returning all servers
+[92m18:53:09 - LiteLLM:DEBUG[0m: client.py:273 - litellm headers for streamable_http_client: {}
+[92m18:53:09 - LiteLLM:DEBUG[0m: client.py:402 - MCP client using SSL configuration: SSLContext
+[92m18:53:09 - LiteLLM Proxy:DEBUG[0m: auth_checks.py:4036 - Vector store registry not found, skipping vector store access check
+INFO:     127.0.0.1:65436 - "GET /ui/assets/logos/gmail.svg HTTP/1.1" 304 Not Modified
+[92m18:53:09 - LiteLLM Proxy:DEBUG[0m: http_parsing_utils.py:529 - populate_request_with_path_params: No vector_store_id present in path=/model_group/info
+[92m18:53:09 - LiteLLM:DEBUG[0m: user_api_key_auth.py:1099 - 404: {'error': "Team doesn't exist in cache + check_cache_only=True. Team=litellm-dashboard."}
+[92m18:53:09 - LiteLLM Proxy:DEBUG[0m: user_api_key_auth.py:1348 - Checking if token expired, expiry time 2026-04-29 11:16:22.190000+00:00 and current time 2026-04-28 13:23:09.989425+00:00
+INFO:     127.0.0.1:65443 - "GET /ui/assets/logos/stripe.svg HTTP/1.1" 304 Not Modified
+INFO:     127.0.0.1:65438 - "GET /ui/assets/logos/google_drive.svg HTTP/1.1" 304 Not Modified
+[92m18:53:09 - LiteLLM Proxy:DEBUG[0m: auth_checks.py:4036 - Vector store registry not found, skipping vector store access check
+INFO:     127.0.0.1:65443 - "GET /ui/assets/logos/shopify.svg HTTP/1.1" 304 Not Modified
+INFO:     127.0.0.1:65438 - "GET /ui/assets/logos/salesforce.svg HTTP/1.1" 304 Not Modified
+INFO:     127.0.0.1:65442 - "GET /config/list?config_type=general_settings HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65438 - "GET /ui/assets/logos/hubspot.svg HTTP/1.1" 304 Not Modified
+INFO:     127.0.0.1:65443 - "GET /ui/assets/logos/twilio.svg HTTP/1.1" 304 Not Modified
+INFO:     127.0.0.1:65461 - "GET /v1/mcp/server/submissions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65442 - "GET /ui/assets/logos/cloudflare.svg HTTP/1.1" 304 Not Modified
+[92m18:53:10 - LiteLLM Proxy:DEBUG[0m: user_api_key_auth.py:1567 - centralized auth: team fetch failed (HTTPException: 404: {'error': "Team doesn't exist in db. Team=litellm-dashboard. Create team via `/team/new` call."})
+INFO:     127.0.0.1:65438 - "GET /ui/assets/logos/postgresql.svg HTTP/1.1" 304 Not Modified
+INFO:     127.0.0.1:65443 - "GET /ui/assets/logos/sentry.svg HTTP/1.1" 304 Not Modified
+INFO:     127.0.0.1:65461 - "GET /ui/assets/logos/snowflake.svg HTTP/1.1" 304 Not Modified
+INFO:     127.0.0.1:65442 - "GET /ui/assets/logos/zapier.svg HTTP/1.1" 304 Not Modified
+INFO:     127.0.0.1:65461 - "GET /__next._tree.txt?_rsc=1r34m HTTP/1.1" 404 Not Found
+[92m18:53:10 - LiteLLM Proxy:DEBUG[0m: auth_checks.py:4036 - Vector store registry not found, skipping vector store access check
+[92m18:53:10 - LiteLLM Proxy:DEBUG[0m: model_checks.py:131 - ALL KEY MODELS - 0
+[92m18:53:10 - LiteLLM Proxy:DEBUG[0m: model_checks.py:166 - ALL TEAM MODELS - 0
+[92m18:53:10 - LiteLLM:DEBUG[0m: utils.py:5620 - checking potential_model_names in litellm.model_cost: {'split_model': 'oia-gpt-realtime', 'combined_model_name': 'azure/oia-gpt-realtime', 'stripped_model_name': 'azure/oia-gpt-realtime', 'combined_stripped_model_name': 'azure/oia-gpt-realtime', 'custom_llm_provider': 'azure'}
+[92m18:53:10 - LiteLLM:DEBUG[0m: utils.py:5921 - Error getting model info: This model isn't mapped yet. Add it here - https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json
+[92m18:53:10 - LiteLLM:DEBUG[0m: utils.py:5620 - checking potential_model_names in litellm.model_cost: {'split_model': 'oia-gpt-realtime', 'combined_model_name': 'azure/oia-gpt-realtime', 'stripped_model_name': 'azure/oia-gpt-realtime', 'combined_stripped_model_name': 'azure/oia-gpt-realtime', 'custom_llm_provider': 'azure'}
+[92m18:53:10 - LiteLLM:DEBUG[0m: utils.py:5921 - Error getting model info: This model isn't mapped yet. Add it here - https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json
+INFO:     127.0.0.1:65443 - "GET /ui/assets/logos/gitlab.svg HTTP/1.1" 304 Not Modified
+INFO:     127.0.0.1:65438 - "GET /ui/assets/logos/google.svg HTTP/1.1" 304 Not Modified
+INFO:     127.0.0.1:65436 - "GET /model_group/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65440 - "GET /v1/mcp/server/health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65440 - "GET / HTTP/1.1" 200 OK
+[92m18:53:17 - LiteLLM Proxy:DEBUG[0m: custom_openapi_spec.py:311 - Successfully added ProxyChatCompletionRequest schema to OpenAPI spec
+[92m18:53:17 - LiteLLM Proxy:DEBUG[0m: custom_openapi_spec.py:311 - Successfully added EmbeddingRequest schema to OpenAPI spec
+[92m18:53:17 - LiteLLM Proxy:DEBUG[0m: custom_openapi_spec.py:315 - Could not get schema for ResponsesAPIRequestParams
+INFO:     127.0.0.1:65440 - "GET /openapi.json HTTP/1.1" 200 OK
+[92m18:53:17 - LiteLLM Proxy:DEBUG[0m: http_parsing_utils.py:529 - populate_request_with_path_params: No vector_store_id present in path=/organization/list
+[92m18:53:17 - LiteLLM:DEBUG[0m: user_api_key_auth.py:1099 - 404: {'error': "Team doesn't exist in cache + check_cache_only=True. Team=litellm-dashboard."}
+[92m18:53:17 - LiteLLM Proxy:DEBUG[0m: user_api_key_auth.py:1348 - Checking if token expired, expiry time 2026-04-29 11:16:22.190000+00:00 and current time 2026-04-28 13:23:17.073159+00:00
+[92m18:53:17 - LiteLLM Proxy:DEBUG[0m: http_parsing_utils.py:529 - populate_request_with_path_params: No vector_store_id present in path=/team/list
+[92m18:53:17 - LiteLLM:DEBUG[0m: user_api_key_auth.py:1099 - 404: {'error': "Team doesn't exist in cache + check_cache_only=True. Team=litellm-dashboard."}
+[92m18:53:17 - LiteLLM Proxy:DEBUG[0m: user_api_key_auth.py:1348 - Checking if token expired, expiry time 2026-04-29 11:16:22.190000+00:00 and current time 2026-04-28 13:23:17.085893+00:00
+[92m18:53:17 - LiteLLM Proxy:DEBUG[0m: http_parsing_utils.py:529 - populate_request_with_path_params: No vector_store_id present in path=/v1/mcp/server
+[92m18:53:17 - LiteLLM:DEBUG[0m: user_api_key_auth.py:1099 - 404: {'error': "Team doesn't exist in cache + check_cache_only=True. Team=litellm-dashboard."}
+[92m18:53:17 - LiteLLM Proxy:DEBUG[0m: user_api_key_auth.py:1348 - Checking if token expired, expiry time 2026-04-29 11:16:22.190000+00:00 and current time 2026-04-28 13:23:17.089077+00:00
+[92m18:53:17 - LiteLLM Proxy:DEBUG[0m: http_parsing_utils.py:529 - populate_request_with_path_params: No vector_store_id present in path=/v1/mcp/server/health
+[92m18:53:17 - LiteLLM:DEBUG[0m: user_api_key_auth.py:1099 - 404: {'error': "Team doesn't exist in cache + check_cache_only=True. Team=litellm-dashboard."}
+[92m18:53:17 - LiteLLM Proxy:DEBUG[0m: user_api_key_auth.py:1348 - Checking if token expired, expiry time 2026-04-29 11:16:22.190000+00:00 and current time 2026-04-28 13:23:17.093754+00:00
+[92m18:53:17 - LiteLLM Proxy:DEBUG[0m: http_parsing_utils.py:529 - populate_request_with_path_params: No vector_store_id present in path=/v1/mcp/toolset
+[92m18:53:17 - LiteLLM:DEBUG[0m: user_api_key_auth.py:1099 - 404: {'error': "Team doesn't exist in cache + check_cache_only=True. Team=litellm-dashboard."}
+[92m18:53:17 - LiteLLM Proxy:DEBUG[0m: user_api_key_auth.py:1348 - Checking if token expired, expiry time 2026-04-29 11:16:22.190000+00:00 and current time 2026-04-28 13:23:17.096736+00:00
+[92m18:53:17 - LiteLLM Proxy:DEBUG[0m: user_api_key_auth.py:1567 - centralized auth: team fetch failed (HTTPException: 404: {'error': "Team doesn't exist in db. Team=litellm-dashboard. Create team via `/team/new` call."})
+[92m18:53:17 - LiteLLM Proxy:DEBUG[0m: user_api_key_auth.py:1567 - centralized auth: team fetch failed (HTTPException: 404: {'error': "Team doesn't exist in db. Team=litellm-dashboard. Create team via `/team/new` call."})
+[92m18:53:17 - LiteLLM Proxy:DEBUG[0m: user_api_key_auth.py:1567 - centralized auth: team fetch failed (HTTPException: 404: {'error': "Team doesn't exist in db. Team=litellm-dashboard. Create team via `/team/new` call."})
+[92m18:53:17 - LiteLLM Proxy:DEBUG[0m: user_api_key_auth.py:1567 - centralized auth: team fetch failed (HTTPException: 404: {'error': "Team doesn't exist in db. Team=litellm-dashboard. Create team via `/team/new` call."})
+[92m18:53:17 - LiteLLM Proxy:DEBUG[0m: auth_checks.py:4036 - Vector store registry not found, skipping vector store access check
+[92m18:53:17 - LiteLLM:DEBUG[0m: mcp_server_manager.py:796 - Admin user without explicit object_permission - returning all servers
+INFO:     127.0.0.1:65438 - "GET /v1/mcp/server HTTP/1.1" 200 OK
+[92m18:53:17 - LiteLLM Proxy:DEBUG[0m: auth_checks.py:4036 - Vector store registry not found, skipping vector store access check
+[92m18:53:17 - LiteLLM Proxy:DEBUG[0m: user_api_key_auth.py:1567 - centralized auth: team fetch failed (HTTPException: 404: {'error': "Team doesn't exist in db. Team=litellm-dashboard. Create team via `/team/new` call."})
+[92m18:53:17 - LiteLLM Proxy:DEBUG[0m: proxy_server.py:4256 - len new_models: 2
+[92m18:53:17 - LiteLLM Proxy:DEBUG[0m: auth_checks.py:4036 - Vector store registry not found, skipping vector store access check
+[92m18:53:17 - LiteLLM:DEBUG[0m: mcp_server_manager.py:796 - Admin user without explicit object_permission - returning all servers
+[92m18:53:17 - LiteLLM:DEBUG[0m: client.py:273 - litellm headers for streamable_http_client: {}
+[92m18:53:17 - LiteLLM:DEBUG[0m: client.py:402 - MCP client using SSL configuration: SSLContext
+[92m18:53:17 - LiteLLM Proxy:DEBUG[0m: auth_checks.py:4036 - Vector store registry not found, skipping vector store access check
+[92m18:53:17 - LiteLLM Proxy:WARNING[0m: toolset_db.py:60 - litellm.proxy._experimental.mcp_server.toolset_db::list_mcp_toolsets - 'Prisma' object has no attribute 'litellm_mcptoolsettable'
+INFO:     127.0.0.1:65442 - "GET /v1/mcp/toolset HTTP/1.1" 200 OK
+[92m18:53:17 - LiteLLM Proxy:DEBUG[0m: auth_checks.py:4036 - Vector store registry not found, skipping vector store access check
+INFO:     127.0.0.1:65436 - "GET /organization/list HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65443 - "GET /team/list HTTP/1.1" 200 OK
+[92m18:53:17 - LiteLLM Proxy:DEBUG[0m: proxy_server.py:5461 - guardrails from the DB []
+[92m18:53:17 - LiteLLM Proxy:INFO[0m: policy_registry.py:577 - Synced 0 production policies and 0 draft/published (by ID) from DB to in-memory registry
+[92m18:53:17 - LiteLLM Proxy:INFO[0m: attachment_registry.py:481 - Synced 0 attachments from DB to in-memory registry
+[92m18:53:17 - LiteLLM Proxy:DEBUG[0m: proxy_server.py:5497 - Successfully synced policies and attachments from DB
+[92m18:53:17 - LiteLLM:DEBUG[0m: mcp_server_manager.py:2644 - Loading MCP servers from database into registry...
+[92m18:53:17 - LiteLLM:INFO[0m: mcp_server_manager.py:2664 - Found 1 MCP servers in database
+[92m18:53:17 - LiteLLM:DEBUG[0m: mcp_server_manager.py:2697 - MCP registry refreshed (1 servers in registry)
+[92m18:53:17 - LiteLLM Proxy:DEBUG[0m: pass_through_endpoints.py:2409 - initializing pass through endpoints
+[92m18:53:17 - LiteLLM Proxy:INFO[0m: proxy_server.py:5640 - Loading 0 search tool(s) from database into router
+[92m18:53:17 - LiteLLM Proxy:DEBUG[0m: proxy_server.py:5660 - No search tools found in database, keeping config-loaded search tools (if any)
+[92m18:53:17 - LiteLLM Proxy:INFO[0m: tool_registry_writer.py:329 - ToolPolicyRegistry: synced 17 tool policies and 1 object permissions from DB
+[92m18:53:17 - LiteLLM Proxy:DEBUG[0m: proxy_server.py:5517 - Successfully synced tool policy from DB
+INFO:     127.0.0.1:65461 - "GET /v1/mcp/server/health HTTP/1.1" 200 OK
+[92m18:53:19 - LiteLLM Proxy:DEBUG[0m: spend_update_queue.py:39 - Aggregating updates by entity type: []
+[92m18:53:20 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1122 - User Spend transactions: {}
+[92m18:53:20 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1165 - End-User Spend transactions: {}
+[92m18:53:20 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1180 - KEY Spend transactions: {}
+[92m18:53:20 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1221 - Team Spend transactions: {}
+[92m18:53:20 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1269 - Team Membership Spend transactions: {}
+[92m18:53:20 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1342 - Org Spend transactions: {}
+[92m18:53:20 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1435 - Tag Spend transactions: {}
+[92m18:53:20 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1435 - Agent Spend transactions: {}
+[92m18:53:20 - LiteLLM Proxy:DEBUG[0m: daily_spend_update_queue.py:99 - Aggregated daily spend update transactions: {}
+[92m18:53:20 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1576 - Daily User Spend transactions: 0
+[92m18:53:20 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1609 - No new transactions to process for daily user spend update
+[92m18:53:20 - LiteLLM Proxy:DEBUG[0m: daily_spend_update_queue.py:99 - Aggregated daily spend update transactions: {}
+[92m18:53:20 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1576 - Daily Team Spend transactions: 0
+[92m18:53:20 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1609 - No new transactions to process for daily team spend update
+[92m18:53:20 - LiteLLM Proxy:DEBUG[0m: daily_spend_update_queue.py:99 - Aggregated daily spend update transactions: {}
+[92m18:53:20 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1576 - Daily Org Spend transactions: 0
+[92m18:53:20 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1609 - No new transactions to process for daily org spend update
+[92m18:53:20 - LiteLLM Proxy:DEBUG[0m: daily_spend_update_queue.py:99 - Aggregated daily spend update transactions: {}
+[92m18:53:20 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1576 - Daily End_user Spend transactions: 0
+[92m18:53:20 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1609 - No new transactions to process for daily end_user spend update
+[92m18:53:20 - LiteLLM Proxy:DEBUG[0m: daily_spend_update_queue.py:99 - Aggregated daily spend update transactions: {}
+[92m18:53:20 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1576 - Daily Agent Spend transactions: 0
+[92m18:53:20 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1609 - No new transactions to process for daily agent spend update
+[92m18:53:20 - LiteLLM Proxy:DEBUG[0m: utils.py:4936 - Spend Logs transactions: 0
+[92m18:53:29 - LiteLLM Proxy:DEBUG[0m: daily_spend_update_queue.py:99 - Aggregated daily spend update transactions: {}
+[92m18:53:31 - LiteLLM Proxy:DEBUG[0m: spend_update_queue.py:39 - Aggregating updates by entity type: []
+[92m18:53:31 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1122 - User Spend transactions: {}
+[92m18:53:31 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1165 - End-User Spend transactions: {}
+[92m18:53:31 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1180 - KEY Spend transactions: {}
+[92m18:53:31 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1221 - Team Spend transactions: {}
+[92m18:53:31 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1269 - Team Membership Spend transactions: {}
+[92m18:53:31 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1342 - Org Spend transactions: {}
+[92m18:53:31 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1435 - Tag Spend transactions: {}
+[92m18:53:31 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1435 - Agent Spend transactions: {}
+[92m18:53:31 - LiteLLM Proxy:DEBUG[0m: daily_spend_update_queue.py:99 - Aggregated daily spend update transactions: {}
+[92m18:53:31 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1576 - Daily User Spend transactions: 0
+[92m18:53:31 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1609 - No new transactions to process for daily user spend update
+[92m18:53:31 - LiteLLM Proxy:DEBUG[0m: daily_spend_update_queue.py:99 - Aggregated daily spend update transactions: {}
+[92m18:53:31 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1576 - Daily Team Spend transactions: 0
+[92m18:53:31 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1609 - No new transactions to process for daily team spend update
+[92m18:53:31 - LiteLLM Proxy:DEBUG[0m: daily_spend_update_queue.py:99 - Aggregated daily spend update transactions: {}
+[92m18:53:31 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1576 - Daily Org Spend transactions: 0
+[92m18:53:31 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1609 - No new transactions to process for daily org spend update
+[92m18:53:31 - LiteLLM Proxy:DEBUG[0m: daily_spend_update_queue.py:99 - Aggregated daily spend update transactions: {}
+[92m18:53:31 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1576 - Daily End_user Spend transactions: 0
+[92m18:53:31 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1609 - No new transactions to process for daily end_user spend update
+[92m18:53:31 - LiteLLM Proxy:DEBUG[0m: daily_spend_update_queue.py:99 - Aggregated daily spend update transactions: {}
+[92m18:53:31 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1576 - Daily Agent Spend transactions: 0
+[92m18:53:31 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1609 - No new transactions to process for daily agent spend update
+[92m18:53:31 - LiteLLM Proxy:DEBUG[0m: utils.py:4936 - Spend Logs transactions: 0
