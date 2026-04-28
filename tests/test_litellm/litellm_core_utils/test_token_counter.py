@@ -980,3 +980,211 @@ def test_token_counter_with_thinking_content():
     assert (
         tokens_no_thinking < 15
     ), f"Expected minimal token count for empty thinking block, got {tokens_no_thinking}"
+
+
+# 1×1 transparent PNG, base64-encoded — small enough to inline in tests.
+_TEST_PNG_BASE64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII="
+
+
+def test_token_counter_with_anthropic_image_base64():
+    """
+    Anthropic-native image block with source.type='base64' is counted, not rejected.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/20367 —
+    previously raised ValueError("Invalid content item type: image. ...").
+    """
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "What's in this image?"},
+                {
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": "image/png",
+                        "data": _TEST_PNG_BASE64,
+                    },
+                },
+            ],
+        }
+    ]
+
+    tokens = token_counter(
+        model="anthropic/claude-sonnet-4-5-20250929", messages=messages
+    )
+    # User text + image base tokens (calculate_img_tokens auto-mode = 85) + overhead.
+    assert tokens > 85, f"Expected image block to contribute tokens, got {tokens}"
+
+
+def test_token_counter_with_anthropic_image_url():
+    """Anthropic-native image block with source.type='url' is counted."""
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "image",
+                    "source": {
+                        "type": "url",
+                        "url": "https://example.com/image.png",
+                    },
+                }
+            ],
+        }
+    ]
+
+    tokens = token_counter(
+        model="anthropic/claude-sonnet-4-5-20250929",
+        messages=messages,
+        use_default_image_token_count=True,  # avoid an actual HTTP fetch
+    )
+    assert tokens > 0, f"Expected positive token count, got {tokens}"
+
+
+def test_token_counter_with_anthropic_image_file():
+    """
+    Anthropic-native image block with source.type='file' is counted.
+
+    file_id refers to an Anthropic Files API upload; there is no fetchable
+    image payload, so the counter falls back to DEFAULT_IMAGE_TOKEN_COUNT.
+    """
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "image",
+                    "source": {
+                        "type": "file",
+                        "file_id": "file_011CQc1DRcaXZyDtCkP9NbBz",
+                    },
+                }
+            ],
+        }
+    ]
+
+    tokens = token_counter(
+        model="anthropic/claude-sonnet-4-5-20250929", messages=messages
+    )
+    assert tokens > 0, f"Expected positive token count, got {tokens}"
+
+
+def test_token_counter_with_anthropic_document_base64():
+    """
+    Anthropic-native document block with title/context text fields is counted.
+
+    Validates that:
+    - 'title' and 'context' string fields are counted via the model tokenizer
+    - source payload contributes the default image-token fallback
+    - 'citations' and 'type' metadata are not counted as text
+    """
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "document",
+                    "source": {
+                        "type": "base64",
+                        "media_type": "application/pdf",
+                        "data": "JVBERi0xLjQKJeLjz9MK",  # truncated, content not parsed
+                    },
+                    "title": "Q4 financial report",
+                    "context": "Internal quarterly summary for the finance team.",
+                    "citations": {"enabled": True},
+                }
+            ],
+        }
+    ]
+
+    tokens = token_counter(
+        model="anthropic/claude-sonnet-4-5-20250929", messages=messages
+    )
+    # title + context together are ~15 tokens, plus DEFAULT_IMAGE_TOKEN_COUNT (250) for the source.
+    assert (
+        tokens > 250
+    ), f"Expected document tokens to include source fallback, got {tokens}"
+
+
+def test_token_counter_with_anthropic_document_file():
+    """Anthropic-native document block with source.type='file' is counted."""
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "document",
+                    "source": {
+                        "type": "file",
+                        "file_id": "file_011CQc1DRcaXZyDtCkP9NbBz",
+                    },
+                }
+            ],
+        }
+    ]
+
+    tokens = token_counter(
+        model="anthropic/claude-sonnet-4-5-20250929", messages=messages
+    )
+    assert tokens > 0, f"Expected positive token count, got {tokens}"
+
+
+def test_token_counter_with_image_inside_tool_result():
+    """
+    Image block nested inside tool_result.content is counted via recursion.
+
+    _count_anthropic_content iterates tool_result fields; the 'content' field
+    being a list re-enters _count_content_list, where the new 'image' branch
+    fires.
+    """
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_01234567890",
+                    "content": [
+                        {"type": "text", "text": "Here is the rendered chart:"},
+                        {
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": "image/png",
+                                "data": _TEST_PNG_BASE64,
+                            },
+                        },
+                    ],
+                }
+            ],
+        }
+    ]
+
+    tokens = token_counter(model="gpt-3.5-turbo", messages=messages)
+    assert tokens > 85, f"Expected nested image to contribute tokens, got {tokens}"
+
+
+def test_token_counter_with_malformed_image_uses_default_token_count():
+    """
+    Malformed Anthropic image block (no 'source') doesn't crash when
+    default_token_count is provided — _count_content_list's outer try/except
+    swallows the inner ValueError and returns the fallback.
+    """
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "image"},  # missing 'source' — would raise without fallback
+            ],
+        }
+    ]
+
+    tokens = token_counter(
+        model="gpt-3.5-turbo",
+        messages=messages,
+        default_token_count=42,
+    )
+    # The malformed-block fallback returns 42 for the content-list count;
+    # outer message bookkeeping (tokens_per_message etc.) adds a few more.
+    assert tokens >= 42, f"Expected default_token_count fallback, got {tokens}"
