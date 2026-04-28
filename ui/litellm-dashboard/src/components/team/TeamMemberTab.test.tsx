@@ -453,6 +453,25 @@ describe("TeamMembersComponent", () => {
     expect(screen.getAllByText("user2@test.com").length).toBeGreaterThanOrEqual(1);
   });
 
+  it("should show filtered count when search is active", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(
+      <TeamMembersComponent
+        teamData={createMockTeamData()}
+        canEditTeam={false}
+        handleMemberDelete={mockHandleMemberDelete}
+        setSelectedEditMember={mockSetSelectedEditMember}
+        setIsEditMemberModalVisible={mockSetIsEditMemberModalVisible}
+        setIsAddMemberModalVisible={mockSetIsAddMemberModalVisible}
+      />,
+    );
+
+    const searchInput = screen.getByPlaceholderText(/search by email or user id/i);
+    await user.type(searchInput, "user1");
+
+    expect(screen.getByText("1 of 2 Members")).toBeInTheDocument();
+  });
+
   it("should hide action buttons when canEditTeam is false", () => {
     renderWithProviders(
       <TeamMembersComponent

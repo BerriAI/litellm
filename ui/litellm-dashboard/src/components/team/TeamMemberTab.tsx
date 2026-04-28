@@ -9,7 +9,7 @@ import { Input, Select, Space, Tooltip, Typography } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import MemberTable from "@/components/common_components/MemberTable";
 import { TeamData, TeamMembership } from "./TeamInfo";
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 
 interface TeamMemberTabProps {
   teamData: TeamData;
@@ -32,9 +32,6 @@ export default function TeamMemberTab({
   const [searchText, setSearchText] = useState("");
   const [roleFilter, setRoleFilter] = useState<string | null>(null);
   const [memberTablePage, setMemberTablePage] = useState(1);
-
-  // Reset to page 1 when filter/search changes — without remounting MemberTable
-  useEffect(() => { setMemberTablePage(1); }, [searchText, roleFilter]);
 
   // O(1) lookup instead of O(n) find() per member per column
   const membershipsMap = useMemo(
@@ -226,8 +223,8 @@ export default function TeamMemberTab({
           placeholder="Search by email or user ID"
           allowClear
           style={{ width: 280 }}
-          onChange={(e) => setSearchText(e.target.value)}
-          onSearch={(v) => setSearchText(v)}
+          onChange={(e) => { setSearchText(e.target.value); setMemberTablePage(1); }}
+          onSearch={(v) => { setSearchText(v); setMemberTablePage(1); }}
         />
         <Select
           placeholder="Filter by role"
@@ -237,11 +234,12 @@ export default function TeamMemberTab({
             { value: "admin", label: "Admin" },
             { value: "non-admin", label: "Non-admin" },
           ]}
-          onChange={(v) => setRoleFilter(v ?? null)}
+          onChange={(v) => { setRoleFilter(v ?? null); setMemberTablePage(1); }}
         />
       </Space>
       <MemberTable
         members={filteredMembers}
+        totalMembers={teamData.team_info.members_with_roles.length}
         canEdit={canEditTeam}
         withPagination
         currentPage={memberTablePage}

@@ -25,6 +25,8 @@ export interface MemberTableProps {
   /** Controlled current page (optional). When provided, pair with onPageChange. */
   currentPage?: number;
   onPageChange?: (page: number) => void;
+  /** Total unfiltered member count. When provided and differs from members.length, shows "X of Y Members". */
+  totalMembers?: number;
 }
 
 export default function MemberTable({
@@ -43,6 +45,7 @@ export default function MemberTable({
   defaultPageSize = 50,
   currentPage: controlledPage,
   onPageChange,
+  totalMembers,
 }: MemberTableProps) {
   const [internalPage, setInternalPage] = useState(1);
   const [pageSize, setPageSize] = useState(defaultPageSize);
@@ -54,6 +57,9 @@ export default function MemberTable({
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
   const safePage = Math.min(page, totalPages);
   const pagedMembers = withPagination ? members.slice((safePage - 1) * pageSize, safePage * pageSize) : members;
+  const countDisplay = totalMembers !== undefined && total !== totalMembers
+    ? `${total} of ${totalMembers} Members`
+    : `${total} Member${total !== 1 ? "s" : ""}`;
   const baseColumns: ColumnsType<Member> = [
     {
       title: "User Email",
@@ -128,7 +134,7 @@ export default function MemberTable({
     <Space direction="vertical" style={{ width: "100%" }}>
       <div className="flex items-center justify-between w-full">
         <span className="text-sm text-gray-700">
-          {total} Member{total !== 1 ? "s" : ""}
+          {countDisplay}
         </span>
         {withPagination && (
           <Pagination
@@ -139,7 +145,14 @@ export default function MemberTable({
             showSizeChanger
             pageSizeOptions={["10", "25", "50", "100"]}
             showQuickJumper
-            onChange={(p, ps) => { setPage(p); if (ps !== pageSize) { setPageSize(ps); setPage(1); } }}
+            onChange={(p, ps) => {
+              if (ps !== pageSize) {
+                setPageSize(ps);
+                setPage(1);
+              } else {
+                setPage(p);
+              }
+            }}
           />
         )}
       </div>
