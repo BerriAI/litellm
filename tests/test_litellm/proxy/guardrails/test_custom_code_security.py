@@ -1,9 +1,16 @@
+import os
+
 import pytest
 
 from litellm.proxy.guardrails.guardrail_hooks.custom_code.custom_code_guardrail import (
     CustomCodeCompilationError,
     CustomCodeGuardrail,
 )
+
+
+@pytest.fixture(autouse=True)
+def enable_custom_code_guardrails(monkeypatch):
+    monkeypatch.setenv("LITELLM_ENABLE_CUSTOM_CODE_GUARDRAILS", "true")
 
 
 # str.mro() + generator gi_code + code.replace(co_names=...) + __setattr__
