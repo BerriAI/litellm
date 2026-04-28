@@ -1770,10 +1770,8 @@ class OpenTelemetry(CustomLogger):
                     # list instead of "choices".  Each item with
                     # type="message" contains a "content" list of
                     # OutputText objects (type="output_text").
-                    output_messages = (
-                        self._transform_responses_api_output_to_otel(
-                            response_obj.get("output")
-                        )
+                    output_messages = self._transform_responses_api_output_to_otel(
+                        response_obj.get("output")
                     )
                     if output_messages:
                         self.safe_set_attribute(
@@ -1886,9 +1884,7 @@ class OpenTelemetry(CustomLogger):
             transformed.append(transformed_msg)
         return transformed
 
-    def _transform_responses_api_output_to_otel(
-        self, output: List[dict]
-    ) -> List[dict]:
+    def _transform_responses_api_output_to_otel(self, output: List[dict]) -> List[dict]:
         """
         Transform Responses API output items into OTEL GenAI 1.38 format.
 
