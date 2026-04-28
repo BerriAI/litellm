@@ -8,8 +8,9 @@ omits each feature's routes until the feature is warmed.
 
 import asyncio
 import importlib
+import sys
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Callable, Tuple
+from typing import TYPE_CHECKING, Callable, Dict, Tuple
 
 from starlette.types import Receive, Scope, Send
 
@@ -46,6 +47,9 @@ class LazyFeature:
     # For routes whose path has a leading parameter (e.g. /{server}/authorize)
     # — startswith can't match those, so the matcher also checks endswith.
     path_suffixes: Tuple[str, ...] = ()
+    # Keep the stub injected even after load — for mounted ASGI sub-apps
+    # whose routes don't appear in the parent app's openapi spec.
+    persistent_swagger_stub: bool = False
 
 
 LAZY_FEATURES: Tuple[LazyFeature, ...] = (
@@ -158,6 +162,7 @@ LAZY_FEATURES: Tuple[LazyFeature, ...] = (
         module_path="litellm.proxy._experimental.mcp_server.server",
         path_prefixes=("/mcp",),
         register_fn=_mount_app("/mcp", attr_name="app"),
+        persistent_swagger_stub=True,
     ),
     LazyFeature(
         name="config_overrides",
@@ -305,3 +310,33 @@ class LazyFeatureMiddleware:
 
 def attach_lazy_features(app: "FastAPI") -> None:
     app.add_middleware(LazyFeatureMiddleware, fastapi_app=app)
+
+
+def inject_lazy_stubs(schema: Dict) -> Dict:
+    """Stub openapi entries for unloaded features so Swagger renders sections."""
+    paths = schema.setdefault("paths", {})
+    for feat in LAZY_FEATURES:
+        if feat.module_path in sys.modules and not feat.persistent_swagger_stub:
+            continue
+        prefix = feat.path_prefixes[0]
+        if prefix in paths:
+            continue
+        paths[prefix] = {
+            "get": {
+                "tags": [feat.name],
+                "summary": feat.name,
+                "responses": {"200": {"description": "OK"}},
+            }
+        }
+    return schema
+
+
+def lazy_tag_to_prefix() -> Dict[str, str]:
+    """feature.name -> first prefix, used by the Swagger warmup JS plugin.
+    Excludes persistent-stub features (mounted sub-apps) — warming them
+    triggers a streaming hit and no useful new routes appear."""
+    return {
+        feat.name: feat.path_prefixes[0]
+        for feat in LAZY_FEATURES
+        if not feat.persistent_swagger_stub
+    }
