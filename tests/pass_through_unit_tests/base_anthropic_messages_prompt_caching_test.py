@@ -97,7 +97,7 @@ class BaseAnthropicMessagesPromptCachingTest(ABC):
 
         Examples:
         - "bedrock/converse/anthropic.claude-sonnet-4-5-20250929-v1:0"
-        - "bedrock/invoke/anthropic.claude-3-5-sonnet-20241022-v2:0"
+        - "bedrock/invoke/anthropic.claude-sonnet-4-5-20250929-v1:0"
         """
         pass
 
