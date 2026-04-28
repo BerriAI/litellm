@@ -18,9 +18,12 @@ name: Claude Code Compatibility Matrix (daily cron)
 #
 # Cross-repo authentication (per "Cross-repo authentication" in the PRD):
 # A GitHub App installed on `BerriAI/litellm-docs` only, scoped to
-# `contents: write`, mints an installation token at job-start. The token
-# is only ever used by the publisher, which only ever writes
-# `compatibility-matrix.json` (enforced by `select_files_to_commit`).
+# `contents: write` (so the publisher can push the head branch) and
+# `pull-requests: write` (so `gh pr create` can open the docs PR), mints
+# an installation token at job-start. The token is only ever used by the
+# publisher, which only ever writes `compatibility-matrix.json`
+# (enforced by `select_files_to_commit`) and only ever opens PRs against
+# `litellm-docs` (enforced by the `--repo` flag passed to `gh`).
 
 on:
   schedule:
