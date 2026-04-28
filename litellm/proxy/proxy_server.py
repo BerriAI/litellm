@@ -6688,6 +6688,10 @@ class ProxyStartupEvent:
         Args:
             scheduler: The scheduler to add the background jobs to
         """
+        global prisma_client
+        global proxy_logging_obj
+        global user_api_key_cache
+
         ########################################################
         # CloudZero Background Job
         ########################################################
@@ -6761,8 +6765,6 @@ class ProxyStartupEvent:
                 )
 
                 # Get prisma_client and proxy_logging_obj from global scope
-                global prisma_client
-                global proxy_logging_obj
                 if prisma_client is not None:
                     # Reuse the PodLockManager from db_spend_update_writer
                     pod_lock_manager = (
@@ -6790,6 +6792,83 @@ class ProxyStartupEvent:
         else:
             verbose_proxy_logger.debug(
                 "Key rotation disabled (set LITELLM_KEY_ROTATION_ENABLED=true to enable)"
+            )
+
+        await cls._initialize_expired_ui_session_key_cleanup_background_job(
+            scheduler=scheduler
+        )
+
+    @classmethod
+    async def _initialize_expired_ui_session_key_cleanup_background_job(
+        cls, scheduler: AsyncIOScheduler
+    ):
+        """
+        Initialize the expired UI session key cleanup background job.
+        """
+        global prisma_client
+        global proxy_logging_obj
+        global user_api_key_cache
+
+        ########################################################
+        # Expired UI Session Key Cleanup Background Job
+        ########################################################
+        from litellm.constants import (
+            EXPIRED_UI_SESSION_KEY_CLEANUP_JOB_NAME,
+            LITELLM_EXPIRED_UI_SESSION_KEY_CLEANUP_ENABLED,
+            LITELLM_EXPIRED_UI_SESSION_KEY_CLEANUP_INTERVAL_SECONDS,
+        )
+
+        expired_ui_session_key_cleanup_enabled: Optional[bool] = str_to_bool(
+            LITELLM_EXPIRED_UI_SESSION_KEY_CLEANUP_ENABLED
+        )
+        verbose_proxy_logger.debug(
+            "expired_ui_session_key_cleanup_enabled: "
+            f"{expired_ui_session_key_cleanup_enabled}"
+        )
+
+        if expired_ui_session_key_cleanup_enabled is True:
+            try:
+                from litellm.proxy.common_utils.expired_ui_session_key_cleanup_manager import (
+                    ExpiredUISessionKeyCleanupManager,
+                )
+
+                if prisma_client is not None:
+                    pod_lock_manager = (
+                        proxy_logging_obj.db_spend_update_writer.pod_lock_manager
+                    )
+                    expired_ui_session_key_cleanup_manager = (
+                        ExpiredUISessionKeyCleanupManager(
+                            prisma_client=prisma_client,
+                            user_api_key_cache=user_api_key_cache,
+                            pod_lock_manager=pod_lock_manager,
+                        )
+                    )
+                    verbose_proxy_logger.debug(
+                        "Expired UI session key cleanup background job scheduled "
+                        "every "
+                        f"{LITELLM_EXPIRED_UI_SESSION_KEY_CLEANUP_INTERVAL_SECONDS} "
+                        "seconds "
+                        "(LITELLM_EXPIRED_UI_SESSION_KEY_CLEANUP_ENABLED=true)"
+                    )
+                    scheduler.add_job(
+                        expired_ui_session_key_cleanup_manager.cleanup_expired_keys,
+                        "interval",
+                        seconds=LITELLM_EXPIRED_UI_SESSION_KEY_CLEANUP_INTERVAL_SECONDS,
+                        id=EXPIRED_UI_SESSION_KEY_CLEANUP_JOB_NAME,
+                    )
+                else:
+                    verbose_proxy_logger.warning(
+                        "Expired UI session key cleanup enabled but prisma_client "
+                        "not available"
+                    )
+            except Exception as e:
+                verbose_proxy_logger.warning(
+                    f"Failed to setup expired UI session key cleanup job: {e}"
+                )
+        else:
+            verbose_proxy_logger.debug(
+                "Expired UI session key cleanup disabled (set "
+                "LITELLM_EXPIRED_UI_SESSION_KEY_CLEANUP_ENABLED=true to enable)"
             )
 
     @classmethod
