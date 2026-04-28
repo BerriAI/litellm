@@ -56,58 +56,19 @@ class SearchAPIRouter:
         team_config: Optional[Dict[str, Any]] = None,
     ) -> Tuple[Optional[str], Optional[str]]:
         """
-        Resolve search provider credentials with precedence:
-        1. request metadata.search_provider_config.{provider}
-        2. team metadata.search_provider_config.{provider}
-        3. default_team_settings.search_provider_config.{provider}
-        4. search_tool.litellm_params
-        5. env fallback in provider validate_environment()
+        Resolve search provider credentials from tool configuration ONLY.
+        
+        Credentials are stored only in search_tool.litellm_params, never in team/key metadata.
+        This ensures secrets are not exposed in team/key API responses.
+        
+        Args:
+            tool_litellm_params: Search tool litellm_params with credentials
+            
+        Returns:
+            Tuple of (api_key, api_base) from tool configuration
         """
-        resolved_api_key: Optional[str] = None
-        resolved_api_base: Optional[str] = None
-
-        request_provider_config = {}
-        if isinstance(request_metadata, dict):
-            search_provider_config = request_metadata.get("search_provider_config")
-            if isinstance(search_provider_config, dict):
-                request_provider_config = search_provider_config.get(
-                    search_provider, {}
-                )
-
-        team_provider_config = {}
-        if isinstance(team_metadata, dict):
-            search_provider_config = team_metadata.get("search_provider_config")
-            if isinstance(search_provider_config, dict):
-                team_provider_config = search_provider_config.get(search_provider, {})
-
-        team_settings_provider_config = {}
-        if isinstance(team_config, dict):
-            search_provider_config = team_config.get("search_provider_config")
-            if isinstance(search_provider_config, dict):
-                team_settings_provider_config = search_provider_config.get(
-                    search_provider, {}
-                )
-
-        if isinstance(request_provider_config, dict):
-            resolved_api_key = request_provider_config.get("api_key")
-            resolved_api_base = request_provider_config.get("api_base")
-
-        if resolved_api_key is None and isinstance(team_provider_config, dict):
-            resolved_api_key = team_provider_config.get("api_key")
-        if resolved_api_base is None and isinstance(team_provider_config, dict):
-            resolved_api_base = team_provider_config.get("api_base")
-
-        if resolved_api_key is None and isinstance(team_settings_provider_config, dict):
-            resolved_api_key = team_settings_provider_config.get("api_key")
-        if resolved_api_base is None and isinstance(
-            team_settings_provider_config, dict
-        ):
-            resolved_api_base = team_settings_provider_config.get("api_base")
-
-        if resolved_api_key is None:
-            resolved_api_key = tool_litellm_params.get("api_key")
-        if resolved_api_base is None:
-            resolved_api_base = tool_litellm_params.get("api_base")
+        resolved_api_key: Optional[str] = tool_litellm_params.get("api_key")
+        resolved_api_base: Optional[str] = tool_litellm_params.get("api_base")
 
         return resolved_api_key, resolved_api_base
 

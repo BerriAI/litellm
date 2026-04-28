@@ -57,7 +57,14 @@ import type { KeyResponse, Team } from "./key_team_helpers/key_list";
 import MCPServerSelector from "./mcp_server_management/MCPServerSelector";
 import MCPToolPermissions from "./mcp_server_management/MCPToolPermissions";
 import NotificationsManager from "./molecules/notifications_manager";
-import { Organization, fetchMCPAccessGroups, getGuardrailsList, getPoliciesList, teamDeleteCall } from "./networking";
+import {
+  Organization,
+  fetchMCPAccessGroups,
+  fetchSearchTools,
+  getGuardrailsList,
+  getPoliciesList,
+  teamDeleteCall,
+} from "./networking";
 import NumericalInput from "./shared/numerical_input";
 import VectorStoreSelector from "./vector_store_management/VectorStoreSelector";
 
@@ -267,6 +274,7 @@ const Teams: React.FC<TeamProps> = ({
   // Add this state near the other useState declarations
   const [guardrailsList, setGuardrailsList] = useState<string[]>([]);
   const [policiesList, setPoliciesList] = useState<string[]>([]);
+  const [searchToolNames, setSearchToolNames] = useState<string[]>([]);
   const [loggingSettings, setLoggingSettings] = useState<any[]>([]);
   const [mcpAccessGroups, setMcpAccessGroups] = useState<string[]>([]);
   const [mcpAccessGroupsLoaded, setMcpAccessGroupsLoaded] = useState(false);
@@ -332,6 +340,24 @@ const Teams: React.FC<TeamProps> = ({
 
     fetchGuardrails();
     fetchPolicies();
+  }, [accessToken]);
+
+  useEffect(() => {
+    const loadSearchTools = async () => {
+      try {
+        if (!accessToken) return;
+        const response = await fetchSearchTools(accessToken);
+        const tools = Array.isArray(response?.data) ? response.data : [];
+        setSearchToolNames(
+          tools
+            .map((tool: any) => tool?.search_tool_name)
+            .filter((name: unknown): name is string => typeof name === "string" && name.length > 0),
+        );
+      } catch (error) {
+        console.error("Failed to fetch search tools:", error);
+      }
+    };
+    loadSearchTools();
   }, [accessToken]);
 
   const fetchMcpAccessGroups = async () => {
@@ -1204,6 +1230,27 @@ const Teams: React.FC<TeamProps> = ({
                       }}
                       context="team"
                       dataTestId="create-team-models-select"
+                    />
+                  </Form.Item>
+
+                  <Form.Item
+                    label={
+                      <span>
+                        Allowed Search Tools{" "}
+                        <Tooltip title="Select which search tools this team can access. Leave empty to allow all search tools.">
+                          <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                        </Tooltip>
+                      </span>
+                    }
+                    name="allowed_search_tools"
+                  >
+                    <Select
+                      mode="multiple"
+                      placeholder="Select search tools (empty = all search tools allowed)"
+                      style={{ width: "100%" }}
+                      options={searchToolNames.map((name) => ({ label: name, value: name }))}
+                      showSearch
+                      optionFilterProp="label"
                     />
                   </Form.Item>
 

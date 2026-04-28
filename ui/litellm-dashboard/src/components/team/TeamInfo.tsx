@@ -3,6 +3,7 @@ import { organizationKeys, useOrganizations } from "@/app/(dashboard)/hooks/orga
 import { useQueryClient } from "@tanstack/react-query";
 import UserSearchModal from "@/components/common_components/user_search_modal";
 import {
+  fetchSearchTools,
   getPoliciesList,
   getPolicyInfoWithGuardrails,
   Member,
@@ -102,6 +103,7 @@ export interface TeamData {
     } | null;
     created_at: string;
     access_group_ids?: string[];
+    allowed_search_tools?: string[];
     default_team_member_models?: string[];
     access_group_models?: string[];
     access_group_mcp_server_ids?: string[];
@@ -191,6 +193,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   const { data: guardrailsData, isLoading: isGuardrailsLoading } = useGuardrails();
   const globalGuardrailNames = guardrailsData?.globalGuardrailNames ?? new Set<string>();
   const [policiesList, setPoliciesList] = useState<string[]>([]);
+  const [searchToolNames, setSearchToolNames] = useState<string[]>([]);
   const [policyGuardrails, setPolicyGuardrails] = useState<Record<string, string[]>>({});
   const [loadingPolicies, setLoadingPolicies] = useState(false);
   const [memberToDelete, setMemberToDelete] = useState<Member | null>(null);
@@ -298,6 +301,24 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
     };
 
     fetchPolicies();
+  }, [accessToken]);
+
+  useEffect(() => {
+    const loadSearchTools = async () => {
+      try {
+        if (!accessToken) return;
+        const response = await fetchSearchTools(accessToken);
+        const tools = Array.isArray(response?.data) ? response.data : [];
+        setSearchToolNames(
+          tools
+            .map((tool: any) => tool?.search_tool_name)
+            .filter((name: unknown): name is string => typeof name === "string" && name.length > 0),
+        );
+      } catch (error) {
+        console.error("Failed to fetch search tools in team info:", error);
+      }
+    };
+    loadSearchTools();
   }, [accessToken]);
 
   // Fetch resolved guardrails for all policies
@@ -457,24 +478,11 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       try {
         const rawMetadata = values.metadata ? JSON.parse(values.metadata) : {};
         // Exclude soft_budget_alerting_emails from parsed metadata since it's handled separately
-        const { soft_budget_alerting_emails, search_provider_config, ...rest } = rawMetadata;
+        const { soft_budget_alerting_emails, ...rest } = rawMetadata;
         parsedMetadata = rest;
       } catch (e) {
         NotificationsManager.fromBackend("Invalid JSON in metadata field");
         return;
-      }
-
-      let searchProviderConfig: Record<string, any> | undefined;
-      if (typeof values.search_provider_config === "string") {
-        const trimmedSearchProviderConfig = values.search_provider_config.trim();
-        if (trimmedSearchProviderConfig.length > 0) {
-          try {
-            searchProviderConfig = JSON.parse(trimmedSearchProviderConfig);
-          } catch (e) {
-            NotificationsManager.fromBackend("Invalid JSON in search provider configuration");
-            return;
-          }
-        }
       }
 
       let secretManagerSettings: Record<string, any> | undefined;
@@ -517,6 +525,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         team_id: teamId,
         team_alias: values.team_alias,
         models: values.models,
+        allowed_search_tools: values.allowed_search_tools || [],
         tpm_limit: sanitizeNumeric(values.tpm_limit),
         rpm_limit: sanitizeNumeric(values.rpm_limit),
         model_tpm_limit: modelTpmLimit,
@@ -526,7 +535,6 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         budget_duration: values.budget_duration,
         metadata: {
           ...parsedMetadata,
-          ...(searchProviderConfig !== undefined ? { search_provider_config: searchProviderConfig } : {}),
           guardrails: (values.guardrails || []).filter((n: string) => !globalGuardrailNames.has(n)),
           opted_out_global_guardrails: optedOutGlobalGuardrails,
           ...(values.logging_settings?.length > 0 ? { logging: values.logging_settings } : {}),
@@ -940,6 +948,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                       models: info.models,
                       tpm_limit: info.tpm_limit,
                       rpm_limit: info.rpm_limit,
+                      allowed_search_tools: info.allowed_search_tools || [],
                       modelLimits: Array.from(
                         new Set([
                           ...Object.keys(info.metadata?.model_tpm_limit ?? {}),
@@ -966,13 +975,10 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                           : "",
                       metadata: info.metadata
                         ? JSON.stringify(
-                          (({ logging, secret_manager_settings, soft_budget_alerting_emails, search_provider_config, model_tpm_limit, model_rpm_limit, ...rest }) => rest)(info.metadata),
+                          (({ logging, secret_manager_settings, soft_budget_alerting_emails, model_tpm_limit, model_rpm_limit, ...rest }) => rest)(info.metadata),
                           null,
                           2,
                         )
-                        : "",
-                      search_provider_config: info.metadata?.search_provider_config
-                        ? JSON.stringify(info.metadata.search_provider_config, null, 2)
                         : "",
                       logging_settings: info.metadata?.logging || [],
                       secret_manager_settings: info.metadata?.secret_manager_settings
@@ -1022,6 +1028,23 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                         }}
                         context="team"
                         dataTestId="models-select"
+                      />
+                    </Form.Item>
+
+                    <Form.Item
+                      label="Allowed Search Tools"
+                      name="allowed_search_tools"
+                      tooltip="Select which search tools this team can access. Leave empty to allow all search tools."
+                    >
+                      <Select
+                        mode="multiple"
+                        placeholder="Select search tools (empty = all tools allowed)"
+                        style={{ width: "100%" }}
+                        options={searchToolNames.map((name) => ({ label: name, value: name }))}
+                        showSearch
+                        filterOption={(input, option) =>
+                          (option?.label ?? "").toLowerCase().includes(input.toLowerCase())
+                        }
                       />
                     </Form.Item>
 
@@ -1417,29 +1440,6 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     </Form.Item>
 
                     <Form.Item
-                      label="Search Provider Configuration"
-                      name="search_provider_config"
-                      tooltip='Team-level provider credentials. Example: {"tavily": {"api_key": "tvly-...", "api_base": "https://api.tavily.com"}}'
-                      rules={[
-                        {
-                          validator: async (_, value) => {
-                            if (!value || (typeof value === "string" && value.trim() === "")) {
-                              return Promise.resolve();
-                            }
-                            try {
-                              JSON.parse(value);
-                              return Promise.resolve();
-                            } catch (error) {
-                              return Promise.reject(new Error("Please enter valid JSON"));
-                            }
-                          },
-                        },
-                      ]}
-                    >
-                      <Input.TextArea rows={8} placeholder='{"tavily":{"api_key":"tvly-...","api_base":"https://api.tavily.com"}}' />
-                    </Form.Item>
-
-                    <Form.Item
                       label="Secret Manager Settings"
                       name="secret_manager_settings"
                       help={
@@ -1655,14 +1655,6 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                       </div>
                     )}
 
-                    {info.metadata?.search_provider_config && (
-                      <div className="pt-4 border-t border-gray-200">
-                        <Text className="font-medium">Search Provider Configuration</Text>
-                        <pre className="mt-2 bg-gray-50 p-3 rounded text-xs overflow-x-auto">
-                          {JSON.stringify(info.metadata.search_provider_config, null, 2)}
-                        </pre>
-                      </div>
-                    )}
                   </div>
                 )}
               </Card>

@@ -134,10 +134,41 @@ async def search(
 
     if "search_tool_name" in data and data["search_tool_name"]:
         data["model"] = data["search_tool_name"]
+        search_tool_name_value = data["search_tool_name"]
+
+        # Authorization check: verify key can access this search tool
+        from litellm.proxy.auth.auth_checks import (
+            can_key_call_search_tool,
+            can_team_call_search_tool,
+            get_team_object,
+        )
+
+        try:
+            # Check key-level access
+            await can_key_call_search_tool(
+                search_tool_name=search_tool_name_value,
+                valid_token=user_api_key_dict,
+            )
+
+            # Check team-level access if key is associated with a team
+            if user_api_key_dict.team_id:
+                team_object = await get_team_object(
+                    team_id=user_api_key_dict.team_id,
+                    user_api_key_cache=None,  # Will use internal cache
+                    parent_otel_span=None,
+                    proxy_logging_obj=None,
+                )
+                await can_team_call_search_tool(
+                    search_tool_name=search_tool_name_value,
+                    team_object=team_object,
+                )
+        except Exception as e:
+            verbose_proxy_logger.error(
+                f"Search tool authorization failed for {search_tool_name_value}: {str(e)}"
+            )
+            raise
 
         if llm_router is not None and hasattr(llm_router, "search_tools"):
-            search_tool_name_value = data["search_tool_name"]
-
             verbose_proxy_logger.debug(
                 f"Search endpoint - Looking for search_tool_name: {search_tool_name_value}. "
                 f"Available search tools in router: {[tool.get('search_tool_name') for tool in llm_router.search_tools]}. "
