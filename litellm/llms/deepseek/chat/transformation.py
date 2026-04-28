@@ -75,6 +75,20 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
         is_async: Literal[False] = False,
     ) -> List[AllMessageValues]: ...
 
+    def _ensure_reasoning_content_on_assistant_messages(
+        self, messages: List[AllMessageValues]
+    ) -> List[AllMessageValues]:
+        """
+        DeepSeek V4 thinking mode requires `reasoning_content` on every assistant message
+        in the conversation history. If an assistant message is missing it (e.g. because
+        Message.__init__ deleted it when it was None), inject an empty string so the API
+        does not return 400 "reasoning_content must be passed back".
+        """
+        for message in messages:
+            if message.get("role") == "assistant" and "reasoning_content" not in message:
+                message["reasoning_content"] = ""  # type: ignore[typeddict-unknown-key]
+        return messages
+
     def _transform_messages(
         self, messages: List[AllMessageValues], model: str, is_async: bool = False
     ) -> Union[List[AllMessageValues], Coroutine[Any, Any, List[AllMessageValues]]]:
@@ -82,6 +96,7 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
         DeepSeek does not support content in list format.
         """
         messages = handle_messages_with_content_list_to_str_conversion(messages)
+        messages = self._ensure_reasoning_content_on_assistant_messages(messages)
         if is_async:
             return super()._transform_messages(
                 messages=messages, model=model, is_async=True
