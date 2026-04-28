@@ -103,6 +103,7 @@ from litellm.types.utils import (
     ModelResponseStream,
     TextCompletionResponse,
     TokenCountResponse,
+    TranscriptionStreamingResponse,
 )
 from litellm.utils import (
     _invalidate_model_cost_lowercase_map,
@@ -8055,6 +8056,11 @@ async def audio_transcriptions(
         form_data = await get_form_data(request)
         data = {key: value for key, value in form_data.items() if key != "file"}
 
+        # Form fields arrive as strings; coerce `stream` to bool so downstream
+        # provider transformation sees a real boolean.
+        if "stream" in data and isinstance(data["stream"], str):
+            data["stream"] = data["stream"].strip().lower() == "true"
+
         # Include original request and headers in the data
         data = await add_litellm_data_to_request(
             data=data,
@@ -8160,6 +8166,15 @@ async def audio_transcriptions(
         )
         if callback_headers:
             fastapi_response.headers.update(callback_headers)
+
+        # Streaming transcription: wrap raw-byte iterator in StreamingResponse
+        # so FastAPI flushes SSE chunks instead of trying to JSON-serialize.
+        if isinstance(response, TranscriptionStreamingResponse):
+            return StreamingResponse(
+                content=response,
+                media_type="text/event-stream",
+                headers=dict(fastapi_response.headers),
+            )
 
         return response
     except Exception as e:

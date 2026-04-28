@@ -1,6 +1,14 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, List, Optional, Union
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    AsyncIterator,
+    Iterator,
+    List,
+    Optional,
+    Union,
+)
 
 import httpx
 
@@ -79,6 +87,16 @@ class BaseAudioTranscriptionConfig(BaseConfig, ABC):
         raise NotImplementedError(
             "AudioTranscriptionConfig does not need a response transformation for audio transcription models"
         )
+
+    def transform_audio_transcription_streaming_chunk(
+        self,
+        chunk: bytes,
+    ) -> bytes:
+        """
+        Hook for providers to translate streaming chunks to OpenAI-compatible
+        SSE bytes. Default: pass-through (provider already speaks OpenAI SSE).
+        """
+        return chunk
 
     def transform_request(
         self,
