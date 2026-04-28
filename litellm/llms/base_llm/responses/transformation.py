@@ -165,7 +165,18 @@ class BaseResponsesAPIConfig(ABC):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
+        stream: bool = False,
+        starting_after: Optional[int] = None,
     ) -> Tuple[str, Dict]:
+        """
+        Build the URL and query params for ``GET /v1/responses/{response_id}``.
+
+        ``stream`` and ``starting_after`` enable cursor-based stream resume per
+        the OpenAI Responses API. Implementations that do not support resume
+        should ignore these arguments. Implementations that do support resume
+        should put ``stream`` and ``starting_after`` into the returned ``data``
+        dict so the underlying HTTP layer attaches them as query parameters.
+        """
         pass
 
     @abstractmethod

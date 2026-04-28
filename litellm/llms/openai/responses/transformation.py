@@ -450,15 +450,25 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
+        stream: bool = False,
+        starting_after: Optional[int] = None,
     ) -> Tuple[str, Dict]:
         """
-        Transform the get response API request into a URL and data
+        Transform the get response API request into a URL and data.
 
         OpenAI API expects the following request
         - GET /v1/responses/{response_id}
+
+        For cursor-based stream resume, OpenAI accepts ``stream`` and
+        ``starting_after`` as query parameters; we surface them via the
+        returned ``data`` dict so the HTTP layer can attach them.
         """
         url = f"{api_base}/{response_id}"
         data: Dict = {}
+        if stream:
+            data["stream"] = "true"
+        if starting_after is not None:
+            data["starting_after"] = starting_after
         return url, data
 
     def transform_get_response_api_response(
