@@ -102,3 +102,6 @@ STABILIZATION_TODO.md
 **/playwright-report
 **/*.storageState.json
 **/coverage
+# GSD agent
+.gsd/
+.bg-shell/
