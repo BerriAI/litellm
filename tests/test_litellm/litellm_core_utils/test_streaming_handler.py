@@ -2091,3 +2091,79 @@ def test_gemini_legacy_vertex_tool_calls_finish_reason_with_stop_enum():
         f"Expected 'tool_calls' but got {final.choices[0].finish_reason!r}. "
         "STOP enum was not normalised through map_finish_reason()."
     )
+
+
+def test_role_surfaced_on_finish_chunk_for_empty_completion_sglang(
+    initialized_custom_stream_wrapper: CustomStreamWrapper,
+):
+    """
+    Regression test for #26428: SGLang sends 3 chunks for an empty
+    (immediate-EOS) completion:
+      1. delta={role:"assistant", content:""}, finish_reason=null
+      2. delta={role:null, content:null},      finish_reason="stop"
+      3. choices=[],                            usage={...}
+
+    Chunk 1 is filtered by `is_chunk_non_empty` (empty content, no tool
+    calls), so `sent_first_chunk` stays False. The synthesized empty-delta
+    finish chunk produced from chunk 2 must carry role="assistant" so
+    callers can identify the message role.
+    """
+    initialized_custom_stream_wrapper.received_finish_reason = "stop"
+    initialized_custom_stream_wrapper.custom_llm_provider = "openai"
+    initialized_custom_stream_wrapper.sent_first_chunk = False
+
+    finish_chunk = ModelResponseStream(
+        id="eecc20283cf04b12bb3861733c632547",
+        created=1776972110,
+        model="Qwen3-Coder-480B-A35B-Instruct",
+        object="chat.completion.chunk",
+        choices=[
+            StreamingChoices(
+                index=0,
+                delta=Delta(role=None, content=None),
+                finish_reason="stop",
+            )
+        ],
+    )
+
+    result = initialized_custom_stream_wrapper.chunk_creator(chunk=finish_chunk)
+
+    assert result is not None, "finish chunk should not be dropped"
+    assert (
+        result.choices[0].delta.role == "assistant"
+    ), "role must be surfaced on the finish chunk when no content carried it"
+    assert result.choices[0].finish_reason == "stop"
+    assert initialized_custom_stream_wrapper.sent_first_chunk is True
+    assert initialized_custom_stream_wrapper.sent_last_chunk is True
+
+
+def test_role_not_duplicated_on_finish_chunk_when_content_arrived(
+    initialized_custom_stream_wrapper: CustomStreamWrapper,
+):
+    """
+    Companion to #26428 fix: when role was already emitted on an earlier
+    content chunk (sent_first_chunk is True), the empty-delta finish chunk
+    must NOT also carry role. This guards against a regression for normal
+    streams where role already appeared on a content chunk.
+    """
+    initialized_custom_stream_wrapper.received_finish_reason = "stop"
+    initialized_custom_stream_wrapper.custom_llm_provider = "openai"
+    initialized_custom_stream_wrapper.sent_first_chunk = True  # already emitted
+
+    finish_chunk = ModelResponseStream(
+        choices=[
+            StreamingChoices(
+                index=0,
+                delta=Delta(role=None, content=None),
+                finish_reason="stop",
+            )
+        ],
+    )
+
+    result = initialized_custom_stream_wrapper.chunk_creator(chunk=finish_chunk)
+
+    assert result is not None
+    assert (
+        result.choices[0].delta.role is None
+    ), "role must not be re-emitted on the finish chunk for normal streams"
+    assert result.choices[0].finish_reason == "stop"
