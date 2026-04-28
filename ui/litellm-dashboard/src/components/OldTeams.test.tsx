@@ -4,6 +4,7 @@ import React from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fetchAvailableModelsForTeamOrKey } from "./key_team_helpers/fetch_available_models_team_key";
 import { fetchMCPAccessGroups, getGuardrailsList, teamCreateCall } from "./networking";
+import { teamListCall } from "@/app/(dashboard)/hooks/teams/useTeams";
 import OldTeams from "./OldTeams";
 
 const mockTeamInfoView = vi.fn();
@@ -128,6 +129,16 @@ const createQueryClient = () => {
 const renderWithQueryClient = (component: React.ReactElement) => {
   const queryClient = createQueryClient();
   return render(<QueryClientProvider client={queryClient}>{component}</QueryClientProvider>);
+};
+
+const mockTeamsResponse = (teams: any[]) => {
+  vi.mocked(teamListCall).mockResolvedValueOnce({
+    teams,
+    total: teams.length,
+    page: 1,
+    page_size: 10,
+    total_pages: teams.length > 0 ? 1 : 0,
+  });
 };
 
 describe("OldTeams - handleCreate organization handling", () => {
@@ -349,27 +360,26 @@ describe("OldTeams - handleCreate organization handling", () => {
 
   it("should clear the delete modal when the cancel button is clicked", async () => {
     mockUseOrganizations.mockReturnValue({ data: [] });
+    mockTeamsResponse([
+      {
+        team_id: "1",
+        team_alias: "Test Team",
+        organization_id: "org-123",
+        models: ["gpt-4"],
+        max_budget: 100,
+        budget_duration: "1d",
+        tpm_limit: 1000,
+        rpm_limit: 1000,
+        created_at: new Date().toISOString(),
+        keys: [],
+        members_with_roles: [],
+        spend: 0,
+      },
+    ]);
     renderWithQueryClient(
       <OldTeams
-        teams={[
-          {
-            team_id: "1",
-            team_alias: "Test Team",
-            organization_id: "org-123",
-            models: ["gpt-4"],
-            max_budget: 100,
-            budget_duration: "1d",
-            tpm_limit: 1000,
-            rpm_limit: 1000,
-            created_at: new Date().toISOString(),
-            keys: [],
-            members_with_roles: [],
-            spend: 0,
-          },
-        ]}
         searchParams={{}}
         accessToken="test-token"
-        setTeams={vi.fn()}
         userID="user-123"
         userRole="Admin"
         organizations={[]}
@@ -395,10 +405,8 @@ describe("OldTeams - empty state", () => {
   it("should display empty state message when teams array is empty", async () => {
     renderWithQueryClient(
       <OldTeams
-        teams={[]}
         searchParams={{}}
         accessToken="test-token"
-        setTeams={vi.fn()}
         userID="user-123"
         userRole="Admin"
         organizations={[]}
@@ -414,10 +422,8 @@ describe("OldTeams - empty state", () => {
   it("should display empty state message when teams is null", async () => {
     renderWithQueryClient(
       <OldTeams
-        teams={null}
         searchParams={{}}
         accessToken="test-token"
-        setTeams={vi.fn()}
         userID="user-123"
         userRole="Admin"
         organizations={[]}
@@ -431,27 +437,26 @@ describe("OldTeams - empty state", () => {
   });
 
   it("should not display empty state when teams array has items", async () => {
+    mockTeamsResponse([
+      {
+        team_id: "1",
+        team_alias: "Test Team",
+        organization_id: "org-123",
+        models: ["gpt-4"],
+        max_budget: 100,
+        budget_duration: "1d",
+        tpm_limit: 1000,
+        rpm_limit: 1000,
+        created_at: new Date().toISOString(),
+        keys: [],
+        members_with_roles: [],
+        spend: 0,
+      },
+    ]);
     renderWithQueryClient(
       <OldTeams
-        teams={[
-          {
-            team_id: "1",
-            team_alias: "Test Team",
-            organization_id: "org-123",
-            models: ["gpt-4"],
-            max_budget: 100,
-            budget_duration: "1d",
-            tpm_limit: 1000,
-            rpm_limit: 1000,
-            created_at: new Date().toISOString(),
-            keys: [],
-            members_with_roles: [],
-            spend: 0,
-          },
-        ]}
         searchParams={{}}
         accessToken="test-token"
-        setTeams={vi.fn()}
         userID="user-123"
         userRole="Admin"
         organizations={[]}
@@ -602,27 +607,26 @@ describe("OldTeams - premium props", () => {
   });
 
   it("passes premiumUser flag to TeamInfoView", async () => {
+    mockTeamsResponse([
+      {
+        team_id: "team-123456789",
+        team_alias: "Premium Team",
+        organization_id: "org-123",
+        models: ["gpt-4"],
+        max_budget: 100,
+        budget_duration: "1d",
+        tpm_limit: 1000,
+        rpm_limit: 1000,
+        created_at: new Date().toISOString(),
+        keys: [],
+        members_with_roles: [],
+        spend: 0,
+      },
+    ]);
     renderWithQueryClient(
       <OldTeams
-        teams={[
-          {
-            team_id: "team-123456789",
-            team_alias: "Premium Team",
-            organization_id: "org-123",
-            models: ["gpt-4"],
-            max_budget: 100,
-            budget_duration: "1d",
-            tpm_limit: 1000,
-            rpm_limit: 1000,
-            created_at: new Date().toISOString(),
-            keys: [],
-            members_with_roles: [],
-            spend: 0,
-          },
-        ]}
         searchParams={{}}
         accessToken="test-token"
-        setTeams={vi.fn()}
         userID="user-123"
         userRole="Admin"
         organizations={[]}
@@ -650,25 +654,8 @@ describe("OldTeams - Default Team Settings tab visibility", () => {
   it("should show Default Team Settings tab for Admin role", () => {
     renderWithQueryClient(
       <OldTeams
-        teams={[
-          {
-            team_id: "1",
-            team_alias: "Test Team",
-            organization_id: "org-123",
-            models: ["gpt-4"],
-            max_budget: 100,
-            budget_duration: "1d",
-            tpm_limit: 1000,
-            rpm_limit: 1000,
-            created_at: new Date().toISOString(),
-            keys: [],
-            members_with_roles: [],
-            spend: 0,
-          },
-        ]}
         searchParams={{}}
         accessToken="test-token"
-        setTeams={vi.fn()}
         userID="user-123"
         userRole="Admin"
         organizations={[]}
@@ -681,25 +668,8 @@ describe("OldTeams - Default Team Settings tab visibility", () => {
   it("should show Default Team Settings tab for proxy_admin role", () => {
     renderWithQueryClient(
       <OldTeams
-        teams={[
-          {
-            team_id: "1",
-            team_alias: "Test Team",
-            organization_id: "org-123",
-            models: ["gpt-4"],
-            max_budget: 100,
-            budget_duration: "1d",
-            tpm_limit: 1000,
-            rpm_limit: 1000,
-            created_at: new Date().toISOString(),
-            keys: [],
-            members_with_roles: [],
-            spend: 0,
-          },
-        ]}
         searchParams={{}}
         accessToken="test-token"
-        setTeams={vi.fn()}
         userID="user-123"
         userRole="proxy_admin"
         organizations={[]}
@@ -712,25 +682,8 @@ describe("OldTeams - Default Team Settings tab visibility", () => {
   it("should not show Default Team Settings tab for proxy_admin_viewer role", () => {
     renderWithQueryClient(
       <OldTeams
-        teams={[
-          {
-            team_id: "1",
-            team_alias: "Test Team",
-            organization_id: "org-123",
-            models: ["gpt-4"],
-            max_budget: 100,
-            budget_duration: "1d",
-            tpm_limit: 1000,
-            rpm_limit: 1000,
-            created_at: new Date().toISOString(),
-            keys: [],
-            members_with_roles: [],
-            spend: 0,
-          },
-        ]}
         searchParams={{}}
         accessToken="test-token"
-        setTeams={vi.fn()}
         userID="user-123"
         userRole="proxy_admin_viewer"
         organizations={[]}
@@ -743,25 +696,8 @@ describe("OldTeams - Default Team Settings tab visibility", () => {
   it("should not show Default Team Settings tab for Admin Viewer role", () => {
     renderWithQueryClient(
       <OldTeams
-        teams={[
-          {
-            team_id: "1",
-            team_alias: "Test Team",
-            organization_id: "org-123",
-            models: ["gpt-4"],
-            max_budget: 100,
-            budget_duration: "1d",
-            tpm_limit: 1000,
-            rpm_limit: 1000,
-            created_at: new Date().toISOString(),
-            keys: [],
-            members_with_roles: [],
-            spend: 0,
-          },
-        ]}
         searchParams={{}}
         accessToken="test-token"
-        setTeams={vi.fn()}
         userID="user-123"
         userRole="Admin Viewer"
         organizations={[]}
@@ -794,10 +730,8 @@ describe("OldTeams - access_group_ids in team create", () => {
   it("should pass access_group_ids to teamCreateCall when creating team", async () => {
     renderWithQueryClient(
       <OldTeams
-        teams={[]}
         searchParams={{}}
         accessToken="test-token"
-        setTeams={vi.fn()}
         userID="user-123"
         userRole="Admin"
         organizations={[{ organization_id: "org-1", organization_alias: "Org 1", models: [], members: [] }]}
@@ -858,10 +792,8 @@ describe("OldTeams - models dropdown options", () => {
 
     renderWithQueryClient(
       <OldTeams
-        teams={[]}
         searchParams={{}}
         accessToken="test-token"
-        setTeams={vi.fn()}
         userID="user-123"
         userRole="Admin"
         organizations={[]}
@@ -913,28 +845,27 @@ describe("OldTeams - organization alias display", () => {
     ];
 
     mockUseOrganizations.mockReturnValue({ data: mockOrganizations });
+    mockTeamsResponse([
+      {
+        team_id: "1",
+        team_alias: "Test Team",
+        organization_id: "org-123",
+        models: ["gpt-4"],
+        max_budget: 100,
+        budget_duration: "1d",
+        tpm_limit: 1000,
+        rpm_limit: 1000,
+        created_at: new Date().toISOString(),
+        keys: [],
+        members_with_roles: [],
+        spend: 0,
+      },
+    ]);
 
     renderWithQueryClient(
       <OldTeams
-        teams={[
-          {
-            team_id: "1",
-            team_alias: "Test Team",
-            organization_id: "org-123",
-            models: ["gpt-4"],
-            max_budget: 100,
-            budget_duration: "1d",
-            tpm_limit: 1000,
-            rpm_limit: 1000,
-            created_at: new Date().toISOString(),
-            keys: [],
-            members_with_roles: [],
-            spend: 0,
-          },
-        ]}
         searchParams={{}}
         accessToken="test-token"
-        setTeams={vi.fn()}
         userID="user-123"
         userRole="Admin"
         organizations={mockOrganizations}
@@ -949,28 +880,27 @@ describe("OldTeams - organization alias display", () => {
 
   it("should display organization id when alias is not found", async () => {
     mockUseOrganizations.mockReturnValue({ data: [] });
+    mockTeamsResponse([
+      {
+        team_id: "1",
+        team_alias: "Test Team",
+        organization_id: "org-unknown",
+        models: ["gpt-4"],
+        max_budget: 100,
+        budget_duration: "1d",
+        tpm_limit: 1000,
+        rpm_limit: 1000,
+        created_at: new Date().toISOString(),
+        keys: [],
+        members_with_roles: [],
+        spend: 0,
+      },
+    ]);
 
     renderWithQueryClient(
       <OldTeams
-        teams={[
-          {
-            team_id: "1",
-            team_alias: "Test Team",
-            organization_id: "org-unknown",
-            models: ["gpt-4"],
-            max_budget: 100,
-            budget_duration: "1d",
-            tpm_limit: 1000,
-            rpm_limit: 1000,
-            created_at: new Date().toISOString(),
-            keys: [],
-            members_with_roles: [],
-            spend: 0,
-          },
-        ]}
         searchParams={{}}
         accessToken="test-token"
-        setTeams={vi.fn()}
         userID="user-123"
         userRole="Admin"
         organizations={[]}
@@ -984,28 +914,27 @@ describe("OldTeams - organization alias display", () => {
 
   it("should display N/A when organization_id is null", async () => {
     mockUseOrganizations.mockReturnValue({ data: [] });
+    mockTeamsResponse([
+      {
+        team_id: "1",
+        team_alias: "Test Team",
+        organization_id: null as any,
+        models: ["gpt-4"],
+        max_budget: 100,
+        budget_duration: "1d",
+        tpm_limit: 1000,
+        rpm_limit: 1000,
+        created_at: new Date().toISOString(),
+        keys: [],
+        members_with_roles: [],
+        spend: 0,
+      },
+    ]);
 
     renderWithQueryClient(
       <OldTeams
-        teams={[
-          {
-            team_id: "1",
-            team_alias: "Test Team",
-            organization_id: null as any,
-            models: ["gpt-4"],
-            max_budget: 100,
-            budget_duration: "1d",
-            tpm_limit: 1000,
-            rpm_limit: 1000,
-            created_at: new Date().toISOString(),
-            keys: [],
-            members_with_roles: [],
-            spend: 0,
-          },
-        ]}
         searchParams={{}}
         accessToken="test-token"
-        setTeams={vi.fn()}
         userID="user-123"
         userRole="Admin"
         organizations={[]}
