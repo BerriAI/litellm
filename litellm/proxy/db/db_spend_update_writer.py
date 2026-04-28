@@ -28,7 +28,10 @@ from typing import (
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching import DualCache, RedisCache
-from litellm.constants import DB_SPEND_UPDATE_JOB_NAME,DB_DAILY_TAG_SPEND_UPDATE_JOB_NAME
+from litellm.constants import (
+    DB_SPEND_UPDATE_JOB_NAME,
+    DB_DAILY_TAG_SPEND_UPDATE_JOB_NAME,
+)
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.proxy._types import (
     DB_CONNECTION_ERROR_TYPES,
@@ -508,12 +511,35 @@ class DBSpendUpdateWriter:
         - Update that user's row
         - Update litellm-proxy-budget row (global proxy spend)
         """
-        # Skip personal spend tracking for team key calls.
+        # Skip personal/global spend tracking for team key calls.
         # Team spend is tracked separately via _update_team_db.
         # Without this guard, LiteLLM_UserTable.spend accumulates team key
         # costs and causes false BudgetExceededError on personal key calls
         # when the Redis counter is absent (e.g. after a restart).
+        # End-user spend, however, must still be enqueued — _update_user_db
+        # is the only producer of END_USER SpendUpdateQueueItem, so dropping
+        # it here would silently break end-user budget enforcement and
+        # spend reporting for team-key contexts.
         if team_id is not None:
+            if end_user_id is not None and prisma_client is not None:
+                try:
+                    await self.spend_update_queue.add_update(
+                        update=SpendUpdateQueueItem(
+                            entity_type=Litellm_EntityType.END_USER,
+                            entity_id=end_user_id,
+                            response_cost=response_cost,
+                        )
+                    )
+                except Exception as e:
+                    verbose_proxy_logger.error(
+                        "Spend tracking - failed to enqueue end-user spend "
+                        "update for team key call. end_user_id=%s, "
+                        "response_cost=%s - %s\n%s",
+                        end_user_id,
+                        response_cost,
+                        str(e),
+                        traceback.format_exc(),
+                    )
             return
         ## if an end-user is passed in, do an upsert - we can't guarantee they already exist in db
         existing_user_obj = await user_api_key_cache.async_get_cache(key=user_id)
@@ -1020,7 +1046,7 @@ class DBSpendUpdateWriter:
             proxy_logging_obj=proxy_logging_obj,
             daily_spend_transactions=daily_agent_spend_update_transactions,
         )
-        
+
         ################## Tool Registry Upserts ##################
         await self._flush_tool_discovery_queue(prisma_client=prisma_client)
 
@@ -1068,7 +1094,9 @@ class DBSpendUpdateWriter:
         ):
             verbose_proxy_logger.debug("acquired lock for daily tag spend updates")
             try:
-                daily_tag_spend_update_transactions = await self.redis_update_buffer.get_all_daily_tag_spend_update_transactions_from_redis_buffer()
+                daily_tag_spend_update_transactions = (
+                    await self.redis_update_buffer.get_all_daily_tag_spend_update_transactions_from_redis_buffer()
+                )
 
                 if daily_tag_spend_update_transactions:
                     await DBSpendUpdateWriter.update_daily_tag_spend(

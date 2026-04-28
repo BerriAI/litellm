@@ -1398,8 +1398,8 @@ async def test_commit_spend_updates_uses_pipeline():
     mock_redis_update_buffer = AsyncMock()
     mock_redis_update_buffer.store_in_memory_spend_updates_in_redis = AsyncMock()
     # Return all-None tuple (no data to commit)
-    mock_redis_update_buffer.get_all_transactions_from_redis_buffer_pipeline = AsyncMock(
-        return_value=(None, None, None, None, None, None, None)
+    mock_redis_update_buffer.get_all_transactions_from_redis_buffer_pipeline = (
+        AsyncMock(return_value=(None, None, None, None, None, None, None))
     )
     db_writer.redis_update_buffer = mock_redis_update_buffer
 
@@ -1495,3 +1495,41 @@ async def test_update_user_db_runs_for_personal_key_calls():
         litellm.max_budget = original_max_budget
 
     db_writer.spend_update_queue.add_update.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_update_user_db_team_key_call_still_tracks_end_user_spend():
+    """
+    Team-key calls must still record end-user spend.
+
+    _update_user_db is the only producer of END_USER SpendUpdateQueueItem,
+    so the team_id guard must not silently skip the end-user update path —
+    that would break end-user budget enforcement and spend reporting for
+    team contexts.
+
+    Regression test for greptile P1 review on PR #26663.
+    """
+    from litellm.proxy._types import Litellm_EntityType
+
+    db_writer = DBSpendUpdateWriter()
+    db_writer.spend_update_queue = AsyncMock()
+
+    mock_prisma_client = MagicMock()
+    mock_cache = AsyncMock()
+    mock_cache.async_get_cache = AsyncMock(return_value=None)
+
+    await db_writer._update_user_db(
+        response_cost=0.07,
+        user_id="user-123",
+        prisma_client=mock_prisma_client,
+        user_api_key_cache=mock_cache,
+        litellm_proxy_budget_name="litellm-proxy-budget",
+        end_user_id="end-user-xyz",
+        team_id="team-abc",
+    )
+
+    db_writer.spend_update_queue.add_update.assert_called_once()
+    enqueued = db_writer.spend_update_queue.add_update.call_args.kwargs["update"]
+    assert enqueued["entity_type"] == Litellm_EntityType.END_USER
+    assert enqueued["entity_id"] == "end-user-xyz"
+    assert enqueued["response_cost"] == 0.07
