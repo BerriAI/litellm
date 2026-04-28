@@ -106,9 +106,6 @@ const routeFor = (slug: string): string => {
       return "guardrails";
     case "policies":
       return "policies";
-    case "chat":
-      return "chat";
-
     // tools
     case "mcp-servers":
       return "tools/mcp-servers";
