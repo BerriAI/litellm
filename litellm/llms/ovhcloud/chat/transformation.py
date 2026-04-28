@@ -16,6 +16,7 @@ from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.chat.transformation import LiteLLMLoggingObj
 from litellm.types.llms.openai import AllMessageValues
 
+
 class OVHCloudChatConfig(OpenAIGPTConfig):
     @property
     def custom_llm_provider(self) -> Optional[str]:
@@ -74,7 +75,6 @@ class OVHCloudChatConfig(OpenAIGPTConfig):
         response.update(extra_body)
         return response
 
-
     def transform_response(
         self,
         model: str,
@@ -116,7 +116,7 @@ class OVHCloudChatConfig(OpenAIGPTConfig):
                 if reasoning_new is not None and reasoning_legacy is None:
                     message.reasoning_content = reasoning_new
 
-        return model_response        
+        return model_response
 
 
 class OVHCloudChatCompletionStreamingHandler(BaseModelResponseIterator):
