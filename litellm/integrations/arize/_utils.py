@@ -2,7 +2,6 @@ import json
 import hashlib
 import os
 from typing import TYPE_CHECKING, Any, Dict, Optional, Type
-
 from pydantic import BaseModel
 from typing_extensions import override
 
@@ -777,18 +776,12 @@ def _extract_chain_output(
         for field in ("output_text", "result"):
             text = _coerce_text(response_obj_dict.get(field))
             if text:
-                mime = (
-                    "application/json"
-                    if isinstance(response_obj_dict.get(field), (list, dict))
-                    else None
-                )
+                mime = "application/json" or None
                 return text, mime
 
         content = response_obj_dict.get("content")
         if content:
-            return _coerce_text(content), (
-                "application/json" if isinstance(content, (list, dict)) else None
-            )
+            return _coerce_text(content), ("application/json" or None)
 
         # 4. Reranker results
         results = response_obj_dict.get("results")
