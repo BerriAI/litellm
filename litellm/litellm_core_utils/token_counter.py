@@ -681,17 +681,32 @@ def _count_anthropic_document(
     Anthropic shape:
         {"type": "document", "source": {...}, "title": ..., "context": ..., "citations": ...}
 
-    We count the text-bearing fields ("title", "context") with the model
-    tokenizer and add DEFAULT_IMAGE_TOKEN_COUNT for the opaque source payload
-    (typically a PDF — we cannot dimension it). Skipped: "type",
-    "cache_control", "citations" (configuration metadata, not prompt content).
+    Source variants (per the Anthropic Citations API):
+        - {"type": "text", "media_type": "text/plain", "data": "<inline text>"}
+        - {"type": "base64", "media_type": ..., "data": ...}
+        - {"type": "url", "url": ...}
+        - {"type": "file", "file_id": ...}
+
+    For text sources we tokenize source["data"] with the model tokenizer
+    (it's plain prompt content). For base64 / url / file sources the
+    payload is opaque (typically a PDF — we cannot dimension it) and we
+    add DEFAULT_IMAGE_TOKEN_COUNT as the fallback.
+
+    Title and context are always counted. Skipped: "type", "cache_control",
+    "citations" (configuration metadata, not prompt content).
     """
     tokens = 0
     for field in ("title", "context"):
         value = content.get(field)
         if isinstance(value, str) and value:
             tokens += count_function(value)
-    if content.get("source") is not None:
+    source = content.get("source")
+    if isinstance(source, dict) and source.get("type") == "text":
+        data = source.get("data")
+        if isinstance(data, str) and data:
+            tokens += count_function(data)
+    elif source is not None:
+        # base64 / url / file / unknown — opaque payload, use the fallback.
         tokens += DEFAULT_IMAGE_TOKEN_COUNT
     return tokens
 

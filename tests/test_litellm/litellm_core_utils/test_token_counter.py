@@ -1130,6 +1130,40 @@ def test_token_counter_with_anthropic_document_file():
     assert tokens > 0, f"Expected positive token count, got {tokens}"
 
 
+def test_token_counter_with_anthropic_document_text():
+    """
+    Anthropic-native document block with source.type='text' tokenizes the
+    inline text in source['data'], not the flat DEFAULT_IMAGE_TOKEN_COUNT
+    fallback used for opaque (base64/url/file) payloads.
+    """
+    inline_text = "Lorem ipsum dolor sit amet, consectetur adipiscing elit. " * 200
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "document",
+                    "source": {
+                        "type": "text",
+                        "media_type": "text/plain",
+                        "data": inline_text,
+                    },
+                    "title": "Long inline doc",
+                }
+            ],
+        }
+    ]
+
+    tokens = token_counter(
+        model="anthropic/claude-sonnet-4-5-20250929", messages=messages
+    )
+    # The inline text alone is well over a thousand tokens — substantially
+    # more than the 250-token fallback used for opaque sources.
+    assert (
+        tokens > 500
+    ), f"Expected text-source document to tokenize source['data'], got {tokens}"
+
+
 def test_token_counter_with_image_inside_tool_result():
     """
     Image block nested inside tool_result.content is counted via recursion.
