@@ -5,16 +5,16 @@ Our unified API follows the OpenAI standard.
 More information on our website: https://endpoints.ai.cloud.ovh.net
 """
 
-from typing import Optional, Union, List
+from typing import Any, Optional, Union, List
 
 import httpx
-from litellm.utils import ModelResponseStream
+from litellm.utils import ModelResponse, ModelResponseStream
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 from litellm.llms.ovhcloud.utils import OVHCloudException
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm.llms.base_llm.chat.transformation import LiteLLMLoggingObj
 from litellm.types.llms.openai import AllMessageValues
-
 
 class OVHCloudChatConfig(OpenAIGPTConfig):
     @property
@@ -73,6 +73,50 @@ class OVHCloudChatConfig(OpenAIGPTConfig):
         )
         response.update(extra_body)
         return response
+
+
+    def transform_response(
+        self,
+        model: str,
+        raw_response: httpx.Response,
+        model_response: ModelResponse,
+        logging_obj: LiteLLMLoggingObj,
+        request_data: dict,
+        messages: List[AllMessageValues],
+        optional_params: dict,
+        litellm_params: dict,
+        encoding: Any,
+        api_key: Optional[str] = None,
+        json_mode: Optional[bool] = None,
+    ) -> ModelResponse:
+        # Call parent to do standard OpenAI response parsing
+        model_response = super().transform_response(
+            model=model,
+            raw_response=raw_response,
+            model_response=model_response,
+            logging_obj=logging_obj,
+            request_data=request_data,
+            messages=messages,
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+            encoding=encoding,
+            api_key=api_key,
+            json_mode=json_mode,
+        )
+
+        # OVHCloud field migration (deadline: 2026-05-11):
+        # `reasoning_content` is replaced by `reasoning` in non-streaming responses.
+        # Normalise to `reasoning_content` so downstream consumers
+        # see a consistent key during the transition window.
+        for choice in model_response.choices:
+            message = getattr(choice, "message", None)
+            if message is not None:
+                reasoning_new = getattr(message, "reasoning", None)
+                reasoning_legacy = getattr(message, "reasoning_content", None)
+                if reasoning_new is not None and reasoning_legacy is None:
+                    message.reasoning_content = reasoning_new
+
+        return model_response        
 
 
 class OVHCloudChatCompletionStreamingHandler(BaseModelResponseIterator):
