@@ -864,3 +864,83 @@ def test_litellm_project_table_has_timestamp_fields():
     fields = LiteLLM_ProjectTable.model_fields
     assert "created_at" in fields, "LiteLLM_ProjectTable must have created_at field"
     assert "updated_at" in fields, "LiteLLM_ProjectTable must have updated_at field"
+
+
+def test_project_routes_in_self_managed_routes():
+    """
+    /project/list and /project/info must appear in self_managed_routes so that
+    non-admin callers reach the endpoint (which enforces its own membership check)
+    instead of being rejected with 401 by the framework.
+    """
+    from litellm.proxy._types import LiteLLMRoutes
+
+    routes = LiteLLMRoutes.self_managed_routes.value
+    assert "/project/list" in routes, "/project/list missing from self_managed_routes"
+    assert "/project/info" in routes, "/project/info missing from self_managed_routes"
+
+
+@pytest.mark.asyncio
+async def test_list_projects_internal_user_queries_user_table_teams():
+    """
+    list_projects for a non-admin user must look up team membership via
+    LiteLLM_UserTable.teams, not LiteLLM_TeamTable.members which is always empty.
+    """
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from litellm_enterprise.proxy.management_endpoints.project_endpoints import (
+        list_projects,
+    )
+
+    user_id = "user-abc"
+    team_id = "team-xyz"
+
+    fake_user = MagicMock()
+    fake_user.teams = [team_id]
+
+    fake_project = MagicMock()
+    fake_project.model_dump.return_value = {
+        "project_id": "proj-1",
+        "project_alias": "p1",
+        "team_id": team_id,
+        "created_by": "admin",
+        "updated_by": "admin",
+        "created_at": None,
+        "updated_at": None,
+        "models": [],
+        "spend": 0.0,
+        "blocked": False,
+        "budget_id": None,
+        "description": None,
+        "metadata": None,
+        "model_spend": None,
+        "model_rpm_limit": None,
+        "model_tpm_limit": None,
+        "object_permission_id": None,
+        "litellm_budget_table": None,
+        "object_permission": None,
+    }
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_usertable.find_unique = AsyncMock(return_value=fake_user)
+    mock_prisma.db.litellm_projecttable.find_many = AsyncMock(
+        return_value=[fake_project]
+    )
+
+    with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma):
+        response = await list_projects(
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.INTERNAL_USER,
+                api_key="sk-user",
+                user_id=user_id,
+            ),
+        )
+
+    # Must have queried LiteLLM_UserTable by user_id, not LiteLLM_TeamTable
+    mock_prisma.db.litellm_usertable.find_unique.assert_called_once_with(
+        where={"user_id": user_id}
+    )
+    mock_prisma.db.litellm_teamtable.find_many.assert_not_called()
+    # Projects filtered by the team_ids from user's teams list
+    call_kwargs = mock_prisma.db.litellm_projecttable.find_many.call_args[1]
+    assert call_kwargs["where"]["team_id"]["in"] == [team_id]
+    assert len(response) == 1
