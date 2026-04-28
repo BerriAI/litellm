@@ -266,6 +266,53 @@ class ResponsesSessionHandler:
         return False
 
     @staticmethod
+    async def get_chat_completion_message_history_for_session_id(
+        session_id: str,
+    ) -> ChatCompletionSession:
+        from litellm.responses.litellm_completion_transformation.transformation import (
+            ChatCompletionSession,
+        )
+
+        all_spend_logs: List[SpendLogsPayload] = (
+            await ResponsesSessionHandler.get_all_spend_logs_for_session_id(session_id)
+        )
+
+        chat_completion_message_history: List[
+            Union[
+                AllMessageValues,
+                GenericChatCompletionMessage,
+                ChatCompletionMessageToolCall,
+                ChatCompletionResponseMessage,
+                Message,
+            ]
+        ] = []
+        for spend_log in all_spend_logs:
+            chat_completion_message_history = await ResponsesSessionHandler.extend_chat_completion_message_with_spend_log_payload(
+                spend_log=spend_log,
+                chat_completion_message_history=chat_completion_message_history,
+            )
+
+        return ChatCompletionSession(
+            messages=chat_completion_message_history,
+            litellm_session_id=session_id,
+        )
+
+    @staticmethod
+    async def get_all_spend_logs_for_session_id(
+        session_id: str,
+    ) -> List[SpendLogsPayload]:
+        from litellm.proxy.proxy_server import prisma_client
+
+        if prisma_client is None:
+            return []
+
+        spend_logs = await prisma_client.db.litellm_spendlogs.find_many(
+            where={"session_id": session_id},
+            order={"endTime": "asc"},
+        )
+        return cast(List[SpendLogsPayload], spend_logs)
+
+    @staticmethod
     async def get_all_spend_logs_for_previous_response_id(
         previous_response_id: str,
     ) -> List[SpendLogsPayload]:

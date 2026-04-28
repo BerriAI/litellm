@@ -24,6 +24,8 @@ from litellm.types.llms.openai import (
     ResponsesAPIResponse,
     ResponseText,
 )
+from litellm.caching.dual_cache import DualCache
+from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.types.responses.main import DecodedResponseId
 from litellm.types.utils import (
     CompletionTokensDetailsWrapper,
@@ -31,6 +33,72 @@ from litellm.types.utils import (
     SpecialEnums,
     Usage,
 )
+
+LITELLM_CONVERSATION_ID_PREFIX = "litellm_conv_id_"
+
+
+def is_litellm_conversation_id(conversation_id: Optional[str]) -> bool:
+    return isinstance(conversation_id, str) and conversation_id.startswith(
+        LITELLM_CONVERSATION_ID_PREFIX
+    )
+
+
+_LITELLM_CONVERSATION_TTL_SECONDS = 3600
+_LITELLM_CONVERSATION_CACHE: Optional[DualCache] = None
+_LITELLM_CONVERSATION_REDIS_REF: Optional[Any] = None
+
+
+def _get_conversation_cache() -> DualCache:
+    global _LITELLM_CONVERSATION_CACHE, _LITELLM_CONVERSATION_REDIS_REF
+    redis_cache: Optional[Any] = None
+    try:
+        from litellm.proxy import proxy_server
+
+        redis_cache = getattr(proxy_server, "redis_usage_cache", None)
+    except Exception:
+        redis_cache = None
+
+    if (
+        _LITELLM_CONVERSATION_CACHE is None
+        or _LITELLM_CONVERSATION_REDIS_REF is not redis_cache
+    ):
+        _LITELLM_CONVERSATION_CACHE = DualCache(
+            in_memory_cache=InMemoryCache(
+                max_size_in_memory=10000,
+                default_ttl=_LITELLM_CONVERSATION_TTL_SECONDS,
+                max_size_per_item=2048,
+            ),
+            redis_cache=redis_cache,
+            default_in_memory_ttl=_LITELLM_CONVERSATION_TTL_SECONDS,
+            default_redis_ttl=_LITELLM_CONVERSATION_TTL_SECONDS,
+        )
+        _LITELLM_CONVERSATION_REDIS_REF = redis_cache
+    return _LITELLM_CONVERSATION_CACHE
+
+
+def _conversation_cache_key(conversation_id: str) -> str:
+    return f"litellm_conversation:{conversation_id}"
+
+
+async def get_cached_conversation_items(
+    conversation_id: str,
+) -> Optional[List[Dict[str, Any]]]:
+    cache = _get_conversation_cache()
+    cached = await cache.async_get_cache(key=_conversation_cache_key(conversation_id))
+    if isinstance(cached, list):
+        return cached
+    return None
+
+
+async def set_cached_conversation_items(
+    conversation_id: str, items: List[Dict[str, Any]]
+) -> None:
+    cache = _get_conversation_cache()
+    await cache.async_set_cache(
+        key=_conversation_cache_key(conversation_id),
+        value=items,
+        ttl=_LITELLM_CONVERSATION_TTL_SECONDS,
+    )
 
 
 class ResponsesAPIRequestUtils:
