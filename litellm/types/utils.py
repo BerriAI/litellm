@@ -3332,6 +3332,8 @@ class LlmProviders(str, Enum):
     CURSOR = "cursor"
     BEDROCK_MANTLE = "bedrock_mantle"
 
+    ASTRAFLOW = "astraflow"
+    ASTRAFLOW_CN = "astraflow-cn"
 
 # Create a set of all provider values for quick lookup
 LlmProvidersSet = {provider.value for provider in LlmProviders}
