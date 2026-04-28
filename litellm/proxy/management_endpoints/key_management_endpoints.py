@@ -5120,7 +5120,7 @@ async def block_key(
             action="updated",
             user_api_key_dict=user_api_key_dict,
             table_name=LitellmTableNames.KEY_TABLE_NAME,
-            before_value=_record_before_block.model_dump_json(exclude_none=True),
+            before_value=existing_record.model_dump_json(exclude_none=True),
             after_value='{"blocked": true}',
         )
     )
