@@ -611,7 +611,7 @@ async def common_checks(  # noqa: PLR0915
                 verbose_proxy_logger.info(f"Free model usage - User: {user_email}, Model: {_model}")
             else:
                 user_budget = user_object.max_budget
-                if user_budget < user_object.spend:
+                if user_object.spend >= user_budget:
                     user_email = user_object.user_email if user_object.user_email else user_object.user_id
 
                     # Get budget duration for user-friendly message
