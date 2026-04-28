@@ -176,3 +176,68 @@ def test_completion_cost_deepseek():
         pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
+
+
+def test_deepseek_v4_supported_openai_params_include_thinking_controls():
+    from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
+
+    supported_params = OpenAIGPTConfig().get_supported_openai_params(
+        "deepseek/deepseek-v4-pro"
+    )
+
+    assert "thinking" in supported_params
+    assert "reasoning_effort" in supported_params
+
+
+def test_deepseek_v4_transform_request_injects_reasoning_content_for_tool_calls():
+    from litellm.llms.openai.openai import OpenAIConfig
+
+    request = OpenAIConfig().transform_request(
+        model="deepseek/deepseek-v4-pro",
+        messages=[
+            {"role": "user", "content": "hello"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "lookup", "arguments": "{}"},
+                    }
+                ],
+            },
+        ],
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    assert request["messages"][1]["reasoning_content"] == ""
+
+
+def test_deepseek_reasoner_transform_request_does_not_inject_reasoning_content():
+    from litellm.llms.openai.openai import OpenAIConfig
+
+    request = OpenAIConfig().transform_request(
+        model="deepseek/deepseek-reasoner",
+        messages=[
+            {"role": "user", "content": "hello"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "lookup", "arguments": "{}"},
+                    }
+                ],
+            },
+        ],
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    assert "reasoning_content" not in request["messages"][1]

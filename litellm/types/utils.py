@@ -1221,7 +1221,7 @@ class Message(SafeAttributeModel, OpenAIObject):
             if hasattr(self, "annotations"):
                 del self.annotations
 
-        if reasoning_content is None:
+        if reasoning_content is None and not getattr(self, "tool_calls", None):
             # ensure default response matches OpenAI spec
             if hasattr(self, "reasoning_content"):
                 del self.reasoning_content
