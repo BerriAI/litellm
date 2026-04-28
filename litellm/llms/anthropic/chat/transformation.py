@@ -448,6 +448,28 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 if "properties" not in _input_schema:
                     _input_schema["properties"] = {}
 
+            # Resolve legacy `definitions` $ref pointers inline before
+            # filtering. Anthropic supports `$defs` natively but not
+            # `definitions` (old JSON Schema draft-04 style). MCP servers
+            # such as DevRev emit schemas with `definitions` + `$ref` which
+            # causes Anthropic to return "PointerToNowhere" errors because
+            # the `definitions` key is stripped by the _allowed_properties
+            # filter below while the $ref pointers remain.
+            if "definitions" in _input_schema:
+                import copy
+
+                from litellm.litellm_core_utils.prompt_templates.common_utils import (
+                    unpack_defs,
+                )
+
+                _input_schema = copy.deepcopy(_input_schema)
+                defs: dict = {
+                    **_input_schema.pop("definitions", {}),
+                    **_input_schema.pop("$defs", {}),
+                }
+                if defs:
+                    unpack_defs(_input_schema, defs)
+
             _allowed_properties = set(AnthropicInputSchema.__annotations__.keys())
             input_schema_filtered = {
                 k: v for k, v in _input_schema.items() if k in _allowed_properties

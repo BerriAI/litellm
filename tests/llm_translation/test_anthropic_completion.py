@@ -1885,3 +1885,110 @@ def test_metadata_filter_applies_to_azure_anthropic():
         headers={},
     )
     assert data.get("metadata") == {"user_id": "u2"}
+
+
+def test_anthropic_tool_with_legacy_definitions_ref_resolved_inline():
+    """MCP servers (e.g. DevRev) emit schemas with `definitions` + $ref.
+    Anthropic doesn't support `definitions` — refs must be inlined before
+    the _allowed_properties filter strips the definitions block."""
+    args = {
+        "non_default_params": {
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "update_contact",
+                        "description": "Update a contact.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "id": {"type": "string"},
+                                "tags": {
+                                    "$ref": "#/definitions/_gen:tags",
+                                    "description": "Tags for the contact.",
+                                },
+                            },
+                            "required": ["id"],
+                            "definitions": {
+                                "_gen:tags": {
+                                    "type": "object",
+                                    "properties": {
+                                        "set": {
+                                            "type": "array",
+                                            "items": {"type": "string"},
+                                        }
+                                    },
+                                }
+                            },
+                        },
+                    },
+                }
+            ]
+        }
+    }
+
+    mapped_params = litellm.AnthropicConfig().map_openai_params(
+        non_default_params=args["non_default_params"],
+        optional_params={},
+        model="claude-sonnet-4-5-20250929",
+        drop_params=False,
+    )
+
+    tool = mapped_params["tools"][0]
+    input_schema = tool["input_schema"]
+
+    # `definitions` must not appear — it's not in AnthropicInputSchema
+    assert "definitions" not in input_schema
+
+    # The $ref should have been resolved inline — no dangling pointer
+    tags_prop = input_schema["properties"]["tags"]
+    assert "$ref" not in tags_prop, "dangling $ref will cause Anthropic PointerToNowhere"
+    assert tags_prop.get("type") == "object"
+    assert "set" in tags_prop.get("properties", {})
+
+
+def test_anthropic_tool_defs_ref_still_preserved():
+    """$defs refs (officially supported by Anthropic) must not be touched."""
+    args = {
+        "non_default_params": {
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "create_user",
+                        "description": "Create a user.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "user": {"$ref": "#/$defs/User"},
+                            },
+                            "required": ["user"],
+                            "$defs": {
+                                "User": {
+                                    "type": "object",
+                                    "properties": {
+                                        "name": {"type": "string"},
+                                        "email": {"type": "string"},
+                                    },
+                                }
+                            },
+                        },
+                    },
+                }
+            ]
+        }
+    }
+
+    mapped_params = litellm.AnthropicConfig().map_openai_params(
+        non_default_params=args["non_default_params"],
+        optional_params={},
+        model="claude-sonnet-4-5-20250929",
+        drop_params=False,
+    )
+
+    tool = mapped_params["tools"][0]
+    # $defs refs should be preserved as-is (Anthropic handles them natively)
+    assert tool["input_schema"]["properties"]["user"]["$ref"] == "#/$defs/User"
+    assert (
+        tool["input_schema"]["$defs"]["User"]["properties"]["name"]["type"] == "string"
+    )

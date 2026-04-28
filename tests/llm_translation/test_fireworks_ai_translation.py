@@ -242,3 +242,47 @@ def test_global_disable_flag_with_transform_messages_helper(monkeypatch):
             "#transform=inline"
             not in json_data["messages"][0]["content"][1]["image_url"]["url"]
         )
+
+
+def test_fireworks_transform_tools_resolves_definitions_refs():
+    """MCP servers emit tool schemas with `definitions` + $ref. Fireworks
+    rejects these — verify _transform_tools resolves refs inline."""
+    from litellm.llms.fireworks_ai.chat.transformation import FireworksAIConfig
+
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "update_contact",
+                "description": "Update a contact.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "id": {"type": "string"},
+                        "tags": {
+                            "$ref": "#/definitions/_gen:tags",
+                            "description": "Tags",
+                        },
+                    },
+                    "required": ["id"],
+                    "definitions": {
+                        "_gen:tags": {
+                            "type": "object",
+                            "properties": {
+                                "set": {"type": "array", "items": {"type": "string"}}
+                            },
+                        }
+                    },
+                },
+            },
+        }
+    ]
+
+    result = FireworksAIConfig()._transform_tools(tools)
+    params = result[0]["function"]["parameters"]
+
+    assert "definitions" not in params, "definitions block must be stripped"
+    tags_prop = params["properties"]["tags"]
+    assert "$ref" not in tags_prop, "dangling $ref must be resolved"
+    assert tags_prop.get("type") == "object"
+    assert "set" in tags_prop.get("properties", {})
