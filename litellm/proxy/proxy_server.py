@@ -2129,7 +2129,9 @@ async def update_cache(  # noqa: PLR0915
                 if cached_user is None:
                     # do nothing if there is no cache value
                     return
-                existing_spend_obj = CacheCodec.deserialize(cached_user, LiteLLM_UserTable)
+                existing_spend_obj = CacheCodec.deserialize(
+                    cached_user, LiteLLM_UserTable
+                )
                 if existing_spend_obj is None:
                     return
                 verbose_proxy_logger.debug(
@@ -3606,21 +3608,23 @@ class ProxyConfig:
                 verbose_proxy_logger.critical(
                     "LITELLM_MASTER_KEY is not set! All requests will be treated as INTERNAL_USER with no admin access. Set LITELLM_MASTER_KEY for production use."
                 )
-            ### USER API KEY CACHE IN-MEMORY TTL ###
+            ### USER API KEY CACHE TTL (in-memory + Redis when Redis auth sharing is enabled) ###
             user_api_key_cache_ttl = general_settings.get(
                 "user_api_key_cache_ttl", None
             )
             if user_api_key_cache_ttl is not None:
+                ttl = float(user_api_key_cache_ttl)
+                # Mirror TTL on Redis as well when ``litellm_settings.enable_redis_auth_cache``
+                # attaches Redis to ``user_api_key_cache``; otherwise DualCache misses in
+                # memory fall back to a key that outlasts ``user_api_key_cache_ttl``.
                 user_api_key_cache.update_cache_ttl(
-                    default_in_memory_ttl=float(user_api_key_cache_ttl),
-                    default_redis_ttl=None,  # user_api_key_cache uses in-memory TTL only; Redis not configured for key lookups
+                    default_in_memory_ttl=ttl,
+                    default_redis_ttl=ttl,
                 )
 
             ### PKCE MULTI-INSTANCE PREREQUISITE CHECK ###
             # PKCE verifiers are stored in redis_usage_cache when available so they can
             # be read back by any instance (not just the one that started the auth flow).
-            # user_api_key_cache is intentionally left in-memory-only to avoid routing
-            # all API-key lookups through Redis.
             use_pkce = os.getenv("GENERIC_CLIENT_USE_PKCE", "false").lower() == "true"
             if use_pkce and redis_usage_cache is None:
                 global _pkce_no_redis_warning_emitted
