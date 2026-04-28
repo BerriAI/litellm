@@ -19,7 +19,10 @@ from litellm.utils import ProviderConfigManager
 from litellm.llms.github_copilot.responses.transformation import (
     GithubCopilotResponsesAPIConfig,
 )
+from litellm.llms.github_copilot.common_utils import GetAPIKeyError
 from litellm.types.llms.openai import ResponsesAPIOptionalRequestParams
+from litellm.types.router import GenericLiteLLMParams
+from litellm.exceptions import AuthenticationError
 
 
 class TestGithubCopilotResponsesAPITransformation:
@@ -589,16 +592,19 @@ class TestResponsesAPIMiscMethods:
     def test_supports_native_websocket_is_false(self):
         assert self.config.supports_native_websocket() is False
 
+    @patch("litellm.llms.github_copilot.responses.transformation.Authenticator")
     def test_get_complete_url_default_base(self, mock_authenticator_class):
         url = self.config.get_complete_url(api_base=None, litellm_params={})
         assert url == "https://api.githubcopilot.com/responses"
 
+    @patch("litellm.llms.github_copilot.responses.transformation.Authenticator")
     def test_get_complete_url_custom_base(self, mock_authenticator_class):
         url = self.config.get_complete_url(
             api_base="https://custom.example.com/v1/", litellm_params={}
         )
         assert url == "https://custom.example.com/v1/responses"
 
+    @patch("litellm.llms.github_copilot.responses.transformation.Authenticator")
     def test_validate_environment_no_api_key_raises(self, mock_authenticator_class):
         mock_authenticator_class.return_value.get_api_key.return_value = None
         with pytest.raises(AuthenticationError):
@@ -606,6 +612,7 @@ class TestResponsesAPIMiscMethods:
                 headers={}, model="gpt-4", litellm_params=None
             )
 
+    @patch("litellm.llms.github_copilot.responses.transformation.Authenticator")
     def test_validate_environment_get_api_key_error_raises(
         self, mock_authenticator_class
     ):
@@ -617,6 +624,7 @@ class TestResponsesAPIMiscMethods:
                 headers={}, model="gpt-4", litellm_params=None
             )
 
+    @patch("litellm.llms.github_copilot.responses.transformation.Authenticator")
     def test_validate_environment_with_conversation_key(self, mock_authenticator_class):
         mock_authenticator_class.return_value.get_api_key.return_value = "test-key"
         lp = GenericLiteLLMParams(metadata={"copilot_conversation_id": "test-conv"})

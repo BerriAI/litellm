@@ -12,7 +12,9 @@ import pytest
 
 from litellm.llms.github_copilot import common_utils
 from litellm.llms.github_copilot.common_utils import (
+    COPILOT_CONVERSATION_ID_HEADER,
     determine_x_initiator,
+    get_copilot_default_headers,
     get_or_create_conversation_id,
 )
 
