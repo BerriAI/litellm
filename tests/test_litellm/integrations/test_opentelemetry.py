@@ -3315,3 +3315,174 @@ class TestTransformResponsesAPIOutput(unittest.TestCase):
         ]
         result = otel._transform_responses_api_output_to_otel(output)
         self.assertEqual(result[0]["role"], "assistant")
+
+
+    def test_pydantic_like_objects_accepted(self):
+        """Items with .get() but not isinstance(dict) should be accepted."""
+
+        class FakeOutputItem:
+            """Mimics BaseLiteLLMOpenAIResponseObject duck-typing."""
+
+            def __init__(self, data):
+                self._data = data
+
+            def get(self, key, default=None):
+                return self._data.get(key, default)
+
+        class FakeContent:
+            def __init__(self, data):
+                self._data = data
+
+            def get(self, key, default=None):
+                return self._data.get(key, default)
+
+        otel = OpenTelemetry()
+        output = [
+            FakeOutputItem(
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [
+                        FakeContent({"type": "output_text", "text": "Pydantic works!"}),
+                    ],
+                }
+            )
+        ]
+        result = otel._transform_responses_api_output_to_otel(output)
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["parts"][0]["content"], "Pydantic works!")
+
+
+class TestSystemInstructionsPrecedence(unittest.TestCase):
+    """Tests for the is-not-None precedence in system_instructions coalescing."""
+
+    def _get_attr(self, mock_span, attr_name):
+        calls = [
+            call
+            for call in mock_span.set_attribute.call_args_list
+            if call[0][0] == attr_name
+        ]
+        if not calls:
+            return None
+        return calls[0][0][1]
+
+    def _base_kwargs(self, **overrides):
+        kwargs = {
+            "model": "gpt-4o",
+            "messages": [{"role": "user", "content": "Hi"}],
+            "optional_params": {},
+            "litellm_params": {"custom_llm_provider": "openai"},
+            "standard_logging_object": {
+                "id": "test-id",
+                "call_type": "responses",
+                "metadata": {},
+            },
+        }
+        kwargs.update(overrides)
+        return kwargs
+
+    def test_empty_list_system_instructions_does_not_fallthrough(self):
+        """An empty list for system_instructions should NOT fall through to instructions."""
+        otel = OpenTelemetry()
+        mock_span = MagicMock()
+
+        kwargs = self._base_kwargs(
+            system_instructions=[],
+            instructions="Should not be used",
+        )
+        response_obj = {"id": "r1", "model": "gpt-4o"}
+
+        otel.set_attributes(span=mock_span, kwargs=kwargs, response_obj=response_obj)
+
+        # system_instructions is [] (falsy but not None), so it wins.
+        # Since it's an empty list, no attribute should be set (nothing to transform).
+        value = self._get_attr(mock_span, "gen_ai.system_instructions")
+        # The empty list is truthy for `is not None` but produces empty
+        # transformed output — the attribute should NOT contain "Should not be used".
+        if value is not None:
+            self.assertNotIn("Should not be used", str(value))
+
+
+class TestResponsesAPIToolCallSpanAttributes(unittest.TestCase):
+    """Tests for per-tool-call span attributes on Responses API function_call items."""
+
+    def _base_kwargs(self):
+        return {
+            "model": "gpt-4o",
+            "messages": [{"role": "user", "content": "What is the weather?"}],
+            "optional_params": {},
+            "litellm_params": {"custom_llm_provider": "openai"},
+            "standard_logging_object": {
+                "id": "resp_tc",
+                "call_type": "responses",
+                "metadata": {},
+            },
+        }
+
+    def test_per_tool_call_attributes_emitted(self):
+        """function_call output items should produce per-tool-call span attributes."""
+        otel = OpenTelemetry()
+        mock_span = MagicMock()
+
+        response_obj = {
+            "id": "resp_tc",
+            "model": "gpt-4o",
+            "status": "completed",
+            "output": [
+                {
+                    "type": "function_call",
+                    "name": "get_weather",
+                    "call_id": "call_abc",
+                    "arguments": '{"location": "SF"}',
+                }
+            ],
+        }
+
+        otel.set_attributes(span=mock_span, kwargs=self._base_kwargs(), response_obj=response_obj)
+
+        # Verify per-tool-call attributes were set (same format as choices branch)
+        attr_names = [call[0][0] for call in mock_span.set_attribute.call_args_list]
+        tool_call_attrs = [a for a in attr_names if "function_call" in a]
+        self.assertTrue(len(tool_call_attrs) > 0, "Per-tool-call span attributes should be emitted")
+
+        # Verify the name attribute specifically
+        mock_span.set_attribute.assert_any_call(
+            "gen_ai.completion.0.function_call.name", "get_weather"
+        )
+        mock_span.set_attribute.assert_any_call(
+            "gen_ai.completion.0.function_call.arguments", '{"location": "SF"}'
+        )
+
+    def test_multiple_tool_calls_indexed(self):
+        """Multiple function_call items should be indexed correctly."""
+        otel = OpenTelemetry()
+        mock_span = MagicMock()
+
+        response_obj = {
+            "id": "resp_tc2",
+            "model": "gpt-4o",
+            "status": "completed",
+            "output": [
+                {
+                    "type": "function_call",
+                    "name": "get_weather",
+                    "call_id": "call_1",
+                    "arguments": "{}",
+                },
+                {
+                    "type": "function_call",
+                    "name": "get_time",
+                    "call_id": "call_2",
+                    "arguments": "{}",
+                },
+            ],
+        }
+
+        otel.set_attributes(span=mock_span, kwargs=self._base_kwargs(), response_obj=response_obj)
+
+        mock_span.set_attribute.assert_any_call(
+            "gen_ai.completion.0.function_call.name", "get_weather"
+        )
+        mock_span.set_attribute.assert_any_call(
+            "gen_ai.completion.1.function_call.name", "get_time"
+        )
