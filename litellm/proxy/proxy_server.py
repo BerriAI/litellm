@@ -209,6 +209,7 @@ from litellm import Router
 from litellm._logging import verbose_proxy_logger, verbose_router_logger
 from litellm.caching.caching import DualCache, RedisCache
 from litellm.caching.redis_cluster_cache import RedisClusterCache
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.constants import (
     _REALTIME_BODY_CACHE_SIZE,
     APSCHEDULER_COALESCE,
@@ -1598,7 +1599,7 @@ prisma_client: Optional[PrismaClient] = None
 shared_aiohttp_session: Optional["ClientSession"] = (
     None  # Global shared session for connection reuse
 )
-user_api_key_cache = DualCache(
+user_api_key_cache = UserApiKeyCache(
     default_in_memory_ttl=UserAPIKeyCacheTTLEnum.in_memory_cache_ttl.value
 )
 spend_counter_cache = DualCache(
@@ -2041,19 +2042,13 @@ async def update_cache(  # noqa: PLR0915
         else:
             hashed_token = token
         verbose_proxy_logger.debug("_update_key_cache: hashed_token=%s", hashed_token)
-        cached_key = await user_api_key_cache.async_get_cache(key=hashed_token)
-        verbose_proxy_logger.debug(
-            f"_update_key_cache: existing_spend_obj={cached_key}"
+        existing_spend_obj = await user_api_key_cache.async_get_cache(
+            key=hashed_token, model_type=UserAPIKeyAuth
         )
-        if cached_key is None:
-            return
-        existing_spend_obj = CacheCodec.deserialize(cached_key, UserAPIKeyAuth)
+        verbose_proxy_logger.debug(
+            f"_update_key_cache: existing_spend_obj={existing_spend_obj}"
+        )
         if existing_spend_obj is None:
-            verbose_proxy_logger.warning(
-                "_update_key_cache: unexpected cached key type %s for hashed_token=%s; skipping spend update",
-                type(cached_key).__name__,
-                hashed_token,
-            )
             return
 
         existing_spend = existing_spend_obj.spend or 0.0
@@ -2114,14 +2109,10 @@ async def update_cache(  # noqa: PLR0915
                 existing_team_member_spend + response_cost
             )
 
-        # Update the cost column for the given token (dict for Redis pipeline json.dumps)
+        # Existing spend_obj is mutated; UserApiKeyCache.async_set_cache_pipeline turns
+        # BaseModel values into dicts for Redis (same Codec path as async_set_cache).
         existing_spend_obj.spend = new_spend
-        values_to_update_in_cache.append(
-            (
-                hashed_token,
-                CacheCodec.serialize(existing_spend_obj, model_type=UserAPIKeyAuth),
-            )
-        )
+        values_to_update_in_cache.append((hashed_token, existing_spend_obj))
 
     ### UPDATE USER SPEND ###
     async def _update_user_cache():
