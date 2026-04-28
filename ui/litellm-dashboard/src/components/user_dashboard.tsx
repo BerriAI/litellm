@@ -317,16 +317,6 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
     setUserRole("App Owner");
   }
 
-  if (userRole && userRole == "Admin Viewer") {
-    const { Title, Paragraph } = Typography;
-    return (
-      <div>
-        <Title level={1}>Access Denied</Title>
-        <Paragraph>Ask your proxy admin for access to create keys</Paragraph>
-      </div>
-    );
-  }
-
   console.log("inside user dashboard, selected team", selectedTeam);
   console.log("All cookies after redirect:", document.cookie);
   return (
