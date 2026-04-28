@@ -392,3 +392,85 @@ class ArizePhoenixLogger(OpenTelemetry):  # type: ignore
             "status": "healthy",
             "message": "Arize-Phoenix credentials are configured properly",
         }
+
+    async def log_success_fallback_event(
+        self,
+        original_model_group: str,
+        kwargs: dict,
+        original_exception: Exception,
+    ):
+        """
+        Log a successful fallback event by creating a span that captures the fallback chain.
+
+        When a fallback succeeds, this creates a span showing:
+        - Which model originally failed (original_model_group)
+        - Which model it fell back to (from kwargs["model"])
+        - The error that triggered the fallback
+        """
+        from opentelemetry.trace import Status, StatusCode
+
+        original_model = original_model_group
+        fallback_model = kwargs.get("model")
+        fallback_depth = kwargs.get("fallback_depth", 1)
+
+        status_code = getattr(original_exception, "status_code", None)
+        exception_class = original_exception.__class__.__name__
+
+        span_name = f"fallback: {original_model} -> {fallback_model}"
+        span = self.tracer.start_span(name=span_name)
+
+        def _safe_set(s, k, v):
+            if hasattr(s, "set_attribute"):
+                s.set_attribute(k, v)
+
+        _safe_set(span, "llm.fallback.event_type", "success")
+        _safe_set(span, "llm.fallback.original_model", original_model)
+        _safe_set(span, "llm.fallback.fallback_model", fallback_model)
+        _safe_set(span, "llm.fallback.attempt_number", fallback_depth)
+        if status_code is not None:
+            _safe_set(span, "llm.fallback.error_status_code", status_code)
+        _safe_set(span, "llm.fallback.error_class", exception_class)
+
+        span.set_status(Status(StatusCode.OK))
+        span.end()
+
+    async def log_failure_fallback_event(
+        self,
+        original_model_group: str,
+        kwargs: dict,
+        original_exception: Exception,
+    ):
+        """
+        Log a failed fallback event by creating a span that captures the failure.
+
+        When all fallbacks fail, this creates a span showing:
+        - Which model originally failed
+        - Which fallback models were attempted
+        - The chain of errors
+        """
+        from opentelemetry.trace import Status, StatusCode
+
+        original_model = original_model_group
+        fallback_attempted = kwargs.get("model")
+        max_fallbacks = kwargs.get("max_fallbacks", 0)
+
+        exception_class = original_exception.__class__.__name__
+        status_code = getattr(original_exception, "status_code", None)
+
+        span_name = f"fallback_failed: {original_model}"
+        span = self.tracer.start_span(name=span_name)
+
+        def _safe_set(s, k, v):
+            if hasattr(s, "set_attribute"):
+                s.set_attribute(k, v)
+
+        _safe_set(span, "llm.fallback.event_type", "failure")
+        _safe_set(span, "llm.fallback.original_model", original_model)
+        _safe_set(span, "llm.fallback.attempted_model", fallback_attempted)
+        _safe_set(span, "llm.fallback.max_fallbacks", max_fallbacks)
+        if status_code is not None:
+            _safe_set(span, "llm.fallback.error_status_code", status_code)
+        _safe_set(span, "llm.fallback.error_class", exception_class)
+
+        span.set_status(Status(StatusCode.ERROR))
+        span.end()

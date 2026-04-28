@@ -938,6 +938,24 @@ def _set_request_attributes(
     if kwargs.get("model"):
         safe_set_attribute(span, span_attrs.LLM_MODEL_NAME, kwargs.get("model"))
 
+    # Track fallback context: which attempt number in the fallback chain
+    fallback_attempt = kwargs.get("fallback_depth")
+    if fallback_attempt is not None:
+        safe_set_attribute(span, "llm.fallback.attempt_number", fallback_attempt)
+        # Original model that was attempted before fallback
+        original_model = kwargs.get("original_model")
+        if original_model:
+            safe_set_attribute(span, "llm.fallback.original_model", original_model)
+        # Error that triggered fallback
+        original_exception = kwargs.get("original_exception")
+        if original_exception is not None:
+            status_code = getattr(original_exception, "status_code", None)
+            if status_code is not None:
+                safe_set_attribute(span, "llm.fallback.error_status_code", status_code)
+            exception_class = getattr(original_exception, "__class__.__name__", None)
+            if exception_class:
+                safe_set_attribute(span, "llm.fallback.error_class", exception_class)
+
     safe_set_attribute(
         span, "llm.request.type", standard_logging_payload.get("call_type")
     )
