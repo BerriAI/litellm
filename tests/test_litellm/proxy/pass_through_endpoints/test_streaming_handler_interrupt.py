@@ -1,15 +1,6 @@
-"""
-Regression tests for LIT-2642 — interrupted pass-through streams must still
-trigger logging so spend is tracked.
+"""Regression tests for LIT-2642 — interrupted pass-through streams must still log usage."""
 
-`PassThroughStreamingHandler.chunk_processor` collects bytes from the
-upstream response and schedules `_route_streaming_logging_to_handler` once
-the chunk loop completes. When a FastAPI client disconnects mid-stream,
-Starlette calls `aclose()` on the async generator and raises `GeneratorExit`
-at the suspended `yield`. The previous `except Exception` branch did not
-catch `GeneratorExit`, so the post-loop logging task was never scheduled.
-"""
-
+import asyncio
 from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -36,7 +27,6 @@ def _make_streaming_response(chunks):
 
 @pytest.mark.asyncio
 async def test_chunk_processor_logs_on_normal_completion():
-    """Baseline: full consumption schedules logging exactly once."""
     chunks = [b"chunk-1", b"chunk-2", b"chunk-3"]
     response = _make_streaming_response(chunks)
 
@@ -60,8 +50,6 @@ async def test_chunk_processor_logs_on_normal_completion():
         ):
             received.append(chunk)
 
-        import asyncio
-
         await asyncio.sleep(0)
 
     assert received == chunks
@@ -72,11 +60,6 @@ async def test_chunk_processor_logs_on_normal_completion():
 
 @pytest.mark.asyncio
 async def test_chunk_processor_logs_on_client_disconnect():
-    """
-    LIT-2642 regression: closing the generator early (e.g. client
-    disconnect) must still schedule logging so per-chunk spend data
-    isn't dropped.
-    """
     chunks = [b"event-1", b"event-2", b"event-3"]
     response = _make_streaming_response(chunks)
 
@@ -98,26 +81,19 @@ async def test_chunk_processor_logs_on_client_disconnect():
             url_route="/bedrock/model/claude/invoke-with-response-stream",
         )
 
-        # Consume one chunk, then close the generator — same path Starlette
-        # takes when the HTTP client disconnects mid-stream.
         first = await gen.__anext__()
         await gen.aclose()
-
-        import asyncio
 
         await asyncio.sleep(0)
 
     assert first == chunks[0]
     mock_route.assert_called_once()
     call_kwargs = mock_route.call_args.kwargs
-    # Only one chunk made it through before disconnect — that is what
-    # the logging handler must be given so partial usage is captured.
     assert call_kwargs["raw_bytes"] == [chunks[0]]
 
 
 @pytest.mark.asyncio
 async def test_chunk_processor_does_not_schedule_logging_when_no_chunks():
-    """If no chunks were ever received, don't schedule a no-op logging task."""
     response = _make_streaming_response([])
 
     mock_logging_obj = MagicMock()
