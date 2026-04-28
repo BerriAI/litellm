@@ -76,8 +76,6 @@ class OVHCloudChatConfig(OpenAIGPTConfig):
         return response
 
 
-
-
 class OVHCloudChatCompletionStreamingHandler(BaseModelResponseIterator):
     """
     Handler for OVHCloud AI Endpoints streaming chat completion responses
