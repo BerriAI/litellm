@@ -1033,6 +1033,11 @@ def get_openapi_schema():
 
     openapi_schema = CustomOpenAPISpec.add_llm_api_request_schema_body(openapi_schema)
 
+    # Stub unloaded lazy features so they appear as Swagger sections.
+    from litellm.proxy._lazy_features import inject_lazy_stubs
+
+    openapi_schema = inject_lazy_stubs(openapi_schema)
+
     # Fix Swagger UI execute path error when server_root_path is set
     if server_root_path:
         openapi_schema["servers"] = [{"url": "/" + server_root_path.strip("/")}]
@@ -1058,6 +1063,11 @@ def custom_openapi():
     from litellm.proxy.common_utils.custom_openapi_spec import CustomOpenAPISpec
 
     openapi_schema = CustomOpenAPISpec.add_llm_api_request_schema_body(openapi_schema)
+
+    # Stub unloaded lazy features so they appear as Swagger sections.
+    from litellm.proxy._lazy_features import inject_lazy_stubs
+
+    openapi_schema = inject_lazy_stubs(openapi_schema)
 
     # Fix Swagger UI execute path error when server_root_path is set
     if server_root_path:
@@ -1486,14 +1496,40 @@ def mount_swagger_ui():
 
     app.mount("/swagger", StaticFiles(directory=swagger_directory), name="swagger")
 
+    # On dropdown expand: one-time fetch to the prefix (triggers lazy load),
+    # then spec re-download so real routes replace the stub. Raw JS (no
+    # <script> tag) since it's injected inside the existing inline script.
+    from fastapi.responses import HTMLResponse
+
+    from litellm.proxy._lazy_features import lazy_tag_to_prefix
+
+    _lazy_plugin_js = (
+        "const TAG_TO_PREFIX = "
+        + json.dumps(lazy_tag_to_prefix())
+        + ";const warmedTags = new Set();const LazyLoadPlugin = () => ({"
+        "statePlugins:{layout:{wrapActions:{show:(ori,sys)=>(...args)=>{"
+        "const thing=args[0];let tag=null;"
+        "if(Array.isArray(thing)){for(const t of thing)if(TAG_TO_PREFIX[t])tag=t;}"
+        "if(tag&&!warmedTags.has(tag)){warmedTags.add(tag);"
+        "fetch(TAG_TO_PREFIX[tag]).finally(()=>setTimeout(()=>sys.specActions.download(),800));}"
+        "return ori(...args);}}}}});"
+    )
+
     def swagger_monkey_patch(*args, **kwargs):
-        return get_swagger_ui_html(
+        response = get_swagger_ui_html(
             *args,
             **kwargs,
             swagger_js_url=f"{custom_root_path_swagger_path}/swagger-ui-bundle.js",
             swagger_css_url=f"{custom_root_path_swagger_path}/swagger-ui.css",
             swagger_favicon_url=f"{custom_root_path_swagger_path}/favicon.png",
         )
+        body = response.body.decode("utf-8")
+        body = body.replace(
+            "const ui = SwaggerUIBundle({",
+            _lazy_plugin_js + "const ui = SwaggerUIBundle({plugins:[LazyLoadPlugin],",
+            1,
+        )
+        return HTMLResponse(content=body)
 
     applications.get_swagger_ui_html = swagger_monkey_patch
 
