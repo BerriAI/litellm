@@ -20,11 +20,27 @@ T = TypeVar("T")
 
 
 class AsyncCacheProtocol(Protocol):
-    """Protocol for cache backends used by EventDrivenCacheCoordinator."""
+    """Protocol for cache backends used by EventDrivenCacheCoordinator.
 
-    async def async_get_cache(self, key: str, **kwargs: Any) -> Any: ...
+    Matches ``DualCache`` / ``UserApiKeyCache`` call shapes (explicit optional params
+    before ``**kwargs``), not only ``(key, **kwargs)``, so overloads validate.
+    """
 
-    async def async_set_cache(self, key: str, value: Any, **kwargs: Any) -> Any: ...
+    async def async_get_cache(
+        self,
+        key: str,
+        parent_otel_span: Any = None,
+        local_only: bool = False,
+        **kwargs: Any,
+    ) -> Any: ...
+
+    async def async_set_cache(
+        self,
+        key: str,
+        value: Any,
+        local_only: bool = False,
+        **kwargs: Any,
+    ) -> Any: ...
 
 
 class EventDrivenCacheCoordinator:
