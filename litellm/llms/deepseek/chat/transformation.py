@@ -80,12 +80,22 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
     ) -> List[AllMessageValues]:
         """
         DeepSeek V4 thinking mode requires `reasoning_content` on every assistant message
-        in the conversation history. If an assistant message is missing it (e.g. because
-        Message.__init__ deleted it when it was None), inject an empty string so the API
-        does not return 400 "reasoning_content must be passed back".
+        in the conversation history. Only inject when we can confirm this is a thinking-mode
+        conversation: at least one assistant message already carries `reasoning_content`
+        (returned by DeepSeek on a prior turn). If no message has it the request is not
+        in thinking mode and we leave payloads untouched.
         """
+        thinking_active = any(
+            msg.get("role") == "assistant" and "reasoning_content" in msg
+            for msg in messages
+        )
+        if not thinking_active:
+            return messages
         for message in messages:
-            if message.get("role") == "assistant" and "reasoning_content" not in message:
+            if (
+                message.get("role") == "assistant"
+                and "reasoning_content" not in message
+            ):
                 message["reasoning_content"] = ""  # type: ignore[typeddict-unknown-key]
         return messages
 
