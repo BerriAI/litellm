@@ -163,6 +163,16 @@ async def search(
                     data["metadata"] = {}
                 data["metadata"]["model_group"] = search_tool_name_value
 
+    # Ensure team context is available to search router credential resolution.
+    # add_litellm_data_to_request() also injects these values, but this keeps
+    # search endpoint behavior explicit and resilient for direct router paths.
+    if "metadata" not in data or not isinstance(data.get("metadata"), dict):
+        data["metadata"] = {}
+    if getattr(user_api_key_dict, "team_metadata", None) is not None:
+        data["metadata"]["user_api_key_team_metadata"] = user_api_key_dict.team_metadata
+    if getattr(user_api_key_dict, "team_id", None) is not None:
+        data["metadata"]["user_api_key_team_id"] = user_api_key_dict.team_id
+
     # Process request using ProxyBaseLLMRequestProcessing
     processor = ProxyBaseLLMRequestProcessing(data=data)
     try:

@@ -457,11 +457,24 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       try {
         const rawMetadata = values.metadata ? JSON.parse(values.metadata) : {};
         // Exclude soft_budget_alerting_emails from parsed metadata since it's handled separately
-        const { soft_budget_alerting_emails, ...rest } = rawMetadata;
+        const { soft_budget_alerting_emails, search_provider_config, ...rest } = rawMetadata;
         parsedMetadata = rest;
       } catch (e) {
         NotificationsManager.fromBackend("Invalid JSON in metadata field");
         return;
+      }
+
+      let searchProviderConfig: Record<string, any> | undefined;
+      if (typeof values.search_provider_config === "string") {
+        const trimmedSearchProviderConfig = values.search_provider_config.trim();
+        if (trimmedSearchProviderConfig.length > 0) {
+          try {
+            searchProviderConfig = JSON.parse(trimmedSearchProviderConfig);
+          } catch (e) {
+            NotificationsManager.fromBackend("Invalid JSON in search provider configuration");
+            return;
+          }
+        }
       }
 
       let secretManagerSettings: Record<string, any> | undefined;
@@ -513,6 +526,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         budget_duration: values.budget_duration,
         metadata: {
           ...parsedMetadata,
+          ...(searchProviderConfig !== undefined ? { search_provider_config: searchProviderConfig } : {}),
           guardrails: (values.guardrails || []).filter((n: string) => !globalGuardrailNames.has(n)),
           opted_out_global_guardrails: optedOutGlobalGuardrails,
           ...(values.logging_settings?.length > 0 ? { logging: values.logging_settings } : {}),
@@ -952,10 +966,13 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                           : "",
                       metadata: info.metadata
                         ? JSON.stringify(
-                          (({ logging, secret_manager_settings, soft_budget_alerting_emails, model_tpm_limit, model_rpm_limit, ...rest }) => rest)(info.metadata),
+                          (({ logging, secret_manager_settings, soft_budget_alerting_emails, search_provider_config, model_tpm_limit, model_rpm_limit, ...rest }) => rest)(info.metadata),
                           null,
                           2,
                         )
+                        : "",
+                      search_provider_config: info.metadata?.search_provider_config
+                        ? JSON.stringify(info.metadata.search_provider_config, null, 2)
                         : "",
                       logging_settings: info.metadata?.logging || [],
                       secret_manager_settings: info.metadata?.secret_manager_settings
@@ -1400,6 +1417,29 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     </Form.Item>
 
                     <Form.Item
+                      label="Search Provider Configuration"
+                      name="search_provider_config"
+                      tooltip='Team-level provider credentials. Example: {"tavily": {"api_key": "tvly-...", "api_base": "https://api.tavily.com"}}'
+                      rules={[
+                        {
+                          validator: async (_, value) => {
+                            if (!value || (typeof value === "string" && value.trim() === "")) {
+                              return Promise.resolve();
+                            }
+                            try {
+                              JSON.parse(value);
+                              return Promise.resolve();
+                            } catch (error) {
+                              return Promise.reject(new Error("Please enter valid JSON"));
+                            }
+                          },
+                        },
+                      ]}
+                    >
+                      <Input.TextArea rows={8} placeholder='{"tavily":{"api_key":"tvly-...","api_base":"https://api.tavily.com"}}' />
+                    </Form.Item>
+
+                    <Form.Item
                       label="Secret Manager Settings"
                       name="secret_manager_settings"
                       help={
@@ -1611,6 +1651,15 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                         <Text className="font-medium">Secret Manager Settings</Text>
                         <pre className="mt-2 bg-gray-50 p-3 rounded text-xs overflow-x-auto">
                           {JSON.stringify(info.metadata.secret_manager_settings, null, 2)}
+                        </pre>
+                      </div>
+                    )}
+
+                    {info.metadata?.search_provider_config && (
+                      <div className="pt-4 border-t border-gray-200">
+                        <Text className="font-medium">Search Provider Configuration</Text>
+                        <pre className="mt-2 bg-gray-50 p-3 rounded text-xs overflow-x-auto">
+                          {JSON.stringify(info.metadata.search_provider_config, null, 2)}
                         </pre>
                       </div>
                     )}
