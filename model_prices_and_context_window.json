@@ -27206,6 +27206,21 @@
         "supports_reasoning": true,
         "supports_tool_choice": true
     },
+    "openrouter/zai/glm-5.1": {
+        "cache_creation_input_token_cost": 0,
+        "cache_read_input_token_cost": 5.25e-07,
+        "input_cost_per_token": 1.05e-06,
+        "output_cost_per_token": 3.5e-06,
+        "litellm_provider": "openrouter",
+        "max_input_tokens": 202752,
+        "max_output_tokens": 65535,
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true,
+        "source": "https://openrouter.ai/z-ai/glm-5.1"
+    },
     "openrouter/minimax/minimax-m2.1": {
         "input_cost_per_token": 2.7e-07,
         "output_cost_per_token": 1.2e-06,
