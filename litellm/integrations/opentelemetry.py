@@ -1914,19 +1914,14 @@ class OpenTelemetry(CustomLogger):
                     transformed.append({"role": role, "parts": parts})
             elif item.get("type") == "function_call":
                 # Surface tool calls from Responses API output
-                tool_call = {
-                    "role": "assistant",
-                    "parts": [
-                        {
-                            "type": "tool_call",
-                            "name": item.get("name", ""),
-                            "arguments": item.get("arguments", ""),
-                        }
-                    ],
+                part: dict = {
+                    "type": "tool_call",
+                    "name": item.get("name", ""),
+                    "arguments": item.get("arguments", ""),
                 }
                 if item.get("call_id"):
-                    tool_call["parts"][0]["id"] = item["call_id"]
-                transformed.append(tool_call)
+                    part["id"] = item["call_id"]
+                transformed.append({"role": "assistant", "parts": [part]})
         return transformed
 
     def set_raw_request_attributes(self, span: Span, kwargs, response_obj):
