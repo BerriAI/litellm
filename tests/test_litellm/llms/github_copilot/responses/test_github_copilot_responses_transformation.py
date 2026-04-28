@@ -604,29 +604,24 @@ class TestResponsesAPIMiscMethods:
         )
         assert url == "https://custom.example.com/v1/responses"
 
-    @patch("litellm.llms.github_copilot.responses.transformation.Authenticator")
-    def test_validate_environment_no_api_key_raises(self, mock_authenticator_class):
-        mock_authenticator_class.return_value.get_api_key.return_value = None
+    def test_validate_environment_no_api_key_raises(self):
+        self.config.authenticator.get_api_key = MagicMock(return_value=None)
         with pytest.raises(AuthenticationError):
             self.config.validate_environment(
                 headers={}, model="gpt-4", litellm_params=None
             )
 
-    @patch("litellm.llms.github_copilot.responses.transformation.Authenticator")
-    def test_validate_environment_get_api_key_error_raises(
-        self, mock_authenticator_class
-    ):
-        mock_authenticator_class.return_value.get_api_key.side_effect = GetAPIKeyError(
-            status_code=401, message="key expired"
+    def test_validate_environment_get_api_key_error_raises(self):
+        self.config.authenticator.get_api_key = MagicMock(
+            side_effect=GetAPIKeyError(status_code=401, message="key expired")
         )
         with pytest.raises(AuthenticationError):
             self.config.validate_environment(
                 headers={}, model="gpt-4", litellm_params=None
             )
 
-    @patch("litellm.llms.github_copilot.responses.transformation.Authenticator")
-    def test_validate_environment_with_conversation_key(self, mock_authenticator_class):
-        mock_authenticator_class.return_value.get_api_key.return_value = "test-key"
+    def test_validate_environment_with_conversation_key(self):
+        self.config.authenticator.get_api_key = MagicMock(return_value="test-key")
         lp = GenericLiteLLMParams(metadata={"copilot_conversation_id": "test-conv"})
         headers = self.config.validate_environment(
             headers={}, model="gpt-4", litellm_params=lp
