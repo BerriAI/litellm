@@ -772,11 +772,17 @@ def _extract_chain_output(
             field_value = response_obj_dict.get(field)
             text = _coerce_text(field_value)
             if text:
-                return text, ("application/json" if isinstance(field_value, (list, dict)) else None)
+                return text, (
+                    "application/json"
+                    if isinstance(field_value, (list, dict))
+                    else None
+                )
 
         content = response_obj_dict.get("content")
         if content:
-            return _coerce_text(content), ("application/json" if isinstance(content, (list, dict)) else None)
+            return _coerce_text(content), (
+                "application/json" if isinstance(content, (list, dict)) else None
+            )
 
         # 4. Reranker results
         results = response_obj_dict.get("results")
