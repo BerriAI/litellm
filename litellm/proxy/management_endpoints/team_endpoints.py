@@ -4145,6 +4145,7 @@ async def _authorize_and_filter_teams(
     """
     is_proxy_admin = _user_has_admin_view(user_api_key_dict)
     allowed_org_ids: Optional[List[str]] = None
+    caller_user = None
 
     if not is_proxy_admin:
         # Check if user is an org admin (even for own queries, so they see org teams)
@@ -4203,24 +4204,34 @@ async def _authorize_and_filter_teams(
         # Regular users are scoped to the canonical team ids on their user row.
         # This mirrors /v2/team/list and avoids exposing teams from stale
         # members_with_roles entries.
-        try:
-            target_user = await get_user_object(
-                user_id=user_id,
-                prisma_client=prisma_client,
-                user_api_key_cache=user_api_key_cache,
-                user_id_upsert=False,
-                proxy_logging_obj=proxy_logging_obj,
-            )
-        except ValueError:
-            raise HTTPException(
-                status_code=404,
-                detail={"error": f"User not found, passed user_id={user_id}"},
-            )
-        if target_user is None:
-            raise HTTPException(
-                status_code=404,
-                detail={"error": f"User not found, passed user_id={user_id}"},
-            )
+        #
+        # Reuse caller_user when listing own teams — already loaded above for
+        # org-admin detection — to avoid a second get_user_object round-trip.
+        if (
+            caller_user is not None
+            and user_api_key_dict.user_id is not None
+            and user_id == user_api_key_dict.user_id
+        ):
+            target_user = caller_user
+        else:
+            try:
+                target_user = await get_user_object(
+                    user_id=user_id,
+                    prisma_client=prisma_client,
+                    user_api_key_cache=user_api_key_cache,
+                    user_id_upsert=False,
+                    proxy_logging_obj=proxy_logging_obj,
+                )
+            except ValueError:
+                raise HTTPException(
+                    status_code=404,
+                    detail={"error": f"User not found, passed user_id={user_id}"},
+                )
+            if target_user is None:
+                raise HTTPException(
+                    status_code=404,
+                    detail={"error": f"User not found, passed user_id={user_id}"},
+                )
         user_team_ids = target_user.teams or []
         if not user_team_ids:
             return []
