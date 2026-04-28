@@ -701,15 +701,26 @@ class StickyLeastBusyLoggingHandler(CustomLogger):
         node_summary = ", ".join(
             f"{did}={request_counts.get(did, 0)}" for did in dep_ids
         )
-        verbose_router_logger.debug(
-            f"[StickyLeastBusy ROUTING] "
-            f"healthy_nodes={len(dep_ids)}, "
+
+        # Calculate imbalance ratio for each deployment
+        imbalance_ratios = []
+        for did in dep_ids:
+            load = request_counts.get(did, 0)
+            ref = max(reference_load, 1.0)
+            ratio = load / ref if ref > 0 else 0
+            imbalance_ratios.append(f"{did}={ratio:.2f}")
+
+        verbose_router_logger.info(
+            f"[StickyLeastBusy ROUTING] model_group={model_group}, "
+            f"healthy_deployments={len(dep_ids)}, "
+            f"deployment_ids={dep_ids}, "
             f"total_in_flight={total_load}, "
             f"avg_load={avg_load:.2f}, "
             f"min_load={min_load}, "
             f"reference_load={reference_load:.2f}, "
-            f"threshold={self.imbalance_threshold}, "
-            f"loads=[{node_summary}]"
+            f"imbalance_threshold={self.imbalance_threshold}, "
+            f"loads_per_deployment=[{node_summary}], "
+            f"imbalance_ratios=[{', '.join(imbalance_ratios)}]"
         )
 
         # Try sticky routing
@@ -719,49 +730,56 @@ class StickyLeastBusyLoggingHandler(CustomLogger):
                 preferred_load = request_counts.get(preferred_id, 0)
                 effective_reference = max(reference_load, 1.0)
                 threshold_value = self.imbalance_threshold * effective_reference
+                current_ratio = preferred_load / effective_reference if effective_reference > 0 else 0
 
-                verbose_router_logger.debug(
-                    f"[StickyLeastBusy STICKY-CHECK] "
-                    f"preferred_node={preferred_id}, "
+                verbose_router_logger.info(
+                    f"[StickyLeastBusy STICKY-CHECK] model_group={model_group}, "
+                    f"sticky_key={sticky_key[:16]}..., "
+                    f"preferred_deployment={preferred_id}, "
                     f"preferred_load={preferred_load}, "
-                    f"threshold_value={threshold_value:.2f} "
-                    f"(= {self.imbalance_threshold} * "
-                    f"max(({avg_load:.2f}+{min_load})/2, 1.0))"
+                    f"effective_reference={effective_reference:.2f}, "
+                    f"threshold_value={threshold_value:.2f}, "
+                    f"current_imbalance_ratio={current_ratio:.2f}x "
+                    f"(threshold_ratio={self.imbalance_threshold}x)"
                 )
 
                 if preferred_load < threshold_value:
                     selected = dep_id_to_deployment[preferred_id]
-                    verbose_router_logger.debug(
-                        f"[StickyLeastBusy DECISION] STICKY -> "
-                        f"{self._get_deployment_info(selected)} "
-                        f"(load={preferred_load} < threshold={threshold_value:.2f})"
+                    verbose_router_logger.info(
+                        f"[StickyLeastBusy DECISION] STICKY -> deployment_id={preferred_id}, "
+                        f"api_base={selected.get('litellm_params', {}).get('api_base', 'unknown')}, "
+                        f"model={selected.get('litellm_params', {}).get('model', 'unknown')}, "
+                        f"reason=load_{preferred_load}_below_threshold_{threshold_value:.2f}, "
+                        f"imbalance_ratio={current_ratio:.2f}x"
                     )
                     self._routing_decisions.labels(
                         model_group, preferred_id, "sticky", "consistent_hashing"
                     ).inc()
                     return selected
                 else:
-                    verbose_router_logger.debug(
-                        f"[StickyLeastBusy STICKY-OVERRIDE] "
-                        f"Overriding stickiness! "
-                        f"preferred_node={preferred_id} is overloaded "
-                        f"(load={preferred_load} >= threshold={threshold_value:.2f}), "
-                        f"falling back to least-busy"
+                    verbose_router_logger.info(
+                        f"[StickyLeastBusy STICKY-OVERRIDE] model_group={model_group}, "
+                        f"preferred_deployment={preferred_id} OVERLOADED, "
+                        f"load={preferred_load} exceeds threshold={threshold_value:.2f}, "
+                        f"imbalance_ratio={current_ratio:.2f}x > {self.imbalance_threshold}x, "
+                        f"falling_back_to=least_busy"
                     )
                     self._routing_decisions.labels(
                         model_group, preferred_id, "override", "consistent_hashing"
                     ).inc()
             else:
-                verbose_router_logger.debug(
-                    f"[StickyLeastBusy STICKY-CHECK] "
-                    f"preferred_node={preferred_id} not found in healthy deployments, "
-                    f"falling back to least-busy"
+                verbose_router_logger.info(
+                    f"[StickyLeastBusy STICKY-CHECK] model_group={model_group}, "
+                    f"sticky_key={sticky_key[:16]}..., "
+                    f"preferred_deployment={preferred_id} "
+                    f"not_in_healthy_deployments={list(dep_id_to_deployment.keys())}, "
+                    f"falling_back_to=least_busy"
                 )
         else:
-            verbose_router_logger.debug(
-                "[StickyLeastBusy STICKY-CHECK] "
-                "No sticky key (no messages or single new conversation), "
-                "using least-busy"
+            verbose_router_logger.info(
+                f"[StickyLeastBusy STICKY-CHECK] model_group={model_group}, "
+                f"reason=no_sticky_key, "
+                f"using=least_busy"
             )
 
         # Least-busy fallback with random tie-breaking
@@ -783,12 +801,20 @@ class StickyLeastBusyLoggingHandler(CustomLogger):
         selected_dep_id = selected["model_info"]["id"]
         if isinstance(selected_dep_id, int):
             selected_dep_id = str(selected_dep_id)
-        verbose_router_logger.debug(
-            f"[StickyLeastBusy DECISION] LEAST-BUSY -> "
-            f"{self._get_deployment_info(selected)} "
-            f"(min_load={min_load}, "
-            f"candidates_with_min_load={len(min_deployments)}, "
-            f"candidate_ids={min_dep_ids})"
+
+        # Calculate how much less loaded the selected node is compared to average
+        load_difference = avg_load - min_load if dep_ids else 0
+        load_reduction_pct = (load_difference / avg_load * 100) if avg_load > 0 else 0
+
+        verbose_router_logger.info(
+            f"[StickyLeastBusy DECISION] LEAST-BUSY -> deployment_id={selected_dep_id}, "
+            f"api_base={selected.get('litellm_params', {}).get('api_base', 'unknown')}, "
+            f"model={selected.get('litellm_params', {}).get('model', 'unknown')}, "
+            f"selected_load={min_load}, "
+            f"avg_load={avg_load:.2f}, "
+            f"load_difference_from_avg={load_difference:.2f} ({load_reduction_pct:.1f}% reduction), "
+            f"candidates_with_min_load={len(min_deployments)}/{len(dep_ids)}, "
+            f"candidate_ids={min_dep_ids}"
         )
         self._routing_decisions.labels(
             model_group, selected_dep_id, "least_busy", "consistent_hashing"
@@ -806,9 +832,15 @@ class StickyLeastBusyLoggingHandler(CustomLogger):
         messages: Optional[List[Dict[str, str]]] = None,
         request_kwargs: Optional[Dict] = None,
     ) -> dict:
-        verbose_router_logger.debug(
-            f"[StickyLeastBusy] get_available_deployments called "
-            f"(SYNC) for model_group={model_group}"
+        # Log available healthy deployments at INFO level for production visibility
+        healthy_ids = [
+            str(d.get("model_info", {}).get("id", "unknown"))
+            for d in healthy_deployments
+        ]
+        verbose_router_logger.info(
+            f"[StickyLeastBusy ROUTING-START] (SYNC) model_group={model_group}, "
+            f"healthy_deployments_count={len(healthy_deployments)}, "
+            f"healthy_deployment_ids={healthy_ids}"
         )
         try:
             request_counts = self._get_request_counts(model_group, healthy_deployments)
@@ -834,9 +866,15 @@ class StickyLeastBusyLoggingHandler(CustomLogger):
         messages: Optional[List[Dict[str, str]]] = None,
         request_kwargs: Optional[Dict] = None,
     ) -> dict:
-        verbose_router_logger.debug(
-            f"[StickyLeastBusy] async_get_available_deployments called "
-            f"(ASYNC) for model_group={model_group}"
+        # Log available healthy deployments at INFO level for production visibility
+        healthy_ids = [
+            str(d.get("model_info", {}).get("id", "unknown"))
+            for d in healthy_deployments
+        ]
+        verbose_router_logger.info(
+            f"[StickyLeastBusy ROUTING-START] (ASYNC) model_group={model_group}, "
+            f"healthy_deployments_count={len(healthy_deployments)}, "
+            f"healthy_deployment_ids={healthy_ids}"
         )
         try:
             request_counts = await self._async_get_request_counts(
