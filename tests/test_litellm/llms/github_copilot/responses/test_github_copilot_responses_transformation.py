@@ -578,3 +578,61 @@ class TestEncryptedContentEdgeCases:
         assert (
             result1["encrypted_content"] != result2["encrypted_content"]
         ), "Each reasoning item must preserve its own encrypted_content independently"
+
+
+class TestResponsesAPIMiscMethods:
+    """Cover misc methods with low coverage in responses/transformation.py."""
+
+    def setup_method(self):
+        self.config = GithubCopilotResponsesAPIConfig()
+
+    def test_supports_native_websocket_is_false(self):
+        assert self.config.supports_native_websocket() is False
+
+    def test_get_complete_url_default_base(self, mock_authenticator_class):
+        url = self.config.get_complete_url(api_base=None, litellm_params={})
+        assert url == "https://api.githubcopilot.com/responses"
+
+    def test_get_complete_url_custom_base(self, mock_authenticator_class):
+        url = self.config.get_complete_url(
+            api_base="https://custom.example.com/v1/", litellm_params={}
+        )
+        assert url == "https://custom.example.com/v1/responses"
+
+    def test_validate_environment_no_api_key_raises(self, mock_authenticator_class):
+        mock_authenticator_class.return_value.get_api_key.return_value = None
+        with pytest.raises(AuthenticationError):
+            self.config.validate_environment(
+                headers={}, model="gpt-4", litellm_params=None
+            )
+
+    def test_validate_environment_get_api_key_error_raises(
+        self, mock_authenticator_class
+    ):
+        mock_authenticator_class.return_value.get_api_key.side_effect = GetAPIKeyError(
+            status_code=401, message="key expired"
+        )
+        with pytest.raises(AuthenticationError):
+            self.config.validate_environment(
+                headers={}, model="gpt-4", litellm_params=None
+            )
+
+    def test_validate_environment_with_conversation_key(self, mock_authenticator_class):
+        mock_authenticator_class.return_value.get_api_key.return_value = "test-key"
+        lp = GenericLiteLLMParams(metadata={"copilot_conversation_id": "test-conv"})
+        headers = self.config.validate_environment(
+            headers={}, model="gpt-4", litellm_params=lp
+        )
+        assert "x-conversation-id" in headers
+
+    def test_map_openai_params_returns_dict(self):
+        result = self.config.map_openai_params(
+            response_api_optional_params={"temperature": 0.5},
+            model="gpt-4",
+            drop_params=False,
+        )
+        assert result == {"temperature": 0.5}
+
+    def test_get_supported_openai_params_returns_list(self):
+        result = self.config.get_supported_openai_params("gpt-4")
+        assert isinstance(result, list)

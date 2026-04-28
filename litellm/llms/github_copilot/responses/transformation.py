@@ -115,9 +115,7 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
         # Add vision header if input contains images
         if self._has_vision_input(input):
             headers["copilot-vision-request"] = "true"
-            verbose_logger.debug(
-                "GitHub Copilot Responses API: Enabled vision request"
-            )
+            verbose_logger.debug("GitHub Copilot Responses API: Enabled vision request")
 
         # Call parent to get request body (validates input, handles reasoning items)
         return super().transform_responses_api_request(

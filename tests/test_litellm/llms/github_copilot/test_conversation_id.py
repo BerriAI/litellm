@@ -139,3 +139,42 @@ class TestDetermineXInitiator:
 
     def test_empty_list_returns_user(self):
         assert determine_x_initiator([]) == "user"
+
+    def test_non_dict_items_ignored(self):
+        """Non-dict items in the list should be skipped."""
+        assert determine_x_initiator(["hello", 42, None]) == "user"
+
+    def test_system_plus_user_returns_user(self):
+        """System + user is still user-initiated."""
+        messages = [
+            {"role": "system", "content": "You are helpful"},
+            {"role": "user", "content": "Hi"},
+        ]
+        assert determine_x_initiator(messages) == "user"
+
+
+class TestGetCopilotDefaultHeaders:
+    """Tests for get_copilot_default_headers in common_utils.py."""
+
+    def test_basic_headers_without_conversation_key(self):
+        headers = get_copilot_default_headers(api_key="test-key-123")
+
+        assert headers["Authorization"] == "Bearer test-key-123"
+        assert headers["content-type"] == "application/json"
+        assert headers["copilot-integration-id"] == "vscode-chat"
+        assert "x-request-id" in headers
+        assert COPILOT_CONVERSATION_ID_HEADER not in headers
+
+    def test_headers_with_conversation_key(self):
+        headers = get_copilot_default_headers(
+            api_key="test-key", conversation_key="my-conv"
+        )
+
+        assert COPILOT_CONVERSATION_ID_HEADER in headers
+        conv_id = headers[COPILOT_CONVERSATION_ID_HEADER]
+        assert len(conv_id) == 36  # UUID format
+
+    def test_same_conversation_key_returns_same_id(self):
+        h1 = get_copilot_default_headers(api_key="k", conversation_key="stable-key")
+        h2 = get_copilot_default_headers(api_key="k", conversation_key="stable-key")
+        assert h1[COPILOT_CONVERSATION_ID_HEADER] == h2[COPILOT_CONVERSATION_ID_HEADER]
