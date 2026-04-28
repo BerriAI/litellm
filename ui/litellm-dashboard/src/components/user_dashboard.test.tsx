@@ -1,5 +1,5 @@
 import { vi, describe, it, expect, beforeEach, afterEach } from "vitest";
-import { cleanup } from "@testing-library/react";
+import { cleanup, screen } from "@testing-library/react";
 import React from "react";
 import { renderWithProviders } from "../../tests/test-utils";
 
@@ -136,5 +136,26 @@ describe("UserDashboard beforeunload listener", () => {
       ([event]) => event === "beforeunload",
     );
     expect(removeCalls).toHaveLength(1);
+  });
+});
+
+describe("UserDashboard role-based rendering", () => {
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("renders the keys page (no Access Denied screen) for proxy_admin_viewer", () => {
+    renderDashboard({ userRole: "Admin Viewer" });
+
+    expect(screen.queryByText("Access Denied")).toBeNull();
+    expect(screen.queryByText("Ask your proxy admin for access to create keys")).toBeNull();
+    expect(screen.getByTestId("virtual-keys-table-mock")).toBeInTheDocument();
+  });
+
+  it("renders the keys page for proxy_admin", () => {
+    renderDashboard({ userRole: "Admin" });
+
+    expect(screen.queryByText("Access Denied")).toBeNull();
+    expect(screen.getByTestId("virtual-keys-table-mock")).toBeInTheDocument();
   });
 });
