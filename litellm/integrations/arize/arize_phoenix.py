@@ -154,28 +154,144 @@ class ArizePhoenixLogger(OpenTelemetry):  # type: ignore
 
         return None
 
+    # ------------------------------------------------------------------
+    # Router-level parent span — one per logical user request so all
+    # retry + fallback attempt spans nest under a single root in Phoenix.
+    # The span object is stored on the logger instance (never in kwargs /
+    # metadata) to avoid JSON-serialisation errors when request data is
+    # forwarded to providers.
+    # ------------------------------------------------------------------
+
+    def _router_span_registry(self) -> dict:
+        if not hasattr(self, "_router_parent_spans"):
+            self._router_parent_spans: dict = {}
+        return self._router_parent_spans
+
+    @staticmethod
+    def _router_call_id(kwargs) -> Optional[str]:
+        call_id = kwargs.get("litellm_trace_id") or kwargs.get("litellm_call_id")
+        if call_id:
+            return str(call_id)
+        litellm_params = kwargs.get("litellm_params") or {}
+        call_id = litellm_params.get("litellm_trace_id") or litellm_params.get(
+            "litellm_call_id"
+        )
+        return str(call_id) if call_id else None
+
+    def start_router_parent_span(self, kwargs: dict) -> None:
+        import uuid
+
+        from opentelemetry import trace
+        from opentelemetry.trace import SpanKind
+
+        call_id = self._router_call_id(kwargs)
+        if call_id is None:
+            call_id = str(uuid.uuid4())
+            kwargs["litellm_trace_id"] = call_id
+
+        registry = self._router_span_registry()
+        if call_id in registry:
+            return
+
+        # Evict stale ended entries (span=None) to bound registry size.
+        if len(registry) > 200:
+            stale = [k for k, v in registry.items() if v[0] is None]
+            for k in stale:
+                del registry[k]
+
+        litellm_params = kwargs.get("litellm_params") or {}
+        proxy_server_request = litellm_params.get("proxy_server_request") or {}
+        headers = proxy_server_request.get("headers") or {}
+        traceparent_ctx = (
+            self.get_traceparent_from_header(headers=headers)
+            if headers.get("traceparent")
+            else None
+        )
+
+        kind = SpanKind.SERVER if proxy_server_request else SpanKind.INTERNAL
+
+        span = self.tracer.start_span(
+            name="litellm_proxy_request",
+            context=traceparent_ctx,
+            kind=kind,
+        )
+        span.set_attribute("openinference.span.kind", "CHAIN")
+        span.set_attribute("llm.request.model", str(kwargs.get("model", "")))
+
+        ctx = trace.set_span_in_context(span)
+        registry[call_id] = (span, ctx)
+
+    def end_router_parent_span(
+        self, kwargs: dict, exception: Optional[BaseException] = None
+    ) -> None:
+        from opentelemetry.trace import Status, StatusCode
+
+        call_id = self._router_call_id(kwargs)
+        if call_id is None:
+            return
+
+        registry = self._router_span_registry()
+        entry = registry.get(call_id)
+        if entry is None:
+            return
+
+        span, ctx = entry
+        if span is None:
+            return  # already ended
+
+        if exception is not None:
+            span.set_status(Status(StatusCode.ERROR))
+            try:
+                span.record_exception(exception)
+            except Exception:
+                pass
+        else:
+            span.set_status(Status(StatusCode.OK))
+
+        span.end()
+
+        # Keep ctx in registry so async success/failure callbacks that fire
+        # after this finally-block can still attach child spans to the same
+        # trace. An ended span's context (trace_id + span_id) remains valid
+        # for parenting. Stale entries are evicted in start_router_parent_span.
+        registry[call_id] = (None, ctx)
+
+    def _get_router_parent_ctx(self, kwargs):
+        """Return (ctx, None) if a router parent exists for this call, else (None, None)."""
+        registry = getattr(self, "_router_parent_spans", None)
+        if not registry:
+            return None, None
+        call_id = self._router_call_id(kwargs)
+        if not call_id:
+            return None, None
+        entry = registry.get(call_id)
+        if entry is None:
+            return None, None
+        _span, ctx = entry
+        return ctx, None
+
     def _get_phoenix_context(self, kwargs):
         """
         Build a trace context for Phoenix's dedicated TracerProvider.
 
-        The base ``_get_span_context`` returns parent spans from the global
-        TracerProvider (the ``otel`` callback).  Those spans live on a
-        *different* TracerProvider, so they won't appear in Phoenix — using
-        them as parents just creates broken links.
-
-        Instead we:
-        1. Honour an incoming ``traceparent`` HTTP header (distributed tracing).
-        2. In proxy mode, create our *own* parent span on Phoenix's tracer
-           so the hierarchy is visible end-to-end inside Phoenix.
-        3. In SDK (non-proxy) mode, just return (None, None) for a root span.
+        Priority:
+        1. Router parent span (covers all retries + fallbacks under one root).
+        2. Incoming ``traceparent`` header (distributed tracing).
+        3. Proxy mode — create a per-call ``litellm_proxy_request`` parent.
+        4. SDK mode — root span, no parent.
         """
         from opentelemetry import trace
+
+        # 1. Router parent already open for this call — attach as child.
+        ctx, _ = self._get_router_parent_ctx(kwargs)
+        if ctx is not None:
+            return ctx, None
 
         litellm_params = kwargs.get("litellm_params", {}) or {}
         proxy_server_request = litellm_params.get("proxy_server_request", {}) or {}
         headers = proxy_server_request.get("headers", {}) or {}
 
-        # Propagate distributed trace context if the caller sent a traceparent
+        # 2. Propagate distributed trace context if the caller sent a traceparent
         traceparent_ctx = (
             self.get_traceparent_from_header(headers=headers)
             if headers.get("traceparent")
@@ -185,8 +301,7 @@ class ArizePhoenixLogger(OpenTelemetry):  # type: ignore
         is_proxy_mode = bool(proxy_server_request)
 
         if is_proxy_mode:
-            # Create a parent span on Phoenix's own tracer so both parent
-            # and child are exported to Phoenix.
+            # 3. Create a per-call parent on Phoenix's own tracer.
             start_time_val = kwargs.get("start_time", kwargs.get("api_call_start_time"))
             parent_span = self.tracer.start_span(
                 name="litellm_proxy_request",
@@ -199,7 +314,7 @@ class ArizePhoenixLogger(OpenTelemetry):  # type: ignore
             ctx = trace.set_span_in_context(parent_span)
             return ctx, parent_span
 
-        # SDK mode — no parent span needed
+        # 4. SDK mode — no parent span needed
         return traceparent_ctx, None
 
     def _handle_success(self, kwargs, response_obj, start_time, end_time):
@@ -399,38 +514,34 @@ class ArizePhoenixLogger(OpenTelemetry):  # type: ignore
         kwargs: dict,
         original_exception: Exception,
     ):
-        """
-        Log a successful fallback event by creating a span that captures the fallback chain.
-
-        When a fallback succeeds, this creates a span showing:
-        - Which model originally failed (original_model_group)
-        - Which model it fell back to (from kwargs["model"])
-        - The error that triggered the fallback
-        """
         from opentelemetry.trace import Status, StatusCode
 
-        original_model = original_model_group
         fallback_model = kwargs.get("model")
         fallback_depth = kwargs.get("fallback_depth", 1)
-
         status_code = getattr(original_exception, "status_code", None)
         exception_class = original_exception.__class__.__name__
 
-        span_name = f"fallback: {original_model} -> {fallback_model}"
-        span = self.tracer.start_span(name=span_name)
-
-        def _safe_set(s, k, v):
-            if hasattr(s, "set_attribute"):
-                s.set_attribute(k, v)
-
-        _safe_set(span, "llm.fallback.event_type", "success")
-        _safe_set(span, "llm.fallback.original_model", original_model)
-        _safe_set(span, "llm.fallback.fallback_model", fallback_model)
-        _safe_set(span, "llm.fallback.attempt_number", fallback_depth)
+        ctx, _ = self._get_router_parent_ctx(kwargs)
+        span = self.tracer.start_span(
+            name=f"fallback: {original_model_group} -> {fallback_model}",
+            context=ctx,
+        )
+        span.set_attribute("llm.fallback.event_type", "success")
+        span.set_attribute("llm.fallback.original_model", str(original_model_group))
+        span.set_attribute("llm.fallback.fallback_model", str(fallback_model))
+        span.set_attribute("llm.fallback.attempt_number", fallback_depth)
+        span.set_attribute("llm.fallback.error_class", exception_class)
         if status_code is not None:
-            _safe_set(span, "llm.fallback.error_status_code", status_code)
-        _safe_set(span, "llm.fallback.error_class", exception_class)
-
+            span.set_attribute("llm.fallback.error_status_code", int(status_code))
+        span.add_event(
+            "fallback_triggered",
+            attributes={
+                "trigger.model": str(original_model_group),
+                "trigger.error_class": exception_class,
+                "trigger.status_code": str(status_code or ""),
+                "fallback.model": str(fallback_model),
+            },
+        )
         span.set_status(Status(StatusCode.OK))
         span.end()
 
@@ -440,37 +551,25 @@ class ArizePhoenixLogger(OpenTelemetry):  # type: ignore
         kwargs: dict,
         original_exception: Exception,
     ):
-        """
-        Log a failed fallback event by creating a span that captures the failure.
-
-        When all fallbacks fail, this creates a span showing:
-        - Which model originally failed
-        - Which fallback models were attempted
-        - The chain of errors
-        """
         from opentelemetry.trace import Status, StatusCode
 
-        original_model = original_model_group
         fallback_attempted = kwargs.get("model")
         max_fallbacks = kwargs.get("max_fallbacks", 0)
-
-        exception_class = original_exception.__class__.__name__
         status_code = getattr(original_exception, "status_code", None)
+        exception_class = original_exception.__class__.__name__
 
-        span_name = f"fallback_failed: {original_model}"
-        span = self.tracer.start_span(name=span_name)
-
-        def _safe_set(s, k, v):
-            if hasattr(s, "set_attribute"):
-                s.set_attribute(k, v)
-
-        _safe_set(span, "llm.fallback.event_type", "failure")
-        _safe_set(span, "llm.fallback.original_model", original_model)
-        _safe_set(span, "llm.fallback.attempted_model", fallback_attempted)
-        _safe_set(span, "llm.fallback.max_fallbacks", max_fallbacks)
+        ctx, _ = self._get_router_parent_ctx(kwargs)
+        span = self.tracer.start_span(
+            name=f"fallback_failed: {original_model_group}",
+            context=ctx,
+        )
+        span.set_attribute("llm.fallback.event_type", "failure")
+        span.set_attribute("llm.fallback.original_model", str(original_model_group))
+        span.set_attribute("llm.fallback.attempted_model", str(fallback_attempted))
+        span.set_attribute("llm.fallback.max_fallbacks", int(max_fallbacks))
+        span.set_attribute("llm.fallback.error_class", exception_class)
         if status_code is not None:
-            _safe_set(span, "llm.fallback.error_status_code", status_code)
-        _safe_set(span, "llm.fallback.error_class", exception_class)
-
+            span.set_attribute("llm.fallback.error_status_code", int(status_code))
+        span.record_exception(original_exception)
         span.set_status(Status(StatusCode.ERROR))
         span.end()
