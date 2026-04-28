@@ -1,25 +1,23 @@
 """Unit tests for the daily-cron matrix publisher.
 
-The publisher orchestrates Docker, git, npm, gh and pytest — per the
-PRD's "Testing Decisions" section, the orchestration itself is too thin
-to warrant heavy mocking. These tests cover the small pure helpers that
-do warrant test coverage:
+The publisher orchestrates git, uv, gh and pytest on a dedicated GCP VM —
+the orchestration itself is too thin to warrant heavy mocking. These
+tests cover the small pure helpers that do warrant test coverage:
 
-- `commit_message_for_matrix`: deterministic commit message containing
-  the LiteLLM and Claude Code versions plus `generated_at`, so the docs
-  repo's git log shows what produced each push.
-- `docker_image_for_tag`: maps a `v*-stable` tag to its `ghcr.io` image.
-- `select_files_to_commit`: enforces the "only `compatibility-matrix.json`
-  is pushed" guarantee that the GitHub App's broad `contents: write` scope
-  doesn't enforce on its own (per PRD: "File-level restriction is enforced
-  by script correctness").
-- `pr_branch_name`: deterministic head-branch name for the docs PR.
+- ``commit_message_for_matrix``: deterministic commit message containing
+  the LiteLLM and Claude Code versions plus ``generated_at``, so the
+  docs repo's git log shows what produced each push.
+- ``select_files_to_commit``: enforces the "only
+  ``compatibility-matrix.json`` is pushed" guarantee. Even with PR
+  review in front of the docs branch, the publisher refuses to stage
+  any other file as defence in depth.
+- ``pr_branch_name``: deterministic head-branch name for the docs PR.
   Two cron runs on the same UTC day with the same resolved versions
   must collide on this branch so the second run updates the existing
   PR rather than spawning a new one.
-- `pr_title_for_matrix` / `pr_body_for_matrix`: the strings the publisher
-  hands to `gh pr create`. Tested for content (not formatting trivia)
-  to keep the tests resilient to copy edits.
+- ``pr_title_for_matrix`` / ``pr_body_for_matrix``: the strings the
+  publisher hands to ``gh pr create``. Tested for content (not formatting
+  trivia) to keep the tests resilient to copy edits.
 """
 
 from __future__ import annotations
@@ -30,7 +28,6 @@ from tests.claude_code.publisher import (
     DOCS_TARGET_BASENAME,
     PR_BRANCH_PREFIX,
     commit_message_for_matrix,
-    docker_image_for_tag,
     pr_body_for_matrix,
     pr_branch_name,
     pr_title_for_matrix,
@@ -65,18 +62,6 @@ def test_commit_message_is_deterministic():
         "generated_at": "2026-04-25T06:00:00Z",
     }
     assert commit_message_for_matrix(matrix) == commit_message_for_matrix(matrix)
-
-
-def test_docker_image_for_tag_targets_berriai_ghcr():
-    assert (
-        docker_image_for_tag("v1.83.0-stable")
-        == "ghcr.io/berriai/litellm:v1.83.0-stable"
-    )
-
-
-def test_docker_image_for_tag_rejects_empty_tag():
-    with pytest.raises(ValueError, match="tag must be a non-empty string"):
-        docker_image_for_tag("")
 
 
 def test_select_files_to_commit_drops_anything_other_than_matrix():

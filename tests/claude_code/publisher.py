@@ -1,37 +1,50 @@
-"""Daily-cron matrix publisher.
+"""Daily-cron matrix publisher (GCP VM edition).
 
-End-to-end orchestrator that runs on the isolated cron VM (per the PRD's
-"Two CI environments / Daily Cron" section). The flow is:
+End-to-end orchestrator that runs on the dedicated cron VM
+`litellm-compatibility-matrix-populator`. The flow is:
 
-  1. Resolve the latest LiteLLM `v*-stable` tag via `resolver.py`.
-  2. Pull the corresponding Docker image and start it as the proxy.
-  3. Install the absolute latest Claude Code CLI from npm.
-  4. Run `pytest tests/claude_code/` against the proxy.
-  5. Build `compatibility-matrix.json` from the per-test results artifact
-     using the Matrix JSON Builder (`matrix_builder.py`).
-  6. Open (or update) a pull request against the docs repo with the JSON
-     change, using the GitHub App installation token mounted as
-     `DOCS_REPO_TOKEN`. This is intentionally a PR rather than a direct
-     push so docs maintainers get to review each matrix update before it
-     ships to readers.
+  1. Resolve the latest LiteLLM ``v*-stable`` tag via ``resolver.py``.
+  2. Update a long-lived git worktree of ``BerriAI/litellm`` to that tag,
+     run ``uv sync --frozen`` against it, and boot the proxy as a
+     subprocess on a non-conflicting local port. Reusing the same worktree
+     across runs (rather than a fresh tempdir) keeps disk footprint
+     bounded — ``uv sync`` removes packages no longer pinned and ``git
+     checkout`` mutates the same files in place.
+  3. Run ``pytest tests/claude_code/`` against the proxy. The locally
+     installed Claude Code CLI is exercised as-is — there is no
+     ``npm install`` step, so the operator controls when the CLI is
+     upgraded by running ``npm install -g @anthropic-ai/claude-code@latest``
+     out-of-band (typically baked into the VM image or a separate cron).
+  4. Build ``compatibility-matrix.json`` from the per-test results
+     artifact using the Matrix JSON Builder (``matrix_builder.py``).
+  5. Open (or update) a pull request against the docs repo with the JSON
+     change, using a ``gh`` CLI that has been pre-authenticated on the VM
+     against an account with ``pull-requests: write`` on
+     ``BerriAI/litellm-docs``.
 
-The orchestration is thin glue over Docker, git, npm, gh and subprocess —
-per the PRD's "Testing Decisions" section, it intentionally ships without
-a unit-test harness; the daily-cron failure surface is itself the test.
-The pure helpers below (commit message, image-name builder, file
-allowlist, PR title/body/branch builders) are unit-tested under
-`_publisher_unit_tests/`.
+Why no Docker
+-------------
 
-The "only `compatibility-matrix.json` is ever committed" guarantee is
-enforced by `select_files_to_commit` rather than by token scope, since
-GitHub Apps cannot scope `contents: write` to a single file path.
+The original design pulled ``ghcr.io/berriai/litellm:<tag>`` per run on
+GitHub-hosted runners. The cron VM does not run docker — installing it
+would just trade one set of moving parts (docker daemon, image pulls,
+networking) for the simpler "one git checkout + one ``uv sync``" we
+already use to start the proxy interactively. Removing the docker code
+also halves the publisher's surface area.
 
-Idempotency: re-runs on the same UTC day with the same resolved versions
-land on the same branch (`compat-matrix/<litellm-version>-<claude-code-
-version>-<UTC-date>`). If the JSON is byte-identical to the docs repo's
-`main`, the script exits before pushing. If a PR is already open for the
-branch, `gh pr create` no-ops with a non-fatal message; we treat that as
-success.
+Idempotency
+-----------
+
+Re-runs on the same UTC day with the same resolved versions land on the
+same head branch (``compat-matrix/<litellm-version>-<claude-code-
+version>-<UTC-date>``). If the JSON is byte-identical to the docs repo's
+target branch, the script exits before pushing. If a PR is already open
+for the branch, ``gh pr create`` no-ops with a non-fatal message; we
+treat that as success.
+
+The "only ``compatibility-matrix.json`` is ever committed" guarantee is
+enforced by ``select_files_to_commit`` rather than by token scope, since
+GitHub does not expose file-path-scoped tokens.
 """
 
 from __future__ import annotations
@@ -39,10 +52,14 @@ from __future__ import annotations
 import argparse
 import datetime
 import os
+import shutil
+import signal
 import subprocess
 import sys
 import tempfile
 import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 from typing import Any, List, Mapping, Optional, Sequence
 
@@ -52,14 +69,29 @@ from tests.claude_code.resolver import latest_stable_litellm_tag
 DOCS_REPO_DEFAULT = "BerriAI/litellm-docs"
 DOCS_TARGET_BASENAME = "compatibility-matrix.json"
 DOCS_TARGET_PATH_DEFAULT = f"static/data/{DOCS_TARGET_BASENAME}"
-DOCKER_IMAGE_BASE = "ghcr.io/berriai/litellm"
-DEFAULT_PROXY_PORT = 4000
-DEFAULT_PROXY_API_KEY = "sk-cron-matrix"  # only used inside the ephemeral VM
 PR_BRANCH_PREFIX = "compat-matrix"
+
+# Sourced from the same config the human-tended dev proxy uses, but on a
+# different port so a developer running the proxy on :4000 doesn't
+# collide with the cron run.
+DEFAULT_PROXY_PORT = 4100
+DEFAULT_PROXY_API_KEY = "sk-cron-matrix"  # the proxy never sees real auth
+DEFAULT_PROXY_HEALTH_TIMEOUT_SECONDS = 90
+
+# Location of a persistent litellm checkout that the cron mutates each
+# run (``git checkout <tag>`` + ``uv sync``). Persisting across runs
+# keeps disk usage bounded. Override via the ``LITELLM_WORKTREE`` env var
+# or ``--worktree`` so the cron can target a deliberate path on the VM.
+DEFAULT_WORKTREE = Path.home() / "litellm-cron-worktree"
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_MANIFEST = REPO_ROOT / "tests" / "claude_code" / "manifest.yaml"
 DEFAULT_RESULTS = REPO_ROOT / "compat-results.json"
+
+
+# ---------------------------------------------------------------------------
+# Pure helpers — unit-tested under _publisher_unit_tests/.
+# ---------------------------------------------------------------------------
 
 
 def commit_message_for_matrix(matrix: Mapping[str, Any]) -> str:
@@ -88,16 +120,15 @@ def pr_branch_name(
 
     Two cron runs that resolve to the same (litellm_version,
     claude_code_version, UTC date) land on the same branch and therefore
-    the same PR — the second push is a fast-forward update of the
-    existing branch and `gh pr create` no-ops. This is the idempotency
-    contract the PRD's "Daily Cron" section requires.
+    the same PR — the second push is a force-with-lease update of the
+    existing branch and ``gh pr create`` no-ops.
 
     Each component is required because:
-      - `litellm_version` distinguishes consecutive stable tags
-      - `claude_code_version` distinguishes a Claude-Code-only refresh
-      - `date_utc` lets us still produce a fresh branch when neither
-        upstream version moved but a maintainer manually re-ran the
-        workflow on a later day to recover from a transient failure
+      - ``litellm_version`` distinguishes consecutive stable tags
+      - ``claude_code_version`` distinguishes a Claude-Code-only refresh
+      - ``date_utc`` lets us still produce a fresh branch when neither
+        upstream version moved but a maintainer manually re-ran on a
+        later day to recover from a transient failure
     """
     if not litellm_version:
         raise ValueError("litellm_version must be a non-empty string")
@@ -129,7 +160,7 @@ def pr_body_for_matrix(matrix: Mapping[str, Any]) -> str:
     Renders one line per feature with the per-provider statuses inline,
     so reviewers don't have to diff the JSON to see what changed since
     the last refresh. The status column ordering follows the manifest
-    (which the matrix already reflects in `providers`), keeping the
+    (which the matrix already reflects in ``providers``), keeping the
     table stable across days.
     """
     litellm_version = matrix.get("litellm_version", "")
@@ -175,82 +206,150 @@ def pr_body_for_matrix(matrix: Mapping[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def docker_image_for_tag(tag: str) -> str:
-    """Return the ghcr.io image reference for a `v*-stable` tag."""
-    if not tag:
-        raise ValueError("tag must be a non-empty string")
-    return f"{DOCKER_IMAGE_BASE}:{tag}"
-
-
 def select_files_to_commit(
     staged_paths: Sequence[str], allowed_basename: str
 ) -> List[str]:
     """Return only the paths whose basename matches the allowlist.
 
-    The cron VM's GitHub App holds `contents: write` on the entire docs
-    repo (GitHub does not support file-path-scoped tokens), so the
-    "only ship the matrix JSON" property is enforced here instead. Any
-    stray file in the working tree is dropped before the commit step.
+    Even though the docs-repo PR is reviewable, the publisher still
+    enforces a one-file allowlist as defence in depth — a stray file in
+    the working tree from a future feature must not be smuggled into the
+    PR by accident.
     """
     return [p for p in staged_paths if os.path.basename(p) == allowed_basename]
 
 
+# ---------------------------------------------------------------------------
+# Subprocess + filesystem glue. Side-effectful, deliberately not unit-tested
+# (the daily cron's failure surface is the test).
+# ---------------------------------------------------------------------------
+
+
 def _now_utc_iso() -> str:
-    """ISO-8601 UTC timestamp with `Z` suffix, matching the v1 schema."""
+    """ISO-8601 UTC timestamp with ``Z`` suffix, matching the v1 schema."""
     return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _today_utc_date() -> str:
+    """Fallback UTC date string used when ``generated_at`` is missing."""
+    return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
 
 
 def _run(cmd: Sequence[str], **kwargs: Any) -> subprocess.CompletedProcess:
     """Print + run subprocess; raise on nonzero exit unless caller opts out."""
-    print("+ " + " ".join(cmd), flush=True)
+    print("+ " + " ".join(str(part) for part in cmd), flush=True)
     return subprocess.run(cmd, check=True, **kwargs)
 
 
 def _get_claude_code_version() -> str:
-    """Return the version string printed by `claude --version`."""
+    """Return the version string printed by ``claude --version``."""
     completed = subprocess.run(
         ["claude", "--version"], capture_output=True, text=True, check=True
     )
-    # `claude --version` prints e.g. "2.1.120 (Claude Code)"; we keep the
-    # raw first whitespace-delimited token, which is the version.
+    # ``claude --version`` prints e.g. "2.1.120 (Claude Code)"; the first
+    # whitespace-delimited token is the version.
     out = (completed.stdout or "").strip()
     return out.split()[0] if out else ""
 
 
-def _start_proxy(image: str, port: int) -> str:
-    """Start the LiteLLM proxy via `docker run -d`; returns the container id."""
-    completed = subprocess.run(
+def _ensure_worktree(worktree: Path) -> None:
+    """Make sure ``worktree`` is a working litellm checkout.
+
+    On first run we ``git clone`` ``BerriAI/litellm`` into the worktree
+    path. On subsequent runs we reuse what's already there — the run
+    just needs ``git fetch && git checkout <tag>``.
+
+    Why a clone instead of a ``git worktree`` of the dev checkout: the
+    dev checkout (``~/litellm/litellm``) is where humans iterate and may
+    sit on uncommitted changes or arbitrary feature branches. A separate
+    clone keeps the cron's ``git checkout <tag>`` from disturbing that.
+    """
+    if (worktree / ".git").exists():
+        return
+    worktree.parent.mkdir(parents=True, exist_ok=True)
+    _run(
         [
-            "docker",
-            "run",
-            "-d",
-            "-p",
-            f"{port}:4000",
-            "--name",
-            "litellm-compat-matrix-proxy",
-            image,
-            "--port",
-            "4000",
-        ],
-        capture_output=True,
-        text=True,
-        check=True,
+            "git",
+            "clone",
+            "https://github.com/BerriAI/litellm.git",
+            str(worktree),
+        ]
     )
-    container_id = (completed.stdout or "").strip()
-    if not container_id:
-        raise RuntimeError("docker run did not return a container id")
-    return container_id
 
 
-def _stop_proxy(container_id: str) -> None:
-    subprocess.run(["docker", "rm", "-f", container_id], check=False)
+def _checkout_tag_in_worktree(worktree: Path, tag: str) -> None:
+    """Fetch and ``git checkout <tag>`` inside ``worktree``.
+
+    Uses ``git checkout --force`` so any cruft left behind by a previous
+    run (e.g. ``compat-results.json``, ``__pycache__``) is wiped before
+    a fresh ``uv sync``. The cron has no use for that state — every run
+    starts from the published tag.
+    """
+    _run(["git", "fetch", "--tags", "--force"], cwd=worktree)
+    _run(["git", "reset", "--hard"], cwd=worktree)
+    _run(["git", "clean", "-fdx", "-e", ".venv"], cwd=worktree)
+    _run(["git", "checkout", "--force", tag], cwd=worktree)
 
 
-def _wait_for_proxy(port: int, timeout_seconds: int = 60) -> None:
-    """Poll the proxy's /health endpoint until it returns 200 or we time out."""
-    import urllib.error
-    import urllib.request
+def _uv_sync(worktree: Path) -> None:
+    """Bring the worktree's ``.venv`` in line with the checked-out tag.
 
+    ``uv sync --frozen`` is deterministic: it installs exactly what the
+    lockfile says and removes anything no longer referenced. That's the
+    "doesn't blow up storage" property the operator requires — the venv
+    can never grow unboundedly across runs.
+    """
+    _run(["uv", "sync", "--frozen"], cwd=worktree)
+
+
+def _start_proxy(worktree: Path, port: int, config_path: Path) -> subprocess.Popen:
+    """Start the LiteLLM proxy as a subprocess; returns the Popen handle.
+
+    Started in its own process group so we can SIGTERM the whole tree
+    on shutdown — the proxy itself spawns worker subprocesses that
+    don't otherwise propagate signals from a parent.
+    """
+    cmd = [
+        "uv",
+        "run",
+        "litellm",
+        "--config",
+        str(config_path),
+        "--port",
+        str(port),
+    ]
+    print("+ " + " ".join(cmd), flush=True)
+    return subprocess.Popen(
+        cmd,
+        cwd=worktree,
+        stdout=sys.stdout,
+        stderr=sys.stderr,
+        start_new_session=True,
+    )
+
+
+def _stop_proxy(proc: subprocess.Popen) -> None:
+    """SIGTERM the proxy's process group; SIGKILL if it doesn't exit."""
+    if proc.poll() is not None:
+        return
+    try:
+        os.killpg(proc.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        return
+    try:
+        proc.wait(timeout=15)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        proc.wait(timeout=5)
+
+
+def _wait_for_proxy(
+    port: int, timeout_seconds: int = DEFAULT_PROXY_HEALTH_TIMEOUT_SECONDS
+) -> None:
+    """Poll ``/health/liveliness`` until it returns 200 or we time out."""
     url = f"http://127.0.0.1:{port}/health/liveliness"
     deadline = time.time() + timeout_seconds
     last_err: Optional[BaseException] = None
@@ -267,12 +366,16 @@ def _wait_for_proxy(port: int, timeout_seconds: int = 60) -> None:
     )
 
 
+# ---------------------------------------------------------------------------
+# PR creation against the docs repo.
+# ---------------------------------------------------------------------------
+
+
 def publish(
     *,
     docs_repo: str,
     docs_branch: str,
     docs_target_path: str,
-    docs_token: str,
     manifest_path: Path,
     results_path: Path,
     matrix_output_path: Path,
@@ -282,17 +385,11 @@ def publish(
 ) -> None:
     """Build the matrix JSON and open a PR against the docs repo.
 
-    Only `docs_target_path` is staged from the docs-repo working tree —
-    any other file produced by the build is dropped via
-    `select_files_to_commit`. The PR base is `docs_branch` (typically
-    `main`); the head branch name is deterministic per
-    `pr_branch_name(...)` so re-runs on the same UTC day update the
-    same PR rather than spawning a new one.
-
-    `docs_token` is the GitHub App installation token. It must be scoped
-    to `contents: write` AND `pull-requests: write` on `docs_repo`. The
-    workflow's `actions/create-github-app-token` step is responsible for
-    requesting both permissions.
+    Auth uses whatever ``gh auth login`` has stashed on the cron VM —
+    the GCP edition does not pass an explicit token. The account ``gh``
+    is logged in as must be a collaborator on ``docs_repo`` with
+    ``pull-requests: write`` (the same permission ``gh pr create``
+    needs interactively).
     """
     matrix = build_from_paths(
         manifest_path=manifest_path,
@@ -311,17 +408,20 @@ def publish(
 
     with tempfile.TemporaryDirectory(prefix="docs-repo-") as workdir:
         workdir_path = Path(workdir)
-        clone_url = f"https://x-access-token:{docs_token}@github.com/{docs_repo}.git"
+        # ``gh repo clone`` reuses the VM's ``gh auth`` state, so we
+        # don't need to construct an authenticated URL by hand.
         _run(
             [
-                "git",
+                "gh",
+                "repo",
                 "clone",
+                docs_repo,
+                str(workdir_path),
+                "--",
                 "--depth",
                 "1",
                 "--branch",
                 docs_branch,
-                clone_url,
-                str(workdir_path),
             ]
         )
         _run(
@@ -334,7 +434,7 @@ def publish(
         )
         # Branch always starts from the freshly-cloned base. If the
         # remote branch already exists from an earlier run on the same
-        # day, the later `git push --force-with-lease` reconciles —
+        # day, the later ``git push --force-with-lease`` reconciles —
         # we'd rather present the latest matrix JSON than preserve a
         # stale intermediate state.
         _run(["git", "checkout", "-b", branch_name], cwd=workdir_path)
@@ -343,8 +443,8 @@ def publish(
         target_in_docs.parent.mkdir(parents=True, exist_ok=True)
         target_in_docs.write_text(matrix_output_path.read_text())
 
-        # Defense in depth: even if some other tool dropped a file in the
-        # working tree, only the matrix JSON is staged.
+        # Defence in depth: even if some other tool dropped a file in
+        # the working tree, only the matrix JSON is staged.
         staged = [docs_target_path]
         keep = select_files_to_commit(staged, DOCS_TARGET_BASENAME)
         if not keep:
@@ -356,7 +456,7 @@ def publish(
             _run(["git", "add", path], cwd=workdir_path)
 
         # Skip the push entirely if the JSON is byte-identical to what's
-        # already on `docs_branch` — keeps the docs-repo PR list clean
+        # already on ``docs_branch`` — keeps the docs-repo PR list clean
         # during idempotent reruns of the cron.
         diff = subprocess.run(
             ["git", "diff", "--cached", "--quiet"],
@@ -371,7 +471,7 @@ def publish(
             ["git", "commit", "-m", commit_message_for_matrix(matrix)],
             cwd=workdir_path,
         )
-        # `--force-with-lease` so a same-day rerun updates the existing
+        # ``--force-with-lease`` so a same-day rerun updates the existing
         # branch (and therefore the existing PR) safely; the lease check
         # ensures we never overwrite a docs-maintainer's manual fixup
         # commit on the same branch.
@@ -394,18 +494,7 @@ def publish(
             title=pr_title_for_matrix(matrix),
             body=pr_body_for_matrix(matrix),
             cwd=workdir_path,
-            token=docs_token,
         )
-
-
-def _today_utc_date() -> str:
-    """Fallback UTC date string used when `generated_at` is missing.
-
-    Centralised so the branch-naming helper stays a pure function — it
-    refuses to inject the clock itself, which makes it trivially
-    unit-testable.
-    """
-    return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
 
 
 def _open_or_update_pr(
@@ -416,17 +505,8 @@ def _open_or_update_pr(
     title: str,
     body: str,
     cwd: Path,
-    token: str,
 ) -> None:
-    """Open a PR via the `gh` CLI; treat 'already exists' as success.
-
-    `gh` is preinstalled on `ubuntu-latest` runners and is also the
-    pattern other workflows in this repo follow (e.g.
-    `auto_update_price_and_context_window.yml`). We pass the GitHub App
-    installation token through `GH_TOKEN` so `gh` doesn't fall back to
-    the runner's default `GITHUB_TOKEN`, which is scoped to this repo
-    and would not have write access on `litellm-docs`.
-    """
+    """Open a PR via the ``gh`` CLI; treat 'already exists' as success."""
     completed = subprocess.run(
         [
             "gh",
@@ -444,7 +524,6 @@ def _open_or_update_pr(
             body,
         ],
         cwd=cwd,
-        env={**os.environ, "GH_TOKEN": token},
         capture_output=True,
         text=True,
         check=False,
@@ -453,7 +532,7 @@ def _open_or_update_pr(
         print(completed.stdout.strip(), flush=True)
         return
     stderr = completed.stderr or ""
-    # `gh pr create` exits non-zero when a PR already exists for the
+    # ``gh pr create`` exits non-zero when a PR already exists for the
     # head branch. That's the idempotent re-run path and not an error:
     # the branch was already force-pushed above, so the existing PR now
     # carries the freshest matrix JSON.
@@ -467,6 +546,11 @@ def _open_or_update_pr(
     raise RuntimeError(f"gh pr create failed with exit code {completed.returncode}")
 
 
+# ---------------------------------------------------------------------------
+# Top-level orchestrator.
+# ---------------------------------------------------------------------------
+
+
 def main(argv: Optional[Sequence[str]] = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -477,12 +561,21 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument(
         "--docs-branch",
         default=os.environ.get("DOCS_BRANCH", "main"),
-        help="Branch on the docs repo to push to.",
+        help="Base branch on the docs repo to PR against.",
     )
     parser.add_argument(
         "--docs-target-path",
         default=os.environ.get("DOCS_TARGET_PATH", DOCS_TARGET_PATH_DEFAULT),
         help="Path inside the docs repo where the matrix JSON lives.",
+    )
+    parser.add_argument(
+        "--worktree",
+        type=Path,
+        default=Path(os.environ.get("LITELLM_WORKTREE", str(DEFAULT_WORKTREE))),
+        help=(
+            "Persistent litellm checkout the cron mutates each run "
+            f"(default: {DEFAULT_WORKTREE})."
+        ),
     )
     parser.add_argument(
         "--proxy-port",
@@ -493,6 +586,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         "--manifest",
         type=Path,
         default=DEFAULT_MANIFEST,
+        help="Manifest the matrix JSON is built against.",
     )
     parser.add_argument(
         "--results",
@@ -506,77 +600,75 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         default=REPO_ROOT / DOCS_TARGET_BASENAME,
     )
     parser.add_argument(
-        "--skip-proxy",
-        action="store_true",
-        help=(
-            "Skip Docker/proxy/CLI/pytest steps and go straight to publish — "
-            "useful when the workflow runs those steps in separate jobs."
-        ),
-    )
-    parser.add_argument(
         "--skip-publish",
         action="store_true",
-        help="Run the test pipeline but do not push to the docs repo.",
+        help="Run the test pipeline but do not open a PR.",
     )
     args = parser.parse_args(argv)
 
-    docs_token = os.environ.get("DOCS_REPO_TOKEN", "")
-    if not args.skip_publish and not docs_token:
-        print(
-            "DOCS_REPO_TOKEN is required to push to the docs repo "
-            "(GitHub App installation token)",
-            file=sys.stderr,
-        )
-        return 2
-
-    container_id: Optional[str] = None
-    litellm_version: str
-    claude_code_version: str
+    proxy_proc: Optional[subprocess.Popen] = None
     try:
         litellm_version = latest_stable_litellm_tag(
             token=os.environ.get("GITHUB_TOKEN")
         )
         print(f"resolved latest stable litellm: {litellm_version}", flush=True)
 
-        if not args.skip_proxy:
-            image = docker_image_for_tag(litellm_version)
-            _run(["docker", "pull", image])
-            container_id = _start_proxy(image, args.proxy_port)
-            _wait_for_proxy(args.proxy_port)
-
-            _run(["npm", "install", "-g", "@anthropic-ai/claude-code@latest"])
-            claude_code_version = _get_claude_code_version()
-            print(f"installed claude code cli: {claude_code_version}", flush=True)
-
-            env = {
-                **os.environ,
-                "ANTHROPIC_BASE_URL": f"http://127.0.0.1:{args.proxy_port}",
-                "ANTHROPIC_AUTH_TOKEN": DEFAULT_PROXY_API_KEY,
-                "COMPAT_RESULTS_PATH": str(args.results),
-            }
-            _run(
-                [
-                    "pytest",
-                    "tests/claude_code/",
-                    "--ignore=tests/claude_code/_driver_unit_tests",
-                    "--ignore=tests/claude_code/_builder_unit_tests",
-                    "--ignore=tests/claude_code/_publisher_unit_tests",
-                ],
-                env=env,
-                check=False,
+        claude_code_version = _get_claude_code_version()
+        if not claude_code_version:
+            print(
+                "could not read 'claude --version'; is the CLI installed?",
+                file=sys.stderr,
             )
-        else:
-            claude_code_version = os.environ.get("CLAUDE_CODE_VERSION", "")
+            return 2
+        print(f"local claude code cli: {claude_code_version}", flush=True)
+
+        _ensure_worktree(args.worktree)
+        _checkout_tag_in_worktree(args.worktree, litellm_version)
+        _uv_sync(args.worktree)
+
+        config_path = args.worktree / "tests" / "claude_code" / "test_config.yaml"
+        if not config_path.exists():
+            raise RuntimeError(
+                f"proxy config not found at {config_path}; the resolved tag "
+                f"{litellm_version} may predate the compat matrix work"
+            )
+
+        proxy_proc = _start_proxy(args.worktree, args.proxy_port, config_path)
+        _wait_for_proxy(args.proxy_port)
+
+        env = {
+            **os.environ,
+            "ANTHROPIC_BASE_URL": f"http://127.0.0.1:{args.proxy_port}",
+            "ANTHROPIC_AUTH_TOKEN": DEFAULT_PROXY_API_KEY,
+            "COMPAT_RESULTS_PATH": str(args.results),
+        }
+        # Run pytest from inside the worktree so it picks up the
+        # checked-out tag's test code (and its conftest hook), not the
+        # current process's working directory.
+        subprocess.run(
+            [
+                "uv",
+                "run",
+                "pytest",
+                "tests/claude_code/",
+                "--ignore=tests/claude_code/_driver_unit_tests",
+                "--ignore=tests/claude_code/_builder_unit_tests",
+                "--ignore=tests/claude_code/_publisher_unit_tests",
+                "--ignore=tests/claude_code/_pr_gate_unit_tests",
+            ],
+            env=env,
+            cwd=args.worktree,
+            check=False,
+        )
 
         if args.skip_publish:
-            print("skip-publish: not pushing to docs repo", flush=True)
+            print("skip-publish: not opening a PR", flush=True)
             return 0
 
         publish(
             docs_repo=args.docs_repo,
             docs_branch=args.docs_branch,
             docs_target_path=args.docs_target_path,
-            docs_token=docs_token,
             manifest_path=args.manifest,
             results_path=args.results,
             matrix_output_path=args.matrix_output,
@@ -586,8 +678,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         )
         return 0
     finally:
-        if container_id is not None:
-            _stop_proxy(container_id)
+        if proxy_proc is not None:
+            _stop_proxy(proxy_proc)
 
 
 if __name__ == "__main__":
@@ -598,10 +690,11 @@ __all__ = [
     "DOCS_REPO_DEFAULT",
     "DOCS_TARGET_BASENAME",
     "DOCS_TARGET_PATH_DEFAULT",
-    "DOCKER_IMAGE_BASE",
+    "DEFAULT_PROXY_PORT",
+    "DEFAULT_PROXY_API_KEY",
+    "DEFAULT_WORKTREE",
     "PR_BRANCH_PREFIX",
     "commit_message_for_matrix",
-    "docker_image_for_tag",
     "select_files_to_commit",
     "pr_branch_name",
     "pr_title_for_matrix",
