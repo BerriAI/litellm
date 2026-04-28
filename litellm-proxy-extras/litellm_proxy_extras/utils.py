@@ -586,16 +586,18 @@ class ProxyExtrasDBManager:
 
                     if "P1002" in stderr and "advisory lock" in stderr:
                         last_was_advisory_lock = True
+                        # Prisma's advisory-lock timeout is hardcoded at 10s
+                        # (see https://www.prisma.io/docs/orm/prisma-migrate/workflows/development-and-production#advisory-locking).
+                        # The mechanism that actually helps is the back-off
+                        # sleep: it gives a stale orphan lock time to be
+                        # reaped by the pooler, or a peer migration time to
+                        # finish and release.
                         logger.warning(
                             "Advisory-lock contention on attempt %d "
-                            "(Prisma key 72707369). Retrying with longer wait.",
+                            "(Prisma key 72707369). Backing off before retry.",
                             attempt + 1,
                         )
                         time.sleep(random.randrange(5, 15))
-                        # Lengthen Prisma's lock wait on subsequent attempts.
-                        # Picked up by _get_prisma_env()'s os.environ.copy()
-                        # on the next iteration.
-                        os.environ["MIGRATE_LOCK_TIMEOUT"] = "30"
                         continue
 
                     last_was_advisory_lock = False
@@ -714,7 +716,12 @@ class ProxyExtrasDBManager:
                     "(e.g. Neon `-pooler`, Supabase pgbouncer, RDS Proxy), "
                     "set DIRECT_URL to a non-pooled URL — pooled connections "
                     "in transaction mode can orphan session-scoped advisory "
-                    "locks. v2 will use DIRECT_URL automatically when set."
+                    "locks. v2 will use DIRECT_URL automatically when set.\n\n"
+                    "Last resort: set PRISMA_SCHEMA_DISABLE_ADVISORY_LOCK=true "
+                    "to bypass advisory locking entirely. Only safe when "
+                    "concurrent `prisma migrate deploy` runs are otherwise "
+                    "serialized; two pods racing without the lock will "
+                    "corrupt the migration ledger."
                 )
             raise RuntimeError(
                 "Database migration failed after 4 attempts (retry loop "

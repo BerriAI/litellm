@@ -5,7 +5,6 @@ The v2 resolver is opt-in via `--use_v2_migration_resolver` / the
 (default) behavior is unchanged from pre-fix.
 """
 
-import os
 import subprocess
 from unittest.mock import patch
 
@@ -306,10 +305,12 @@ def test_v2_no_direct_url_passthrough(monkeypatch, tmp_path):
 
 
 def test_v2_p1002_retries_then_succeeds(monkeypatch, tmp_path):
-    """v2: P1002 advisory-lock contention is retried, MIGRATE_LOCK_TIMEOUT
-    is bumped to 30s on subsequent attempts, and a later success returns True."""
+    """v2: P1002 advisory-lock contention is caught, the loop sleeps and
+    retries, and a later success returns True. The retry mechanism is the
+    sleep itself — Prisma's 10s advisory-lock timeout is not configurable —
+    so we verify (1) a retry occurred and (2) the second-attempt subprocess
+    env still carries DATABASE_URL (no env corruption between attempts)."""
     monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@localhost:9/x")
-    monkeypatch.delenv("MIGRATE_LOCK_TIMEOUT", raising=False)
     monkeypatch.setattr(
         ProxyExtrasDBManager, "_warn_if_db_ahead_of_head", lambda _: None
     )
@@ -324,13 +325,15 @@ def test_v2_p1002_retries_then_succeeds(monkeypatch, tmp_path):
     )
 
     calls = {"n": 0}
+    envs_seen = []
 
     class FakeResult:
         stdout = "No pending migrations to apply\n"
         stderr = ""
 
-    def fake_run(cmd, *args, **kwargs):
+    def fake_run(cmd, *args, env=None, **kwargs):
         calls["n"] += 1
+        envs_seen.append(env or {})
         if calls["n"] == 1:
             raise subprocess.CalledProcessError(
                 returncode=1,
@@ -345,7 +348,14 @@ def test_v2_p1002_retries_then_succeeds(monkeypatch, tmp_path):
     ok = ProxyExtrasDBManager.setup_database(use_migrate=True, use_v2_resolver=True)
     assert ok is True
     assert calls["n"] == 2, "should retry once after the lock contention"
-    assert os.environ.get("MIGRATE_LOCK_TIMEOUT") == "30"
+    # Both attempts must have received the deploy env with DATABASE_URL set —
+    # asserting on the env passed to subprocess.run (not on os.environ) so
+    # that future refactors which compute the env outside the loop are still
+    # caught.
+    assert len(envs_seen) == 2
+    assert all(
+        e.get("DATABASE_URL") == "postgresql://u:p@localhost:9/x" for e in envs_seen
+    )
 
 
 def test_v2_p1002_terminal_raises_with_remediation_hint(monkeypatch, tmp_path):
@@ -377,3 +387,4 @@ def test_v2_p1002_terminal_raises_with_remediation_hint(monkeypatch, tmp_path):
     assert "pg_terminate_backend" in msg
     assert "objid = 72707369" in msg
     assert "DIRECT_URL" in msg
+    assert "PRISMA_SCHEMA_DISABLE_ADVISORY_LOCK" in msg
