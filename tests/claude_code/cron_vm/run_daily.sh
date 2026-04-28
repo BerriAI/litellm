@@ -43,25 +43,44 @@ PYTEST_K="${PYTEST_K:-}"
 
 POPULATOR_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WORKDIR="$(mktemp -d -t litellm-compat-matrix.XXXXXX)"
-PROXY_PID=""
+PROXY_PID_FILE="${WORKDIR}/proxy.pid"
 
+# Cleanup is intentionally aggressive: it can run on normal exit, on a
+# signal received by the script, or after a partial failure where the
+# proxy is up but ${PROXY_PID_FILE} is stale. We try four things in
+# order and stop as soon as the proxy port is free:
+#
+#   1. SIGTERM the pid recorded in proxy.pid.
+#   2. SIGKILL anything from `pgrep -f "litellm.*--port ${PROXY_PORT}"`
+#      that survived. This catches the common case where the recorded
+#      pid was the sh wrapper, not the long-lived python child.
+#   3. ss -K on the port (kernel kills sockets but not processes;
+#      mostly useful for catching lingering CLOSE_WAITs).
+#   4. wipe ${WORKDIR}.
 cleanup() {
   local rc=$?
   set +e
-  if [[ -n "${PROXY_PID}" ]] && kill -0 "${PROXY_PID}" 2>/dev/null; then
-    # Negative pid = process group; the proxy spawns workers that don't
-    # forward signals from a parent.
-    kill -TERM "-${PROXY_PID}" 2>/dev/null || true
-    for _ in 1 2 3 4 5; do
-      kill -0 "${PROXY_PID}" 2>/dev/null || break
-      sleep 1
-    done
-    kill -KILL "-${PROXY_PID}" 2>/dev/null || true
+  local proxy_pid
+  if [[ -f "${PROXY_PID_FILE}" ]]; then
+    proxy_pid="$(cat "${PROXY_PID_FILE}")"
+    if [[ -n "${proxy_pid}" ]]; then
+      kill -TERM "-${proxy_pid}" 2>/dev/null || kill -TERM "${proxy_pid}" 2>/dev/null || true
+      for _ in 1 2 3 4 5; do
+        kill -0 "${proxy_pid}" 2>/dev/null || break
+        sleep 1
+      done
+    fi
   fi
+  # Belt-and-braces: any python or uv talking to ${PROXY_PORT} that
+  # survived the SIGTERM gets SIGKILL'd by name.
+  pgrep -f "litellm.*--port[ =]?${PROXY_PORT}\b" 2>/dev/null \
+    | xargs -r kill -KILL 2>/dev/null || true
+  pgrep -f "${WORKTREE}/.uv-bin/uv.*run litellm" 2>/dev/null \
+    | xargs -r kill -KILL 2>/dev/null || true
   rm -rf "${WORKDIR}"
   exit "${rc}"
 }
-trap cleanup EXIT
+trap cleanup EXIT INT TERM
 
 log() { printf '==> %s\n' "$*" >&2; }
 die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
@@ -117,13 +136,42 @@ fi
 log "updating worktree to ${LITELLM_VERSION}"
 git -C "${WORKTREE}" fetch --tags --force
 git -C "${WORKTREE}" reset --hard
-# Keep the venv around — uv sync will reconcile it. Drop everything else
-# (compat-results.json, __pycache__, etc.) so each run starts clean.
-git -C "${WORKTREE}" clean -fdx -e .venv
+# Keep the venv and the .uv-bin cache around — uv sync will reconcile
+# the venv and we don't want to re-download the pinned uv binary on
+# every run. Drop everything else (compat-results.json, __pycache__,
+# etc.) so each run starts clean.
+git -C "${WORKTREE}" clean -fdx -e .venv -e .uv-bin
 git -C "${WORKTREE}" checkout --force "${LITELLM_VERSION}"
 
-log "uv sync --frozen"
-(cd "${WORKTREE}" && uv sync --frozen)
+# litellm pins an exact uv version in pyproject.toml's [tool.uv]
+# `required-version` field, so a system uv that's newer or older
+# refuses to sync. We pin our own local copy at the version the
+# checked-out tag asks for, cached under .uv-bin/ inside the worktree
+# so subsequent runs skip the download.
+PINNED_UV_VERSION="$(
+  awk -F'"' '/^required-version[[:space:]]*=/{ for (i=2; i<=NF; i++) if ($i ~ /^[=<>!~]+/) { gsub(/^[=<>!~]+/, "", $i); print $i; exit } }' \
+    "${WORKTREE}/pyproject.toml"
+)"
+if [[ -z "${PINNED_UV_VERSION}" ]]; then
+  log "no uv version pin in pyproject.toml; using system uv"
+  WORKTREE_UV="$(command -v uv)"
+else
+  WORKTREE_UV="${WORKTREE}/.uv-bin/uv-${PINNED_UV_VERSION}"
+  if [[ ! -x "${WORKTREE_UV}" ]]; then
+    log "downloading uv ${PINNED_UV_VERSION} for the worktree"
+    mkdir -p "${WORKTREE}/.uv-bin"
+    curl -fsSL \
+      "https://github.com/astral-sh/uv/releases/download/${PINNED_UV_VERSION}/uv-x86_64-unknown-linux-gnu.tar.gz" \
+      | tar -xzO "uv-x86_64-unknown-linux-gnu/uv" >"${WORKTREE_UV}.tmp"
+    chmod +x "${WORKTREE_UV}.tmp"
+    mv "${WORKTREE_UV}.tmp" "${WORKTREE_UV}"
+  fi
+fi
+# `--extra proxy` pulls fastapi/uvicorn/etc. so `uv run litellm` can
+# actually serve. `--group proxy-dev` brings in pytest and the rest of
+# what tests/claude_code/ needs.
+log "uv sync --frozen --group proxy-dev --extra proxy (uv ${PINNED_UV_VERSION:-system})"
+(cd "${WORKTREE}" && "${WORKTREE_UV}" sync --frozen --group proxy-dev --extra proxy)
 
 PROXY_CONFIG="${WORKTREE}/tests/claude_code/test_config.yaml"
 [[ -f "${PROXY_CONFIG}" ]] || die "proxy config not found at ${PROXY_CONFIG} (does ${LITELLM_VERSION} predate the compat matrix work?)"
@@ -133,12 +181,17 @@ PROXY_CONFIG="${WORKTREE}/tests/claude_code/test_config.yaml"
 # ---------------------------------------------------------------------------
 
 log "starting proxy on :${PROXY_PORT}"
-(
-  cd "${WORKTREE}" \
-    && setsid uv run litellm --config "${PROXY_CONFIG}" --port "${PROXY_PORT}" \
-       >"${WORKDIR}/proxy.log" 2>&1
-) &
-PROXY_PID=$!
+# `setsid` puts the proxy in its own session+pgroup so cleanup() can
+# SIGTERM the whole tree by passing the pgid as a negative pid. We
+# write that pid to a file so cleanup() doesn't need to remember a
+# variable that might be stale by the time the trap fires.
+setsid bash -c '
+  echo "$$" > "$0"
+  cd "$1"
+  exec "$2" run litellm --config "$3" --port "$4"
+' "${PROXY_PID_FILE}" "${WORKTREE}" "${WORKTREE_UV}" "${PROXY_CONFIG}" "${PROXY_PORT}" \
+  >"${WORKDIR}/proxy.log" 2>&1 &
+disown
 
 HEALTH_URL="http://127.0.0.1:${PROXY_PORT}/health/liveliness"
 for _ in $(seq 1 45); do
@@ -171,10 +224,10 @@ log "running pytest"
 set +e
 (
   cd "${WORKTREE}" \
-    && ANTHROPIC_BASE_URL="http://127.0.0.1:${PROXY_PORT}" \
-       ANTHROPIC_AUTH_TOKEN="${PROXY_API_KEY}" \
+    && LITELLM_PROXY_BASE_URL="http://127.0.0.1:${PROXY_PORT}" \
+       LITELLM_PROXY_API_KEY="${PROXY_API_KEY}" \
        COMPAT_RESULTS_PATH="${RESULTS_JSON}" \
-       uv run pytest "${PYTEST_ARGS[@]}"
+       "${WORKTREE_UV}" run pytest "${PYTEST_ARGS[@]}"
 )
 PYTEST_EXIT=$?
 set -e
@@ -189,7 +242,7 @@ MATRIX_JSON="${WORKDIR}/compatibility-matrix.json"
 log "building ${MATRIX_JSON}"
 (
   cd "${WORKTREE}" \
-    && uv run python "${POPULATOR_DIR}/build_matrix.py" \
+    && "${WORKTREE_UV}" run python "${POPULATOR_DIR}/build_matrix.py" \
        --manifest "${WORKTREE}/tests/claude_code/manifest.yaml" \
        --results "${RESULTS_JSON}" \
        --output "${MATRIX_JSON}" \
