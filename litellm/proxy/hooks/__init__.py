@@ -24,7 +24,6 @@ PROXY_HOOKS = {
     "parallel_request_limiter": _PROXY_MaxParallelRequestsHandler_v3,
     "cache_control_check": _PROXY_CacheControlCheck,
     "responses_id_security": ResponsesIDSecurity,
-    "litellm_skills": SkillsInjectionHook,
     "max_iterations_limiter": _PROXY_MaxIterationsHandler,
     "max_budget_per_session_limiter": _PROXY_MaxBudgetPerSessionHandler,
 }
@@ -32,6 +31,9 @@ PROXY_HOOKS = {
 ## FEATURE FLAG HOOKS ##
 if os.getenv("LEGACY_MULTI_INSTANCE_RATE_LIMITING", "false").lower() == "true":
     PROXY_HOOKS["parallel_request_limiter"] = _PROXY_MaxParallelRequestsHandler
+
+if os.getenv("LITELLM_ENABLE_SKILLS", "false").lower() == "true":
+    PROXY_HOOKS["litellm_skills"] = SkillsInjectionHook
 
 
 ### update PROXY_HOOKS with ENTERPRISE_PROXY_HOOKS ###
