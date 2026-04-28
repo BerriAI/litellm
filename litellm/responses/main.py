@@ -518,6 +518,13 @@ async def aresponses(
             kwargs.pop("prompt_id", None)
             kwargs["_async_prompt_merged_params"] = merged_optional_params
 
+        (
+            input,
+            kwargs,
+            _litellm_conversation_id,
+            _litellm_conversation_pre_call_input,
+        ) = await _apply_litellm_managed_conversation(input=input, kwargs=kwargs)
+
         func = partial(
             responses,
             input=input,
@@ -575,6 +582,12 @@ async def aresponses(
                 f"Got an unexpected None response from the Responses API: {response}"
             )
 
+        await _record_litellm_managed_conversation(
+            response=response,
+            conversation_id=_litellm_conversation_id,
+            pre_call_input=_litellm_conversation_pre_call_input,
+        )
+
         return response
     except Exception as e:
         raise litellm.exception_type(
@@ -584,6 +597,95 @@ async def aresponses(
             completion_kwargs=local_vars,
             extra_kwargs=kwargs,
         )
+
+
+async def _apply_litellm_managed_conversation(
+    input: Union[str, ResponseInputParam],
+    kwargs: Dict[str, Any],
+) -> tuple[
+    Union[str, ResponseInputParam],
+    Dict[str, Any],
+    Optional[str],
+    Optional[List[Dict[str, Any]]],
+]:
+    from litellm.llms.openai.responses.count_tokens.transformation import (
+        OpenAICountTokensConfig,
+    )
+    from litellm.responses.litellm_completion_transformation.session_handler import (
+        ResponsesSessionHandler,
+    )
+    from litellm.responses.utils import (
+        get_cached_conversation_items,
+        is_litellm_conversation_id,
+    )
+
+    extra_body = kwargs.get("extra_body") or {}
+    conversation_id = kwargs.pop("conversation", None) or extra_body.pop(
+        "conversation", None
+    )
+
+    if not is_litellm_conversation_id(conversation_id):
+        if conversation_id is not None:
+            kwargs["conversation"] = conversation_id
+        return input, kwargs, None, None
+
+    kwargs["litellm_session_id"] = conversation_id
+
+    history_input_items: List[Dict[str, Any]] = []
+    cached = await get_cached_conversation_items(conversation_id)
+    if cached:
+        history_input_items = list(cached)
+    else:
+        session = await ResponsesSessionHandler.get_chat_completion_message_history_for_session_id(
+            session_id=conversation_id
+        )
+        history_messages = session.get("messages") or []
+        if history_messages:
+            replayed, _ = OpenAICountTokensConfig.messages_to_responses_input(
+                messages=cast(List[Dict[str, Any]], history_messages)
+            )
+            history_input_items = list(replayed)
+
+    if isinstance(input, str):
+        new_input_items: List[Dict[str, Any]] = history_input_items + [
+            {"role": "user", "content": input}
+        ]
+    else:
+        new_input_items = history_input_items + list(input or [])
+
+    if not history_input_items:
+        return input, kwargs, conversation_id, list(new_input_items)
+
+    return (
+        cast(Union[str, ResponseInputParam], new_input_items),
+        kwargs,
+        conversation_id,
+        list(new_input_items),
+    )
+
+
+async def _record_litellm_managed_conversation(
+    response: Any,
+    conversation_id: Optional[str],
+    pre_call_input: Optional[List[Dict[str, Any]]],
+) -> None:
+    from litellm.responses.utils import set_cached_conversation_items
+
+    if not conversation_id or pre_call_input is None:
+        return
+    if not isinstance(response, ResponsesAPIResponse):
+        return
+
+    output = getattr(response, "output", None) or []
+    serialized_output: List[Dict[str, Any]] = []
+    for item in output:
+        if hasattr(item, "model_dump"):
+            serialized_output.append(item.model_dump(exclude_none=True))
+        elif isinstance(item, dict):
+            serialized_output.append(item)
+
+    full_transcript = list(pre_call_input) + serialized_output
+    await set_cached_conversation_items(conversation_id, full_transcript)
 
 
 def _apply_prompt_management_to_responses_call(
