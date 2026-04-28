@@ -129,5 +129,13 @@ class TestDetermineXInitiator:
     def test_string_input_returns_user(self):
         assert determine_x_initiator("What is 2+2?") == "user"
 
+    def test_legacy_function_role_returns_agent(self):
+        """Deprecated role:function must be treated as agent continuation."""
+        messages = [
+            {"role": "user", "content": "Call a function"},
+            {"role": "function", "content": "result", "name": "my_fn"},
+        ]
+        assert determine_x_initiator(messages) == "agent"
+
     def test_empty_list_returns_user(self):
         assert determine_x_initiator([]) == "user"

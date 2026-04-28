@@ -188,8 +188,8 @@ def determine_x_initiator(messages_or_input: Union[list, str]) -> str:
             # No role = agent-initiated (Responses API role-less item types)
             if role is None:
                 return "agent"
-            # assistant or tool role = agent continuation
-            if role in ("assistant", "tool"):
+            # assistant, tool, or legacy function role = agent continuation
+            if role in ("assistant", "tool", "function"):
                 return "agent"
 
     return "user"
