@@ -1824,15 +1824,6 @@ class OpenTelemetry(CustomLogger):
                             value=safe_dumps([status]),
                         )
 
-                    # Extract finish reason from ResponsesAPIResponse.status
-                    status = response_obj.get("status")
-                    if status:
-                        self.safe_set_attribute(
-                            span=span,
-                            key=SpanAttributes.GEN_AI_RESPONSE_FINISH_REASONS.value,
-                            value=safe_dumps([status]),
-                        )
-
         except Exception as e:
             self.handle_callback_failure(
                 callback_name=self.callback_name or "opentelemetry"
