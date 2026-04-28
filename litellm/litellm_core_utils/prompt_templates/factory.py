@@ -1661,14 +1661,18 @@ def _sanitize_anthropic_tool_use_id(tool_use_id: str) -> str:
     return sanitized
 
 
+_ANTHROPIC_DOCUMENT_BASE64_MEDIA_TYPES = {"application/pdf", "text/plain"}
+
+
 def _is_anthropic_document_data_uri(url: str) -> bool:
-    # Anthropic document blocks cover non-image mimes the API accepts via base64
-    # source (application/pdf, text/*). Match the mime-type prefix in a data URI.
+    # Anthropic's base64 document source accepts only application/pdf and
+    # text/plain (see select_anthropic_content_block_type_for_file). Routing
+    # other mimes here would produce a document block the API rejects, so we
+    # leave them on the image code path.
     match = re.match(r"data:([^;,]+)", url)
     if not match:
         return False
-    mime_type = match.group(1)
-    return mime_type.startswith("application/") or mime_type.startswith("text/")
+    return match.group(1) in _ANTHROPIC_DOCUMENT_BASE64_MEDIA_TYPES
 
 
 def convert_to_anthropic_tool_result(
@@ -4043,22 +4047,36 @@ def _convert_to_bedrock_tool_call_result(
                         BedrockToolResultContentBlock(document=_block["document"])
                     )
             elif content["type"] == "file":
+                # Match the user-message path (_process_file_message): accept
+                # either file_data (base64 data URI) or file_id (server-side
+                # reference / URL) and hand off to BedrockImageProcessor. Raise
+                # BadRequestError on both-None rather than silently dropping.
                 file_obj = content.get("file") or {}
                 file_data = file_obj.get("file_data")
-                if isinstance(file_data, str):
-                    _file_block: BedrockContentBlock = (
-                        BedrockImageProcessor.process_image_sync(image_url=file_data)
+                file_id = file_obj.get("file_id")
+                if file_data is None and file_id is None:
+                    raise litellm.BadRequestError(
+                        message="file_data and file_id cannot both be None. Got={}".format(
+                            content
+                        ),
+                        model="",
+                        llm_provider="bedrock",
                     )
-                    if "document" in _file_block:
-                        tool_result_content_blocks.append(
-                            BedrockToolResultContentBlock(
-                                document=_file_block["document"]
-                            )
-                        )
-                    elif "image" in _file_block:
-                        tool_result_content_blocks.append(
-                            BedrockToolResultContentBlock(image=_file_block["image"])
-                        )
+                file_format = file_obj.get("format")
+                _file_block: BedrockContentBlock = (
+                    BedrockImageProcessor.process_image_sync(
+                        image_url=cast(str, file_id or file_data),
+                        format=file_format,
+                    )
+                )
+                if "document" in _file_block:
+                    tool_result_content_blocks.append(
+                        BedrockToolResultContentBlock(document=_file_block["document"])
+                    )
+                elif "image" in _file_block:
+                    tool_result_content_blocks.append(
+                        BedrockToolResultContentBlock(image=_file_block["image"])
+                    )
 
     message.get("name", "")
     id = str(message.get("tool_call_id", str(uuid.uuid4())))
