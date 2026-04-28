@@ -43,4 +43,4 @@ class TestBedrockInvokePromptCaching(BaseAnthropicMessagesPromptCachingTest):
     """
 
     def get_model(self) -> str:
-        return "bedrock/invoke/us.anthropic.claude-3-5-sonnet-20241022-v2:0"
+        return "bedrock/invoke/us.anthropic.claude-sonnet-4-5-20250929-v1:0"
