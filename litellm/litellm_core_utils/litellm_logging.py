@@ -1478,10 +1478,6 @@ class Logging(LiteLLMLoggingBaseClass):
         Calculate response cost using result + logging object variables.
 
         used for consistent cost calculation across response headers + logging integrations.
-
-        `dict`/`list` results (e.g. non-streaming vertex rawPredict) are
-        accepted - the underlying calculator duck-types over the response
-        shape via `usage` extraction.
         """
 
         if cache_hit is None:
@@ -1750,13 +1746,7 @@ class Logging(LiteLLMLoggingBaseClass):
         start_time,
         end_time,
     ):
-        """
-        Compute response_cost, build the standard logging payload, and emit
-        it. Handles both typed responses (ModelResponse, etc.) and raw dict
-        / list results (e.g. non-streaming vertex rawPredict, anthropic
-        passthrough). Without this, the dict path skipped cost calculation
-        and spend was logged as $0.00.
-        """
+        """Resolve hidden params, compute response cost, and emit the standard logging payload."""
         hidden_params = getattr(logging_result, "_hidden_params", {})
         if hidden_params:
             if self.model_call_details.get("litellm_params") is not None:
@@ -1888,10 +1878,6 @@ class Logging(LiteLLMLoggingBaseClass):
                 and result is not None
                 and self.stream is not True
             ):
-                # Single path for both typed responses (ModelResponse, etc.)
-                # and raw dict/list results. Previously the dict branch
-                # skipped cost calculation, which caused non-streaming
-                # rawPredict spend to log as $0.00.
                 if self._is_recognized_call_type_for_logging(
                     logging_result=logging_result
                 ) or isinstance(logging_result, (dict, list)):

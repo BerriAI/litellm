@@ -2557,11 +2557,7 @@ def _make_dict_logging_obj():
 
 
 def test_success_handler_computes_cost_for_dict_response():
-    """
-    Non-streaming raw dict responses (e.g. vertex rawPredict via
-    /v1/messages from Claude Code) must run through the cost calculator.
-    Pre-fix this branch skipped cost calc and spend was logged as $0.00.
-    """
+    """Non-streaming dict responses run through the cost calculator."""
     logging_obj = _make_dict_logging_obj()
     expected_cost = 0.42
     with (
@@ -2599,10 +2595,7 @@ def test_success_handler_computes_cost_for_dict_response():
 
 
 def test_success_handler_preserves_precomputed_cost_for_dict_response():
-    """
-    If a pass-through handler has already computed and stored response_cost
-    on model_call_details, the unified path must NOT overwrite it.
-    """
+    """Precomputed response_cost on model_call_details must not be overwritten."""
     logging_obj = _make_dict_logging_obj()
     precomputed_cost = 1.23
     logging_obj.model_call_details["response_cost"] = precomputed_cost
@@ -2641,10 +2634,7 @@ def test_success_handler_preserves_precomputed_cost_for_dict_response():
 
 
 def test_success_handler_unified_helper_runs_for_typed_results():
-    """
-    Recognized typed responses still flow through the same helper. Sanity
-    check that unifying the two branches did not regress the typed path.
-    """
+    """Recognized typed responses still flow through the unified helper."""
     logging_obj = _make_dict_logging_obj()
     expected_cost = 0.10
     typed_result = MagicMock()
