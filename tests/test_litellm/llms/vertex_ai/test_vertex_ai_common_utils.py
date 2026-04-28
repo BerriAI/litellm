@@ -225,7 +225,11 @@ def test_build_vertex_schema():
                     "metadata": {"type": "object"},
                     "callbacks": {
                         "anyOf": [
-                            {"type": "array", "nullable": True},
+                            {
+                                "type": "array",
+                                "items": {"type": "object"},
+                                "nullable": True,
+                            },
                             {"type": "object", "nullable": True},
                         ]
                     },
