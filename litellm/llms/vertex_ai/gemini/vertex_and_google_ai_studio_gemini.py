@@ -91,6 +91,7 @@ from litellm.utils import (
     ModelResponse,
     is_base64_encoded,
     supports_reasoning,
+    supports_thinking_budget_zero,
 )
 
 from ....utils import _remove_additional_properties, _remove_strict_from_schema
@@ -924,11 +925,15 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
     @staticmethod
     def _model_supports_thinking_budget_zero(model: Optional[str]) -> bool:
-        """Only Flash-family Gemini 2.x models accept thinkingBudget=0 to disable thinking.
-        Pro models reject it with a 400 INVALID_ARGUMENT error."""
+        """Returns True if the model accepts thinkingBudget=0 to disable thinking.
+        Reads from model_prices_and_context_window.json via supports_thinking_budget_zero;
+        falls back to False (safe default) when the model is unknown."""
         if model is None:
             return False
-        return "flash" in model.lower()
+        try:
+            return supports_thinking_budget_zero(model)
+        except Exception:
+            return False
 
     @staticmethod
     def _validate_thinking_config_conflicts(

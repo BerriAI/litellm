@@ -9431,7 +9431,6 @@
             "us": 1.1,
             "fast": 6.0
         },
-        "supports_max_reasoning_effort": true,
         "supports_minimal_reasoning_effort": true
     },
     "claude-opus-4-7-20260416": {
@@ -9466,7 +9465,6 @@
             "us": 1.1,
             "fast": 6.0
         },
-        "supports_max_reasoning_effort": true,
         "supports_minimal_reasoning_effort": true
     },
     "claude-sonnet-4-20250514": {
@@ -12006,7 +12004,8 @@
         "litellm_provider": "deepinfra",
         "mode": "chat",
         "supports_tool_choice": true,
-        "supports_function_calling": true
+        "supports_function_calling": true,
+        "supports_thinking_budget_zero": true
     },
     "deepinfra/google/gemini-2.5-pro": {
         "max_tokens": 1000000,
@@ -14289,7 +14288,8 @@
             "search_context_size_medium": 0.035,
             "search_context_size_high": 0.035
         },
-        "supports_service_tier": true
+        "supports_service_tier": true,
+        "supports_thinking_budget_zero": true
     },
     "gemini-2.5-flash-image": {
         "cache_read_input_token_cost": 3e-08,
@@ -14339,7 +14339,8 @@
         "supports_vision": true,
         "supports_web_search": false,
         "tpm": 8000000,
-        "supports_service_tier": true
+        "supports_service_tier": true,
+        "supports_thinking_budget_zero": true
     },
     "gemini-3-pro-image-preview": {
         "input_cost_per_image": 0.0011,
@@ -14561,7 +14562,8 @@
             "search_context_size_medium": 0.035,
             "search_context_size_high": 0.035
         },
-        "supports_service_tier": true
+        "supports_service_tier": true,
+        "supports_thinking_budget_zero": true
     },
     "gemini-2.5-flash-lite-preview-09-2025": {
         "cache_read_input_token_cost": 1e-08,
@@ -14611,7 +14613,8 @@
             "search_context_size_low": 0.035,
             "search_context_size_medium": 0.035,
             "search_context_size_high": 0.035
-        }
+        },
+        "supports_thinking_budget_zero": true
     },
     "gemini-2.5-flash-preview-09-2025": {
         "cache_read_input_token_cost": 7.5e-08,
@@ -14661,7 +14664,8 @@
             "search_context_size_low": 0.035,
             "search_context_size_medium": 0.035,
             "search_context_size_high": 0.035
-        }
+        },
+        "supports_thinking_budget_zero": true
     },
     "gemini-live-2.5-flash-preview-native-audio-09-2025": {
         "cache_read_input_token_cost": 7.5e-08,
@@ -14812,7 +14816,8 @@
             "search_context_size_low": 0.035,
             "search_context_size_medium": 0.035,
             "search_context_size_high": 0.035
-        }
+        },
+        "supports_thinking_budget_zero": true
     },
     "gemini-2.5-pro": {
         "cache_read_input_token_cost": 1.25e-07,
@@ -15761,7 +15766,8 @@
             "search_context_size_medium": 0.035,
             "search_context_size_high": 0.035
         },
-        "supports_service_tier": true
+        "supports_service_tier": true,
+        "supports_thinking_budget_zero": true
     },
     "gemini/gemini-2.5-flash-image": {
         "cache_read_input_token_cost": 3e-08,
@@ -15817,7 +15823,8 @@
             "search_context_size_medium": 0.035,
             "search_context_size_high": 0.035
         },
-        "supports_service_tier": true
+        "supports_service_tier": true,
+        "supports_thinking_budget_zero": true
     },
     "gemini/gemini-3-pro-image-preview": {
         "input_cost_per_image": 0.0011,
@@ -15996,7 +16003,8 @@
             "search_context_size_medium": 0.035,
             "search_context_size_high": 0.035
         },
-        "supports_service_tier": true
+        "supports_service_tier": true,
+        "supports_thinking_budget_zero": true
     },
     "gemini/gemini-2.5-flash-lite-preview-09-2025": {
         "cache_read_input_token_cost": 1e-08,
@@ -16048,7 +16056,8 @@
             "search_context_size_low": 0.035,
             "search_context_size_medium": 0.035,
             "search_context_size_high": 0.035
-        }
+        },
+        "supports_thinking_budget_zero": true
     },
     "gemini/gemini-2.5-flash-preview-09-2025": {
         "cache_read_input_token_cost": 7.5e-08,
@@ -16100,7 +16109,8 @@
             "search_context_size_low": 0.035,
             "search_context_size_medium": 0.035,
             "search_context_size_high": 0.035
-        }
+        },
+        "supports_thinking_budget_zero": true
     },
     "gemini/gemini-flash-latest": {
         "cache_read_input_token_cost": 7.5e-08,
@@ -16257,7 +16267,8 @@
             "search_context_size_low": 0.035,
             "search_context_size_medium": 0.035,
             "search_context_size_high": 0.035
-        }
+        },
+        "supports_thinking_budget_zero": true
     },
     "gemini/gemini-2.5-flash-preview-tts": {
         "input_cost_per_token": 3e-07,
@@ -25343,7 +25354,8 @@
         "source": "https://www.oracle.com/artificial-intelligence/generative-ai/generative-ai-service/pricing",
         "supports_function_calling": true,
         "supports_response_schema": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_thinking_budget_zero": true
     },
     "oci/google.gemini-2.5-flash-lite": {
         "input_cost_per_token": 7.5e-08,
@@ -25356,7 +25368,8 @@
         "source": "https://www.oracle.com/artificial-intelligence/generative-ai/generative-ai-service/pricing",
         "supports_function_calling": true,
         "supports_response_schema": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_thinking_budget_zero": true
     },
     "oci/cohere.embed-english-v3.0": {
         "input_cost_per_token": 1e-07,
@@ -26150,7 +26163,8 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_thinking_budget_zero": true
     },
     "openrouter/google/gemini-2.5-pro": {
         "input_cost_per_audio_token": 7e-07,
@@ -27893,7 +27907,8 @@
         "mode": "responses",
         "supports_web_search": true,
         "supports_reasoning": false,
-        "supports_function_calling": true
+        "supports_function_calling": true,
+        "supports_thinking_budget_zero": true
     },
     "perplexity/xai/grok-4-1-fast-non-reasoning": {
         "litellm_provider": "perplexity",
@@ -28457,7 +28472,8 @@
         "supports_vision": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
-        "supports_response_schema": true
+        "supports_response_schema": true,
+        "supports_thinking_budget_zero": true
     },
     "replicate/openai/gpt-oss-120b": {
         "input_cost_per_token": 1.8e-07,
@@ -31136,7 +31152,8 @@
         "supports_vision": true,
         "supports_function_calling": true,
         "supports_tool_choice": true,
-        "supports_response_schema": true
+        "supports_response_schema": true,
+        "supports_thinking_budget_zero": true
     },
     "vercel_ai_gateway/google/gemini-2.5-pro": {
         "input_cost_per_token": 2.5e-06,
@@ -32645,7 +32662,8 @@
         "supports_url_context": true,
         "supports_vision": true,
         "supports_web_search": false,
-        "tpm": 8000000
+        "tpm": 8000000,
+        "supports_thinking_budget_zero": true
     },
     "vertex_ai/gemini-3-pro-image-preview": {
         "input_cost_per_image": 0.0011,
