@@ -6,6 +6,8 @@ Currently only supports admin.
 JWT token must have 'litellm_proxy_admin' in scope.
 """
 
+from __future__ import annotations
+
 import fnmatch
 import hashlib
 import os
