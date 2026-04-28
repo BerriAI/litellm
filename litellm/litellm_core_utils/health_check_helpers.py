@@ -157,7 +157,9 @@ class HealthCheckHelpers:
                 **model_params,
             ),
             "completion": lambda: litellm.atext_completion(
-                **_filter_model_params(model_params=model_params),
+                **_filter_model_params(
+                    model_params=model_params, keep_max_tokens=True
+                ),
                 prompt=prompt or "test",
             ),
             "embedding": lambda: litellm.aembedding(
