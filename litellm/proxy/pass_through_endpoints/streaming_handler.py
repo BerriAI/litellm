@@ -41,16 +41,17 @@ class PassThroughStreamingHandler:
         - Collect non-empty chunks for post-processing (logging)
         - Inject cost into chunks if include_cost_in_streaming_usage is enabled
         """
-        try:
-            raw_bytes: List[bytes] = []
-            # Extract model name for cost injection
-            model_name = PassThroughStreamingHandler._extract_model_for_cost_injection(
-                request_body=request_body,
-                url_route=url_route,
-                endpoint_type=endpoint_type,
-                litellm_logging_obj=litellm_logging_obj,
-            )
+        raw_bytes: List[bytes] = []
+        logging_scheduled = False
+        # Extract model name for cost injection
+        model_name = PassThroughStreamingHandler._extract_model_for_cost_injection(
+            request_body=request_body,
+            url_route=url_route,
+            endpoint_type=endpoint_type,
+            litellm_logging_obj=litellm_logging_obj,
+        )
 
+        try:
             async for chunk in response.aiter_bytes():
                 raw_bytes.append(chunk)
                 if (
@@ -73,25 +74,37 @@ class PassThroughStreamingHandler:
                             chunk = modified_chunk
 
                 yield chunk
-
-            # After all chunks are processed, handle post-processing
-            end_time = datetime.now()
-
-            asyncio.create_task(
-                PassThroughStreamingHandler._route_streaming_logging_to_handler(
-                    litellm_logging_obj=litellm_logging_obj,
-                    passthrough_success_handler_obj=passthrough_success_handler_obj,
-                    url_route=url_route,
-                    request_body=request_body or {},
-                    endpoint_type=endpoint_type,
-                    start_time=start_time,
-                    raw_bytes=raw_bytes,
-                    end_time=end_time,
-                )
-            )
         except Exception as e:
             verbose_proxy_logger.error(f"Error in chunk_processor: {str(e)}")
             raise
+        finally:
+            # Always log collected chunks for spend tracking, even if the
+            # client disconnects mid-stream. On disconnect, Starlette calls
+            # aclose() on this async generator, which raises GeneratorExit
+            # at the suspended `yield` — `except Exception` does not catch
+            # it, so post-loop logging would otherwise be skipped and all
+            # captured per-chunk usage data lost (e.g. for interrupted
+            # Bedrock streams). See LIT-2642.
+            if not logging_scheduled and raw_bytes:
+                logging_scheduled = True
+                try:
+                    end_time = datetime.now()
+                    asyncio.create_task(
+                        PassThroughStreamingHandler._route_streaming_logging_to_handler(
+                            litellm_logging_obj=litellm_logging_obj,
+                            passthrough_success_handler_obj=passthrough_success_handler_obj,
+                            url_route=url_route,
+                            request_body=request_body or {},
+                            endpoint_type=endpoint_type,
+                            start_time=start_time,
+                            raw_bytes=raw_bytes,
+                            end_time=end_time,
+                        )
+                    )
+                except Exception as e:
+                    verbose_proxy_logger.error(
+                        f"Error scheduling chunk_processor logging: {str(e)}"
+                    )
 
     @staticmethod
     async def _route_streaming_logging_to_handler(
