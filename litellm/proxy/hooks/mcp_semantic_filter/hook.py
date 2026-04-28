@@ -135,11 +135,6 @@ class SemanticToolFilterHook(CustomLogger):
            ``_extract_tool_info`` resolves the name.
         2. Everything else (MCP ``Tool`` objects, flat dicts, etc.) is
            looked up by name in ``self.filter._tool_map``.
-
-        Note: MCP tools that were pre-expanded into OpenAI format by
-        ``_expand_mcp_tools`` will also match case (1) and appear
-        native.  The ``tools_expanded_from_mcp`` flag in the caller
-        handles that case explicitly so these tools are not lost.
         """
         # OpenAI-format dicts have name nested under "function", not at
         # top level.  Check shape first to avoid relying on
