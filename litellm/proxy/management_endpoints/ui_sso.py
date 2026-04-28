@@ -39,7 +39,6 @@ from fastapi.responses import RedirectResponse
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
-from litellm.caching import DualCache
 from litellm.constants import (
     LITELLM_UI_SESSION_DURATION,
     MAX_SPENDLOG_ROWS_TO_QUERY,
@@ -70,7 +69,7 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.auth_checks import ExperimentalUIJWTToken, get_user_object
-from litellm.proxy.common_utils.cache_pydantic_utils import CacheCodec
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.auth.auth_utils import _has_user_setup_sso
 from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -1051,7 +1050,7 @@ async def get_existing_user_info_from_db(
     user_id: Optional[str],
     user_email: Optional[str],
     prisma_client: PrismaClient,
-    user_api_key_cache: DualCache,
+    user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: ProxyLogging,
 ) -> Optional[LiteLLM_UserTable]:
     try:
@@ -1075,7 +1074,7 @@ async def get_existing_user_info_from_db(
 async def get_user_info_from_db(
     result: Union[CustomOpenID, OpenID, dict],
     prisma_client: PrismaClient,
-    user_api_key_cache: DualCache,
+    user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: ProxyLogging,
     user_email: Optional[str],
     user_defined_values: Optional[SSOUserDefinedValues],
@@ -1195,7 +1194,7 @@ async def _sync_user_role_from_jwt_role_map(
     received_response: Optional[dict],
     user_info: Optional[Union[LiteLLM_UserTable, NewUserResponse]],
     prisma_client: PrismaClient,
-    user_api_key_cache: DualCache,
+    user_api_key_cache: UserApiKeyCache,
     user_defined_values: Optional[SSOUserDefinedValues],
 ) -> None:
     """
@@ -1234,7 +1233,8 @@ async def _sync_user_role_from_jwt_role_map(
         user_info.user_role = mapped_role.value
         await user_api_key_cache.async_set_cache(
             key=user_info.user_id,
-            value=CacheCodec.serialize(user_info, model_type=LiteLLM_UserTable),
+            value=user_info,
+            model_type=LiteLLM_UserTable,
         )
 
 

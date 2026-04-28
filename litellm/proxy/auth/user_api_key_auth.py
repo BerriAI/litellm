@@ -20,7 +20,6 @@ from fastapi.security.api_key import APIKeyHeader
 import litellm
 from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm._service_logger import ServiceLogging
-from litellm.caching import DualCache
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.dot_notation_indexing import get_nested_value
 from litellm.proxy._types import *
@@ -58,7 +57,7 @@ from litellm.proxy.auth.oauth2_check import Oauth2Handler
 from litellm.proxy.auth.oauth2_proxy_hook import handle_oauth2_proxy_request
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.common_utils.cache_coordinator import EventDrivenCacheCoordinator
-from litellm.proxy.common_utils.cache_pydantic_utils import CacheCodec
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.common_utils.http_parsing_utils import (
     _read_request_body,
     _safe_get_request_headers,
@@ -328,7 +327,7 @@ _global_spend_coordinator = EventDrivenCacheCoordinator(log_prefix="[GLOBAL SPEN
 
 async def _fetch_global_spend_with_event_coordination(
     cache_key: str,
-    user_api_key_cache: DualCache,
+    user_api_key_cache: UserApiKeyCache,
     prisma_client: PrismaClient,
 ) -> Optional[float]:
     """
@@ -351,7 +350,7 @@ async def _fetch_global_spend_with_event_coordination(
 
 async def get_global_proxy_spend(
     litellm_proxy_admin_name: str,
-    user_api_key_cache: DualCache,
+    user_api_key_cache: UserApiKeyCache,
     prisma_client: Optional[PrismaClient],
     token: str,
     proxy_logging_obj: ProxyLogging,
@@ -504,7 +503,7 @@ async def _resolve_jwt_to_virtual_key(
     jwt_claims: dict,
     jwt_handler: JWTHandler,
     prisma_client: Optional[PrismaClient],
-    user_api_key_cache: DualCache,
+    user_api_key_cache: UserApiKeyCache,
     parent_otel_span: Optional[Span],
     proxy_logging_obj: ProxyLogging,
 ) -> Optional[UserAPIKeyAuth]:
@@ -1315,13 +1314,9 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                 if prisma_client is not None:
                     _cache_key = f"{valid_token.team_id}_{valid_token.user_id}"
 
-                    _cached_member = await user_api_key_cache.async_get_cache(
-                        key=_cache_key
-                    )
-                    team_member_info: Optional[LiteLLM_TeamMembership] = (
-                        CacheCodec.deserialize(_cached_member, LiteLLM_TeamMembership)
-                        if _cached_member is not None
-                        else None
+                    team_member_info = await user_api_key_cache.async_get_cache(
+                        key=_cache_key,
+                        model_type=LiteLLM_TeamMembership,
                     )
                     if team_member_info is None:
                         # read from DB
@@ -1342,10 +1337,8 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                                 )
                                 await user_api_key_cache.async_set_cache(
                                     key=_cache_key,
-                                    value=CacheCodec.serialize(
-                                        team_member_info,
-                                        model_type=LiteLLM_TeamMembership,
-                                    ),
+                                    value=team_member_info,
+                                    model_type=LiteLLM_TeamMembership,
                                     ttl=5,
                                 )
 
@@ -1497,9 +1490,8 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                 team_cache_key = f"team_id:{valid_token.team_id}"
                 await user_api_key_cache.async_set_cache(
                     key=team_cache_key,
-                    value=CacheCodec.serialize(
-                        _team_obj, model_type=LiteLLM_TeamTableCachedObj
-                    ),
+                    value=_team_obj,
+                    model_type=LiteLLM_TeamTableCachedObj,
                 )  # save team table in cache - used for tpm/rpm limiting - tpm_rpm_limiter.py
 
             # Fetch project object if key belongs to a project

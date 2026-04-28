@@ -6,6 +6,7 @@ the flag is explicitly set to True, and leaves it in-memory-only otherwise.
 """
 
 from contextlib import contextmanager
+import json
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -29,7 +30,18 @@ class _FakeRedisCache(RedisCache):
     """
 
     def __init__(self):  # noqa: super().__init__ skipped intentionally
-        pass
+        self._store = {}
+
+    def set_cache(self, key, value, **kwargs):  # type: ignore[override]
+        # Enforce Redis JSON-serializable payload contract.
+        self._store[key] = json.dumps(value)
+        return True
+
+    def get_cache(self, key, **kwargs):  # type: ignore[override]
+        raw = self._store.get(key)
+        if raw is None:
+            return None
+        return json.loads(raw)
 
 
 @contextmanager
