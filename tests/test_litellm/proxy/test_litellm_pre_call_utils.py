@@ -1749,6 +1749,95 @@ async def test_add_litellm_metadata_from_request_headers():
         litellm.callbacks = original_callbacks
 
 
+@pytest.mark.asyncio
+async def test_anthropic_messages_standard_logging_object_matches_fixture():
+    """
+    Regression: /v1/messages calls routed to non-Anthropic providers should keep
+    call_type=anthropic_messages in standard logging payloads.
+    """
+    litellm._turn_on_debug()
+    test_logger = TestCustomLogger()
+    original_callbacks = litellm.callbacks
+    litellm.callbacks = [test_logger]
+
+    try:
+        data = {
+            "model": "gemini/gemini-2.5-flash",
+            "messages": [{"role": "user", "content": "Hi."}],
+            "stream": False,
+            "mock_response": "Hello! How can I help you today?",
+            "api_key": "fake-key",
+            "max_tokens": 4096,
+        }
+
+        mock_request = MagicMock(spec=Request)
+        mock_request.headers = {"user-agent": "PostmanRuntime/7.53.0"}
+        mock_request.url.path = "/v1/messages"
+        mock_request.url = MagicMock()
+        mock_request.url.__str__.return_value = "http://localhost/v1/messages"
+        mock_request.method = "POST"
+        mock_request.query_params = {}
+        mock_request.client = MagicMock()
+        mock_request.client.host = "127.0.0.1"
+
+        mock_fastapi_response = MagicMock(spec=Response)
+        mock_user_api_key_dict = UserAPIKeyAuth(
+            api_key="test-key", user_id="default_user_id"
+        )
+
+        mock_proxy_logging_obj = MagicMock(spec=ProxyLogging)
+
+        async def mock_during_call_hook(*args, **kwargs):
+            return None
+
+        async def mock_pre_call_hook(*args, **kwargs):
+            return data
+
+        async def mock_post_call_success_hook(*args, **kwargs):
+            return kwargs.get("response", args[2] if len(args) > 2 else None)
+
+        mock_proxy_logging_obj.during_call_hook = mock_during_call_hook
+        mock_proxy_logging_obj.pre_call_hook = mock_pre_call_hook
+        mock_proxy_logging_obj.post_call_success_hook = mock_post_call_success_hook
+
+        processor = ProxyBaseLLMRequestProcessing(data=data)
+        await processor.base_process_llm_request(
+            request=mock_request,
+            fastapi_response=mock_fastapi_response,
+            user_api_key_dict=mock_user_api_key_dict,
+            route_type="anthropic_messages",
+            proxy_logging_obj=mock_proxy_logging_obj,
+            general_settings={},
+            proxy_config=MagicMock(),
+            select_data_generator=None,
+            llm_router=None,
+            model="gemini/gemini-2.5-flash",
+            is_streaming_request=False,
+        )
+
+        await asyncio.sleep(3)
+
+        assert test_logger.standard_logging_object is not None
+        actual = test_logger.standard_logging_object
+
+        expected = {
+            "call_type": "anthropic_messages",
+            "status": "success",
+            "model": "gemini/gemini-2.5-flash",
+        }
+
+        # Compare only stable fields from the saved proxy log snapshot.
+        actual_projection = {
+            "call_type": actual.get("call_type"),
+            "status": actual.get("status"),
+            "model": actual.get("model"),
+        }
+        assert actual_projection == expected
+        assert actual.get("call_type") == "anthropic_messages"
+    finally:
+        litellm.callbacks = original_callbacks
+
+
 def test_add_litellm_metadata_from_request_headers_x_litellm_trace_id_sets_chain_id():
     """x-litellm-trace-id sets both metadata and top-level litellm_session_id/litellm_trace_id for call chaining."""
     headers = {"x-litellm-trace-id": "foo"}
@@ -3192,3 +3281,144 @@ def test_clean_headers_strips_x_api_key_when_byok_enabled_but_x_api_key_was_auth
     # Even with BYOK enabled, x-api-key must be stripped when it was used
     # as the LiteLLM auth header (anti-replay guard).
     assert "x-api-key" not in result
+
+
+# ---------------------------------------------------------------------------
+# Team guardrail + global policy regression tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_team_guardrail_merges_with_global_policy():
+    """
+    Regression: team's direct guardrail must be present alongside guardrails
+    resolved from a global policy (scope='*') configured by the admin.
+
+    The bug: get_guardrail_from_metadata checked litellm_metadata before
+    metadata. When the request contained a non-empty litellm_metadata field
+    (without a 'guardrails' key), the merged list in data["metadata"] was
+    shadowed and non-default guardrails silently received an empty
+    requested_guardrails list.
+    """
+    from litellm.proxy.policy_engine.attachment_registry import get_attachment_registry
+    from litellm.proxy.policy_engine.policy_registry import get_policy_registry
+    from litellm.proxy.litellm_pre_call_utils import move_guardrails_to_metadata
+    from litellm.types.proxy.policy_engine import (
+        Policy,
+        PolicyAttachment,
+        PolicyGuardrails,
+    )
+
+    data = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "Hello"}],
+        # Simulate a request that carries litellm_metadata (without guardrails)
+        # which previously shadowed data["metadata"]["guardrails"].
+        "litellm_metadata": {"some_user_field": "some_value"},
+        "metadata": {},
+    }
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test-key",
+        team_metadata={"guardrails": ["team-direct-guardrail"]},
+    )
+
+    policy_registry = get_policy_registry()
+    policy_registry._policies = {
+        "global-policy": Policy(
+            guardrails=PolicyGuardrails(add=["policy-guardrail-1", "policy-guardrail-2"]),
+        ),
+    }
+    policy_registry._initialized = True
+
+    attachment_registry = get_attachment_registry()
+    attachment_registry._attachments = [
+        PolicyAttachment(policy="global-policy", scope="*"),
+    ]
+    attachment_registry._initialized = True
+
+    try:
+        with patch("litellm.proxy.utils._premium_user_check"):
+            await move_guardrails_to_metadata(
+                data=data,
+                _metadata_variable_name="metadata",
+                user_api_key_dict=user_api_key_dict,
+            )
+
+        guardrails = data["metadata"].get("guardrails", [])
+
+        assert "team-direct-guardrail" in guardrails, \
+            f"Team guardrail missing from merged list: {guardrails}"
+        assert "policy-guardrail-1" in guardrails, \
+            f"policy-guardrail-1 missing: {guardrails}"
+        assert "policy-guardrail-2" in guardrails, \
+            f"policy-guardrail-2 missing: {guardrails}"
+        assert len(guardrails) == len(set(guardrails)), \
+            f"Duplicates in guardrails list: {guardrails}"
+
+        # Verify get_guardrail_from_metadata returns the merged list even
+        # when litellm_metadata is present (the bug: it returned [] before fix)
+        from litellm.integrations.custom_guardrail import CustomGuardrail
+
+        class _DummyGuardrail(CustomGuardrail):
+            pass
+
+        dummy = _DummyGuardrail(guardrail_name="team-direct-guardrail")
+        returned = dummy.get_guardrail_from_metadata(data)
+        assert "team-direct-guardrail" in returned, (
+            f"get_guardrail_from_metadata shadowed by litellm_metadata; got: {returned}"
+        )
+
+    finally:
+        policy_registry._policies = {}
+        policy_registry._initialized = False
+        attachment_registry._attachments = []
+        attachment_registry._initialized = False
+
+
+@pytest.mark.asyncio
+async def test_get_guardrail_from_metadata_prefers_metadata_over_litellm_metadata():
+    """
+    Unit test: get_guardrail_from_metadata must read from data["metadata"] first.
+    A non-empty data["litellm_metadata"] without a 'guardrails' key must not
+    shadow data["metadata"]["guardrails"].
+    """
+    from litellm.integrations.custom_guardrail import CustomGuardrail
+
+    class _DummyGuardrail(CustomGuardrail):
+        pass
+
+    dummy = _DummyGuardrail(guardrail_name="my-guardrail")
+
+    data = {
+        "metadata": {"guardrails": ["my-guardrail", "other-guardrail"]},
+        "litellm_metadata": {"some_field": "some_value"},  # no 'guardrails' key
+    }
+
+    result = dummy.get_guardrail_from_metadata(data)
+    assert result == ["my-guardrail", "other-guardrail"], (
+        f"Expected guardrails from metadata, got: {result}"
+    )
+
+
+def test_get_guardrail_from_metadata_reads_litellm_metadata_when_no_metadata():
+    """
+    get_guardrail_from_metadata must still read from litellm_metadata when
+    data["metadata"] has no 'guardrails' key (thread/assistant endpoint path).
+    """
+    from litellm.integrations.custom_guardrail import CustomGuardrail
+
+    class _DummyGuardrail(CustomGuardrail):
+        pass
+
+    dummy = _DummyGuardrail(guardrail_name="my-guardrail")
+
+    data = {
+        "metadata": {"requester_metadata": {"user": "alice"}},  # no guardrails key
+        "litellm_metadata": {"guardrails": ["my-guardrail"]},
+    }
+
+    result = dummy.get_guardrail_from_metadata(data)
+    assert result == ["my-guardrail"], (
+        f"Expected guardrails from litellm_metadata fallback, got: {result}"
+    )

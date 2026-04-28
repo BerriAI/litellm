@@ -42,6 +42,7 @@ ignored_keys = [
     "metadata.cold_storage_object_key",
     "metadata.litellm_overhead_time_ms",
     "metadata.cost_breakdown",
+    "metadata.eval_information",
 ]
 
 

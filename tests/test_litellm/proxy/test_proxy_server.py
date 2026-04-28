@@ -5034,8 +5034,7 @@ async def test_init_and_increment_spend_counter_reseeds_from_db_on_counter_miss(
 async def test_reseed_spend_from_db_user_and_org_prefixes():
     """User and org counters must reseed from their own DB tables, not
     fall through to 0.0 like the other counters do today."""
-    import litellm.proxy.proxy_server as ps
-    from litellm.proxy.proxy_server import _reseed_spend_from_db
+    from litellm.proxy.db.spend_counter_reseed import SpendCounterReseed
 
     user_row = MagicMock()
     user_row.spend = 17.0
@@ -5048,20 +5047,15 @@ async def test_reseed_spend_from_db_user_and_org_prefixes():
         return_value=org_row
     )
 
-    orig_prisma = ps.prisma_client
-    ps.prisma_client = fake_prisma
-    try:
-        assert await _reseed_spend_from_db("spend:user:alice") == 17.0
-        fake_prisma.db.litellm_usertable.find_unique.assert_awaited_once_with(
-            where={"user_id": "alice"}
-        )
+    assert await SpendCounterReseed.from_db(fake_prisma, "spend:user:alice") == 17.0
+    fake_prisma.db.litellm_usertable.find_unique.assert_awaited_once_with(
+        where={"user_id": "alice"}
+    )
 
-        assert await _reseed_spend_from_db("spend:org:acme") == 305.0
-        fake_prisma.db.litellm_organizationtable.find_unique.assert_awaited_once_with(
-            where={"organization_id": "acme"}
-        )
-    finally:
-        ps.prisma_client = orig_prisma
+    assert await SpendCounterReseed.from_db(fake_prisma, "spend:org:acme") == 305.0
+    fake_prisma.db.litellm_organizationtable.find_unique.assert_awaited_once_with(
+        where={"organization_id": "acme"}
+    )
 
 
 @pytest.mark.asyncio
@@ -5069,19 +5063,391 @@ async def test_reseed_spend_from_db_skips_window_variant_keys():
     """Window counters (spend:*:window:{duration}) share prefixes with
     primary counters but don't correspond to a DB row. The guard must
     short-circuit without querying the DB."""
-    import litellm.proxy.proxy_server as ps
-    from litellm.proxy.proxy_server import _reseed_spend_from_db
+    from litellm.proxy.db.spend_counter_reseed import SpendCounterReseed
 
     fake_prisma = MagicMock()
     fake_prisma.db.litellm_verificationtoken.find_unique = AsyncMock()
     fake_prisma.db.litellm_teamtable.find_unique = AsyncMock()
 
-    orig_prisma = ps.prisma_client
+    assert (
+        await SpendCounterReseed.from_db(fake_prisma, "spend:key:sk-abc:window:1h")
+        is None
+    )
+    assert (
+        await SpendCounterReseed.from_db(fake_prisma, "spend:team:team-1:window:1d")
+        is None
+    )
+    fake_prisma.db.litellm_verificationtoken.find_unique.assert_not_awaited()
+    fake_prisma.db.litellm_teamtable.find_unique.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_get_current_spend_reseeds_from_db_when_counter_missing():
+    """
+    When both the Redis and in-memory counters are missing, the enforcement
+    read path must reseed from the authoritative DB, not fall back to the
+    caller-supplied stale value. Otherwise, every Redis TTL expiry lets a
+    request through against a stale in-process `team_membership.spend`.
+    """
+    from litellm.caching.dual_cache import DualCache
+    from litellm.proxy.proxy_server import get_current_spend
+
+    counter_cache = DualCache()
+    recorded_warms: list = []
+
+    async def record_increment(key, value, ttl=None, **kwargs):
+        recorded_warms.append({"key": key, "value": value})
+        return value
+
+    fake_redis = AsyncMock()
+    fake_redis.async_increment = AsyncMock(side_effect=record_increment)
+    fake_redis.async_get_cache = AsyncMock(return_value=None)
+    counter_cache.redis_cache = fake_redis
+
+    # DB has authoritative spend=362.0; caller hands us stale fallback=30.0
+    # (the in-process team_membership.spend that hasn't caught up to DB).
+    db_row = MagicMock()
+    db_row.spend = 362.0
+    fake_prisma = MagicMock()
+    fake_prisma.db.litellm_teammembership.find_unique = AsyncMock(return_value=db_row)
+
+    import litellm.proxy.proxy_server as ps
+
+    orig_counter, orig_prisma = ps.spend_counter_cache, ps.prisma_client
+    ps.spend_counter_cache = counter_cache
     ps.prisma_client = fake_prisma
     try:
-        assert await _reseed_spend_from_db("spend:key:sk-abc:window:1h") == 0.0
-        assert await _reseed_spend_from_db("spend:team:team-1:window:1d") == 0.0
-        fake_prisma.db.litellm_verificationtoken.find_unique.assert_not_awaited()
-        fake_prisma.db.litellm_teamtable.find_unique.assert_not_awaited()
+        spend = await get_current_spend(
+            counter_key="spend:team_member:user-1:team-1",
+            fallback_spend=30.0,
+        )
+        assert spend == 362.0, (
+            f"expected DB reseed to return 362.0, got {spend} "
+            f"(fallback would have returned 30.0 and caused bypass)"
+        )
+        # Counter warmed so subsequent reads are fast
+        assert ("spend:team_member:user-1:team-1", 362.0) in [
+            (w["key"], w["value"]) for w in recorded_warms
+        ]
     finally:
+        ps.spend_counter_cache = orig_counter
+        ps.prisma_client = orig_prisma
+
+
+@pytest.mark.asyncio
+async def test_get_current_spend_uses_fallback_when_db_unavailable():
+    """
+    If prisma is unavailable and both counters are missing, the read path
+    must degrade to the caller-supplied fallback rather than raising.
+    """
+    from litellm.caching.dual_cache import DualCache
+    from litellm.proxy.proxy_server import get_current_spend
+
+    counter_cache = DualCache()
+    fake_redis = AsyncMock()
+    fake_redis.async_get_cache = AsyncMock(return_value=None)
+    counter_cache.redis_cache = fake_redis
+
+    import litellm.proxy.proxy_server as ps
+
+    orig_counter, orig_prisma = ps.spend_counter_cache, ps.prisma_client
+    ps.spend_counter_cache = counter_cache
+    ps.prisma_client = None  # simulate prisma unavailable
+    try:
+        spend = await get_current_spend(
+            counter_key="spend:team_member:user-1:team-1",
+            fallback_spend=15.5,
+        )
+        assert spend == 15.5
+    finally:
+        ps.spend_counter_cache = orig_counter
+        ps.prisma_client = orig_prisma
+
+
+@pytest.mark.asyncio
+async def test_get_current_spend_coalesces_concurrent_reseeds():
+    """
+    When several concurrent calls hit a cold counter on the same pod,
+    only one DB query should fire. The rest should wait for the lock,
+    re-check the warmed counter, and return without hitting the DB.
+    """
+    import asyncio as _asyncio
+
+    from litellm.caching.dual_cache import DualCache
+    from litellm.proxy.proxy_server import get_current_spend
+
+    counter_cache = DualCache()
+    counter_key = "spend:team_member:user-1:team-coalesce"
+
+    # Track DB query calls and inject a small delay so the concurrent
+    # callers actually overlap in the lock-acquire window.
+    db_call_count = 0
+
+    async def slow_find_unique(**kwargs):
+        nonlocal db_call_count
+        db_call_count += 1
+        await _asyncio.sleep(0.05)
+        row = MagicMock()
+        row.spend = 100.0
+        return row
+
+    fake_redis = AsyncMock()
+    redis_store: dict = {}
+
+    async def redis_get(key, **_):
+        return redis_store.get(key)
+
+    async def redis_increment(key, value, **_):
+        redis_store[key] = (redis_store.get(key) or 0.0) + value
+        return redis_store[key]
+
+    fake_redis.async_get_cache = AsyncMock(side_effect=redis_get)
+    fake_redis.async_increment = AsyncMock(side_effect=redis_increment)
+    counter_cache.redis_cache = fake_redis
+
+    fake_prisma = MagicMock()
+    fake_prisma.db.litellm_teammembership.find_unique = AsyncMock(
+        side_effect=slow_find_unique
+    )
+
+    import litellm.proxy.proxy_server as ps
+
+    orig_counter, orig_prisma = ps.spend_counter_cache, ps.prisma_client
+    ps.spend_counter_cache = counter_cache
+    ps.prisma_client = fake_prisma
+    try:
+        results = await _asyncio.gather(
+            *[
+                get_current_spend(counter_key=counter_key, fallback_spend=0.0)
+                for _ in range(5)
+            ]
+        )
+        assert results == [100.0] * 5, f"all callers should see DB value, got {results}"
+        assert (
+            db_call_count == 1
+        ), f"expected exactly 1 DB query for 5 concurrent reseeds, got {db_call_count}"
+    finally:
+        ps.spend_counter_cache = orig_counter
+        ps.prisma_client = orig_prisma
+
+
+@pytest.mark.asyncio
+async def test_get_current_spend_uses_db_zero_over_stale_fallback():
+    """
+    When DB returns spend=0 (e.g. just after a budget period reset), the
+    authoritative DB value must win over a stale non-zero fallback. The
+    fallback in production is the in-process team_membership.spend, which
+    can still hold the pre-reset value across pods.
+    """
+    from litellm.caching.dual_cache import DualCache
+    from litellm.proxy.proxy_server import get_current_spend
+
+    counter_cache = DualCache()
+    fake_redis = AsyncMock()
+    fake_redis.async_get_cache = AsyncMock(return_value=None)
+    counter_cache.redis_cache = fake_redis
+
+    db_row = MagicMock()
+    db_row.spend = 0.0
+    fake_prisma = MagicMock()
+    fake_prisma.db.litellm_teammembership.find_unique = AsyncMock(return_value=db_row)
+
+    import litellm.proxy.proxy_server as ps
+
+    orig_counter, orig_prisma = ps.spend_counter_cache, ps.prisma_client
+    ps.spend_counter_cache = counter_cache
+    ps.prisma_client = fake_prisma
+    try:
+        spend = await get_current_spend(
+            counter_key="spend:team_member:user-1:team-after-reset",
+            fallback_spend=42.0,
+        )
+        assert (
+            spend == 0.0
+        ), f"DB authoritative 0 must override stale fallback 42, got {spend}"
+    finally:
+        ps.spend_counter_cache = orig_counter
+        ps.prisma_client = orig_prisma
+
+
+@pytest.mark.asyncio
+async def test_concurrent_read_and_write_paths_share_one_db_query():
+    """
+    The read path (`get_current_spend`) and the write path
+    (`_init_and_increment_spend_counter`) both reseed cold counters from
+    the DB. They must share the per-counter lock so a concurrent pre-call
+    enforcement read and post-call increment for the same counter collapse
+    to one DB query, not two.
+    """
+    import asyncio as _asyncio
+
+    from litellm.caching.dual_cache import DualCache
+    from litellm.proxy.proxy_server import (
+        _init_and_increment_spend_counter,
+        get_current_spend,
+    )
+
+    counter_cache = DualCache()
+    counter_key = "spend:team_member:user-1:team-cross-path"
+
+    db_call_count = 0
+
+    async def slow_find_unique(**kwargs):
+        nonlocal db_call_count
+        db_call_count += 1
+        await _asyncio.sleep(0.05)
+        row = MagicMock()
+        row.spend = 50.0
+        return row
+
+    redis_store: dict = {}
+
+    async def redis_get(key, **_):
+        return redis_store.get(key)
+
+    async def redis_increment(key, value, **_):
+        redis_store[key] = (redis_store.get(key) or 0.0) + value
+        return redis_store[key]
+
+    fake_redis = AsyncMock()
+    fake_redis.async_get_cache = AsyncMock(side_effect=redis_get)
+    fake_redis.async_increment = AsyncMock(side_effect=redis_increment)
+    counter_cache.redis_cache = fake_redis
+
+    fake_prisma = MagicMock()
+    fake_prisma.db.litellm_teammembership.find_unique = AsyncMock(
+        side_effect=slow_find_unique
+    )
+
+    import litellm.proxy.proxy_server as ps
+
+    orig_counter, orig_prisma, orig_user = (
+        ps.spend_counter_cache,
+        ps.prisma_client,
+        ps.user_api_key_cache,
+    )
+    ps.spend_counter_cache = counter_cache
+    ps.prisma_client = fake_prisma
+    ps.user_api_key_cache = DualCache()
+    try:
+        results = await _asyncio.gather(
+            get_current_spend(counter_key=counter_key, fallback_spend=0.0),
+            _init_and_increment_spend_counter(
+                counter_key=counter_key,
+                source_cache_key="ignored",
+                increment=1.5,
+            ),
+            get_current_spend(counter_key=counter_key, fallback_spend=0.0),
+        )
+        assert (
+            db_call_count == 1
+        ), f"expected 1 DB query for concurrent read+write+read, got {db_call_count}"
+        # Read-path callers see the warmed counter; the write path's
+        # increment may or may not have landed by then, so accept either
+        # the seeded value or seeded+increment.
+        assert results[0] in (50.0, 51.5), f"got {results[0]}"
+        assert results[2] in (50.0, 51.5), f"got {results[2]}"
+    finally:
+        ps.spend_counter_cache = orig_counter
+        ps.prisma_client = orig_prisma
+        ps.user_api_key_cache = orig_user
+
+
+@pytest.mark.asyncio
+async def test_reseed_locks_dict_is_bounded():
+    """
+    `SpendCounterReseed._locks` is an LRU bounded at
+    `SPEND_COUNTER_RESEED_LOCKS_MAX_SIZE` to prevent unbounded growth in
+    long-lived deployments with high counter-key churn. Inserting more
+    than the cap evicts the oldest entries.
+    """
+    import litellm.constants as constants
+    from litellm.proxy.db.spend_counter_reseed import SpendCounterReseed
+
+    orig_locks = SpendCounterReseed._locks.copy()
+    SpendCounterReseed._locks.clear()
+    orig_max = constants.SPEND_COUNTER_RESEED_LOCKS_MAX_SIZE
+    constants.SPEND_COUNTER_RESEED_LOCKS_MAX_SIZE = 5
+    # The class reads the constant via module-level import, so patch the
+    # module-level name on the spend_counter_reseed module too.
+    import litellm.proxy.db.spend_counter_reseed as scr
+
+    orig_module_max = scr.SPEND_COUNTER_RESEED_LOCKS_MAX_SIZE
+    scr.SPEND_COUNTER_RESEED_LOCKS_MAX_SIZE = 5
+    try:
+        for i in range(7):
+            await SpendCounterReseed._get_lock(f"spend:key:test-key-{i}")
+        assert (
+            len(SpendCounterReseed._locks) == 5
+        ), f"got {len(SpendCounterReseed._locks)}"
+        # Oldest two evicted
+        assert "spend:key:test-key-0" not in SpendCounterReseed._locks
+        assert "spend:key:test-key-1" not in SpendCounterReseed._locks
+        # Most recent retained
+        assert "spend:key:test-key-6" in SpendCounterReseed._locks
+    finally:
+        constants.SPEND_COUNTER_RESEED_LOCKS_MAX_SIZE = orig_max
+        scr.SPEND_COUNTER_RESEED_LOCKS_MAX_SIZE = orig_module_max
+        SpendCounterReseed._locks.clear()
+        SpendCounterReseed._locks.update(orig_locks)
+
+
+@pytest.mark.asyncio
+async def test_reseed_warms_cache_even_on_zero_db_spend():
+    """
+    When DB returns 0.0 (fresh entity / just after reset), the cache must
+    still be warmed so subsequent reads hit the cache instead of issuing
+    another DB query. Skipping the warm causes O(requests) DB load on
+    zero-spend entities.
+    """
+    from litellm.caching.dual_cache import DualCache
+    from litellm.proxy.proxy_server import get_current_spend
+
+    counter_cache = DualCache()
+    counter_key = "spend:team_member:user-1:team-zero-warm"
+    redis_store: dict = {}
+
+    async def redis_get(key, **_):
+        return redis_store.get(key)
+
+    async def redis_increment(key, value, **_):
+        redis_store[key] = (redis_store.get(key) or 0.0) + value
+        return redis_store[key]
+
+    fake_redis = AsyncMock()
+    fake_redis.async_get_cache = AsyncMock(side_effect=redis_get)
+    fake_redis.async_increment = AsyncMock(side_effect=redis_increment)
+    counter_cache.redis_cache = fake_redis
+
+    db_call_count = 0
+
+    async def find_unique(**kwargs):
+        nonlocal db_call_count
+        db_call_count += 1
+        row = MagicMock()
+        row.spend = 0.0
+        return row
+
+    fake_prisma = MagicMock()
+    fake_prisma.db.litellm_teammembership.find_unique = AsyncMock(
+        side_effect=find_unique
+    )
+
+    import litellm.proxy.proxy_server as ps
+
+    orig_counter, orig_prisma = ps.spend_counter_cache, ps.prisma_client
+    ps.spend_counter_cache = counter_cache
+    ps.prisma_client = fake_prisma
+    try:
+        # First call: cold cache, hits DB, returns 0.
+        spend1 = await get_current_spend(counter_key=counter_key, fallback_spend=0.0)
+        # Second call: cache should be warmed at 0, no second DB query.
+        spend2 = await get_current_spend(counter_key=counter_key, fallback_spend=0.0)
+        assert spend1 == 0.0 and spend2 == 0.0
+        assert (
+            db_call_count == 1
+        ), f"second read should hit warmed cache, got {db_call_count} DB queries"
+        assert redis_store.get(counter_key) == 0.0, "cache must be warmed at 0"
+    finally:
+        ps.spend_counter_cache = orig_counter
         ps.prisma_client = orig_prisma

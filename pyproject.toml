@@ -1,6 +1,6 @@
 [project]
 name = "litellm"
-version = "1.83.12"
+version = "1.83.14"
 description = "Library to easily interface with LLM API providers"
 readme = "README.md"
 requires-python = ">=3.10, <3.14"
@@ -13,13 +13,13 @@ dependencies = [
     "fastuuid==0.14.0",
     "httpx==0.28.1",
     "openai==2.24.0",
-    "python-dotenv==1.0.1",
+    "python-dotenv==1.2.2",
     "tiktoken==0.12.0",
     "importlib-metadata==8.5.0",
     "tokenizers==0.22.2",
     "click==8.1.8",
     "jinja2==3.1.6",
-    "aiohttp==3.13.3",
+    "aiohttp==3.13.4",
     "pydantic==2.12.5",
     "jsonschema==4.23.0",
 ]
@@ -40,10 +40,10 @@ proxy = [
     "backoff==2.2.1",
     "pyyaml==6.0.3",
     "rq==2.7.0",
-    "orjson==3.11.5",
+    "orjson==3.11.6",
     "apscheduler==3.11.2",
     "fastapi-sso==0.19.0",
-    "PyJWT==2.11.0",
+    "PyJWT==2.12.0",
     "python-multipart==0.0.26",
     "cryptography==46.0.7",
     "pynacl==1.6.2",
@@ -52,8 +52,8 @@ proxy = [
     "azure-identity==1.25.2",
     "azure-storage-blob==12.28.0",
     "mcp==1.26.0",
-    "litellm-proxy-extras==0.4.68",
-    "litellm-enterprise==0.1.38",
+    "litellm-proxy-extras==0.4.69",
+    "litellm-enterprise==0.1.39",
     "RestrictedPython==8.1",
     "rich==13.9.4",
     "polars==1.38.1",
@@ -81,7 +81,7 @@ semantic-router = [
     "semantic-router==0.1.12; python_version < '3.14'",
     "aurelio-sdk==0.0.19; python_version < '3.14'",
 ]
-mlflow = ["mlflow==3.9.0"]
+mlflow = ["mlflow==3.11.1"]
 grpc = [
     # Newest non-yanked release older than the 30-day cutoff.
     "grpcio==1.78.0",
@@ -105,8 +105,8 @@ proxy-runtime = [
     "mangum==0.17.0",
     "azure-ai-contentsafety==1.0.0",
     "azure-storage-file-datalake==12.20.0",
-    "pypdf==6.7.5; python_version < '3.14'",
-    "llm-sandbox==0.3.31",
+    "pypdf==6.10.2; python_version < '3.14'",
+    "llm-sandbox==0.3.39",
     "detect-secrets==1.5.0",
 ]
 
@@ -166,7 +166,7 @@ ci = [
     # protobuf, Pillow is a compiled C extension).
     "tenacity==8.5.0",
     "google-generativeai==0.8.6",
-    "Pillow==12.1.1",
+    "Pillow==12.2.0",
     # Azure batch E2E tests still import psycopg2 directly.
     "psycopg2-binary==2.9.11",
     "pytest-codspeed==4.3.0",
@@ -236,7 +236,7 @@ source-exclude = [
 profile = "black"
 
 [tool.commitizen]
-version = "1.83.12"
+version = "1.83.14"
 version_files = [
     "pyproject.toml:^version",
 ]
