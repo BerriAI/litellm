@@ -7754,6 +7754,8 @@ class Router:
             )
         elif litellm_model_name_model_info is not None:
             model_info = litellm_model_name_model_info
+        elif custom_model_info is not None:
+            model_info = cast(ModelInfo, custom_model_info)
 
         return model_info
 

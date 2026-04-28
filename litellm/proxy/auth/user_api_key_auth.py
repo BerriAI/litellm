@@ -29,6 +29,7 @@ from litellm.proxy.auth.auth_checks import (
     _cache_key_object,
     _delete_cache_key_object,
     _get_user_role,
+    _is_model_cost_zero,
     _is_user_proxy_admin,
     _virtual_key_max_budget_alert_check,
     _virtual_key_max_budget_check,
@@ -318,7 +319,43 @@ def update_valid_token_with_end_user_params(
         valid_token.end_user_model_max_budget = end_user_params[
             "end_user_model_max_budget"
         ]
+    if end_user_params.get("end_user_max_budget") is not None:
+        valid_token.end_user_max_budget = end_user_params["end_user_max_budget"]
     return valid_token
+
+
+async def _enforce_end_user_budget_if_needed(
+    valid_token: UserAPIKeyAuth,
+    end_user_object: Optional[LiteLLM_EndUserTable],
+    request_data: dict,
+    route: str,
+    llm_router: Optional[Any],
+    proxy_logging_obj: ProxyLogging,
+) -> None:
+    model = get_model_from_request(request_data, route)
+    skip_budget_checks = False
+    if model is not None and llm_router is not None:
+        skip_budget_checks = _is_model_cost_zero(model=model, llm_router=llm_router)
+
+    if skip_budget_checks:
+        return
+
+    end_user_mb = valid_token.end_user_max_budget
+    if end_user_mb is None and end_user_object is not None:
+        budget_table = end_user_object.litellm_budget_table
+        end_user_mb = budget_table.max_budget if budget_table is not None else None
+
+    if (
+        end_user_mb is not None
+        and end_user_object is not None
+        and valid_token.end_user_id is not None
+    ):
+        await proxy_logging_obj.max_budget_limiter.is_end_user_within_budget(
+            end_user_id=valid_token.end_user_id,
+            end_user_max_budget=end_user_mb,
+            end_user_spend=end_user_object.spend,
+            route=route,
+        )
 
 
 # Reusable coordinator for global spend to prevent cache stampede
@@ -877,8 +914,6 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                     model = get_model_from_request(request_data, route)
                     skip_budget_checks = False
                     if model is not None and llm_router is not None:
-                        from litellm.proxy.auth.auth_checks import _is_model_cost_zero
-
                         skip_budget_checks = _is_model_cost_zero(
                             model=model, llm_router=llm_router
                         )
@@ -1080,6 +1115,15 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                     _end_user_object.object_permission
                 )
 
+            await _enforce_end_user_budget_if_needed(
+                valid_token=valid_token,
+                end_user_object=_end_user_object,
+                request_data=request_data,
+                route=route,
+                llm_router=llm_router,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+
             return valid_token
 
         if (
@@ -1145,6 +1189,20 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                 route=route,
                 start_time=start_time,
             )
+
+            _user_api_key_obj = update_valid_token_with_end_user_params(
+                valid_token=_user_api_key_obj, end_user_params=end_user_params
+            )
+
+            await _enforce_end_user_budget_if_needed(
+                valid_token=_user_api_key_obj,
+                end_user_object=_end_user_object,
+                request_data=request_data,
+                route=route,
+                llm_router=llm_router,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+
             asyncio.create_task(
                 _cache_key_object(
                     hashed_token=hash_token(master_key),
@@ -1152,10 +1210,6 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                     user_api_key_cache=user_api_key_cache,
                     proxy_logging_obj=proxy_logging_obj,
                 )
-            )
-
-            _user_api_key_obj = update_valid_token_with_end_user_params(
-                valid_token=_user_api_key_obj, end_user_params=end_user_params
             )
 
             return _user_api_key_obj
@@ -1284,8 +1338,6 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
             model = get_model_from_request(request_data, route)
             skip_budget_checks = False
             if model is not None and llm_router is not None:
-                from litellm.proxy.auth.auth_checks import _is_model_cost_zero
-
                 skip_budget_checks = _is_model_cost_zero(
                     model=model, llm_router=llm_router
                 )
@@ -1426,6 +1478,24 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                             end_user_id=valid_token.end_user_id,
                             end_user_model_max_budget=end_user_mmb,
                             model=current_model,
+                        )
+
+                    # Check 5c. End user max budget
+                    end_user_mb = valid_token.end_user_max_budget
+                    # Fallback in case end-user max budget not set on token
+                    if end_user_mb is None and _end_user_object is not None:
+                        budget_table = _end_user_object.litellm_budget_table
+                        end_user_mb = budget_table.max_budget if budget_table is not None else None         
+                    if (
+                        end_user_mb is not None
+                        and _end_user_object is not None
+                        and valid_token.end_user_id is not None
+                    ):
+                        await proxy_logging_obj.max_budget_limiter.is_end_user_within_budget(
+                            end_user_id=valid_token.end_user_id,
+                            end_user_max_budget=end_user_mb,
+                            end_user_spend=_end_user_object.spend,
+                            route=route,
                         )
 
             # Check 6: Additional Common Checks across jwt + key auth
@@ -1904,37 +1974,66 @@ async def _run_post_custom_auth_checks(
             llm_router=llm_router,
         )
 
+    # 2a. Check if model has zero cost - if so, skip all budget checks
+    model = get_model_from_request(request_data, route)
+    skip_budget_checks = False
+    if model is not None and llm_router is not None:
+        skip_budget_checks = _is_model_cost_zero(model=model, llm_router=llm_router)
+        if skip_budget_checks:
+            verbose_proxy_logger.info(
+                f"Skipping all budget checks for zero-cost model: {model}"
+            )
+
     current_model = request_data.get("model", None)
 
-    # 3. Check key-level model_max_budget
-    max_budget_per_model = valid_token.model_max_budget
-    if (
-        max_budget_per_model is not None
-        and isinstance(max_budget_per_model, dict)
-        and len(max_budget_per_model) > 0
-        and current_model is not None
-        and valid_token.token is not None
-    ):
-        await model_max_budget_limiter.is_key_within_model_budget(
-            user_api_key_dict=valid_token,
-            model=current_model,
-        )
+    if not skip_budget_checks:
+        # 3. Check key-level model_max_budget
+        max_budget_per_model = valid_token.model_max_budget
+        if (
+            max_budget_per_model is not None
+            and isinstance(max_budget_per_model, dict)
+            and len(max_budget_per_model) > 0
+            and current_model is not None
+            and valid_token.token is not None
+        ):
+            await model_max_budget_limiter.is_key_within_model_budget(
+                user_api_key_dict=valid_token,
+                model=current_model,
+            )
 
-    # 4. Check end-user model_max_budget
-    end_user_mmb = valid_token.end_user_model_max_budget
-    if (
-        end_user_mmb is not None
-        and isinstance(end_user_mmb, dict)
-        and len(end_user_mmb) > 0
-        and current_model is not None
-        and valid_token.end_user_id is not None
-    ):
-        await model_max_budget_limiter.is_end_user_within_model_budget(
-            end_user_id=valid_token.end_user_id,
-            end_user_model_max_budget=end_user_mmb,
-            model=current_model,
-        )
+        # 4. Check end-user model_max_budget
+        end_user_mmb = valid_token.end_user_model_max_budget
+        if (
+            end_user_mmb is not None
+            and isinstance(end_user_mmb, dict)
+            and len(end_user_mmb) > 0
+            and current_model is not None
+            and valid_token.end_user_id is not None
+        ):
+            await model_max_budget_limiter.is_end_user_within_model_budget(
+                end_user_id=valid_token.end_user_id,
+                end_user_model_max_budget=end_user_mmb,
+                model=current_model,
+            )
 
+        # 4b. Check end-user max_budget
+        end_user_mb = valid_token.end_user_max_budget
+        # Fallback in case end-user max budget not set on token
+        if end_user_mb is None and end_user_object is not None:
+            budget_table = end_user_object.litellm_budget_table
+            end_user_mb = budget_table.max_budget if budget_table is not None else None
+        if (
+            end_user_mb is not None
+            and end_user_object is not None
+            and valid_token.end_user_id is not None
+        ):
+            await proxy_logging_obj.max_budget_limiter.is_end_user_within_budget(
+                end_user_id=valid_token.end_user_id,
+                end_user_max_budget=end_user_mb,
+                end_user_spend=end_user_object.spend,
+                route=route,
+            )
+        
     # 5. Look up user object if user_id is set
     user_object = None
     if valid_token.user_id is not None:
@@ -2008,7 +2107,7 @@ async def _run_post_custom_auth_checks(
             llm_router=llm_router,
             proxy_logging_obj=proxy_logging_obj,
             valid_token=valid_token,
-            skip_budget_checks=False,
+            skip_budget_checks=skip_budget_checks,
             project_object=_project_obj,
         )
 

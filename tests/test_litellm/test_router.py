@@ -1955,6 +1955,25 @@ def test_get_deployment_model_info_base_model_flow():
             # Should return None when no model info is found
             assert result is None
 
+    # Test Case 6: Only custom model info exists (no model-name info)
+    mock_custom_only_info = {
+        "input_cost_per_token": 0.0,
+        "output_cost_per_token": 0.0,
+        "mode": "chat",
+        "litellm_provider": "openai",
+    }
+
+    with patch.object(litellm, "model_cost", {"custom-only-id": mock_custom_only_info}):
+        with patch.object(litellm, "get_model_info", return_value=None):
+            result = router.get_deployment_model_info(
+                model_id="custom-only-id", model_name="missing-model-name"
+            )
+
+            assert result is not None
+            assert result["input_cost_per_token"] == 0.0
+            assert result["output_cost_per_token"] == 0.0
+            assert result["litellm_provider"] == "openai"
+
     print("✓ All base model flow test cases passed!")
 
 

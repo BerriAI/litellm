@@ -5,7 +5,7 @@ from litellm.proxy.auth.user_api_key_auth import (
     _run_post_custom_auth_checks,
     update_valid_token_with_end_user_params,
 )
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy._types import LiteLLM_BudgetTable, LiteLLM_EndUserTable, UserAPIKeyAuth
 
 
 @pytest.mark.asyncio
@@ -79,6 +79,71 @@ async def test_custom_auth_run_post_custom_auth_checks_with_end_user_budget_exce
                     parent_otel_span=None,
                 )
             mock_budget_check.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_custom_auth_zero_cost_model_skips_budget_checks():
+    valid_token = UserAPIKeyAuth(
+        token="test_token",
+        end_user_id="test_user",
+        model_max_budget={"gpt-4": {"budget_limit": 10.0, "time_period": "1d"}},
+        end_user_model_max_budget={
+            "gpt-4": {"budget_limit": 10.0, "time_period": "1d"}
+        },
+        end_user_max_budget=5.0,
+    )
+    request_data = {"model": "gpt-4"}
+    end_user_object = LiteLLM_EndUserTable(
+        user_id="test_user",
+        spend=20.0,
+        litellm_budget_table=LiteLLM_BudgetTable(max_budget=5.0),
+        blocked=False,
+    )
+
+    with patch(
+        "litellm.proxy.auth.user_api_key_auth._lookup_end_user_and_apply_budget",
+        new_callable=AsyncMock,
+    ) as mock_lookup, patch(
+        "litellm.proxy.auth.user_api_key_auth._enforce_key_and_fallback_model_access",
+        new_callable=AsyncMock,
+    ), patch(
+        "litellm.proxy.auth.user_api_key_auth._is_model_cost_zero",
+        return_value=True,
+    ), patch(
+        "litellm.proxy.auth.user_api_key_auth.common_checks", new_callable=AsyncMock
+    ) as mock_common_checks, patch(
+        "litellm.proxy.proxy_server.general_settings",
+        {"custom_auth_run_common_checks": True},
+    ), patch(
+        "litellm.proxy.proxy_server.llm_router",
+        object(),
+    ), patch(
+        "litellm.proxy.proxy_server.model_max_budget_limiter.is_key_within_model_budget",
+        new_callable=AsyncMock,
+    ) as mock_key_model_budget, patch(
+        "litellm.proxy.proxy_server.model_max_budget_limiter.is_end_user_within_model_budget",
+        new_callable=AsyncMock,
+    ) as mock_end_user_model_budget, patch(
+        "litellm.proxy.proxy_server.proxy_logging_obj.max_budget_limiter.is_end_user_within_budget",
+        new_callable=AsyncMock,
+    ) as mock_end_user_budget:
+        mock_lookup.return_value = (valid_token, end_user_object)
+        mock_common_checks.return_value = True
+
+        result = await _run_post_custom_auth_checks(
+            valid_token=valid_token,
+            request=None,
+            request_data=request_data,
+            route="/v1/chat/completions",
+            parent_otel_span=None,
+        )
+
+        assert result.token == "test_token"
+        mock_key_model_budget.assert_not_awaited()
+        mock_end_user_model_budget.assert_not_awaited()
+        mock_end_user_budget.assert_not_awaited()
+        mock_common_checks.assert_awaited_once()
+        assert mock_common_checks.await_args.kwargs["skip_budget_checks"] is True
 
 
 def test_update_valid_token_does_not_override_custom_auth_values_with_none():
