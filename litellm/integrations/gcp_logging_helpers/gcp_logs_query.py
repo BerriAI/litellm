@@ -171,13 +171,15 @@ async def query_parallel_requests_metrics_last_n_seconds(
         )
 
         # Execute the query using Client API
-        # Limit to 500 entries max for performance (we only need latest per token)
-        MAX_ENTRIES = 500
+        # Limit entries for performance (we only need latest per token)
+        MAX_ENTRIES = int(
+            os.environ.get("GCP_LOG_QUERY_MAX_ENTRIES", "15000")
+        )
         all_entries = []
         for entry in client.list_entries(
             filter_=filter_str,
             order_by="timestamp desc",  # Most recent first (by receipt time)
-            page_size=100,  # Request 100 entries per page
+            page_size=1000,  # Max page size to minimize API calls and avoid 429 rate limits
         ):
             all_entries.append(entry)
             if len(all_entries) >= MAX_ENTRIES:
@@ -280,13 +282,17 @@ async def get_concurrent_requests_from_gcp_logs(
         )
         return [], False
 
-    # Query last 5 seconds and get latest entry per token
+    # Query last N seconds and get latest entry per token
+    # Default: 60 seconds (1 minute), configurable via GCP_LOG_QUERY_TIME_WINDOW_SECONDS
+    time_window = int(
+        os.environ.get("GCP_LOG_QUERY_TIME_WINDOW_SECONDS", "60")
+    )
     metrics = await query_parallel_requests_metrics_last_n_seconds(
         target_timestamp=target_timestamp,
         project_id=project_id,
         api_key_filter=api_key_filter,
         key_alias_filter=key_alias_filter,
-        time_window_seconds=5,
+        time_window_seconds=time_window,
     )
 
     if not metrics:
