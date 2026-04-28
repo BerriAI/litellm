@@ -2692,6 +2692,23 @@ async def can_key_call_model(
     Raises:
         - Exception: If token not allowed to call model
     """
+    key_access_group_ids = valid_token.access_group_ids or []
+    # When access_group_ids is set but models is empty, resolve the groups first.
+    # An empty models list normally grants all-model access, but if access_group_ids
+    # is explicitly configured it should constrain access to only the models in
+    # those groups — not silently bypass this check.
+    if key_access_group_ids and not valid_token.models:
+        models_from_groups = await _get_models_from_access_groups(
+            access_group_ids=key_access_group_ids,
+        )
+        return _can_object_call_model(
+            model=model,
+            llm_router=llm_router,
+            models=models_from_groups,
+            team_model_aliases=valid_token.team_model_aliases,
+            team_id=valid_token.team_id,
+            object_type="key",
+        )
     try:
         return _can_object_call_model(
             model=model,
@@ -2703,7 +2720,6 @@ async def can_key_call_model(
         )
     except ProxyException:
         # Fallback: check key's access_group_ids
-        key_access_group_ids = valid_token.access_group_ids or []
         if key_access_group_ids:
             models_from_groups = await _get_models_from_access_groups(
                 access_group_ids=key_access_group_ids,
@@ -2751,20 +2767,37 @@ async def can_team_access_model(
     1. First checks native team-level model permissions (current implementation)
     2. If not allowed natively, falls back to access_group_ids on the team
     """
+    team_access_group_ids = (
+        (team_object.access_group_ids or []) if team_object else []
+    )
+    team_models = team_object.models if team_object else []
+    # When access_group_ids is set but models is empty, resolve the groups first.
+    # An empty models list normally grants all-model access, but if access_group_ids
+    # is explicitly configured it should constrain access to only the models in
+    # those groups — not silently bypass this check.
+    if team_access_group_ids and not team_models:
+        models_from_groups = await _get_models_from_access_groups(
+            access_group_ids=team_access_group_ids,
+        )
+        return _can_object_call_model(
+            model=model,
+            llm_router=llm_router,
+            models=models_from_groups,
+            team_model_aliases=team_model_aliases,
+            team_id=team_object.team_id if team_object else None,
+            object_type="team",
+        )
     try:
         return _can_object_call_model(
             model=model,
             llm_router=llm_router,
-            models=team_object.models if team_object else [],
+            models=team_models,
             team_model_aliases=team_model_aliases,
             team_id=team_object.team_id if team_object else None,
             object_type="team",
         )
     except ProxyException:
         # Fallback: check team's access_group_ids
-        team_access_group_ids = (
-            (team_object.access_group_ids or []) if team_object else []
-        )
         if team_access_group_ids:
             models_from_groups = await _get_models_from_access_groups(
                 access_group_ids=team_access_group_ids,

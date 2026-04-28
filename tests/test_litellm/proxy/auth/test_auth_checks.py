@@ -1780,3 +1780,117 @@ async def test_team_member_budget_check_reads_from_spend_counter():
                 proxy_logging_obj=proxy_logging_obj,
             )
         assert exc_info.value.current_cost == 1.5
+
+
+@pytest.mark.asyncio
+async def test_can_key_call_model_access_group_ids_with_empty_models_denied():
+    """
+    Regression test for https://github.com/BerriAI/litellm/issues/26656.
+    When a key has access_group_ids set but no explicit models, the access
+    group constraint must be enforced — not silently bypassed by the
+    empty-models-means-all-access shortcut.
+    """
+    from litellm.proxy.auth.auth_checks import can_key_call_model
+
+    valid_token = UserAPIKeyAuth(
+        token="test-token",
+        models=[],  # empty → would normally mean all-model access
+        access_group_ids=["group-uuid-1"],
+    )
+
+    # The access group only contains "gpt-4o" — not "gpt-4-turbo"
+    with patch(
+        "litellm.proxy.auth.auth_checks._get_models_from_access_groups",
+        new_callable=AsyncMock,
+        return_value=["gpt-4o"],
+    ):
+        with pytest.raises(ProxyException):
+            await can_key_call_model(
+                model="gpt-4-turbo",
+                llm_model_list=None,
+                valid_token=valid_token,
+                llm_router=None,
+            )
+
+
+@pytest.mark.asyncio
+async def test_can_key_call_model_access_group_ids_with_empty_models_allowed():
+    """
+    When a key has access_group_ids set and no explicit models, a model that
+    IS in the access group should be allowed.
+    """
+    from litellm.proxy.auth.auth_checks import can_key_call_model
+
+    valid_token = UserAPIKeyAuth(
+        token="test-token",
+        models=[],
+        access_group_ids=["group-uuid-1"],
+    )
+
+    with patch(
+        "litellm.proxy.auth.auth_checks._get_models_from_access_groups",
+        new_callable=AsyncMock,
+        return_value=["gpt-4o"],
+    ):
+        result = await can_key_call_model(
+            model="gpt-4o",
+            llm_model_list=None,
+            valid_token=valid_token,
+            llm_router=None,
+        )
+    assert result is True
+
+
+@pytest.mark.asyncio
+async def test_can_team_access_model_access_group_ids_with_empty_models_denied():
+    """
+    Regression test for https://github.com/BerriAI/litellm/issues/26656.
+    When a team has access_group_ids set but no explicit models, the access
+    group constraint must be enforced for team-level checks too.
+    """
+    from litellm.proxy.auth.auth_checks import can_team_access_model
+
+    team_object = LiteLLM_TeamTable(
+        team_id="test-team",
+        models=[],
+        access_group_ids=["group-uuid-2"],
+    )
+
+    with patch(
+        "litellm.proxy.auth.auth_checks._get_models_from_access_groups",
+        new_callable=AsyncMock,
+        return_value=["gpt-4o"],
+    ):
+        with pytest.raises(ProxyException):
+            await can_team_access_model(
+                model="gpt-4-turbo",
+                team_object=team_object,
+                llm_router=None,
+            )
+
+
+@pytest.mark.asyncio
+async def test_can_team_access_model_access_group_ids_with_empty_models_allowed():
+    """
+    When a team has access_group_ids set and no explicit models, a model
+    that IS in the access group should be allowed.
+    """
+    from litellm.proxy.auth.auth_checks import can_team_access_model
+
+    team_object = LiteLLM_TeamTable(
+        team_id="test-team",
+        models=[],
+        access_group_ids=["group-uuid-2"],
+    )
+
+    with patch(
+        "litellm.proxy.auth.auth_checks._get_models_from_access_groups",
+        new_callable=AsyncMock,
+        return_value=["gpt-4o"],
+    ):
+        result = await can_team_access_model(
+            model="gpt-4o",
+            team_object=team_object,
+            llm_router=None,
+        )
+    assert result is True
