@@ -1,8 +1,36 @@
+from unittest.mock import patch
+
 import pytest
 
+import litellm
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     VertexGeminiConfig,
 )
+
+# Keys that _get_model_info_helper resolves to for Flash models when the remote
+# model_cost JSON is used (which won't have the flag until after this PR merges).
+_FLASH_MODEL_COST_KEYS = [
+    "gemini-2.5-flash",
+    "gemini/gemini-2.5-flash",
+    "gemini-2.5-flash-lite",
+    "gemini/gemini-2.5-flash-lite",
+]
+
+
+@pytest.fixture()
+def flash_model_cost_flags():
+    """Inject supports_thinking_budget_zero=True into model_cost for Flash models.
+
+    In CI, litellm fetches the remote model_cost JSON from GitHub main, which
+    won't have this flag until after the PR merges. Patching model_cost here
+    makes tests independent of the remote file state.
+    """
+    patch_entries = {
+        key: {**litellm.model_cost.get(key, {}), "supports_thinking_budget_zero": True}
+        for key in _FLASH_MODEL_COST_KEYS
+    }
+    with patch.dict(litellm.model_cost, patch_entries):
+        yield
 
 
 class TestMapThinkingParamBudgetZero:
@@ -22,7 +50,7 @@ class TestMapThinkingParamBudgetZero:
         )
         assert "thinkingBudget" not in result
 
-    def test_flash_budget_zero_emits_thinking_budget(self):
+    def test_flash_budget_zero_emits_thinking_budget(self, flash_model_cost_flags):
         result = VertexGeminiConfig._map_thinking_param(
             thinking_param={"type": "enabled", "budget_tokens": 0},
             model="gemini-2.5-flash",
@@ -45,7 +73,7 @@ class TestMapThinkingParamBudgetZero:
         assert result.get("thinkingBudget") == 1024
         assert result.get("includeThoughts") is True
 
-    def test_model_supports_thinking_budget_zero_flash(self):
+    def test_model_supports_thinking_budget_zero_flash(self, flash_model_cost_flags):
         assert VertexGeminiConfig._model_supports_thinking_budget_zero("gemini-2.5-flash") is True
         assert VertexGeminiConfig._model_supports_thinking_budget_zero("gemini/gemini-2.5-flash") is True
         assert VertexGeminiConfig._model_supports_thinking_budget_zero("gemini-2.5-flash-lite") is True

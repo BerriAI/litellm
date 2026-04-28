@@ -454,23 +454,36 @@ def test_gemini_thinking():
 
 def test_gemini_thinking_budget_0():
     litellm._turn_on_debug()
+    from unittest.mock import patch
     from litellm.types.utils import Message, CallTypes
     from litellm.utils import return_raw_request
     import json
 
-    raw_request = return_raw_request(
-        endpoint=CallTypes.completion,
-        kwargs={
-            "model": "gemini/gemini-2.5-flash",
-            "messages": [
-                {
-                    "role": "user",
-                    "content": "Explain the concept of Occam's Razor and provide a simple, everyday example",
-                }
-            ],
-            "thinking": {"type": "enabled", "budget_tokens": 0},
-        },
-    )
+    # Inject supports_thinking_budget_zero so the translation layer emits
+    # thinkingBudget=0 for Flash regardless of whether the remote JSON has the
+    # flag yet (CI fetches GitHub main which lags behind this PR).
+    # _map_thinking_param receives the stripped model name ("gemini-2.5-flash"),
+    # which resolves to key "gemini-2.5-flash" in model_cost (vertex_ai provider).
+    flash_cost_patch = {
+        "gemini-2.5-flash": {
+            **litellm.model_cost.get("gemini-2.5-flash", {}),
+            "supports_thinking_budget_zero": True,
+        }
+    }
+    with patch.dict(litellm.model_cost, flash_cost_patch):
+        raw_request = return_raw_request(
+            endpoint=CallTypes.completion,
+            kwargs={
+                "model": "gemini/gemini-2.5-flash",
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": "Explain the concept of Occam's Razor and provide a simple, everyday example",
+                    }
+                ],
+                "thinking": {"type": "enabled", "budget_tokens": 0},
+            },
+        )
     print(json.dumps(raw_request, indent=4, default=str))
     assert "0" in json.dumps(raw_request["raw_request_body"])
 
@@ -1629,21 +1642,34 @@ async def test_gemini_flash_to_pro_fallback_thinking_budget_zero():
         VertexGeminiConfig,
     )
 
-    # Translation-layer check: Pro must not receive thinkingBudget=0
-    pro_config = VertexGeminiConfig._map_thinking_param(
-        thinking_param={"type": "enabled", "budget_tokens": 0},
-        model="gemini-2.5-pro",
-    )
-    assert "thinkingBudget" not in pro_config, (
-        "thinkingBudget=0 must not be sent to Pro — it causes a 400 INVALID_ARGUMENT"
-    )
+    # Patch model_cost to declare Flash support for thinkingBudget=0.
+    # In CI, litellm fetches the remote JSON from GitHub main which won't have
+    # this flag until after the PR merges, so we inject it here explicitly.
+    # _map_thinking_param receives the stripped model name ("gemini-2.5-flash"),
+    # which resolves to key "gemini-2.5-flash" in model_cost (vertex_ai provider).
+    flash_cost_patch = {
+        "gemini-2.5-flash": {
+            **litellm.model_cost.get("gemini-2.5-flash", {}),
+            "supports_thinking_budget_zero": True,
+        }
+    }
 
-    # Flash must still receive thinkingBudget=0 (it supports disabling thinking)
-    flash_config = VertexGeminiConfig._map_thinking_param(
-        thinking_param={"type": "enabled", "budget_tokens": 0},
-        model="gemini-2.5-flash",
-    )
-    assert flash_config.get("thinkingBudget") == 0
+    with patch.dict(litellm.model_cost, flash_cost_patch):
+        # Translation-layer check: Pro must not receive thinkingBudget=0
+        pro_config = VertexGeminiConfig._map_thinking_param(
+            thinking_param={"type": "enabled", "budget_tokens": 0},
+            model="gemini-2.5-pro",
+        )
+        assert "thinkingBudget" not in pro_config, (
+            "thinkingBudget=0 must not be sent to Pro — it causes a 400 INVALID_ARGUMENT"
+        )
+
+        # Flash must still receive thinkingBudget=0 (it supports disabling thinking)
+        flash_config = VertexGeminiConfig._map_thinking_param(
+            thinking_param={"type": "enabled", "budget_tokens": 0},
+            model="gemini-2.5-flash",
+        )
+        assert flash_config.get("thinkingBudget") == 0
 
     # Router-layer check: fallback from flash (429) to pro succeeds without 400
     router = Router(
