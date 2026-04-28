@@ -21,6 +21,7 @@ import httpx
 from httpx._types import CookieTypes, QueryParamTypes, RequestFiles
 
 import litellm
+from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
@@ -405,8 +406,13 @@ def _sync_streaming(
                     raw_bytes=raw_bytes,
                     provider_config=provider_config,
                 )
-            except Exception:
-                pass
+            except Exception as e:
+                verbose_logger.exception(
+                    "Failed to schedule passthrough spend-tracking flush "
+                    "in _sync_streaming; %d buffered chunks dropped: %s",
+                    len(raw_bytes),
+                    e,
+                )
 
 
 async def _async_streaming(
@@ -450,5 +456,10 @@ async def _async_streaming(
                         provider_config=provider_config,
                     )
                 )
-            except Exception:
-                pass
+            except Exception as e:
+                verbose_logger.exception(
+                    "Failed to schedule passthrough spend-tracking flush "
+                    "in _async_streaming; %d buffered chunks dropped: %s",
+                    len(raw_bytes),
+                    e,
+                )
