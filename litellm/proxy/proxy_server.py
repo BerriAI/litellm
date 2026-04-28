@@ -12617,23 +12617,30 @@ async def update_config(  # noqa: PLR0915
             await _upsert_section("environment_variables", existing)
 
         # litellm_settings: existing-wins merge (preserving legacy behavior),
-        # except success_callback is unioned with the request value.
+        # except success_callback is always normalized + deduped, and unioned
+        # with any existing list. Normalizing on every write — not only when
+        # an existing entry is present — keeps the DB free of mixed-case
+        # entries that delete_callback (lowercase lookup) cannot find.
         if config_info.litellm_settings is not None:
             existing = await _read_section("litellm_settings")
-            updated_litellm_settings = config_info.litellm_settings
+            updated_litellm_settings = dict(config_info.litellm_settings)
+
+            incoming_cb = updated_litellm_settings.get("success_callback")
+            if isinstance(incoming_cb, list):
+                updated_litellm_settings["success_callback"] = normalize_callback_names(
+                    incoming_cb
+                )
+
             merged = {**updated_litellm_settings, **existing}
-            if (
-                "success_callback" in updated_litellm_settings
-                and "success_callback" in existing
-                and isinstance(existing["success_callback"], list)
-                and isinstance(updated_litellm_settings["success_callback"], list)
-            ):
-                normalized = normalize_callback_names(
-                    updated_litellm_settings["success_callback"]
-                )
-                merged["success_callback"] = list(
-                    set(existing["success_callback"] + normalized)
-                )
+
+            incoming_cb = updated_litellm_settings.get("success_callback")
+            existing_cb = existing.get("success_callback")
+            if isinstance(incoming_cb, list):
+                if isinstance(existing_cb, list):
+                    merged["success_callback"] = list(set(existing_cb + incoming_cb))
+                else:
+                    merged["success_callback"] = list(set(incoming_cb))
+
             await _upsert_section("litellm_settings", merged)
 
         # router_settings: merge existing + request, request wins.
