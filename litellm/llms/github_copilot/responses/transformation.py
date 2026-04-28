@@ -33,7 +33,9 @@ from ..common_utils import (
 )
 
 if TYPE_CHECKING:
-    from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+    from litellm.litellm_core_utils.litellm_logging import (
+        Logging as _LiteLLMLoggingObj,
+    )
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
@@ -181,7 +183,8 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
             # where we have access to the input parameter
 
             verbose_logger.debug(
-                f"GitHub Copilot Responses API: Successfully configured headers for model {model}"
+                f"GitHub Copilot Responses API: Successfully configured headers"
+                f" for model {model}"
             )
 
             return merged_headers
@@ -248,7 +251,8 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
                     filtered_item[k] = v
 
             verbose_logger.debug(
-                f"GitHub Copilot reasoning item processed, encrypted_content preserved: {encrypted_content is not None}"
+                f"GitHub Copilot reasoning item processed, encrypted_content"
+                f" preserved: {encrypted_content is not None}"
             )
             return filtered_item
         return item
@@ -289,7 +293,8 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
         """
         if depth > max_depth:
             verbose_logger.warning(
-                f"[GitHub Copilot] Max recursion depth {max_depth} reached while checking for vision content"
+                f"[GitHub Copilot] Max recursion depth {max_depth} reached"
+                f" while checking for vision content"
             )
             return False
 
