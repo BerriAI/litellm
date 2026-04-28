@@ -1695,6 +1695,28 @@ class OrgMember(MemberBase):
     ]
 
 
+class SearchProviderCredentials(LiteLLMPydanticObjectBase):
+    """
+    Per-team credentials for a search provider.
+    """
+
+    api_key: Optional[str] = None
+    api_base: Optional[str] = None
+
+
+class TeamSearchProviderConfig(LiteLLMPydanticObjectBase):
+    """
+    Structured team-level search provider credentials.
+    Stored in team metadata under `search_provider_config`.
+    """
+
+    tavily: Optional[SearchProviderCredentials] = None
+    perplexity: Optional[SearchProviderCredentials] = None
+    brave: Optional[SearchProviderCredentials] = None
+    exa: Optional[SearchProviderCredentials] = None
+    serper: Optional[SearchProviderCredentials] = None
+
+
 class TeamBase(LiteLLMPydanticObjectBase):
     team_alias: Optional[str] = None
     team_id: Optional[str] = None
@@ -1703,7 +1725,7 @@ class TeamBase(LiteLLMPydanticObjectBase):
     members: list = []
     members_with_roles: List[Member] = []
     team_member_permissions: Optional[List[str]] = None
-    metadata: Optional[dict] = None
+    metadata: Optional[dict] = None  # may include search_provider_config
     tpm_limit: Optional[int] = None
     rpm_limit: Optional[int] = None
 
@@ -1821,6 +1843,13 @@ class UpdateTeamRequest(LiteLLMPydanticObjectBase):
     default_team_member_models: Optional[List[str]] = (
         None  # default allowed_models seeded onto new team members
     )
+
+
+class TeamSearchProviderConfigUpdateRequest(LiteLLMPydanticObjectBase):
+    team_id: str
+    provider: str
+    api_key: Optional[str] = None
+    api_base: Optional[str] = None
 
 
 class ResetTeamBudgetRequest(LiteLLMPydanticObjectBase):
