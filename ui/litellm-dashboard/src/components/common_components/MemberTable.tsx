@@ -22,6 +22,9 @@ export interface MemberTableProps {
   /** When true, renders top-right pagination controls instead of the default antd bottom pagination. */
   withPagination?: boolean;
   defaultPageSize?: number;
+  /** Controlled current page (optional). When provided, pair with onPageChange. */
+  currentPage?: number;
+  onPageChange?: (page: number) => void;
 }
 
 export default function MemberTable({
@@ -38,9 +41,14 @@ export default function MemberTable({
   loading,
   withPagination = false,
   defaultPageSize = 50,
+  currentPage: controlledPage,
+  onPageChange,
 }: MemberTableProps) {
-  const [page, setPage] = useState(1);
+  const [internalPage, setInternalPage] = useState(1);
   const [pageSize, setPageSize] = useState(defaultPageSize);
+
+  const page = controlledPage ?? internalPage;
+  const setPage = onPageChange ?? setInternalPage;
 
   const total = members.length;
   const totalPages = Math.max(1, Math.ceil(total / pageSize));

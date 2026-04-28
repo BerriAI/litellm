@@ -9,7 +9,7 @@ import { Input, Select, Space, Tooltip, Typography } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import MemberTable from "@/components/common_components/MemberTable";
 import { TeamData, TeamMembership } from "./TeamInfo";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 interface TeamMemberTabProps {
   teamData: TeamData;
@@ -31,6 +31,10 @@ export default function TeamMemberTab({
 }: TeamMemberTabProps) {
   const [searchText, setSearchText] = useState("");
   const [roleFilter, setRoleFilter] = useState<string | null>(null);
+  const [memberTablePage, setMemberTablePage] = useState(1);
+
+  // Reset to page 1 when filter/search changes — without remounting MemberTable
+  useEffect(() => { setMemberTablePage(1); }, [searchText, roleFilter]);
 
   // O(1) lookup instead of O(n) find() per member per column
   const membershipsMap = useMemo(
@@ -46,7 +50,12 @@ export default function TeamMemberTab({
   const filteredMembers = useMemo(() => {
     const q = searchText.trim().toLowerCase();
     return teamData.team_info.members_with_roles.filter((m) => {
-      if (roleFilter && m.role?.toLowerCase() !== roleFilter) return false;
+      if (roleFilter) {
+        const role = m.role?.toLowerCase() ?? "";
+        const isAdmin = role === "admin" || role === "org_admin";
+        if (roleFilter === "admin" && !isAdmin) return false;
+        if (roleFilter === "non-admin" && isAdmin) return false;
+      }
       if (!q) return true;
       return (
         m.user_email?.toLowerCase().includes(q) ||
@@ -226,16 +235,17 @@ export default function TeamMemberTab({
           style={{ width: 160 }}
           options={[
             { value: "admin", label: "Admin" },
-            { value: "user", label: "User" },
+            { value: "non-admin", label: "Non-admin" },
           ]}
           onChange={(v) => setRoleFilter(v ?? null)}
         />
       </Space>
       <MemberTable
-        key={`${searchText}::${roleFilter}`}
         members={filteredMembers}
         canEdit={canEditTeam}
         withPagination
+        currentPage={memberTablePage}
+        onPageChange={setMemberTablePage}
         onEdit={(record) => {
           const membership = membershipsMap.get(record.user_id ?? "");
           const enhancedMember = {
