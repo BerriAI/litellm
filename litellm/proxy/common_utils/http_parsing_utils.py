@@ -12,6 +12,8 @@ from litellm.proxy.common_utils.callback_utils import (
 )
 from litellm.types.router import Deployment
 
+_JSON_STRING_FORM_FIELDS = ("metadata", "litellm_metadata", "user_config")
+
 
 async def _read_request_body(request: Optional[Request]) -> Dict:
     """
@@ -39,8 +41,7 @@ async def _read_request_body(request: Optional[Request]) -> Dict:
 
         if "form" in content_type:
             parsed_body = dict(await request.form())
-            if "metadata" in parsed_body and isinstance(parsed_body["metadata"], str):
-                parsed_body["metadata"] = json.loads(parsed_body["metadata"])
+            _decode_json_string_form_fields(parsed_body=parsed_body)
         else:
             # Read the request body
             body = await request.body()
@@ -94,6 +95,16 @@ async def _read_request_body(request: Optional[Request]) -> Dict:
             "Unexpected error reading request body - {}".format(e)
         )
         return {}
+
+
+def _decode_json_string_form_fields(parsed_body: Dict[str, Any]) -> None:
+    for field_name in _JSON_STRING_FORM_FIELDS:
+        if field_name in parsed_body and isinstance(parsed_body[field_name], str):
+            parsed_body[field_name] = json.loads(parsed_body[field_name])
+
+    tags = parsed_body.get("tags")
+    if isinstance(tags, str) and tags.lstrip().startswith("["):
+        parsed_body["tags"] = json.loads(tags)
 
 
 def _safe_get_request_parsed_body(request: Optional[Request]) -> Optional[dict]:
