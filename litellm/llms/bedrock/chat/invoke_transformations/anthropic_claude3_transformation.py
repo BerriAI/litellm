@@ -170,7 +170,9 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         anthropic_request.pop("model", None)
         anthropic_request.pop("stream", None)
         anthropic_request.pop("output_format", None)
-        if not _supports_factory(model=model, custom_llm_provider=None, key="supports_output_config"):
+        if not _supports_factory(
+            model=model, custom_llm_provider=None, key="supports_output_config"
+        ):
             anthropic_request.pop("output_config", None)
         if "anthropic_version" not in anthropic_request:
             anthropic_request["anthropic_version"] = self.anthropic_version
