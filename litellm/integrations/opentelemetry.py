@@ -1571,8 +1571,7 @@ class OpenTelemetry(CustomLogger):
             self.safe_set_attribute(
                 span=span,
                 key=SpanAttributes.LLM_SYSTEM.value,
-                value=litellm_params.get("custom_llm_provider", "Unknown"),
-            )
+                value=litellm_params.get("custom_llm_provider") or "Unknown",
 
             # The maximum number of tokens the LLM generates for a request.
             if optional_params.get("max_tokens"):
