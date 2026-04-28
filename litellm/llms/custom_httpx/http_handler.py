@@ -486,6 +486,8 @@ class AsyncHTTPHandler:
         params: Optional[dict] = None,
         headers: Optional[dict] = None,
         follow_redirects: Optional[bool] = None,
+        stream: bool = False,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
     ):
         # Set follow_redirects to UseClientDefault if None
         _follow_redirects = (
@@ -494,6 +496,24 @@ class AsyncHTTPHandler:
 
         params = params or {}
         params.update(HTTPHandler.extract_query_params(url))
+
+        if stream:
+            # Build and send an open SSE-style stream request. Caller is
+            # responsible for iterating ``response.aiter_lines()`` and
+            # eventually awaiting ``response.aclose()`` to release the
+            # underlying connection back to the pool.
+            req = self.client.build_request(
+                "GET",
+                url,
+                params=params,
+                headers=headers,
+                timeout=timeout if timeout is not None else self.timeout,
+            )
+            response = await self.client.send(
+                req, stream=True, follow_redirects=_follow_redirects
+            )
+            response.raise_for_status()
+            return response
 
         response = await self.client.get(
             url, params=params, headers=headers, follow_redirects=_follow_redirects  # type: ignore

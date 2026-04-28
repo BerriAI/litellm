@@ -2624,10 +2624,25 @@ class BaseLLMHTTPHandler:
         client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
         _is_async: bool = False,
         shared_session: Optional["ClientSession"] = None,
-    ) -> Union[ResponsesAPIResponse, Coroutine[Any, Any, ResponsesAPIResponse]]:
+        stream: bool = False,
+        starting_after: Optional[int] = None,
+        litellm_metadata: Optional[Dict[str, Any]] = None,
+    ) -> Union[
+        ResponsesAPIResponse,
+        BaseResponsesAPIStreamingIterator,
+        Coroutine[
+            Any, Any, Union[ResponsesAPIResponse, BaseResponsesAPIStreamingIterator]
+        ],
+    ]:
         """
         Get a response by ID
-        Uses GET /v1/responses/{response_id} endpoint in the responses API
+        Uses GET /v1/responses/{response_id} endpoint in the responses API.
+
+        When ``stream=True``, performs cursor-based stream resume per the OpenAI
+        Responses API spec — equivalent to
+        ``client.responses.retrieve(response_id, stream=True, starting_after=N)``
+        on the OpenAI Python SDK. The provider must support resume; OpenAI and
+        Azure OpenAI (api-version 2025-04-01-preview) are known to support it.
         """
         if _is_async:
             return self.async_get_responses(
@@ -2641,6 +2656,9 @@ class BaseLLMHTTPHandler:
                 timeout=timeout,
                 client=client,
                 shared_session=shared_session,
+                stream=stream,
+                starting_after=starting_after,
+                litellm_metadata=litellm_metadata,
             )
 
         if client is None or not isinstance(client, HTTPHandler):
@@ -2667,6 +2685,8 @@ class BaseLLMHTTPHandler:
             api_base=api_base,
             litellm_params=litellm_params,
             headers=headers,
+            stream=stream,
+            starting_after=starting_after,
         )
 
         ## LOGGING
@@ -2705,9 +2725,17 @@ class BaseLLMHTTPHandler:
         timeout: Optional[Union[float, httpx.Timeout]] = None,
         client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
         shared_session: Optional["ClientSession"] = None,
-    ) -> ResponsesAPIResponse:
+        stream: bool = False,
+        starting_after: Optional[int] = None,
+        litellm_metadata: Optional[Dict[str, Any]] = None,
+    ) -> Union[ResponsesAPIResponse, BaseResponsesAPIStreamingIterator]:
         """
-        Async version of get_responses
+        Async version of get_responses.
+
+        When ``stream=True``, returns a :class:`ResponsesAPIStreamingIterator`
+        that yields :class:`ResponsesAPIStreamingResponse` events parsed from
+        the upstream SSE stream — enabling cursor-based stream resume per the
+        OpenAI Responses API spec.
         """
         if client is None or not isinstance(client, AsyncHTTPHandler):
             verbose_logger.debug(
@@ -2738,6 +2766,8 @@ class BaseLLMHTTPHandler:
             api_base=api_base,
             litellm_params=litellm_params,
             headers=headers,
+            stream=stream,
+            starting_after=starting_after,
         )
 
         ## LOGGING
@@ -2752,6 +2782,34 @@ class BaseLLMHTTPHandler:
         )
 
         try:
+            if stream:
+                # Open an SSE-style stream against the retrieve endpoint and
+                # wrap it in the same iterator used for streaming POSTs so
+                # parsing, hooks, and logging stay uniform across paths.
+                response = await async_httpx_client.get(
+                    url=url,
+                    headers=headers,
+                    params=data,
+                    stream=True,
+                    timeout=timeout,
+                )
+                request_context: Dict[str, Any] = {
+                    "response_id": response_id,
+                    "stream": True,
+                    "starting_after": starting_after,
+                    "litellm_params": dict(litellm_params),
+                }
+                return ResponsesAPIStreamingIterator(
+                    response=response,
+                    model="",
+                    logging_obj=logging_obj,
+                    responses_api_provider_config=responses_api_provider_config,
+                    litellm_metadata=litellm_metadata,
+                    custom_llm_provider=custom_llm_provider,
+                    request_data=request_context,
+                    call_type=CallTypes.aresponses.value,
+                )
+
             response = await async_httpx_client.get(
                 url=url, headers=headers, params=data
             )

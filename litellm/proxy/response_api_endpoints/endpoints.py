@@ -527,6 +527,28 @@ async def get_response(
     # Normal provider response flow
     data = await _read_request_body(request=request)
     data["response_id"] = response_id
+
+    # Read cursor-based stream resume params from the query string. The
+    # OpenAI Python SDK sends ``client.responses.retrieve(id, stream=True,
+    # starting_after=N)`` as ``GET .../responses/{id}?stream=true&starting_after=N``
+    # — these never appear in the request body for a GET. Without this we
+    # silently drop them and return the cached non-stream response.
+    query_stream = request.query_params.get("stream")
+    if query_stream is not None and query_stream.lower() in ("true", "1"):
+        data["stream"] = True
+    query_starting_after = request.query_params.get("starting_after")
+    if query_starting_after is not None:
+        try:
+            data["starting_after"] = int(query_starting_after)
+        except ValueError:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Query parameter 'starting_after' must be an integer "
+                    f"sequence number, got {query_starting_after!r}."
+                ),
+            )
+
     processor = ProxyBaseLLMRequestProcessing(data=data)
     try:
         return await processor.base_process_llm_request(

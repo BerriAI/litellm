@@ -261,6 +261,8 @@ class ManusResponsesAPIConfig(OpenAIResponsesAPIConfig):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
+        stream: bool = False,
+        starting_after: Optional[int] = None,
     ) -> Tuple[str, Dict]:
         """
         Transform the get response API request into a URL and data.
@@ -269,6 +271,10 @@ class ManusResponsesAPIConfig(OpenAIResponsesAPIConfig):
         - GET /v1/responses/{response_id}
 
         Reference: https://open.manus.im/docs/openai-compatibility
+
+        Cursor-based stream resume (``stream`` / ``starting_after``) is not
+        supported by Manus; the arguments are accepted for signature parity
+        with the base class and silently ignored.
         """
         url = f"{api_base}/{response_id}"
         data: Dict = {}
