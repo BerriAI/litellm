@@ -1661,6 +1661,16 @@ def _sanitize_anthropic_tool_use_id(tool_use_id: str) -> str:
     return sanitized
 
 
+def _is_anthropic_document_data_uri(url: str) -> bool:
+    # Anthropic document blocks cover non-image mimes the API accepts via base64
+    # source (application/pdf, text/*). Match the mime-type prefix in a data URI.
+    match = re.match(r"data:([^;,]+)", url)
+    if not match:
+        return False
+    mime_type = match.group(1)
+    return mime_type.startswith("application/") or mime_type.startswith("text/")
+
+
 def convert_to_anthropic_tool_result(
     message: Union[ChatCompletionToolMessage, ChatCompletionFunctionMessage],
     force_base64: bool = False,
@@ -1698,14 +1708,24 @@ def convert_to_anthropic_tool_result(
     """
     anthropic_content: Union[
         str,
-        List[Union[AnthropicMessagesToolResultContent, AnthropicMessagesImageParam]],
+        List[
+            Union[
+                AnthropicMessagesToolResultContent,
+                AnthropicMessagesImageParam,
+                AnthropicMessagesDocumentParam,
+            ]
+        ],
     ] = ""
     if isinstance(message["content"], str):
         anthropic_content = message["content"]
     elif isinstance(message["content"], List):
         content_list = message["content"]
         anthropic_content_list: List[
-            Union[AnthropicMessagesToolResultContent, AnthropicMessagesImageParam]
+            Union[
+                AnthropicMessagesToolResultContent,
+                AnthropicMessagesImageParam,
+                AnthropicMessagesDocumentParam,
+            ]
         ] = []
         for content in content_list:
             if content["type"] == "text":
@@ -1720,21 +1740,62 @@ def convert_to_anthropic_tool_result(
                     text_content["cache_control"] = cache_control_value
                 anthropic_content_list.append(text_content)
             elif content["type"] == "image_url":
+                image_url_value = content["image_url"]
                 format = (
-                    content["image_url"].get("format")
-                    if isinstance(content["image_url"], dict)
+                    image_url_value.get("format")
+                    if isinstance(image_url_value, dict)
                     else None
                 )
-                _anthropic_image_param = create_anthropic_image_param(
-                    content["image_url"], format=format, is_bedrock_invoke=force_base64
+                url_str = (
+                    image_url_value.get("url")
+                    if isinstance(image_url_value, dict)
+                    else image_url_value
                 )
-                _anthropic_image_param = add_cache_control_to_content(
-                    anthropic_content_element=_anthropic_image_param,
+                # Data URIs with non-image mime types (e.g. application/pdf) must
+                # translate to Anthropic document blocks, not image blocks —
+                # wrapping a PDF in `type: "image"` is rejected by the API.
+                if isinstance(url_str, str) and _is_anthropic_document_data_uri(
+                    url_str
+                ):
+                    synth_file_message: ChatCompletionFileObject = {
+                        "type": "file",
+                        "file": {"file_data": url_str},
+                    }
+                    _document_block = anthropic_process_openai_file_message(
+                        synth_file_message
+                    )
+                    _document_block = add_cache_control_to_content(
+                        anthropic_content_element=cast(
+                            AnthropicMessagesDocumentParam, _document_block
+                        ),
+                        original_content_element=content,
+                    )
+                    anthropic_content_list.append(
+                        cast(AnthropicMessagesDocumentParam, _document_block)
+                    )
+                else:
+                    _anthropic_image_param = create_anthropic_image_param(
+                        image_url_value,
+                        format=format,
+                        is_bedrock_invoke=force_base64,
+                    )
+                    _anthropic_image_param = add_cache_control_to_content(
+                        anthropic_content_element=_anthropic_image_param,
+                        original_content_element=content,
+                    )
+                    anthropic_content_list.append(
+                        cast(AnthropicMessagesImageParam, _anthropic_image_param)
+                    )
+            elif content["type"] == "file":
+                file_content = cast(ChatCompletionFileObject, content)
+                _file_block = anthropic_process_openai_file_message(file_content)
+                _file_block = add_cache_control_to_content(
+                    anthropic_content_element=cast(
+                        AnthropicMessagesDocumentParam, _file_block
+                    ),
                     original_content_element=content,
                 )
-                anthropic_content_list.append(
-                    cast(AnthropicMessagesImageParam, _anthropic_image_param)
-                )
+                anthropic_content_list.append(_file_block)
 
         anthropic_content = anthropic_content_list
     anthropic_tool_result: Optional[AnthropicMessagesToolResultParam] = None
@@ -3977,6 +4038,27 @@ def _convert_to_bedrock_tool_call_result(
                     tool_result_content_blocks.append(
                         BedrockToolResultContentBlock(image=_block["image"])
                     )
+                elif "document" in _block:
+                    tool_result_content_blocks.append(
+                        BedrockToolResultContentBlock(document=_block["document"])
+                    )
+            elif content["type"] == "file":
+                file_obj = content.get("file") or {}
+                file_data = file_obj.get("file_data")
+                if isinstance(file_data, str):
+                    _file_block: BedrockContentBlock = (
+                        BedrockImageProcessor.process_image_sync(image_url=file_data)
+                    )
+                    if "document" in _file_block:
+                        tool_result_content_blocks.append(
+                            BedrockToolResultContentBlock(
+                                document=_file_block["document"]
+                            )
+                        )
+                    elif "image" in _file_block:
+                        tool_result_content_blocks.append(
+                            BedrockToolResultContentBlock(image=_file_block["image"])
+                        )
 
     message.get("name", "")
     id = str(message.get("tool_call_id", str(uuid.uuid4())))

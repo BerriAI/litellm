@@ -1885,3 +1885,113 @@ def test_metadata_filter_applies_to_azure_anthropic():
         headers={},
     )
     assert data.get("metadata") == {"user_id": "u2"}
+
+
+def test_anthropic_tool_result_openai_file_pdf_becomes_document():
+    """
+    OpenAI `{type: "file", file: {file_data: "data:application/pdf;..."}}` inside
+    a tool-message content list should translate to an Anthropic document block
+    inside the tool_result content. The existing helper
+    `anthropic_process_openai_file_message` already does this translation for
+    user messages; it must be reused on the tool-result path.
+    """
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        convert_to_anthropic_tool_result,
+    )
+
+    pdf_b64 = "JVBERi0xLjQKJeLjz9MK"
+    message = {
+        "tool_call_id": "toolu_pdf_1",
+        "role": "tool",
+        "name": "fetch_document",
+        "content": [
+            {
+                "type": "file",
+                "file": {
+                    "file_data": f"data:application/pdf;base64,{pdf_b64}",
+                    "filename": "summary.pdf",
+                },
+            },
+        ],
+    }
+
+    result = convert_to_anthropic_tool_result(message)
+
+    assert result["type"] == "tool_result"
+    assert result["tool_use_id"] == "toolu_pdf_1"
+    content = result["content"]
+    assert isinstance(content, list) and len(content) == 1
+    block = content[0]
+    assert block["type"] == "document"
+    assert block["source"]["type"] == "base64"
+    assert block["source"]["media_type"] == "application/pdf"
+    assert block["source"]["data"] == pdf_b64
+
+
+def test_anthropic_tool_result_image_url_pdf_data_uri_becomes_document():
+    """
+    Regression: a PDF sent as an `image_url` data URI on the tool-result path
+    must translate to an Anthropic document block (not an image block — Anthropic
+    rejects image blocks whose media_type is a non-image like application/pdf).
+    """
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        convert_to_anthropic_tool_result,
+    )
+
+    pdf_b64 = "JVBERi0xLjQKJeLjz9MK"
+    message = {
+        "tool_call_id": "toolu_pdf_img_1",
+        "role": "tool",
+        "name": "fetch_document",
+        "content": [
+            {
+                "type": "image_url",
+                "image_url": {
+                    "url": f"data:application/pdf;base64,{pdf_b64}",
+                },
+            },
+        ],
+    }
+
+    result = convert_to_anthropic_tool_result(message)
+
+    content = result["content"]
+    assert isinstance(content, list) and len(content) == 1
+    block = content[0]
+    assert block["type"] == "document"
+    assert block["source"]["media_type"] == "application/pdf"
+    assert block["source"]["data"] == pdf_b64
+
+
+def test_anthropic_tool_result_image_url_png_still_becomes_image():
+    """
+    Regression: image_url with a real image mime type must continue to translate
+    to an Anthropic image block. Locks in existing behavior after the
+    data-URI-mime-type branching for PDFs.
+    """
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        convert_to_anthropic_tool_result,
+    )
+
+    png_b64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgYGBgAAAABQABXvMqOgAAAABJRU5ErkJggg=="
+    message = {
+        "tool_call_id": "toolu_png_1",
+        "role": "tool",
+        "name": "fetch_image",
+        "content": [
+            {
+                "type": "image_url",
+                "image_url": {
+                    "url": f"data:image/png;base64,{png_b64}",
+                },
+            },
+        ],
+    }
+
+    result = convert_to_anthropic_tool_result(message)
+
+    content = result["content"]
+    assert isinstance(content, list) and len(content) == 1
+    block = content[0]
+    assert block["type"] == "image"
+    assert block["source"]["media_type"] == "image/png"
