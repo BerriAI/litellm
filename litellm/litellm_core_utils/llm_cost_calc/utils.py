@@ -984,7 +984,7 @@ class CostCalculatorUtils:
         elif custom_llm_provider == litellm.LlmProviders.OPENAI.value:
             # Check if this is a gpt-image model (token-based pricing)
             model_lower = model.lower()
-            if "gpt-image-1" in model_lower:
+            if "gpt-image-1" in model_lower or "gpt-image-2" in model_lower:
                 from litellm.llms.openai.image_generation.cost_calculator import (
                     cost_calculator as openai_gpt_image_cost_calculator,
                 )
@@ -1006,7 +1006,7 @@ class CostCalculatorUtils:
         elif custom_llm_provider == litellm.LlmProviders.AZURE.value:
             # Check if this is a gpt-image model (token-based pricing)
             model_lower = model.lower()
-            if "gpt-image-1" in model_lower:
+            if "gpt-image-1" in model_lower or "gpt-image-2" in model_lower:
                 from litellm.llms.openai.image_generation.cost_calculator import (
                     cost_calculator as openai_gpt_image_cost_calculator,
                 )
