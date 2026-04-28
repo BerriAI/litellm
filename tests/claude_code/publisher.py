@@ -642,24 +642,29 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             "ANTHROPIC_AUTH_TOKEN": DEFAULT_PROXY_API_KEY,
             "COMPAT_RESULTS_PATH": str(args.results),
         }
+        pytest_cmd = [
+            "uv",
+            "run",
+            "pytest",
+            "tests/claude_code/",
+            "--ignore=tests/claude_code/_driver_unit_tests",
+            "--ignore=tests/claude_code/_builder_unit_tests",
+            "--ignore=tests/claude_code/_publisher_unit_tests",
+            "--ignore=tests/claude_code/_pr_gate_unit_tests",
+        ]
+        # Operator escape hatch: PYTEST_K narrows the run to a single
+        # cell or feature for first-time validation after a CLI/proxy
+        # upgrade. The matrix builder fills cells we didn't touch with
+        # `not_tested`, so a PYTEST_K-narrowed run is safe to publish —
+        # though in practice it's used with --skip-publish.
+        pytest_k = os.environ.get("PYTEST_K", "").strip()
+        if pytest_k:
+            pytest_cmd.extend(["-k", pytest_k])
+            print(f"PYTEST_K set; narrowing pytest to: {pytest_k}", flush=True)
         # Run pytest from inside the worktree so it picks up the
         # checked-out tag's test code (and its conftest hook), not the
         # current process's working directory.
-        subprocess.run(
-            [
-                "uv",
-                "run",
-                "pytest",
-                "tests/claude_code/",
-                "--ignore=tests/claude_code/_driver_unit_tests",
-                "--ignore=tests/claude_code/_builder_unit_tests",
-                "--ignore=tests/claude_code/_publisher_unit_tests",
-                "--ignore=tests/claude_code/_pr_gate_unit_tests",
-            ],
-            env=env,
-            cwd=args.worktree,
-            check=False,
-        )
+        subprocess.run(pytest_cmd, env=env, cwd=args.worktree, check=False)
 
         if args.skip_publish:
             print("skip-publish: not opening a PR", flush=True)
