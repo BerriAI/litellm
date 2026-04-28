@@ -41,14 +41,9 @@ Group=mateo
 # is the standard `KEY=value` one line per env var.
 EnvironmentFile=-/etc/litellm-compat-matrix.env
 
-# Run from the dev checkout so `python -m tests.claude_code.publisher`
-# resolves; the publisher itself manages the separate worktree it
-# mutates per run.
 WorkingDirectory=%h/litellm/litellm
 
-# `uv run --frozen` reuses the dev checkout's venv. The publisher then
-# bootstraps its own worktree + venv for the proxy.
-ExecStart=/usr/bin/env -S uv run --frozen python -m tests.claude_code.publisher
+ExecStart=%h/litellm/litellm/tests/claude_code/cron_vm/run_daily.sh
 
 # 90 minutes is generous: cold runs do `git clone` + `uv sync` of a new
 # tag's lockfile, which can take a couple of minutes on a 2-vCPU VM,
