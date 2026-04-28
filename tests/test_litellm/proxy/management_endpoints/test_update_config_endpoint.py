@@ -208,6 +208,26 @@ def test_success_callback_unioned_with_existing(admin_auth, patched_proxy):
     assert set(stored) == {"langfuse", "prometheus"}
 
 
+def test_success_callback_normalized_on_first_write(admin_auth, patched_proxy):
+    """
+    Regression: when no litellm_settings row exists yet, incoming mixed-case
+    callbacks must still be lowercased and deduped before write. delete_callback
+    looks up by lowercase name, so a stored "SQS" would be unreachable, and a
+    follow-up /config/update with ["sqs"] would union mixed-case stored entries
+    with normalized incoming ones, producing duplicates.
+    """
+    prisma = patched_proxy()
+    client = TestClient(app)
+    resp = client.post(
+        "/config/update",
+        json={"litellm_settings": {"success_callback": ["SQS", "sQs"]}},
+    )
+
+    assert resp.status_code == 200
+    stored = prisma.db.litellm_config.rows["litellm_settings"]["success_callback"]
+    assert set(stored) == {"sqs"}
+
+
 def test_alert_to_webhook_url_enables_slack_alerting(admin_auth, patched_proxy):
     prisma = patched_proxy()
     client = TestClient(app)
