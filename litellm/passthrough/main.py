@@ -390,19 +390,29 @@ def _sync_streaming(
 ):
     from litellm.utils import executor
 
+    raw_bytes: List[bytes] = []
+    flush_scheduled = False
     try:
-        raw_bytes: List[bytes] = []
         for chunk in response.iter_bytes():  # type: ignore
             raw_bytes.append(chunk)
             yield chunk
-
-        executor.submit(
-            litellm_logging_obj.flush_passthrough_collected_chunks,
-            raw_bytes=raw_bytes,
-            provider_config=provider_config,
-        )
-    except Exception as e:
-        raise e
+    finally:
+        # Always flush collected chunks for spend tracking, even if the
+        # consumer terminates the generator early (GeneratorExit). Without
+        # this, an interrupted stream loses all per-chunk usage data
+        # because the post-loop flush never runs. See LIT-2642.
+        if not flush_scheduled and raw_bytes:
+            flush_scheduled = True
+            try:
+                executor.submit(
+                    litellm_logging_obj.flush_passthrough_collected_chunks,
+                    raw_bytes=raw_bytes,
+                    provider_config=provider_config,
+                )
+            except Exception:
+                # Don't mask the original exception (incl. GeneratorExit)
+                # if scheduling the flush itself fails.
+                pass
 
 
 async def _async_streaming(
@@ -411,23 +421,47 @@ async def _async_streaming(
     provider_config: "BasePassthroughConfig",
 ):
     iter_response = await response
+
+    # Validate response status before consuming the body so 4xx/5xx
+    # responses raise without entering the chunk-collection path.
     try:
         iter_response.raise_for_status()
-        raw_bytes: List[bytes] = []
-
-        async for chunk in iter_response.aiter_bytes():  # type: ignore
-            raw_bytes.append(chunk)
-            yield chunk
-
-        asyncio.create_task(
-            litellm_logging_obj.async_flush_passthrough_collected_chunks(
-                raw_bytes=raw_bytes,
-                provider_config=provider_config,
-            )
-        )
     except Exception:
         try:
             await iter_response.aclose()
         except Exception:
             pass
         raise
+
+    raw_bytes: List[bytes] = []
+    flush_scheduled = False
+    try:
+        async for chunk in iter_response.aiter_bytes():  # type: ignore
+            raw_bytes.append(chunk)
+            yield chunk
+    except Exception:
+        try:
+            await iter_response.aclose()
+        except Exception:
+            pass
+        raise
+    finally:
+        # Always flush collected chunks for spend tracking, even if the
+        # client disconnects mid-stream. On disconnect, Starlette calls
+        # aclose() on this generator, which raises GeneratorExit at the
+        # suspended `yield` — `except Exception` does not catch it, so
+        # the post-loop flush would otherwise be skipped and all
+        # captured per-chunk usage data lost. See LIT-2642.
+        if not flush_scheduled and raw_bytes:
+            flush_scheduled = True
+            try:
+                asyncio.create_task(
+                    litellm_logging_obj.async_flush_passthrough_collected_chunks(
+                        raw_bytes=raw_bytes,
+                        provider_config=provider_config,
+                    )
+                )
+            except Exception:
+                # Don't mask the original exception (incl. GeneratorExit)
+                # if scheduling the flush itself fails.
+                pass
