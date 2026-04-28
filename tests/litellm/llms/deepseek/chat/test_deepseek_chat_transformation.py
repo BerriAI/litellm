@@ -166,3 +166,57 @@ class TestDeepSeekThinkingParams:
         )
 
         assert "thinking" not in result
+
+
+class TestDeepSeekReasoningContentInjection:
+    """Test reasoning_content injection for DeepSeek V4 multi-turn thinking mode."""
+
+    def setup_method(self):
+        self.config = DeepSeekChatConfig()
+
+    def test_injects_empty_string_when_reasoning_content_missing(self):
+        """Assistant messages missing reasoning_content get reasoning_content='' injected."""
+        messages = [
+            {"role": "user", "content": "What is the weather in Tokyo?"},
+            {"role": "assistant", "content": None, "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "get_weather", "arguments": "{}"}}]},
+            {"role": "tool", "tool_call_id": "call_1", "content": "Sunny, 28C"},
+        ]
+        result = self.config._ensure_reasoning_content_on_assistant_messages(messages)
+        assert result[1]["reasoning_content"] == ""
+
+    def test_preserves_existing_reasoning_content(self):
+        """Assistant messages with existing reasoning_content are not overwritten."""
+        messages = [
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": "hello", "reasoning_content": "thinking about it"},
+        ]
+        result = self.config._ensure_reasoning_content_on_assistant_messages(messages)
+        assert result[1]["reasoning_content"] == "thinking about it"
+
+    def test_skips_non_assistant_messages(self):
+        """User and tool messages are not modified."""
+        messages = [
+            {"role": "user", "content": "hi"},
+            {"role": "tool", "tool_call_id": "call_1", "content": "result"},
+        ]
+        result = self.config._ensure_reasoning_content_on_assistant_messages(messages)
+        assert "reasoning_content" not in result[0]
+        assert "reasoning_content" not in result[1]
+
+    def test_injects_on_plain_assistant_message_without_reasoning_content(self):
+        """Plain assistant text messages missing reasoning_content also get it injected."""
+        messages = [
+            {"role": "user", "content": "What is 2+2?"},
+            {"role": "assistant", "content": "4"},
+        ]
+        result = self.config._ensure_reasoning_content_on_assistant_messages(messages)
+        assert result[1]["reasoning_content"] == ""
+
+    def test_transform_messages_injects_reasoning_content(self):
+        """_transform_messages calls injection before handing off to parent."""
+        messages = [
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": "hello"},
+        ]
+        result = self.config._transform_messages(messages=messages, model="deepseek-v4-pro")
+        assert result[1]["reasoning_content"] == ""
