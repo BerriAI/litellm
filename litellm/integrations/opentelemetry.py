@@ -1683,10 +1683,16 @@ class OpenTelemetry(CustomLogger):
             #   - "system_instructions" — Vertex AI Gemini chat-completion
             #   - "instructions"        — OpenAI Responses API
             #   - "system"              — Anthropic Messages API
+            # Use `is not None` rather than truthiness to avoid falsy
+            # values (e.g. []) falling through to the wrong kwarg.
             system_instructions = (
                 kwargs.get("system_instructions")
-                or kwargs.get("instructions")
-                or kwargs.get("system")
+                if kwargs.get("system_instructions") is not None
+                else (
+                    kwargs.get("instructions")
+                    if kwargs.get("instructions") is not None
+                    else kwargs.get("system")
+                )
             )
             if system_instructions:
                 if isinstance(system_instructions, str):
@@ -1770,14 +1776,52 @@ class OpenTelemetry(CustomLogger):
                     # list instead of "choices".  Each item with
                     # type="message" contains a "content" list of
                     # OutputText objects (type="output_text").
+                    output_items = response_obj.get("output")
                     output_messages = self._transform_responses_api_output_to_otel(
-                        response_obj.get("output")
+                        output_items
                     )
                     if output_messages:
                         self.safe_set_attribute(
                             span=span,
                             key=SpanAttributes.GEN_AI_OUTPUT_MESSAGES.value,
                             value=safe_dumps(output_messages),
+                        )
+
+                    # Emit per-tool-call span attributes (parity with
+                    # the choices branch that calls _tool_calls_kv_pair).
+                    # Convert Responses API function_call items to the
+                    # ChatCompletionMessageToolCall format expected by
+                    # _tool_calls_kv_pair.
+                    tool_calls = []
+                    for out_item in output_items:
+                        if (
+                            hasattr(out_item, "get")
+                            and out_item.get("type") == "function_call"
+                        ):
+                            tool_calls.append(
+                                {
+                                    "function": {
+                                        "name": out_item.get("name", ""),
+                                        "arguments": out_item.get("arguments", ""),
+                                    }
+                                }
+                            )
+                    if tool_calls:
+                        kv_pairs = OpenTelemetry._tool_calls_kv_pair(tool_calls)  # type: ignore
+                        for key, value in kv_pairs.items():
+                            self.safe_set_attribute(
+                                span=span,
+                                key=key,
+                                value=value,
+                            )
+
+                    # Extract finish reason from ResponsesAPIResponse.status
+                    status = response_obj.get("status")
+                    if status:
+                        self.safe_set_attribute(
+                            span=span,
+                            key=SpanAttributes.GEN_AI_RESPONSE_FINISH_REASONS.value,
+                            value=safe_dumps([status]),
                         )
 
                     # Extract finish reason from ResponsesAPIResponse.status
@@ -1884,7 +1928,7 @@ class OpenTelemetry(CustomLogger):
             transformed.append(transformed_msg)
         return transformed
 
-    def _transform_responses_api_output_to_otel(self, output: List[dict]) -> List[dict]:
+    def _transform_responses_api_output_to_otel(self, output: List) -> List[dict]:
         """
         Transform Responses API output items into OTEL GenAI 1.38 format.
 
@@ -1893,18 +1937,24 @@ class OpenTelemetry(CustomLogger):
         ``content`` list of ``OutputText`` objects with ``type="output_text"``
         and ``text`` fields.
 
+        Items may be plain dicts or Pydantic model instances (e.g.
+        ``ResponseOutputMessage``, ``ResponseFunctionToolCall``).  Both
+        expose a ``.get()`` method via ``BaseLiteLLMOpenAIResponseObject``,
+        so we use ``hasattr(item, "get")`` rather than ``isinstance(item,
+        dict)`` to accept either form.
+
         This method converts them to the same ``{"role": ..., "parts": [...]}``
         format used by ``_transform_choices_to_otel_semantic_conventions``.
         """
         transformed = []
         for item in output:
-            if not isinstance(item, dict):
+            if not hasattr(item, "get"):
                 continue
             if item.get("type") == "message":
                 role = item.get("role", "assistant")
                 parts = []
                 for content in item.get("content", []):
-                    if not isinstance(content, dict):
+                    if not hasattr(content, "get"):
                         continue
                     if content.get("type") == "output_text":
                         text = content.get("text", "")
