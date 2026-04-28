@@ -597,7 +597,14 @@ def process_items(schema, depth=0):
             f"Max depth of {DEFAULT_MAX_RECURSE_DEPTH} exceeded while processing schema. Please check the schema for excessive nesting."
         )
     if isinstance(schema, dict):
-        if "items" in schema and schema["items"] == {}:
+        # Vertex requires `items` whenever `type == "array"` (even inside anyOf).
+        # Normalize: empty `items: {}` and missing-items both become {"type": "object"}.
+        type_val = schema.get("type")
+        if (
+            isinstance(type_val, str)
+            and type_val.lower() == "array"
+            and ("items" not in schema or schema.get("items") == {})
+        ):
             schema["items"] = {"type": "object"}
         for key, value in schema.items():
             if isinstance(value, dict):
