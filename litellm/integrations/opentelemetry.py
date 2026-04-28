@@ -1571,7 +1571,8 @@ class OpenTelemetry(CustomLogger):
             self.safe_set_attribute(
                 span=span,
                 key=SpanAttributes.LLM_SYSTEM.value,
-                value=litellm_params.get("custom_llm_provider") or "Unknown",
+                value=litellm_params.get("custom_llm_provider", "Unknown"),
+            )
 
             # The maximum number of tokens the LLM generates for a request.
             if optional_params.get("max_tokens"):
@@ -1723,9 +1724,7 @@ class OpenTelemetry(CustomLogger):
                 choices = response_obj.get("choices")
                 if choices:
                     transformed_choices = (
-                        self._transform_choices_to_otel_semantic_conventions(
-                            choices
-                        )
+                        self._transform_choices_to_otel_semantic_conventions(choices)
                     )
                     self.safe_set_attribute(
                         span=span,
