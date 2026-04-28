@@ -1,27 +1,14 @@
-"""
-Regression tests for LIT-2642 — interrupted streaming responses must still
-flush collected chunks so spend is tracked even when the client disconnects
-mid-stream.
+"""Regression tests for LIT-2642 — interrupted streams must still flush usage."""
 
-Bedrock invoke streaming was the reported reproducer: the proxy passes the
-upstream stream through `_async_streaming` in `litellm/passthrough/main.py`,
-which collects bytes and triggers `async_flush_passthrough_collected_chunks`
-once the loop completes. When a FastAPI client disconnects mid-stream,
-Starlette calls `aclose()` on the async generator and raises `GeneratorExit`
-at the suspended `yield`. The previous `except Exception` branch did not
-catch `GeneratorExit`, so the post-loop flush was skipped and all per-chunk
-usage data was dropped.
-"""
-
+import asyncio
 from typing import List
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
 
 
 def _make_streaming_response(chunks: List[bytes]):
-    """Build a mock httpx.Response that streams the given chunks via aiter_bytes."""
     mock = MagicMock(spec=httpx.Response)
     mock.status_code = 200
     mock.headers = httpx.Headers({"content-type": "application/vnd.amazon.eventstream"})
@@ -42,9 +29,13 @@ def _make_logging_obj():
     return mock
 
 
+class _ImmediateExecutor:
+    def submit(self, fn, *args, **kwargs):
+        fn(*args, **kwargs)
+
+
 @pytest.mark.asyncio
 async def test_async_streaming_flushes_on_normal_completion():
-    """Baseline: full stream consumption flushes collected chunks once."""
     from litellm.passthrough.main import _async_streaming
 
     chunks = [b"chunk-1", b"chunk-2", b"chunk-3"]
@@ -66,9 +57,6 @@ async def test_async_streaming_flushes_on_normal_completion():
 
     assert received == chunks
 
-    # Allow the scheduled task to run.
-    import asyncio
-
     await asyncio.sleep(0)
 
     mock_logging_obj.async_flush_passthrough_collected_chunks.assert_called_once()
@@ -81,11 +69,6 @@ async def test_async_streaming_flushes_on_normal_completion():
 
 @pytest.mark.asyncio
 async def test_async_streaming_flushes_on_client_disconnect():
-    """
-    LIT-2642 regression: GeneratorExit (raised when the consumer disconnects
-    mid-stream) must still flush whatever chunks we already collected so
-    spend tracking captures the partial usage.
-    """
     from litellm.passthrough.main import _async_streaming
 
     chunks = [
@@ -107,15 +90,10 @@ async def test_async_streaming_flushes_on_client_disconnect():
         provider_config=provider_config,
     )
 
-    # Pull one chunk, then close the generator early — mirrors what
-    # Starlette does when the HTTP client disconnects mid-stream.
     received = [await gen.__anext__()]
     await gen.aclose()
 
     assert received == [chunks[0]]
-
-    # Allow the scheduled flush task to run.
-    import asyncio
 
     await asyncio.sleep(0)
 
@@ -123,15 +101,11 @@ async def test_async_streaming_flushes_on_client_disconnect():
     call_kwargs = (
         mock_logging_obj.async_flush_passthrough_collected_chunks.call_args.kwargs
     )
-    # Only the first chunk was consumed before disconnect; that's what we
-    # must hand off to the cost-tracking flush so partial usage isn't
-    # silently dropped.
     assert call_kwargs["raw_bytes"] == [chunks[0]]
 
 
 @pytest.mark.asyncio
 async def test_async_streaming_does_not_flush_on_4xx():
-    """Error responses must still raise without entering the flush path."""
     from litellm.passthrough.main import _async_streaming
 
     err_response = MagicMock(spec=httpx.Response)
@@ -162,17 +136,11 @@ async def test_async_streaming_does_not_flush_on_4xx():
         ):
             pass
 
-    # No bytes were collected, so no flush should have been scheduled.
     mock_logging_obj.async_flush_passthrough_collected_chunks.assert_not_called()
 
 
 @pytest.mark.asyncio
 async def test_async_streaming_flushes_on_upstream_exception_with_partial_data():
-    """
-    If the upstream connection drops mid-stream and aiter_bytes raises,
-    we still surface the exception, but partial chunks already collected
-    are flushed so spend tracking isn't fully lost.
-    """
     from litellm.passthrough.main import _async_streaming
 
     partial_chunks = [b"partial-chunk-1", b"partial-chunk-2"]
@@ -206,8 +174,6 @@ async def test_async_streaming_flushes_on_upstream_exception_with_partial_data()
 
     assert received == partial_chunks
 
-    import asyncio
-
     await asyncio.sleep(0)
 
     mock_logging_obj.async_flush_passthrough_collected_chunks.assert_called_once()
@@ -218,7 +184,6 @@ async def test_async_streaming_flushes_on_upstream_exception_with_partial_data()
 
 
 def test_sync_streaming_flushes_on_normal_completion():
-    """Baseline for the sync codepath."""
     from litellm.passthrough.main import _sync_streaming
 
     chunks = [b"a", b"b", b"c"]
@@ -234,13 +199,6 @@ def test_sync_streaming_flushes_on_normal_completion():
     mock_logging_obj.flush_passthrough_collected_chunks = MagicMock()
     provider_config = MagicMock()
 
-    # Use a synchronous in-process executor so we can assert immediately.
-    class _ImmediateExecutor:
-        def submit(self, fn, *args, **kwargs):
-            fn(*args, **kwargs)
-
-    from unittest.mock import patch
-
     with patch("litellm.utils.executor", _ImmediateExecutor()):
         received = list(
             _sync_streaming(
@@ -255,10 +213,6 @@ def test_sync_streaming_flushes_on_normal_completion():
 
 
 def test_sync_streaming_flushes_on_early_close():
-    """
-    Sync analog of LIT-2642: closing the generator early must still flush
-    so per-chunk usage data is not silently dropped.
-    """
     from litellm.passthrough.main import _sync_streaming
 
     chunks = [b"first", b"second", b"third"]
@@ -274,12 +228,6 @@ def test_sync_streaming_flushes_on_early_close():
     mock_logging_obj.flush_passthrough_collected_chunks = MagicMock()
     provider_config = MagicMock()
 
-    class _ImmediateExecutor:
-        def submit(self, fn, *args, **kwargs):
-            fn(*args, **kwargs)
-
-    from unittest.mock import patch
-
     with patch("litellm.utils.executor", _ImmediateExecutor()):
         gen = _sync_streaming(
             response=mock_response,
@@ -287,7 +235,6 @@ def test_sync_streaming_flushes_on_early_close():
             provider_config=provider_config,
         )
 
-        # Consume one chunk, then close — analog of a client disconnect.
         first = next(gen)
         gen.close()
 

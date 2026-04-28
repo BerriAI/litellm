@@ -36,14 +36,8 @@ class PassThroughStreamingHandler:
         passthrough_success_handler_obj: PassThroughEndpointLogging,
         url_route: str,
     ):
-        """
-        - Yields chunks from the response
-        - Collect non-empty chunks for post-processing (logging)
-        - Inject cost into chunks if include_cost_in_streaming_usage is enabled
-        """
         raw_bytes: List[bytes] = []
         logging_scheduled = False
-        # Extract model name for cost injection
         model_name = PassThroughStreamingHandler._extract_model_for_cost_injection(
             request_body=request_body,
             url_route=url_route,
@@ -59,7 +53,6 @@ class PassThroughStreamingHandler:
                     and model_name
                 ):
                     if endpoint_type == EndpointType.VERTEX_AI:
-                        # Only handle streamRawPredict (uses Anthropic format)
                         if "streamRawPredict" in url_route or "rawPredict" in url_route:
                             modified_chunk = ProxyBaseLLMRequestProcessing._process_chunk_with_cost_injection(
                                 chunk, model_name
@@ -78,17 +71,12 @@ class PassThroughStreamingHandler:
             verbose_proxy_logger.error(f"Error in chunk_processor: {str(e)}")
             raise
         finally:
-            # Always log collected chunks for spend tracking, even if the
-            # client disconnects mid-stream. On disconnect, Starlette calls
-            # aclose() on this async generator, which raises GeneratorExit
-            # at the suspended `yield` — `except Exception` does not catch
-            # it, so post-loop logging would otherwise be skipped and all
-            # captured per-chunk usage data lost (e.g. for interrupted
-            # Bedrock streams). See LIT-2642.
+            # GeneratorExit (raised on client disconnect) is not caught by
+            # `except Exception`; the finally block ensures partial usage
+            # still gets logged for spend tracking. See LIT-2642.
             if not logging_scheduled and raw_bytes:
                 logging_scheduled = True
                 try:
-                    end_time = datetime.now()
                     asyncio.create_task(
                         PassThroughStreamingHandler._route_streaming_logging_to_handler(
                             litellm_logging_obj=litellm_logging_obj,
@@ -98,7 +86,7 @@ class PassThroughStreamingHandler:
                             endpoint_type=endpoint_type,
                             start_time=start_time,
                             raw_bytes=raw_bytes,
-                            end_time=end_time,
+                            end_time=datetime.now(),
                         )
                     )
                 except Exception as e:

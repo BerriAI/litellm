@@ -397,10 +397,6 @@ def _sync_streaming(
             raw_bytes.append(chunk)
             yield chunk
     finally:
-        # Always flush collected chunks for spend tracking, even if the
-        # consumer terminates the generator early (GeneratorExit). Without
-        # this, an interrupted stream loses all per-chunk usage data
-        # because the post-loop flush never runs. See LIT-2642.
         if not flush_scheduled and raw_bytes:
             flush_scheduled = True
             try:
@@ -410,8 +406,6 @@ def _sync_streaming(
                     provider_config=provider_config,
                 )
             except Exception:
-                # Don't mask the original exception (incl. GeneratorExit)
-                # if scheduling the flush itself fails.
                 pass
 
 
@@ -422,8 +416,6 @@ async def _async_streaming(
 ):
     iter_response = await response
 
-    # Validate response status before consuming the body so 4xx/5xx
-    # responses raise without entering the chunk-collection path.
     try:
         iter_response.raise_for_status()
     except Exception:
@@ -446,12 +438,9 @@ async def _async_streaming(
             pass
         raise
     finally:
-        # Always flush collected chunks for spend tracking, even if the
-        # client disconnects mid-stream. On disconnect, Starlette calls
-        # aclose() on this generator, which raises GeneratorExit at the
-        # suspended `yield` — `except Exception` does not catch it, so
-        # the post-loop flush would otherwise be skipped and all
-        # captured per-chunk usage data lost. See LIT-2642.
+        # GeneratorExit (raised on client disconnect) is not caught by
+        # `except Exception`; the finally block ensures partial usage
+        # still gets flushed for spend tracking. See LIT-2642.
         if not flush_scheduled and raw_bytes:
             flush_scheduled = True
             try:
@@ -462,6 +451,4 @@ async def _async_streaming(
                     )
                 )
             except Exception:
-                # Don't mask the original exception (incl. GeneratorExit)
-                # if scheduling the flush itself fails.
                 pass
