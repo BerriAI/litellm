@@ -9,18 +9,29 @@ End-to-end orchestrator that runs on the isolated cron VM (per the PRD's
   4. Run `pytest tests/claude_code/` against the proxy.
   5. Build `compatibility-matrix.json` from the per-test results artifact
      using the Matrix JSON Builder (`matrix_builder.py`).
-  6. Direct-push the JSON to the docs repo's main branch using the
-     GitHub App installation token mounted as `DOCS_REPO_TOKEN`.
+  6. Open (or update) a pull request against the docs repo with the JSON
+     change, using the GitHub App installation token mounted as
+     `DOCS_REPO_TOKEN`. This is intentionally a PR rather than a direct
+     push so docs maintainers get to review each matrix update before it
+     ships to readers.
 
-The orchestration is thin glue over Docker, git, npm and subprocess — per
-the PRD's "Testing Decisions" section, it intentionally ships without a
-unit-test harness; the daily-cron failure surface is itself the test. The
-pure helpers below (commit message, image-name builder, file allowlist)
-are unit-tested under `_publisher_unit_tests/`.
+The orchestration is thin glue over Docker, git, npm, gh and subprocess —
+per the PRD's "Testing Decisions" section, it intentionally ships without
+a unit-test harness; the daily-cron failure surface is itself the test.
+The pure helpers below (commit message, image-name builder, file
+allowlist, PR title/body/branch builders) are unit-tested under
+`_publisher_unit_tests/`.
 
 The "only `compatibility-matrix.json` is ever committed" guarantee is
 enforced by `select_files_to_commit` rather than by token scope, since
 GitHub Apps cannot scope `contents: write` to a single file path.
+
+Idempotency: re-runs on the same UTC day with the same resolved versions
+land on the same branch (`compat-matrix/<litellm-version>-<claude-code-
+version>-<UTC-date>`). If the JSON is byte-identical to the docs repo's
+`main`, the script exits before pushing. If a PR is already open for the
+branch, `gh pr create` no-ops with a non-fatal message; we treat that as
+success.
 """
 
 from __future__ import annotations
@@ -44,6 +55,7 @@ DOCS_TARGET_PATH_DEFAULT = f"static/data/{DOCS_TARGET_BASENAME}"
 DOCKER_IMAGE_BASE = "ghcr.io/berriai/litellm"
 DEFAULT_PROXY_PORT = 4000
 DEFAULT_PROXY_API_KEY = "sk-cron-matrix"  # only used inside the ephemeral VM
+PR_BRANCH_PREFIX = "compat-matrix"
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_MANIFEST = REPO_ROOT / "tests" / "claude_code" / "manifest.yaml"
@@ -67,6 +79,100 @@ def commit_message_for_matrix(matrix: Mapping[str, Any]) -> str:
         f"generated_at: {generated_at}",
     ]
     return headline + "\n\n" + "\n".join(body_lines) + "\n"
+
+
+def pr_branch_name(
+    *, litellm_version: str, claude_code_version: str, date_utc: str
+) -> str:
+    """Deterministic branch name for the docs-repo PR.
+
+    Two cron runs that resolve to the same (litellm_version,
+    claude_code_version, UTC date) land on the same branch and therefore
+    the same PR — the second push is a fast-forward update of the
+    existing branch and `gh pr create` no-ops. This is the idempotency
+    contract the PRD's "Daily Cron" section requires.
+
+    Each component is required because:
+      - `litellm_version` distinguishes consecutive stable tags
+      - `claude_code_version` distinguishes a Claude-Code-only refresh
+      - `date_utc` lets us still produce a fresh branch when neither
+        upstream version moved but a maintainer manually re-ran the
+        workflow on a later day to recover from a transient failure
+    """
+    if not litellm_version:
+        raise ValueError("litellm_version must be a non-empty string")
+    if not claude_code_version:
+        raise ValueError("claude_code_version must be a non-empty string")
+    if not date_utc:
+        raise ValueError("date_utc must be a non-empty string")
+    return f"{PR_BRANCH_PREFIX}/{litellm_version}-{claude_code_version}-{date_utc}"
+
+
+def pr_title_for_matrix(matrix: Mapping[str, Any]) -> str:
+    """Single-line PR title with the resolved versions inline.
+
+    Mirrors the commit headline so notification subject lines and the
+    docs repo's PR list are immediately self-describing — maintainers
+    can triage from the inbox without opening the diff.
+    """
+    litellm_version = matrix.get("litellm_version", "")
+    claude_code_version = matrix.get("claude_code_version", "")
+    return (
+        "chore(compat-matrix): refresh for "
+        f"{litellm_version} + claude-code {claude_code_version}"
+    )
+
+
+def pr_body_for_matrix(matrix: Mapping[str, Any]) -> str:
+    """Markdown body summarising the matrix at a glance.
+
+    Renders one line per feature with the per-provider statuses inline,
+    so reviewers don't have to diff the JSON to see what changed since
+    the last refresh. The status column ordering follows the manifest
+    (which the matrix already reflects in `providers`), keeping the
+    table stable across days.
+    """
+    litellm_version = matrix.get("litellm_version", "")
+    claude_code_version = matrix.get("claude_code_version", "")
+    generated_at = matrix.get("generated_at", "")
+    providers = list(matrix.get("providers", []))
+    features = list(matrix.get("features", []))
+
+    lines: List[str] = [
+        "Automated daily refresh of the Claude Code compatibility matrix.",
+        "",
+        "| Field | Value |",
+        "| --- | --- |",
+        f"| litellm_version | `{litellm_version}` |",
+        f"| claude_code_version | `{claude_code_version}` |",
+        f"| generated_at | `{generated_at}` |",
+        "",
+        "## Per-feature results",
+        "",
+    ]
+    for feature in features:
+        if not isinstance(feature, Mapping):
+            continue
+        name = feature.get("name") or feature.get("id") or ""
+        cells = feature.get("providers") or {}
+        per_provider = ", ".join(
+            f"{provider}={(cells.get(provider) or {}).get('status', 'not_tested')}"
+            for provider in providers
+        )
+        lines.append(f"- **{name}**: {per_provider}")
+
+    lines.extend(
+        [
+            "",
+            "---",
+            "",
+            "Generated by `tests/claude_code/publisher.py`. "
+            "Close without merging if the diff looks wrong; the next "
+            "cron run will reopen with fresh results.",
+            "",
+        ]
+    )
+    return "\n".join(lines)
 
 
 def docker_image_for_tag(tag: str) -> str:
@@ -174,11 +280,19 @@ def publish(
     claude_code_version: str,
     generated_at: str,
 ) -> None:
-    """Build the matrix JSON and direct-push it to the docs repo's branch.
+    """Build the matrix JSON and open a PR against the docs repo.
 
     Only `docs_target_path` is staged from the docs-repo working tree —
     any other file produced by the build is dropped via
-    `select_files_to_commit`.
+    `select_files_to_commit`. The PR base is `docs_branch` (typically
+    `main`); the head branch name is deterministic per
+    `pr_branch_name(...)` so re-runs on the same UTC day update the
+    same PR rather than spawning a new one.
+
+    `docs_token` is the GitHub App installation token. It must be scoped
+    to `contents: write` AND `pull-requests: write` on `docs_repo`. The
+    workflow's `actions/create-github-app-token` step is responsible for
+    requesting both permissions.
     """
     matrix = build_from_paths(
         manifest_path=manifest_path,
@@ -187,6 +301,12 @@ def publish(
         claude_code_version=claude_code_version,
         generated_at=generated_at,
         output_path=matrix_output_path,
+    )
+
+    branch_name = pr_branch_name(
+        litellm_version=litellm_version,
+        claude_code_version=claude_code_version,
+        date_utc=generated_at[:10] if generated_at else _today_utc_date(),
     )
 
     with tempfile.TemporaryDirectory(prefix="docs-repo-") as workdir:
@@ -212,6 +332,12 @@ def publish(
             ["git", "config", "user.name", "litellm-compat-matrix-bot"],
             cwd=workdir_path,
         )
+        # Branch always starts from the freshly-cloned base. If the
+        # remote branch already exists from an earlier run on the same
+        # day, the later `git push --force-with-lease` reconciles —
+        # we'd rather present the latest matrix JSON than preserve a
+        # stale intermediate state.
+        _run(["git", "checkout", "-b", branch_name], cwd=workdir_path)
 
         target_in_docs = workdir_path / docs_target_path
         target_in_docs.parent.mkdir(parents=True, exist_ok=True)
@@ -230,22 +356,115 @@ def publish(
             _run(["git", "add", path], cwd=workdir_path)
 
         # Skip the push entirely if the JSON is byte-identical to what's
-        # already on main — keeps the docs-repo git log clean during
-        # idempotent reruns of the cron.
+        # already on `docs_branch` — keeps the docs-repo PR list clean
+        # during idempotent reruns of the cron.
         diff = subprocess.run(
             ["git", "diff", "--cached", "--quiet"],
             cwd=workdir_path,
             check=False,
         )
         if diff.returncode == 0:
-            print("matrix JSON unchanged; skipping push", flush=True)
+            print("matrix JSON unchanged; skipping PR", flush=True)
             return
 
         _run(
             ["git", "commit", "-m", commit_message_for_matrix(matrix)],
             cwd=workdir_path,
         )
-        _run(["git", "push", "origin", docs_branch], cwd=workdir_path)
+        # `--force-with-lease` so a same-day rerun updates the existing
+        # branch (and therefore the existing PR) safely; the lease check
+        # ensures we never overwrite a docs-maintainer's manual fixup
+        # commit on the same branch.
+        _run(
+            [
+                "git",
+                "push",
+                "--force-with-lease",
+                "--set-upstream",
+                "origin",
+                branch_name,
+            ],
+            cwd=workdir_path,
+        )
+
+        _open_or_update_pr(
+            docs_repo=docs_repo,
+            docs_branch=docs_branch,
+            head_branch=branch_name,
+            title=pr_title_for_matrix(matrix),
+            body=pr_body_for_matrix(matrix),
+            cwd=workdir_path,
+            token=docs_token,
+        )
+
+
+def _today_utc_date() -> str:
+    """Fallback UTC date string used when `generated_at` is missing.
+
+    Centralised so the branch-naming helper stays a pure function — it
+    refuses to inject the clock itself, which makes it trivially
+    unit-testable.
+    """
+    return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
+
+
+def _open_or_update_pr(
+    *,
+    docs_repo: str,
+    docs_branch: str,
+    head_branch: str,
+    title: str,
+    body: str,
+    cwd: Path,
+    token: str,
+) -> None:
+    """Open a PR via the `gh` CLI; treat 'already exists' as success.
+
+    `gh` is preinstalled on `ubuntu-latest` runners and is also the
+    pattern other workflows in this repo follow (e.g.
+    `auto_update_price_and_context_window.yml`). We pass the GitHub App
+    installation token through `GH_TOKEN` so `gh` doesn't fall back to
+    the runner's default `GITHUB_TOKEN`, which is scoped to this repo
+    and would not have write access on `litellm-docs`.
+    """
+    completed = subprocess.run(
+        [
+            "gh",
+            "pr",
+            "create",
+            "--repo",
+            docs_repo,
+            "--base",
+            docs_branch,
+            "--head",
+            head_branch,
+            "--title",
+            title,
+            "--body",
+            body,
+        ],
+        cwd=cwd,
+        env={**os.environ, "GH_TOKEN": token},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if completed.returncode == 0:
+        print(completed.stdout.strip(), flush=True)
+        return
+    stderr = completed.stderr or ""
+    # `gh pr create` exits non-zero when a PR already exists for the
+    # head branch. That's the idempotent re-run path and not an error:
+    # the branch was already force-pushed above, so the existing PR now
+    # carries the freshest matrix JSON.
+    if "a pull request for branch" in stderr and "already exists" in stderr:
+        print(
+            f"PR already exists for {head_branch}; updated branch in place",
+            flush=True,
+        )
+        return
+    sys.stderr.write(stderr)
+    raise RuntimeError(f"gh pr create failed with exit code {completed.returncode}")
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
@@ -380,9 +599,13 @@ __all__ = [
     "DOCS_TARGET_BASENAME",
     "DOCS_TARGET_PATH_DEFAULT",
     "DOCKER_IMAGE_BASE",
+    "PR_BRANCH_PREFIX",
     "commit_message_for_matrix",
     "docker_image_for_tag",
     "select_files_to_commit",
+    "pr_branch_name",
+    "pr_title_for_matrix",
+    "pr_body_for_matrix",
     "publish",
     "main",
 ]
