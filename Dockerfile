@@ -80,10 +80,6 @@ RUN apk add --no-cache bash openssl tzdata nodejs npm python3 py3-pip libsndfile
     # at /usr/local/lib/node_modules/npm/ remains fully functional.
     { apk del --no-cache npm 2>/dev/null || true; }
 
-# Install google-cloud-logging for concurrent request logs feature
-# Pinned to v3.x to avoid breaking changes in future major versions
-RUN pip install "google-cloud-logging>=3.0.0,<4.0.0"
-
 WORKDIR /app
 # Copy the current directory contents into the container at /app
 COPY . .

@@ -1,9 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import moment from "moment";
-import { concurrentRequestLogsPaginatedCall } from "../networking";
+import { concurrentRequestLogsCall } from "../networking";
 
 interface ConcurrentRequestLogsProps {
   accessToken: string | null;
@@ -55,32 +55,39 @@ export default function ConcurrentRequestLogs({
   const [matchFilter, setMatchFilter] = useState<MatchFilter>("all");
   const [currentPage, setCurrentPage] = useState(1);
 
-  // Fetch concurrent request logs (GCP Logs + SpendLogs combined)
-  // Server-side filtering for matchStatus - filtered server-side for proper pagination
+  // Fetch ALL concurrent request logs from server (no pagination).
+  // Pagination is handled client-side to avoid repeated GCP API calls on page changes.
+  // staleTime prevents refetches within 60s (GCP data doesn't change that fast).
   const logsData = useQuery<{
     data: ConcurrentRequestData[];
     total: number;
   }>({
-    queryKey: ["concurrentRequestLogs", targetTimestamp, currentPage, apiKey, keyAlias, matchFilter],
+    queryKey: ["concurrentRequestLogs", targetTimestamp, apiKey, keyAlias, matchFilter],
     queryFn: async () => {
       if (!accessToken) return { data: [], total: 0 };
       const isoTimestamp = istToISO(targetTimestamp);
-      return await concurrentRequestLogsPaginatedCall(
+      return await concurrentRequestLogsCall(
         accessToken,
         isoTimestamp,
-        currentPage,
-        PAGE_SIZE,
         apiKey || undefined,
         keyAlias || undefined,
         matchFilter !== "all" ? matchFilter : undefined
       );
     },
     enabled: !!accessToken,
+    staleTime: 60 * 1000, // 60 seconds - don't refetch on page changes
   });
 
-  // Use data directly from server (match filtering is now server-side)
-  const convertedData = logsData.data?.data || [];
-  const totalItems = logsData.data?.total || 0;
+  // Client-side pagination
+  const allData = logsData.data?.data || [];
+  const totalItems = allData.length;
+
+  const paginatedData = useMemo(() => {
+    const offset = (currentPage - 1) * PAGE_SIZE;
+    return allData.slice(offset, offset + PAGE_SIZE);
+  }, [allData, currentPage]);
+
+  const totalPages = Math.ceil(totalItems / PAGE_SIZE);
 
   const handleRefresh = () => {
     logsData.refetch();
@@ -92,8 +99,6 @@ export default function ConcurrentRequestLogs({
   };
 
   const formattedTimestamp = formatIST(targetTimestamp);
-  // Total from server already accounts for filters
-  const totalPages = Math.ceil(totalItems / PAGE_SIZE);
 
   if (!accessToken) {
     return null;
@@ -273,14 +278,14 @@ export default function ConcurrentRequestLogs({
                   </div>
                 </td>
               </tr>
-            ) : convertedData.length === 0 ? (
+            ) : paginatedData.length === 0 ? (
               <tr>
                 <td colSpan={5} className="px-6 py-4 text-center text-gray-500">
                   No active concurrent requests found at this timestamp
                 </td>
               </tr>
             ) : (
-              convertedData.map((row, index) => (
+              paginatedData.map((row, index) => (
                 <tr key={index} className="hover:bg-gray-50">
                   <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
                     {row.key_alias}
@@ -360,8 +365,7 @@ export default function ConcurrentRequestLogs({
         </p>
         <p className="mt-1">
           <strong>Redis Concurrency:</strong> Value from Redis parallel request
-          counters logged to GCP Cloud Logging within the last 5 seconds before
-          the target timestamp.
+          counters logged to GCP Cloud Logging recently.
         </p>
       </div>
     </div>

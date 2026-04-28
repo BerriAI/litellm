@@ -881,23 +881,20 @@ export default function SpendLogsTable({
                       </div>
                     </>
                   ) : (
-                    <>
-                      <DataTable
-                        columns={createColumns({
-                          sortBy,
-                          sortOrder,
-                          onSortChange: (newSortBy, newSortOrder) => {
-                            setSortBy(newSortBy);
-                            setSortOrder(newSortOrder);
-                            setCurrentPage(1);
-                          },
-                        })}
-                        data={filteredData}
-                        onRowClick={handleRowClick}
-                        isLoading={logs.isLoading}
-                      />
-                      <ErrorStatsTable data={errorStats.data?.data || []} timeBucketSize={errorStats.data?.time_bucket_size} />
-                    </>
+                    <DataTable
+                      columns={createColumns({
+                        sortBy,
+                        sortOrder,
+                        onSortChange: (newSortBy, newSortOrder) => {
+                          setSortBy(newSortBy);
+                          setSortOrder(newSortOrder);
+                          setCurrentPage(1);
+                        },
+                      })}
+                      data={filteredData}
+                      onRowClick={handleRowClick}
+                      isLoading={logs.isLoading}
+                    />
                   )}
                 </div>
               </>

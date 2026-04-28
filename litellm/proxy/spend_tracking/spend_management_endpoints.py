@@ -4029,29 +4029,17 @@ async def concurrent_request_logs(
         default=None,
         description="Filter by match status: 'matching', 'mismatching', or null for all"
     ),
-    page: int = fastapi.Query(
-        default=1,
-        ge=1,
-        description="Page number (1-indexed)"
-    ),
-    page_size: int = fastapi.Query(
-        default=50,
-        ge=1,
-        le=100,
-        description="Number of items per page"
-    ),
 ):
     """
     Get concurrent request logs by querying GCP Cloud Logging for parallel requests metrics,
     then fetching SpendLogs concurrency for those keys.
 
     Query flow:
-    1. Query GCP Cloud Logging for [METRICS] log entries from last 5 minutes before target timestamp
-       (searches from input_timestamp - 5min to input_timestamp)
+    1. Query GCP Cloud Logging for [METRICS] log entries from last N seconds before target timestamp
     2. For each token, find the log entry with the LATEST timestamp (closest to input_timestamp)
        The current_count from this entry represents the Redis counter value at that time
     3. Query SpendLogs using the input timestamp directly (not GCP log timestamps)
-    4. Return combined data with Redis counter (from GCP logs) and SpendLogs concurrency
+    4. Return ALL combined data (pagination is handled client-side to avoid repeated GCP API calls)
 
     Requires GOOGLE_CLOUD_PROJECT or GCP_PROJECT environment variable to be set,
     and appropriate GCP credentials (GOOGLE_APPLICATION_CREDENTIALS).
@@ -4178,56 +4166,19 @@ async def concurrent_request_logs(
                 })
             return data
 
-        # If match_status filter is requested, we need to query ALL keys first
-        # to properly filter before pagination
-        if match_status:
-            # Query SpendLogs for ALL keys
-            all_tokens = [r["token"] for r in gcp_results if r["token"]]
-            all_spend_logs_map = await query_spend_logs_for_tokens(all_tokens)
-            all_data = build_data_with_match(gcp_results, all_spend_logs_map)
+        # Always query SpendLogs for ALL keys and return all data.
+        # Pagination is handled client-side to avoid repeated GCP API calls on page changes.
+        all_tokens = [r["token"] for r in gcp_results if r["token"]]
+        all_spend_logs_map = await query_spend_logs_for_tokens(all_tokens)
+        all_data = build_data_with_match(gcp_results, all_spend_logs_map)
 
-            # Apply match_status filter
-            if match_status == "matching":
-                filtered_data = [d for d in all_data if d["is_match"] is True]
-            elif match_status == "mismatching":
-                filtered_data = [d for d in all_data if d["is_match"] is False]
-            else:
-                filtered_data = all_data
+        # Apply match_status filter if requested
+        if match_status == "matching":
+            all_data = [d for d in all_data if d["is_match"] is True]
+        elif match_status == "mismatching":
+            all_data = [d for d in all_data if d["is_match"] is False]
 
-            # Apply pagination AFTER filtering
-            total = len(filtered_data)
-            offset = (page - 1) * page_size
-            paginated_data = filtered_data[offset:offset + page_size]
-            return {"data": paginated_data, "total": total}
-
-        # No match_status filter: paginate first, then query SpendLogs for efficiency
-        total = len(gcp_results)
-        offset = (page - 1) * page_size
-        paginated_results = gcp_results[offset:offset + page_size]
-
-        if not paginated_results:
-            return {"data": [], "total": total}
-
-        # Query SpendLogs only for paginated keys
-        tokens = [r["token"] for r in paginated_results if r["token"]]
-        if not tokens:
-            # Return GCP data only (no spend logs data available)
-            data = [
-                {
-                    "key_alias": r["key_alias"] or "—",
-                    "key_token": r["token"],
-                    "redis_concurrency": r["redis_concurrency"],
-                    "scrape_timestamp": r["scrape_timestamp"],
-                    "update_timestamp": r.get("update_timestamp"),
-                    "spend_logs_concurrency": "—",
-                }
-                for r in paginated_results
-            ]
-            return {"data": data, "total": total}
-
-        spend_logs_map = await query_spend_logs_for_tokens(tokens)
-        data = build_data_with_match(paginated_results, spend_logs_map)
-        return {"data": data, "total": total}
+        return {"data": all_data, "total": len(all_data)}
 
     except Exception as e:
         verbose_proxy_logger.error(f"[concurrent_request_logs] Error: {str(e)}")
