@@ -1,3 +1,4 @@
+import os
 from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Literal, Optional
 
 import litellm
@@ -528,7 +529,7 @@ def process_callback(
     for _var in env_vars:
         env_variable = environment_variables.get(_var, None)
         if env_variable is None:
-            env_vars_dict[_var] = None
+            env_vars_dict[_var] = os.getenv(_var)
         else:
             env_vars_dict[_var] = env_variable
 
