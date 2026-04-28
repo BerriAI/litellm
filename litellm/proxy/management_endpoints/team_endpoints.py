@@ -4147,12 +4147,6 @@ async def _authorize_and_filter_teams(
     allowed_org_ids: Optional[List[str]] = None
 
     if not is_proxy_admin:
-        is_own_query = (
-            user_id is not None
-            and user_api_key_dict.user_id is not None
-            and user_api_key_dict.user_id == user_id
-        )
-
         # Check if user is an org admin (even for own queries, so they see org teams)
         if user_api_key_dict.user_id is not None:
             caller_user = await get_user_object(
@@ -4172,15 +4166,23 @@ async def _authorize_and_filter_teams(
                 if not allowed_org_ids:
                     allowed_org_ids = None
 
-        if allowed_org_ids is None and not is_own_query:
-            raise HTTPException(
-                status_code=401,
-                detail={
-                    "error": "Only admin users can query all teams/other teams. Your user role={}".format(
-                        user_api_key_dict.user_role
-                    )
-                },
+        if allowed_org_ids is None:
+            if user_id is None:
+                user_id = user_api_key_dict.user_id
+            is_own_query = (
+                user_id is not None
+                and user_api_key_dict.user_id is not None
+                and user_api_key_dict.user_id == user_id
             )
+            if not is_own_query:
+                raise HTTPException(
+                    status_code=401,
+                    detail={
+                        "error": "Only admin users can query all teams/other teams. Your user role={}".format(
+                            user_api_key_dict.user_role
+                        )
+                    },
+                )
 
     if allowed_org_ids is not None:
         # Org admin: query DB for teams in their orgs
@@ -4198,16 +4200,36 @@ async def _authorize_and_filter_teams(
             and any(m.get("user_id") == user_id for m in team.members_with_roles)
         ]
     elif user_id:
-        # Regular user: fetch all and filter by membership (Prisma can't filter JSON arrays)
-        response = await prisma_client.db.litellm_teamtable.find_many(
-            include={"litellm_model_table": True}
+        # Regular users are scoped to the canonical team ids on their user row.
+        # This mirrors /v2/team/list and avoids exposing teams from stale
+        # members_with_roles entries.
+        try:
+            target_user = await get_user_object(
+                user_id=user_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                user_id_upsert=False,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+        except ValueError:
+            raise HTTPException(
+                status_code=404,
+                detail={"error": f"User not found, passed user_id={user_id}"},
+            )
+        if target_user is None:
+            raise HTTPException(
+                status_code=404,
+                detail={"error": f"User not found, passed user_id={user_id}"},
+            )
+        user_team_ids = target_user.teams or []
+        if not user_team_ids:
+            return []
+        return list(
+            await prisma_client.db.litellm_teamtable.find_many(
+                where={"team_id": {"in": user_team_ids}},
+                include={"litellm_model_table": True},
+            )
         )
-        return [
-            team
-            for team in response
-            if team.members_with_roles
-            and any(m.get("user_id") == user_id for m in team.members_with_roles)
-        ]
     else:
         # Proxy admin: all teams
         return list(
