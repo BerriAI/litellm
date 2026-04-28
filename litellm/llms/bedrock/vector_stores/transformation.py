@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union, cast
 from urllib.parse import urlparse
 
 import httpx
@@ -7,8 +7,8 @@ from litellm.llms.base_llm.vector_store.transformation import BaseVectorStoreCon
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.types.integrations.rag.bedrock_knowledgebase import (
     BedrockKBContent,
-    BedrockKBResponse,
     BedrockKBRetrievalConfiguration,
+    BedrockKBResponse,
     BedrockKBRetrievalQuery,
 )
 from litellm.types.router import GenericLiteLLMParams
@@ -199,6 +199,7 @@ class BedrockVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
         vector_store_id: str,
         query: Union[str, List[str]],
         vector_store_search_optional_params: VectorStoreSearchOptionalRequestParams,
+        extra_body: Optional[Dict[str, Any]],
         api_base: str,
         litellm_logging_obj: LiteLLMLoggingObj,
         litellm_params: dict,
@@ -213,6 +214,14 @@ class BedrockVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
         }
 
         retrieval_config: Dict[str, Any] = {}
+        from litellm import verbose_logger
+
+        if isinstance(extra_body, dict):
+            retrieval_config = dict(
+                extra_body.get("retrievalConfiguration")
+                or extra_body.get("retrieval_configuration")
+                or {}
+            )
         max_results = vector_store_search_optional_params.get("max_num_results")
         if max_results is not None:
             retrieval_config.setdefault("vectorSearchConfiguration", {})[
@@ -224,13 +233,9 @@ class BedrockVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
                 "filter"
             ] = filters
         if retrieval_config:
-            # Create a properly typed retrieval configuration
-            typed_retrieval_config: BedrockKBRetrievalConfiguration = {}
-            if "vectorSearchConfiguration" in retrieval_config:
-                typed_retrieval_config["vectorSearchConfiguration"] = retrieval_config[
-                    "vectorSearchConfiguration"
-                ]
-            request_body["retrievalConfiguration"] = typed_retrieval_config
+            request_body["retrievalConfiguration"] = cast(
+                BedrockKBRetrievalConfiguration, retrieval_config
+            )
 
         litellm_logging_obj.model_call_details["query"] = query
         return url, request_body
