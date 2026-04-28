@@ -4,7 +4,7 @@ Unit tests for OVHCloud AI Endpoints chat integration.
 
 import os
 import sys
-
+import litellm
 import pytest
 
 from litellm.llms.ovhcloud.utils import OVHCloudException
@@ -365,3 +365,51 @@ class TestOVHCloudReasoningFieldMigration:
         }
         result = handler.chunk_parser(chunk)
         assert result.choices[0]["delta"]["reasoning_content"] == "legacy field"
+
+
+    def test_non_streaming_new_reasoning_field(self):
+            """Non-streaming: new `reasoning` field should be mapped to `reasoning_content`."""
+            from unittest.mock import MagicMock, patch
+            import json
+
+            config = OVHCloudChatConfig()
+
+            raw_response = MagicMock()
+            raw_response.status_code = 200
+            raw_response.headers = {"Content-Type": "application/json"}
+            raw_response.text = json.dumps({
+                "id": "test-id",
+                "object": "chat.completion",
+                "created": 1234567890,
+                "model": "test-model",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {
+                            "role": "assistant",
+                            "content": "Hello!",
+                            "reasoning": "Let me think...",
+                        },
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+            })
+            raw_response.json.return_value = json.loads(raw_response.text)
+
+            model_response = litellm.ModelResponse()
+
+            result = config.transform_response(
+                model="ovhcloud/test-model",
+                raw_response=raw_response,
+                model_response=model_response,
+                logging_obj=MagicMock(),
+                request_data={},
+                messages=[],
+                optional_params={},
+                litellm_params={},
+                encoding=None,
+                api_key="test-key",
+            )
+
+            assert result.choices[0].message.reasoning_content == "Let me think..."        
