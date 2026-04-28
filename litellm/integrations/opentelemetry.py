@@ -834,7 +834,7 @@ class OpenTelemetry(CustomLogger):
     def _record_metrics(self, kwargs, response_obj, start_time, end_time):
         duration_s = (end_time - start_time).total_seconds()
         params = kwargs.get("litellm_params") or {}
-        provider = params.get("custom_llm_provider", "Unknown")
+        provider = params.get("custom_llm_provider", None) or "Unknown"
 
         common_attrs = {
             "gen_ai.operation.name": "chat",
@@ -1132,7 +1132,11 @@ class OpenTelemetry(CustomLogger):
             }
             body_msg = choice.get("message", {})
             if self.message_logging and body_msg.get("content"):
-                attrs["message.content"] = body_msg["content"]
+                completion_content = body_msg["content"]
+                if isinstance(completion_content, str):
+                    attrs["message.content"] = completion_content
+                else:
+                    attrs["message.content"] = safe_dumps(completion_content)
             body = {
                 "index": idx,
                 "finish_reason": choice.get("finish_reason"),
@@ -1717,10 +1721,11 @@ class OpenTelemetry(CustomLogger):
             ########## LLM Response Attributes ##########
             #############################################
             if isinstance(response_obj, dict):
-                if response_obj.get("choices"):
+                choices = response_obj.get("choices")
+                if choices:
                     transformed_choices = (
                         self._transform_choices_to_otel_semantic_conventions(
-                            response_obj.get("choices")
+                            choices
                         )
                     )
                     self.safe_set_attribute(
@@ -1730,7 +1735,7 @@ class OpenTelemetry(CustomLogger):
                     )
 
                     finish_reasons = []
-                    for idx, choice in enumerate(response_obj.get("choices")):
+                    for idx, choice in enumerate(choices):
                         if choice.get("finish_reason"):
                             finish_reasons.append(choice.get("finish_reason"))
 
@@ -1741,7 +1746,7 @@ class OpenTelemetry(CustomLogger):
                             value=safe_dumps(finish_reasons),
                         )
 
-                    for idx, choice in enumerate(response_obj.get("choices")):
+                    for idx, choice in enumerate(choices):
                         if choice.get("finish_reason"):
                             message = choice.get("message")
                             tool_calls = message.get("tool_calls")
