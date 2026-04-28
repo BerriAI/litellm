@@ -8046,16 +8046,17 @@
     },
     "bedrock/us-east-1/minimax.minimax-m2.5": {
         "input_cost_per_token": 3e-07,
-        "output_cost_per_token": 1.2e-06,
         "litellm_provider": "bedrock",
         "max_input_tokens": 1000000,
         "max_output_tokens": 8192,
         "max_tokens": 8192,
         "mode": "chat",
+        "source": "https://aws.amazon.com/bedrock/pricing/",
         "supports_function_calling": true,
+        "supports_reasoning": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
-        "source": "https://aws.amazon.com/bedrock/pricing/"
+        "output_cost_per_token": 1.2e-06
     },
     "bedrock/us-east-1/moonshotai.kimi-k2-thinking": {
         "input_cost_per_token": 6e-07,
@@ -8663,16 +8664,17 @@
     },
     "bedrock/us-west-2/minimax.minimax-m2.5": {
         "input_cost_per_token": 3e-07,
-        "output_cost_per_token": 1.2e-06,
         "litellm_provider": "bedrock",
         "max_input_tokens": 1000000,
         "max_output_tokens": 8192,
         "max_tokens": 8192,
         "mode": "chat",
+        "source": "https://aws.amazon.com/bedrock/pricing/",
         "supports_function_calling": true,
+        "supports_reasoning": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
-        "source": "https://aws.amazon.com/bedrock/pricing/"
+        "output_cost_per_token": 1.2e-06
     },
     "bedrock/us-west-2/moonshotai.kimi-k2-thinking": {
         "input_cost_per_token": 6e-07,
@@ -9443,6 +9445,7 @@
             "us": 1.1,
             "fast": 6.0
         },
+        "supports_max_reasoning_effort": true,
         "supports_minimal_reasoning_effort": true
     },
     "claude-opus-4-7-20260416": {
@@ -9477,6 +9480,7 @@
             "us": 1.1,
             "fast": 6.0
         },
+        "supports_max_reasoning_effort": true,
         "supports_minimal_reasoning_effort": true
     },
     "claude-sonnet-4-20250514": {
@@ -16292,7 +16296,8 @@
             "/v1/audio/speech"
         ],
         "tpm": 4000000,
-        "rpm": 10
+        "rpm": 10,
+        "supports_thinking_budget_zero": true
     },
     "gemini/gemini-2.5-pro": {
         "cache_read_input_token_cost": 1.25e-07,
@@ -22706,13 +22711,14 @@
     },
     "minimax.minimax-m2.5": {
         "input_cost_per_token": 3e-07,
-        "output_cost_per_token": 1.2e-06,
         "litellm_provider": "bedrock_converse",
         "max_input_tokens": 1000000,
         "max_output_tokens": 8192,
         "max_tokens": 8192,
         "mode": "chat",
+        "output_cost_per_token": 1.2e-06,
         "supports_function_calling": true,
+        "supports_reasoning": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
         "source": "https://aws.amazon.com/bedrock/pricing/"
@@ -34773,17 +34779,17 @@
     },
     "zai.glm-5": {
         "input_cost_per_token": 1e-06,
-        "output_cost_per_token": 3.2e-06,
         "litellm_provider": "bedrock_converse",
         "max_input_tokens": 200000,
         "max_output_tokens": 128000,
         "max_tokens": 128000,
         "mode": "chat",
+        "output_cost_per_token": 3.2e-06,
+        "source": "https://aws.amazon.com/bedrock/pricing/",
         "supports_function_calling": true,
         "supports_reasoning": true,
         "supports_system_messages": true,
-        "supports_tool_choice": true,
-        "source": "https://aws.amazon.com/bedrock/pricing/"
+        "supports_tool_choice": true
     },
     "zai/glm-5": {
         "cache_creation_input_token_cost": 0,
@@ -38863,7 +38869,8 @@
             "audio"
         ],
         "supports_audio_input": true,
-        "supports_audio_output": true
+        "supports_audio_output": true,
+        "supports_thinking_budget_zero": true
     },
     "gemini-2.5-flash-native-audio-preview-09-2025": {
         "input_cost_per_audio_token": 1e-06,
@@ -38887,7 +38894,8 @@
             "audio"
         ],
         "supports_audio_input": true,
-        "supports_audio_output": true
+        "supports_audio_output": true,
+        "supports_thinking_budget_zero": true
     },
     "gemini-2.5-flash-native-audio-preview-12-2025": {
         "input_cost_per_audio_token": 1e-06,
@@ -38911,7 +38919,8 @@
             "audio"
         ],
         "supports_audio_input": true,
-        "supports_audio_output": true
+        "supports_audio_output": true,
+        "supports_thinking_budget_zero": true
     },
     "gemini-3.1-flash-live-preview": {
         "input_cost_per_audio_token": 3e-06,
@@ -38969,7 +38978,8 @@
         "supports_audio_input": true,
         "supports_audio_output": true,
         "tpm": 250000,
-        "rpm": 10
+        "rpm": 10,
+        "supports_thinking_budget_zero": true
     },
     "gemini/gemini-2.5-flash-native-audio-preview-09-2025": {
         "input_cost_per_audio_token": 1e-06,
@@ -38995,7 +39005,8 @@
         "supports_audio_input": true,
         "supports_audio_output": true,
         "tpm": 250000,
-        "rpm": 10
+        "rpm": 10,
+        "supports_thinking_budget_zero": true
     },
     "gemini/gemini-2.5-flash-native-audio-preview-12-2025": {
         "input_cost_per_audio_token": 1e-06,
@@ -39021,7 +39032,8 @@
         "supports_audio_input": true,
         "supports_audio_output": true,
         "tpm": 250000,
-        "rpm": 10
+        "rpm": 10,
+        "supports_thinking_budget_zero": true
     },
     "gemini/gemini-3.1-flash-live-preview": {
         "input_cost_per_audio_token": 3e-06,
@@ -39065,7 +39077,8 @@
         "source": "https://ai.google.dev/pricing",
         "supported_endpoints": [
             "/v1/audio/speech"
-        ]
+        ],
+        "supports_thinking_budget_zero": true
     },
     "gemini-flash-latest": {
         "cache_read_input_token_cost": 3e-08,
@@ -39566,6 +39579,20 @@
             }
         ]
     },
+    "zai.glm-5": {
+        "input_cost_per_token": 1e-06,
+        "output_cost_per_token": 3.2e-06,
+        "litellm_provider": "bedrock_converse",
+        "max_input_tokens": 200000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "source": "https://aws.amazon.com/bedrock/pricing/"
+    },
     "bedrock/us-east-1/zai.glm-5": {
         "input_cost_per_token": 1e-06,
         "output_cost_per_token": 3.2e-06,
@@ -39590,6 +39617,45 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_reasoning": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "source": "https://aws.amazon.com/bedrock/pricing/"
+    },
+    "minimax.minimax-m2.5": {
+        "input_cost_per_token": 3e-07,
+        "output_cost_per_token": 1.2e-06,
+        "litellm_provider": "bedrock_converse",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 8192,
+        "max_tokens": 8192,
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "source": "https://aws.amazon.com/bedrock/pricing/"
+    },
+    "bedrock/us-east-1/minimax.minimax-m2.5": {
+        "input_cost_per_token": 3e-07,
+        "output_cost_per_token": 1.2e-06,
+        "litellm_provider": "bedrock",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 8192,
+        "max_tokens": 8192,
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "source": "https://aws.amazon.com/bedrock/pricing/"
+    },
+    "bedrock/us-west-2/minimax.minimax-m2.5": {
+        "input_cost_per_token": 3e-07,
+        "output_cost_per_token": 1.2e-06,
+        "litellm_provider": "bedrock",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 8192,
+        "max_tokens": 8192,
+        "mode": "chat",
+        "supports_function_calling": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
         "source": "https://aws.amazon.com/bedrock/pricing/"

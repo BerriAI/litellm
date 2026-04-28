@@ -57,13 +57,34 @@ class TestMapThinkingParamBudgetZero:
         assert result.get("includeThoughts") is True
 
     def test_model_supports_thinking_budget_zero_flash(self, local_model_cost_map):
-        assert VertexGeminiConfig._model_supports_thinking_budget_zero("gemini-2.5-flash") is True
-        assert VertexGeminiConfig._model_supports_thinking_budget_zero("gemini/gemini-2.5-flash") is True
-        assert VertexGeminiConfig._model_supports_thinking_budget_zero("gemini-2.5-flash-lite") is True
+        assert (
+            VertexGeminiConfig._model_supports_thinking_budget_zero("gemini-2.5-flash")
+            is True
+        )
+        assert (
+            VertexGeminiConfig._model_supports_thinking_budget_zero(
+                "gemini/gemini-2.5-flash"
+            )
+            is True
+        )
+        assert (
+            VertexGeminiConfig._model_supports_thinking_budget_zero(
+                "gemini-2.5-flash-lite"
+            )
+            is True
+        )
 
     def test_model_supports_thinking_budget_zero_pro(self):
-        assert VertexGeminiConfig._model_supports_thinking_budget_zero("gemini-2.5-pro") is False
-        assert VertexGeminiConfig._model_supports_thinking_budget_zero("gemini/gemini-2.5-pro") is False
+        assert (
+            VertexGeminiConfig._model_supports_thinking_budget_zero("gemini-2.5-pro")
+            is False
+        )
+        assert (
+            VertexGeminiConfig._model_supports_thinking_budget_zero(
+                "gemini/gemini-2.5-pro"
+            )
+            is False
+        )
 
     def test_model_supports_thinking_budget_zero_none(self):
         assert VertexGeminiConfig._model_supports_thinking_budget_zero(None) is False

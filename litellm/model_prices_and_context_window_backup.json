@@ -9431,6 +9431,7 @@
             "us": 1.1,
             "fast": 6.0
         },
+        "supports_max_reasoning_effort": true,
         "supports_minimal_reasoning_effort": true
     },
     "claude-opus-4-7-20260416": {
@@ -9465,6 +9466,7 @@
             "us": 1.1,
             "fast": 6.0
         },
+        "supports_max_reasoning_effort": true,
         "supports_minimal_reasoning_effort": true
     },
     "claude-sonnet-4-20250514": {
@@ -16280,7 +16282,8 @@
             "/v1/audio/speech"
         ],
         "tpm": 4000000,
-        "rpm": 10
+        "rpm": 10,
+        "supports_thinking_budget_zero": true
     },
     "gemini/gemini-2.5-pro": {
         "cache_read_input_token_cost": 1.25e-07,
@@ -38785,7 +38788,8 @@
             "audio"
         ],
         "supports_audio_input": true,
-        "supports_audio_output": true
+        "supports_audio_output": true,
+        "supports_thinking_budget_zero": true
     },
     "gemini-2.5-flash-native-audio-preview-09-2025": {
         "input_cost_per_audio_token": 1e-06,
@@ -38809,7 +38813,8 @@
             "audio"
         ],
         "supports_audio_input": true,
-        "supports_audio_output": true
+        "supports_audio_output": true,
+        "supports_thinking_budget_zero": true
     },
     "gemini-2.5-flash-native-audio-preview-12-2025": {
         "input_cost_per_audio_token": 1e-06,
@@ -38833,7 +38838,8 @@
             "audio"
         ],
         "supports_audio_input": true,
-        "supports_audio_output": true
+        "supports_audio_output": true,
+        "supports_thinking_budget_zero": true
     },
     "gemini-3.1-flash-live-preview": {
         "input_cost_per_audio_token": 3e-06,
@@ -38891,7 +38897,8 @@
         "supports_audio_input": true,
         "supports_audio_output": true,
         "tpm": 250000,
-        "rpm": 10
+        "rpm": 10,
+        "supports_thinking_budget_zero": true
     },
     "gemini/gemini-2.5-flash-native-audio-preview-09-2025": {
         "input_cost_per_audio_token": 1e-06,
@@ -38917,7 +38924,8 @@
         "supports_audio_input": true,
         "supports_audio_output": true,
         "tpm": 250000,
-        "rpm": 10
+        "rpm": 10,
+        "supports_thinking_budget_zero": true
     },
     "gemini/gemini-2.5-flash-native-audio-preview-12-2025": {
         "input_cost_per_audio_token": 1e-06,
@@ -38943,7 +38951,8 @@
         "supports_audio_input": true,
         "supports_audio_output": true,
         "tpm": 250000,
-        "rpm": 10
+        "rpm": 10,
+        "supports_thinking_budget_zero": true
     },
     "gemini/gemini-3.1-flash-live-preview": {
         "input_cost_per_audio_token": 3e-06,
@@ -38987,7 +38996,8 @@
         "source": "https://ai.google.dev/pricing",
         "supported_endpoints": [
             "/v1/audio/speech"
-        ]
+        ],
+        "supports_thinking_budget_zero": true
     },
     "gemini-flash-latest": {
         "cache_read_input_token_cost": 3e-08,

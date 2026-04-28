@@ -1642,9 +1642,9 @@ async def test_gemini_flash_to_pro_fallback_thinking_budget_zero():
         thinking_param={"type": "enabled", "budget_tokens": 0},
         model="gemini-2.5-pro",
     )
-    assert "thinkingBudget" not in pro_config, (
-        "thinkingBudget=0 must not be sent to Pro — it causes a 400 INVALID_ARGUMENT"
-    )
+    assert (
+        "thinkingBudget" not in pro_config
+    ), "thinkingBudget=0 must not be sent to Pro — it causes a 400 INVALID_ARGUMENT"
 
     # Flash must still receive thinkingBudget=0 (it supports disabling thinking)
     flash_config = VertexGeminiConfig._map_thinking_param(
@@ -1708,7 +1708,9 @@ async def test_gemini_flash_to_pro_fallback_thinking_budget_zero():
             thinking={"type": "enabled", "budget_tokens": 0},
         )
 
-    assert call_count == 2, f"Expected 2 calls (flash then pro fallback), got {call_count}"
+    assert (
+        call_count == 2
+    ), f"Expected 2 calls (flash then pro fallback), got {call_count}"
     assert response.choices[0].message.content == "Hello!"
     # The thinking param reaches pro but thinkingBudget=0 is not in the translated body
     assert pro_call_kwargs.get("thinking") == {"type": "enabled", "budget_tokens": 0}
