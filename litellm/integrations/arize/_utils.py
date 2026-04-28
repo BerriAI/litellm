@@ -603,20 +603,15 @@ def _extract_responses_api_text(output_items) -> Optional[str]:
     if not isinstance(output_items, list) or not output_items:
         return None
 
-    def _g(obj, key, default=None):
-        if hasattr(obj, "get"):
-            return obj.get(key, default)
-        return getattr(obj, key, default)
-
     texts = []
     for item in output_items:
-        if _g(item, "type") != "message":
+        if _get(item, "type") != "message":
             continue
-        content_list = _g(item, "content")
+        content_list = _get(item, "content")
         if not isinstance(content_list, list):
             continue
         for c in content_list:
-            text = _g(c, "text")
+            text = _get(c, "text")
             if text:
                 texts.append(text)
     return "\n\n".join(texts) if texts else None
@@ -774,14 +769,14 @@ def _extract_chain_output(
 
         # 3. Tool / MCP result shapes — content array, output_text, result
         for field in ("output_text", "result"):
-            text = _coerce_text(response_obj_dict.get(field))
+            field_value = response_obj_dict.get(field)
+            text = _coerce_text(field_value)
             if text:
-                mime = "application/json" or None
-                return text, mime
+                return text, ("application/json" if isinstance(field_value, (list, dict)) else None)
 
         content = response_obj_dict.get("content")
         if content:
-            return _coerce_text(content), ("application/json" or None)
+            return _coerce_text(content), ("application/json" if isinstance(content, (list, dict)) else None)
 
         # 4. Reranker results
         results = response_obj_dict.get("results")
@@ -945,9 +940,8 @@ def _set_request_attributes(
             status_code = getattr(original_exception, "status_code", None)
             if status_code is not None:
                 safe_set_attribute(span, "llm.fallback.error_status_code", status_code)
-            exception_class = getattr(original_exception, "__class__.__name__", None)
-            if exception_class:
-                safe_set_attribute(span, "llm.fallback.error_class", exception_class)
+            exception_class = type(original_exception).__name__
+            safe_set_attribute(span, "llm.fallback.error_class", exception_class)
 
     safe_set_attribute(
         span, "llm.request.type", standard_logging_payload.get("call_type")
