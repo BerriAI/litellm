@@ -310,3 +310,27 @@ def test_delta_maps_reasoning_to_reasoning_content():
     # When neither is present, reasoning_content is not set (OpenAI spec)
     delta4 = Delta(content="hello")
     assert not hasattr(delta4, "reasoning_content")
+
+
+def test_message_keeps_reasoning_content_slot_for_tool_calls():
+    """
+    DeepSeek V4 requires reasoning_content to remain available on assistant
+    tool-call messages so later request transforms can re-inject it.
+    """
+    from litellm.types.utils import Message
+
+    message = Message(
+        role="assistant",
+        content=None,
+        tool_calls=[
+            {
+                "id": "call_1",
+                "type": "function",
+                "function": {"name": "lookup", "arguments": "{}"},
+            }
+        ],
+        reasoning_content=None,
+    )
+
+    assert hasattr(message, "reasoning_content")
+    assert message.reasoning_content is None
