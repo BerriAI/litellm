@@ -794,8 +794,9 @@ def _extract_chain_output(
         resp = standard_logging_payload.get("response")
         text = _coerce_text(resp)
         if text:
-            mime = "application/json" if isinstance(resp, (list, dict)) else None
-            return text, mime
+            return text, (
+                "application/json" if isinstance(resp, (list, dict)) else None
+            )
 
     return None, None
 
