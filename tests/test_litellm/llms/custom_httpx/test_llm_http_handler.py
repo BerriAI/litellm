@@ -2,12 +2,16 @@ import os
 import sys
 from unittest.mock import AsyncMock, Mock, patch
 
+import httpx
 import pytest
 
 sys.path.insert(
     0, os.path.abspath("../../../..")
 )  # Adds the parent directory to the system path
-from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
+from litellm.llms.custom_httpx.llm_http_handler import (
+    BaseLLMHTTPHandler,
+    _google_genai_streaming_hidden_params,
+)
 from litellm.types.router import GenericLiteLLMParams
 
 
@@ -320,3 +324,29 @@ async def test_async_anthropic_messages_handler_header_priority():
         assert captured_headers["X-Forwarded-Only"] == "keep"
         assert captured_headers["X-Extra-Only"] == "also-keep"
         assert captured_headers["X-Provider-Only"] == "keep-this-too"
+
+
+def test_google_genai_streaming_hidden_params_model_info_and_router_fallback():
+    logging_obj = Mock()
+    logging_obj.get_router_model_id = Mock(return_value="router-model-id")
+
+    from_model_info = _google_genai_streaming_hidden_params(
+        api_base="https://generativelanguage.googleapis.com/v1beta",
+        litellm_params=GenericLiteLLMParams(model_info={"id": "info-id"}),
+        logging_obj=logging_obj,
+        response_headers=httpx.Headers({"x-ratelimit-remaining": "10"}),
+    )
+    assert from_model_info["model_id"] == "info-id"
+    assert (
+        from_model_info["api_base"]
+        == "https://generativelanguage.googleapis.com/v1beta"
+    )
+    assert isinstance(from_model_info["additional_headers"], dict)
+
+    from_router = _google_genai_streaming_hidden_params(
+        api_base="https://x",
+        litellm_params=GenericLiteLLMParams(),
+        logging_obj=logging_obj,
+        response_headers=httpx.Headers({}),
+    )
+    assert from_router["model_id"] == "router-model-id"
