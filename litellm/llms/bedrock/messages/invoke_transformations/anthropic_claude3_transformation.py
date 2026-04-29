@@ -362,10 +362,11 @@ class AmazonAnthropicClaudeMessagesConfig(
             "sonnet_4.6",
             "sonnet-4-6",
             "sonnet_4_6",
-            # NOTE: Opus 4.7 on Bedrock does not support server-side tool search
-            # as of launch (2026-04-16). Bedrock rejects the tool type with:
-            # "tool type 'tool_search_tool_..._20251119' is not supported for this model".
-            # Re-add the opus-4.7 patterns here once AWS announces support.
+            # Opus 4.7
+            "opus-4.7",
+            "opus_4.7",
+            "opus-4-7",
+            "opus_4_7",
         ]
 
         return any(pattern in model_lower for pattern in supported_patterns)
