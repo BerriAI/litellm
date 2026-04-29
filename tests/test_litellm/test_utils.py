@@ -901,6 +901,47 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
         raise AssertionError(error_message)
 
 
+def test_azure_supports_service_tier_flags():
+    """
+    Verify that supports_service_tier is set correctly for Azure models
+    based on Azure's priority processing documentation.
+
+    Ref: https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/priority-processing
+    """
+    import json
+    from pathlib import Path
+
+    config_path = (
+        Path(__file__).parent.parent.parent / "model_prices_and_context_window.json"
+    )
+    with open(config_path, "r") as f:
+        models = json.load(f)
+
+    # Models that Azure officially supports for priority processing
+    should_have = [
+        "azure/gpt-4.1",
+        "azure/gpt-4.1-2025-04-14",
+    ]
+    # Models that should NOT have the flag
+    should_not_have = [
+        "azure/gpt-5.3-chat",
+        "azure/gpt-5.4-mini",
+        "azure/gpt-5.4-nano",
+    ]
+
+    for model in should_have:
+        assert model in models, f"{model} not found in model config"
+        assert models[model].get("supports_service_tier") is True, (
+            f"{model} should have supports_service_tier=true"
+        )
+
+    for model in should_not_have:
+        assert model in models, f"{model} not found in model config"
+        assert "supports_service_tier" not in models[model], (
+            f"{model} should not have supports_service_tier"
+        )
+
+
 def test_max_tokens_consistency():
     """
     Test that max_tokens == max_output_tokens for all models.

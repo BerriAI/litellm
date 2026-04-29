@@ -2930,7 +2930,8 @@
         "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_vision": true,
-        "supports_web_search": false
+        "supports_web_search": false,
+        "supports_service_tier": true
     },
     "azure/gpt-4.1-2025-04-14": {
         "deprecation_date": "2026-11-04",
@@ -2964,7 +2965,8 @@
         "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_vision": true,
-        "supports_web_search": false
+        "supports_web_search": false,
+        "supports_service_tier": true
     },
     "azure/gpt-4.1-mini": {
         "cache_read_input_token_cost": 1e-07,
@@ -4396,7 +4398,6 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
-        "supports_service_tier": true,
         "supports_vision": true
     },
     "azure/gpt-5.3-codex": {
@@ -4838,7 +4839,6 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
-        "supports_service_tier": true,
         "supports_vision": true,
         "supports_web_search": true,
         "supports_none_reasoning_effort": false,
@@ -4910,7 +4910,6 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
-        "supports_service_tier": true,
         "supports_vision": true,
         "supports_web_search": true,
         "supports_none_reasoning_effort": false,
