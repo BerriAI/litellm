@@ -4,6 +4,7 @@ import pytest
 
 from litellm.litellm_core_utils.core_helpers import (
     _FINISH_REASON_MAP,
+    filter_internal_params,
     map_finish_reason,
     reconstruct_model_name,
     redact_nested_match_and_regex_keys,
@@ -201,3 +202,11 @@ class TestRedactNestedMatchAndRegexKeys:
     def test_passes_through_none_and_str(self):
         assert redact_nested_match_and_regex_keys(None) is None
         assert redact_nested_match_and_regex_keys("plain") == "plain"
+
+
+class TestFilterInternalParams:
+    def test_should_strip_client_metadata(self):
+        data = {"temperature": 0.7, "client_metadata": {"app": "codex-cli"}}
+        result = filter_internal_params(data)
+        assert "client_metadata" not in result
+        assert result["temperature"] == 0.7
