@@ -1524,7 +1524,7 @@ def get_responses(
         # Pre Call logging
         litellm_logging_obj.update_from_kwargs(
             kwargs=local_vars,
-            model=None,
+            model=kwargs.get("model"),
             optional_params={
                 "response_id": response_id,
             },

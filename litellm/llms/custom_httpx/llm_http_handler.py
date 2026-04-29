@@ -156,6 +156,26 @@ else:
 
 
 class BaseLLMHTTPHandler:
+    @staticmethod
+    def _get_responses_streaming_model(
+        logging_obj: LiteLLMLoggingObj,
+        litellm_params: GenericLiteLLMParams,
+    ) -> str:
+        model_call_details = getattr(logging_obj, "model_call_details", {}) or {}
+        request_model = model_call_details.get("model")
+        if isinstance(request_model, str) and request_model:
+            return request_model
+
+        logging_model = getattr(logging_obj, "model", None)
+        if isinstance(logging_model, str) and logging_model:
+            return logging_model
+
+        litellm_model = getattr(litellm_params, "model", None)
+        if isinstance(litellm_model, str):
+            return litellm_model
+
+        return ""
+
     async def _make_common_async_call(
         self,
         async_httpx_client: AsyncHTTPHandler,
@@ -2699,6 +2719,9 @@ class BaseLLMHTTPHandler:
                 "headers": headers,
             },
         )
+        request_model = self._get_responses_streaming_model(
+            logging_obj=logging_obj, litellm_params=litellm_params
+        )
 
         try:
             if stream:
@@ -2717,7 +2740,7 @@ class BaseLLMHTTPHandler:
                 }
                 return SyncResponsesAPIStreamingIterator(
                     response=response,
-                    model="",
+                    model=request_model,
                     logging_obj=logging_obj,
                     responses_api_provider_config=responses_api_provider_config,
                     litellm_metadata=litellm_metadata,
@@ -2810,6 +2833,9 @@ class BaseLLMHTTPHandler:
                 "headers": headers,
             },
         )
+        request_model = self._get_responses_streaming_model(
+            logging_obj=logging_obj, litellm_params=litellm_params
+        )
 
         try:
             if stream:
@@ -2831,7 +2857,7 @@ class BaseLLMHTTPHandler:
                 }
                 return ResponsesAPIStreamingIterator(
                     response=response,
-                    model="",
+                    model=request_model,
                     logging_obj=logging_obj,
                     responses_api_provider_config=responses_api_provider_config,
                     litellm_metadata=litellm_metadata,

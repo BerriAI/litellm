@@ -168,12 +168,14 @@ async def test_aget_responses_stream_returns_streaming_iterator(
         response_id=response_id,
         stream=True,
         starting_after=6,
+        model="gpt-4.1-mini",
         custom_llm_provider="openai",
         api_key="sk-test",
         api_base="https://api.openai.com/v1/responses",
     )
 
     assert isinstance(result, ResponsesAPIStreamingIterator)
+    assert result.model == "gpt-4.1-mini"
     assert captured["stream"] is True
     assert captured["params"] == {"stream": "true", "starting_after": 6}
     assert response_id in captured["url"]
@@ -218,12 +220,14 @@ def test_get_responses_stream_returns_sync_streaming_iterator(
         response_id=response_id,
         stream=True,
         starting_after=6,
+        model="gpt-4.1-mini",
         custom_llm_provider="openai",
         api_key="sk-test",
         api_base="https://api.openai.com/v1/responses",
     )
 
     assert isinstance(result, SyncResponsesAPIStreamingIterator)
+    assert result.model == "gpt-4.1-mini"
     assert captured["stream"] is True
     assert captured["params"] == {"stream": "true", "starting_after": 6}
     assert response_id in captured["url"]

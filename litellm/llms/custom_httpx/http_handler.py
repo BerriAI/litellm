@@ -337,6 +337,14 @@ async def _safe_aread_response(response: httpx.Response) -> bytes:
         return b""
 
 
+async def _safe_aclose_response(response: httpx.Response) -> None:
+    """Safely close an async response, ignoring transport cleanup failures."""
+    try:
+        await response.aclose()
+    except Exception:
+        pass
+
+
 def _safe_read_response(response: httpx.Response) -> bytes:
     """Safely read sync response body, falling back to empty bytes on errors."""
     try:
@@ -357,7 +365,10 @@ def _raise_masked_sync_error(e: httpx.HTTPStatusError, stream: bool) -> None:
 async def _raise_masked_async_error(e: httpx.HTTPStatusError, stream: bool) -> None:
     """Raise a MaskedHTTPStatusError for async HTTP handlers."""
     if stream:
-        _body = mask_sensitive_info(await _safe_aread_response(e.response))
+        try:
+            _body = mask_sensitive_info(await _safe_aread_response(e.response))
+        finally:
+            await _safe_aclose_response(e.response)
         raise MaskedHTTPStatusError(e, message=_body, text=_body) from None
     _text = mask_sensitive_info(_safe_get_response_text(e.response))
     raise MaskedHTTPStatusError(e, message=_text, text=_text) from None
@@ -512,7 +523,10 @@ class AsyncHTTPHandler:
             response = await self.client.send(
                 req, stream=True, follow_redirects=_follow_redirects
             )
-            response.raise_for_status()
+            try:
+                response.raise_for_status()
+            except httpx.HTTPStatusError as e:
+                await _raise_masked_async_error(e, stream=True)
             return response
 
         response = await self.client.get(
