@@ -535,6 +535,159 @@ def test_azure_with_custom_api_base_and_key():
         assert response.status_code == 200  # type: ignore[union-attr]
 
 
+def test_timeout_param_forwarded_to_build_request():
+    """
+    Verify that the `timeout` parameter is resolved and forwarded to
+    build_request so httpx enforces it on the underlying HTTP call.
+    The @client decorator reads kwargs["timeout"] on exception and attaches
+    it to the exception for the router's fallback logic.
+    """
+    client = HTTPHandler()
+
+    mock_provider_config = MagicMock()
+    mock_provider_config.get_complete_url.return_value = (
+        httpx.URL("https://api.example.com/v1/chat/completions"),
+        "https://api.example.com",
+    )
+    mock_provider_config.get_api_key.return_value = "test-key"
+    mock_provider_config.validate_environment.return_value = {}
+    mock_provider_config.sign_request.return_value = ({}, None)
+    mock_provider_config.is_streaming_request.return_value = False
+
+    with patch(
+        "litellm.utils.ProviderConfigManager.get_provider_passthrough_config",
+        return_value=mock_provider_config,
+    ), patch(
+        "litellm.litellm_core_utils.get_litellm_params.get_litellm_params",
+        return_value={},
+    ), patch(
+        "litellm.litellm_core_utils.get_llm_provider_logic.get_llm_provider",
+        return_value=("my-model", "openai", "test-key", "https://api.example.com"),
+    ), patch.object(
+        client.client, "send", return_value=MagicMock(status_code=200)
+    ), patch.object(
+        client.client, "build_request"
+    ) as mock_build_request:
+        mock_logging_obj = MagicMock()
+        mock_logging_obj.update_environment_variables = MagicMock()
+
+        llm_passthrough_route(
+            model="openai/my-model",
+            endpoint="v1/chat/completions",
+            method="POST",
+            custom_llm_provider="openai",
+            json={"model": "my-model", "messages": [{"role": "user", "content": "Hi"}]},
+            timeout=30,
+            client=client,
+            litellm_logging_obj=mock_logging_obj,
+        )
+
+        mock_build_request.assert_called_once()
+        call_kwargs = mock_build_request.call_args.kwargs
+        assert call_kwargs["timeout"] == 30.0
+
+
+def test_timeout_defaults_to_600_when_not_provided():
+    """
+    When no timeout is passed, the passthrough should default to 600s
+    (matching the completion endpoint behaviour).
+    """
+    client = HTTPHandler()
+
+    mock_provider_config = MagicMock()
+    mock_provider_config.get_complete_url.return_value = (
+        httpx.URL("https://api.example.com/v1/chat/completions"),
+        "https://api.example.com",
+    )
+    mock_provider_config.get_api_key.return_value = "test-key"
+    mock_provider_config.validate_environment.return_value = {}
+    mock_provider_config.sign_request.return_value = ({}, None)
+    mock_provider_config.is_streaming_request.return_value = False
+
+    with patch(
+        "litellm.utils.ProviderConfigManager.get_provider_passthrough_config",
+        return_value=mock_provider_config,
+    ), patch(
+        "litellm.litellm_core_utils.get_litellm_params.get_litellm_params",
+        return_value={},
+    ), patch(
+        "litellm.litellm_core_utils.get_llm_provider_logic.get_llm_provider",
+        return_value=("my-model", "openai", "test-key", "https://api.example.com"),
+    ), patch.object(
+        client.client, "send", return_value=MagicMock(status_code=200)
+    ), patch.object(
+        client.client, "build_request"
+    ) as mock_build_request:
+        mock_logging_obj = MagicMock()
+        mock_logging_obj.update_environment_variables = MagicMock()
+
+        llm_passthrough_route(
+            model="openai/my-model",
+            endpoint="v1/chat/completions",
+            method="POST",
+            custom_llm_provider="openai",
+            json={"model": "my-model", "messages": [{"role": "user", "content": "Hi"}]},
+            client=client,
+            litellm_logging_obj=mock_logging_obj,
+        )
+
+        mock_build_request.assert_called_once()
+        call_kwargs = mock_build_request.call_args.kwargs
+        assert call_kwargs["timeout"] == 600.0
+
+
+def test_timeout_httpx_timeout_object_forwarded():
+    """
+    When an httpx.Timeout object is passed, it should be forwarded
+    directly to build_request without conversion.
+    """
+    client = HTTPHandler()
+
+    mock_provider_config = MagicMock()
+    mock_provider_config.get_complete_url.return_value = (
+        httpx.URL("https://api.example.com/v1/chat/completions"),
+        "https://api.example.com",
+    )
+    mock_provider_config.get_api_key.return_value = "test-key"
+    mock_provider_config.validate_environment.return_value = {}
+    mock_provider_config.sign_request.return_value = ({}, None)
+    mock_provider_config.is_streaming_request.return_value = False
+
+    custom_timeout = httpx.Timeout(timeout=45.0, connect=10.0)
+
+    with patch(
+        "litellm.utils.ProviderConfigManager.get_provider_passthrough_config",
+        return_value=mock_provider_config,
+    ), patch(
+        "litellm.litellm_core_utils.get_litellm_params.get_litellm_params",
+        return_value={},
+    ), patch(
+        "litellm.litellm_core_utils.get_llm_provider_logic.get_llm_provider",
+        return_value=("my-model", "openai", "test-key", "https://api.example.com"),
+    ), patch.object(
+        client.client, "send", return_value=MagicMock(status_code=200)
+    ), patch.object(
+        client.client, "build_request"
+    ) as mock_build_request:
+        mock_logging_obj = MagicMock()
+        mock_logging_obj.update_environment_variables = MagicMock()
+
+        llm_passthrough_route(
+            model="openai/my-model",
+            endpoint="v1/chat/completions",
+            method="POST",
+            custom_llm_provider="openai",
+            json={"model": "my-model", "messages": [{"role": "user", "content": "Hi"}]},
+            timeout=custom_timeout,
+            client=client,
+            litellm_logging_obj=mock_logging_obj,
+        )
+
+        mock_build_request.assert_called_once()
+        call_kwargs = mock_build_request.call_args.kwargs
+        assert call_kwargs["timeout"] is custom_timeout
+
+
 def test_content_param_forwarded_to_build_request():
     """
     Regression test: the `content` parameter passed to llm_passthrough_route
