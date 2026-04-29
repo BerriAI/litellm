@@ -1,10 +1,12 @@
 import json
-from typing import List, Optional
+from datetime import datetime, timedelta, timezone
+from typing import Callable, List, Optional
 
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import Span
+from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.router_strategy.budget_limiter import RouterBudgetLimiting
 from litellm.types.llms.openai import AllMessageValues
@@ -17,17 +19,53 @@ from litellm.types.utils import (
 VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX = "virtual_key_spend"
 END_USER_SPEND_CACHE_KEY_PREFIX = "end_user_model_spend"
 
+# In-memory cache TTL for per-model spend values (seconds).
+# Controls how long a spend value lives in the fast in-memory cache before
+# the next read re-fetches from Postgres.  60 s matches the TTL used by the
+# overall end-user budget check (UserAPIKeyCacheTTLEnum).
+_MODEL_SPEND_CACHE_TTL_SECONDS = 60
+
+
+def _budget_window_start_date(budget_duration: str) -> str:
+    """Return the earliest ISO date string (YYYY-MM-DD) that falls within the
+    current budget window for the given *budget_duration* (e.g. ``"30d"``).
+
+    The daily-spend tables store one row per calendar day, so the boundary is
+    always rounded to a full day.
+    """
+    seconds = duration_in_seconds(budget_duration)
+    days = max(seconds // 86400, 1)  # at least 1 day
+    now = datetime.now(timezone.utc)
+    start = now - timedelta(days=days)
+    return start.strftime("%Y-%m-%d")
+
+
+def _strip_provider_prefix(model: str) -> str:
+    """``"openai/gpt-4"`` -> ``"gpt-4"``, ``"gpt-4"`` -> ``"gpt-4"``."""
+    if "/" in model:
+        return model.split("/", 1)[-1]
+    return model
+
 
 class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
     """
-    Handles budgets for model + virtual key
+    Handles budgets for model + virtual key.
 
     Example: key=sk-1234567890, model=gpt-4o, max_budget=100, time_period=1d
+
+    The read path checks the in-memory cache first; on a miss it falls back
+    to querying the ``LiteLLM_DailyUserSpend`` / ``LiteLLM_DailyEndUserSpend``
+    Postgres tables that the proxy already populates on every request.  This
+    makes per-model budgets survive pod restarts and work across replicas.
+
+    The write path is inherited from ``RouterBudgetLimiting`` and seeds /
+    increments the in-memory cache so that enforcement within the same pod
+    is near-instant without waiting for the DB round-trip.
     """
 
     def __init__(self, dual_cache: DualCache):
         self.dual_cache = dual_cache
-        self.redis_increment_operation_queue = []
+        self.redis_increment_operation_queue: list = []
 
     async def is_key_within_model_budget(
         self,
@@ -139,25 +177,52 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
 
         return True
 
+    # spend lookup (read path) overrides parent with DB fallback
+
     async def _get_end_user_spend_for_model(
         self,
         end_user_id: str,
         model: str,
         key_budget_config: BudgetConfig,
     ) -> Optional[float]:
-        # 1. model: directly look up `model`
-        end_user_model_spend_cache_key = f"{END_USER_SPEND_CACHE_KEY_PREFIX}:{end_user_id}:{model}:{key_budget_config.budget_duration}"
-        _current_spend = await self.dual_cache.async_get_cache(
-            key=end_user_model_spend_cache_key,
-        )
+        """Return current spend for an end-user on a specific model within the
+        budget window.
 
-        if _current_spend is None:
-            # 2. If 1, does not exist, check if passed as {custom_llm_provider}/model
-            end_user_model_spend_cache_key = f"{END_USER_SPEND_CACHE_KEY_PREFIX}:{end_user_id}:{self._get_model_without_custom_llm_provider(model)}:{key_budget_config.budget_duration}"
-            _current_spend = await self.dual_cache.async_get_cache(
-                key=end_user_model_spend_cache_key,
+        Checks the in-memory cache first (trying both ``model`` as-is and
+        with the provider prefix stripped, matching the upstream two-key
+        lookup).  On a complete cache miss, queries
+        ``LiteLLM_DailyEndUserSpend`` in Postgres and populates the cache.
+        """
+        duration = key_budget_config.budget_duration
+        # Try cache with model as-is, then with provider prefix stripped
+        primary_key = (
+            f"{END_USER_SPEND_CACHE_KEY_PREFIX}:{end_user_id}:{model}:{duration}"
+        )
+        cached = await self.dual_cache.async_get_cache(key=primary_key)
+        if cached is not None:
+            return float(cached)
+
+        stripped = self._get_model_without_custom_llm_provider(model)
+        if stripped != model:
+            alt_key = (
+                f"{END_USER_SPEND_CACHE_KEY_PREFIX}:{end_user_id}:{stripped}:{duration}"
             )
-        return _current_spend
+            cached = await self.dual_cache.async_get_cache(key=alt_key)
+            if cached is not None:
+                return float(cached)
+
+        # No budget window configured -- skip DB fallback
+        if not duration:
+            return None
+
+        # Cache miss -- fall back to Postgres
+        return await self._query_db_and_cache(
+            cache_key=primary_key,
+            db_lookup=self._query_end_user_model_spend,
+            entity_id=end_user_id,
+            model=model,
+            budget_duration=duration,
+        )
 
     async def _get_virtual_key_spend_for_model(
         self,
@@ -165,28 +230,135 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
         model: str,
         key_budget_config: BudgetConfig,
     ) -> Optional[float]:
-        """
-        Get the current spend for a virtual key for a model
+        """Return current spend for a virtual key on a specific model within
+        the budget window.
 
-        Lookup model in this order:
-            1. model: directly look up `model`
-            2. If 1, does not exist, check if passed as {custom_llm_provider}/model
+        Checks the in-memory cache first (trying both ``model`` as-is and
+        with the provider prefix stripped, matching the upstream two-key
+        lookup).  On a complete cache miss, queries
+        ``LiteLLM_DailyUserSpend`` in Postgres and populates the cache.
         """
+        duration = key_budget_config.budget_duration
+        # Try cache with model as-is, then with provider prefix stripped
+        primary_key = f"{VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX}:{user_api_key_hash}:{model}:{duration}"
+        cached = await self.dual_cache.async_get_cache(key=primary_key)
+        if cached is not None:
+            return float(cached)
 
-        # 1. model: directly look up `model`
-        virtual_key_model_spend_cache_key = f"{VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX}:{user_api_key_hash}:{model}:{key_budget_config.budget_duration}"
-        _current_spend = await self.dual_cache.async_get_cache(
-            key=virtual_key_model_spend_cache_key,
+        stripped = self._get_model_without_custom_llm_provider(model)
+        if stripped != model:
+            alt_key = f"{VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX}:{user_api_key_hash}:{stripped}:{duration}"
+            cached = await self.dual_cache.async_get_cache(key=alt_key)
+            if cached is not None:
+                return float(cached)
+
+        # No budget window configured -- skip DB fallback
+        if not duration:
+            return None
+
+        # Cache miss -- fall back to Postgres
+        return await self._query_db_and_cache(
+            cache_key=primary_key,
+            db_lookup=self._query_virtual_key_model_spend,
+            entity_id=user_api_key_hash or "",
+            model=model,
+            budget_duration=duration,
         )
 
-        if _current_spend is None:
-            # 2. If 1, does not exist, check if passed as {custom_llm_provider}/model
-            # if "/" in model, remove first part before "/" - eg. openai/o1-preview -> o1-preview
-            virtual_key_model_spend_cache_key = f"{VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX}:{user_api_key_hash}:{self._get_model_without_custom_llm_provider(model)}:{key_budget_config.budget_duration}"
-            _current_spend = await self.dual_cache.async_get_cache(
-                key=virtual_key_model_spend_cache_key,
+    async def _query_db_and_cache(
+        self,
+        cache_key: str,
+        db_lookup: Callable,
+        entity_id: str,
+        model: str,
+        budget_duration: str,
+    ) -> Optional[float]:
+        """Query Postgres for spend and cache the result on success."""
+        try:
+            db_spend = await db_lookup(
+                entity_id=entity_id,
+                model=model,
+                budget_duration=budget_duration,
             )
-        return _current_spend
+        except Exception:
+            verbose_proxy_logger.debug(
+                "model_max_budget_limiter: failed to query DB for spend "
+                "-- returning None (will not block request)",
+                exc_info=True,
+            )
+            return None
+
+        if db_spend is not None:
+            await self.dual_cache.async_set_cache(
+                key=cache_key,
+                value=db_spend,
+                ttl=_MODEL_SPEND_CACHE_TTL_SECONDS,
+            )
+        return db_spend
+
+    @staticmethod
+    async def _query_end_user_model_spend(
+        entity_id: str,
+        model: str,
+        budget_duration: str,
+    ) -> Optional[float]:
+        """Sum spend from ``LiteLLM_DailyEndUserSpend`` for *entity_id* +
+        *model* within the budget window."""
+        from litellm.proxy.proxy_server import prisma_client
+
+        if prisma_client is None:
+            return None
+
+        start_date = _budget_window_start_date(budget_duration)
+        model_without_provider = _strip_provider_prefix(model)
+
+        rows = await prisma_client.db.litellm_dailyenduserspend.find_many(
+            where={
+                "end_user_id": entity_id,
+                "date": {"gte": start_date},
+                "OR": [
+                    {"model_group": model},
+                    {"model_group": model_without_provider},
+                ],
+            },
+        )
+        if not rows:
+            return 0.0
+        return sum(r.spend for r in rows)
+
+    @staticmethod
+    async def _query_virtual_key_model_spend(
+        entity_id: str,
+        model: str,
+        budget_duration: str,
+    ) -> Optional[float]:
+        """Sum spend from ``LiteLLM_DailyUserSpend`` for *entity_id* (an
+        api_key hash) + *model* within the budget window.
+
+        Note: ``LiteLLM_DailyUserSpend`` is keyed by ``api_key`` which stores
+        the hashed token — the same value passed as *entity_id*.
+        """
+        from litellm.proxy.proxy_server import prisma_client
+
+        if prisma_client is None:
+            return None
+
+        start_date = _budget_window_start_date(budget_duration)
+        model_without_provider = _strip_provider_prefix(model)
+
+        rows = await prisma_client.db.litellm_dailyuserspend.find_many(
+            where={
+                "api_key": entity_id,
+                "date": {"gte": start_date},
+                "OR": [
+                    {"model_group": model},
+                    {"model_group": model_without_provider},
+                ],
+            },
+        )
+        if not rows:
+            return 0.0
+        return sum(r.spend for r in rows)
 
     def _get_request_model_budget_config(
         self, model: str, internal_model_max_budget: GenericBudgetConfigType
