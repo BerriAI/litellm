@@ -288,6 +288,10 @@ def _fix_image_media_types_in_messages(messages: List[Dict]) -> List[Dict]:
     from litellm import verbose_logger
     from litellm.litellm_core_utils.token_counter import get_image_type
 
+    # Only override with types Anthropic actually accepts. Using a fallback like
+    # "image/" + detected would produce "image/heic" for any ISO Base Media File
+    # Format container (MP4, MOV, …) since get_image_type() returns "heic" for
+    # all ftyp-box files — making the failure mode worse than before.
     _MIME_MAP = {"jpeg": "image/jpeg", "png": "image/png", "gif": "image/gif", "webp": "image/webp"}
 
     def _fix_source(source: dict) -> None:
@@ -301,7 +305,10 @@ def _fix_image_media_types_in_messages(messages: List[Dict]) -> List[Dict]:
             detected = get_image_type(raw)
             if detected is None:
                 return
-            detected_mime = _MIME_MAP.get(detected, "image/" + detected)
+            detected_mime = _MIME_MAP.get(detected)
+            if detected_mime is None:
+                # Detected type is not supported by Anthropic; keep declared type.
+                return
             declared = source.get("media_type", "")
             if detected_mime != declared:
                 verbose_logger.debug(

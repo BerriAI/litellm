@@ -3399,3 +3399,151 @@ def test_extract_response_content_thinking_block_null_thinking():
     assert len(thinking_blocks) == 1
     assert thinking_blocks[0]["thinking"] == "Let me think..."
     assert "Done" in text
+
+
+_JPEG_B64 = "/9j/4AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+_PNG_B64 = "iVBORw0KGgoAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+_FTYP_B64 = "AAAAGGZ0eXBtcDQyAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+
+
+class TestConvertToAnthropicImageObjMediaTypeDetection:
+    def test_jpeg_bytes_with_png_declaration_corrected(self):
+        with patch(
+            "litellm.litellm_core_utils.token_counter.get_image_type",
+            return_value="jpeg",
+        ):
+            from litellm.litellm_core_utils.prompt_templates.factory import (
+                convert_to_anthropic_image_obj,
+            )
+
+            result = convert_to_anthropic_image_obj(
+                f"data:image/png;base64,{_JPEG_B64}", format=None
+            )
+            assert result["media_type"] == "image/jpeg"
+
+    def test_png_bytes_with_jpeg_declaration_corrected(self):
+        with patch(
+            "litellm.litellm_core_utils.token_counter.get_image_type",
+            return_value="png",
+        ):
+            from litellm.litellm_core_utils.prompt_templates.factory import (
+                convert_to_anthropic_image_obj,
+            )
+
+            result = convert_to_anthropic_image_obj(
+                f"data:image/jpeg;base64,{_PNG_B64}", format=None
+            )
+            assert result["media_type"] == "image/png"
+
+    def test_correct_declaration_not_overridden(self):
+        with patch(
+            "litellm.litellm_core_utils.token_counter.get_image_type",
+            return_value="jpeg",
+        ):
+            from litellm.litellm_core_utils.prompt_templates.factory import (
+                convert_to_anthropic_image_obj,
+            )
+
+            result = convert_to_anthropic_image_obj(
+                f"data:image/jpeg;base64,{_JPEG_B64}", format=None
+            )
+            assert result["media_type"] == "image/jpeg"
+
+    def test_heic_false_positive_keeps_declared_type(self):
+        with patch(
+            "litellm.litellm_core_utils.token_counter.get_image_type",
+            return_value="heic",
+        ):
+            from litellm.litellm_core_utils.prompt_templates.factory import (
+                convert_to_anthropic_image_obj,
+            )
+
+            result = convert_to_anthropic_image_obj(
+                f"data:image/jpeg;base64,{_FTYP_B64}", format=None
+            )
+            assert result["media_type"] == "image/jpeg"
+
+    def test_explicit_format_not_overridden_by_detection(self):
+        with patch(
+            "litellm.litellm_core_utils.token_counter.get_image_type",
+            return_value="jpeg",
+        ):
+            from litellm.litellm_core_utils.prompt_templates.factory import (
+                convert_to_anthropic_image_obj,
+            )
+
+            result = convert_to_anthropic_image_obj(
+                f"data:image/png;base64,{_JPEG_B64}", format="image/png"
+            )
+            assert result["media_type"] == "image/png"
+
+
+class TestFixImageMediaTypesInMessages:
+    def _make_messages(self, declared: str, b64_data: str) -> list:
+        return [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": declared,
+                            "data": b64_data,
+                        },
+                    }
+                ],
+            }
+        ]
+
+    def test_jpeg_bytes_with_png_declaration_corrected(self):
+        with patch(
+            "litellm.litellm_core_utils.token_counter.get_image_type",
+            return_value="jpeg",
+        ):
+            from litellm.llms.anthropic.experimental_pass_through.messages.handler import (
+                _fix_image_media_types_in_messages,
+            )
+
+            messages = self._make_messages("image/png", _JPEG_B64)
+            result = _fix_image_media_types_in_messages(messages)
+            assert result[0]["content"][0]["source"]["media_type"] == "image/jpeg"
+
+    def test_correct_declaration_unchanged(self):
+        with patch(
+            "litellm.litellm_core_utils.token_counter.get_image_type",
+            return_value="jpeg",
+        ):
+            from litellm.llms.anthropic.experimental_pass_through.messages.handler import (
+                _fix_image_media_types_in_messages,
+            )
+
+            messages = self._make_messages("image/jpeg", _JPEG_B64)
+            result = _fix_image_media_types_in_messages(messages)
+            assert result[0]["content"][0]["source"]["media_type"] == "image/jpeg"
+
+    def test_heic_false_positive_keeps_declared_type(self):
+        with patch(
+            "litellm.litellm_core_utils.token_counter.get_image_type",
+            return_value="heic",
+        ):
+            from litellm.llms.anthropic.experimental_pass_through.messages.handler import (
+                _fix_image_media_types_in_messages,
+            )
+
+            messages = self._make_messages("image/jpeg", _FTYP_B64)
+            result = _fix_image_media_types_in_messages(messages)
+            assert result[0]["content"][0]["source"]["media_type"] == "image/jpeg"
+
+    def test_none_detection_keeps_declared_type(self):
+        with patch(
+            "litellm.litellm_core_utils.token_counter.get_image_type",
+            return_value=None,
+        ):
+            from litellm.llms.anthropic.experimental_pass_through.messages.handler import (
+                _fix_image_media_types_in_messages,
+            )
+
+            messages = self._make_messages("image/png", _JPEG_B64)
+            result = _fix_image_media_types_in_messages(messages)
+            assert result[0]["content"][0]["source"]["media_type"] == "image/png"
