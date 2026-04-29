@@ -7538,8 +7538,11 @@ def print_args_passed_to_litellm(original_function, args, kwargs):
 
 def get_logging_id(start_time, response_obj):
     try:
+        resp_id = response_obj.get("id")
+        if not resp_id:
+            return None
         response_id = (
-            "time-" + start_time.strftime("%H-%M-%S-%f") + "_" + response_obj.get("id")
+            "time-" + start_time.strftime("%H-%M-%S-%f") + "_" + str(resp_id)[:150]
         )
         return response_id
     except Exception:
