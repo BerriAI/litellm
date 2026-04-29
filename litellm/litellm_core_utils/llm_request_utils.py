@@ -1,6 +1,12 @@
 from typing import Dict, Optional
 
 import litellm
+from litellm._logging import verbose_logger
+
+# Params that callers (e.g. LangChain) sometimes pass at the top level but
+# that are NOT valid top-level OpenAI API fields.  Forwarding them in
+# extra_body causes OpenAI to return "400 Unrecognized request argument".
+_OPENAI_INVALID_TOP_LEVEL_PARAMS = frozenset({"strict"})
 
 
 def _ensure_extra_body_is_safe(extra_body: Optional[Dict]) -> Optional[Dict]:
@@ -26,6 +32,18 @@ def _ensure_extra_body_is_safe(extra_body: Optional[Dict]) -> Optional[Dict]:
             # Langfuse TextPromptClients have .__dict__ attribute
             if _prompt is not None and hasattr(_prompt, "__dict__"):
                 extra_body["metadata"]["prompt"] = _prompt.__dict__
+    
+    # Drop params that are invalid at the OpenAI top-level request body.
+    # Some callers (e.g. LangChain) pass these at the completion() top level;
+    # they end up in extra_body and cause "400 Unrecognized request argument".
+    dropped = [k for k in _OPENAI_INVALID_TOP_LEVEL_PARAMS if k in extra_body]
+    for k in dropped:
+        extra_body.pop(k)
+    if dropped:
+        verbose_logger.debug(
+            "LiteLLM: dropped invalid top-level OpenAI params from extra_body: %s",
+            dropped,
+        )
 
     return extra_body
 
