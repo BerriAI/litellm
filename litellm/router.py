@@ -7603,6 +7603,7 @@ class Router:
                 if (
                     deployment.litellm_params == _deployment_on_router.litellm_params
                     and deployment.model_info == _deployment_on_router.model_info
+                    and deployment.model_name == _deployment_on_router.model_name
                 ):
                     # No need to update
                     return None
