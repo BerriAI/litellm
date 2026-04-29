@@ -60,10 +60,12 @@ from litellm.types.utils import (
     ModelResponseStream,
     StreamingChoices,
 )
+from litellm.constants import DEFAULT_MAX_TOKENS
 from litellm.utils import (
     ChatCompletionMessageToolCall,
     CustomStreamWrapper,
     Usage,
+    get_max_tokens,
 )
 
 if TYPE_CHECKING:
@@ -664,7 +666,38 @@ class OCIChatConfig(BaseConfig):
         oci_region = optional_params.get("oci_region", "us-ashburn-1")
         return f"https://inference.generativeai.{oci_region}.oci.oraclecloud.com/20231130/actions/chat"
 
-    def _get_optional_params(self, vendor: OCIVendors, optional_params: dict) -> Dict:
+    @staticmethod
+    def _get_max_tokens_for_model(model: Optional[str] = None) -> int:
+        """
+        Get the max output tokens for a given OCI model.
+
+        Uses litellm's model cost map for a dynamic lookup, falling back to
+        DEFAULT_MAX_TOKENS (configurable via the DEFAULT_MAX_TOKENS env var)
+        when the model is not found.
+
+        The model cost map stores OCI entries under ``oci/`` prefixed keys
+        (e.g. ``oci/cohere.command-a-03-2025``), but litellm strips the
+        provider prefix before calling ``transform_request``.  We therefore
+        try the bare name first and, if that misses, retry with the
+        ``oci/`` prefix.
+        """
+        if model is None:
+            return DEFAULT_MAX_TOKENS
+        # Try the bare model name first, then with the oci/ provider prefix
+        # since the cost map keys are prefixed but transform_request receives
+        # the name without the prefix.
+        for candidate in (model, f"oci/{model}"):
+            try:
+                max_tokens = get_max_tokens(candidate)
+                if max_tokens is not None:
+                    return max_tokens
+            except Exception:
+                continue
+        return DEFAULT_MAX_TOKENS
+
+    def _get_optional_params(
+        self, vendor: OCIVendors, optional_params: dict, model: Optional[str] = None
+    ) -> Dict:
         selected_params = {}
         if vendor == OCIVendors.COHERE:
             open_ai_to_oci_param_map = self.openai_to_oci_cohere_param_map
@@ -672,7 +705,7 @@ class OCIChatConfig(BaseConfig):
             open_ai_to_oci_param_map.pop("tool_choice")
             # Add default values for Cohere API
             selected_params = {
-                "maxTokens": 600,
+                "maxTokens": self._get_max_tokens_for_model(model),
                 "temperature": 1,
                 "topK": 0,
                 "topP": 0.75,
@@ -784,6 +817,13 @@ class OCIChatConfig(BaseConfig):
                         )
                     )
 
+            # Cohere requires all chat history elements to have a non-empty
+            # message.  Upstream callers (e.g. Open WebUI) may include
+            # assistant placeholders or empty system messages.  Skip them
+            # to avoid a 400 "all elements in history must have a message".
+            if not content and not tool_calls:
+                continue
+
             if role == "user":
                 chat_history.append(CohereMessage(role="USER", message=content))
             elif role == "assistant":
@@ -880,8 +920,15 @@ class OCIChatConfig(BaseConfig):
         # Build request based on vendor type
         if vendor == OCIVendors.COHERE:
             # For Cohere, we need to use the specific Cohere format
-            # Extract the last user message as the main message
-            user_messages = [msg for msg in messages if msg.get("role") == "user"]
+            # Extract the last user message as the main message.
+            # Filter out user messages with empty content — the Cohere API
+            # requires the main message field to be non-empty.
+            user_messages = [
+                msg
+                for msg in messages
+                if msg.get("role") == "user"
+                and self._extract_text_content(msg.get("content", "")).strip()
+            ]
             if not user_messages:
                 raise Exception("No user message found for Cohere model")
 
@@ -898,7 +945,7 @@ class OCIChatConfig(BaseConfig):
 
             # Create Cohere-specific chat request
             optional_cohere_params = self._get_optional_params(
-                OCIVendors.COHERE, optional_params
+                OCIVendors.COHERE, optional_params, model=model
             )
             chat_request = CohereChatRequest(
                 apiFormat="COHERE",
@@ -921,7 +968,7 @@ class OCIChatConfig(BaseConfig):
                 chatRequest=OCIChatRequestPayload(
                     apiFormat=vendor.value,
                     messages=adapt_messages_to_generic_oci_standard(messages),
-                    **self._get_optional_params(vendor, optional_params),
+                    **self._get_optional_params(vendor, optional_params, model=model),
                 ),
             )
 
