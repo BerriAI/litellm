@@ -25,6 +25,8 @@ from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm.proxy._types import hash_token
 
 INVALID_VIRTUAL_KEY_CACHE_PREFIX = "invalid_vk:"
+
+
 class InvalidVirtualKeyCache:
     """Settings + negative cache for virtual keys that are not in the DB (or not yet)."""
 
@@ -149,8 +151,6 @@ class InvalidVirtualKeyCache:
 
         Malformed keys raise ``HTTPException`` (401) with masking details instead of returning bool.
         """
-        ttl_seconds = cls.configured_ttl_seconds(general_settings)
-
         if isinstance(api_key, str):
             _masked_key = (
                 "{}****{}".format(api_key[:4], api_key[-4:])
@@ -177,7 +177,29 @@ class InvalidVirtualKeyCache:
                 detail="LiteLLM Virtual Key expected.",
             )
 
-        hashed_token = hash_token(token=api_key)
+        return await cls.check_invalid_hashed_token(
+            hashed_token=hash_token(token=api_key),
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            general_settings=general_settings,
+        )
+
+    @classmethod
+    async def check_invalid_hashed_token(
+        cls,
+        *,
+        hashed_token: str,
+        prisma_client: Any,
+        user_api_key_cache: Any,
+        general_settings: Any,
+    ) -> bool:
+        """
+        Hashed-token preflight for callers that no longer have the raw ``sk-`` key.
+
+        Returns ``True`` if the request should be rejected as an invalid virtual key.
+        Returns ``False`` if preflight passed; caller may load the full key object.
+        """
+        ttl_seconds = cls.configured_ttl_seconds(general_settings)
 
         if ttl_seconds is None:
             return False
@@ -196,7 +218,7 @@ class InvalidVirtualKeyCache:
             )
         except Exception as e:
             verbose_proxy_logger.debug(
-                "InvalidVirtualKeyCache.check_invalid_token: verification token probe failed, continuing to combined_view: %s",
+                "InvalidVirtualKeyCache.check_invalid_hashed_token: verification token probe failed, continuing to combined_view: %s",
                 e,
             )
             token_probe_failed = True

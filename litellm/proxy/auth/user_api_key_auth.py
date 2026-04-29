@@ -1166,12 +1166,14 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
             )
 
         if valid_token is None:
-            if await InvalidVirtualKeyCache.check_invalid_token(
+            is_invalid_token = await InvalidVirtualKeyCache.check_invalid_token(
                 api_key=api_key,
                 prisma_client=prisma_client,
                 user_api_key_cache=user_api_key_cache,
                 general_settings=general_settings,
-            ):
+            )
+
+            if is_invalid_token:
                 raise ProxyException(
                     message="Authentication Error at InvalidVirtualKeyCache, Invalid proxy server token passed. Token (hash) = {}. Unable to find token in cache or `LiteLLM_VerificationTokenTable`".format(
                         hash_token(token=api_key),
