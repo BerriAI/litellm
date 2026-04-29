@@ -800,10 +800,13 @@ def test_translate_anthropic_messages_to_openai_tool_result_with_base64_image():
             break
 
     assert tool_message is not None, "Tool message not found in result"
-    # Tool messages in OpenAI format have string content (data URL), not list
-    assert isinstance(tool_message["content"], str)
-    assert tool_message["content"].startswith("data:image/jpeg;base64,")
-    assert "/9j/4AAQSkZJRgABAQAAAQABAAD" in tool_message["content"]
+    # Tool messages with images use list content with ChatCompletionImageObject
+    assert isinstance(tool_message["content"], list)
+    assert len(tool_message["content"]) == 1
+    image_obj = tool_message["content"][0]
+    assert image_obj["type"] == "image_url"
+    assert image_obj["image_url"]["url"].startswith("data:image/jpeg;base64,")
+    assert "/9j/4AAQSkZJRgABAQAAAQABAAD" in image_obj["image_url"]["url"]
 
 
 def test_translate_anthropic_messages_to_openai_tool_result_with_url_image():
@@ -856,10 +859,13 @@ def test_translate_anthropic_messages_to_openai_tool_result_with_url_image():
             break
 
     assert tool_message is not None, "Tool message not found in result"
-    # Tool messages in OpenAI format have string content (URL), not list
-    assert isinstance(tool_message["content"], str)
+    # Tool messages with images use list content with ChatCompletionImageObject
+    assert isinstance(tool_message["content"], list)
+    assert len(tool_message["content"]) == 1
+    image_obj = tool_message["content"][0]
+    assert image_obj["type"] == "image_url"
     assert (
-        tool_message["content"]
+        image_obj["image_url"]["url"]
         == "https://i0.wp.com/picjumbo.com/wp-content/uploads/amazing-stone-path-in-forest-free-image.jpg"
     )
 

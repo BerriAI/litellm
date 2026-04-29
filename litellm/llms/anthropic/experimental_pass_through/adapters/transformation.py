@@ -477,19 +477,26 @@ class LiteLLMAnthropicMessagesAdapter:
                                                 self._translate_anthropic_image_to_openai(
                                                     cast(dict, source)
                                                 )
-                                                or ""
                                             )
-                                            tool_result = ChatCompletionToolMessage(
-                                                role="tool",
-                                                tool_call_id=content.get(
-                                                    "tool_use_id", ""
-                                                ),
-                                                content=openai_image_url,
-                                            )
-                                            self._add_cache_control_if_applicable(
-                                                content, tool_result, model
-                                            )
-                                            tool_message_list.append(tool_result)  # type: ignore[arg-type]
+                                            if openai_image_url:
+                                                tool_result = ChatCompletionToolMessage(
+                                                    role="tool",
+                                                    tool_call_id=content.get(
+                                                        "tool_use_id", ""
+                                                    ),
+                                                    content=[
+                                                        ChatCompletionImageObject(
+                                                            type="image_url",
+                                                            image_url=ChatCompletionImageUrlObject(
+                                                                url=openai_image_url
+                                                            ),
+                                                        )
+                                                    ],
+                                                )
+                                                self._add_cache_control_if_applicable(
+                                                    content, tool_result, model
+                                                )
+                                                tool_message_list.append(tool_result)  # type: ignore[arg-type]
                                 else:
                                     # For multiple content items, combine into a single tool message
                                     # with list content to preserve all items while having one tool_use_id
