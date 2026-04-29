@@ -57,7 +57,9 @@ class UserApiKeyCache(DualCache):
     def set_cache(self, key, value, local_only: bool = False, **kwargs):  # type: ignore[override]
         model_type = cast(Optional[Type[BaseModel]], kwargs.pop("model_type", None))
         payload = CacheCodec.serialize(value, model_type=model_type)
-        return super().set_cache(key=key, value=payload, local_only=local_only, **kwargs)
+        return super().set_cache(
+            key=key, value=payload, local_only=local_only, **kwargs
+        )
 
     async def async_set_cache(self, key, value, local_only: bool = False, **kwargs):  # type: ignore[override]
         model_type = cast(Optional[Type[BaseModel]], kwargs.pop("model_type", None))
