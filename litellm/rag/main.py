@@ -52,6 +52,7 @@ INGESTION_REGISTRY: Dict[str, Type[BaseRAGIngestion]] = {
     "gemini": GeminiRAGIngestion,
     "s3_vectors": S3VectorsRAGIngestion,
     "vertex_ai": VertexAIRAGIngestion,
+    "pg_vector": OpenAIRAGIngestion,
 }
 
 
