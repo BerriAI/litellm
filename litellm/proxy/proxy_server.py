@@ -672,6 +672,10 @@ async def _initialize_shared_aiohttp_session():
     try:
         from aiohttp import ClientSession, TCPConnector
 
+        from litellm.llms.custom_httpx.http_handler import (
+            _build_aiohttp_keepalive_socket_factory,
+        )
+
         connector_kwargs: Dict[str, Any] = {
             "keepalive_timeout": AIOHTTP_KEEPALIVE_TIMEOUT,
             "ttl_dns_cache": AIOHTTP_TTL_DNS_CACHE,
@@ -682,6 +686,9 @@ async def _initialize_shared_aiohttp_session():
             connector_kwargs["limit"] = AIOHTTP_CONNECTOR_LIMIT
         if AIOHTTP_CONNECTOR_LIMIT_PER_HOST > 0:
             connector_kwargs["limit_per_host"] = AIOHTTP_CONNECTOR_LIMIT_PER_HOST
+        socket_factory = _build_aiohttp_keepalive_socket_factory()
+        if socket_factory is not None:
+            connector_kwargs["socket_factory"] = socket_factory
 
         connector = TCPConnector(**connector_kwargs)
         session = ClientSession(connector=connector)
