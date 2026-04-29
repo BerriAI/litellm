@@ -376,14 +376,12 @@ if MCP_AVAILABLE:
         from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
         from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
         from litellm.proxy.proxy_server import proxy_config
-        from mcp.server.models import CallToolResult
-        from mcp.server.lowlevel.server import request_ctx, request_ctx_var
+        from mcp.types import CallToolResult
+        from mcp.server.lowlevel.server import request_ctx
 
         req_ctx = request_ctx.get(None)
         if req_ctx:
             active_mcp_session_var.set(req_ctx.session)
-        elif request_ctx_var.get(None):
-            active_mcp_session_var.set(request_ctx_var.get().session)
 
         # Validate arguments
         (
@@ -2758,6 +2756,8 @@ if MCP_AVAILABLE:
                 raw_headers=raw_headers,
                 client_ip=_sse_client_ip,
             )
+        except HTTPException:
+            raise
         except Exception as e:
             verbose_logger.warning(
                 f"Failed to extract auth context in POST /messages: {e}"

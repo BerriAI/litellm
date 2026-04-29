@@ -1211,8 +1211,12 @@ class MCPServerManager:
             # config/DB records predating the allowlist.
             if server.command:
                 base_command = os.path.basename(server.command)
-                # Strip .exe/.cmd/.bat suffix for Windows compatibility
-                base_command_no_ext = os.path.splitext(base_command)[0]
+                # Strip .exe/.cmd/.bat/.com suffix for Windows compatibility
+                base_command_no_ext = base_command
+                for ext in [".exe", ".cmd", ".bat", ".com"]:
+                    if base_command.lower().endswith(ext):
+                        base_command_no_ext = base_command[: -len(ext)]
+                        break
                 if (
                     base_command not in MCP_STDIO_ALLOWED_COMMANDS
                     and base_command_no_ext not in MCP_STDIO_ALLOWED_COMMANDS
