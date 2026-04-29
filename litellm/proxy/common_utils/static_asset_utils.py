@@ -101,16 +101,17 @@ async def fetch_validated_image_bytes(
     # returns the original hostname for the Host header. For HTTPS with
     # ssl_verify enabled, it returns the URL unchanged (TLS hostname
     # validation handles DNS rebinding).
-    request_kwargs = {}
-    if rewritten_url != url:
-        request_kwargs["headers"] = {"host": host_header}
-
     async_client = get_async_httpx_client(
         llm_provider=httpxSpecialProvider.UI,
         params={"timeout": timeout_s},
     )
     try:
-        response = await async_client.get(rewritten_url, **request_kwargs)
+        if rewritten_url != url:
+            response = await async_client.get(
+                rewritten_url, headers={"host": host_header}
+            )
+        else:
+            response = await async_client.get(rewritten_url)
     except Exception as exc:
         verbose_proxy_logger.debug("Asset fetch failed for %r: %s", url, exc)
         return None
@@ -118,9 +119,15 @@ async def fetch_validated_image_bytes(
     if response.status_code != 200:
         return None
 
-    content_type = (
-        (response.headers.get("content-type") or "").split(";")[0].strip().lower()
+    raw_content_type = (
+        response.headers.get("content-type") if hasattr(response, "headers") else None
     )
+    if not isinstance(raw_content_type, str):
+        # Defensive: if upstream omits Content-Type entirely, treat as
+        # non-image. (Also keeps ``Mock`` responses without a configured
+        # ``headers`` from blowing up the content-type check.)
+        return None
+    content_type = raw_content_type.split(";")[0].strip().lower()
     if content_type not in ALLOWED_IMAGE_CONTENT_TYPES:
         verbose_proxy_logger.warning(
             "Asset fetch from %r returned non-image content-type %r — refusing to serve.",
