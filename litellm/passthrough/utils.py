@@ -58,7 +58,7 @@ class BasePassthroughUtils:
         request_headers: dict,
         headers: dict,
         forward_headers: Optional[bool] = False,
-    ):
+    ) -> dict:
         """
         Helper to forward headers from original request.
 
