@@ -19,6 +19,7 @@ from litellm.integrations.langsmith_mock_client import (
     create_mock_langsmith_client,
     should_use_langsmith_mock,
 )
+from litellm.litellm_core_utils.redact_messages import redact_user_api_key_info
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
@@ -153,6 +154,15 @@ class LangsmithLogger(CustomBatchLogger):
             for key in ("session_id", "thread_id", "conversation_id"):
                 if key in requester_metadata and key not in extra_metadata:
                     extra_metadata[key] = requester_metadata[key]
+
+        # helper is shallow; also scrub nested requester_metadata since
+        # LangSmith forwards the whole dict into `extra`
+        extra_metadata = redact_user_api_key_info(metadata=extra_metadata)
+        nested = extra_metadata.get("requester_metadata")
+        if isinstance(nested, dict):
+            extra_metadata["requester_metadata"] = redact_user_api_key_info(
+                metadata=nested
+            )
         return extra_metadata
 
     def _build_outputs_with_usage(
