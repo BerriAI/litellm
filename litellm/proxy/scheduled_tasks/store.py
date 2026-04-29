@@ -15,13 +15,12 @@ from typing import Any, Dict, List, Optional
 from litellm.proxy.scheduled_tasks.schedule import compute_next_run
 
 
-def _serialize_json_for_prisma(value: Any) -> str:
+def _encode_json(value: Any) -> str:
     """
     Encode a value bound for a Prisma `Json?` column. prisma-client-python
-    rejects raw Python dicts/lists/None on Json columns
-    (`MissingRequiredValueError` / `DataError`); always json.dumps so the
-    driver hands a string to Postgres jsonb. Read path round-trips back
-    to native Python (`null` → None, `{}` → {}, etc).
+    rejects raw Python dicts/lists on Json columns; json.dumps once so the
+    driver hands a string to Postgres jsonb. Read path round-trips back to
+    native Python. Callers must skip the field entirely when value is None.
     """
     return json.dumps(value)
 
@@ -73,25 +72,25 @@ async def create_task(
     expires_at: datetime,
     fire_once: bool,
 ) -> Any:
-    return await prisma_client.db.litellm_scheduledtasktable.create(
-        data={
-            "owner_token": owner_token,
-            "user_id": user_id,
-            "team_id": team_id,
-            "agent_id": agent_id,
-            "title": title,
-            "action": action,
-            "action_args": _serialize_json_for_prisma(action_args),
-            "check_prompt": check_prompt,
-            "format_prompt": format_prompt,
-            "schedule_kind": schedule_kind,
-            "schedule_spec": schedule_spec,
-            "schedule_tz": schedule_tz,
-            "next_run_at": next_run_at,
-            "expires_at": expires_at,
-            "fire_once": fire_once,
-        }
-    )
+    data: Dict[str, Any] = {
+        "owner_token": owner_token,
+        "user_id": user_id,
+        "team_id": team_id,
+        "agent_id": agent_id,
+        "title": title,
+        "action": action,
+        "check_prompt": check_prompt,
+        "format_prompt": format_prompt,
+        "schedule_kind": schedule_kind,
+        "schedule_spec": schedule_spec,
+        "schedule_tz": schedule_tz,
+        "next_run_at": next_run_at,
+        "expires_at": expires_at,
+        "fire_once": fire_once,
+    }
+    if action_args is not None:
+        data["action_args"] = _encode_json(action_args)
+    return await prisma_client.db.litellm_scheduledtasktable.create(data=data)
 
 
 async def list_tasks_for_owner(
@@ -148,12 +147,15 @@ async def update_task_for_owner(
         return None
 
     # Mirror the create path: Json columns must be json-encoded for
-    # prisma-client-python.
+    # prisma-client-python. Drop the key entirely when caller sent null;
+    # passing None to a Json? column is rejected.
     if "action_args" in fields:
-        fields = {
-            **fields,
-            "action_args": _serialize_json_for_prisma(fields["action_args"]),
-        }
+        if fields["action_args"] is None:
+            fields = {k: v for k, v in fields.items() if k != "action_args"}
+            if not fields:
+                raise ValueError("no fields to update")
+        else:
+            fields = {**fields, "action_args": _encode_json(fields["action_args"])}
 
     return await prisma_client.db.litellm_scheduledtasktable.update(
         where={"task_id": task_id},
