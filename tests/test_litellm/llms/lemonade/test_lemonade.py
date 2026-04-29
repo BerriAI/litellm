@@ -37,7 +37,7 @@ def test_get_openai_compatible_provider_info():
     )
 
     assert api_base == "http://localhost:8000/api/v1"
-    assert key == "lemonade"
+    assert key == "lemonade"  # falls back to sentinel when no key provided
 
 
 def test_get_openai_compatible_provider_info_with_custom_base():
@@ -50,7 +50,32 @@ def test_get_openai_compatible_provider_info_with_custom_base():
     )
 
     assert api_base == custom_api_base
-    assert key == "lemonade"
+    assert key == "lemonade"  # falls back to sentinel when no key provided
+
+
+def test_get_openai_compatible_provider_info_with_api_key():
+    """Test that a passed api_key is respected"""
+    config = LemonadeChatConfig()
+
+    api_base, key = config._get_openai_compatible_provider_info(
+        api_base=None,
+        api_key="my-secret-key",
+    )
+
+    assert key == "my-secret-key"
+
+
+def test_get_openai_compatible_provider_info_with_env_key(monkeypatch):
+    """Test that LEMONADE_API_KEY env var is used when no api_key is passed"""
+    monkeypatch.setenv("LEMONADE_API_KEY", "env-secret-key")
+    config = LemonadeChatConfig()
+
+    api_base, key = config._get_openai_compatible_provider_info(
+        api_base=None,
+        api_key=None,
+    )
+
+    assert key == "env-secret-key"
 
 
 def test_transform_response():
