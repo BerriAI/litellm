@@ -769,6 +769,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "uses_embed_content": {"type": "boolean"},
                 "supports_reasoning": {"type": "boolean"},
                 "supports_minimal_reasoning_effort": {"type": "boolean"},
+                "supports_low_reasoning_effort": {"type": "boolean"},
                 "supports_none_reasoning_effort": {"type": "boolean"},
                 "supports_xhigh_reasoning_effort": {"type": "boolean"},
                 "supports_max_reasoning_effort": {"type": "boolean"},
@@ -1178,7 +1179,7 @@ def test_get_model_info_shows_supports_computer_use():
     "model, custom_llm_provider",
     [
         ("gpt-3.5-turbo", "openai"),
-        ("anthropic.claude-3-7-sonnet-20250219-v1:0", "bedrock"),
+        ("anthropic.claude-sonnet-4-5-20250929-v1:0", "bedrock"),
         ("gemini-2.5-pro", "vertex_ai"),
     ],
 )
@@ -1324,7 +1325,7 @@ class TestProxyFunctionCalling:
             ),
             (
                 "litellm_proxy/bedrock-claude-3-opus",
-                "bedrock/anthropic.claude-3-7-sonnet-20250219-v1:0",
+                "bedrock/anthropic.claude-sonnet-4-5-20250929-v1:0",
                 False,
             ),
             (
@@ -1622,7 +1623,7 @@ class TestProxyFunctionCalling:
             ),
             (
                 "litellm_proxy/bedrock-claude-3-opus",
-                "bedrock/converse/anthropic.claude-3-7-sonnet-20250219-v1:0",
+                "bedrock/converse/anthropic.claude-sonnet-4-5-20250929-v1:0",
                 False,
                 "Bedrock Claude 3 Opus via Converse API",
             ),
@@ -1709,7 +1710,7 @@ class TestProxyFunctionCalling:
             ),
             (
                 "litellm_proxy/staging-claude-opus",
-                "bedrock/converse/anthropic.claude-3-7-sonnet-20250219-v1:0",
+                "bedrock/converse/anthropic.claude-sonnet-4-5-20250929-v1:0",
                 False,
                 "Staging Claude Opus",
             ),
@@ -1721,7 +1722,7 @@ class TestProxyFunctionCalling:
             ),
             (
                 "litellm_proxy/high-performance-claude",
-                "bedrock/converse/anthropic.claude-3-7-sonnet-20250219-v1:0",
+                "bedrock/converse/anthropic.claude-sonnet-4-5-20250929-v1:0",
                 False,
                 "High-performance Claude deployment",
             ),
@@ -1859,7 +1860,7 @@ class TestProxyFunctionCalling:
         bedrock_models = [
             "bedrock/converse/anthropic.claude-3-haiku-20240307-v1:0",
             "bedrock/converse/anthropic.claude-3-sonnet-20240229-v1:0",
-            "bedrock/converse/anthropic.claude-3-7-sonnet-20250219-v1:0",
+            "bedrock/converse/anthropic.claude-sonnet-4-5-20250929-v1:0",
         ]
 
         for model in bedrock_models:
@@ -1891,7 +1892,7 @@ class TestProxyFunctionCalling:
             ),
             (
                 "litellm_proxy/bedrock-claude-3-opus",
-                "bedrock/converse/anthropic.claude-3-7-sonnet-20250219-v1:0",
+                "bedrock/converse/anthropic.claude-sonnet-4-5-20250929-v1:0",
                 False,
                 "Bedrock Claude 3 Opus via Converse API",
             ),
@@ -1978,7 +1979,7 @@ class TestProxyFunctionCalling:
             ),
             (
                 "litellm_proxy/staging-claude-opus",
-                "bedrock/converse/anthropic.claude-3-7-sonnet-20250219-v1:0",
+                "bedrock/converse/anthropic.claude-sonnet-4-5-20250929-v1:0",
                 False,
                 "Staging Claude Opus",
             ),
@@ -1990,7 +1991,7 @@ class TestProxyFunctionCalling:
             ),
             (
                 "litellm_proxy/high-performance-claude",
-                "bedrock/converse/anthropic.claude-3-7-sonnet-20250219-v1:0",
+                "bedrock/converse/anthropic.claude-sonnet-4-5-20250929-v1:0",
                 False,
                 "High-performance Claude deployment",
             ),
@@ -2128,7 +2129,7 @@ class TestProxyFunctionCalling:
         bedrock_models = [
             "bedrock/converse/anthropic.claude-3-haiku-20240307-v1:0",
             "bedrock/converse/anthropic.claude-3-sonnet-20240229-v1:0",
-            "bedrock/converse/anthropic.claude-3-7-sonnet-20250219-v1:0",
+            "bedrock/converse/anthropic.claude-sonnet-4-5-20250929-v1:0",
         ]
 
         for model in bedrock_models:
@@ -2160,7 +2161,7 @@ class TestProxyFunctionCalling:
             ),
             (
                 "litellm_proxy/bedrock-claude-3-opus",
-                "bedrock/converse/anthropic.claude-3-7-sonnet-20250219-v1:0",
+                "bedrock/converse/anthropic.claude-sonnet-4-5-20250929-v1:0",
                 False,
                 "Bedrock Claude 3 Opus via Converse API",
             ),
@@ -2247,7 +2248,7 @@ class TestProxyFunctionCalling:
             ),
             (
                 "litellm_proxy/staging-claude-opus",
-                "bedrock/converse/anthropic.claude-3-7-sonnet-20250219-v1:0",
+                "bedrock/converse/anthropic.claude-sonnet-4-5-20250929-v1:0",
                 False,
                 "Staging Claude Opus",
             ),
@@ -2259,7 +2260,7 @@ class TestProxyFunctionCalling:
             ),
             (
                 "litellm_proxy/high-performance-claude",
-                "bedrock/converse/anthropic.claude-3-7-sonnet-20250219-v1:0",
+                "bedrock/converse/anthropic.claude-sonnet-4-5-20250929-v1:0",
                 False,
                 "High-performance Claude deployment",
             ),
@@ -2397,7 +2398,7 @@ class TestProxyFunctionCalling:
         bedrock_models = [
             "bedrock/converse/anthropic.claude-3-haiku-20240307-v1:0",
             "bedrock/converse/anthropic.claude-3-sonnet-20240229-v1:0",
-            "bedrock/converse/anthropic.claude-3-7-sonnet-20250219-v1:0",
+            "bedrock/converse/anthropic.claude-sonnet-4-5-20250929-v1:0",
         ]
 
         for model in bedrock_models:

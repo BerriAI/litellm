@@ -1,3 +1,5 @@
+import copy
+
 import pytest
 
 from litellm.proxy.common_utils.openai_endpoint_utils import (
@@ -86,7 +88,7 @@ def test_remove_sensitive_info_from_deployment_with_excluded_keys():
     """
     Test that excluded_keys prevents masking of specific keys (exact match).
     """
-    model_config = {
+    base_config = {
         "model_name": "test-model",
         "litellm_params": {
             "model": "openai/gpt-4",
@@ -98,13 +100,13 @@ def test_remove_sensitive_info_from_deployment_with_excluded_keys():
     }
 
     # Without excluded_keys, access_token should be masked (contains "token")
-    sanitized_config = remove_sensitive_info_from_deployment(model_config)
+    sanitized_config = remove_sensitive_info_from_deployment(copy.deepcopy(base_config))
     assert sanitized_config["litellm_params"]["access_token"] != "token-12345"
     assert "*" in sanitized_config["litellm_params"]["access_token"]
 
     # With excluded_keys, litellm_credentials_name should NOT be masked (even if it would match patterns)
     sanitized_config = remove_sensitive_info_from_deployment(
-        model_config, excluded_keys={"litellm_credentials_name"}
+        copy.deepcopy(base_config), excluded_keys={"litellm_credentials_name"}
     )
     assert (
         sanitized_config["litellm_params"]["litellm_credentials_name"]
