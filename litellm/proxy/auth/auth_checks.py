@@ -915,7 +915,8 @@ async def get_team_member_default_budget(
     Fetches the team-level default per-member budget referenced by team.metadata["team_member_budget_id"].
 
     This budget is applied to team members whose TeamMembership row has no
-    linked budget. Results are cached for performance.
+    linked budget, or whose linked budget has max_budget=NULL. Results are
+    cached for performance.
 
     Args:
         budget_id: The budget_id pulled from team.metadata["team_member_budget_id"]
