@@ -208,6 +208,30 @@ def test_success_callback_unioned_with_existing(admin_auth, patched_proxy):
     assert set(stored) == {"langfuse", "prometheus"}
 
 
+def test_success_callback_dedups_against_mixed_case_existing(admin_auth, patched_proxy):
+    """
+    Regression: a litellm_settings row written by an older code path (or by
+    direct DB edit) may still hold mixed-case callback names like
+    ["Langfuse"]. When the user submits ["langfuse"], the union must
+    normalize the existing entries too — otherwise the DB ends up with both
+    "Langfuse" and "langfuse" and delete_callback (lowercase lookup) cannot
+    find the original.
+    """
+    prisma = patched_proxy(
+        initial_rows={"litellm_settings": {"success_callback": ["Langfuse", "SQS"]}}
+    )
+
+    client = TestClient(app)
+    resp = client.post(
+        "/config/update",
+        json={"litellm_settings": {"success_callback": ["langfuse"]}},
+    )
+
+    assert resp.status_code == 200
+    stored = prisma.db.litellm_config.rows["litellm_settings"]["success_callback"]
+    assert set(stored) == {"langfuse", "sqs"}
+
+
 def test_success_callback_normalized_on_first_write(admin_auth, patched_proxy):
     """
     Regression: when no litellm_settings row exists yet, incoming mixed-case
