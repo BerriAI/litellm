@@ -9,6 +9,8 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 from litellm._logging import verbose_logger
 from litellm.proxy._experimental.mcp_server.utils import MCP_TOOL_PREFIX_SEPARATOR
 
+from litellm.proxy._experimental.mcp_server.utils import is_tool_name_prefixed
+
 if TYPE_CHECKING:
     from semantic_router.routers import SemanticRouter
 
@@ -192,7 +194,19 @@ class SemanticMCPToolFilter:
             matched_tool_names = self._extract_tool_names_from_matches(matches)
 
             if not matched_tool_names:
-                return available_tools
+                # Return only non-MCP tools (built-in tools without a server prefix)
+                # to avoid exceeding provider tool limits when no semantic matches exist
+                non_mcp_tools = [
+                    tool
+                    for tool in available_tools
+                    if not is_tool_name_prefixed(self._extract_tool_info(tool)[0])
+                ]
+                if non_mcp_tools:
+                    return non_mcp_tools
+
+                # Fallback: if all tools are MCP tools (no built-in tools), return
+                # a bounded subset to avoid an empty tool list that would confuse the model
+                return available_tools[:limit]
 
             return self._get_tools_by_names(matched_tool_names, available_tools)
 
