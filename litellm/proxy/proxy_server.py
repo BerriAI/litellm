@@ -5842,6 +5842,19 @@ async def initialize(  # noqa: PLR0915
                 verbose_proxy_logger.setLevel(
                     level=logging.DEBUG
                 )  # set proxy logs to debug
+            elif litellm_log_setting.upper() in ("WARNING", "ERROR", "CRITICAL"):
+                import logging
+
+                from litellm._logging import (
+                    verbose_logger,
+                    verbose_proxy_logger,
+                    verbose_router_logger,
+                )
+
+                _level = getattr(logging, litellm_log_setting.upper())
+                verbose_logger.setLevel(level=_level)
+                verbose_router_logger.setLevel(level=_level)
+                verbose_proxy_logger.setLevel(level=_level)
     dynamic_config = {"general": {}, user_model: {}}
     if config:
         (
