@@ -5,36 +5,32 @@ from fastapi import Request
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import CommonProxyErrors, UserAPIKeyAuth
 
-# Fields on ``UserAPIKeyAuth`` that grant privileges directly (``user_role``
-# is the canonical privesc — coerced from the string ``"proxy_admin"`` into
-# ``LitellmUserRoles.PROXY_ADMIN`` by Pydantic) or break trust assumptions
-# (``api_key`` / ``token`` short-circuit the validated-key contract;
-# ``permissions`` / ``allowed_routes`` directly grant route access; budget
-# and limit fields can be set to wild values to bypass enforcement;
-# ``metadata`` is too broad to safely admit from caller-controlled headers).
+# OAuth2-proxy header trust is for **identity assertion** from a trusted
+# upstream auth proxy (oauth2-proxy, Authelia, etc.). The allowlist below
+# is the only safe surface — anything else (``user_role``, ``api_key``,
+# ``permissions``, ``max_budget``, ``user_max_budget``,
+# ``team_tpm_limit``, ``end_user_max_budget``, ``allowed_model_region``,
+# and dozens of similar policy fields scattered across the
+# ``LiteLLM_VerificationTokenView`` hierarchy) is a privilege grant that
+# would let a caller forge their own enforcement parameters by sending
+# the matching header.
 #
-# Operators who legitimately need any of these to flow from a trusted
-# upstream proxy should switch to JWT authentication, which validates a
+# A denylist of "privileged fields" is unmaintainable in this codebase:
+# the auth model has ~50 budget/spend/limit/permission fields and gains
+# more with each release. An allowlist scoped to identity assertion is
+# default-secure — new fields are blocked automatically.
+#
+# Operators who need a trusted upstream to assert anything beyond
+# identity should switch to JWT authentication, which validates a
 # signature on the assertion rather than blindly trusting headers.
-PRIVILEGED_OAUTH2_PROXY_FIELDS: FrozenSet[str] = frozenset(
+ALLOWED_OAUTH2_PROXY_FIELDS: FrozenSet[str] = frozenset(
     {
-        "user_role",
-        "api_key",
-        "token",
-        "key_alias",
-        "key_name",
-        "permissions",
-        "allowed_routes",
-        "max_budget",
-        "spend",
-        "model_max_budget",
-        "model_spend",
-        "tpm_limit",
-        "rpm_limit",
-        "team_max_budget",
-        "team_spend",
-        "blocked",
-        "metadata",
+        "user_id",
+        "user_email",
+        "team_id",
+        "team_alias",
+        "org_id",
+        "models",
     }
 )
 
@@ -54,15 +50,15 @@ async def handle_oauth2_proxy_request(request: Request) -> UserAPIKeyAuth:
        previously did not, which let any open-source deployment turn
        the feature on without realising it requires a hardened
        deployment topology.
-    2. **Privileged-field denylist.** ``oauth2_config_mappings`` maps
-       header names to ``UserAPIKeyAuth`` fields. Without a denylist,
-       an admin who maps the wrong header to ``user_role`` (or who
-       hasn't fully locked down their reverse proxy) lets any caller
-       set the ``user_role`` header to ``"proxy_admin"`` and gain full
-       admin privileges — Pydantic coerces the string into the enum.
-       Mapping any privileged field is rejected at startup-style auth
-       time so the misconfiguration surfaces loudly rather than as a
-       silent privesc.
+    2. **Identity-only allowlist.** ``oauth2_config_mappings`` maps
+       header names to ``UserAPIKeyAuth`` fields. Without an allowlist,
+       an admin who maps the wrong header to ``user_role`` lets any
+       caller send ``X-User-Role: proxy_admin`` and gain full admin
+       privileges (Pydantic coerces the string into the enum). Only
+       fields in ``ALLOWED_OAUTH2_PROXY_FIELDS`` (identity assertion
+       only — see the constant's comment) may be mapped; any other
+       mapping is rejected at request time so the misconfiguration
+       surfaces loudly rather than as a silent privesc.
     """
     from litellm.proxy.proxy_server import general_settings, premium_user
 
@@ -81,17 +77,18 @@ async def handle_oauth2_proxy_request(request: Request) -> UserAPIKeyAuth:
     if not oauth2_config_mappings:
         raise ValueError("Oauth2 config mappings not found in general_settings")
 
-    privileged_mapped = sorted(
-        set(oauth2_config_mappings.keys()) & PRIVILEGED_OAUTH2_PROXY_FIELDS
+    disallowed = sorted(
+        set(oauth2_config_mappings.keys()) - ALLOWED_OAUTH2_PROXY_FIELDS
     )
-    if privileged_mapped:
+    if disallowed:
         raise ValueError(
-            "Oauth2 proxy auth refuses to map privileged UserAPIKeyAuth "
-            f"fields from request headers: {privileged_mapped}. These "
-            "fields would grant privileges (e.g. proxy_admin), bypass "
-            "budget enforcement, or short-circuit key validation if a "
-            "caller can spoof the corresponding header. If you need a "
-            "trusted upstream to assert one of these, use JWT auth "
+            "Oauth2 proxy auth refuses to map non-identity UserAPIKeyAuth "
+            f"fields from request headers: {disallowed}. Only identity "
+            f"fields are accepted ({sorted(ALLOWED_OAUTH2_PROXY_FIELDS)}); "
+            "anything else (privileges, budgets, rate limits, metadata) "
+            "would let a caller forge enforcement parameters by spoofing "
+            "the matching header. If you need a trusted upstream to "
+            "assert anything beyond identity, use JWT auth "
             "(signature-validated) instead of header-trust."
         )
 
