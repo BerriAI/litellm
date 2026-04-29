@@ -30,24 +30,32 @@ async def test_auth_context_persistence():
 
 @pytest.mark.asyncio
 async def test_get_or_extract_auth_context_fallback():
-    """Test get_or_extract_auth_context fallback to server object."""
+    """Test get_or_extract_auth_context fallback to session read_stream."""
     from litellm.proxy._experimental.mcp_server.server import (
-        server,
         MCPAuthenticatedUser,
         auth_context_var,
     )
+    from unittest.mock import MagicMock
 
     auth_data = UserAPIKeyAuth(api_key="fallback-key")
     auth_user = MCPAuthenticatedUser(user_api_key_auth=auth_data)
 
-    # Set on server object
-    server._litellm_auth_context = auth_user
+    # Mock request_ctx.get().session._read_stream._litellm_auth_context
+    mock_session = MagicMock()
+    mock_read_stream = MagicMock()
+    mock_read_stream._litellm_auth_context = auth_user
+    mock_session._read_stream = mock_read_stream
+
+    mock_request_ctx = MagicMock()
+    mock_request_ctx.get.return_value.session = mock_session
 
     # Ensure ContextVar is empty
     token = auth_context_var.set(None)
     try:
-        result = await get_or_extract_auth_context()
-        assert result[0].api_key == "fallback-key"
+        with patch("mcp.server.lowlevel.server.request_ctx", mock_request_ctx):
+            result = await get_or_extract_auth_context()
+            assert result[0] is not None
+            assert result[0].api_key == "fallback-key"
     finally:
         auth_context_var.reset(token)
 
