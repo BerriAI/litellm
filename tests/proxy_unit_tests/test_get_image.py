@@ -65,12 +65,14 @@ async def test_get_image_cache_logic():
         os.remove(cache_path)
 
     # Mock response — set headers explicitly so the Content-Type
-    # validation added for GHSA-pjc9-2hw6-78rr accepts the response
-    # as a legitimate image.
+    # validation accepts the response as a legitimate image, and set
+    # ``is_redirect=False`` so ``async_safe_get`` doesn't try to walk
+    # a redirect chain.
     mock_response = mock.Mock()
     mock_response.status_code = 200
     mock_response.content = b"fake image data"
     mock_response.headers = {"content-type": "image/jpeg"}
+    mock_response.is_redirect = False
 
     with mock.patch(
         "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.get"

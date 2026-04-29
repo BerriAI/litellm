@@ -12312,16 +12312,21 @@ async def get_image():
         # SSRF + content-type validation — the helper rejects
         # private/internal/cloud-metadata targets and non-image responses.
         image_bytes = await fetch_validated_image_bytes(logo_path)
-        if image_bytes is not None:
-            try:
-                with open(cache_path, "wb") as f:
-                    f.write(image_bytes)
-                return FileResponse(cache_path, media_type="image/jpeg")
-            except OSError as e:
-                verbose_proxy_logger.debug(
-                    "Could not write logo cache to %s: %s", cache_path, e
-                )
-        return FileResponse(default_logo, media_type="image/jpeg")
+        if image_bytes is None:
+            return FileResponse(default_logo, media_type="image/jpeg")
+        try:
+            with open(cache_path, "wb") as f:
+                f.write(image_bytes)
+            return FileResponse(cache_path, media_type="image/jpeg")
+        except OSError as e:
+            # Read-only assets dir: serve the validated bytes inline
+            # rather than dropping them and returning the default logo.
+            from fastapi.responses import Response
+
+            verbose_proxy_logger.debug(
+                "Could not write logo cache to %s: %s — serving inline", cache_path, e
+            )
+            return Response(content=image_bytes, media_type="image/jpeg")
     else:
         # Default logo (resolved from the bundled asset, not user-controlled).
         return FileResponse(logo_path, media_type="image/jpeg")

@@ -18,7 +18,7 @@ import os
 from typing import List, Optional
 
 from litellm._logging import verbose_proxy_logger
-from litellm.litellm_core_utils.url_utils import SSRFError, validate_url
+from litellm.litellm_core_utils.url_utils import SSRFError, async_safe_get
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.types.llms.custom_http import httpxSpecialProvider
 
@@ -26,13 +26,19 @@ from litellm.types.llms.custom_http import httpxSpecialProvider
 # without this, an admin-configured URL whose upstream returns
 # ``application/json`` (e.g. cloud metadata, internal API) would still be
 # served back to the caller verbatim.
+#
+# ``image/svg+xml`` is intentionally NOT in this list: SVG is the only
+# common image format that can embed JavaScript, and the endpoint is
+# unauthenticated. An admin-configured CDN serving a crafted SVG would
+# otherwise reach unauthenticated callers; removing SVG closes the
+# residual XSS surface even though the response is served with a
+# hardcoded ``image/jpeg`` / ``image/x-icon`` media type.
 ALLOWED_IMAGE_CONTENT_TYPES = frozenset(
     {
         "image/jpeg",
         "image/jpg",
         "image/png",
         "image/gif",
-        "image/svg+xml",
         "image/webp",
         "image/x-icon",
         "image/vnd.microsoft.icon",
@@ -76,19 +82,27 @@ async def fetch_validated_image_bytes(
     url: str, *, timeout_s: float = 5.0
 ) -> Optional[bytes]:
     """
-    Fetch ``url`` with SSRF protection (always-on) and Content-Type
-    validation. Returns the raw bytes on success, ``None`` on any
-    failure (blocked target, non-200, or non-image response).
+    Fetch ``url`` with SSRF protection and Content-Type validation.
+    Returns the raw bytes on success, ``None`` on any failure (blocked
+    target, redirect to a blocked target, non-200, or non-image
+    response).
 
-    The SSRF guard is enforced unconditionally — these endpoints are
-    unauthenticated, so the admin-facing ``litellm.user_url_validation``
-    toggle does not apply. An admin who opted out of URL validation for
-    LLM provider paths should not also expose ``/get_image`` to SSRF.
+    Delegates to ``async_safe_get`` so each redirect hop is re-validated
+    against ``BLOCKED_NETWORKS`` (a 3xx to ``169.254.169.254`` is
+    rejected, not followed). Honours ``litellm.user_url_validation``
+    like every other SSRF-aware fetch in the codebase; the toggle
+    defaults to True, and an admin who has explicitly disabled URL
+    validation has opted out of SSRF protection globally.
     """
     if not url:
         return None
+
+    async_client = get_async_httpx_client(
+        llm_provider=httpxSpecialProvider.UI,
+        params={"timeout": timeout_s},
+    )
     try:
-        rewritten_url, host_header = validate_url(url)
+        response = await async_safe_get(async_client, url)
     except SSRFError as exc:
         verbose_proxy_logger.warning(
             "Blocked unauthenticated asset fetch — SSRF guard rejected %r: %s",
@@ -96,22 +110,6 @@ async def fetch_validated_image_bytes(
             exc,
         )
         return None
-
-    # ``validate_url`` rewrites HTTP URLs to point at a validated IP and
-    # returns the original hostname for the Host header. For HTTPS with
-    # ssl_verify enabled, it returns the URL unchanged (TLS hostname
-    # validation handles DNS rebinding).
-    async_client = get_async_httpx_client(
-        llm_provider=httpxSpecialProvider.UI,
-        params={"timeout": timeout_s},
-    )
-    try:
-        if rewritten_url != url:
-            response = await async_client.get(
-                rewritten_url, headers={"host": host_header}
-            )
-        else:
-            response = await async_client.get(rewritten_url)
     except Exception as exc:
         verbose_proxy_logger.debug("Asset fetch failed for %r: %s", url, exc)
         return None

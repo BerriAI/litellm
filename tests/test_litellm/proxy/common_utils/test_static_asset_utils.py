@@ -101,121 +101,89 @@ class TestResolveLocalAssetPath:
 
 
 class TestFetchValidatedImageBytes:
-    @pytest.fixture
-    def mock_async_client(self):
-        client = MagicMock()
-        client.get = AsyncMock()
-        return client
+    """
+    The helper now delegates to ``async_safe_get`` for the SSRF guard +
+    redirect handling. Tests mock ``async_safe_get`` directly so they
+    exercise the helper's contract (Content-Type validation, status code
+    handling, exception fallthrough) without depending on the SSRF
+    primitive's internals.
+    """
 
-    @pytest.mark.asyncio
-    async def test_blocks_private_ip_via_validate_url(self, mock_async_client):
-        # The SSRF half of GHSA-pjc9-2hw6-78rr — admin sets logo URL to
-        # http://169.254.169.254/iam, attacker hits /get_image, exfils creds.
-        with (
+    @staticmethod
+    def _patches(*, async_safe_get_return=None, async_safe_get_side_effect=None):
+        return [
             patch(
-                "litellm.proxy.common_utils.static_asset_utils.validate_url",
-                side_effect=SSRFError("blocked: 169.254.169.254"),
+                "litellm.proxy.common_utils.static_asset_utils.async_safe_get",
+                new_callable=AsyncMock,
+                return_value=async_safe_get_return,
+                side_effect=async_safe_get_side_effect,
             ),
             patch(
                 "litellm.proxy.common_utils.static_asset_utils.get_async_httpx_client",
-                return_value=mock_async_client,
+                return_value=MagicMock(),
             ),
-        ):
-            result = await fetch_validated_image_bytes("http://169.254.169.254/iam")
-
-        assert result is None
-        # The fetch must not be attempted when the URL is rejected.
-        mock_async_client.get.assert_not_called()
+        ]
 
     @pytest.mark.asyncio
-    async def test_rejects_non_image_content_type(self, mock_async_client):
+    async def test_blocks_ssrf_target(self):
+        # The SSRF half of GHSA-pjc9-2hw6-78rr — admin sets logo URL to
+        # http://169.254.169.254/iam, attacker hits /get_image, exfils creds.
+        # ``async_safe_get`` raises SSRFError on private/metadata targets
+        # and on redirect hops to those targets (covers the redirect
+        # bypass Veria flagged on the previous iteration).
+        with (
+            self._patches(
+                async_safe_get_side_effect=SSRFError("blocked: 169.254.169.254")
+            )[0],
+            self._patches()[1],
+        ):
+            result = await fetch_validated_image_bytes("http://169.254.169.254/iam")
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_rejects_non_image_content_type(self):
         # Even when the URL passes SSRF, the upstream response must be an
-        # image. Otherwise an attacker could redirect to an upstream that
+        # image. Otherwise an attacker could point at an upstream that
         # returns ``application/json`` AWS creds and have them tunneled
         # through the ``image/jpeg`` response wrapper.
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.headers = {"content-type": "application/json"}
         mock_response.content = b'{"AccessKeyId": "..."}'
-        mock_async_client.get.return_value = mock_response
 
-        with (
-            patch(
-                "litellm.proxy.common_utils.static_asset_utils.validate_url",
-                return_value=("http://cdn.example/logo", "cdn.example"),
-            ),
-            patch(
-                "litellm.proxy.common_utils.static_asset_utils.get_async_httpx_client",
-                return_value=mock_async_client,
-            ),
-        ):
+        with self._patches(async_safe_get_return=mock_response)[0], self._patches()[1]:
             result = await fetch_validated_image_bytes("http://cdn.example/logo")
-
         assert result is None
 
     @pytest.mark.asyncio
-    async def test_returns_bytes_for_valid_image_response(self, mock_async_client):
+    async def test_returns_bytes_for_valid_image_response(self):
         png_bytes = b"\x89PNG\r\n\x1a\nfake png body"
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.headers = {"content-type": "image/png; charset=binary"}
         mock_response.content = png_bytes
-        mock_async_client.get.return_value = mock_response
 
-        with (
-            patch(
-                "litellm.proxy.common_utils.static_asset_utils.validate_url",
-                return_value=(
-                    "https://cdn.example/logo.png",
-                    "cdn.example",
-                ),
-            ),
-            patch(
-                "litellm.proxy.common_utils.static_asset_utils.get_async_httpx_client",
-                return_value=mock_async_client,
-            ),
-        ):
+        with self._patches(async_safe_get_return=mock_response)[0], self._patches()[1]:
             result = await fetch_validated_image_bytes("https://cdn.example/logo.png")
-
         assert result == png_bytes
 
     @pytest.mark.asyncio
-    async def test_returns_none_on_non_200_response(self, mock_async_client):
+    async def test_returns_none_on_non_200_response(self):
         mock_response = MagicMock()
         mock_response.status_code = 404
         mock_response.headers = {"content-type": "image/png"}
-        mock_async_client.get.return_value = mock_response
 
-        with (
-            patch(
-                "litellm.proxy.common_utils.static_asset_utils.validate_url",
-                return_value=("https://cdn.example/logo", "cdn.example"),
-            ),
-            patch(
-                "litellm.proxy.common_utils.static_asset_utils.get_async_httpx_client",
-                return_value=mock_async_client,
-            ),
-        ):
+        with self._patches(async_safe_get_return=mock_response)[0], self._patches()[1]:
             result = await fetch_validated_image_bytes("https://cdn.example/logo")
-
         assert result is None
 
     @pytest.mark.asyncio
-    async def test_returns_none_on_fetch_exception(self, mock_async_client):
-        mock_async_client.get.side_effect = Exception("connection reset")
-
+    async def test_returns_none_on_fetch_exception(self):
         with (
-            patch(
-                "litellm.proxy.common_utils.static_asset_utils.validate_url",
-                return_value=("https://cdn.example/logo", "cdn.example"),
-            ),
-            patch(
-                "litellm.proxy.common_utils.static_asset_utils.get_async_httpx_client",
-                return_value=mock_async_client,
-            ),
+            self._patches(async_safe_get_side_effect=Exception("connection reset"))[0],
+            self._patches()[1],
         ):
             result = await fetch_validated_image_bytes("https://cdn.example/logo")
-
         assert result is None
 
     @pytest.mark.asyncio
@@ -223,30 +191,32 @@ class TestFetchValidatedImageBytes:
         result = await fetch_validated_image_bytes("")
         assert result is None
 
+    @pytest.mark.asyncio
+    async def test_rejects_svg_content_type(self):
+        # ``image/svg+xml`` is intentionally NOT in the allowlist for
+        # unauthenticated endpoints — SVG is the only common image
+        # format that can embed JavaScript.
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.headers = {"content-type": "image/svg+xml"}
+        mock_response.content = b"<svg><script>alert(1)</script></svg>"
+
+        with self._patches(async_safe_get_return=mock_response)[0], self._patches()[1]:
+            result = await fetch_validated_image_bytes("https://cdn.example/x.svg")
+        assert result is None
+
     @pytest.mark.parametrize(
         "content_type",
         sorted(ALLOWED_IMAGE_CONTENT_TYPES),
     )
     @pytest.mark.asyncio
-    async def test_accepts_each_allowed_image_content_type(
-        self, mock_async_client, content_type
-    ):
+    async def test_accepts_each_allowed_image_content_type(self, content_type):
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.headers = {"content-type": content_type}
         mock_response.content = b"image-bytes"
-        mock_async_client.get.return_value = mock_response
 
-        with (
-            patch(
-                "litellm.proxy.common_utils.static_asset_utils.validate_url",
-                return_value=("https://cdn.example/logo", "cdn.example"),
-            ),
-            patch(
-                "litellm.proxy.common_utils.static_asset_utils.get_async_httpx_client",
-                return_value=mock_async_client,
-            ),
-        ):
+        with self._patches(async_safe_get_return=mock_response)[0], self._patches()[1]:
             result = await fetch_validated_image_bytes("https://cdn.example/logo")
 
         assert result == b"image-bytes"
