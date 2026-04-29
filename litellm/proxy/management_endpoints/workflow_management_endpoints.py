@@ -17,7 +17,10 @@ import json
 from typing import Any, Dict, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from prisma.errors import UniqueViolationError
+try:
+    from prisma.errors import UniqueViolationError
+except ImportError:
+    UniqueViolationError = None  # type: ignore
 from pydantic import BaseModel
 
 from litellm._logging import verbose_proxy_logger
@@ -345,20 +348,19 @@ async def append_workflow_event(
 
             return event
 
-        except UniqueViolationError:
-            if attempt == _MAX_SEQUENCE_RETRIES - 1:
-                verbose_proxy_logger.exception(
-                    "Sequence number collision after %d retries for run %s",
-                    _MAX_SEQUENCE_RETRIES,
-                    run_id,
-                )
-                raise HTTPException(
-                    status_code=409,
-                    detail="Concurrent write conflict — please retry",
-                )
-            continue
-
         except Exception as e:
+            if UniqueViolationError is not None and isinstance(e, UniqueViolationError):
+                if attempt == _MAX_SEQUENCE_RETRIES - 1:
+                    verbose_proxy_logger.exception(
+                        "Sequence number collision after %d retries for run %s",
+                        _MAX_SEQUENCE_RETRIES,
+                        run_id,
+                    )
+                    raise HTTPException(
+                        status_code=409,
+                        detail="Concurrent write conflict — please retry",
+                    )
+                continue
             verbose_proxy_logger.exception("Error appending workflow event: %s", e)
             raise HTTPException(status_code=500, detail=str(e))
 
@@ -436,20 +438,19 @@ async def append_workflow_message(
             msg = await prisma_client.db.litellm_workflowmessage.create(data=msg_data)
             return msg
 
-        except UniqueViolationError:
-            if attempt == _MAX_SEQUENCE_RETRIES - 1:
-                verbose_proxy_logger.exception(
-                    "Sequence number collision after %d retries for run %s",
-                    _MAX_SEQUENCE_RETRIES,
-                    run_id,
-                )
-                raise HTTPException(
-                    status_code=409,
-                    detail="Concurrent write conflict — please retry",
-                )
-            continue
-
         except Exception as e:
+            if UniqueViolationError is not None and isinstance(e, UniqueViolationError):
+                if attempt == _MAX_SEQUENCE_RETRIES - 1:
+                    verbose_proxy_logger.exception(
+                        "Sequence number collision after %d retries for run %s",
+                        _MAX_SEQUENCE_RETRIES,
+                        run_id,
+                    )
+                    raise HTTPException(
+                        status_code=409,
+                        detail="Concurrent write conflict — please retry",
+                    )
+                continue
             verbose_proxy_logger.exception("Error appending workflow message: %s", e)
             raise HTTPException(status_code=500, detail=str(e))
 
