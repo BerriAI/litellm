@@ -56,12 +56,6 @@ class ExceptionCheckers:
         if re.search(r"rate[\s_\-]*limit", _error_str_lower):
             return True
 
-        #######################################
-        # Mistral API returns this error string
-        #########################################
-        if "service tier capacity exceeded" in _error_str_lower:
-            return True
-
         return False
 
     @staticmethod
