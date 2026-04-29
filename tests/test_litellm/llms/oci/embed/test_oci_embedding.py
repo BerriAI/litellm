@@ -76,9 +76,13 @@ class TestOCIEmbeddingConfig:
         assert "embedText" in url
 
     def test_get_complete_url_custom_api_base(self):
-        """test_get_complete_url returns api_base as-is when provided."""
+        """Custom api_base still gets /<api-version>/actions/embedText appended.
+        The OCI signature covers the path, so a bare base URL would cause a
+        401 when the signed path doesn't match the actual request."""
+        from litellm.llms.oci.common_utils import OCI_API_VERSION
+
         config = OCIEmbeddingConfig()
-        custom_base = "https://custom.oci.example.com/embed"
+        custom_base = "https://custom.oci.example.com"
         url = config.get_complete_url(
             api_base=custom_base,
             api_key=None,
@@ -86,7 +90,21 @@ class TestOCIEmbeddingConfig:
             optional_params={},
             litellm_params={},
         )
-        assert url == custom_base
+        assert url == f"{custom_base}/{OCI_API_VERSION}/actions/embedText"
+
+    def test_get_complete_url_custom_api_base_strips_trailing_slash(self):
+        """Trailing slash on api_base must not produce a double slash."""
+        from litellm.llms.oci.common_utils import OCI_API_VERSION
+
+        config = OCIEmbeddingConfig()
+        url = config.get_complete_url(
+            api_base="https://custom.oci.example.com/",
+            api_key=None,
+            model=TEST_MODEL_NAME,
+            optional_params={},
+            litellm_params={},
+        )
+        assert url == f"https://custom.oci.example.com/{OCI_API_VERSION}/actions/embedText"
 
     def test_get_supported_openai_params(self):
         """test_get_supported_openai_params returns expected params list."""
@@ -96,7 +114,7 @@ class TestOCIEmbeddingConfig:
         assert "encoding_format" not in params
 
     def test_map_openai_params_dimensions(self):
-        """test dimensions is mapped correctly."""
+        """test dimensions is mapped to outputDimensions (OCI API field name)."""
         config = OCIEmbeddingConfig()
         optional_params = {}
         result = config.map_openai_params(
@@ -105,7 +123,8 @@ class TestOCIEmbeddingConfig:
             model=TEST_MODEL_NAME,
             drop_params=False,
         )
-        assert result["dimensions"] == 512
+        assert result["outputDimensions"] == 512
+        assert "dimensions" not in result
 
     def test_validate_environment_with_credentials(self, supplied_params):
         """test validate_environment returns content-type and user-agent headers when credentials are supplied."""
@@ -122,21 +141,25 @@ class TestOCIEmbeddingConfig:
         assert "litellm" in result["user-agent"]
 
     def test_validate_environment_missing_credentials(self):
-        """test validate_environment raises Exception with 'Missing required parameters' when credentials are incomplete."""
+        """test validate_environment sets headers even with incomplete credentials.
+
+        Credential validation is deferred to signing time — validate_environment only
+        populates common HTTP headers (content-type, user-agent).
+        """
         config = OCIEmbeddingConfig()
         incomplete_params = {
             "oci_user": "ocid1.user.oc1..xxx",
             # Missing oci_fingerprint, oci_tenancy, oci_key/oci_key_file, oci_compartment_id
         }
-        with pytest.raises(Exception) as excinfo:
-            config.validate_environment(
-                headers={},
-                model=TEST_MODEL,
-                messages=[],
-                optional_params=incomplete_params,
-                litellm_params={},
-            )
-        assert "Missing required parameters" in str(excinfo.value)
+        result = config.validate_environment(
+            headers={},
+            model=TEST_MODEL,
+            messages=[],
+            optional_params=incomplete_params,
+            litellm_params={},
+        )
+        assert result["content-type"] == "application/json"
+        assert "litellm" in result["user-agent"]
 
     def test_validate_environment_with_signer(self):
         """test validate_environment passes when oci_signer is provided."""
@@ -234,13 +257,15 @@ class TestOCIEmbeddingConfig:
         assert result["inputs"] == ["Hello world"]
 
     def test_transform_embedding_request_token_list_raises(self):
-        """test token-array inputs raise ValueError instead of silent conversion."""
+        """test token-array inputs raise OCIError instead of silent conversion."""
+        from litellm.llms.oci.common_utils import OCIError
+
         config = OCIEmbeddingConfig()
         optional_params = {
             "oci_compartment_id": TEST_COMPARTMENT_ID,
         }
         with patch.object(config, "sign_request", return_value=({}, "{}")):
-            with pytest.raises(ValueError, match="does not support token-array"):
+            with pytest.raises(OCIError, match="does not support token-array"):
                 config.transform_embedding_request(
                     model=TEST_MODEL_NAME,
                     input=[[1234, 5678]],
@@ -264,6 +289,10 @@ class TestOCIEmbeddingConfig:
             raw_response=mock_response,
             model_response=model_response,
             logging_obj=mock_logging,
+            api_key=None,
+            request_data={},
+            optional_params={},
+            litellm_params={},
         )
 
         assert isinstance(result, EmbeddingResponse)
@@ -296,6 +325,10 @@ class TestOCIEmbeddingConfig:
                 raw_response=mock_response,
                 model_response=model_response,
                 logging_obj=mock_logging,
+                api_key=None,
+                request_data={},
+                optional_params={},
+                litellm_params={},
             )
 
     def test_model_prices_embedding_models(self):

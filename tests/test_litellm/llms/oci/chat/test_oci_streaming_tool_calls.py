@@ -11,13 +11,10 @@ Error: ValidationError: 1 validation error for OCIStreamChunk message.toolCalls.
 
 import os
 import sys
-import pytest
-from unittest.mock import MagicMock
 
-# Adds the parent directory to the system path
 sys.path.insert(0, os.path.abspath("../../../../.."))
 
-from litellm.llms.oci.chat.transformation import OCIStreamWrapper
+from litellm.llms.oci.chat.generic import handle_generic_stream_chunk
 from litellm.types.utils import ModelResponseStream
 
 
@@ -26,12 +23,9 @@ class TestOCIStreamingToolCalls:
 
     def test_stream_chunk_with_missing_arguments_field(self):
         """
-        Test that streaming chunks with tool calls missing 'arguments' field are handled.
-
         OCI API can return tool calls in early chunks without the 'arguments' field,
         which should be filled with an empty string to satisfy Pydantic validation.
         """
-        # Mock streaming chunk with tool call missing 'arguments' field
         chunk_data = {
             "index": 0,
             "finishReason": None,
@@ -43,21 +37,13 @@ class TestOCIStreamingToolCalls:
                         "type": "FUNCTION",
                         "id": "call_abc123",
                         "name": "get_weather",
-                        # Note: 'arguments' field is missing
+                        # 'arguments' field is missing
                     }
                 ],
             },
         }
 
-        wrapper = OCIStreamWrapper(
-            completion_stream=iter([]),
-            model="meta.llama-3.1-405b-instruct",
-            custom_llm_provider="oci",
-            logging_obj=MagicMock(),
-        )
-
-        # This should not raise a ValidationError
-        result = wrapper._handle_generic_stream_chunk(chunk_data)
+        result = handle_generic_stream_chunk(chunk_data)
 
         assert isinstance(result, ModelResponseStream)
         assert len(result.choices) == 1
@@ -66,9 +52,7 @@ class TestOCIStreamingToolCalls:
         assert result.choices[0].delta.tool_calls[0]["function"]["arguments"] == ""
 
     def test_stream_chunk_with_missing_id_field(self):
-        """
-        Test that streaming chunks with tool calls missing 'id' field are handled.
-        """
+        """Missing 'id' gets a generated call_* id."""
         chunk_data = {
             "index": 0,
             "finishReason": None,
@@ -80,29 +64,20 @@ class TestOCIStreamingToolCalls:
                         "type": "FUNCTION",
                         "name": "get_weather",
                         "arguments": '{"location": "San Francisco"}',
-                        # Note: 'id' field is missing
+                        # 'id' field is missing
                     }
                 ],
             },
         }
 
-        wrapper = OCIStreamWrapper(
-            completion_stream=iter([]),
-            model="meta.llama-3.1-405b-instruct",
-            custom_llm_provider="oci",
-            logging_obj=MagicMock(),
-        )
-
-        result = wrapper._handle_generic_stream_chunk(chunk_data)
+        result = handle_generic_stream_chunk(chunk_data)
 
         assert isinstance(result, ModelResponseStream)
         assert result.choices[0].delta.tool_calls is not None
-        assert result.choices[0].delta.tool_calls[0]["id"] == ""
+        assert result.choices[0].delta.tool_calls[0]["id"].startswith("call_")
 
     def test_stream_chunk_with_missing_name_field(self):
-        """
-        Test that streaming chunks with tool calls missing 'name' field are handled.
-        """
+        """Missing 'name' defaults to empty string."""
         chunk_data = {
             "index": 0,
             "finishReason": None,
@@ -114,29 +89,20 @@ class TestOCIStreamingToolCalls:
                         "type": "FUNCTION",
                         "id": "call_abc123",
                         "arguments": '{"location": "San Francisco"}',
-                        # Note: 'name' field is missing
+                        # 'name' field is missing
                     }
                 ],
             },
         }
 
-        wrapper = OCIStreamWrapper(
-            completion_stream=iter([]),
-            model="meta.llama-3.1-405b-instruct",
-            custom_llm_provider="oci",
-            logging_obj=MagicMock(),
-        )
-
-        result = wrapper._handle_generic_stream_chunk(chunk_data)
+        result = handle_generic_stream_chunk(chunk_data)
 
         assert isinstance(result, ModelResponseStream)
         assert result.choices[0].delta.tool_calls is not None
         assert result.choices[0].delta.tool_calls[0]["function"]["name"] == ""
 
     def test_stream_chunk_with_all_missing_fields(self):
-        """
-        Test that streaming chunks with tool calls missing all optional fields are handled.
-        """
+        """All optional fields missing — all default gracefully."""
         chunk_data = {
             "index": 0,
             "finishReason": None,
@@ -146,31 +112,22 @@ class TestOCIStreamingToolCalls:
                 "toolCalls": [
                     {
                         "type": "FUNCTION"
-                        # All fields missing: id, name, arguments
+                        # id, name, arguments all missing
                     }
                 ],
             },
         }
 
-        wrapper = OCIStreamWrapper(
-            completion_stream=iter([]),
-            model="meta.llama-3.1-405b-instruct",
-            custom_llm_provider="oci",
-            logging_obj=MagicMock(),
-        )
-
-        result = wrapper._handle_generic_stream_chunk(chunk_data)
+        result = handle_generic_stream_chunk(chunk_data)
 
         assert isinstance(result, ModelResponseStream)
         assert result.choices[0].delta.tool_calls is not None
-        assert result.choices[0].delta.tool_calls[0]["id"] == ""
+        assert result.choices[0].delta.tool_calls[0]["id"].startswith("call_")
         assert result.choices[0].delta.tool_calls[0]["function"]["name"] == ""
         assert result.choices[0].delta.tool_calls[0]["function"]["arguments"] == ""
 
     def test_stream_chunk_with_complete_tool_call(self):
-        """
-        Test that streaming chunks with complete tool calls still work correctly.
-        """
+        """Fully-populated tool call passes through unchanged."""
         chunk_data = {
             "index": 0,
             "finishReason": None,
@@ -188,14 +145,7 @@ class TestOCIStreamingToolCalls:
             },
         }
 
-        wrapper = OCIStreamWrapper(
-            completion_stream=iter([]),
-            model="meta.llama-3.1-405b-instruct",
-            custom_llm_provider="oci",
-            logging_obj=MagicMock(),
-        )
-
-        result = wrapper._handle_generic_stream_chunk(chunk_data)
+        result = handle_generic_stream_chunk(chunk_data)
 
         assert isinstance(result, ModelResponseStream)
         assert result.choices[0].delta.tool_calls is not None
@@ -210,9 +160,7 @@ class TestOCIStreamingToolCalls:
         )
 
     def test_stream_chunk_with_multiple_tool_calls_missing_fields(self):
-        """
-        Test that streaming chunks with multiple tool calls, some with missing fields, are handled.
-        """
+        """Multiple tool calls with a mix of complete and incomplete entries."""
         chunk_data = {
             "index": 0,
             "finishReason": None,
@@ -220,58 +168,41 @@ class TestOCIStreamingToolCalls:
                 "role": "ASSISTANT",
                 "content": None,
                 "toolCalls": [
-                    {
-                        "type": "FUNCTION",
-                        "id": "call_1",
-                        "name": "get_weather",
-                        # Missing arguments
-                    },
+                    {"type": "FUNCTION", "id": "call_1", "name": "get_weather"},
                     {
                         "type": "FUNCTION",
                         "name": "get_time",
                         "arguments": '{"timezone": "UTC"}',
-                        # Missing id
                     },
                     {
                         "type": "FUNCTION",
                         "id": "call_3",
                         "name": "calculate",
                         "arguments": '{"expression": "2+2"}',
-                        # Complete
                     },
                 ],
             },
         }
 
-        wrapper = OCIStreamWrapper(
-            completion_stream=iter([]),
-            model="meta.llama-3.1-405b-instruct",
-            custom_llm_provider="oci",
-            logging_obj=MagicMock(),
-        )
-
-        result = wrapper._handle_generic_stream_chunk(chunk_data)
+        result = handle_generic_stream_chunk(chunk_data)
 
         assert isinstance(result, ModelResponseStream)
         assert result.choices[0].delta.tool_calls is not None
         assert len(result.choices[0].delta.tool_calls) == 3
 
-        # First tool call - missing arguments
         assert result.choices[0].delta.tool_calls[0]["id"] == "call_1"
         assert (
             result.choices[0].delta.tool_calls[0]["function"]["name"] == "get_weather"
         )
         assert result.choices[0].delta.tool_calls[0]["function"]["arguments"] == ""
 
-        # Second tool call - missing id
-        assert result.choices[0].delta.tool_calls[1]["id"] == ""
+        assert result.choices[0].delta.tool_calls[1]["id"].startswith("call_")
         assert result.choices[0].delta.tool_calls[1]["function"]["name"] == "get_time"
         assert (
             result.choices[0].delta.tool_calls[1]["function"]["arguments"]
             == '{"timezone": "UTC"}'
         )
 
-        # Third tool call - complete
         assert result.choices[0].delta.tool_calls[2]["id"] == "call_3"
         assert result.choices[0].delta.tool_calls[2]["function"]["name"] == "calculate"
         assert (
@@ -280,9 +211,7 @@ class TestOCIStreamingToolCalls:
         )
 
     def test_stream_chunk_without_tool_calls(self):
-        """
-        Test that streaming chunks without tool calls continue to work as before.
-        """
+        """Plain text chunks (no tool calls) pass through correctly."""
         chunk_data = {
             "index": 0,
             "finishReason": None,
@@ -292,14 +221,7 @@ class TestOCIStreamingToolCalls:
             },
         }
 
-        wrapper = OCIStreamWrapper(
-            completion_stream=iter([]),
-            model="meta.llama-3.1-405b-instruct",
-            custom_llm_provider="oci",
-            logging_obj=MagicMock(),
-        )
-
-        result = wrapper._handle_generic_stream_chunk(chunk_data)
+        result = handle_generic_stream_chunk(chunk_data)
 
         assert isinstance(result, ModelResponseStream)
         assert result.choices[0].delta.content == "Hello, how can I help you?"

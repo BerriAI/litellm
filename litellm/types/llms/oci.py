@@ -12,10 +12,15 @@ class OCIVendors(Enum):
     """
     A class to hold the vendor names for OCI models.
     This is used to map model names to their respective vendors.
+
+    Cohere on OCI ships two distinct chat schemas:
+      - ``COHERE``   — V1 ``message: str`` + ``chatHistory`` (legacy ``cohere.command-*``)
+      - ``COHEREV2`` — V2 OpenAI-style ``messages: [{role, content: [...]}]`` with
+                       multimodal content blocks; required for ``cohere.command-a-vision``
     """
 
     COHERE = "COHERE"
-    GEMINI = "GEMINI"
+    COHEREV2 = "COHEREV2"
     GENERIC = "GENERIC"
 
 
@@ -57,7 +62,7 @@ OCIContentPartUnion = Union[OCITextContentPart, OCIImageContentPart]
 class OCIToolCall(BaseModel):
     """Represents a tool call made by the model."""
 
-    id: str
+    id: Optional[str] = None  # absent in some provider responses (e.g. Google via OCI)
     type: Literal["FUNCTION"] = "FUNCTION"
     name: str
     arguments: str  # Arguments should be a JSON-serialized string
@@ -103,6 +108,9 @@ class OCIChatRequestPayload(BaseModel):
     frequencyPenalty: Optional[float] = None
     presencePenalty: Optional[float] = None
     responseFormat: Optional[Dict[str, Any]] = None
+    toolChoice: Optional[Union[str, Dict[str, Any]]] = None
+    logitBias: Optional[Dict[str, Any]] = None
+    logProbs: Optional[int] = None
 
 
 class OCIServingMode(BaseModel):
@@ -118,7 +126,7 @@ class OCICompletionPayload(BaseModel):
 
     compartmentId: str
     servingMode: OCIServingMode
-    chatRequest: Union[OCIChatRequestPayload, CohereChatRequest]
+    chatRequest: Union[OCIChatRequestPayload, CohereChatRequest, "CohereV2ChatRequest"]
 
 
 # --- API Response Models (Non-streaming) ---
@@ -141,7 +149,9 @@ class OCIResponseUsage(BaseModel):
     """Token usage in the OCI response."""
 
     promptTokens: int
-    completionTokens: int
+    # completionTokens may be absent for reasoning models when all the output
+    # budget is consumed by reasoning tokens before any visible content is produced.
+    completionTokens: Optional[int] = None
     totalTokens: int
     completionTokensDetails: Optional[OCICompletionTokenDetails] = None
     promptTokensDetails: Optional[OCIPromptTokensDetails] = None
@@ -151,7 +161,9 @@ class OCIResponseChoice(BaseModel):
     """A completion choice in the OCI response."""
 
     index: int
-    message: OCIMessage
+    # message is absent when a reasoning model exhausts max_tokens in the
+    # reasoning phase without producing any visible content.
+    message: Optional[OCIMessage] = None
     finishReason: Optional[str] = None
     logprobs: Optional[Dict[str, Any]] = None
 
@@ -234,10 +246,14 @@ class CohereSystemMessage(CohereMessage):
 
 
 class CohereToolMessage(CohereMessage):
-    """Tool message in Cohere chat."""
+    """Tool message in Cohere chat.
+
+    The OCI Cohere API represents tool results via a ``toolResults`` list on the
+    TOOL-role history entry — not via a ``toolCallId`` string.
+    """
 
     role: Literal["TOOL"] = "TOOL"
-    toolCallId: str
+    toolResults: List[CohereToolResult]
 
 
 class CohereParameterDefinition(BaseModel):
@@ -264,10 +280,14 @@ class CohereToolCall(BaseModel):
 
 
 class CohereToolResult(BaseModel):
-    """Result of a tool call."""
+    """Result of a tool call.
 
-    callId: str
-    result: str
+    Matches the OCI SDK's CohereToolResult: each result carries the originating
+    tool call (name + parameters) and a list of output objects.
+    """
+
+    call: CohereToolCall
+    outputs: List[Dict[str, Any]]
 
 
 class CohereResponseFormat(BaseModel):
@@ -365,7 +385,13 @@ class CohereChatResponse(BaseModel):
     text: str
     apiFormat: Literal["COHERE"] = "COHERE"
     finishReason: Literal[
-        "COMPLETE", "ERROR_TOXIC", "ERROR_LIMIT", "ERROR", "USER_CANCEL", "MAX_TOKENS"
+        "COMPLETE",
+        "ERROR_TOXIC",
+        "ERROR_LIMIT",
+        "ERROR",
+        "USER_CANCEL",
+        "MAX_TOKENS",
+        "TOOL_CALL",
     ]
 
     # Optional fields
@@ -394,3 +420,122 @@ class CohereChatResult(BaseModel):
     modelId: str
     modelVersion: str
     chatResponse: CohereChatResponse
+
+
+# ---------------------------------------------------------------------------
+# Cohere V2 chat types (apiFormat="COHEREV2"; required for cohere.command-a-vision)
+#
+# Wire format mirrors oci.generative_ai_inference.models.CohereChatRequestV2 /
+# CohereChatResponseV2. Differences vs V1:
+#   - messages is a list of role+content objects (OpenAI-style)
+#   - content is a list of typed blocks (TEXT, IMAGE_URL, …)
+#   - response carries a single ``message`` (assistant) instead of ``text``
+# ---------------------------------------------------------------------------
+
+
+class CohereV2TextContent(BaseModel):
+    type: Literal["TEXT"] = "TEXT"
+    text: str
+
+
+class CohereV2ImageUrl(BaseModel):
+    url: str
+    detail: Optional[Literal["AUTO", "HIGH", "LOW"]] = None
+
+
+class CohereV2ImageContent(BaseModel):
+    type: Literal["IMAGE_URL"] = "IMAGE_URL"
+    imageUrl: CohereV2ImageUrl
+
+
+CohereV2ContentUnion = Union[CohereV2TextContent, CohereV2ImageContent]
+
+
+class CohereV2Message(BaseModel):
+    """One message in a V2 chat request or response."""
+
+    role: Literal["USER", "ASSISTANT", "SYSTEM", "TOOL"]
+    content: Optional[List[CohereV2ContentUnion]] = None
+
+
+class CohereV2ChatRequest(BaseModel):
+    """Cohere V2 chat request payload (apiFormat="COHEREV2")."""
+
+    apiFormat: Literal["COHEREV2"] = "COHEREV2"
+    messages: List[CohereV2Message]
+    isStream: Optional[bool] = None
+    maxTokens: Optional[int] = None
+    temperature: Optional[float] = None
+    topP: Optional[float] = None
+    topK: Optional[int] = None
+    frequencyPenalty: Optional[float] = None
+    presencePenalty: Optional[float] = None
+    stopSequences: Optional[List[str]] = None
+    seed: Optional[int] = None
+    responseFormat: Optional[Dict[str, Any]] = None
+    safetyMode: Optional[Literal["CONTEXTUAL", "STRICT", "OFF"]] = None
+    isRawPrompting: Optional[bool] = None
+
+
+class CohereV2AssistantMessage(BaseModel):
+    """Assistant message inside a V2 response."""
+
+    role: Literal["ASSISTANT"] = "ASSISTANT"
+    content: Optional[List[CohereV2ContentUnion]] = None
+
+
+class CohereV2ChatResponse(BaseModel):
+    """V2 chat response (top-level field of the ``chatResponse`` body)."""
+
+    apiFormat: Literal["COHEREV2"] = "COHEREV2"
+    id: Optional[str] = None
+    message: Optional[CohereV2AssistantMessage] = None
+    finishReason: Optional[str] = None
+    errorMessage: Optional[str] = None
+    usage: Optional[CohereUsage] = None
+
+
+class CohereV2ChatResult(BaseModel):
+    """Top-level Cohere V2 chat result envelope."""
+
+    modelId: str
+    modelVersion: str
+    chatResponse: CohereV2ChatResponse
+
+
+# ---------------------------------------------------------------------------
+# OCI Embed types
+# ---------------------------------------------------------------------------
+
+
+class OCIEmbedRequest(BaseModel):
+    """Request body for POST /20231130/actions/embedText."""
+
+    compartmentId: str
+    servingMode: OCIServingMode
+    inputs: List[str]
+    inputType: Optional[str] = (
+        None  # SEARCH_DOCUMENT | SEARCH_QUERY | CLASSIFICATION | CLUSTERING | IMAGE
+    )
+    truncate: Optional[str] = "END"  # NONE | START | END
+    outputDimensions: Optional[int] = (
+        None  # cohere.embed-v4.0+; valid: 256, 512, 1024, 1536
+    )
+
+
+class OCIEmbedUsage(BaseModel):
+    promptTokens: int
+    totalTokens: int
+
+
+class OCIEmbedResponse(BaseModel):
+    """Response body from POST /20231130/actions/embedText."""
+
+    id: Optional[str] = None  # present in the official SDK response
+    embeddings: List[List[float]]
+    modelId: str
+    modelVersion: str
+    # OCI returns per-input token counts in inputTextTokenCounts (summed for total usage)
+    inputTextTokenCounts: Optional[List[int]] = None
+    # Some deployments may return a usage object instead
+    usage: Optional[OCIEmbedUsage] = None
