@@ -147,9 +147,9 @@ class CloudflareChatConfig(BaseConfig):
     ) -> ModelResponse:
         completion_response = raw_response.json()
 
-        model_response.choices[0].message.content = completion_response["result"][  # type: ignore
-            "response"
-        ]
+        # Support both "response" and "response_text" keys (newer models like Nemotron use "response_text")
+        result = completion_response["result"]
+        model_response.choices[0].message.content = result.get("response") or result.get("response_text", "")  # type: ignore
 
         prompt_tokens = litellm.utils.get_token_count(messages=messages, model=model)
         completion_tokens = len(
