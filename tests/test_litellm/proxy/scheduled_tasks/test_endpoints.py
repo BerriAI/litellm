@@ -4,6 +4,7 @@ prisma scheduled-tasks table. The /due test path uses a fake of query_raw +
 tx() that exercises the same Python-side schedule advance logic.
 """
 
+import json
 import os
 import sys
 from datetime import datetime, timedelta, timezone
@@ -80,8 +81,23 @@ class _FakeScheduledTaskTable:
         return [r for r in self.rows if self._matches(r, where)]
 
     async def create(self, data: Dict[str, Any]) -> MagicMock:
+        # Mirror real Prisma write semantics:
+        #  - relation field `owner_key: {connect: {token: X}}` becomes the
+        #    scalar `owner_token` column on the row;
+        #  - Json columns (`action_args`) come in as JSON strings and are
+        #    deserialized back to Python on read.
+        normalized = dict(data)
+        if "owner_key" in normalized:
+            connect = normalized.pop("owner_key", {}).get("connect", {})
+            if "token" in connect:
+                normalized["owner_token"] = connect["token"]
+        if isinstance(normalized.get("action_args"), str):
+            try:
+                normalized["action_args"] = json.loads(normalized["action_args"])
+            except ValueError:
+                pass
         self._counter += 1
-        row = _make_row(task_id=f"task-{self._counter}", **data)
+        row = _make_row(task_id=f"task-{self._counter}", **normalized)
         self.rows.append(row)
         return row
 
@@ -106,6 +122,11 @@ class _FakeScheduledTaskTable:
         for r in self.rows:
             if r.task_id == where["task_id"]:
                 for k, v in data.items():
+                    if k == "action_args" and isinstance(v, str):
+                        try:
+                            v = json.loads(v)
+                        except ValueError:
+                            pass
                     setattr(r, k, v)
                 return r
         raise Exception("Not found")

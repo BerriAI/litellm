@@ -8,10 +8,25 @@ is required for multi-pod tick safety.
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 from litellm.proxy.scheduled_tasks.schedule import compute_next_run
+
+
+def _serialize_json_for_prisma(value: Any) -> Optional[str]:
+    """
+    Encode a value bound for a Prisma `Json?` column. prisma-client-python
+    rejects raw Python dicts/lists on Json columns
+    (`MissingRequiredValueError` / `DataError`); always json.dumps so the
+    driver hands a string to Postgres jsonb. Read path round-trips back
+    to native Python.
+    """
+    if value is None:
+        return None
+    return json.dumps(value)
+
 
 # Whitelist of fields PATCH can touch. Anything outside this set would let
 # a buggy caller rewrite scheduling state (status, fired flags, ...).
@@ -62,13 +77,15 @@ async def create_task(
 ) -> Any:
     return await prisma_client.db.litellm_scheduledtasktable.create(
         data={
-            "owner_token": owner_token,
+            # Prisma exposes the FK via the relation field (`owner_key`),
+            # not the scalar column. Use connect to satisfy the input type.
+            "owner_key": {"connect": {"token": owner_token}},
             "user_id": user_id,
             "team_id": team_id,
             "agent_id": agent_id,
             "title": title,
             "action": action,
-            "action_args": action_args,
+            "action_args": _serialize_json_for_prisma(action_args),
             "check_prompt": check_prompt,
             "format_prompt": format_prompt,
             "schedule_kind": schedule_kind,
@@ -133,6 +150,15 @@ async def update_task_for_owner(
     )
     if existing is None:
         return None
+
+    # Mirror the create path: Json columns must be json-encoded for
+    # prisma-client-python.
+    if "action_args" in fields:
+        fields = {
+            **fields,
+            "action_args": _serialize_json_for_prisma(fields["action_args"]),
+        }
+
     return await prisma_client.db.litellm_scheduledtasktable.update(
         where={"task_id": task_id},
         data=fields,
