@@ -13,12 +13,14 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import (
     AddTeamCallback,
+    LiteLLM_TeamTable,
     ProxyErrorTypes,
     ProxyException,
     TeamCallbackMetadata,
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.management_endpoints.team_endpoints import _verify_team_access
 from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
 
 router = APIRouter()
@@ -99,6 +101,15 @@ async def add_team_callbacks(
                     "error": f"Team id = {team_id} does not exist. Please use a different team id."
                 },
             )
+
+        # IDOR guard: only proxy admins / org admins / team admins of THIS
+        # team may write callback credentials. Without this, any
+        # authenticated key holder could overwrite another team's logging
+        # config (and read back the credentials they wrote).
+        await _verify_team_access(
+            team_obj=LiteLLM_TeamTable(**_existing_team.model_dump()),
+            user_api_key_dict=user_api_key_dict,
+        )
 
         # store team callback settings in metadata
         team_metadata = _existing_team.metadata
@@ -195,6 +206,14 @@ async def disable_team_logging(
                 status_code=404,
                 detail={"error": f"Team id = {team_id} does not exist."},
             )
+
+        # IDOR guard: only proxy admins / org admins / team admins of THIS
+        # team may disable its logging — otherwise any authenticated key
+        # holder can silence audit logging for any team.
+        await _verify_team_access(
+            team_obj=LiteLLM_TeamTable(**_existing_team.model_dump()),
+            user_api_key_dict=user_api_key_dict,
+        )
 
         # Update team metadata to disable logging
         team_metadata = _existing_team.metadata
@@ -304,6 +323,14 @@ async def get_team_callbacks(
                 status_code=404,
                 detail={"error": f"Team id = {team_id} does not exist."},
             )
+
+        # IDOR guard: callback metadata holds third-party API credentials
+        # (Langfuse / Langsmith / GCS). Only proxy admins / org admins /
+        # team admins of THIS team may read them.
+        await _verify_team_access(
+            team_obj=LiteLLM_TeamTable(**_existing_team.model_dump()),
+            user_api_key_dict=user_api_key_dict,
+        )
 
         # Retrieve team callback settings from metadata
         team_metadata = _existing_team.metadata
