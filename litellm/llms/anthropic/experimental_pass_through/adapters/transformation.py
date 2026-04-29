@@ -1454,7 +1454,7 @@ class LiteLLMAnthropicMessagesAdapter:
         for choice in choices:
             if choice.delta.content is not None and len(choice.delta.content) > 0:
                 text += choice.delta.content
-            if choice.delta.tool_calls is not None:
+            if choice.delta.tool_calls is not None and len(choice.delta.tool_calls) > 0:
                 partial_json = ""
                 for tool in choice.delta.tool_calls:
                     if (
