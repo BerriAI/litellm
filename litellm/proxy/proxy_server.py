@@ -1536,7 +1536,7 @@ def mount_swagger_ui():
         "const thing=args[0];const shown=args[1];let tag=null;"
         "if(Array.isArray(thing)){for(const t of thing)if(TAG_TO_PREFIX[t])tag=t;}"
         "if(shown!==false&&tag&&!warmedTags.has(tag)){warmedTags.add(tag);"
-        "fetch('/lazy/warm/'+tag,{method:'POST'}).then(r=>r.json()).then(d=>{"
+        "fetch('/lazy/warm/'+tag,{method:'POST',credentials:'include'}).then(r=>r.json()).then(d=>{"
         "if(!d.paths||Object.keys(d.paths).length===0)return;"
         "const cur=sys.specSelectors.specJson().toJS();"
         "const merged={};let inserted=false;"
