@@ -2827,19 +2827,9 @@ if MCP_AVAILABLE:
     # Include the MCP router
     app.include_router(router)
     # Mount SSE handlers using the SDK's documented pattern.
-    # We use raw ASGI apps for both the SSE GET endpoint and the POST messages endpoint
-    # to avoid accessing private Starlette request attributes.
-    from starlette.routing import Route as StarletteRoute
-
-    app.routes.insert(
-        0, StarletteRoute("/sse", endpoint=handle_sse_mcp_endpoint, methods=["GET"])
-    )
-    app.routes.insert(
-        0,
-        StarletteRoute(
-            "/messages", endpoint=handle_sse_post_messages, methods=["POST"]
-        ),
-    )
+    # We use app.mount for raw ASGI callables to avoid Starlette's request/response wrapper.
+    app.mount("/sse", handle_sse_mcp_endpoint)
+    app.mount("/messages", handle_sse_post_messages)
 
     # StreamableHTTP catch-all mounts (must come after specific routes)
     app.mount("/mcp", handle_streamable_http_mcp)
@@ -2919,7 +2909,7 @@ if MCP_AVAILABLE:
     ]:
         """
         Get auth context from ContextVar first, then fall back to the
-        server object (which survives cross-task boundaries in the MCP SDK).
+        session read_stream (which survives cross-task boundaries in the MCP SDK).
         """
         (
             user_api_key_auth,

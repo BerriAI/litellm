@@ -1215,7 +1215,7 @@ class MCPServerManager:
                 base_command_no_ext = base_command
                 for ext in [".exe", ".cmd", ".bat", ".com"]:
                     if base_command.lower().endswith(ext):
-                        base_command_no_ext = base_command[: -len(ext)]
+                        base_command_no_ext = base_command[: -len(ext)].lower()
                         break
                 if (
                     base_command not in MCP_STDIO_ALLOWED_COMMANDS
