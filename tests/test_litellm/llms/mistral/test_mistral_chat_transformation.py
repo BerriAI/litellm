@@ -719,3 +719,89 @@ class TestMistralFileHandling:
         # Check that file_ids are modified to match Mistral's expected format
         assert result[0]["content"][1]["file_id"] == "file-12345"  # type: ignore
         assert result[0]["content"][2]["file_id"] == "file-67890"  # type: ignore
+
+    def test_handle_file_message_with_file_data_converts_to_document_url(self):
+        """Test that file_data (base64 URI) is translated to Mistral's document_url format."""
+        mistral_config = MistralConfig()
+        file_data = "data:application/pdf;base64,JVBERi0xLjQK"
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "What does this PDF contain?"},
+                    {
+                        "type": "file",
+                        "file": {
+                            "filename": "test.pdf",
+                            "file_data": file_data,
+                        },
+                    },
+                ],
+            }
+        ]
+        casted_messages = cast(list[AllMessageValues], messages)
+        result = mistral_config._handle_message_with_file(casted_messages)
+
+        assert len(result) == 1
+        content = result[0]["content"]
+        assert isinstance(content, list)
+        assert len(content) == 2
+        assert content[0] == {"type": "text", "text": "What does this PDF contain?"}
+        assert content[1]["type"] == "document_url"  # type: ignore
+        assert content[1]["document_url"] == file_data  # type: ignore
+        assert "file" not in content[1]
+
+    def test_handle_file_message_file_data_takes_priority_over_file_id(self):
+        """Test that file_data is preferred over file_id when both are present."""
+        mistral_config = MistralConfig()
+        file_data = "data:application/pdf;base64,JVBERi0xLjQK"
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "file",
+                        "file": {
+                            "file_id": "file-12345",
+                            "file_data": file_data,
+                        },
+                    }
+                ],
+            }
+        ]
+        casted_messages = cast(list[AllMessageValues], messages)
+        result = mistral_config._handle_message_with_file(casted_messages)
+
+        content = result[0]["content"]
+        assert isinstance(content, list)
+        assert content[0]["type"] == "document_url"  # type: ignore
+        assert content[0]["document_url"] == file_data  # type: ignore
+
+    def test_transform_messages_sync_translates_file_data_to_document_url(self):
+        """Test the full sync transform pipeline translates file_data end-to-end."""
+        mistral_config = MistralConfig()
+        file_data = "data:application/pdf;base64,JVBERi0xLjQK"
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Summarise this PDF."},
+                    {
+                        "type": "file",
+                        "file": {"filename": "doc.pdf", "file_data": file_data},
+                    },
+                ],
+            }
+        ]
+        casted_messages = cast(list[AllMessageValues], messages)
+        result = mistral_config._transform_messages_sync(
+            casted_messages, model="mistral-small-latest"
+        )
+
+        user_content = result[0]["content"]
+        assert isinstance(user_content, list)
+        file_block = next(
+            (c for c in user_content if c.get("type") == "document_url"), None
+        )
+        assert file_block is not None
+        assert file_block["document_url"] == file_data  # type: ignore

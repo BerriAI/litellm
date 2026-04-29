@@ -303,21 +303,28 @@ class MistralConfig(OpenAIGPTConfig):
         self, messages: List[AllMessageValues]
     ) -> List[AllMessageValues]:
         """
-        Mistral API supports only 'file_id' in message content with type 'file'.
+        Translate OpenAI 'file' content blocks to Mistral-native formats:
+        - file_data (base64 data URI) → {"type": "document_url", "document_url": <data_uri>}
+        - file_id (uploaded file ID)  → {"type": "file", "file_id": <id>}
         """
         for m in messages:
             _content_block = m.get("content")
             if _content_block and isinstance(_content_block, list):
                 if any(c.get("type") == "file" for c in _content_block):
-                    # If file content is present, we get file_id from 'file' attribute of content block
-                    # then replace 'file' with 'file_id' and assign the value of 'file_id' attribute to it.
                     file_contents = [
                         c for c in _content_block if c.get("type") == "file"
                     ]
                     for file_content in file_contents:
-                        file_id = file_content.get("file", {}).get("file_id")
-                        if file_id:
-                            # Replace 'file' with 'file_id'
+                        file_obj = file_content.get("file", {})
+                        file_data = file_obj.get("file_data")
+                        file_id = file_obj.get("file_id")
+                        if file_data:
+                            # Mistral does not accept 'file_data'; translate to document_url
+                            file_content["type"] = "document_url"  # type: ignore
+                            file_content["document_url"] = file_data  # type: ignore
+                            file_content.pop("file", None)
+                        elif file_id:
+                            # Replace 'file' wrapper with flat 'file_id' key
                             file_content["file_id"] = file_id  # type: ignore
                             file_content.pop("file", None)
         return messages
