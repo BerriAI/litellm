@@ -15,16 +15,14 @@ from typing import Any, Dict, List, Optional
 from litellm.proxy.scheduled_tasks.schedule import compute_next_run
 
 
-def _serialize_json_for_prisma(value: Any) -> Optional[str]:
+def _serialize_json_for_prisma(value: Any) -> str:
     """
     Encode a value bound for a Prisma `Json?` column. prisma-client-python
-    rejects raw Python dicts/lists on Json columns
+    rejects raw Python dicts/lists/None on Json columns
     (`MissingRequiredValueError` / `DataError`); always json.dumps so the
     driver hands a string to Postgres jsonb. Read path round-trips back
-    to native Python.
+    to native Python (`null` → None, `{}` → {}, etc).
     """
-    if value is None:
-        return None
     return json.dumps(value)
 
 
