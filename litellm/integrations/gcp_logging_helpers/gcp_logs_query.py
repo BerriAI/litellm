@@ -28,8 +28,8 @@ METRICS_LOG_PATTERN = re.compile(
     r'\[METRICS\] Emitting parallel_requests metric: '
     r'token=(?P<token>[^,]+), '
     r'key_alias=(?P<key_alias>[^,]+), '
-    r'previous_count=(?P<previous_count>\d+), '
-    r'current_count=(?P<current_count>\d+), '
+    r'previous_count=(?P<previous_count>-?\d+), '
+    r'current_count=(?P<current_count>-?\d+), '
     r'operation=(?P<operation>[^,]+), '
     r'timestamp=(?P<timestamp>[\d.]+)'
 )
