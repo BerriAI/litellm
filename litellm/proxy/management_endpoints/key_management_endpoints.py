@@ -3248,10 +3248,11 @@ async def generate_key_helper_fn(  # noqa: PLR0915
                 data=key_data, table_name="key"
             )
 
-            key_data["token_id"] = getattr(create_key_response, "token", None)
-            if key_data["token_id"] is not None:
+            created_token_id = getattr(create_key_response, "token", None)
+            key_data["token_id"] = created_token_id
+            if isinstance(created_token_id, str):
                 await InvalidVirtualKeyCache.delete_invalid_token_cache(
-                    hashed_token=key_data["token_id"],
+                    hashed_token=created_token_id,
                     user_api_key_cache=user_api_key_cache,
                 )
             key_data["litellm_budget_table"] = getattr(
