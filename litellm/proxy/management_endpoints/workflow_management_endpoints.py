@@ -119,7 +119,7 @@ async def _require_run(
         raise HTTPException(status_code=404, detail=f"Run '{run_id}' not found")
     if user_api_key_dict is not None and not _is_admin(user_api_key_dict):
         caller = _caller_key(user_api_key_dict)
-        if caller and run.created_by and run.created_by != caller:
+        if not caller or run.created_by != caller:
             raise HTTPException(status_code=404, detail=f"Run '{run_id}' not found")
     return run
 
@@ -239,7 +239,7 @@ async def get_workflow_run(
             raise HTTPException(status_code=404, detail=f"Run '{run_id}' not found")
         if not _is_admin(user_api_key_dict):
             caller = _caller_key(user_api_key_dict)
-            if caller and run.created_by and run.created_by != caller:
+            if not caller or run.created_by != caller:
                 raise HTTPException(status_code=404, detail=f"Run '{run_id}' not found")
         return run
     except HTTPException:

@@ -28,7 +28,7 @@ def _make_run(
     session_id: str = "sess-1",
     workflow_type: str = "shin-builder",
     status: str = "pending",
-    created_by: Any = None,
+    created_by: Any = "tok-test",
 ) -> MagicMock:
     obj = MagicMock()
     obj.run_id = run_id
@@ -118,7 +118,9 @@ def _make_app() -> FastAPI:
 def _override_auth() -> Any:
     from litellm.proxy._types import UserAPIKeyAuth
 
-    return UserAPIKeyAuth(api_key="sk-test", user_id="admin")
+    auth = UserAPIKeyAuth(api_key="sk-test", user_id="admin")
+    auth.token = "tok-test"
+    return auth
 
 
 def _override_auth_admin() -> Any:
@@ -567,6 +569,34 @@ class TestTenantIsolation:
 
         resp = client.get("/v1/workflows/runs/run-1")
         assert resp.status_code == 404
+
+    @patch("litellm.proxy.proxy_server.prisma_client")
+    def test_non_admin_get_null_owner_run_returns_404(self, mock_pc):
+        token = "tok-caller"
+        client = self._make_app_with_auth(lambda: _override_auth_user_with_token(token))
+        mock_pc.db = self._prisma.db
+        self._prisma.db.litellm_workflowrun.find_unique = AsyncMock(
+            return_value=_make_run(created_by=None)
+        )
+
+        resp = client.get("/v1/workflows/runs/run-1")
+        assert resp.status_code == 404
+
+    @patch("litellm.proxy.proxy_server.prisma_client")
+    def test_non_admin_update_null_owner_run_returns_404(self, mock_pc):
+        token = "tok-caller"
+        client = self._make_app_with_auth(lambda: _override_auth_user_with_token(token))
+        mock_pc.db = self._prisma.db
+        self._prisma.db.litellm_workflowrun.find_unique = AsyncMock(
+            return_value=_make_run(created_by=None)
+        )
+        self._prisma.db.litellm_workflowrun.update = AsyncMock(
+            return_value=_make_run(status="completed")
+        )
+
+        resp = client.patch("/v1/workflows/runs/run-1", json={"status": "completed"})
+        assert resp.status_code == 404
+        self._prisma.db.litellm_workflowrun.update.assert_not_awaited()
 
     @patch("litellm.proxy.proxy_server.prisma_client")
     def test_non_admin_get_own_run_succeeds(self, mock_pc):
