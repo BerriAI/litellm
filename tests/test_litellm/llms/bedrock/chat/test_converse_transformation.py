@@ -4364,3 +4364,39 @@ def test_bedrock_tool_message_image_url_png_still_becomes_image():
     assert "document" not in block
     assert block["image"]["format"] == "png"
     assert block["image"]["source"]["bytes"] == png_b64
+
+
+def test_transform_response_does_not_leak_body_on_parse_failure():
+    from litellm.llms.bedrock.common_utils import BedrockError
+
+    leaky_body = {"output": {"message": {"content": [{"text": "secret content"}]}}}
+
+    class MockResponse:
+        def json(self):
+            return leaky_body
+
+        @property
+        def text(self):
+            return json.dumps(leaky_body)
+
+    with patch(
+        "litellm.llms.bedrock.chat.converse_transformation.ConverseResponseBlock",
+        side_effect=KeyError("missing required field"),
+    ):
+        with pytest.raises(BedrockError) as exc_info:
+            AmazonConverseConfig()._transform_response(
+                model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+                response=MockResponse(),
+                model_response=ModelResponse(),
+                stream=False,
+                logging_obj=None,
+                optional_params={},
+                api_key=None,
+                data=None,
+                messages=[],
+                encoding=None,
+            )
+
+    msg = str(exc_info.value)
+    assert "secret content" not in msg
+    assert "Error converting to valid response block" in msg
