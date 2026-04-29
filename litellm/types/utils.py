@@ -1493,6 +1493,9 @@ class PromptTokensDetailsWrapper(
     image_count: Optional[int] = None
     """Number of images sent to the model. Used for Vertex AI multimodal embeddings."""
 
+    cache_write_tokens: Optional[int] = None
+    """Tokens written to the prompt cache in this request (OpenRouter extension for Anthropic models)."""
+
     video_length_seconds: Optional[float] = None
     """Length of videos sent to the model. Used for Vertex AI multimodal embeddings."""
 
@@ -1516,6 +1519,8 @@ class PromptTokensDetailsWrapper(
             del self.cache_creation_tokens
         if self.cache_creation_token_details is None:
             del self.cache_creation_token_details
+        if self.cache_write_tokens is None:
+            del self.cache_write_tokens
 
 
 class ServerToolUse(BaseModel):
@@ -1679,6 +1684,34 @@ class Usage(SafeAttributeModel, CompletionUsage):
             params["prompt_cache_hit_tokens"], int
         ):
             self._cache_read_input_tokens = params["prompt_cache_hit_tokens"]
+
+        ## OPENROUTER / OPENAI FORMAT MAPPING ##
+        # OpenRouter (and other OpenAI-compatible providers) return cache token counts
+        # in prompt_tokens_details rather than as top-level Anthropic fields.
+        # Populate both the private Anthropic-style fields AND the public
+        # prompt_tokens_details fields from prompt_tokens_details when the explicit
+        # Anthropic params (cache_creation_input_tokens, cache_read_input_tokens)
+        # were not provided, so that ALL downstream consumers see the correct values:
+        #   - streaming adapter / Langfuse: reads _cache_*_input_tokens (private)
+        #   - cost calculator (_parse_prompt_tokens_details): reads
+        #       prompt_tokens_details.cache_creation_tokens (public field on wrapper)
+        _ptd = getattr(self, "prompt_tokens_details", None)
+        if _ptd is not None:
+            if not self._cache_read_input_tokens:
+                _cached = getattr(_ptd, "cached_tokens", 0) or 0
+                if _cached > 0:
+                    self._cache_read_input_tokens = _cached
+            if not self._cache_creation_input_tokens:
+                _writes = getattr(_ptd, "cache_write_tokens", 0) or 0
+                if _writes > 0:
+                    self._cache_creation_input_tokens = _writes
+                    # Also populate the public field that the cost calculator reads
+                    # (_parse_prompt_tokens_details reads cache_creation_tokens, not
+                    # the private _cache_creation_input_tokens attribute).
+                    # Guard against overwriting a value already set by a prior
+                    # Anthropic-native mapping pass.
+                    if not getattr(_ptd, "cache_creation_tokens", None):
+                        _ptd.cache_creation_tokens = _writes
 
         for k, v in params.items():
             setattr(self, k, v)

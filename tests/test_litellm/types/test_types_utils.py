@@ -310,3 +310,99 @@ def test_delta_maps_reasoning_to_reasoning_content():
     # When neither is present, reasoning_content is not set (OpenAI spec)
     delta4 = Delta(content="hello")
     assert not hasattr(delta4, "reasoning_content")
+
+
+def test_usage_openrouter_cache_tokens_from_prompt_tokens_details():
+    """OpenRouter returns cache token counts in prompt_tokens_details (OpenAI format).
+    Usage.__init__ must map them to the Anthropic-style private fields so that cost
+    calculations and the Anthropic pass-through streaming adapter see correct values."""
+    from litellm.types.utils import PromptTokensDetailsWrapper, Usage
+
+    # Simulate what OpenRouter sends in the final streaming chunk
+    usage = Usage(
+        prompt_tokens=18500,
+        completion_tokens=120,
+        total_tokens=18620,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            cached_tokens=17000,
+            cache_write_tokens=400,
+        ),
+    )
+
+    # Private Anthropic-style fields (streaming adapter / Langfuse path)
+    assert usage._cache_read_input_tokens == 17000
+    assert usage._cache_creation_input_tokens == 400
+
+    # Public prompt_tokens_details fields (cost-calculator path).
+    # _parse_prompt_tokens_details in llm_cost_calc/utils.py reads
+    # prompt_tokens_details.cache_creation_tokens — it must be populated too.
+    assert usage.prompt_tokens_details is not None
+    assert usage.prompt_tokens_details.cache_creation_tokens == 400  # cost-calc path
+
+    # When Anthropic native params are provided they must take precedence over
+    # prompt_tokens_details so existing callers are not broken.
+    usage_native = Usage(
+        prompt_tokens=18500,
+        completion_tokens=120,
+        total_tokens=18620,
+        cache_read_input_tokens=999,
+        cache_creation_input_tokens=888,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            cached_tokens=17000,
+            cache_write_tokens=400,
+        ),
+    )
+    assert usage_native._cache_read_input_tokens == 999
+    assert usage_native._cache_creation_input_tokens == 888
+
+    # cache_write_tokens must not appear in serialised output when absent
+    usage_no_writes = Usage(
+        prompt_tokens=100,
+        completion_tokens=10,
+        total_tokens=110,
+        prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=50),
+    )
+    dumped = usage_no_writes.model_dump()
+    ptd = dumped.get("prompt_tokens_details", {})
+    assert "cache_write_tokens" not in ptd
+    # cache_creation_tokens should also be absent when no writes were reported
+    assert "cache_creation_tokens" not in ptd
+
+    # If cache_creation_tokens is already set on the wrapper (e.g. from a prior
+    # Anthropic-native mapping pass), the OpenRouter block must not overwrite it.
+    usage_no_overwrite = Usage(
+        prompt_tokens=18500,
+        completion_tokens=120,
+        total_tokens=18620,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            cache_creation_tokens=999,  # pre-existing value
+            cache_write_tokens=400,     # OpenRouter field — must NOT win
+        ),
+    )
+    assert usage_no_overwrite.prompt_tokens_details.cache_creation_tokens == 999
+
+
+def test_usage_openrouter_cache_tokens_dict_path():
+    """In production, prompt_tokens_details arrives as a plain dict (parsed from JSON).
+    The dict branch (isinstance(..., dict) → PromptTokensDetailsWrapper(**d)) must also
+    populate both the private fields and cache_creation_tokens for cost calculation."""
+    from litellm.types.utils import Usage
+
+    # Plain dict — the real code path from JSON-parsed API responses
+    usage = Usage(
+        prompt_tokens=18500,
+        completion_tokens=120,
+        total_tokens=18620,
+        prompt_tokens_details={
+            "cached_tokens": 17000,
+            "cache_write_tokens": 400,
+        },
+    )
+
+    # Both the streaming-adapter path (private fields) …
+    assert usage._cache_read_input_tokens == 17000
+    assert usage._cache_creation_input_tokens == 400
+
+    # … and the cost-calculator path (public wrapper field) must be populated.
+    assert usage.prompt_tokens_details is not None
+    assert usage.prompt_tokens_details.cache_creation_tokens == 400
