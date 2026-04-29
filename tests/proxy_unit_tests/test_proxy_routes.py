@@ -46,7 +46,10 @@ def test_routes_on_litellm_proxy():
 
     from litellm.proxy._lazy_features import LAZY_FEATURES
 
+    registered_paths = [getattr(r, "path", "") for r in app.routes]
     for feat in LAZY_FEATURES:
+        if any(rp.startswith(p) for p in feat.path_prefixes for rp in registered_paths):
+            continue
         try:
             module = importlib.import_module(feat.module_path)
             feat.register_fn(app, module)
