@@ -1312,6 +1312,7 @@ model LiteLLM_WorkflowRun {
   session_id    String   @unique @default(uuid())
   workflow_type String
   status        String   @default("pending")
+  created_by    String?  // user_id of the key that created this run; null = created by master key
   created_at    DateTime @default(now())
   updated_at    DateTime @updatedAt
   input         Json?
@@ -1324,6 +1325,7 @@ model LiteLLM_WorkflowRun {
   @@index([workflow_type, status])
   @@index([session_id])
   @@index([created_at])
+  @@index([created_by])
 }
 
 // Append-only log of state transitions. Never mutate rows here.
