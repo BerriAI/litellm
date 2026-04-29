@@ -5,6 +5,7 @@ import sys
 import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 
 sys.path.insert(
@@ -363,3 +364,125 @@ async def test_recreate_prisma_client_kills_old_engine_without_disconnect(
     mock_kill.assert_any_call(9999, signal.SIGTERM)
     disconnect_mock.assert_not_awaited()
     fake_new_prisma.connect.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
+# get_generic_data: transport-reconnect-and-retry coverage (issue #25143)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_generic_data_retries_on_transport_error_for_config_table(
+    mock_proxy_logging,
+):
+    """`get_generic_data(table_name="config")` self-heals on a transient
+    `httpx.ReadError`: reconnect once, retry once, return the row.
+
+    Regression for issue #25143 — the 1.83.x line lost the reconnect-and-retry
+    branch that 1.82.6 had on this method. `_update_config_from_db` fans out
+    four concurrent `get_generic_data` calls, so a single transport flap used
+    to surface as four `db_exceptions` alerts and a stale config window.
+    """
+    client = PrismaClient(
+        database_url="mock://test", proxy_logging_obj=mock_proxy_logging
+    )
+
+    expected_row = {"param_name": "general_settings", "param_value": {"foo": "bar"}}
+    invocations: list[None] = []
+
+    async def _flaky_find_first(**kwargs):
+        invocations.append(None)
+        if len(invocations) == 1:
+            raise httpx.ReadError("simulated transport blip")
+        return expected_row
+
+    client.db.litellm_config.find_first = AsyncMock(side_effect=_flaky_find_first)
+    client.attempt_db_reconnect = AsyncMock(return_value=True)
+
+    result = await client.get_generic_data(
+        key="param_name",
+        value="general_settings",
+        table_name="config",
+    )
+
+    assert result == expected_row
+    assert len(invocations) == 2
+    client.attempt_db_reconnect.assert_awaited_once()
+    reconnect_kwargs = client.attempt_db_reconnect.await_args.kwargs
+    assert reconnect_kwargs["reason"] == "prisma_get_generic_data_config_lookup_failure"
+
+    # The failure_handler telemetry side-effect must NOT fire on the first
+    # transport blip — only if the post-retry call also fails. Drain the
+    # event loop so any spuriously-spawned task would have run by now.
+    await asyncio.sleep(0)
+    mock_proxy_logging.failure_handler.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_get_generic_data_propagates_when_reconnect_fails(mock_proxy_logging):
+    """If reconnect itself does not succeed, propagate the original transport
+    error and let the existing failure_handler / db_exceptions telemetry fire."""
+    client = PrismaClient(
+        database_url="mock://test", proxy_logging_obj=mock_proxy_logging
+    )
+
+    client.db.litellm_config.find_first = AsyncMock(
+        side_effect=httpx.ReadError("simulated transport blip")
+    )
+    client.attempt_db_reconnect = AsyncMock(return_value=False)
+
+    with pytest.raises(httpx.ReadError):
+        await client.get_generic_data(
+            key="param_name",
+            value="general_settings",
+            table_name="config",
+        )
+
+    client.attempt_db_reconnect.assert_awaited_once()
+    # Failure telemetry IS expected here — the read genuinely failed.
+    await asyncio.sleep(0)
+    mock_proxy_logging.failure_handler.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# _engine_confirmed_dead flag-reset bug (B2)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_engine_confirmed_dead_persists_across_failed_heavy_reconnect(
+    mock_proxy_logging,
+):
+    """Regression test for the flag-reset bug.
+
+    Before the fix, `_run_reconnect_cycle` cleared
+    `self._engine_confirmed_dead = False` *before* awaiting
+    `_do_heavy_reconnect()`. If the heavy reconnect raised (e.g. timeout,
+    missing DATABASE_URL, recreate failure), the flag was left cleared and the
+    next attempt could demote to the lightweight path even though the engine
+    was genuinely dead.
+
+    The fix moves the reset into the success branch — the flag must stay True
+    when heavy reconnect raises.
+    """
+    client = PrismaClient(
+        database_url="mock://test", proxy_logging_obj=mock_proxy_logging
+    )
+    client._engine_confirmed_dead = True
+    client._engine_pid = 0  # so `_is_engine_alive` is not consulted
+
+    # Make the heavy reconnect path raise.
+    client.db.recreate_prisma_client = AsyncMock(
+        side_effect=RuntimeError("simulated heavy reconnect failure")
+    )
+    client._start_engine_watcher = AsyncMock()
+    client._cleanup_engine_watcher = MagicMock()
+    client._reap_all_zombies = MagicMock()
+
+    with patch.dict(os.environ, {"DATABASE_URL": "postgresql://test"}):
+        with pytest.raises(Exception):
+            await client._run_reconnect_cycle(timeout_seconds=5.0)
+
+    # The flag must STILL be True so the next attempt re-enters the heavy
+    # branch instead of silently demoting to the lightweight path.
+    assert client._engine_confirmed_dead is True
