@@ -81,8 +81,7 @@ from litellm.constants import (
     DEFAULT_ALLOWED_FAILS,
 )
 import httpx
-
-# register_async_client_cleanup is lazy-loaded and called on first access
+# register_async_client_cleanup is called eagerly at module import time
 
 litellm_mode = os.getenv("LITELLM_MODE", "DEV")  # "PRODUCTION", "DEV"
 
@@ -1990,6 +1989,15 @@ if TYPE_CHECKING:
 # Track if async client cleanup has been registered (for lazy loading)
 _async_client_cleanup_registered = False
 
+# Register async client cleanup eagerly so it runs even when only eagerly-imported
+# symbols (e.g. `acompletion`, imported via `from .main import *`) are used.
+# Without this, __getattr__ is never triggered and SSL connections are left open
+# at process exit, causing "Fatal error on SSL transport" / "Event loop is closed"
+# tracebacks with asyncio.gather (see issue #23278).
+from litellm.llms.custom_httpx.async_client_cleanup import register_async_client_cleanup
+register_async_client_cleanup()
+_async_client_cleanup_registered = True
+
 # Eager loading for backwards compatibility with VCR and other HTTP recording tools
 # When LITELLM_DISABLE_LAZY_LOADING is set, lazy-loaded attributes are loaded at import time
 # For now, this only affects encoding (tiktoken) as it was the only reported issue
@@ -2012,6 +2020,7 @@ def __getattr__(name: str) -> Any:
 
         register_async_client_cleanup()
         _async_client_cleanup_registered = True
+
 
     # Use cached registry from _lazy_imports instead of importing tuples every time
     from ._lazy_imports import _get_lazy_import_registry
