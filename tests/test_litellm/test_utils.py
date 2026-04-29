@@ -486,6 +486,57 @@ def test_cohere_embedding_optional_params():
     assert optional_params is not None
 
 
+def test_encoding_format_none_not_sent_to_third_party_providers():
+    """
+    together_ai / nvidia_nim / etc. reject encoding_format=null.
+    When no encoding_format is given, the None sentinel should only be set
+    for the canonical OpenAI provider, not third-party providers that share
+    the same embedding code path.
+    """
+    from unittest.mock import MagicMock, patch
+
+    import litellm
+
+    mock_response = litellm.EmbeddingResponse(
+        model="text-embedding-3-small",
+        data=[{"embedding": [0.1, 0.2, 0.3], "index": 0, "object": "embedding"}],
+        usage=litellm.Usage(prompt_tokens=1, total_tokens=1),
+    )
+
+    def get_optional_params(call_args):
+        return call_args.kwargs.get(
+            "optional_params", call_args[1].get("optional_params", {})
+        )
+
+    with patch("litellm.main.openai_chat_completions") as mock_oai:
+        mock_oai.embedding.return_value = mock_response
+
+        # OpenAI — encoding_format=None should be set to suppress SDK default
+        litellm.embedding(model="text-embedding-3-small", input="hello")
+        params = get_optional_params(mock_oai.embedding.call_args)
+        assert "encoding_format" in params
+        assert params["encoding_format"] is None
+
+        # together_ai — encoding_format key should be absent entirely
+        mock_oai.reset_mock()
+        litellm.embedding(
+            model="together_ai/togethercomputer/m2-bert-80M-8k-retrieval",
+            input="hello",
+        )
+        params = get_optional_params(mock_oai.embedding.call_args)
+        assert "encoding_format" not in params
+
+        # Explicit encoding_format should always be forwarded
+        mock_oai.reset_mock()
+        litellm.embedding(
+            model="together_ai/togethercomputer/m2-bert-80M-8k-retrieval",
+            input="hello",
+            encoding_format="float",
+        )
+        params = get_optional_params(mock_oai.embedding.call_args)
+        assert params.get("encoding_format") == "float"
+
+
 def validate_model_cost_values(model_data, exceptions=None):
     """
     Validates that cost values in model data do not exceed 1.
@@ -1420,8 +1471,7 @@ class TestProxyFunctionCalling:
         assert result is True, "Resolvable model names work with fallback logic"
 
         # Documentation notes:
-        print(
-            """
+        print("""
         PROXY MODEL RESOLUTION BEHAVIOR:
         
         ✅ WORKS (with current fallback logic):
@@ -1436,8 +1486,7 @@ class TestProxyFunctionCalling:
            
         💡 SOLUTION: Use LiteLLM proxy server with proper model_list configuration
            that maps custom names to underlying models.
-        """
-        )
+        """)
 
     @pytest.mark.parametrize(
         "proxy_model_with_hints,expected_result",
@@ -1799,8 +1848,7 @@ class TestProxyFunctionCalling:
         This test provides documentation on how the proxy server configuration
         would typically map custom model names to underlying models.
         """
-        print(
-            """
+        print("""
         
         REAL-WORLD PROXY SERVER CONFIGURATION EXAMPLE:
         ===============================================
@@ -1853,8 +1901,7 @@ class TestProxyFunctionCalling:
         - Consistent request/response format
         - Enhanced streaming support for function calls
         
-        """
-        )
+        """)
 
         # Verify that direct underlying models work as expected
         bedrock_models = [
@@ -2068,8 +2115,7 @@ class TestProxyFunctionCalling:
         This test provides documentation on how the proxy server configuration
         would typically map custom model names to underlying models.
         """
-        print(
-            """
+        print("""
         
         REAL-WORLD PROXY SERVER CONFIGURATION EXAMPLE:
         ===============================================
@@ -2122,8 +2168,7 @@ class TestProxyFunctionCalling:
         - Consistent request/response format
         - Enhanced streaming support for function calls
         
-        """
-        )
+        """)
 
         # Verify that direct underlying models work as expected
         bedrock_models = [
@@ -2337,8 +2382,7 @@ class TestProxyFunctionCalling:
         This test provides documentation on how the proxy server configuration
         would typically map custom model names to underlying models.
         """
-        print(
-            """
+        print("""
         
         REAL-WORLD PROXY SERVER CONFIGURATION EXAMPLE:
         ===============================================
@@ -2391,8 +2435,7 @@ class TestProxyFunctionCalling:
         - Consistent request/response format
         - Enhanced streaming support for function calls
         
-        """
-        )
+        """)
 
         # Verify that direct underlying models work as expected
         bedrock_models = [

@@ -4922,8 +4922,10 @@ def embedding(  # noqa: PLR0915
 
             if encoding_format is not None:
                 optional_params["encoding_format"] = encoding_format
-            else:
-                # Omiting causes openai sdk to add default value of "float"
+            elif custom_llm_provider == "openai" or custom_llm_provider is None:
+                # Omitting causes openai sdk to add default value of "float".
+                # Only suppress for the canonical OpenAI provider — third-party
+                # providers (together_ai, nvidia_nim, etc.) reject encoding_format=null.
                 optional_params["encoding_format"] = None
 
             api_version = None
