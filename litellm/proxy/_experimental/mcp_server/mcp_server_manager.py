@@ -2641,12 +2641,12 @@ class MCPServerManager:
                 server_name_from_prefix,
             ) = split_server_prefix_from_name(tool_name)
             normalised_prefix = normalize_server_name(server_name_from_prefix)
-            server = prefix_to_server.get(normalised_prefix)
-            if server is not None and (
+            matched_server = prefix_to_server.get(normalised_prefix)
+            if matched_server is not None and (
                 original_tool_name in self.tool_name_to_mcp_server_name_mapping
                 or tool_name in self.tool_name_to_mcp_server_name_mapping
             ):
-                return server
+                return matched_server
 
         return None
 
