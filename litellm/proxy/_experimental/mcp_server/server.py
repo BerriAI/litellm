@@ -2722,6 +2722,20 @@ if MCP_AVAILABLE:
                     status_code=HTTP_500_INTERNAL_SERVER_ERROR,
                     content={"error": "MCP request failed", "details": str(e)},
                 )
+        except HTTPException:
+            raise
+        except Exception as e:
+            verbose_logger.exception(f"Error handling MCP request: {e}")
+            # Instead of re-raising, try to send a graceful error response
+            try:
+                # Send a proper HTTP error response instead of letting the exception bubble up
+                from starlette.responses import JSONResponse
+                from starlette.status import HTTP_500_INTERNAL_SERVER_ERROR
+
+                error_response = JSONResponse(
+                    status_code=HTTP_500_INTERNAL_SERVER_ERROR,
+                    content={"error": "MCP request failed", "details": str(e)},
+                )
                 await error_response(scope, receive, send)
             except Exception as response_error:
                 verbose_logger.exception(
