@@ -115,7 +115,12 @@ else:
 # response side.
 _ANTHROPIC_TOOL_NAME_INVALID_CHARS = re.compile(r"[^a-zA-Z0-9_-]")
 _ANTHROPIC_TOOL_NAME_MAX_LEN = 128
-ANTHROPIC_TOOL_NAME_FORWARD_MAP_KEY = "_anthropic_tool_name_forward_map"
+# Single, internal-only key on ``litellm_params`` used to thread the per-
+# request reverse map (sanitized -> original) from request build to response
+# parsing. ``litellm_params`` is never serialized to a provider; ``optional_
+# params`` IS (it becomes the JSON body via ``data = {**optional_params}``).
+# Keep these two channels strictly separate -- never stash internal
+# coordination state in ``optional_params``.
 ANTHROPIC_TOOL_NAME_REVERSE_MAP_KEY = "_anthropic_tool_name_map"
 
 
@@ -893,6 +898,68 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 original_names.append(original)
         return _build_anthropic_tool_name_maps(original_names)
 
+    @staticmethod
+    def _sanitize_tool_names_in_request(
+        optional_params: Dict[str, Any],
+    ) -> Tuple[Dict[str, str], Dict[str, str]]:
+        """Sanitize ``optional_params['tools']`` and ``optional_params['tool_choice']``
+        in place so every name matches Anthropic's ``^[a-zA-Z0-9_-]{1,128}$``.
+
+        Returns ``(forward, reverse)`` for use by message-history rewriting
+        and response translation. ``forward[original] = sanitized`` is only
+        populated for names that were actually rewritten -- i.e. either
+        contained an invalid character or collided with another tool's
+        sanitized form. Names already valid AND unique pass through and are
+        absent from both maps.
+
+        Only ``type == "custom"`` tools (the OpenAI function-tool shape) are
+        considered. Hosted tools (``web_search``, ``bash``, ``code_execution``,
+        ``computer_*``, ``mcp``, ...) own reserved names defined by Anthropic
+        and must not be touched.
+        """
+        tools = optional_params.get("tools")
+        if not isinstance(tools, list) or not tools:
+            return {}, {}
+
+        # 1. Collect originals from the Anthropic-shaped custom-tool entries.
+        #    Order matters: the first occurrence wins the canonical slot;
+        #    later collisions get numeric suffixes (see
+        #    ``_build_anthropic_tool_name_maps``).
+        original_names: List[str] = []
+        for t in tools:
+            if not isinstance(t, dict):
+                continue
+            if t.get("type") != "custom":
+                continue
+            name = t.get("name")
+            if isinstance(name, str) and name:
+                original_names.append(name)
+
+        if not original_names:
+            return {}, {}
+
+        forward, reverse = _build_anthropic_tool_name_maps(original_names)
+        if not forward:
+            # Every name was already valid -- nothing to do.
+            return forward, reverse
+
+        # 2. Apply forward map in place to custom-tool names.
+        for t in tools:
+            if not isinstance(t, dict) or t.get("type") != "custom":
+                continue
+            name = t.get("name")
+            if isinstance(name, str) and name in forward:
+                t["name"] = forward[name]
+
+        # 3. Apply forward map to ``tool_choice`` when it targets a named tool.
+        tool_choice = optional_params.get("tool_choice")
+        if isinstance(tool_choice, dict) and tool_choice.get("type") == "tool":
+            tc_name = tool_choice.get("name")
+            if isinstance(tc_name, str) and tc_name in forward:
+                tool_choice["name"] = forward[tc_name]
+
+        return forward, reverse
+
     def _detect_tool_search_tools(self, tools: Optional[List]) -> bool:
         """Check if tool search tools are present in the tools list."""
         if not tools:
@@ -1199,26 +1266,16 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             non_default_params=non_default_params
         )
 
-        # Build per-request tool-name maps once, up-front, so both `tools`
-        # and `tool_choice` see the same forward map regardless of the
-        # order params arrive in non_default_params. See
-        # _build_anthropic_tool_name_maps for the collision-handling rules.
-        _tools_param = non_default_params.get("tools")
-        _tool_name_forward_map: Dict[str, str] = {}
-        _tool_name_reverse_map: Dict[str, str] = {}
-        if _tools_param:
-            (
-                _tool_name_forward_map,
-                _tool_name_reverse_map,
-            ) = self._build_request_tool_name_maps(_tools_param)
-            if _tool_name_forward_map:
-                optional_params[ANTHROPIC_TOOL_NAME_FORWARD_MAP_KEY] = (
-                    _tool_name_forward_map
-                )
-            if _tool_name_reverse_map:
-                optional_params[ANTHROPIC_TOOL_NAME_REVERSE_MAP_KEY] = (
-                    _tool_name_reverse_map
-                )
+        # NB: ``map_openai_params`` deliberately does NOT sanitize tool names
+        # here. Names are the *original* OpenAI names at this stage, and must
+        # remain so until ``transform_request`` -- which is the single
+        # chokepoint where Anthropic, Bedrock-Anthropic, and Vertex-Anthropic
+        # all pass through. Doing it there guarantees:
+        #   1. one source of truth for the per-request forward/reverse maps,
+        #   2. the maps land on ``litellm_params`` (internal), never on
+        #      ``optional_params`` (which is serialized into the request body
+        #      via ``data = {**optional_params}`` and would 400 with
+        #      ``Extra inputs are not permitted``).
 
         for param, value in non_default_params.items():
             if param == "max_tokens":
@@ -1230,9 +1287,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                     value if isinstance(value, int) else max(1, int(round(value)))
                 )
             elif param == "tools":
-                anthropic_tools, mcp_servers = self._map_tools(
-                    value, name_forward_map=_tool_name_forward_map
-                )
+                anthropic_tools, mcp_servers = self._map_tools(value)
                 optional_params = self._add_tools_to_optional_params(
                     optional_params=optional_params, tools=anthropic_tools
                 )
@@ -1243,7 +1298,6 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                     self._map_tool_choice(
                         tool_choice=non_default_params.get("tool_choice"),
                         parallel_tool_use=non_default_params.get("parallel_tool_calls"),
-                        name_forward_map=_tool_name_forward_map,
                     )
                 )
 
@@ -1659,21 +1713,33 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             headers=headers, optional_params=optional_params
         )
 
-        # Rewrite tool_call names in prior assistant messages using the
-        # per-request forward map so the `tool_use` blocks we end up sending
-        # match the (rewritten) tool names in optional_params["tools"].
-        # Without this, Anthropic still 400s on tool_use.name even if the
-        # tools array is clean.
+        # === Tool-name sanitization (single chokepoint) ===
+        # Anthropic enforces ^[a-zA-Z0-9_-]{1,128}$ on every tool name. We
+        # sanitize *here* -- not in map_openai_params -- because:
         #
-        # Also propagate the reverse map onto litellm_params so
-        # transform_response / streaming can translate response tool_use
-        # names back to the caller's originals.
-        _forward = optional_params.get(ANTHROPIC_TOOL_NAME_FORWARD_MAP_KEY)
-        _reverse = optional_params.get(ANTHROPIC_TOOL_NAME_REVERSE_MAP_KEY)
-        if _forward:
-            messages = self._rewrite_tool_names_in_messages(messages, _forward)
-        if _reverse and isinstance(litellm_params, dict):
-            litellm_params[ANTHROPIC_TOOL_NAME_REVERSE_MAP_KEY] = _reverse
+        #   - This function is the single boundary shared by AnthropicConfig,
+        #     AmazonAnthropicConfig (Bedrock invoke), VertexAIAnthropicConfig,
+        #     and AzureAnthropicConfig (all call ``super().transform_request``
+        #     or ``AnthropicConfig.transform_request(self, ...)``). Sanitizing
+        #     once here covers every Anthropic-shaped request.
+        #   - The forward/reverse maps are coordination state; they belong on
+        #     ``litellm_params`` (internal-only), never on ``optional_params``
+        #     (which becomes the JSON body via ``{**optional_params}``).
+        #   - It keeps ``map_openai_params`` a pure param translator with no
+        #     side-channel state.
+        #
+        # The reverse map only contains entries for names that were actually
+        # rewritten -- so a tool legitimately named ``foo_bar`` is never
+        # incorrectly retyped to ``foo/bar`` on the response side.
+        # See _build_anthropic_tool_name_maps for the collision-handling
+        # rules and rationale.
+        _name_forward_map, _name_reverse_map = self._sanitize_tool_names_in_request(
+            optional_params=optional_params,
+        )
+        if _name_forward_map:
+            messages = self._rewrite_tool_names_in_messages(messages, _name_forward_map)
+        if _name_reverse_map and isinstance(litellm_params, dict):
+            litellm_params[ANTHROPIC_TOOL_NAME_REVERSE_MAP_KEY] = _name_reverse_map
 
         # Separate system prompt from rest of message
         anthropic_system_message_list = self.translate_system_message(messages=messages)

@@ -3720,7 +3720,9 @@ def test_build_anthropic_tool_name_maps_three_way_collision():
 
 
 def test_map_tools_sanitizes_function_tool_name():
-    """Tools sent to Anthropic must have names matching ^[a-zA-Z0-9_-]{1,128}$."""
+    """``_map_tools`` does NOT sanitize on its own (sanitization happens in
+    ``transform_request``). When given a forward map, it applies it; when not,
+    it passes names through. This test pins the explicit-map behavior."""
     import re as _re
 
     config = AnthropicConfig()
@@ -3780,7 +3782,12 @@ def test_map_tool_choice_no_forward_map_passes_through_valid_name():
     assert out["name"] == "plain_tool"
 
 
-def test_map_openai_params_stashes_forward_and_reverse_maps():
+def test_map_openai_params_does_not_pollute_optional_params_with_internal_keys():
+    """REGRESSION: ``optional_params`` is what becomes the JSON body sent to
+    Anthropic (``data = {**optional_params}``). It MUST NOT carry LiteLLM-
+    internal coordination state like the per-request forward/reverse name
+    maps, or Anthropic 400s with ``Extra inputs are not permitted``.
+    Sanitization belongs in ``transform_request``, not here."""
     config = AnthropicConfig()
     optional_params: dict = {}
     config.map_openai_params(
@@ -3799,25 +3806,22 @@ def test_map_openai_params_stashes_forward_and_reverse_maps():
         model="claude-sonnet-4",
         drop_params=False,
     )
-    # forward map (original -> sanitized) for use by message rewriting
-    assert "_anthropic_tool_name_forward_map" in optional_params
-    assert (
-        optional_params["_anthropic_tool_name_forward_map"][
-            "actions/download-job-logs-for-workflow-run"
-        ]
-        == "actions_download-job-logs-for-workflow-run"
-    )
-    # reverse map (sanitized -> original) for response translation
-    assert "_anthropic_tool_name_map" in optional_params
-    assert (
-        optional_params["_anthropic_tool_name_map"][
-            "actions_download-job-logs-for-workflow-run"
-        ]
-        == "actions/download-job-logs-for-workflow-run"
-    )
+    # No internal keys may appear in optional_params for ANY input.
+    for key in optional_params:
+        assert not key.startswith(
+            "_anthropic_tool_name"
+        ), f"optional_params leaked internal key {key!r}: {optional_params}"
+    # And no key starting with `_` either; optional_params should only
+    # contain documented Anthropic Messages API parameters.
+    for key in optional_params:
+        assert not key.startswith("_"), (
+            f"optional_params leaked underscore-prefixed key {key!r}: "
+            f"{optional_params}"
+        )
 
 
 def test_map_openai_params_no_maps_when_all_names_already_valid():
+    """Sanity check: an all-valid tool list adds nothing weird either."""
     config = AnthropicConfig()
     optional_params: dict = {}
     config.map_openai_params(
@@ -3836,8 +3840,8 @@ def test_map_openai_params_no_maps_when_all_names_already_valid():
         model="claude-sonnet-4",
         drop_params=False,
     )
-    assert "_anthropic_tool_name_forward_map" not in optional_params
-    assert "_anthropic_tool_name_map" not in optional_params
+    for key in optional_params:
+        assert not key.startswith("_anthropic_tool_name")
 
 
 def test_rewrite_tool_names_in_messages_uses_forward_map():
@@ -4078,3 +4082,261 @@ def test_streaming_iterator_passthrough_when_name_not_in_map():
     tool_calls = parsed.choices[0].delta.tool_calls
     assert tool_calls is not None and len(tool_calls) == 1
     assert tool_calls[0]["function"]["name"] == "plain_tool"
+
+
+# ---------------------------------------------------------------------------
+# transform_request: end-to-end sanitization regression coverage
+# ---------------------------------------------------------------------------
+
+
+def _build_optional_params_for_tools(tools):
+    """Run a tools list through ``map_openai_params`` to get the same shape
+    ``transform_request`` will see from the router. Keeping this helper local
+    avoids duplicating the OpenAI->Anthropic param mapping in tests."""
+    config = AnthropicConfig()
+    optional_params: dict = {}
+    config.map_openai_params(
+        non_default_params={"tools": tools},
+        optional_params=optional_params,
+        model="claude-sonnet-4",
+        drop_params=False,
+    )
+    return optional_params
+
+
+def test_transform_request_does_not_leak_internal_keys_into_body():
+    """REGRESSION for "_anthropic_tool_name_forward_map: Extra inputs are not
+    permitted". The dict returned by ``transform_request`` is what becomes
+    the JSON body POSTed to Anthropic. It must contain ONLY documented
+    Anthropic Messages fields -- no LiteLLM coordination state."""
+    config = AnthropicConfig()
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "github_openapi_mcp-actions/download-job-logs-for-workflow-run",
+                "description": "d",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "plain_tool",
+                "description": "d",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        },
+    ]
+    optional_params = _build_optional_params_for_tools(tools)
+    litellm_params: dict = {}
+
+    data = config.transform_request(
+        model="claude-sonnet-4",
+        messages=[{"role": "user", "content": "go"}],
+        optional_params=optional_params,
+        litellm_params=litellm_params,
+        headers={},
+    )
+
+    # Body must not contain any LiteLLM-internal keys.
+    for key in data.keys():
+        assert not key.startswith("_"), (
+            f"transformed request body leaked underscore-prefixed key {key!r}; "
+            f"Anthropic will reject this with 'Extra inputs are not permitted'. "
+            f"body keys: {list(data.keys())}"
+        )
+
+    # Tool names in the body match Anthropic's pattern.
+    import re as _re
+
+    for tool in data.get("tools", []):
+        name = tool.get("name")
+        assert isinstance(name, str)
+        assert _re.fullmatch(
+            r"[a-zA-Z0-9_-]{1,128}", name
+        ), f"sanitized tool name {name!r} still violates Anthropic regex"
+
+    # Sent name for the bad tool is the disambiguated form, valid name passes through.
+    sent_names = {t["name"] for t in data["tools"]}
+    assert "github_openapi_mcp-actions_download-job-logs-for-workflow-run" in sent_names
+    assert "plain_tool" in sent_names
+
+    # Reverse map landed on litellm_params (NOT optional_params, NOT body).
+    rmap = litellm_params["_anthropic_tool_name_map"]
+    assert (
+        rmap["github_openapi_mcp-actions_download-job-logs-for-workflow-run"]
+        == "github_openapi_mcp-actions/download-job-logs-for-workflow-run"
+    )
+    # The legitimately-named tool is not in the reverse map -- it round-trips
+    # untouched on the response side.
+    assert "plain_tool" not in rmap
+
+
+def test_transform_request_no_reverse_map_when_all_names_valid():
+    """If every name is already valid, ``litellm_params`` stays clean
+    (no reverse map key) -- minimizes blast radius for the common case."""
+    config = AnthropicConfig()
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "plain_tool",
+                "description": "d",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        },
+    ]
+    optional_params = _build_optional_params_for_tools(tools)
+    litellm_params: dict = {}
+
+    data = config.transform_request(
+        model="claude-sonnet-4",
+        messages=[{"role": "user", "content": "go"}],
+        optional_params=optional_params,
+        litellm_params=litellm_params,
+        headers={},
+    )
+    assert data["tools"][0]["name"] == "plain_tool"
+    assert "_anthropic_tool_name_map" not in litellm_params
+
+
+def test_transform_request_sanitizes_tool_choice_named_tool():
+    """``tool_choice={"type": "function", "function": {"name": "<bad/name>"}}``
+    must arrive at Anthropic as ``{"type": "tool", "name": "<sanitized>"}``,
+    matching the sanitized name in the tools array."""
+    config = AnthropicConfig()
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "actions/download-job-logs-for-workflow-run",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        }
+    ]
+    optional_params = AnthropicConfig().map_openai_params(
+        non_default_params={
+            "tools": tools,
+            "tool_choice": {
+                "type": "function",
+                "function": {"name": "actions/download-job-logs-for-workflow-run"},
+            },
+        },
+        optional_params={},
+        model="claude-sonnet-4",
+        drop_params=False,
+    )
+    litellm_params: dict = {}
+    data = config.transform_request(
+        model="claude-sonnet-4",
+        messages=[{"role": "user", "content": "go"}],
+        optional_params=optional_params,
+        litellm_params=litellm_params,
+        headers={},
+    )
+    assert data["tool_choice"]["type"] == "tool"
+    assert data["tool_choice"]["name"] == "actions_download-job-logs-for-workflow-run"
+    assert data["tools"][0]["name"] == "actions_download-job-logs-for-workflow-run"
+
+
+def test_transform_request_rewrites_tool_names_in_history():
+    """Historical assistant messages with ``tool_calls`` referencing the bad
+    name must be rewritten to the sanitized form so Anthropic doesn't 400 on
+    ``tool_use.name`` mismatching the (sanitized) tools array."""
+    config = AnthropicConfig()
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "actions/download-job-logs-for-workflow-run",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        }
+    ]
+    optional_params = _build_optional_params_for_tools(tools)
+    messages = [
+        {"role": "user", "content": "logs please"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "toolu_old",
+                    "type": "function",
+                    "function": {
+                        "name": "actions/download-job-logs-for-workflow-run",
+                        "arguments": "{}",
+                    },
+                }
+            ],
+        },
+        {"role": "tool", "tool_call_id": "toolu_old", "content": "..."},
+        {"role": "user", "content": "again"},
+    ]
+    litellm_params: dict = {}
+    data = config.transform_request(
+        model="claude-sonnet-4",
+        messages=messages,
+        optional_params=optional_params,
+        litellm_params=litellm_params,
+        headers={},
+    )
+    # Find the assistant tool_use block in the Anthropic-shaped messages.
+    tool_use_names = []
+    for msg in data["messages"]:
+        content = msg.get("content")
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if isinstance(block, dict) and block.get("type") == "tool_use":
+                tool_use_names.append(block.get("name"))
+    assert (
+        tool_use_names
+    ), "expected at least one tool_use block in transformed messages"
+    for name in tool_use_names:
+        assert name == "actions_download-job-logs-for-workflow-run", (
+            f"history tool_use.name {name!r} not rewritten -- Anthropic will "
+            f"400 because it doesn't match the (sanitized) tools array"
+        )
+
+
+def test_sanitize_tool_names_in_request_skips_hosted_tools():
+    """Hosted tools (web_search, computer_*, code_execution, ...) own
+    Anthropic-reserved names. The sanitizer must not enumerate them as
+    ``custom`` and must not rename them."""
+    optional_params = {
+        "tools": [
+            {"type": "web_search_20250305", "name": "web_search"},
+            {
+                "type": "custom",
+                "name": "actions/download-job-logs-for-workflow-run",
+                "input_schema": {"type": "object", "properties": {}},
+            },
+        ],
+    }
+    forward, reverse = AnthropicConfig._sanitize_tool_names_in_request(optional_params)
+    # Only the custom tool was rewritten.
+    assert forward == {
+        "actions/download-job-logs-for-workflow-run": "actions_download-job-logs-for-workflow-run"
+    }
+    assert reverse == {
+        "actions_download-job-logs-for-workflow-run": "actions/download-job-logs-for-workflow-run"
+    }
+    # Hosted tool's name unchanged.
+    assert optional_params["tools"][0]["name"] == "web_search"
+    # Custom tool's name updated in place.
+    assert (
+        optional_params["tools"][1]["name"]
+        == "actions_download-job-logs-for-workflow-run"
+    )
+
+
+def test_sanitize_tool_names_in_request_no_tools_is_noop():
+    """Empty / missing tools must not error or pollute return."""
+    forward, reverse = AnthropicConfig._sanitize_tool_names_in_request({})
+    assert forward == {}
+    assert reverse == {}
+    forward, reverse = AnthropicConfig._sanitize_tool_names_in_request({"tools": []})
+    assert forward == {}
+    assert reverse == {}
