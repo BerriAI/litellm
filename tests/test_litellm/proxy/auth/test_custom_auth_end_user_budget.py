@@ -139,34 +139,3 @@ def test_update_valid_token_db_values_override_custom_auth_when_set():
     # DB values should win
     assert result.end_user_tpm_limit == 500
     assert result.end_user_model_max_budget == db_budget
-
-
-def test_update_valid_token_does_not_mutate_original_token():
-    """
-    Request-scoped end-user limits must not mutate the cached UserAPIKeyAuth object.
-    """
-    valid_token = UserAPIKeyAuth(
-        token="test_token",
-        end_user_id=None,
-        end_user_tpm_limit=None,
-        end_user_rpm_limit=None,
-        allowed_model_region=None,
-    )
-    end_user_params = {
-        "end_user_id": "attacker-user",
-        "end_user_tpm_limit": 1,
-        "end_user_rpm_limit": 1,
-        "allowed_model_region": "eu",
-    }
-
-    result = update_valid_token_with_end_user_params(valid_token, end_user_params)
-
-    assert result is not valid_token
-    assert result.end_user_id == "attacker-user"
-    assert result.end_user_tpm_limit == 1
-    assert result.end_user_rpm_limit == 1
-    assert result.allowed_model_region == "eu"
-    assert valid_token.end_user_id is None
-    assert valid_token.end_user_tpm_limit is None
-    assert valid_token.end_user_rpm_limit is None
-    assert valid_token.allowed_model_region is None
