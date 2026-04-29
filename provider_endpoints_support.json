@@ -1062,7 +1062,7 @@
     },
     "futurmix": {
       "display_name": "FuturMix (`futurmix`)",
-      "url": "https://docs.litellm.ai/docs/providers/futurmix",
+      "url": "https://futurmix.ai",
       "endpoints": {
         "chat_completions": true,
         "messages": true,
@@ -1073,7 +1073,9 @@
         "audio_speech": false,
         "moderations": false,
         "batches": false,
-        "rerank": false
+        "rerank": false,
+        "a2a": false,
+        "interactions": false
       }
     },
     "vertex_ai": {
