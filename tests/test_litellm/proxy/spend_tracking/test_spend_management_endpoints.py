@@ -376,6 +376,7 @@ ignored_keys = [
     "metadata.error_information",
     "metadata.attempted_retries",
     "metadata.max_retries",
+    "metadata.eval_information",
 ]
 
 MODEL_LIST = [
@@ -420,6 +421,26 @@ def reset_router_callbacks():
     litellm.logging_callback_manager._reset_all_callbacks()
     yield
     litellm.logging_callback_manager._reset_all_callbacks()
+
+
+@pytest.fixture(autouse=True)
+def reset_proxy_auth_globals(monkeypatch):
+    """
+    Pin proxy auth-related globals to a known baseline so tests don't inherit
+    leaked state (master_key, prisma_client, custom auth, cached tokens) from
+    earlier tests. Individual tests can still override via their own
+    monkeypatch calls — those run after this fixture and revert first.
+    """
+    import litellm.proxy.proxy_server as ps
+
+    monkeypatch.setattr(ps, "prisma_client", None)
+    monkeypatch.setattr(ps, "master_key", None)
+    monkeypatch.setattr(ps, "user_custom_auth", None)
+    monkeypatch.setattr(ps, "general_settings", {})
+    try:
+        ps.user_api_key_cache.in_memory_cache.cache_dict.clear()
+    except AttributeError:
+        pass
 
 
 @pytest.mark.asyncio
@@ -758,6 +779,233 @@ async def test_ui_view_spend_logs_sort_by_request_duration_ms(client, monkeypatc
         data = response.json()
         actual_ids = [log["request_id"] for log in data["data"]]
         assert actual_ids == ["req_fast", "req_slow"]
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "sort_order,expected_request_ids",
+    [
+        ("asc", ["req_anthropic", "req_gpt35", "req_gpt4"]),
+        ("desc", ["req_gpt4", "req_gpt35", "req_anthropic"]),
+    ],
+)
+async def test_ui_view_spend_logs_sort_by_model(
+    client, monkeypatch, sort_order, expected_request_ids
+):
+    """Test that model is accepted as a valid sort_by field and orders alphabetically."""
+    base_logs = [
+        {
+            "request_id": "req_gpt4",
+            "api_key": "sk-test-key",
+            "user": "user1",
+            "spend": 0.10,
+            "total_tokens": 100,
+            "startTime": "2025-01-01T00:00:00+00:00",
+            "endTime": "2025-01-01T00:00:01+00:00",
+            "model": "gpt-4",
+        },
+        {
+            "request_id": "req_anthropic",
+            "api_key": "sk-test-key",
+            "user": "user1",
+            "spend": 0.10,
+            "total_tokens": 100,
+            "startTime": "2025-01-01T00:00:01+00:00",
+            "endTime": "2025-01-01T00:00:02+00:00",
+            "model": "claude-3-opus",
+        },
+        {
+            "request_id": "req_gpt35",
+            "api_key": "sk-test-key",
+            "user": "user1",
+            "spend": 0.10,
+            "total_tokens": 100,
+            "startTime": "2025-01-01T00:00:02+00:00",
+            "endTime": "2025-01-01T00:00:03+00:00",
+            "model": "gpt-3.5-turbo",
+        },
+    ]
+
+    async def mock_count(*args, **kwargs):
+        return len(base_logs)
+
+    async def mock_query_raw(sql_query, *params):
+        assert "model" in sql_query
+        # model is non-nullable in the schema, so NULLS LAST should NOT be
+        # appended — only ttft_ms gets that clause. This guards against
+        # accidentally widening the change to all sort columns.
+        assert "NULLS LAST" not in sql_query
+        reverse = "DESC" in sql_query
+        sorted_logs = sorted(
+            base_logs, key=lambda x: x.get("model", ""), reverse=reverse
+        )
+        page_size = params[-2] if len(params) >= 2 else 50
+        skip = params[-1] if len(params) >= 1 else 0
+        return sorted_logs[skip : skip + page_size]
+
+    class MockPrismaClient:
+        def __init__(self):
+            self.db = MagicMock()
+            self.db.litellm_spendlogs = MagicMock()
+            self.db.litellm_spendlogs.count = AsyncMock(side_effect=mock_count)
+            self.db.query_raw = AsyncMock(side_effect=mock_query_raw)
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", MockPrismaClient())
+    monkeypatch.setattr(
+        "litellm.proxy.spend_tracking.spend_management_endpoints._is_admin_view_safe",
+        lambda user_api_key_dict: True,
+    )
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin_user"
+    )
+
+    try:
+        response = client.get(
+            "/spend/logs/ui",
+            params={
+                "start_date": "2024-12-25 00:00:00",
+                "end_date": "2025-01-02 23:59:59",
+                "sort_by": "model",
+                "sort_order": sort_order,
+            },
+            headers={"Authorization": "Bearer sk-test"},
+        )
+
+        assert response.status_code == 200, response.text
+        data = response.json()
+        actual_ids = [log["request_id"] for log in data["data"]]
+        assert actual_ids == expected_request_ids
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
+async def test_ui_view_spend_logs_sort_by_ttft_ms(client, monkeypatch):
+    """sort_by=ttft_ms orders streaming rows by TTFT and pushes non-streaming rows last (NULLS LAST)."""
+    # req_fast_stream: TTFT = 100ms (streaming)
+    # req_slow_stream: TTFT = 2000ms (streaming)
+    # req_no_stream:   completionStartTime == endTime (non-streaming, treated as NULL)
+    # req_null_stream: completionStartTime is null (non-streaming, NULL)
+    base_logs = [
+        {
+            "request_id": "req_fast_stream",
+            "api_key": "sk-test-key",
+            "user": "user1",
+            "spend": 0.10,
+            "total_tokens": 100,
+            "startTime": "2025-01-01T00:00:00+00:00",
+            "completionStartTime": "2025-01-01T00:00:00.100000+00:00",
+            "endTime": "2025-01-01T00:00:01+00:00",
+            "model": "gpt-4",
+            "_ttft_ms": 100,
+        },
+        {
+            "request_id": "req_slow_stream",
+            "api_key": "sk-test-key",
+            "user": "user1",
+            "spend": 0.10,
+            "total_tokens": 100,
+            "startTime": "2025-01-01T00:00:02+00:00",
+            "completionStartTime": "2025-01-01T00:00:04+00:00",
+            "endTime": "2025-01-01T00:00:05+00:00",
+            "model": "gpt-4",
+            "_ttft_ms": 2000,
+        },
+        {
+            "request_id": "req_no_stream",
+            "api_key": "sk-test-key",
+            "user": "user1",
+            "spend": 0.10,
+            "total_tokens": 100,
+            "startTime": "2025-01-01T00:00:06+00:00",
+            "completionStartTime": "2025-01-01T00:00:07+00:00",
+            "endTime": "2025-01-01T00:00:07+00:00",
+            "model": "gpt-4",
+            "_ttft_ms": None,
+        },
+        {
+            "request_id": "req_null_stream",
+            "api_key": "sk-test-key",
+            "user": "user1",
+            "spend": 0.10,
+            "total_tokens": 100,
+            "startTime": "2025-01-01T00:00:08+00:00",
+            "completionStartTime": None,
+            "endTime": "2025-01-01T00:00:09+00:00",
+            "model": "gpt-4",
+            "_ttft_ms": None,
+        },
+    ]
+
+    async def mock_count(*args, **kwargs):
+        return len(base_logs)
+
+    async def mock_query_raw(sql_query, *params):
+        # Endpoint must compute TTFT inline and use NULLS LAST.
+        assert "completionStartTime" in sql_query
+        assert "NULLS LAST" in sql_query
+        reverse = "DESC" in sql_query
+        non_null = [r for r in base_logs if r["_ttft_ms"] is not None]
+        nulls = [r for r in base_logs if r["_ttft_ms"] is None]
+        non_null.sort(key=lambda x: x["_ttft_ms"], reverse=reverse)
+        sorted_logs = non_null + nulls
+        page_size = params[-2] if len(params) >= 2 else 50
+        skip = params[-1] if len(params) >= 1 else 0
+        return [
+            {k: v for k, v in row.items() if k != "_ttft_ms"}
+            for row in sorted_logs[skip : skip + page_size]
+        ]
+
+    class MockPrismaClient:
+        def __init__(self):
+            self.db = MagicMock()
+            self.db.litellm_spendlogs = MagicMock()
+            self.db.litellm_spendlogs.count = AsyncMock(side_effect=mock_count)
+            self.db.query_raw = AsyncMock(side_effect=mock_query_raw)
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", MockPrismaClient())
+    monkeypatch.setattr(
+        "litellm.proxy.spend_tracking.spend_management_endpoints._is_admin_view_safe",
+        lambda user_api_key_dict: True,
+    )
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin_user"
+    )
+
+    try:
+        # asc: fast stream, slow stream, then NULLs (non-streaming) last
+        response = client.get(
+            "/spend/logs/ui",
+            params={
+                "start_date": "2024-12-25 00:00:00",
+                "end_date": "2025-01-02 23:59:59",
+                "sort_by": "ttft_ms",
+                "sort_order": "asc",
+            },
+            headers={"Authorization": "Bearer sk-test"},
+        )
+        assert response.status_code == 200, response.text
+        actual_ids = [log["request_id"] for log in response.json()["data"]]
+        assert actual_ids[:2] == ["req_fast_stream", "req_slow_stream"]
+        assert set(actual_ids[2:]) == {"req_no_stream", "req_null_stream"}
+
+        # desc: slow stream, fast stream, then NULLs still last
+        response = client.get(
+            "/spend/logs/ui",
+            params={
+                "start_date": "2024-12-25 00:00:00",
+                "end_date": "2025-01-02 23:59:59",
+                "sort_by": "ttft_ms",
+                "sort_order": "desc",
+            },
+            headers={"Authorization": "Bearer sk-test"},
+        )
+        assert response.status_code == 200, response.text
+        actual_ids = [log["request_id"] for log in response.json()["data"]]
+        assert actual_ids[:2] == ["req_slow_stream", "req_fast_stream"]
+        assert set(actual_ids[2:]) == {"req_no_stream", "req_null_stream"}
     finally:
         app.dependency_overrides.pop(ps.user_api_key_auth, None)
 
@@ -1150,14 +1398,14 @@ async def test_ui_view_spend_logs_date_range_filter(client, monkeypatch):
 async def test_ui_view_spend_logs_unauthorized(client):
     # Test without authorization header
     response = client.get("/spend/logs/ui")
-    assert response.status_code == 401 or response.status_code == 403
+    assert response.status_code in (401, 403), response.text
 
     # Test with invalid authorization
     response = client.get(
         "/spend/logs/ui",
         headers={"Authorization": "Bearer invalid-token"},
     )
-    assert response.status_code == 401 or response.status_code == 403
+    assert response.status_code in (401, 403), response.text
 
 
 @pytest.mark.asyncio

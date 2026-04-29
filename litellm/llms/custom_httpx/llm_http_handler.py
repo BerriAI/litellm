@@ -2213,6 +2213,7 @@ class BaseLLMHTTPHandler:
             litellm_params=litellm_params,
             headers=headers,
         )
+        data = BaseResponsesAPIConfig.normalize_responses_api_request_dict(data)
 
         if extra_body:
             data.update(extra_body)
@@ -2358,6 +2359,7 @@ class BaseLLMHTTPHandler:
             litellm_params=litellm_params,
             headers=headers,
         )
+        data = BaseResponsesAPIConfig.normalize_responses_api_request_dict(data)
 
         if extra_body:
             data.update(extra_body)
@@ -3897,6 +3899,7 @@ class BaseLLMHTTPHandler:
             litellm_params=litellm_params,
             headers=headers,
         )
+        data = BaseResponsesAPIConfig.normalize_responses_api_request_dict(data)
 
         ## LOGGING
         logging_obj.pre_call(
@@ -3979,6 +3982,7 @@ class BaseLLMHTTPHandler:
             litellm_params=litellm_params,
             headers=headers,
         )
+        data = BaseResponsesAPIConfig.normalize_responses_api_request_dict(data)
 
         ## LOGGING
         logging_obj.pre_call(
@@ -5515,6 +5519,8 @@ class BaseLLMHTTPHandler:
             api_key=litellm_params.api_key,
             headers=image_edit_optional_request_params.get("extra_headers", {}) or {},
             model=model,
+            litellm_params=dict(litellm_params),
+            api_base=litellm_params.api_base,
         )
 
         if extra_headers:
@@ -5611,6 +5617,8 @@ class BaseLLMHTTPHandler:
             api_key=litellm_params.api_key,
             headers=image_edit_optional_request_params.get("extra_headers", {}) or {},
             model=model,
+            litellm_params=dict(litellm_params),
+            api_base=litellm_params.api_base,
         )
 
         if extra_headers:

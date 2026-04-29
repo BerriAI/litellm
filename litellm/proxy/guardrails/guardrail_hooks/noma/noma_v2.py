@@ -7,7 +7,6 @@
 import enum
 import json
 import os
-from copy import deepcopy
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Literal, Optional, Type, cast
 from urllib.parse import urlparse
@@ -139,7 +138,7 @@ class NomaV2Guardrail(CustomGuardrail):
         logging_obj: Optional["LiteLLMLoggingObj"],
         application_id: Optional[str],
     ) -> dict:
-        payload_request_data = deepcopy(request_data)
+        payload_request_data = self._sanitize_payload_for_transport(request_data)
         if logging_obj is not None:
             payload_request_data["litellm_logging_obj"] = getattr(
                 logging_obj, "model_call_details", None

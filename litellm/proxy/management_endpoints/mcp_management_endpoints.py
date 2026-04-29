@@ -52,12 +52,17 @@ from litellm.proxy._experimental.mcp_server.utils import (
 from litellm.proxy._experimental.mcp_server.utils import (
     validate_and_normalize_mcp_server_payload as _base_validate_and_normalize_mcp_server_payload,
 )
+from litellm.proxy.common_utils.encrypt_decrypt_utils import (
+    decrypt_value_helper,
+    encrypt_value_helper,
+)
 
 router = APIRouter(prefix="/v1/mcp", tags=["mcp"])
 
 MCP_AVAILABLE: bool = True
 
 TEMPORARY_MCP_SERVER_TTL_SECONDS = 300
+TEMPORARY_MCP_SERVER_REDIS_KEY_PREFIX = "litellm:mcp:temporary_server"
 
 
 def does_mcp_server_exist(
@@ -329,13 +334,115 @@ if MCP_AVAILABLE:
         )
         return server
 
-    def get_cached_temporary_mcp_server(
+    async def _cache_temporary_mcp_server_in_redis(
+        server: MCPServer, ttl_seconds: int
+    ) -> None:
+        """
+        Best-effort write-through to Redis so temporary MCP OAuth sessions are
+        shared across proxy instances. Keep local in-memory cache as fallback.
+        """
+        if litellm.cache is None or not hasattr(litellm.cache, "cache"):
+            return
+        cache_backend = getattr(litellm.cache, "cache", None)
+        if cache_backend is None or not hasattr(cache_backend, "async_set_cache"):
+            return
+
+        payload: Dict[str, Any] = server.model_dump(mode="json")
+        payload_json = json.dumps(payload)
+        try:
+            encrypted_payload = encrypt_value_helper(payload_json)
+        except Exception as e:
+            verbose_proxy_logger.debug(
+                f"Failed to encrypt temporary MCP server payload for Redis cache: {str(e)}"
+            )
+            return
+
+        if not isinstance(encrypted_payload, str):
+            verbose_proxy_logger.debug(
+                "Encrypted temporary MCP payload is not a string; skipping Redis cache write"
+            )
+            return
+
+        try:
+            await cache_backend.async_set_cache(
+                key=f"{TEMPORARY_MCP_SERVER_REDIS_KEY_PREFIX}:{server.server_id}",
+                value=encrypted_payload,
+                ttl=max(1, ttl_seconds),
+            )
+        except Exception as e:
+            verbose_proxy_logger.debug(
+                f"Failed to write temporary MCP server to Redis cache: {str(e)}"
+            )
+
+    async def _get_temporary_mcp_server_from_redis(
+        server_id: str,
+    ) -> Optional[MCPServer]:
+        """
+        Best-effort read from Redis shared cache. Returns None on miss/errors.
+
+        Values must be encrypted strings (same contract as _cache_temporary_mcp_server_in_redis);
+        legacy plaintext dict payloads are rejected.
+        """
+        if litellm.cache is None or not hasattr(litellm.cache, "cache"):
+            return None
+        cache_backend = getattr(litellm.cache, "cache", None)
+        if cache_backend is None or not hasattr(cache_backend, "async_get_cache"):
+            return None
+
+        try:
+            cached_server = await cache_backend.async_get_cache(
+                key=f"{TEMPORARY_MCP_SERVER_REDIS_KEY_PREFIX}:{server_id}"
+            )
+        except Exception as e:
+            verbose_proxy_logger.debug(
+                f"Failed reading temporary MCP server from Redis cache: {str(e)}"
+            )
+            return None
+
+        if not isinstance(cached_server, str):
+            verbose_proxy_logger.debug(
+                "Temporary MCP Redis cache value must be an encrypted string; rejecting non-string payload"
+            )
+            return None
+
+        decrypted_json = decrypt_value_helper(
+            value=cached_server,
+            key="temporary_mcp_server",
+            exception_type="debug",
+        )
+        if decrypted_json is None:
+            return None
+        try:
+            loaded = json.loads(decrypted_json)
+        except Exception as e:
+            verbose_proxy_logger.debug(
+                f"Invalid decrypted temporary MCP payload in Redis cache: {str(e)}"
+            )
+            return None
+        if not isinstance(loaded, dict):
+            return None
+        payload_dict: Dict[str, Any] = loaded
+
+        try:
+            return MCPServer(**payload_dict)
+        except Exception as e:
+            verbose_proxy_logger.debug(
+                f"Invalid temporary MCP server payload in Redis cache: {str(e)}"
+            )
+            return None
+
+    async def get_cached_temporary_mcp_server(
         server_id: str,
     ) -> Optional[MCPServer]:
         _prune_expired_temporary_mcp_servers()
         entry = _temporary_mcp_servers.get(server_id)
         if entry is None:
-            return None
+            redis_server = await _get_temporary_mcp_server_from_redis(server_id)
+            if redis_server is None:
+                return None
+            # Intentionally avoid repopulating local cache from Redis to prevent
+            # extending effective lifetime beyond the remaining Redis TTL.
+            return redis_server
         return entry.server
 
     def _redact_mcp_credentials(
@@ -1325,6 +1432,10 @@ if MCP_AVAILABLE:
                 temporary_server,
                 ttl_seconds=TEMPORARY_MCP_SERVER_TTL_SECONDS,
             )
+            await _cache_temporary_mcp_server_in_redis(
+                temporary_server,
+                ttl_seconds=TEMPORARY_MCP_SERVER_TTL_SECONDS,
+            )
         except Exception as e:
             verbose_proxy_logger.exception(
                 f"Error caching temporary mcp server: {str(e)}"
@@ -1336,16 +1447,16 @@ if MCP_AVAILABLE:
 
         return _redact_mcp_credentials(temp_record)
 
-    def _get_cached_temporary_mcp_server_or_404(
-        server_id: str, request: Optional[Request] = None
+    async def _get_cached_temporary_mcp_server_or_404(
+        server_id: str,
+        user_api_key_dict: UserAPIKeyAuth,
+        request: Optional[Request] = None,
     ) -> MCPServer:
-        server = get_cached_temporary_mcp_server(server_id)
+        server = await get_cached_temporary_mcp_server(server_id)
+        resolved_from_temp_cache = server is not None
         if server is None:
             # Fall back to real DB/config server (e.g. for the user-side OAuth flow
             # which calls these endpoints with a real server_id, not a temp session id).
-            from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
-                global_mcp_server_manager,
-            )
             from litellm.proxy.auth.ip_address_utils import IPAddressUtils
 
             client_ip = IPAddressUtils.get_mcp_client_ip(request) if request else None
@@ -1359,6 +1470,28 @@ if MCP_AVAILABLE:
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail={"error": f"MCP server {server_id} not found"},
             )
+
+        # Per-server access policy mirrors `fetch_mcp_server`: admin-view
+        # callers are unrestricted; non-admins must have the server in their
+        # allowed-servers set. Temporary cached servers come from the
+        # admin-only `/server/oauth/session` setup flow and are not exposed
+        # to non-admins.
+        if not _user_has_admin_view(user_api_key_dict):
+            if resolved_from_temp_cache:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail={"error": f"Access denied to MCP server {server_id}"},
+                )
+            allowed_server_ids = (
+                await global_mcp_server_manager.get_allowed_mcp_servers(
+                    user_api_key_dict
+                )
+            )
+            if server.server_id not in allowed_server_ids:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail={"error": f"Access denied to MCP server {server_id}"},
+                )
         return server
 
     @router.get(
@@ -1378,7 +1511,9 @@ if MCP_AVAILABLE:
         response_type: Optional[str] = None,
         scope: Optional[str] = None,
     ):
-        mcp_server = _get_cached_temporary_mcp_server_or_404(server_id, request=request)
+        mcp_server = await _get_cached_temporary_mcp_server_or_404(
+            server_id, user_api_key_dict, request=request
+        )
         # Use the server's stored client_id when the caller doesn't supply one
         resolved_client_id = mcp_server.client_id or client_id or ""
         if not resolved_client_id:
@@ -1422,7 +1557,9 @@ if MCP_AVAILABLE:
         refresh_token: Optional[str] = Form(None),
         scope: Optional[str] = Form(None),
     ):
-        mcp_server = _get_cached_temporary_mcp_server_or_404(server_id, request=request)
+        mcp_server = await _get_cached_temporary_mcp_server_or_404(
+            server_id, user_api_key_dict, request=request
+        )
         resolved_client_id = mcp_server.client_id or client_id or ""
         if not resolved_client_id:
             raise HTTPException(
@@ -1458,7 +1595,9 @@ if MCP_AVAILABLE:
         server_id: str,
         user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     ):
-        mcp_server = _get_cached_temporary_mcp_server_or_404(server_id, request=request)
+        mcp_server = await _get_cached_temporary_mcp_server_or_404(
+            server_id, user_api_key_dict, request=request
+        )
         request_data = await _read_request_body(request=request)
         data: dict = {**request_data}
 
