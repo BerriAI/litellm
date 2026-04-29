@@ -333,8 +333,10 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                 responses_kwargs["instructions"] = "\n".join(filter(None, text_parts))
 
         # max_tokens -> max_output_tokens
+        # OpenAI Responses API requires max_output_tokens >= 16
         max_tokens = anthropic_request.get("max_tokens")
         if max_tokens:
+            max_tokens = max(max_tokens, 16)
             responses_kwargs["max_output_tokens"] = max_tokens
 
         # temperature / top_p passed through
