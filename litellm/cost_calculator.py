@@ -1070,6 +1070,8 @@ def completion_cost(  # noqa: PLR0915
     """
     try:
         call_type = _infer_call_type(call_type, completion_response) or "completion"
+        if call_type in ("anthropic_messages", "allm_passthrough_route"):
+            call_type = "completion"
 
         if (
             (call_type == "aimage_generation" or call_type == "image_generation")
@@ -1707,6 +1709,8 @@ def response_cost_calculator(
         "aembedding",
         "completion",
         "acompletion",
+        "anthropic_messages",
+        "allm_passthrough_route",
         "atext_completion",
         "text_completion",
         "image_generation",

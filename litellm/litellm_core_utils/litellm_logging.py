@@ -2014,6 +2014,8 @@ class Logging(LiteLLMLoggingBaseClass):
             event_type="sync_success"
         ):  # prevent double logging
             return
+        if kwargs.get("response_cost") is not None:
+            self.model_call_details["response_cost"] = kwargs["response_cost"]
         start_time, end_time, result = self._success_handler_helper_fn(
             start_time=start_time,
             end_time=end_time,
@@ -2488,6 +2490,9 @@ class Logging(LiteLLMLoggingBaseClass):
             event_type="async_success"
         ):  # prevent double logging
             return
+
+        if kwargs.get("response_cost") is not None:
+            self.model_call_details["response_cost"] = kwargs["response_cost"]
 
         ## CALCULATE COST FOR BATCH JOBS
         if self.call_type == CallTypes.aretrieve_batch.value and isinstance(
