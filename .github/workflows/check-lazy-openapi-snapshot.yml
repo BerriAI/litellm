@@ -63,7 +63,7 @@ jobs:
 
       - name: Mark neutral if drift
         if: steps.diff.outcome == 'failure'
-        uses: LouisBrunner/checks-action@v2.0.0
+        uses: LouisBrunner/checks-action@6b626ffbad7cc56fd58627f774b9067e6118af23 # v2.0.0
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           name: lazy-openapi-snapshot

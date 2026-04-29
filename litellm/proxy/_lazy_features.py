@@ -257,9 +257,16 @@ class LazyFeatureMiddleware:
         self.app = app
         self._fastapi_app = fastapi_app
         self._features = features
-        self._loaded: set = set()
-        # Per-feature locks so independent features can load in parallel.
-        self._locks: dict = {}
+        # Loaded set / per-feature locks live on app.state so the warm endpoint
+        # and the middleware share them — preventing duplicate registrations
+        # when both paths fire for the same feature.
+        if not hasattr(fastapi_app.state, "lazy_loaded"):
+            fastapi_app.state.lazy_loaded = set()
+            fastapi_app.state.lazy_locks = {}
+
+    @property
+    def _loaded(self) -> set:
+        return self._fastapi_app.state.lazy_loaded
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         # Short-circuit once every feature has loaded.
@@ -273,39 +280,47 @@ class LazyFeatureMiddleware:
                 if any(path.startswith(p) for p in feat.path_prefixes) or any(
                     path.endswith(s) for s in feat.path_suffixes
                 ):
-                    await self._load(feat)
+                    await _force_load(self._fastapi_app, feat)
         await self.app(scope, receive, send)
 
-    async def _load(self, feat: LazyFeature) -> None:
-        lock = self._locks.setdefault(feat.module_path, asyncio.Lock())
-        async with lock:
-            if feat.module_path in self._loaded:
-                return
-            try:
-                # Import on a thread (heavy modules take 1-3 s). register_fn
-                # mutates app.router.routes, so it stays on the loop thread.
-                loop = asyncio.get_running_loop()
-                module = await loop.run_in_executor(
-                    None, importlib.import_module, feat.module_path
-                )
-                feat.register_fn(self._fastapi_app, module)
-                self._loaded.add(feat.module_path)
-                self._fastapi_app.openapi_schema = None
-                verbose_proxy_logger.info(
-                    "Lazy-loaded optional feature %r (module: %s)",
-                    feat.name,
-                    feat.module_path,
-                )
-            except Exception as exc:
-                # Mark loaded anyway so we don't retry on every request.
-                self._loaded.add(feat.module_path)
-                verbose_proxy_logger.warning(
-                    "Failed to lazy-load optional feature %r (module: %s): %s. "
-                    "This feature's endpoints will return 404 until restart.",
-                    feat.name,
-                    feat.module_path,
-                    exc,
-                )
+
+async def _force_load(app: "FastAPI", feat: LazyFeature) -> bool:
+    """Import + register a lazy feature exactly once per (app, module).
+    Shared by the middleware and the /lazy/warm endpoint."""
+    if not hasattr(app.state, "lazy_loaded"):
+        app.state.lazy_loaded = set()
+        app.state.lazy_locks = {}
+    lock = app.state.lazy_locks.setdefault(feat.module_path, asyncio.Lock())
+    async with lock:
+        if feat.module_path in app.state.lazy_loaded:
+            return False
+        try:
+            # Import on a thread (heavy modules take 1-3 s). register_fn
+            # mutates app.router.routes, so it stays on the loop thread.
+            loop = asyncio.get_running_loop()
+            module = await loop.run_in_executor(
+                None, importlib.import_module, feat.module_path
+            )
+            feat.register_fn(app, module)
+            app.state.lazy_loaded.add(feat.module_path)
+            app.openapi_schema = None
+            verbose_proxy_logger.info(
+                "Lazy-loaded optional feature %r (module: %s)",
+                feat.name,
+                feat.module_path,
+            )
+            return True
+        except Exception as exc:
+            # Mark loaded anyway so we don't retry on every request.
+            app.state.lazy_loaded.add(feat.module_path)
+            verbose_proxy_logger.warning(
+                "Failed to lazy-load optional feature %r (module: %s): %s. "
+                "This feature's endpoints will return 404 until restart.",
+                feat.name,
+                feat.module_path,
+                exc,
+            )
+            return False
 
 
 def attach_lazy_features(app: "FastAPI") -> None:
@@ -315,13 +330,22 @@ def attach_lazy_features(app: "FastAPI") -> None:
 
 def _make_warmup_router(app: "FastAPI") -> "APIRouter":
     """POST /lazy/warm/{name}: load a feature and return its partial openapi
-    so the Swagger plugin can merge in-place without a full /openapi.json refetch."""
-    from fastapi import APIRouter, HTTPException
+    so the Swagger plugin can merge in-place without a full /openapi.json refetch.
+    Requires auth — anyone who can hit the proxy can already trigger the same
+    imports by sending a real request to a feature's prefix, but gating this
+    debug endpoint avoids unauthenticated callers forcing the import chain."""
+    from fastapi import APIRouter, Depends, HTTPException
     from fastapi.openapi.utils import get_openapi
+
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 
     router = APIRouter()
 
-    @router.post("/lazy/warm/{name}", include_in_schema=False)
+    @router.post(
+        "/lazy/warm/{name}",
+        include_in_schema=False,
+        dependencies=[Depends(user_api_key_auth)],
+    )
     async def warm(name: str):
         feat = next((f for f in LAZY_FEATURES if f.name == name), None)
         if feat is None:
@@ -329,17 +353,7 @@ def _make_warmup_router(app: "FastAPI") -> "APIRouter":
         if feat.persistent_swagger_stub:
             return {"stub_path": None, "paths": {}, "components": {"schemas": {}}}
 
-        already = any(
-            any(getattr(r, "path", "").startswith(p) for p in feat.path_prefixes)
-            for r in app.routes
-        )
-        if not already:
-            loop = asyncio.get_running_loop()
-            module = await loop.run_in_executor(
-                None, importlib.import_module, feat.module_path
-            )
-            feat.register_fn(app, module)
-            app.openapi_schema = None
+        await _force_load(app, feat)
 
         feat_routes = [
             r
@@ -365,35 +379,41 @@ def _make_warmup_router(app: "FastAPI") -> "APIRouter":
 def inject_lazy_stubs(schema: Dict) -> Dict:
     """Inject openapi entries for unloaded features. Uses the snapshot file
     when available (full route info), otherwise falls back to a single
-    placeholder per feature."""
-    from litellm.proxy._lazy_openapi_snapshot import load_snapshot
+    placeholder per feature. Any failure logs and returns the schema unchanged
+    so /openapi.json never 500s on a cosmetic injection bug."""
+    try:
+        from litellm.proxy._lazy_openapi_snapshot import load_snapshot
 
-    snapshot = load_snapshot()
-    paths = schema.setdefault("paths", {})
-    schemas = schema.setdefault("components", {}).setdefault("schemas", {})
+        snapshot = load_snapshot()
+        paths = schema.setdefault("paths", {})
+        schemas = schema.setdefault("components", {}).setdefault("schemas", {})
 
-    for feat in LAZY_FEATURES:
-        if feat.module_path in sys.modules and not feat.persistent_swagger_stub:
-            continue
+        for feat in LAZY_FEATURES:
+            if feat.module_path in sys.modules and not feat.persistent_swagger_stub:
+                continue
 
-        fragment = (snapshot or {}).get(feat.name)
-        if fragment:
-            for p, ops in fragment.get("paths", {}).items():
-                paths.setdefault(p, ops)
-            for name, sch in fragment.get("components", {}).get("schemas", {}).items():
-                schemas.setdefault(name, sch)
-            continue
+            fragment = (snapshot or {}).get(feat.name)
+            if fragment:
+                for p, ops in fragment.get("paths", {}).items():
+                    paths.setdefault(p, ops)
+                for name, sch in (
+                    fragment.get("components", {}).get("schemas", {}).items()
+                ):
+                    schemas.setdefault(name, sch)
+                continue
 
-        prefix = feat.path_prefixes[0]
-        if prefix in paths:
-            continue
-        paths[prefix] = {
-            "get": {
-                "tags": [feat.name],
-                "summary": feat.name,
-                "responses": {"200": {"description": "OK"}},
+            prefix = feat.path_prefixes[0]
+            if prefix in paths:
+                continue
+            paths[prefix] = {
+                "get": {
+                    "tags": [feat.name],
+                    "summary": feat.name,
+                    "responses": {"200": {"description": "OK"}},
+                }
             }
-        }
+    except Exception as exc:
+        verbose_proxy_logger.warning("inject_lazy_stubs failed: %s", exc)
     return schema
 
 
