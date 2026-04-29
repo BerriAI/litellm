@@ -1,0 +1,96 @@
+name: PR Build Artifact ECR Connectivity
+
+on:
+  pull_request:
+    types:
+      - labeled
+
+permissions:
+  contents: read
+  id-token: write
+  pull-requests: read
+
+jobs:
+  push-hello-world-image:
+    name: Push hello-world image to ECR
+    runs-on: ubuntu-latest
+    if: >
+      github.event.action == 'labeled' &&
+      github.event.label.name == 'build-ecr-artifact'
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      AWS_ROLE_TO_ASSUME: ${{ vars.AWS_ROLE_TO_ASSUME }}
+      ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
+
+    steps:
+      - name: Validate required configuration
+        run: |
+          test -n "${AWS_REGION}" || { echo "Missing repository variable: AWS_REGION"; exit 1; }
+          test -n "${AWS_ROLE_TO_ASSUME}" || { echo "Missing repository variable: AWS_ROLE_TO_ASSUME"; exit 1; }
+          test -n "${ECR_REPOSITORY}" || { echo "Missing repository variable: ECR_REPOSITORY"; exit 1; }
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: ecr-login
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Set image tags
+        id: image-tags
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          ECR_REGISTRY: ${{ steps.ecr-login.outputs.registry }}
+        run: |
+          short_sha="${PR_HEAD_SHA::7}"
+          image_tag="litellm-pr-${PR_NUMBER}"
+          trace_tag="litellm-pr-${PR_NUMBER}-${short_sha}"
+
+          {
+            echo "image_uri=${ECR_REGISTRY}/${ECR_REPOSITORY}:${image_tag}"
+            echo "trace_uri=${ECR_REGISTRY}/${ECR_REPOSITORY}:${trace_tag}"
+            echo "image_tag=${image_tag}"
+            echo "trace_tag=${trace_tag}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Create hello-world Dockerfile
+        run: |
+          cat > /tmp/Dockerfile.hello-world <<'EOF'
+          FROM public.ecr.aws/docker/library/alpine:3.20
+          CMD ["echo", "hello from litellm PR artifact workflow"]
+          EOF
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12
+
+      - name: Build and push hello-world image
+        uses: docker/build-push-action@0adf9959216b96bec444f325f1e493d4aa344497 # v6.14
+        with:
+          context: /tmp
+          file: /tmp/Dockerfile.hello-world
+          push: true
+          tags: |
+            ${{ steps.image-tags.outputs.image_uri }}
+            ${{ steps.image-tags.outputs.trace_uri }}
+
+      - name: Write workflow summary
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          IMAGE_URI: ${{ steps.image-tags.outputs.image_uri }}
+          TRACE_URI: ${{ steps.image-tags.outputs.trace_uri }}
+        run: |
+          {
+            echo "### ECR connectivity test passed"
+            echo
+            echo "- PR: \`#${PR_NUMBER}\`"
+            echo "- Head ref: \`${PR_HEAD_REF}\`"
+            echo "- Head SHA: \`${PR_HEAD_SHA}\`"
+            echo "- Updater image URI: \`${IMAGE_URI}\`"
+            echo "- Trace image URI: \`${TRACE_URI}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
