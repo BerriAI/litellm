@@ -4,6 +4,7 @@ import hashlib
 import inspect
 import json
 import os
+import re
 import smtplib
 import sys
 import threading
@@ -2700,8 +2701,7 @@ class PrismaClient:
             required_view = "LiteLLM_VerificationTokenView"
             expected_views_str = ", ".join(f"'{view}'" for view in expected_views)
             pg_schema = os.getenv("DATABASE_SCHEMA", "public")
-            ret = await self.db.query_raw(
-                f"""
+            ret = await self.db.query_raw(f"""
                 WITH existing_views AS (
                     SELECT viewname
                     FROM pg_views
@@ -2713,8 +2713,7 @@ class PrismaClient:
                     (SELECT COUNT(*) FROM existing_views) AS view_count,
                     ARRAY_AGG(viewname) AS view_names
                 FROM existing_views
-                """
-            )
+                """)
             expected_total_views = len(expected_views)
             if ret[0]["view_count"] == expected_total_views:
                 verbose_proxy_logger.info("All necessary views exist!")
@@ -2723,8 +2722,7 @@ class PrismaClient:
                 ## check if required view exists ##
                 if ret[0]["view_names"] and required_view not in ret[0]["view_names"]:
                     await self.health_check()  # make sure we can connect to db
-                    await self.db.execute_raw(
-                        """
+                    await self.db.execute_raw("""
                             CREATE VIEW "LiteLLM_VerificationTokenView" AS
                             SELECT
                             v.*,
@@ -2734,8 +2732,7 @@ class PrismaClient:
                             t.rpm_limit AS team_rpm_limit
                             FROM "LiteLLM_VerificationToken" v
                             LEFT JOIN "LiteLLM_TeamTable" t ON v.team_id = t.team_id;
-                        """
-                    )
+                        """)
 
                     verbose_proxy_logger.info(
                         "LiteLLM_VerificationTokenView Created in DB!"
@@ -5591,14 +5588,27 @@ def get_proxy_base_url() -> Optional[str]:
     return os.getenv("PROXY_BASE_URL")
 
 
+_SERVER_ROOT_PATH_PATTERN = re.compile(r"^(/[a-zA-Z0-9_-]+)*$")
+
+
 def get_server_root_path() -> str:
     """
     Get the server root path from the environment variables.
 
     - If SERVER_ROOT_PATH is set, return it.
     - Otherwise, default to "/".
+
+    Raises ValueError on startup if the value contains characters that could
+    be injected into served static files (e.g. script tags).
     """
-    return os.getenv("SERVER_ROOT_PATH", "")
+    value = os.getenv("SERVER_ROOT_PATH", "")
+    if value and not _SERVER_ROOT_PATH_PATTERN.match(value):
+        raise ValueError(
+            f"Invalid SERVER_ROOT_PATH {value!r}: must be empty or match "
+            r"^(/[a-zA-Z0-9_-]+)*$ (e.g. '/myapp' or '/myapp/v1'). "
+            "Characters outside this set could be injected into served UI assets."
+        )
+    return value
 
 
 def normalize_route_for_root_path(route: str) -> Optional[str]:
