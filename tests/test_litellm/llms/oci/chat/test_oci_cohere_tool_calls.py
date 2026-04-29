@@ -457,7 +457,11 @@ class TestOCICohereToolCalls:
         assert "tool_choice" not in supported_params
 
     def test_cohere_default_parameters(self):
-        """Test that Cohere requests do not inject hardcoded defaults — caller supplies all params."""
+        """Cohere requests inject only ``maxTokens`` as a sanity default (OCI's
+        server-side default of ~600 truncates and induces repetition). Other
+        sampling params are not injected — caller supplies them."""
+        from litellm.llms.oci.chat.transformation import COHERE_DEFAULT_MAX_TOKENS
+
         config = OCIChatConfig()
         messages = [{"role": "user", "content": "Hello"}]
         optional_params = {"oci_compartment_id": TEST_COMPARTMENT_ID}
@@ -472,8 +476,7 @@ class TestOCICohereToolCalls:
 
         chat_request = transformed_request["chatRequest"]
 
-        # No hardcoded defaults injected — only pass through what the user supplies
-        assert "maxTokens" not in chat_request
+        assert chat_request["maxTokens"] == COHERE_DEFAULT_MAX_TOKENS
         assert "topK" not in chat_request
         assert "topP" not in chat_request
         assert "frequencyPenalty" not in chat_request

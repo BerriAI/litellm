@@ -1153,3 +1153,295 @@ class TestOCIChatConfigErrorPaths:
 
 import pytest
 from unittest.mock import MagicMock
+
+
+from litellm.llms.oci.chat.transformation import (
+    COHERE_DEFAULT_MAX_TOKENS,
+    get_vendor_from_model,
+)
+from litellm.types.llms.oci import OCIVendors
+
+
+class TestOCICohereVendorRouting:
+    """Routing matrix:
+
+    - ``cohere.*`` (no "vision")        → COHERE   (V1 chat schema)
+    - ``cohere.*vision*``               → COHEREV2 (V2 multimodal schema)
+    - everything else                   → GENERIC  (Meta, Grok, Gemini)
+    """
+
+    @pytest.mark.parametrize(
+        "model",
+        [
+            "cohere.command-r-plus",
+            "cohere.command-latest",
+            "cohere.command-a-03-2025",
+        ],
+    )
+    def test_v1_cohere_models_route_to_cohere(self, model):
+        assert get_vendor_from_model(model) == OCIVendors.COHERE
+
+    @pytest.mark.parametrize(
+        "model",
+        [
+            "cohere.command-a-vision",
+            "cohere.command-a-vision-07-2025",
+            "cohere.COMMAND-A-VISION",
+        ],
+    )
+    def test_vision_cohere_models_route_to_cohere_v2(self, model):
+        assert get_vendor_from_model(model) == OCIVendors.COHEREV2
+
+    @pytest.mark.parametrize(
+        "model",
+        [
+            "meta.llama-3.3-70b-instruct",
+            "xai.grok-4",
+            "google.gemini-2.5-flash",
+        ],
+    )
+    def test_non_cohere_models_route_to_generic(self, model):
+        assert get_vendor_from_model(model) == OCIVendors.GENERIC
+
+
+class TestOCICohereV2TransformRequest:
+    """End-to-end transform_request shape checks for COHEREV2 (vision)."""
+
+    def _vision_messages(self):
+        return [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "What is in this image?"},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": "https://example.com/cat.jpg"},
+                    },
+                ],
+            }
+        ]
+
+    def test_apiformat_is_cohere_v2(self):
+        config = OCIChatConfig()
+        result = config.transform_request(
+            model="cohere.command-a-vision",
+            messages=self._vision_messages(),  # type: ignore
+            optional_params={"oci_compartment_id": TEST_COMPARTMENT_ID},
+            litellm_params={},
+            headers={},
+        )
+        assert result["chatRequest"]["apiFormat"] == "COHEREV2"
+
+    def test_image_content_block_preserved(self):
+        config = OCIChatConfig()
+        result = config.transform_request(
+            model="cohere.command-a-vision",
+            messages=self._vision_messages(),  # type: ignore
+            optional_params={"oci_compartment_id": TEST_COMPARTMENT_ID},
+            litellm_params={},
+            headers={},
+        )
+        chat_request = result["chatRequest"]
+        # V2 uses messages: [{role, content: [{type, ...}]}]
+        assert "messages" in chat_request
+        assert "message" not in chat_request
+
+        content = chat_request["messages"][0]["content"]
+        text_parts = [p for p in content if p.get("type") == "TEXT"]
+        image_parts = [p for p in content if p.get("type") == "IMAGE_URL"]
+        assert text_parts and text_parts[0]["text"] == "What is in this image?"
+        assert (
+            image_parts
+            and image_parts[0]["imageUrl"]["url"] == "https://example.com/cat.jpg"
+        )
+
+    def test_default_max_tokens_applied_to_v2(self):
+        config = OCIChatConfig()
+        result = config.transform_request(
+            model="cohere.command-a-vision",
+            messages=self._vision_messages(),  # type: ignore
+            optional_params={"oci_compartment_id": TEST_COMPARTMENT_ID},
+            litellm_params={},
+            headers={},
+        )
+        assert result["chatRequest"]["maxTokens"] == COHERE_DEFAULT_MAX_TOKENS
+
+    def test_no_user_message_raises(self):
+        config = OCIChatConfig()
+        with pytest.raises(Exception) as excinfo:
+            config.transform_request(
+                model="cohere.command-a-vision",
+                messages=[{"role": "system", "content": "be brief"}],  # type: ignore
+                optional_params={"oci_compartment_id": TEST_COMPARTMENT_ID},
+                litellm_params={},
+                headers={},
+            )
+        assert "user message" in str(excinfo.value).lower()
+
+    def test_tools_rejected_on_v2(self):
+        config = OCIChatConfig()
+        with pytest.raises(Exception) as excinfo:
+            config.transform_request(
+                model="cohere.command-a-vision",
+                messages=self._vision_messages(),  # type: ignore
+                optional_params={
+                    "oci_compartment_id": TEST_COMPARTMENT_ID,
+                    "tools": [
+                        {
+                            "type": "function",
+                            "function": {
+                                "name": "get_weather",
+                                "description": "...",
+                                "parameters": {"type": "object", "properties": {}},
+                            },
+                        }
+                    ],
+                },
+                litellm_params={},
+                headers={},
+            )
+        assert "Tools are not supported" in str(excinfo.value)
+
+
+class TestOCICohereV2TransformResponse:
+    """Parse a known-good V2 response shape (mirroring CohereChatResponseV2)."""
+
+    def test_basic_text_response(self):
+        from unittest.mock import MagicMock
+
+        response_json = {
+            "modelId": "cohere.command-a-vision",
+            "modelVersion": "1.0",
+            "chatResponse": {
+                "apiFormat": "COHEREV2",
+                "id": "resp-1",
+                "message": {
+                    "role": "ASSISTANT",
+                    "content": [{"type": "TEXT", "text": "A black cat."}],
+                },
+                "finishReason": "COMPLETE",
+                "usage": {
+                    "promptTokens": 12,
+                    "completionTokens": 4,
+                    "totalTokens": 16,
+                },
+            },
+        }
+        raw = MagicMock()
+        raw.json.return_value = response_json
+        raw.status_code = 200
+        raw.headers = {}
+
+        config = OCIChatConfig()
+        result = config.transform_response(
+            model="cohere.command-a-vision",
+            raw_response=raw,
+            model_response=ModelResponse(),
+            logging_obj=MagicMock(),
+            request_data={},
+            messages=[],
+            optional_params={},
+            litellm_params={},
+            encoding=None,
+        )
+        assert result.choices[0].message.content == "A black cat."
+        assert result.choices[0].finish_reason == "stop"
+        assert result.usage.prompt_tokens == 12
+        assert result.usage.completion_tokens == 4
+        assert result.usage.total_tokens == 16
+
+    def test_max_tokens_finish_reason(self):
+        from unittest.mock import MagicMock
+
+        response_json = {
+            "modelId": "cohere.command-a-vision",
+            "modelVersion": "1.0",
+            "chatResponse": {
+                "apiFormat": "COHEREV2",
+                "message": {
+                    "role": "ASSISTANT",
+                    "content": [{"type": "TEXT", "text": "..."}],
+                },
+                "finishReason": "MAX_TOKENS",
+            },
+        }
+        raw = MagicMock()
+        raw.json.return_value = response_json
+        raw.status_code = 200
+        raw.headers = {}
+
+        config = OCIChatConfig()
+        result = config.transform_response(
+            model="cohere.command-a-vision",
+            raw_response=raw,
+            model_response=ModelResponse(),
+            logging_obj=MagicMock(),
+            request_data={},
+            messages=[],
+            optional_params={},
+            litellm_params={},
+            encoding=None,
+        )
+        assert result.choices[0].finish_reason == "length"
+
+
+class TestOCICohereV2Streaming:
+    """V2 streaming is intentionally not implemented in this build — surface a
+    clear 501 instead of crashing on an unrecognized chunk shape."""
+
+    def test_v2_stream_chunk_raises_501(self):
+        from litellm.llms.oci.chat.transformation import OCIStreamWrapper
+
+        wrapper = OCIStreamWrapper(
+            completion_stream=iter([]),
+            model="cohere.command-a-vision",
+            custom_llm_provider="oci",
+            logging_obj=MagicMock(),
+        )
+        with pytest.raises(Exception) as excinfo:
+            wrapper.chunk_creator('data: {"apiFormat": "COHEREV2", "text": "hi"}')
+        assert "not yet supported" in str(excinfo.value).lower()
+
+
+class TestOCICohereDefaultMaxTokens:
+    """OCI's Cohere v1 chat applies a small server-side default to maxTokens
+    (~600). LiteLLM should set a sane default so chat replies aren't truncated
+    or pushed into repetition. Explicit caller values must always win."""
+
+    def test_default_applied_when_caller_omits_max_tokens(self):
+        config = OCIChatConfig()
+        result = config.transform_request(
+            model="cohere.command-latest",
+            messages=[{"role": "user", "content": "hi"}],  # type: ignore
+            optional_params={"oci_compartment_id": TEST_COMPARTMENT_ID},
+            litellm_params={},
+            headers={},
+        )
+        assert result["chatRequest"]["maxTokens"] == COHERE_DEFAULT_MAX_TOKENS
+
+    def test_explicit_max_tokens_wins(self):
+        config = OCIChatConfig()
+        result = config.transform_request(
+            model="cohere.command-latest",
+            messages=[{"role": "user", "content": "hi"}],  # type: ignore
+            optional_params={
+                "oci_compartment_id": TEST_COMPARTMENT_ID,
+                "max_tokens": 123,
+            },
+            litellm_params={},
+            headers={},
+        )
+        assert result["chatRequest"]["maxTokens"] == 123
+
+    def test_default_not_applied_to_generic_vendor(self):
+        """GENERIC models (Meta, xAI, Google) keep their own behavior — no
+        Cohere-specific default."""
+        config = OCIChatConfig()
+        result = config.transform_request(
+            model="meta.llama-3.3-70b-instruct",
+            messages=[{"role": "user", "content": "hi"}],  # type: ignore
+            optional_params={"oci_compartment_id": TEST_COMPARTMENT_ID},
+            litellm_params={},
+            headers={},
+        )
+        assert "maxTokens" not in result["chatRequest"]

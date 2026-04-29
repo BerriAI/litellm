@@ -41,6 +41,10 @@ from litellm.llms.oci.chat.cohere import (
     handle_cohere_response,
     handle_cohere_stream_chunk,
 )
+from litellm.llms.oci.chat.cohere_v2 import (
+    adapt_messages_to_cohere_v2_standard,
+    handle_cohere_v2_response,
+)
 from litellm.llms.oci.chat.generic import (
     adapt_messages_to_generic_oci_standard,
     adapt_tool_definition_to_oci_standard,
@@ -60,6 +64,7 @@ from litellm.llms.oci.common_utils import (
 )
 from litellm.types.llms.oci import (
     CohereChatRequest,
+    CohereV2ChatRequest,
     OCIChatRequestPayload,
     OCICompletionPayload,
     OCIServingMode,
@@ -84,17 +89,31 @@ else:
 # Streaming timeout — generous because OCI models may need to warm up on first request
 STREAMING_TIMEOUT = 60 * 5
 
+# OCI's Cohere v1 chat endpoint applies a small server-side default to maxTokens
+# (~600) when callers omit it. That truncates normal chat replies mid-sentence
+# and pushes the model into repetition loops as it nears the cap. Apply a sane
+# default when the caller did not specify max_tokens; explicit caller values
+# always win.
+COHERE_DEFAULT_MAX_TOKENS = 4000
+
 
 def get_vendor_from_model(model: str) -> OCIVendors:
     """Return the OCI vendor enum for a model name.
 
-    OCI GenAI uses two ``apiFormat`` values:
+    OCI GenAI uses three ``apiFormat`` values:
 
-    - ``"COHERE"`` for Cohere models (``cohere.*``)
-    - ``"GENERIC"`` for all others (Meta Llama, xAI Grok, Google Gemini, …)
+    - ``"COHERE"``   — V1 Cohere chat schema (``cohere.command-r*``,
+      ``cohere.command-light``, ``cohere.command-a-03-2025``, …)
+    - ``"COHEREV2"`` — V2 Cohere chat schema; required by the vision models
+      (``cohere.command-a-vision*``). Carries OpenAI-style ``messages`` with
+      typed content blocks (TEXT, IMAGE_URL, …).
+    - ``"GENERIC"``  — everything else (Meta Llama, xAI Grok, Google Gemini, …).
     """
-    vendor = model.split(".")[0].lower()
+    model_lower = model.lower()
+    vendor = model_lower.split(".")[0]
     if vendor == "cohere":
+        if "vision" in model_lower:
+            return OCIVendors.COHEREV2
         return OCIVendors.COHERE
     return OCIVendors.GENERIC
 
@@ -136,7 +155,7 @@ class OCIChatConfig(BaseConfig):
             "response_format": "responseFormat",
         }
 
-        # Cohere param map differs from GENERIC in three ways:
+        # Cohere V1 param map differs from GENERIC in three ways:
         # - tool_choice is unsupported
         # - stop sequences key is "stopSequences" not "stop"
         # - n (numGenerations) is GENERIC-only
@@ -146,12 +165,21 @@ class OCIChatConfig(BaseConfig):
             if k not in ("tool_choice", "max_retries", "n")
         }
 
+        # Cohere V2 (vision) param map: same as V1 (stopSequences, no
+        # numGenerations), but tool_choice is also unsupported here since this
+        # implementation deliberately doesn't carry V2 tool messages
+        # (mirrors langchain-oci, which raises NotImplementedError on V2 tools).
+        self.openai_to_oci_cohere_v2_param_map = self.openai_to_oci_cohere_param_map
+
+    def _vendor_param_map(self, vendor: OCIVendors) -> Dict[str, Any]:
+        if vendor == OCIVendors.COHERE:
+            return self.openai_to_oci_cohere_param_map
+        if vendor == OCIVendors.COHEREV2:
+            return self.openai_to_oci_cohere_v2_param_map
+        return self.openai_to_oci_generic_param_map
+
     def get_supported_openai_params(self, model: str) -> List[str]:
-        param_map = (
-            self.openai_to_oci_cohere_param_map
-            if get_vendor_from_model(model) == OCIVendors.COHERE
-            else self.openai_to_oci_generic_param_map
-        )
+        param_map = self._vendor_param_map(get_vendor_from_model(model))
         return [key for key, value in param_map.items() if value]
 
     def map_openai_params(
@@ -163,11 +191,7 @@ class OCIChatConfig(BaseConfig):
     ) -> dict:
         adapted_params = {}
         vendor = get_vendor_from_model(model)
-        param_map = (
-            self.openai_to_oci_cohere_param_map
-            if vendor == OCIVendors.COHERE
-            else self.openai_to_oci_generic_param_map
-        )
+        param_map = self._vendor_param_map(vendor)
 
         for key, value in {**non_default_params, **optional_params}.items():
             alias = param_map.get(key)
@@ -280,11 +304,7 @@ class OCIChatConfig(BaseConfig):
         return f"{base}/{OCI_API_VERSION}/actions/chat"
 
     def _get_optional_params(self, vendor: OCIVendors, optional_params: dict) -> Dict:
-        param_map = (
-            self.openai_to_oci_cohere_param_map
-            if vendor == OCIVendors.COHERE
-            else self.openai_to_oci_generic_param_map
-        )
+        param_map = self._vendor_param_map(vendor)
         selected_params: Dict = {}
 
         for openai_key, oci_key in param_map.items():
@@ -299,10 +319,27 @@ class OCIChatConfig(BaseConfig):
             ):
                 selected_params[oci_value] = optional_params[oci_value]  # type: ignore[index]
 
+        if (
+            vendor in (OCIVendors.COHERE, OCIVendors.COHEREV2)
+            and "maxTokens" not in selected_params
+        ):
+            selected_params["maxTokens"] = COHERE_DEFAULT_MAX_TOKENS
+
         if "tools" in selected_params:
             if vendor == OCIVendors.COHERE:
                 selected_params["tools"] = adapt_tool_definitions_to_cohere_standard(  # type: ignore[assignment]
                     selected_params["tools"]  # type: ignore[arg-type]
+                )
+            elif vendor == OCIVendors.COHEREV2:
+                # V2 tool-use is intentionally unsupported here; surface a clear
+                # error rather than sending a malformed payload.
+                raise OCIError(
+                    status_code=400,
+                    message=(
+                        "Tools are not supported on Cohere V2 (vision) models in "
+                        "this LiteLLM build. Drop the `tools` parameter or use a "
+                        "non-vision Cohere model (e.g. cohere.command-a-03-2025)."
+                    ),
                 )
             else:
                 selected_params["tools"] = adapt_tool_definition_to_oci_standard(  # type: ignore[assignment]
@@ -339,6 +376,11 @@ class OCIChatConfig(BaseConfig):
                 if schema_payload is not None:
                     rf_payload["jsonSchema"] = schema_payload
                 if vendor == OCIVendors.COHERE:
+                    rf_payload["type"] = response_type
+                elif vendor == OCIVendors.COHEREV2:
+                    # V2 keeps lowercase "text" / "json_object" / "json_schema"
+                    # like the OpenAI SDK schema (see CohereResponseFormat in
+                    # the OCI SDK).
                     rf_payload["type"] = response_type
                 else:
                     fmt = response_type.upper()
@@ -411,6 +453,22 @@ class OCIChatConfig(BaseConfig):
                 servingMode=serving_mode,
                 chatRequest=chat_request,
             )
+        elif vendor == OCIVendors.COHEREV2:
+            v2_messages = adapt_messages_to_cohere_v2_standard(messages)
+            if not any(m.role == "USER" for m in v2_messages):
+                raise OCIError(
+                    status_code=400,
+                    message="No user message found — Cohere V2 (vision) models require at least one user message",
+                )
+            v2_request = CohereV2ChatRequest(
+                messages=v2_messages,
+                **self._get_optional_params(OCIVendors.COHEREV2, optional_params),
+            )
+            data = OCICompletionPayload(
+                compartmentId=oci_compartment_id,
+                servingMode=serving_mode,
+                chatRequest=v2_request,
+            )
         else:
             data = OCICompletionPayload(
                 compartmentId=oci_compartment_id,
@@ -454,6 +512,10 @@ class OCIChatConfig(BaseConfig):
         vendor = get_vendor_from_model(model)
         if vendor == OCIVendors.COHERE:
             model_response = handle_cohere_response(
+                response_json, model, model_response
+            )
+        elif vendor == OCIVendors.COHEREV2:
+            model_response = handle_cohere_v2_response(
                 response_json, model, model_response
             )
         else:
@@ -583,6 +645,17 @@ class OCIStreamWrapper(CustomStreamWrapper):
 
         if dict_chunk.get("apiFormat") == "COHERE":
             return handle_cohere_stream_chunk(dict_chunk)
+        if dict_chunk.get("apiFormat") == "COHEREV2":
+            # Streaming for the V2 schema is not yet implemented in this build.
+            # Vision + non-streaming chat works; streaming requires parsing the
+            # V2 SSE delta format, which the OCI SDK doesn't expose as classes.
+            raise OCIError(
+                status_code=501,
+                message=(
+                    "Streaming is not yet supported for Cohere V2 (vision) models "
+                    "in this LiteLLM build. Set stream=False for now."
+                ),
+            )
         return handle_generic_stream_chunk(dict_chunk)
 
 
