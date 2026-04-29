@@ -71,6 +71,11 @@ class LoggingWorker:
             verbose_logger.debug(
                 "LoggingWorker: Event loop changed, reinitializing queue and worker"
             )
+            # Cancel orphaned tasks bound to the old (likely closed) event
+            # loop and suppress "Task was destroyed but it is pending!"
+            # warnings. We cannot await these tasks because their event loop
+            # is no longer running.
+            self._discard_orphaned_tasks()
             # Clear old state - these are bound to the old loop
             self._queue = None
             self._sem = None
@@ -417,6 +422,29 @@ class LoggingWorker:
             except asyncio.QueueEmpty:
                 break
 
+    def _discard_orphaned_tasks(self) -> None:
+        """Cancel orphaned tasks and suppress destroy warnings.
+
+        When the event loop changes or the process exits, pending tasks bound to
+        the old loop cannot be awaited. We still cancel them best-effort and
+        disable asyncio's pending-task destroy warning.
+        """
+        all_tasks = list(self._running_tasks)
+        if self._worker_task is not None:
+            all_tasks.append(self._worker_task)
+
+        for task in all_tasks:
+            if task.done():
+                continue
+            try:
+                task.cancel()
+            except RuntimeError:
+                pass  # Event loop is already closed.
+            task._log_destroy_pending = False
+
+        self._worker_task = None
+        self._running_tasks.clear()
+
     def _safe_log(self, level: str, message: str) -> None:
         """
         Safely log a message during shutdown, suppressing errors if logging is closed.
@@ -472,6 +500,10 @@ class LoggingWorker:
         Note: All logging in this method is wrapped to handle cases where
         logging handlers are closed during shutdown.
         """
+        # The original worker loop is bound to the old event loop, which is
+        # often already closed by the time atexit runs.
+        self._discard_orphaned_tasks()
+
         if self._queue is None:
             self._safe_log("debug", "[LoggingWorker] atexit: No queue initialized")
             return
