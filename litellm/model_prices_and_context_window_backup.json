@@ -38410,6 +38410,32 @@
         "output_cost_per_token": 0,
         "supports_reasoning": true
     },
+    "sarvam/sarvam-105b": {
+        "cache_creation_input_token_cost": 0,
+        "cache_creation_input_token_cost_above_1hr": 0,
+        "cache_read_input_token_cost": 0,
+        "input_cost_per_token": 0,
+        "litellm_provider": "sarvam",
+        "max_input_tokens": 128000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 0,
+        "supports_reasoning": true
+    },
+    "sarvam/sarvam-30b": {
+        "cache_creation_input_token_cost": 0,
+        "cache_creation_input_token_cost_above_1hr": 0,
+        "cache_read_input_token_cost": 0,
+        "input_cost_per_token": 0,
+        "litellm_provider": "sarvam",
+        "max_input_tokens": 64000,
+        "max_output_tokens": 64000,
+        "max_tokens": 64000,
+        "mode": "chat",
+        "output_cost_per_token": 0,
+        "supports_reasoning": true
+    },
     "tts-1-1106": {
         "input_cost_per_character": 1.5e-05,
         "litellm_provider": "openai",
