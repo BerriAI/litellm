@@ -2102,12 +2102,91 @@ if MCP_AVAILABLE:
                 # External auth header supplied; still enforce user-identity check.
                 await _check_byok_credential(mcp_server, user_api_key_auth)
 
+        # --- Pre-call hook for local registry paths (fixes #25011) ---
+        # The managed-server path (elif mcp_server) fires pre_call_hook
+        # internally via MCPServerManager.pre_call_tool_check.  The local
+        # registry paths (if local_tool / else fallback) bypass that, so
+        # we fire the hook here for those paths only to avoid double
+        # invocation.
+        async def _fire_pre_call_hook_for_local_path() -> Optional[Dict[str, Any]]:
+            """Fire pre_call_hook and return hook-modified arguments (if any).
+
+            Returns the modified arguments dict when the hook changes them,
+            or None when nothing was modified.  Matches the behaviour of
+            MCPServerManager.pre_call_tool_check (mcp_server_manager.py).
+            """
+            nonlocal arguments
+
+            from litellm.proxy.proxy_server import (
+                proxy_logging_obj as _proxy_log_obj,
+            )
+
+            if not _proxy_log_obj or not user_api_key_auth:
+                return None
+
+            # Extract bearer token from raw headers (same as
+            # MCPServerManager.pre_call_tool_check lines 1945-1949)
+            _normalized = {
+                k.lower(): v for k, v in (raw_headers or {}).items()
+            }
+            _bearer: Optional[str] = None
+            _auth_hdr = _normalized.get("authorization", "")
+            if _auth_hdr.lower().startswith("bearer "):
+                _bearer = _auth_hdr[len("bearer ") :]
+
+            _pre_hook_kwargs = {
+                "name": name,
+                "arguments": arguments or {},
+                "user_api_key_user_id": getattr(
+                    user_api_key_auth, "user_id", None
+                ),
+                "user_api_key_team_id": getattr(
+                    user_api_key_auth, "team_id", None
+                ),
+                "user_api_key_end_user_id": getattr(
+                    user_api_key_auth, "end_user_id", None
+                ),
+                "user_api_key_hash": getattr(
+                    user_api_key_auth, "api_key_hash", None
+                ),
+                "user_api_key_request_route": "/mcp/",
+                "incoming_bearer_token": _bearer,
+            }
+            _mcp_req = (
+                _proxy_log_obj._create_mcp_request_object_from_kwargs(
+                    _pre_hook_kwargs
+                )
+            )
+            _synth = _proxy_log_obj._convert_mcp_to_llm_format(
+                _mcp_req, _pre_hook_kwargs
+            )
+            modified_data = await _proxy_log_obj.pre_call_hook(
+                user_api_key_dict=user_api_key_auth,
+                data=_synth,
+                call_type=CallTypes.call_mcp_tool.value,
+            )
+
+            # Apply hook modifications (same as pre_call_tool_check)
+            if modified_data:
+                modified_kwargs = (
+                    _proxy_log_obj._convert_mcp_hook_response_to_kwargs(
+                        modified_data, _pre_hook_kwargs
+                    )
+                )
+                if modified_kwargs.get("arguments") != (arguments or {}):
+                    arguments = modified_kwargs["arguments"]
+
+            return None
+
+        # --- End pre-call hook helper ---
+
         # Check if tool exists in local registry first (for OpenAPI-based tools)
         # These tools are registered with their prefixed names
         #########################################################
         local_tool = global_mcp_tool_registry.get_tool(name)
         if local_tool:
             verbose_logger.debug(f"Executing local registry tool: {name}")
+            await _fire_pre_call_hook_for_local_path()
             # For BYOK servers the credential must be injected via a ContextVar
             # because the tool function has headers baked into its closure.
             # Pre-format the full Authorization header value using the server's
@@ -2152,6 +2231,7 @@ if MCP_AVAILABLE:
         # Deprecated: Local MCP Server Tool
         #########################################################
         else:
+            await _fire_pre_call_hook_for_local_path()
             local_content = await _handle_local_mcp_tool(original_tool_name, arguments)
             response = CallToolResult(content=cast(Any, local_content), isError=False)
 
