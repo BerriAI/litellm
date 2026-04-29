@@ -1215,7 +1215,12 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
                     raise ValueError("args is required for stdio transport")
                 # Validate command against allowlist to prevent arbitrary execution
                 base_command = os.path.basename(values["command"])
-                if base_command not in MCP_STDIO_ALLOWED_COMMANDS:
+                # Strip .exe/.cmd/.bat suffix for Windows compatibility
+                base_command_no_ext = os.path.splitext(base_command)[0]
+                if (
+                    base_command not in MCP_STDIO_ALLOWED_COMMANDS
+                    and base_command_no_ext not in MCP_STDIO_ALLOWED_COMMANDS
+                ):
                     raise ValueError(
                         f"Command '{values['command']}' is not in the allowed commands list "
                         f"for stdio transport. Allowed commands: {sorted(MCP_STDIO_ALLOWED_COMMANDS)}"
@@ -1283,7 +1288,12 @@ class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
                     raise ValueError("args is required for stdio transport")
                 # Validate command against allowlist to prevent arbitrary execution
                 base_command = os.path.basename(values["command"])
-                if base_command not in MCP_STDIO_ALLOWED_COMMANDS:
+                # Strip .exe/.cmd/.bat suffix for Windows compatibility
+                base_command_no_ext = os.path.splitext(base_command)[0]
+                if (
+                    base_command not in MCP_STDIO_ALLOWED_COMMANDS
+                    and base_command_no_ext not in MCP_STDIO_ALLOWED_COMMANDS
+                ):
                     raise ValueError(
                         f"Command '{values['command']}' is not in the allowed commands list "
                         f"for stdio transport. Allowed commands: {sorted(MCP_STDIO_ALLOWED_COMMANDS)}"

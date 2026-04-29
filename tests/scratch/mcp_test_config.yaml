@@ -1,0 +1,13 @@
+model_list:
+  - model_name: groq-model
+    litellm_params:
+      model: groq/llama-3.3-70b-versatile
+      api_key: os.environ/GROQ_API_KEY
+litellm_settings:
+  default_mcp_sampling_model: groq-model
+mcp_servers:
+  test_server:
+    transport: stdio
+    command: "c:\\Users\\DELL\\Desktop\\litellm\\.venv\\Scripts\\python.exe"
+    args: ["c:\\Users\\DELL\\Desktop\\litellm\\tests\\scratch\\custom_mcp_server.py"]
+    allow_all_keys: true

@@ -156,6 +156,65 @@ def _deserialize_json_dict(data: Any) -> Optional[Dict[str, str]]:
         return data
 
 
+def _create_sampling_callback():
+    """
+    Create a sampling callback for MCP ClientSession.
+    Returns a callable that handles sampling/createMessage requests from
+    upstream MCP servers by routing them through litellm.acompletion().
+    """
+
+    async def _sampling_callback(context, params):
+        from litellm.proxy._experimental.mcp_server.sampling_handler import (
+            handle_sampling_create_message,
+        )
+        import litellm
+        from litellm.proxy._experimental.mcp_server.server import (
+            get_active_auth_context,
+        )
+
+        return await handle_sampling_create_message(
+            context=context,
+            params=params,
+            default_model=getattr(litellm, "default_mcp_sampling_model", None),
+            user_api_key_auth=get_active_auth_context(),
+        )
+
+    return _sampling_callback
+
+
+def _create_elicitation_callback():
+    """
+    Create an elicitation callback for MCP ClientSession.
+    Returns a callable that handles elicitation/create requests from
+    upstream MCP servers. In gateway mode, this relays to the downstream
+    client; in tool bridge mode, it returns a decline response.
+    """
+
+    async def _elicitation_callback(context, params):
+        from litellm.proxy._experimental.mcp_server.elicitation_handler import (
+            handle_elicitation_request,
+        )
+        from litellm.proxy._experimental.mcp_server.server import get_active_mcp_session
+
+        # In Gateway mode, we relay the elicitation request to the downstream client
+        # that triggered the current operation.
+        downstream_session = get_active_mcp_session()
+        downstream_capabilities = (
+            getattr(downstream_session, "capabilities", None)
+            if downstream_session
+            else None
+        )
+
+        return await handle_elicitation_request(
+            context=context,
+            params=params,
+            downstream_session=downstream_session,
+            downstream_capabilities=downstream_capabilities,
+        )
+
+    return _elicitation_callback
+
+
 class MCPServerManager:
     _STDIO_ENV_TEMPLATE_PATTERN = re.compile(r"^\$\{(X-[^}]+)\}$")
 
@@ -1125,23 +1184,34 @@ class MCPServerManager:
 
         transport = server.transport or MCPTransport.sse
 
+        # Create sampling and elicitation callbacks for this client
+        sampling_cb = _create_sampling_callback()
+        elicitation_cb = _create_elicitation_callback()
+
         # Handle stdio transport
         if transport == MCPTransport.stdio:
             resolved_env = (
-                stdio_env if stdio_env is not None else dict(server.env or {})
+                stdio_env
+                if stdio_env is not None
+                else (dict(server.env) if server.env else None)
             )
 
             # Ensure npm-based STDIO MCP servers have a writable cache dir.
             # In containers the default (~/.npm or /app/.npm) may not exist
             # or be read-only, causing npx to fail with ENOENT.
-            if "NPM_CONFIG_CACHE" not in resolved_env:
+            if resolved_env is not None and "NPM_CONFIG_CACHE" not in resolved_env:
                 resolved_env["NPM_CONFIG_CACHE"] = MCP_NPM_CACHE_DIR
             # Defense-in-depth: block commands not in the allowlist.
             # The Pydantic validator blocks new servers; this catches legacy
             # config/DB records predating the allowlist.
             if server.command:
                 base_command = os.path.basename(server.command)
-                if base_command not in MCP_STDIO_ALLOWED_COMMANDS:
+                # Strip .exe/.cmd/.bat suffix for Windows compatibility
+                base_command_no_ext = os.path.splitext(base_command)[0]
+                if (
+                    base_command not in MCP_STDIO_ALLOWED_COMMANDS
+                    and base_command_no_ext not in MCP_STDIO_ALLOWED_COMMANDS
+                ):
                     raise HTTPException(
                         status_code=403,
                         detail=f"MCP stdio command '{server.command}' is not in the allowlist ({sorted(MCP_STDIO_ALLOWED_COMMANDS)}). "
@@ -1164,6 +1234,8 @@ class MCPServerManager:
                 timeout=MCP_CLIENT_TIMEOUT,
                 stdio_config=stdio_config,
                 extra_headers=extra_headers,
+                sampling_callback=sampling_cb,
+                elicitation_callback=elicitation_cb,
             )
         else:
             # For HTTP/SSE transports
@@ -1190,6 +1262,8 @@ class MCPServerManager:
                 timeout=MCP_CLIENT_TIMEOUT,
                 extra_headers=extra_headers,
                 aws_auth=aws_auth,
+                sampling_callback=sampling_cb,
+                elicitation_callback=elicitation_cb,
             )
 
     async def _get_tools_from_server(
