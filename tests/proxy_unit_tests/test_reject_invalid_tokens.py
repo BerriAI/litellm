@@ -15,6 +15,7 @@ from litellm.proxy.auth.reject_invalid_tokens import InvalidVirtualKeyCache
 def _sk_key() -> str:
     return "sk-test-invalid-virtual-key"
 
+
 def _general_settings_positive_ttl() -> dict:
     """Force negative-cache path on (avoid relying only on default constant)."""
     return {"invalid_virtual_key_cache_ttl": 3600}
@@ -63,7 +64,7 @@ async def test_check_invalid_token_empty_cache_db_miss_records_negative_entry():
 async def test_check_invalid_token_negative_cache_hit_short_circuits_even_if_db_has_row():
     """
     Hash already negative-cached → reject immediately without calling Prisma,
-    even if a row exists in DB (stale negative cache after key creation is possible).
+    even if a row exists in DB.
     """
     api_key = _sk_key()
     neg_key = _negative_cache_key_for(api_key)
@@ -86,6 +87,23 @@ async def test_check_invalid_token_negative_cache_hit_short_circuits_even_if_db_
     assert result is True
     find_first.assert_not_called()
     user_api_key_cache.async_set_cache.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_delete_invalid_token_cache_removes_negative_cache_key():
+    api_key = _sk_key()
+    hashed = hash_token(token=api_key)
+    neg_key = _negative_cache_key_for(api_key)
+
+    user_api_key_cache = MagicMock()
+    user_api_key_cache.async_delete_cache = AsyncMock()
+
+    await InvalidVirtualKeyCache.delete_invalid_token_cache(
+        hashed_token=hashed,
+        user_api_key_cache=user_api_key_cache,
+    )
+
+    user_api_key_cache.async_delete_cache.assert_awaited_once_with(key=neg_key)
 
 
 @pytest.mark.asyncio

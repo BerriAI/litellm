@@ -65,6 +65,23 @@ class InvalidVirtualKeyCache:
         return "{}{}".format(cls._prefix, hashed_token)
 
     @classmethod
+    async def delete_invalid_token_cache(
+        cls,
+        *,
+        hashed_token: str,
+        user_api_key_cache: Any,
+    ) -> None:
+        """Clear a stale negative-cache entry after the token is created/restored."""
+        try:
+            await user_api_key_cache.async_delete_cache(
+                key=cls._cache_key(hashed_token)
+            )
+        except Exception as e:
+            verbose_proxy_logger.debug(
+                "InvalidVirtualKeyCache.delete_invalid_token_cache: %s", e
+            )
+
+    @classmethod
     async def allows_db_lookup(
         cls,
         *,
