@@ -1166,7 +1166,7 @@ class Logging(LiteLLMLoggingBaseClass):
                     verbose_logger.debug(f"\033[92m{curl_command}\033[0m\n")
 
     def _get_request_body(self, data: dict) -> str:
-        return str(data)
+        return json.dumps(data, default=str)
 
     def _get_request_curl_command(
         self, api_base: str, headers: Optional[dict], additional_args: dict, data: dict
