@@ -1,9 +1,10 @@
 import json
-from typing import Any, Optional, Union
+from typing import Any, Dict, List, Optional, Union
 
 import httpx
 
 import litellm
+from litellm._logging import verbose_logger
 from litellm.anthropic_beta_headers_manager import (
     update_headers_with_filtered_beta,
 )
@@ -88,6 +89,83 @@ def make_sync_call(
 class BedrockConverseLLM(BaseAWSLLM):
     def __init__(self) -> None:
         super().__init__()
+
+    async def _call_agentic_chat_completion_hooks(
+        self,
+        response: Any,
+        model: str,
+        messages: List[Dict],
+        optional_params: Dict,
+        logging_obj: LiteLLMLoggingObject,
+        stream: bool,
+        litellm_params: Dict,
+    ) -> Optional[Any]:
+        """
+        Call agentic chat completion hooks for all custom loggers.
+
+        Checks each callback for async_should_run_chat_completion_agentic_loop
+        and if triggered, runs async_run_chat_completion_agentic_loop.
+
+        Returns the response from the agentic loop, or None if no hook runs.
+        """
+        from litellm.integrations.custom_logger import CustomLogger
+
+        callbacks = litellm.callbacks + (
+            getattr(logging_obj, "dynamic_success_callbacks", None) or []
+        )
+        tools = optional_params.get("tools", [])
+        custom_llm_provider = litellm_params.get("custom_llm_provider", "bedrock")
+
+        for callback in callbacks:
+            try:
+                if isinstance(callback, CustomLogger):
+                    if not hasattr(
+                        callback, "async_should_run_chat_completion_agentic_loop"
+                    ):
+                        continue
+
+                    (
+                        should_run,
+                        tool_calls,
+                    ) = await callback.async_should_run_chat_completion_agentic_loop(
+                        response=response,
+                        model=model,
+                        messages=messages,
+                        tools=tools,
+                        stream=stream,
+                        custom_llm_provider=custom_llm_provider,
+                        kwargs=litellm_params,
+                    )
+
+                    if should_run:
+                        kwargs_with_provider = (
+                            litellm_params.copy() if litellm_params else {}
+                        )
+                        kwargs_with_provider["custom_llm_provider"] = (
+                            custom_llm_provider
+                        )
+
+                        agentic_response = (
+                            await callback.async_run_chat_completion_agentic_loop(
+                                tools=tool_calls,
+                                model=model,
+                                messages=messages,
+                                response=response,
+                                optional_params=optional_params,
+                                logging_obj=logging_obj,
+                                stream=stream,
+                                kwargs=kwargs_with_provider,
+                            )
+                        )
+                        return agentic_response
+
+            except Exception as e:
+                verbose_logger.exception(
+                    "LiteLLM.AgenticHookError: Exception in agentic completion hooks for Bedrock: %s",
+                    str(e),
+                )
+
+        return None
 
     async def async_streaming(
         self,
@@ -235,7 +313,7 @@ class BedrockConverseLLM(BaseAWSLLM):
         except httpx.TimeoutException:
             raise BedrockError(status_code=408, message="Timeout error occurred.")
 
-        return litellm.AmazonConverseConfig()._transform_response(
+        initial_response = litellm.AmazonConverseConfig()._transform_response(
             model=model,
             response=response,
             model_response=model_response,
@@ -247,6 +325,18 @@ class BedrockConverseLLM(BaseAWSLLM):
             optional_params=optional_params,
             encoding=encoding,
         )
+
+        agentic_response = await self._call_agentic_chat_completion_hooks(
+            response=initial_response,
+            model=model,
+            messages=messages,
+            optional_params=optional_params,
+            logging_obj=logging_obj,
+            stream=False,
+            litellm_params=litellm_params,
+        )
+
+        return agentic_response if agentic_response is not None else initial_response
 
     def completion(  # noqa: PLR0915
         self,
