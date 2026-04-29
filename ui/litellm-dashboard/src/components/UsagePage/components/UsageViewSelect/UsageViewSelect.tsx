@@ -55,8 +55,8 @@ const OPTIONS: OptionConfig[] = [
   },
   {
     value: "team",
-    label: "Team Usage",
-    description: "View usage by team",
+    label: "Team-level Usage",
+    description: "View usage by team; shows team spend separately from global usage.",
     icon: <TeamOutlined style={{ fontSize: "16px" }} />,
   },
   {
