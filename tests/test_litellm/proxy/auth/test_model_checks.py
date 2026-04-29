@@ -338,6 +338,28 @@ def test_get_complete_model_list_keeps_known_base_model():
     assert result == ["gpt-4o-mini"]
 
 
+def test_get_complete_model_list_keeps_custom_proxy_alias():
+    """
+    A custom enterprise proxy model name (e.g. 'internal-assistant') that is
+    listed in proxy_model_list but is NOT a known LiteLLM base model id must
+    survive the filter. This locks in the proxy_model_list-membership branch
+    of _is_unresolvable_model_identifier — the most common preservation path
+    in real deployments.
+    """
+    from litellm.proxy.auth.model_checks import get_complete_model_list
+
+    result = get_complete_model_list(
+        key_models=["internal-assistant"],
+        team_models=[],
+        proxy_model_list=["internal-assistant"],
+        user_model=None,
+        infer_model_from_keys=False,
+        model_access_groups={},
+    )
+
+    assert result == ["internal-assistant"]
+
+
 def test_get_complete_model_list_keeps_finetune_id():
     """OpenAI fine-tune ids (`ft:...`) must survive the filter."""
     from litellm.proxy.auth.model_checks import get_complete_model_list
