@@ -40,6 +40,7 @@ from litellm.proxy.auth.auth_checks import (
     get_jwt_key_mapping_object,
     get_key_object,
     get_project_object,
+    get_team_membership,
     get_team_object,
     get_user_object,
     is_valid_fallback_model,
@@ -1216,6 +1217,48 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
             valid_token = _update_key_budget_with_temp_budget_increase(
                 valid_token
             )  # updating it here, allows all downstream reporting / checks to use the updated budget
+
+            # Bug fix: Populate team_member_rpm_limit / team_member_tpm_limit for Virtual Key auth.
+            #
+            # This is a pure bug fix, not a behaviour change. The JWT auth flow already
+            # enforces per-member rate limits via JWTAuthManager.auth_builder() (see #13601).
+            # The Virtual Key flow was simply missing the equivalent query, causing
+            # team_member_rpm_limit / team_member_tpm_limit to be silently ignored for
+            # all virtual-key requests. Operators who configured per-member limits
+            # always expected them to be enforced; this restores parity between the
+            # two auth paths. No flag is needed because the previous behaviour
+            # (limits not enforced) was unintentional.
+            if (
+                valid_token.user_id is not None
+                and valid_token.team_id is not None
+                and (
+                    valid_token.team_member_rpm_limit is None
+                    or valid_token.team_member_tpm_limit is None
+                )
+            ):
+                try:
+                    _team_membership = await get_team_membership(
+                        user_id=valid_token.user_id,
+                        team_id=valid_token.team_id,
+                        prisma_client=prisma_client,
+                        user_api_key_cache=user_api_key_cache,
+                        parent_otel_span=parent_otel_span,
+                        proxy_logging_obj=proxy_logging_obj,
+                    )
+                    if _team_membership is not None:
+                        valid_token.team_member_rpm_limit = (
+                            _team_membership.safe_get_team_member_rpm_limit()
+                        )
+                        valid_token.team_member_tpm_limit = (
+                            _team_membership.safe_get_team_member_tpm_limit()
+                        )
+                except Exception as e:
+                    verbose_logger.debug(
+                        "user_api_key_auth: Unable to get team membership for "
+                        "user_id={}, team_id={}. Error={}".format(
+                            valid_token.user_id, valid_token.team_id, str(e)
+                        )
+                    )
 
         user_obj: Optional[LiteLLM_UserTable] = None
         valid_token_dict: dict = {}
