@@ -212,6 +212,15 @@ _STANDARD_LOGGING_METADATA_KEYS: frozenset = frozenset(
     StandardLoggingMetadata.__annotations__.keys()
 )
 
+# Regex matching sensitive x-* headers that must NOT appear in
+# requester_custom_headers (defense-in-depth — clean_headers() strips most
+# of these upstream via _SPECIAL_HEADERS_CACHE).
+_SENSITIVE_X_HEADER_RE = re.compile(
+    r"^(x-litellm-api-key|x-api-key|x-goog-api-key"
+    r"|x-mcp-(auth|servers|access-groups)"
+    r"|x-mcp-.+-(authorization|x-api-key))$"
+)
+
 ### GLOBAL VARIABLES ###
 
 # Cache custom pricing keys as frozenset for O(1) lookups instead of looping through 49 keys
@@ -4833,6 +4842,27 @@ class StandardLoggingPayloadSetup:
                 and isinstance(_potential_requester_metadata, dict)
             ):
                 clean_metadata["requester_metadata"] = _potential_requester_metadata
+
+        # Populate requester_custom_headers from proxy_server_request
+        # headers so custom x-* headers are available in logging callbacks.
+        # Only set if not already populated (e.g. by enterprise middleware via
+        # the metadata copy loop above).
+        if (
+            clean_metadata["requester_custom_headers"] is None
+            and proxy_server_request is not None
+        ):
+            _request_headers = proxy_server_request.get("headers", {})
+            if _request_headers and isinstance(_request_headers, dict):
+                custom_headers = {
+                    k.lower(): v
+                    for k, v in _request_headers.items()
+                    if k.lower().startswith("x-")
+                    and v is not None
+                    and isinstance(v, str)
+                    and not _SENSITIVE_X_HEADER_RE.match(k.lower())
+                }
+                if custom_headers:
+                    clean_metadata["requester_custom_headers"] = custom_headers
 
         if (
             EnterpriseStandardLoggingPayloadSetupVAR
