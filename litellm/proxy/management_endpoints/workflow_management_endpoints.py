@@ -21,7 +21,7 @@ from prisma.errors import UniqueViolationError
 from pydantic import BaseModel
 
 from litellm._logging import verbose_proxy_logger
-from litellm.proxy._types import CommonProxyErrors, UserAPIKeyAuth
+from litellm.proxy._types import CommonProxyErrors, LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 
 router = APIRouter()
@@ -32,6 +32,15 @@ _MAX_SEQUENCE_RETRIES = 5
 def _json(value: Any) -> str:
     """Serialize a Python value for prisma-client-py Json fields (must be a string)."""
     return json.dumps(value)
+
+
+def _is_admin(user_api_key_dict: UserAPIKeyAuth) -> bool:
+    return user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
+
+
+def _caller_key(user_api_key_dict: UserAPIKeyAuth) -> Optional[str]:
+    """Return the hashed key token that identifies this caller, or None for master key."""
+    return user_api_key_dict.token
 
 
 # Status transitions driven by event_type
@@ -97,13 +106,21 @@ async def _get_next_sequence_number(prisma_client: Any, run_id: str, table: str)
     return (rows[0].sequence_number + 1) if rows else 0
 
 
-async def _require_run(prisma_client: Any, run_id: str) -> Any:
-    """Return the run or raise 404 — prevents FK-violation 500s on sub-resource endpoints."""
+async def _require_run(
+    prisma_client: Any,
+    run_id: str,
+    user_api_key_dict: Optional[UserAPIKeyAuth] = None,
+) -> Any:
+    """Return the run or raise 404. For non-admin callers, also enforce key ownership."""
     run = await prisma_client.db.litellm_workflowrun.find_unique(
         where={"run_id": run_id}
     )
     if run is None:
         raise HTTPException(status_code=404, detail=f"Run '{run_id}' not found")
+    if user_api_key_dict is not None and not _is_admin(user_api_key_dict):
+        caller = _caller_key(user_api_key_dict)
+        if caller and run.created_by and run.created_by != caller:
+            raise HTTPException(status_code=404, detail=f"Run '{run_id}' not found")
     return run
 
 
@@ -121,7 +138,11 @@ async def create_workflow_run(
     data: WorkflowRunCreateRequest,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
-    """Create a new workflow run. Returns run_id and session_id."""
+    """Create a new workflow run. Returns run_id and session_id.
+
+    The caller's API key token is stored as created_by so that non-admin keys
+    can only see and modify their own runs.
+    """
     from litellm.proxy.proxy_server import prisma_client
 
     if prisma_client is None:
@@ -130,7 +151,10 @@ async def create_workflow_run(
         )
 
     try:
-        create_data: Dict[str, Any] = {"workflow_type": data.workflow_type}
+        create_data: Dict[str, Any] = {
+            "workflow_type": data.workflow_type,
+            "created_by": _caller_key(user_api_key_dict),
+        }
         if data.input is not None:
             create_data["input"] = _json(data.input)
         if data.metadata is not None:
@@ -153,7 +177,10 @@ async def list_workflow_runs(
     limit: int = Query(50, ge=1, le=250),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
-    """List workflow runs. Filter by workflow_type and/or status."""
+    """List workflow runs. Filter by workflow_type and/or status.
+
+    Non-admin callers only see runs created by their own API key.
+    """
     from litellm.proxy.proxy_server import prisma_client
 
     if prisma_client is None:
@@ -165,9 +192,14 @@ async def list_workflow_runs(
     if workflow_type:
         where["workflow_type"] = workflow_type
     if status:
-        # Support comma-separated status values: ?status=running,paused
         statuses = [s.strip() for s in status.split(",")]
         where["status"] = {"in": statuses} if len(statuses) > 1 else statuses[0]
+
+    # Non-admin callers are scoped to their own key.
+    if not _is_admin(user_api_key_dict):
+        caller = _caller_key(user_api_key_dict)
+        if caller:
+            where["created_by"] = caller
 
     try:
         runs = await prisma_client.db.litellm_workflowrun.find_many(
@@ -205,6 +237,10 @@ async def get_workflow_run(
         )
         if run is None:
             raise HTTPException(status_code=404, detail=f"Run '{run_id}' not found")
+        if not _is_admin(user_api_key_dict):
+            caller = _caller_key(user_api_key_dict)
+            if caller and run.created_by and run.created_by != caller:
+                raise HTTPException(status_code=404, detail=f"Run '{run_id}' not found")
         return run
     except HTTPException:
         raise
@@ -242,6 +278,9 @@ async def update_workflow_run(
     if not update:
         raise HTTPException(status_code=400, detail="No fields to update")
 
+    # Enforce ownership before writing.
+    await _require_run(prisma_client, run_id, user_api_key_dict)
+
     try:
         run = await prisma_client.db.litellm_workflowrun.update(
             where={"run_id": run_id},
@@ -269,10 +308,9 @@ async def append_workflow_event(
 ):
     """Append an event to the run's event log. Also updates run.status if event_type maps to a status.
 
-    Sequence numbers are assigned with optimistic concurrency: on a unique-constraint
-    collision (concurrent append to same run), we retry up to _MAX_SEQUENCE_RETRIES times
-    with a freshly computed MAX+1. The event+status update runs inside a single DB
-    transaction so the materialized status never desynchronizes from the event log.
+    Sequence numbers use optimistic concurrency: on a unique-constraint collision
+    (concurrent append), retries up to _MAX_SEQUENCE_RETRIES times with a fresh MAX+1.
+    The event+status update is atomic in a single DB transaction.
     """
     from litellm.proxy.proxy_server import prisma_client
 
@@ -281,8 +319,7 @@ async def append_workflow_event(
             status_code=500, detail=CommonProxyErrors.db_not_connected_error.value
         )
 
-    # Validate run exists before attempting inserts — avoids FK-violation 500.
-    await _require_run(prisma_client, run_id)
+    await _require_run(prisma_client, run_id, user_api_key_dict)
 
     new_status = _EVENT_STATUS_MAP.get(data.event_type)
 
@@ -298,7 +335,6 @@ async def append_workflow_event(
             if data.data is not None:
                 event_data["data"] = _json(data.data)
 
-            # Atomically insert event and update run status in one transaction.
             async with prisma_client.db.tx() as tx:
                 event = await tx.litellm_workflowevent.create(data=event_data)
                 if new_status:
@@ -320,14 +356,12 @@ async def append_workflow_event(
                     status_code=409,
                     detail="Concurrent write conflict — please retry",
                 )
-            # Re-read MAX+1 on next iteration.
             continue
 
         except Exception as e:
             verbose_proxy_logger.exception("Error appending workflow event: %s", e)
             raise HTTPException(status_code=500, detail=str(e))
 
-    # Unreachable but satisfies type checkers.
     raise HTTPException(
         status_code=500, detail="Failed to append event"
     )  # pragma: no cover
@@ -340,9 +374,10 @@ async def append_workflow_event(
 )
 async def list_workflow_events(
     run_id: str,
+    limit: int = Query(100, ge=1, le=500),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
-    """Fetch full event log for a run, ordered by sequence_number."""
+    """Fetch event log for a run, ordered by sequence_number. Default limit 100, max 500."""
     from litellm.proxy.proxy_server import prisma_client
 
     if prisma_client is None:
@@ -350,10 +385,13 @@ async def list_workflow_events(
             status_code=500, detail=CommonProxyErrors.db_not_connected_error.value
         )
 
+    await _require_run(prisma_client, run_id, user_api_key_dict)
+
     try:
         events = await prisma_client.db.litellm_workflowevent.find_many(
             where={"run_id": run_id},
             order={"sequence_number": "asc"},
+            take=limit,
         )
         return {"events": events, "count": len(events)}
     except Exception as e:
@@ -373,8 +411,7 @@ async def append_workflow_message(
 ):
     """Append a conversation message. Stores full content (not truncated).
 
-    Uses optimistic concurrency for sequence numbers — retries on unique-constraint
-    collision so concurrent appends to the same run don't produce 500 errors.
+    Uses optimistic concurrency for sequence numbers.
     """
     from litellm.proxy.proxy_server import prisma_client
 
@@ -383,8 +420,7 @@ async def append_workflow_message(
             status_code=500, detail=CommonProxyErrors.db_not_connected_error.value
         )
 
-    # Validate run exists before attempting insert — avoids FK-violation 500.
-    await _require_run(prisma_client, run_id)
+    await _require_run(prisma_client, run_id, user_api_key_dict)
 
     for attempt in range(_MAX_SEQUENCE_RETRIES):
         try:
@@ -429,9 +465,10 @@ async def append_workflow_message(
 )
 async def list_workflow_messages(
     run_id: str,
+    limit: int = Query(100, ge=1, le=500),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
-    """Fetch full conversation history for a run, ordered by sequence_number."""
+    """Fetch conversation history for a run, ordered by sequence_number. Default limit 100, max 500."""
     from litellm.proxy.proxy_server import prisma_client
 
     if prisma_client is None:
@@ -439,10 +476,13 @@ async def list_workflow_messages(
             status_code=500, detail=CommonProxyErrors.db_not_connected_error.value
         )
 
+    await _require_run(prisma_client, run_id, user_api_key_dict)
+
     try:
         messages = await prisma_client.db.litellm_workflowmessage.find_many(
             where={"run_id": run_id},
             order={"sequence_number": "asc"},
+            take=limit,
         )
         return {"messages": messages, "count": len(messages)}
     except Exception as e:
