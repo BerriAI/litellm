@@ -17,6 +17,7 @@ from litellm.proxy.auth.auth_utils import (
     get_key_model_tpm_limit,
     get_project_model_rpm_limit,
     get_project_model_tpm_limit,
+    is_request_body_safe,
 )
 
 
@@ -876,3 +877,47 @@ class TestGetDynamicLitellmParamsClearsAdminConfigOnBaseOverride:
         assert out["organization"] == "org-admin"
         assert out["api_version"] == "2026-04-01"
         assert out["api_base"] == "https://admin.upstream/v1"
+
+
+class TestIsRequestBodySafeBlocksEndpointTargetingFields:
+    """
+    ``is_request_body_safe`` rejects request-body fields that retarget the
+    outbound request to a caller-controlled host. Beyond the original
+    ``api_base`` / ``base_url``, the same protection must apply to:
+
+    * ``aws_bedrock_runtime_endpoint`` — Bedrock endpoint redirect; an
+      attacker-controlled value coerces the proxy to authenticate against
+      their host with the admin's AWS creds.
+    * ``langsmith_base_url`` — Langsmith callback host; attacker-controlled
+      values exfiltrate the entire request payload (incl. message content)
+      via the observability hook.
+    * ``langfuse_host`` — same exfil vector via the Langfuse hook.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _disable_url_validation(self, monkeypatch):
+        # The new banned-params entries should be rejected even when
+        # ``user_url_validation`` is off — the gate isn't the URL guard,
+        # it's the banned-params list.
+        import litellm
+
+        monkeypatch.setattr(litellm, "user_url_validation", False, raising=False)
+
+    @pytest.mark.parametrize(
+        "field",
+        [
+            "aws_bedrock_runtime_endpoint",
+            "langsmith_base_url",
+            "langfuse_host",
+        ],
+    )
+    def test_endpoint_targeting_field_in_request_body_is_rejected(self, field):
+        with pytest.raises(ValueError) as exc:
+            is_request_body_safe(
+                request_body={"model": "gpt-4", field: "https://attacker.example"},
+                general_settings={},
+                llm_router=None,
+                model="gpt-4",
+            )
+        # The function lists the offending param name in the error.
+        assert field in str(exc.value)

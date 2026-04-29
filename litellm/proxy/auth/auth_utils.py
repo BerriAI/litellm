@@ -184,6 +184,15 @@ def is_request_body_safe(
         "aws_web_identity_token",
         "aws_role_name",
         "vertex_credentials",
+        # Endpoint-targeting fields that must not flow through clientside.
+        # ``aws_bedrock_runtime_endpoint`` redirects Bedrock traffic to an
+        # arbitrary host; ``langsmith_base_url`` / ``langfuse_host`` are
+        # callback hostnames that, if attacker-controlled, exfiltrate the
+        # request payload (incl. message content + admin-configured
+        # observability keys) to the attacker's server.
+        "aws_bedrock_runtime_endpoint",
+        "langsmith_base_url",
+        "langfuse_host",
     ]
 
     for param in banned_params:
