@@ -1,6 +1,5 @@
 import json
 import os
-import time
 from datetime import datetime, timedelta
 from unittest.mock import MagicMock, mock_open, patch
 
@@ -9,7 +8,6 @@ import pytest
 
 from litellm.llms.github_copilot.authenticator import Authenticator
 from litellm.llms.github_copilot.common_utils import (
-    APIKeyExpiredError,
     GetAccessTokenError,
     GetAPIKeyError,
     GetDeviceCodeError,
@@ -108,7 +106,7 @@ class TestGitHubCopilotAuthenticator:
         with (
             patch.object(authenticator, "_login", return_value=mock_token),
             patch("builtins.open", mock_open()),
-            patch("builtins.open", side_effect=IOError) as mock_read,
+            patch("builtins.open", side_effect=IOError),
         ):
             token = authenticator.get_access_token()
             assert token == mock_token
@@ -153,7 +151,7 @@ class TestGitHubCopilotAuthenticator:
         with (
             patch("builtins.open", mock_open(read_data=mock_expired_data)),
             patch.object(authenticator, "_refresh_api_key", return_value=mock_new_data),
-            patch("json.dump") as mock_json_dump,
+            patch("json.dump"),
         ):
             api_key = authenticator.get_api_key()
             assert api_key == "new-api-key"
@@ -374,6 +372,7 @@ class TestGitHubCopilotAuthenticator:
         ]
 
         with (
+            patch.dict(os.environ, {"GITHUB_COPILOT_ENABLE_AUTH_RECOVERY": "true"}),
             patch.object(
                 authenticator,
                 "get_access_token",
@@ -404,6 +403,7 @@ class TestGitHubCopilotAuthenticator:
         mock_client.get.return_value = self._make_failing_response(http_401)
 
         with (
+            patch.dict(os.environ, {"GITHUB_COPILOT_ENABLE_AUTH_RECOVERY": "true"}),
             patch.object(
                 authenticator,
                 "get_access_token",
@@ -448,6 +448,7 @@ class TestGitHubCopilotAuthenticator:
         ]
 
         with (
+            patch.dict(os.environ, {"GITHUB_COPILOT_ENABLE_AUTH_RECOVERY": "true"}),
             patch.object(
                 authenticator,
                 "get_access_token",
@@ -511,6 +512,7 @@ class TestGitHubCopilotAuthenticator:
             message="device flow failed", status_code=401
         )
         with (
+            patch.dict(os.environ, {"GITHUB_COPILOT_ENABLE_AUTH_RECOVERY": "true"}),
             patch.object(
                 authenticator,
                 "get_access_token",
@@ -542,6 +544,7 @@ class TestGitHubCopilotAuthenticator:
 
         reacquire_err = GetDeviceCodeError(message="no device code", status_code=400)
         with (
+            patch.dict(os.environ, {"GITHUB_COPILOT_ENABLE_AUTH_RECOVERY": "true"}),
             patch.object(
                 authenticator,
                 "get_access_token",
@@ -571,6 +574,7 @@ class TestGitHubCopilotAuthenticator:
         mock_client.get.return_value = self._make_failing_response(http_401)
 
         with (
+            patch.dict(os.environ, {"GITHUB_COPILOT_ENABLE_AUTH_RECOVERY": "true"}),
             patch.object(
                 authenticator, "get_access_token", return_value="stale-token"
             ) as mock_get_token,
@@ -628,6 +632,7 @@ class TestGitHubCopilotAuthenticator:
         ]
 
         with (
+            patch.dict(os.environ, {"GITHUB_COPILOT_ENABLE_AUTH_RECOVERY": "true"}),
             patch.object(
                 authenticator,
                 "get_access_token",
@@ -678,8 +683,8 @@ class TestGitHubCopilotAuthenticator:
             assert mock_client.get.call_count == 3
 
     def test_get_api_key_catches_access_token_error(self, authenticator):
-        """get_api_key catches GetAccessTokenError from _refresh_api_key and
-        wraps it in GetAPIKeyError (B2 fix)."""
+        """get_api_key catches GetAccessTokenError from _refresh_api_key
+        and wraps it in GetAPIKeyError."""
         with (
             patch("builtins.open", side_effect=IOError),
             patch.object(
@@ -692,3 +697,36 @@ class TestGitHubCopilotAuthenticator:
         ):
             with pytest.raises(GetAPIKeyError, match="refresh API key"):
                 authenticator.get_api_key()
+
+    def test_refresh_api_key_401_default_no_auth_recovery(self, authenticator):
+        """By default, a 401 does NOT delete the
+        cached token or run device flow. The retry loop drains with the
+        stale token and raises RefreshAPIKeyError, matching pre-fix behavior.
+        Recovery is opt-in via GITHUB_COPILOT_ENABLE_AUTH_RECOVERY=true."""
+        http_401 = self._make_http_error(401, "401 Unauthorized")
+        mock_client = MagicMock()
+        mock_client.get.return_value = self._make_failing_response(http_401)
+
+        env_without_var = {
+            k: v
+            for k, v in os.environ.items()
+            if k != "GITHUB_COPILOT_ENABLE_AUTH_RECOVERY"
+        }
+        with (
+            patch.dict(os.environ, env_without_var, clear=True),
+            patch.object(authenticator, "get_access_token", return_value="stale-token"),
+            patch("os.remove") as mock_remove,
+            patch.object(authenticator, "_get_device_code") as mock_device_code,
+            patch.object(authenticator, "_poll_for_access_token") as mock_poll,
+            patch(
+                "litellm.llms.github_copilot.authenticator._get_httpx_client",
+                return_value=mock_client,
+            ),
+        ):
+            with pytest.raises(RefreshAPIKeyError):
+                authenticator._refresh_api_key()
+
+            mock_remove.assert_not_called()
+            mock_device_code.assert_not_called()
+            mock_poll.assert_not_called()
+            assert mock_client.get.call_count == 3

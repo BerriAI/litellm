@@ -153,10 +153,11 @@ class Authenticator:
         """
         Refresh the API key using the access token.
 
-        On a 401 response the cached access token is deleted and a fresh
-        token is acquired before retrying. If re-acquisition succeeds the
-        invalidation is not repeated; if it fails each subsequent 401
-        re-attempts.
+        On a 401 response, the retry loop drains with the stale token by
+        default, matching pre-recovery behavior. When
+        ``GITHUB_COPILOT_ENABLE_AUTH_RECOVERY=true``, the cached access token
+        is deleted and a fresh token is acquired before retrying. Invalidation
+        runs at most once per call.
 
         Returns:
             Dict[str, Any]: The API key information including token and expiration.
@@ -194,6 +195,10 @@ class Authenticator:
                     result = self._invalidate_and_reacquire_token()
                     token_invalidated = True
                     if result is None:
+                        verbose_logger.info(
+                            "Token invalidation did not yield a fresh token; "
+                            "remaining retries will reuse the stale token."
+                        )
                         continue
                     access_token = result
             except Exception as e:
@@ -208,15 +213,32 @@ class Authenticator:
         """
         Delete the cached access token and re-acquire via device-flow login.
 
+        When ``GITHUB_COPILOT_ENABLE_AUTH_RECOVERY`` is unset or not
+        ``"true"``, this returns ``None`` immediately. That preserves the
+        pre-recovery behavior of failing fast on a 401 without printing a
+        device-flow prompt or blocking on user interaction.
+
         Returns:
-            The fresh access token, or None if either the file deletion or
-            re-acquisition failed (the caller should continue to the next
-            retry with the existing token).
+            The fresh access token, or None if auth recovery is disabled, the
+            file deletion failed, or re-acquisition failed (the caller
+            should continue to the next retry with the existing token).
         """
+        auth_recovery_enabled = (
+            os.getenv("GITHUB_COPILOT_ENABLE_AUTH_RECOVERY", "false").lower() == "true"
+        )
+        if not auth_recovery_enabled:
+            verbose_logger.info(
+                "Skipping access-token recovery: "
+                "GITHUB_COPILOT_ENABLE_AUTH_RECOVERY is not set."
+            )
+            return None
         try:
             os.remove(self.access_token_file)
-        except OSError:
-            verbose_logger.warning("Failed to delete cached access token file")
+        except OSError as e:
+            verbose_logger.warning(
+                f"Failed to delete cached access token file "
+                f"{self.access_token_file}: {repr(e)}"
+            )
             return None
         try:
             return self.get_access_token()
