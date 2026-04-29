@@ -82,6 +82,8 @@ def upload_file_sync(
     image_url: str,
     credentials: Optional[str] = None,
     api_base: Optional[str] = None,
+    scope: Optional[str] = None,
+    auth_url: Optional[str] = None,
 ) -> Optional[str]:
     """
     Upload file to GigaChat and return file_id (sync).
@@ -114,7 +116,11 @@ def upload_file_sync(
         filename = f"{uuid.uuid4()}.{ext}"
 
         # Get access token
-        access_token = get_access_token(credentials)
+        access_token = get_access_token(
+            credentials=credentials,
+            scope=scope,
+            auth_url=auth_url,
+        )
 
         # Upload to GigaChat
         base_url = api_base or GIGACHAT_BASE_URL
@@ -147,6 +153,8 @@ async def upload_file_async(
     image_url: str,
     credentials: Optional[str] = None,
     api_base: Optional[str] = None,
+    scope: Optional[str] = None,
+    auth_url: Optional[str] = None,
 ) -> Optional[str]:
     """
     Upload file to GigaChat and return file_id (async).
@@ -179,7 +187,11 @@ async def upload_file_async(
         filename = f"{uuid.uuid4()}.{ext}"
 
         # Get access token
-        access_token = await get_access_token_async(credentials)
+        access_token = await get_access_token_async(
+            credentials=credentials,
+            scope=scope,
+            auth_url=auth_url,
+        )
 
         # Upload to GigaChat
         base_url = api_base or GIGACHAT_BASE_URL
