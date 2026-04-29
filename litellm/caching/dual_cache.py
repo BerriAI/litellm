@@ -396,9 +396,15 @@ class DualCache(BaseCache):
         **kwargs,
     ) -> Optional[float]:
         """
-        Increment counter in both caches. refresh_ttl bumps the Redis TTL
-        on every write (counter-style). Default preserves window-style
-        semantics (TTL set once on first write).
+        Key - the key in cache
+
+        Value - float - the value you want to increment by
+
+        Refresh_ttl - bool - if True, resets the Redis TTL on every write.
+        Default False preserves window-style semantics.
+
+        Returns - the incremented value, or None if no cache backend is
+        available (in_memory_cache is None and Redis failed/is absent).
         """
         result: Optional[float] = None
         try:
