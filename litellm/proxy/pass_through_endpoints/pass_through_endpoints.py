@@ -1,6 +1,7 @@
 import ast
 import asyncio
 import copy
+import hashlib
 import json
 import posixpath
 import traceback
@@ -2307,7 +2308,18 @@ async def _register_pass_through_endpoint(
         endpoint_data = endpoint
 
     if endpoint_data.get("id") is None:
-        endpoint_data["id"] = str(uuid.uuid4())
+        # Derive a stable, deterministic ID from path + methods so that
+        # repeated reload cycles (e.g. every 30 s from DB) always produce the
+        # same ID.  Random UUIDs caused the registry to grow unboundedly:
+        # old entries could never be matched during cleanup because the UUID
+        # changed on every reload.  Using a content-based ID means an
+        # unchanged endpoint always maps to the same registry key.
+        _path_for_id = endpoint_data.get("path") or ""
+        _methods_for_id = sorted(endpoint_data.get("methods") or [])
+        _stable_key = f"path:{_path_for_id}|methods:{','.join(_methods_for_id)}"
+        endpoint_data["id"] = "auto-" + hashlib.sha256(
+            _stable_key.encode()
+        ).hexdigest()[:16]
     endpoint_id = cast(str, endpoint_data["id"])
 
     target = endpoint_data.get("target")
@@ -2444,9 +2456,32 @@ async def initialize_pass_through_endpoints(
         )
 
     # remove the ones that are not visited from the list
+    import re
+
+    removed_endpoint_ids: set = set()
     for endpoint_key in registered_pass_through_endpoints:
         if endpoint_key not in visited_endpoints:
-            InitPassThroughEndpointHelpers.remove_endpoint_routes(endpoint_key)
+            # Route keys are formatted as "{endpoint_id}:exact:{path}:{methods}"
+            # or "{endpoint_id}:subpath:{path}:{methods}".
+            # remove_endpoint_routes() expects only the endpoint_id prefix, so
+            # we must split it out here.  Previously the full key was passed
+            # verbatim, which never matched any stored endpoint_id and silently
+            # left stale routes in the registry forever.
+            #
+            # Use regex to anchor on `:exact:` or `:subpath:` delimiters so
+            # endpoint IDs that contain colons (e.g. "svc:v2") are handled
+            # correctly instead of being truncated at the first colon.
+            _match = re.match(r"^(.+?):(?:exact|subpath):", endpoint_key)
+            stale_endpoint_id = (
+                _match.group(1) if _match else endpoint_key.split(":", 1)[0]
+            )
+            # Deduplicate: an endpoint with include_subpath=True produces two
+            # registry keys (exact + subpath).  Only call remove once.
+            if stale_endpoint_id not in removed_endpoint_ids:
+                InitPassThroughEndpointHelpers.remove_endpoint_routes(
+                    stale_endpoint_id
+                )
+                removed_endpoint_ids.add(stale_endpoint_id)
 
 
 def _get_pass_through_endpoints_from_config() -> List[PassThroughGenericEndpoint]:
