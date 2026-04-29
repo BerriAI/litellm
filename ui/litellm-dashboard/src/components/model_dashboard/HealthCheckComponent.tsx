@@ -466,6 +466,7 @@ const HealthCheckComponent: React.FC<HealthCheckComponentProps> = ({
   const handlePageChange = (page: number) => {
     setSelectedModelsForHealth([]);
     setAllModelsSelected(false);
+    setModelHealthStatuses({});
     onPageChange?.(page);
   };
 
@@ -533,11 +534,13 @@ const HealthCheckComponent: React.FC<HealthCheckComponentProps> = ({
     };
   });
 
-  const totalCount = paginationMeta?.total_count ?? healthTableData.length;
-  const totalPages = paginationMeta?.total_pages ?? 1;
-  const resultsStart = totalCount > 0 ? (currentPage - 1) * pageSize + 1 : 0;
-  const resultsEnd = Math.min(currentPage * pageSize, totalCount);
   const shouldShowPagination = Boolean(paginationMeta && onPageChange);
+  const totalCount = paginationMeta?.total_count ?? 0;
+  const totalPages = paginationMeta?.total_pages ?? 1;
+  const pageForDisplay = paginationMeta?.current_page ?? currentPage;
+  const pageSizeForDisplay = paginationMeta?.size ?? pageSize;
+  const resultsStart = shouldShowPagination && totalCount > 0 ? (pageForDisplay - 1) * pageSizeForDisplay + 1 : 0;
+  const resultsEnd = shouldShowPagination ? Math.min(pageForDisplay * pageSizeForDisplay, totalCount) : 0;
 
   return (
     <div>
