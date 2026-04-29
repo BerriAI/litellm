@@ -65,6 +65,7 @@ def check_complete_credentials(request_body: dict) -> bool:
         or "bedrock" in given_model
         or "vertex_ai" in given_model
         or "vertex_ai_beta" in given_model
+        or "azure" in given_model
     ):
         # complex credentials - easier to make a malicious request
         return False
@@ -155,10 +156,28 @@ def is_request_body_safe(
         "api_base",
         "base_url",
         "user_config",
+        # Cloud provider credential params — these are deployment-level settings
+        # and must not be overridable from user-supplied request bodies.
+        "vertex_credentials",
+        "vertex_ai_credentials",
+        "aws_access_key_id",
+        "aws_secret_access_key",
+        "aws_session_token",
+        "aws_profile_name",
+        "aws_role_name",
         "aws_sts_endpoint",
         "aws_web_identity_token",
-        "aws_role_name",
-        "vertex_credentials",
+        "azure_ad_token",
+        "azure_ad_token_provider",
+        "aws_bedrock_runtime_endpoint",
+        "aws_session_name",
+        "aws_external_id",
+        "tenant_id",
+        "client_id",
+        "client_secret",
+        "azure_username",
+        "azure_password",
+        "azure_scope",
     ]
 
     for param in banned_params:
