@@ -2675,19 +2675,7 @@ if MCP_AVAILABLE:
                 raw_headers=raw_headers,
                 client_ip=_sse_client_ip,
             )
-            # Also persist auth context on the server object itself.
-            # ContextVars are lost when the MCP SDK spawns internal tasks
-            # (e.g. _receive_loop), so tool handlers can't read auth_context_var.
-            # Storing it on the server object makes it available everywhere.
-            server._litellm_auth_context = MCPAuthenticatedUser(  # type: ignore
-                user_api_key_auth=user_api_key_auth,
-                mcp_auth_header=mcp_auth_header,
-                mcp_servers=mcp_servers,
-                mcp_server_auth_headers=mcp_server_auth_headers,
-                oauth2_headers=oauth2_headers,
-                raw_headers=raw_headers,
-                client_ip=_sse_client_ip,
-            )
+
             if not _SESSION_MANAGERS_INITIALIZED:
                 await initialize_session_managers()
                 await asyncio.sleep(0.1)
@@ -2701,6 +2689,19 @@ if MCP_AVAILABLE:
                 async with sse.connect_sse(scope, receive, send) as streams:
                     verbose_logger.info(
                         "SSE connection established, running server loop..."
+                    )
+                    
+                    # ContextVars can sometimes be lost when the MCP SDK spawns internal tasks
+                    # (e.g. _receive_loop), so tool handlers can't read auth_context_var reliably.
+                    # Storing it on the read_stream ensures it's isolated per SSE session.
+                    streams[0]._litellm_auth_context = MCPAuthenticatedUser(  # type: ignore
+                        user_api_key_auth=user_api_key_auth,
+                        mcp_auth_header=mcp_auth_header,
+                        mcp_servers=mcp_servers,
+                        mcp_server_auth_headers=mcp_server_auth_headers,
+                        oauth2_headers=oauth2_headers,
+                        raw_headers=raw_headers,
+                        client_ip=_sse_client_ip,
                     )
                     try:
                         # Capture the session for propagation to sampling/elicitation callbacks
@@ -2762,10 +2763,21 @@ if MCP_AVAILABLE:
         except HTTPException:
             raise
         except Exception as e:
-            verbose_logger.warning(
+            verbose_logger.exception(
                 f"Failed to extract auth context in POST /messages: {e}"
             )
+            from starlette.responses import JSONResponse
+
+            error_response = JSONResponse(
+                status_code=500,
+                content={"error": "Authentication processing failed", "details": str(e)},
+            )
+            await error_response(scope, receive, send)
+            # CRITICAL: Stop execution if auth extraction fails to prevent unauthenticated fall-through
+            return
+
         # The SDK's handler calls `send` directly.
+        # Only proceed if auth was successfully extracted
         await sse.handle_post_message(scope, receive, send)
         # No need to return NoOpResponse for raw ASGI app.
 
@@ -2781,8 +2793,15 @@ if MCP_AVAILABLE:
             return auth
         elif auth:
             return cast(MCPAuthenticatedUser, auth)
-        # Fallback to server object
-        return getattr(server, "_litellm_auth_context", None)
+        # Fallback to session read_stream
+        try:
+            from mcp.server.lowlevel.server import request_ctx
+
+            session = request_ctx.get().session
+            read_stream = getattr(session, "_read_stream", None)
+            return getattr(read_stream, "_litellm_auth_context", None)
+        except Exception:
+            return None
 
     app = FastAPI(
         title=LITELLM_MCP_SERVER_NAME,
@@ -2908,15 +2927,24 @@ if MCP_AVAILABLE:
             raw_headers,
             _client_ip,
         ) = get_auth_context()
-        # Fallback: read from server object if ContextVar was lost
+        # Fallback: read from session read_stream if ContextVar was lost
         if user_api_key_auth is None:
-            stored = getattr(server, "_litellm_auth_context", None)
+            try:
+                from mcp.server.lowlevel.server import request_ctx
+
+                session = request_ctx.get().session
+                read_stream = getattr(session, "_read_stream", None)
+                stored = getattr(read_stream, "_litellm_auth_context", None)
+            except Exception as e:
+                verbose_logger.debug(f"get_or_extract_auth_context FALLBACK failed: {e}")
+                stored = None
+
             verbose_logger.debug(
                 f"get_or_extract_auth_context FALLBACK: stored={stored}, type={type(stored)}"
             )
             if stored and isinstance(stored, MCPAuthenticatedUser):
                 verbose_logger.debug(
-                    "get_or_extract_auth_context: Recovered auth from server object"
+                    "get_or_extract_auth_context: Recovered auth from session read_stream"
                 )
                 user_api_key_auth = stored.user_api_key_auth
                 mcp_auth_header = stored.mcp_auth_header
