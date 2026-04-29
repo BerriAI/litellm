@@ -23,7 +23,6 @@ class SearchAPIRouter:
     @staticmethod
     def _resolve_search_provider_credentials(
         *,
-        search_provider: str,
         tool_litellm_params: Dict[str, Any],
     ) -> Tuple[Optional[str], Optional[str]]:
         """
@@ -227,7 +226,6 @@ class SearchAPIRouter:
                 )
 
             api_key, api_base = SearchAPIRouter._resolve_search_provider_credentials(
-                search_provider=search_provider,
                 tool_litellm_params=litellm_params,
             )
 
