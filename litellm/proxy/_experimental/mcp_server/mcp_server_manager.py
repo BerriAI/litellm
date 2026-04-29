@@ -50,8 +50,11 @@ from litellm.proxy._experimental.mcp_server.oauth2_token_cache import resolve_mc
 from litellm.proxy._experimental.mcp_server.utils import (
     MCP_TOOL_PREFIX_SEPARATOR,
     add_server_prefix_to_name,
+    compute_short_server_prefix,
     get_server_prefix,
+    is_short_mcp_tool_prefix_enabled,
     is_tool_name_prefixed,
+    iter_known_server_prefixes,
     merge_mcp_headers,
     normalize_server_name,
     split_server_prefix_from_name,
@@ -364,6 +367,7 @@ class MCPServerManager:
                 aws_session_name=server_config.get("aws_session_name", None),
                 instructions=server_config.get("instructions", None),
             )
+            self._assign_unique_short_prefix(new_server)
             self.config_mcp_servers[server_id] = new_server
 
             # Check if this is an OpenAPI-based server
@@ -726,6 +730,7 @@ class MCPServerManager:
         try:
             if mcp_server.server_id not in self.registry:
                 new_server = await self.build_mcp_server_from_table(mcp_server)
+                self._assign_unique_short_prefix(new_server)
                 self.registry[mcp_server.server_id] = new_server
                 await self._maybe_register_openapi_tools(new_server)
                 verbose_logger.debug(f"Added MCP Server: {new_server.name}")
@@ -738,6 +743,12 @@ class MCPServerManager:
         try:
             if mcp_server.server_id in self.registry:
                 new_server = await self.build_mcp_server_from_table(mcp_server)
+                # Carry the previously-resolved short prefix across so the
+                # tool names stay stable for clients holding cached lists.
+                existing_prefix = self.registry[mcp_server.server_id].short_prefix
+                if existing_prefix and not new_server.short_prefix:
+                    new_server.short_prefix = existing_prefix
+                self._assign_unique_short_prefix(new_server)
                 self.registry[mcp_server.server_id] = new_server
                 await self._maybe_register_openapi_tools(new_server)
                 verbose_logger.debug(f"Updated MCP Server: {new_server.name}")
@@ -1236,7 +1247,11 @@ class MCPServerManager:
 
             ## HANDLE OPENAPI TOOLS
             if server.spec_path:
-                _tools = global_mcp_tool_registry.list_tools(tool_prefix=server.name)
+                # OpenAPI tools were stored in the registry under the prefix
+                # active at registration time — fetch by that same prefix.
+                _tools = global_mcp_tool_registry.list_tools(
+                    tool_prefix=get_server_prefix(server)
+                )
                 tools = global_mcp_tool_registry.convert_tools_to_mcp_sdk_tool_type(
                     _tools
                 )
@@ -1810,6 +1825,63 @@ class MCPServerManager:
             verbose_logger.warning(f"Error listing tools from {server_name}: {str(e)}")
             return []
 
+    _SHORT_PREFIX_MAX_REHASH_ATTEMPTS = 1024
+
+    def _assign_unique_short_prefix(self, server: MCPServer) -> None:
+        """Resolve and cache a collision-free short tool prefix on ``server``.
+
+        Called at registration time for every MCP server entering the
+        registry.  Mutates ``server.short_prefix`` in place.  No-ops when
+        ``LITELLM_USE_SHORT_MCP_TOOL_PREFIX`` is disabled, when the server
+        has no ``server_id`` (synthetic temp-server objects), or when a
+        prefix is already cached.
+
+        Collision strategy: take the natural hash; if it's already used by
+        a *different* server in the combined registry, rehash with an
+        incrementing attempt counter until we find an unused slot.  The
+        attempt counter is folded into the hash so the resulting prefix is
+        still deterministic for a given (server_id, set-of-other-server-ids)
+        pair within one process.
+        """
+        if not is_short_mcp_tool_prefix_enabled():
+            return
+        if server.short_prefix:
+            return
+        if not server.server_id:
+            return
+
+        used: Dict[str, str] = {}
+        for other in self.get_registry().values():
+            if other.server_id == server.server_id:
+                continue
+            if other.short_prefix:
+                used[other.short_prefix] = other.server_id
+
+        for attempt in range(self._SHORT_PREFIX_MAX_REHASH_ATTEMPTS):
+            candidate = compute_short_server_prefix(server.server_id, attempt=attempt)
+            if candidate not in used:
+                server.short_prefix = candidate
+                if attempt > 0:
+                    verbose_logger.info(
+                        "MCP short-prefix collision resolved for server %s: "
+                        "natural hash collided with %s, using rehashed prefix "
+                        "%s (attempt=%d).",
+                        server.server_id,
+                        used.get(
+                            compute_short_server_prefix(server.server_id, attempt=0),
+                            "<unknown>",
+                        ),
+                        candidate,
+                        attempt,
+                    )
+                return
+
+        raise RuntimeError(
+            f"Unable to assign a unique short MCP tool prefix for server "
+            f"{server.server_id} after {self._SHORT_PREFIX_MAX_REHASH_ATTEMPTS} "
+            "attempts; the 3-character prefix space is too crowded."
+        )
+
     def _create_prefixed_tools(
         self, tools: List[MCPTool], server: MCPServer, add_prefix: bool = True
     ) -> List[MCPTool]:
@@ -1838,9 +1910,13 @@ class MCPServerManager:
             tool_copy.name = name_to_use
             prefixed_tools.append(tool_copy)
 
-            # Update tool to server mapping for resolution (support both forms)
+            # Register every known prefix form (alias, server_name, server_id,
+            # short ID) so call_tool can resolve regardless of which form a
+            # caller / cached client is using.
             self.tool_name_to_mcp_server_name_mapping[original_name] = prefix
-            self.tool_name_to_mcp_server_name_mapping[prefixed_name] = prefix
+            for known_prefix in iter_known_server_prefixes(server):
+                qualified = add_server_prefix_to_name(original_name, known_prefix)
+                self.tool_name_to_mcp_server_name_mapping[qualified] = prefix
 
         verbose_logger.info(
             f"Successfully fetched {len(prefixed_tools)} tools from server {server.name}"
@@ -2601,37 +2677,43 @@ class MCPServerManager:
         Returns:
             MCPServer if found, None otherwise
         """
+        registry_servers = list(self.get_registry().values())
+
+        # Build prefix → server lookup covering every known form a tool name
+        # may take (alias / server_name / server_id / short ID).  This is what
+        # makes the short-prefix mode work without breaking historical names.
+        prefix_to_server: Dict[str, MCPServer] = {}
+        for server in registry_servers:
+            for known_prefix in iter_known_server_prefixes(server):
+                normalised = normalize_server_name(known_prefix)
+                prefix_to_server.setdefault(normalised, server)
+
         # First try with the original tool name
         if tool_name in self.tool_name_to_mcp_server_name_mapping:
             server_name = self.tool_name_to_mcp_server_name_mapping[tool_name]
-            for server in self.get_registry().values():
-                if normalize_server_name(server.name) == normalize_server_name(
-                    server_name
-                ):
+            normalised_lookup = normalize_server_name(server_name)
+            if normalised_lookup in prefix_to_server:
+                return prefix_to_server[normalised_lookup]
+            for server in registry_servers:
+                if normalize_server_name(server.name) == normalised_lookup:
                     return server
 
-        # If not found and tool name is prefixed, try extracting server name from prefix
-        known_prefixes = {
-            normalize_server_name(get_server_prefix(s))
-            for s in self.get_registry().values()
-            if get_server_prefix(s)
-        }
-        if is_tool_name_prefixed(tool_name, known_server_prefixes=known_prefixes):
+        # If not found and tool name is prefixed, extract the prefix and
+        # match against any known form.
+        if is_tool_name_prefixed(
+            tool_name, known_server_prefixes=set(prefix_to_server.keys())
+        ):
             (
                 original_tool_name,
                 server_name_from_prefix,
             ) = split_server_prefix_from_name(tool_name)
-            if original_tool_name in self.tool_name_to_mcp_server_name_mapping:
-                for server in self.get_registry().values():
-                    if server.server_name is None:
-                        if normalize_server_name(server.name) == normalize_server_name(
-                            server_name_from_prefix
-                        ):
-                            return server
-                    elif normalize_server_name(
-                        server.server_name
-                    ) == normalize_server_name(server_name_from_prefix):
-                        return server
+            normalised_prefix = normalize_server_name(server_name_from_prefix)
+            matched_server = prefix_to_server.get(normalised_prefix)
+            if matched_server is not None and (
+                original_tool_name in self.tool_name_to_mcp_server_name_mapping
+                or tool_name in self.tool_name_to_mcp_server_name_mapping
+            ):
+                return matched_server
 
         return None
 
@@ -2666,6 +2748,9 @@ class MCPServerManager:
         previous_registry = self.registry
         new_registry: Dict[str, MCPServer] = {}
 
+        # Stage one: build every server.  Stage two assigns short prefixes
+        # against the *full* set so dedup is deterministic regardless of
+        # iteration order.
         for server in db_mcp_servers:
             existing_server = previous_registry.get(server.server_id)
 
@@ -2689,10 +2774,21 @@ class MCPServerManager:
                 f"Building server from DB: {server.server_id} ({server.server_name})"
             )
             new_server = await self.build_mcp_server_from_table(server)
+            # Carry the cached short_prefix from the previous registry entry
+            # (if any) so the prefix is stable across reloads.
+            if existing_server is not None and existing_server.short_prefix:
+                new_server.short_prefix = existing_server.short_prefix
             new_registry[server.server_id] = new_server
-            await self._maybe_register_openapi_tools(new_server)
 
+        # Swap in the new registry first so _assign_unique_short_prefix
+        # sees the complete set when checking for collisions.
         self.registry = new_registry
+        for new_server in new_registry.values():
+            self._assign_unique_short_prefix(new_server)
+            # Register OpenAPI tools *after* the final short prefix is assigned
+            # so the tools are stored in the global registry under the same
+            # prefix that lookups will use.
+            await self._maybe_register_openapi_tools(new_server)
 
         verbose_logger.debug(
             "MCP registry refreshed (%s servers in registry)", len(new_registry)
