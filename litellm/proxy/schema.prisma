@@ -410,6 +410,7 @@ model LiteLLM_VerificationToken {
     litellm_project_table LiteLLM_ProjectTable?   @relation(fields: [project_id], references: [project_id])
     object_permission LiteLLM_ObjectPermissionTable?   @relation(fields: [object_permission_id], references: [object_permission_id])
     jwt_key_mappings LiteLLM_JWTKeyMapping[]
+    scheduled_tasks LiteLLM_ScheduledTaskTable[]
 
     // SELECT COUNT(*) FROM (SELECT "public"."LiteLLM_VerificationToken"."token" FROM "public"."LiteLLM_VerificationToken" WHERE ("public"."LiteLLM_VerificationToken"."user_id" = $1 AND ("public"."LiteLLM_VerificationToken"."team_id" IS NULL OR "public"."LiteLLM_VerificationToken"."team_id" <> $2)) OFFSET $3 ) AS "sub"
     // SELECT ... FROM "public"."LiteLLM_VerificationToken" WHERE "public"."LiteLLM_VerificationToken"."user_id" = $1 OFFSET $2
@@ -1289,4 +1290,39 @@ model LiteLLM_AdaptiveRouterSession {
 
   @@id([session_id, router_name, model_name])
   @@index([last_activity_at], map: "idx_adaptive_router_session_activity")
+}
+
+
+model LiteLLM_ScheduledTaskTable {
+  task_id              String    @id @default(uuid())
+  owner_token          String
+  owner_key            LiteLLM_VerificationToken @relation(fields: [owner_token], references: [token], onDelete: Cascade)
+  user_id              String?
+  team_id              String?
+  agent_id             String?
+
+  title                String
+  action               String
+  action_args          Json?
+  check_prompt         String?
+  format_prompt        String?
+
+  schedule_kind        String
+  schedule_spec        String
+  schedule_tz          String?
+
+  next_run_at          DateTime
+  expires_at           DateTime
+  fire_once            Boolean   @default(true)
+
+  status               String    @default("pending")
+  last_fired_at        DateTime?
+
+  created_at           DateTime  @default(now())
+  updated_at           DateTime  @updatedAt
+
+  @@index([owner_token, status])
+  @@index([user_id])
+  @@index([team_id])
+  @@index([agent_id, status])
 }
