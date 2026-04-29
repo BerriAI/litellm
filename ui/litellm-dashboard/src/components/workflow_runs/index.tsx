@@ -113,12 +113,41 @@ const StatusDot: React.FC<{ status: RunStatus; size?: number }> = ({ status, siz
   />
 );
 
+// ── truncated text value ──────────────────────────────────────────────────────
+
+const TRUNCATE_AT = 120;
+
+const TruncatedValue: React.FC<{ value: string }> = ({ value }) => {
+  const [expanded, setExpanded] = useState(false);
+  if (value.length <= TRUNCATE_AT) {
+    return <span style={{ color: "#27272a", wordBreak: "break-all" }}>{value}</span>;
+  }
+  return (
+    <span style={{ color: "#27272a", wordBreak: "break-all" }}>
+      {expanded ? value : value.slice(0, TRUNCATE_AT) + "…"}
+      <button
+        onClick={() => setExpanded((e) => !e)}
+        style={{
+          background: "none",
+          border: "none",
+          padding: "0 4px",
+          cursor: "pointer",
+          color: "#2563eb",
+          fontSize: 11,
+          flexShrink: 0,
+        }}
+      >
+        {expanded ? "less" : "more"}
+      </button>
+    </span>
+  );
+};
+
 // ── metadata card ─────────────────────────────────────────────────────────────
 
 const MetadataCard: React.FC<{ run: WorkflowRun }> = ({ run }) => {
   const meta = run.metadata ?? {};
 
-  // Primary fields shown prominently at the top
   const primaryFields: { key: string; label: string }[] = [
     { key: "state",            label: "state" },
     { key: "worktree_path",    label: "worktree" },
@@ -126,7 +155,6 @@ const MetadataCard: React.FC<{ run: WorkflowRun }> = ({ run }) => {
     { key: "session_id",       label: "session" },
   ];
 
-  // Remaining fields (not title, not primary, not nullish)
   const primaryKeys = new Set(["title", ...primaryFields.map((f) => f.key)]);
   const extraEntries = Object.entries(meta).filter(
     ([k, v]) => !primaryKeys.has(k) && v !== null && v !== undefined && v !== ""
@@ -191,7 +219,6 @@ const MetadataCard: React.FC<{ run: WorkflowRun }> = ({ run }) => {
           fontSize: 12,
         }}
       >
-        {/* always-visible: run status + created */}
         <FieldPair label="status">
           <span style={{ textTransform: "capitalize", color: "#27272a" }}>{run.status}</span>
         </FieldPair>
@@ -199,7 +226,6 @@ const MetadataCard: React.FC<{ run: WorkflowRun }> = ({ run }) => {
           <span style={{ color: "#27272a" }}>{timeAgo(run.created_at)}</span>
         </FieldPair>
 
-        {/* pr_url as clickable link */}
         {meta.pr_url && (
           <FieldPair label="pr">
             <a
@@ -213,27 +239,25 @@ const MetadataCard: React.FC<{ run: WorkflowRun }> = ({ run }) => {
           </FieldPair>
         )}
 
-        {/* primary metadata fields */}
         {primaryFields.map(({ key, label }) => {
           const v = meta[key];
           if (v === null || v === undefined || v === "") return null;
+          const str = typeof v === "object" ? JSON.stringify(v) : String(v);
           return (
             <FieldPair key={key} label={label}>
-              <span style={{ color: "#27272a", wordBreak: "break-all" }}>
-                {typeof v === "object" ? JSON.stringify(v) : String(v)}
-              </span>
+              <TruncatedValue value={str} />
             </FieldPair>
           );
         })}
 
-        {/* extra fields */}
-        {extraEntries.map(([k, v]) => (
-          <FieldPair key={k} label={k}>
-            <span style={{ color: "#27272a", wordBreak: "break-all" }}>
-              {typeof v === "object" ? JSON.stringify(v) : String(v)}
-            </span>
-          </FieldPair>
-        ))}
+        {extraEntries.map(([k, v]) => {
+          const str = typeof v === "object" ? JSON.stringify(v) : String(v);
+          return (
+            <FieldPair key={k} label={k}>
+              <TruncatedValue value={str} />
+            </FieldPair>
+          );
+        })}
       </div>
     </div>
   );
@@ -590,28 +614,31 @@ const WorkflowRuns: React.FC<WorkflowRunsProps> = ({ accessToken }) => {
         </Button>
       </div>
 
-      {/* runs table */}
-      <Table
-        dataSource={runs}
-        columns={columns}
-        rowKey="run_id"
-        loading={loadingRuns}
-        size="small"
-        pagination={{ pageSize: 50, hideOnSinglePage: true }}
-        onRow={(run) => ({
-          onClick: () => fetchRunDetail(run),
-          style: { cursor: "pointer" },
-        })}
-        locale={{
-          emptyText: (
-            <Empty
-              description={<span style={{ color: "#a1a1aa", fontSize: 13 }}>No workflow runs yet</span>}
-              image={Empty.PRESENTED_IMAGE_SIMPLE}
-            />
-          ),
-        }}
-        style={{ borderRadius: 8, border: "1px solid #e4e4e7", overflow: "hidden" }}
-      />
+      {/* runs table — matches logs page density */}
+      <div className="rounded-lg custom-border overflow-x-auto w-full">
+        <Table
+          dataSource={runs}
+          columns={columns}
+          rowKey="run_id"
+          loading={loadingRuns}
+          size="small"
+          pagination={{ pageSize: 50, hideOnSinglePage: true, size: "small" }}
+          onRow={(run) => ({
+            onClick: () => fetchRunDetail(run),
+            style: { cursor: "pointer" },
+          })}
+          locale={{
+            emptyText: (
+              <Empty
+                description={<span style={{ color: "#a1a1aa", fontSize: 13 }}>No workflow runs yet</span>}
+                image={Empty.PRESENTED_IMAGE_SIMPLE}
+              />
+            ),
+          }}
+          className="[&_.ant-table-cell]:py-0.5 [&_.ant-table-thead_.ant-table-cell]:py-1"
+          style={{ border: "none" }}
+        />
+      </div>
 
       {/* detail drawer */}
       <Drawer
@@ -670,7 +697,7 @@ const WorkflowRuns: React.FC<WorkflowRunsProps> = ({ accessToken }) => {
 
             {/* collapsible sections */}
             <Collapse
-              defaultActiveKey={[]}
+              defaultActiveKey={["timeline"]}
               ghost={false}
               style={{ border: "1px solid #e4e4e7", borderRadius: 8, overflow: "hidden" }}
               items={[
