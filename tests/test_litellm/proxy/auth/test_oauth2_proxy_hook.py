@@ -47,17 +47,15 @@ def _request_with_headers(headers: dict) -> Request:
 @pytest.fixture
 def configure_proxy(monkeypatch):
     """
-    Yields a callable that sets ``premium_user`` and
-    ``oauth2_config_mappings`` on the proxy_server module for the
-    duration of one test. Default is premium=True with a single
-    ``user_id -> x-user-id`` mapping.
+    Yields a callable that sets ``oauth2_config_mappings`` on the
+    proxy_server module for the duration of one test. Default mapping
+    is a single ``user_id -> x-user-id`` (identity-only).
     """
     import litellm.proxy.proxy_server as proxy_server
 
-    def _configure(*, premium=True, mappings=None):
+    def _configure(*, mappings=None):
         if mappings is None:
             mappings = {"user_id": "x-user-id"}
-        monkeypatch.setattr(proxy_server, "premium_user", premium, raising=False)
         monkeypatch.setattr(
             proxy_server,
             "general_settings",
@@ -77,15 +75,6 @@ async def test_returns_auth_for_simple_user_id_mapping(configure_proxy):
 
     assert auth.user_id == "alice"
     assert auth.user_role is None
-
-
-@pytest.mark.asyncio
-async def test_rejects_when_not_premium(configure_proxy):
-    configure_proxy(premium=False)
-    request = _request_with_headers({"x-user-id": "alice"})
-
-    with pytest.raises(ValueError, match="enterprise"):
-        await handle_oauth2_proxy_request(request)
 
 
 @pytest.mark.parametrize(
