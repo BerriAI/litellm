@@ -3,6 +3,7 @@ import io
 import json
 import os
 import sys
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -1104,6 +1105,16 @@ def test_video_content_handler_uses_get_for_openai():
     assert not mock_client.post.called
     called_url = mock_client.get.call_args.kwargs["url"]
     assert called_url == "https://api.openai.com/v1/videos/video_abc/content"
+
+
+def test_read_local_file_url_rejects_non_temp_paths():
+    """Local file helper should not read files outside the temp directory."""
+    from litellm.llms.custom_httpx.llm_http_handler import _read_local_file_url
+
+    disallowed_url = Path(__file__).resolve().as_uri()
+
+    with pytest.raises(ValueError, match="outside the allowed temp directory"):
+        _read_local_file_url(disallowed_url)
 
 
 def test_video_content_respects_api_base_and_api_key_from_kwargs():

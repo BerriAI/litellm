@@ -35128,6 +35128,54 @@
             "comment": "Estimated cost based on standard TTS pricing. RunwayML uses ElevenLabs models."
         }
     },
+    "ltx/ltx-2-3-fast": {
+        "litellm_provider": "ltx",
+        "mode": "video_generation",
+        "output_cost_per_video_per_second": 0.06,
+        "source": "https://docs.ltx.video/pricing",
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ],
+        "supported_resolutions": [
+            "1920x1080",
+            "1080x1920",
+            "2560x1440",
+            "1440x2560",
+            "3840x2160",
+            "2160x3840"
+        ],
+        "metadata": {
+            "comment": "$0.06/sec at 1080p, $0.12/sec at 1440p, $0.24/sec at 4K. Using 1080p as base cost."
+        }
+    },
+    "ltx/ltx-2-3-pro": {
+        "litellm_provider": "ltx",
+        "mode": "video_generation",
+        "output_cost_per_video_per_second": 0.08,
+        "source": "https://docs.ltx.video/pricing",
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ],
+        "supported_resolutions": [
+            "1920x1080",
+            "1080x1920",
+            "2560x1440",
+            "1440x2560",
+            "3840x2160",
+            "2160x3840"
+        ],
+        "metadata": {
+            "comment": "$0.08/sec at 1080p, $0.16/sec at 1440p, $0.32/sec at 4K. Using 1080p as base cost."
+        }
+    },
     "fireworks_ai/accounts/fireworks/models/qwen3-coder-480b-a35b-instruct": {
         "max_tokens": 262144,
         "max_input_tokens": 262144,

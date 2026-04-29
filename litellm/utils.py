@@ -8996,6 +8996,10 @@ class ProviderConfigManager:
             from litellm.llms.runwayml.videos.transformation import RunwayMLVideoConfig
 
             return RunwayMLVideoConfig()
+        elif LlmProviders.LTX == provider:
+            from litellm.llms.ltx.videos.transformation import LTXVideoConfig
+
+            return LTXVideoConfig()
         return None
 
     @staticmethod

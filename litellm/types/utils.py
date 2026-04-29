@@ -3214,6 +3214,7 @@ class LlmProviders(str, Enum):
     BYTEZ = "bytez"
     REPLICATE = "replicate"
     RUNWAYML = "runwayml"
+    LTX = "ltx"
     AWS_POLLY = "aws_polly"
     HUGGINGFACE = "huggingface"
     TOGETHER_AI = "together_ai"

@@ -1360,6 +1360,23 @@
         "interactions": true
       }
     },
+    "ltx": {
+      "display_name": "LTX (`ltx`)",
+      "url": "https://docs.litellm.ai/docs/providers/ltx/videos",
+      "endpoints": {
+        "chat_completions": false,
+        "messages": false,
+        "responses": false,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "video_generations": true
+      }
+    },
     "maritalk": {
       "display_name": "Maritalk (`maritalk`)",
       "url": "https://docs.litellm.ai/docs/providers/maritalk",
@@ -1660,6 +1677,7 @@
         "audio_speech": true,
         "moderations": true,
         "batches": true,
+        "evals_api": true,
         "rerank": false,
         "container": true,
         "compact": true,
@@ -2665,6 +2683,13 @@
       "provider_json_field": "embeddings",
       "url": "https://docs.litellm.ai/docs/embedding/supported_embedding"
     },
+    "evals_api": {
+      "docs_label": "evals_api",
+      "display_name": "OpenAI Evals API",
+      "leftnav_label": "/evals",
+      "provider_json_field": "evals_api",
+      "url": "https://docs.litellm.ai/docs/evals_api"
+    },
     "files": {
       "docs_label": "files",
       "display_name": "OpenAI Files API",
@@ -2736,6 +2761,13 @@
       "leftnav_label": "/ocr",
       "provider_json_field": "ocr",
       "url": "https://docs.litellm.ai/docs/ocr"
+    },
+    "prompt_management": {
+      "docs_label": "prompt_management",
+      "display_name": "Prompt Management with Responses API",
+      "leftnav_label": "prompt_management",
+      "provider_json_field": "responses",
+      "url": "https://docs.litellm.ai/docs/prompt_management"
     },
     "rag_ingest": {
       "docs_label": "rag_ingest",
@@ -2829,6 +2861,13 @@
       "leftnav_label": "/vector_stores/search",
       "provider_json_field": "vector_stores_search",
       "url": "https://docs.litellm.ai/docs/vector_stores/search"
+    },
+    "v1_messages": {
+      "docs_label": "v1_messages",
+      "display_name": "Anthropic v1 Messages API",
+      "leftnav_label": "/v1/messages",
+      "provider_json_field": "messages",
+      "url": "https://docs.litellm.ai/docs/anthropic_unified"
     },
     "videos": {
       "docs_label": "videos",
