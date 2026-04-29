@@ -1,5 +1,6 @@
 import asyncio
 import os
+import re
 import ssl
 import sys
 import time
@@ -78,6 +79,29 @@ _DEFAULT_TIMEOUT = httpx.Timeout(
 )
 
 
+_SURROGATE_RE = re.compile(r"[\ud800-\udfff]")
+
+
+def _sanitize_surrogates(value: str) -> str:
+    """Replace UTF-16 surrogate characters that cannot be encoded to UTF-8."""
+    return _SURROGATE_RE.sub("\ufffd", value)
+
+
+def _sanitize_data(obj: Any) -> Any:
+    """
+    Recursively walk a request data structure and replace surrogate characters
+    in all string values.  Surrogates (U+D800..U+DFFF) are invalid in UTF-8
+    and cause ``UnicodeEncodeError`` when httpx serialises the request body.
+    """
+    if isinstance(obj, str):
+        return _sanitize_surrogates(obj)
+    if isinstance(obj, dict):
+        return {k: _sanitize_data(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_sanitize_data(item) for item in obj]
+    return obj
+
+
 def _prepare_request_data_and_content(
     data: Optional[Union[dict, str, bytes]] = None,
     content: Any = None,
@@ -95,6 +119,7 @@ def _prepare_request_data_and_content(
     Solution:
     - Move bytes/str from `data=` to `content=` before calling build_request
     - Keep dicts in `data=` (that's still the correct parameter for dicts)
+    - Sanitize surrogate characters that are invalid in UTF-8
 
     Args:
         data: Request data (can be dict, str, or bytes)
@@ -110,10 +135,12 @@ def _prepare_request_data_and_content(
         if isinstance(data, (bytes, str)):
             # Bytes/strings belong in content= (only if not already provided)
             if content is None:
-                request_content = data
+                request_content = (
+                    _sanitize_data(data) if isinstance(data, str) else data
+                )
         else:
             # dict/Mapping stays in data= parameter
-            request_data = data
+            request_data = _sanitize_data(data)
 
     return request_data, request_content
 
