@@ -2442,6 +2442,92 @@ async def _lookup_deprecated_key(
     return None
 
 
+# DualCache for LiteLLM_Config param_name reads.
+# Redis layer is attached in proxy_server._init_cache.
+LITELLM_CONFIG_CACHE_TTL_SECONDS: int = int(
+    os.environ.get("LITELLM_CONFIG_PARAM_CACHE_TTL_SECONDS", "60")
+)
+_CONFIG_CACHE_MISS: str = "__litellm_config_param_miss__"
+
+litellm_config_cache: DualCache = DualCache(
+    default_in_memory_ttl=LITELLM_CONFIG_CACHE_TTL_SECONDS,
+    default_redis_ttl=LITELLM_CONFIG_CACHE_TTL_SECONDS,
+)
+
+
+class _ConfigRow:
+    """Mimics the Prisma litellm_config row shape for cached entries."""
+
+    __slots__ = ("param_name", "param_value")
+
+    def __init__(self, param_name: str, param_value: Any) -> None:
+        self.param_name = param_name
+        self.param_value = param_value
+
+
+def _config_cache_key(param_name: str) -> str:
+    return f"litellm_config:param:{param_name}"
+
+
+def _pack_config_row(row: Any) -> Dict[str, Any]:
+    return {"param_name": row.param_name, "param_value": row.param_value}
+
+
+def _unpack_config_row(cached: Any) -> Optional[_ConfigRow]:
+    if cached is None or cached == _CONFIG_CACHE_MISS:
+        return None
+    if isinstance(cached, dict):
+        return _ConfigRow(cached["param_name"], cached["param_value"])
+    return None
+
+
+async def get_config_param(prisma_client: Any, param_name: str) -> Optional[Any]:
+    """Cached read of a LiteLLM_Config row; returns row, _ConfigRow shim, or None."""
+    cache_key = _config_cache_key(param_name)
+    cached = await litellm_config_cache.async_get_cache(cache_key)
+    if cached is not None:
+        return _unpack_config_row(cached)
+
+    row = await prisma_client.get_generic_data(
+        key="param_name", value=param_name, table_name="config"
+    )
+    cache_value: Any = _pack_config_row(row) if row is not None else _CONFIG_CACHE_MISS
+    await litellm_config_cache.async_set_cache(
+        cache_key, cache_value, ttl=LITELLM_CONFIG_CACHE_TTL_SECONDS
+    )
+    return row
+
+
+async def invalidate_config_param(param_name: str) -> None:
+    """Evict from both cache layers; call after every LiteLLM_Config write."""
+    await litellm_config_cache.async_delete_cache(_config_cache_key(param_name))
+
+
+async def prefetch_config_params(prisma_client: Any, param_names: List[str]) -> None:
+    """Batch-load LiteLLM_Config rows into the cache with one find_many."""
+    if not param_names:
+        return
+    try:
+        rows = await prisma_client.db.litellm_config.find_many(
+            where={"param_name": {"in": param_names}}  # type: ignore
+        )
+    except Exception as e:
+        verbose_proxy_logger.debug(
+            "prefetch_config_params failed, falling through to per-param queries: %s",
+            e,
+        )
+        return
+    by_name = {row.param_name: row for row in rows}
+    for name in param_names:
+        row = by_name.get(name)
+        cache_value: Any = (
+            _pack_config_row(row) if row is not None else _CONFIG_CACHE_MISS
+        )
+        await litellm_config_cache.async_set_cache(
+            _config_cache_key(name), cache_value, ttl=LITELLM_CONFIG_CACHE_TTL_SECONDS
+        )
+
+
 class PrismaClient:
     spend_log_transactions: List = []
     _spend_log_transactions_lock = asyncio.Lock()
@@ -3310,6 +3396,9 @@ class PrismaClient:
 
                     tasks.append(updated_table_row)
                 await asyncio.gather(*tasks)
+                # invalidate cache so other pods see writes from save_config
+                for k in data.keys():
+                    await invalidate_config_param(k)
                 verbose_proxy_logger.info("Data Inserted into Config Table")
             elif table_name == "spend":
                 db_data = self.jsonify_object(data=data)
