@@ -374,7 +374,7 @@ def _guardrail_modification_check(
         coerced = _coerce_to_dict(container)
         if coerced is None:
             return False
-        return any(coerced.get(key) for key in _GUARDRAIL_MODIFICATION_KEYS)
+        return any(key in coerced for key in _GUARDRAIL_MODIFICATION_KEYS)
 
     # Check both metadata keys — callers can populate either depending on the
     # endpoint. Cover the top-level too so root-level injection is rejected.
