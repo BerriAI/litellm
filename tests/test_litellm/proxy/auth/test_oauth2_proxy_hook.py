@@ -3,23 +3,16 @@ Regression tests for the OAuth2-proxy header-forgery fix
 (GHSA-5c3m-qffq-4r9m).
 
 The hook reads HTTP request headers per ``oauth2_config_mappings`` and
-constructs a ``UserAPIKeyAuth`` from them. Two separate failure modes
-the fix closes:
-
-1. The path was not gated on ``premium_user`` (the sibling
-   ``enable_oauth2_auth`` and ``enable_jwt_auth`` paths are). Open-source
-   deployments could enable the feature without realising it requires
-   a hardened deployment topology.
-2. Any ``UserAPIKeyAuth`` field could be mapped from a header — including
-   ``user_role``, which Pydantic coerces from the string ``"proxy_admin"``
-   into ``LitellmUserRoles.PROXY_ADMIN``. An attacker who reaches the
-   proxy directly (or via a misconfigured reverse proxy) sets the mapped
-   header and gains full admin privileges.
+constructs a ``UserAPIKeyAuth`` from them. Without the
+identity-only allowlist any field could be mapped — including
+``user_role``, which Pydantic coerces from the string
+``"proxy_admin"`` into ``LitellmUserRoles.PROXY_ADMIN``. An attacker
+who reaches the proxy directly (or via a misconfigured reverse
+proxy) sets the mapped header and gains full admin privileges.
 """
 
 import os
 import sys
-from unittest.mock import patch
 
 import pytest
 from fastapi import Request
