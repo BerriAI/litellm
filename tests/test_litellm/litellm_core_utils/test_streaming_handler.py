@@ -2091,3 +2091,45 @@ def test_gemini_legacy_vertex_tool_calls_finish_reason_with_stop_enum():
         f"Expected 'tool_calls' but got {final.choices[0].finish_reason!r}. "
         "STOP enum was not normalised through map_finish_reason()."
     )
+
+
+def test_azure_empty_choices_with_include_usage_preserves_role():
+    """Regression test for #24221: Azure streaming with include_usage drops role='assistant'.
+
+    When Azure sends an initial prompt_filter_results chunk with empty choices
+    and stream_options.include_usage=True, the empty-choices early-return path
+    must not cause sent_first_chunk to become True. Otherwise the real first
+    content chunk will have its role stripped.
+    """
+    wrapper = CustomStreamWrapper(
+        completion_stream=None,
+        model="azure/gpt-4",
+        logging_obj=MagicMock(),
+        custom_llm_provider="azure",
+        stream_options={"include_usage": True},
+    )
+
+    # Azure's initial empty-choices chunk (prompt_filter_results)
+    empty_chunk = ModelResponseStream(
+        id="chatcmpl-abc123",
+        created=1700000000,
+        model="gpt-4",
+        object="chat.completion.chunk",
+        choices=[],
+        usage=None,
+    )
+
+    assert wrapper.sent_first_chunk is False
+
+    result = wrapper.chunk_creator(chunk=empty_chunk)
+
+    # Empty-choices chunk without usage should be skipped (return None)
+    assert (
+        result is None
+    ), "Empty choices chunk without usage data should not be returned"
+
+    # sent_first_chunk must still be False
+    assert wrapper.sent_first_chunk is False, (
+        "sent_first_chunk should remain False after an empty-choices chunk. "
+        "If it becomes True, the next real content chunk will lose role='assistant'."
+    )

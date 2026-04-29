@@ -1568,6 +1568,8 @@ class CustomStreamWrapper:
                     if (
                         self.stream_options is not None
                         and self.stream_options["include_usage"] is True
+                        and hasattr(model_response, "usage")
+                        and model_response.usage is not None
                     ):
                         model_response.choices = []
                         return model_response
