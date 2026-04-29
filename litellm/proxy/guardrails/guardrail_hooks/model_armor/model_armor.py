@@ -36,7 +36,6 @@ from litellm.types.utils import (
     GuardrailStatus,
     ModelResponse,
     ModelResponseStream,
-    StandardLoggingGuardrailInformation,
 )
 
 GUARDRAIL_NAME = "model_armor"
@@ -341,7 +340,15 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
             request_data.get("metadata", {}) if isinstance(request_data, dict) else {}
         )
 
-        guardrail_response = metadata.get("_model_armor_response", {})
+        # Only log when an actual Model Armor API call was made.  When there is
+        # no content to scan (e.g. embeddings have no messages, image responses
+        # are not text) the hooks return early *without* setting
+        # `_model_armor_response`, so we skip logging here to avoid emitting
+        # phantom "applied / success / 0 ms latency" guardrail entries.
+        if "_model_armor_response" not in metadata:
+            return response
+
+        guardrail_response = metadata["_model_armor_response"]
 
         # Determine status – default to "success" but prefer the explicit value if present.
         guardrail_status: GuardrailStatus = metadata.get(
@@ -570,7 +577,6 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
     ):
         """Post-call hook to sanitize model responses."""
         from litellm.proxy.common_utils.callback_utils import (
-            add_guardrail_response_to_standard_logging_object,
             add_guardrail_to_applied_guardrails_header,
         )
 
@@ -598,32 +604,22 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
                 request_data=data,
             )
 
-            # Attach Model Armor response & status to this request's metadata to prevent race conditions
-            if isinstance(armor_response, dict):
-                model_armor_logged_object = {
-                    "model_armor_response": armor_response,
-                    "model_armor_status": (
-                        "blocked"
-                        if self._should_block_content(
-                            armor_response,
-                            allow_sanitization=self.mask_response_content,
-                        )
-                        else "success"
-                    ),
-                }
-                standard_logging_guardrail_information = (
-                    StandardLoggingGuardrailInformation(
-                        guardrail_name=self.guardrail_name,
-                        guardrail_provider="model_armor",
-                        guardrail_mode=GuardrailEventHooks.post_call,
-                        guardrail_response=model_armor_logged_object,
-                        guardrail_status="success",
-                        start_time=data.get("start_time"),
+            # Store armor response in metadata so the decorator's _process_response
+            # picks it up via the same path as async_pre_call_hook / async_moderation_hook.
+            # Previously this wrote to litellm_logging_obj.model_call_details["standard_logging_object"]
+            # which is a different code path than what the standard logging payload reads
+            # (metadata["standard_logging_guardrail_information"]), causing post-call
+            # guardrail responses to be silently dropped from the UI / logs.
+            if isinstance(data, dict):
+                metadata = data.setdefault("metadata", {})
+                metadata["_model_armor_response"] = armor_response
+                metadata["_model_armor_status"] = (
+                    "blocked"
+                    if self._should_block_content(
+                        armor_response,
+                        allow_sanitization=self.mask_response_content,
                     )
-                )
-                add_guardrail_response_to_standard_logging_object(
-                    litellm_logging_obj=data.get("litellm_logging_obj"),
-                    guardrail_response=standard_logging_guardrail_information,
+                    else "success"
                 )
 
             # Add guardrail to applied_guardrails BEFORE potential blocking

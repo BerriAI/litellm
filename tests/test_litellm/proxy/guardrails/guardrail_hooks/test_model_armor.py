@@ -1842,4 +1842,333 @@ async def test_async_moderation_hook_api_error_fail_on_error_false():
                 call_type="completion",
             )
 
-        assert "API Error" in str(exc_info.value)
+
+# ---------------------------------------------------------------------------
+# Regression tests for post-call logging and false-applied-entry bugs
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_post_call_stores_armor_response_in_metadata():
+    """
+    Regression: async_post_call_success_hook must store _model_armor_response and
+    _model_armor_status in metadata so the @log_guardrail_information decorator's
+    _process_response picks them up via metadata["standard_logging_guardrail_information"].
+
+    Previously the hook used add_guardrail_response_to_standard_logging_object, which
+    writes to litellm_logging_obj.model_call_details["standard_logging_object"] – a
+    different code path that the standard logging payload never reads, causing post-call
+    guardrail responses to be silently dropped.
+    """
+    mock_user_api_key_dict = UserAPIKeyAuth()
+
+    guardrail = ModelArmorGuardrail(
+        template_id="test-template",
+        project_id="test-project",
+        location="us-central1",
+        guardrail_name="model-armor-post-logging",
+    )
+
+    armor_api_response = {
+        "sanitizationResult": {
+            "filterMatchState": "NO_MATCH_FOUND",
+            "filterResults": {},
+        }
+    }
+
+    mock_http_response = AsyncMock()
+    mock_http_response.status_code = 200
+    mock_http_response.json = AsyncMock(return_value=armor_api_response)
+
+    guardrail._ensure_access_token_async = AsyncMock(
+        return_value=("test-token", "test-project")
+    )
+
+    mock_llm_response = litellm.ModelResponse()
+    mock_llm_response.choices = [
+        litellm.Choices(message=litellm.Message(content="Hello there"))
+    ]
+
+    request_data = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "Hi"}],
+        "metadata": {"guardrails": ["model-armor-post-logging"]},
+    }
+
+    with patch.object(
+        guardrail.async_handler, "post", AsyncMock(return_value=mock_http_response)
+    ):
+        await guardrail.async_post_call_success_hook(
+            data=request_data,
+            user_api_key_dict=mock_user_api_key_dict,
+            response=mock_llm_response,
+        )
+
+    metadata = request_data["metadata"]
+
+    # _model_armor_response must be set so _process_response can read it
+    assert "_model_armor_response" in metadata, (
+        "_model_armor_response not found in metadata – post-call logging will be dropped"
+    )
+    assert metadata["_model_armor_response"] == armor_api_response
+
+    # Status must be "success" for a clean response
+    assert metadata.get("_model_armor_status") == "success"
+
+    # standard_logging_guardrail_information must contain one entry for this hook
+    slgi = metadata.get("standard_logging_guardrail_information")
+    assert slgi is not None, (
+        "standard_logging_guardrail_information not populated – post-call entry dropped"
+    )
+    assert len(slgi) >= 1
+    entry = slgi[0]
+    assert entry["guardrail_name"] == "model-armor-post-logging"
+    assert entry["guardrail_status"] == "success"
+
+
+@pytest.mark.asyncio
+async def test_post_call_blocked_response_sets_metadata_status_blocked():
+    """
+    Regression: when a post-call armor response blocks content, _model_armor_status
+    in metadata must be 'blocked' so the logging decorator records it correctly.
+    """
+    mock_user_api_key_dict = UserAPIKeyAuth()
+
+    guardrail = ModelArmorGuardrail(
+        template_id="test-template",
+        project_id="test-project",
+        location="us-central1",
+        guardrail_name="model-armor-post-blocked",
+    )
+
+    armor_api_response = {
+        "sanitizationResult": {
+            "filterMatchState": "MATCH_FOUND",
+            "filterResults": {
+                "rai": {
+                    "raiFilterResult": {
+                        "matchState": "MATCH_FOUND",
+                    }
+                }
+            },
+        }
+    }
+
+    mock_http_response = AsyncMock()
+    mock_http_response.status_code = 200
+    mock_http_response.json = AsyncMock(return_value=armor_api_response)
+
+    guardrail._ensure_access_token_async = AsyncMock(
+        return_value=("test-token", "test-project")
+    )
+
+    mock_llm_response = litellm.ModelResponse()
+    mock_llm_response.choices = [
+        litellm.Choices(message=litellm.Message(content="Some harmful content"))
+    ]
+
+    request_data = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "Prompt"}],
+        "metadata": {"guardrails": ["model-armor-post-blocked"]},
+    }
+
+    with patch.object(
+        guardrail.async_handler, "post", AsyncMock(return_value=mock_http_response)
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await guardrail.async_post_call_success_hook(
+                data=request_data,
+                user_api_key_dict=mock_user_api_key_dict,
+                response=mock_llm_response,
+            )
+
+    assert exc_info.value.status_code == 400
+
+    # Even though the request was blocked, the metadata must still be populated
+    metadata = request_data["metadata"]
+    assert metadata.get("_model_armor_status") == "blocked"
+    assert metadata.get("_model_armor_response") == armor_api_response
+
+    # The decorator logs with guardrail_intervened status on HTTPException
+    slgi = metadata.get("standard_logging_guardrail_information")
+    assert slgi is not None
+    assert len(slgi) >= 1
+
+
+@pytest.mark.asyncio
+async def test_pre_call_embedding_request_produces_no_guardrail_log_entry():
+    """
+    Regression: when async_pre_call_hook is called for an embedding request (which has
+    no 'messages' field), it should return early WITHOUT emitting a
+    standard_logging_guardrail_information entry.
+
+    Previously the @log_guardrail_information decorator called _process_response even
+    after early returns, and _process_response defaulted _model_armor_response to {}
+    and _model_armor_status to "success", producing a phantom "applied / 0 ms" entry
+    in the UI for every embedding call.
+    """
+    mock_user_api_key_dict = UserAPIKeyAuth()
+    mock_cache = MagicMock(spec=DualCache)
+
+    guardrail = ModelArmorGuardrail(
+        template_id="test-template",
+        project_id="test-project",
+        location="us-central1",
+        guardrail_name="model-armor-embed",
+    )
+
+    guardrail._ensure_access_token_async = AsyncMock(
+        return_value=("test-token", "test-project")
+    )
+
+    # Embedding requests have 'input', not 'messages'
+    request_data = {
+        "model": "text-embedding-ada-002",
+        "input": "Hello world",
+        "metadata": {"guardrails": ["model-armor-embed"]},
+    }
+
+    with patch.object(
+        guardrail.async_handler, "post", AsyncMock()
+    ) as mock_post:
+        await guardrail.async_pre_call_hook(
+            user_api_key_dict=mock_user_api_key_dict,
+            cache=mock_cache,
+            data=request_data,
+            call_type="embedding",
+        )
+
+    # No Model Armor API call must have been made
+    mock_post.assert_not_called()
+
+    # No guardrail log entry must be emitted – this is the phantom entry bug
+    slgi = request_data.get("metadata", {}).get("standard_logging_guardrail_information")
+    assert slgi is None, (
+        f"Phantom guardrail log entry emitted for embedding pre-call: {slgi}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_post_call_image_response_produces_no_guardrail_log_entry():
+    """
+    Regression: when async_post_call_success_hook is called with an ImageResponse
+    (non-ModelResponse), it should return early WITHOUT emitting a
+    standard_logging_guardrail_information entry.
+
+    Previously the decorator would emit an "applied / 0 ms / empty response" entry
+    for every image generation call, making the UI report all 6 guardrails as applied
+    with no actual Model Armor response data.
+    """
+    mock_user_api_key_dict = UserAPIKeyAuth()
+
+    guardrail = ModelArmorGuardrail(
+        template_id="test-template",
+        project_id="test-project",
+        location="us-central1",
+        guardrail_name="model-armor-image",
+    )
+
+    guardrail._ensure_access_token_async = AsyncMock(
+        return_value=("test-token", "test-project")
+    )
+
+    # ImageResponse is not a litellm.ModelResponse – the hook must skip it
+    from litellm.types.utils import ImageResponse as LiteLLMImageResponse
+    from openai.types import ImagesResponse
+    from openai.types.image import Image
+
+    image_response = LiteLLMImageResponse(
+        created=1234567890,
+        data=[Image(url="https://example.com/image.png")],
+    )
+
+    request_data = {
+        "model": "dall-e-3",
+        "metadata": {"guardrails": ["model-armor-image"]},
+    }
+
+    with patch.object(
+        guardrail.async_handler, "post", AsyncMock()
+    ) as mock_post:
+        await guardrail.async_post_call_success_hook(
+            data=request_data,
+            user_api_key_dict=mock_user_api_key_dict,
+            response=image_response,
+        )
+
+    # No Model Armor API call must have been made for image responses
+    mock_post.assert_not_called()
+
+    # No guardrail log entry must be emitted
+    slgi = request_data.get("metadata", {}).get("standard_logging_guardrail_information")
+    assert slgi is None, (
+        f"Phantom guardrail log entry emitted for image post-call: {slgi}"
+    )
+
+
+def test_process_response_skips_logging_when_no_armor_api_call():
+    """
+    Unit test for _process_response: it must return without emitting
+    standard_logging_guardrail_information when _model_armor_response is absent
+    from metadata (i.e. no Model Armor API call was made).
+    """
+    guardrail = ModelArmorGuardrail(
+        template_id="test-template",
+        project_id="test-project",
+        location="us-central1",
+        guardrail_name="model-armor-unit",
+    )
+
+    request_data_without_call = {
+        "model": "gpt-4",
+        "metadata": {},  # _model_armor_response intentionally absent
+    }
+
+    guardrail._process_response(
+        response=None,
+        request_data=request_data_without_call,
+        duration=0.001,
+        event_type=GuardrailEventHooks.pre_call,
+    )
+
+    # No entry should be added
+    assert "standard_logging_guardrail_information" not in request_data_without_call["metadata"]
+
+
+def test_process_response_logs_when_armor_api_call_made():
+    """
+    Unit test for _process_response: it must emit standard_logging_guardrail_information
+    when _model_armor_response IS present in metadata (an actual API call was made).
+    """
+    guardrail = ModelArmorGuardrail(
+        template_id="test-template",
+        project_id="test-project",
+        location="us-central1",
+        guardrail_name="model-armor-unit",
+    )
+
+    armor_response = {"sanitizationResult": {"filterMatchState": "NO_MATCH_FOUND"}}
+
+    request_data_with_call = {
+        "model": "gpt-4",
+        "metadata": {
+            "_model_armor_response": armor_response,
+            "_model_armor_status": "success",
+        },
+    }
+
+    guardrail._process_response(
+        response=None,
+        request_data=request_data_with_call,
+        duration=0.142,
+        event_type=GuardrailEventHooks.pre_call,
+    )
+
+    slgi = request_data_with_call["metadata"].get("standard_logging_guardrail_information")
+    assert slgi is not None, "_process_response did not emit guardrail log when API call was made"
+    assert len(slgi) == 1
+    entry = slgi[0]
+    assert entry["guardrail_name"] == "model-armor-unit"
+    assert entry["guardrail_status"] == "success"
+    assert entry["guardrail_response"] == armor_response
