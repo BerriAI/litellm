@@ -748,12 +748,21 @@ class ProxyBaseLLMRequestProcessing:
                 "queue_time_seconds"
             ] = queue_time_seconds
 
-        self.data["model"] = (
-            general_settings.get("completion_model", None)  # server default
-            or user_model  # model name passed via cli args
-            or model  # for azure deployments
-            or self.data.get("model", None)  # default passed in http request
-        )
+        # Use appropriate model setting based on route type
+        if route_type == "aembedding":
+            self.data["model"] = (
+                general_settings.get("embedding_model", None)  # server default for embedding
+                or user_model  # model name passed via cli args
+                or model  # for azure deployments
+                or self.data.get("model", None)  # default passed in http request
+            )
+        else:
+            self.data["model"] = (
+                general_settings.get("completion_model", None)  # server default for completion
+                or user_model  # model name passed via cli args
+                or model  # for azure deployments
+                or self.data.get("model", None)  # default passed in http request
+            )
 
         # override with user settings, these are params passed via cli
         if user_temperature:
