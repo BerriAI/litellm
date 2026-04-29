@@ -6,7 +6,9 @@ Why separate file? Make it easy to see how transformation works
 
 import json
 import os
-from typing import TYPE_CHECKING, Dict, List, Literal, Optional, Tuple, Union, cast
+import re
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Tuple, Union, cast
+from urllib.parse import quote
 
 import httpx
 from pydantic import BaseModel
@@ -26,6 +28,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.vertex_ai.common_utils import pop_vertex_request_labels
 from litellm.types.files import (
+    get_file_extension_from_mime_type,
     get_file_mime_type_for_file_type,
     get_file_type_from_extension,
     is_gemini_1_5_accepted_file_type,
@@ -56,6 +59,12 @@ from ..common_utils import (
     get_supports_response_schema,
     get_supports_system_message,
 )
+from ..vertex_llm_base import VertexBase
+
+_GCS_METADATA_VERTEX_BASE = VertexBase()
+_GEMINI_MIME_TYPE_ALIASES: Dict[str, str] = {
+    "image/jpg": "image/jpeg",
+}
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -171,12 +180,125 @@ def _apply_gemini_metadata(
     return cast(PartType, part_dict)
 
 
+def _parse_gs_uri(gs_uri: str) -> Tuple[str, str]:
+    if not gs_uri.startswith("gs://"):
+        raise ValueError(f"Invalid gs URI: {gs_uri}")
+    uri_without_scheme = gs_uri[5:]  # drop gs://
+    uri_parts = uri_without_scheme.split("/", 1)
+    if len(uri_parts) != 2 or not uri_parts[0] or not uri_parts[1]:
+        raise ValueError(f"Invalid gs URI: {gs_uri}")
+    return uri_parts[0], uri_parts[1]
+
+
+def _is_valid_gcs_bucket_name(bucket: str) -> bool:
+    """
+    Validate bucket name against core GCS naming constraints.
+    """
+    bucket_length = len(bucket)
+    max_bucket_length = 222 if "." in bucket else 63
+    if bucket_length < 3 or bucket_length > max_bucket_length:
+        return False
+    if "." in bucket and any(
+        len(label) == 0 or len(label) > 63 for label in bucket.split(".")
+    ):
+        return False
+    if not re.fullmatch(r"[a-z0-9][a-z0-9._-]*[a-z0-9]", bucket):
+        return False
+    if ".." in bucket:
+        return False
+    if re.fullmatch(r"\d+\.\d+\.\d+\.\d+", bucket):
+        return False
+    return True
+
+
+def _get_gcs_object_content_type(
+    image_url: str,
+    vertex_project: Optional[str] = None,
+    vertex_credentials: Optional[Any] = None,
+) -> Optional[str]:
+    """
+    Resolve content type from GCS object metadata.
+    """
+    try:
+        bucket, object_name = _parse_gs_uri(image_url)
+    except ValueError:
+        return None
+    if not _is_valid_gcs_bucket_name(bucket):
+        return None
+
+    headers: Dict[str, str] = {}
+    explicit_vertex_auth_provided = (
+        vertex_project is not None or vertex_credentials is not None
+    )
+    try:
+        access_token, _ = _GCS_METADATA_VERTEX_BASE.get_access_token(
+            credentials=vertex_credentials,
+            project_id=vertex_project,
+        )
+        headers["Authorization"] = f"Bearer {access_token}"
+    except Exception as e:
+        if explicit_vertex_auth_provided:
+            raise litellm.BadRequestError(
+                message=(
+                    "Unable to fetch GCS metadata with provided Vertex credentials/project. "
+                    f"Original error: {str(e)}"
+                ),
+                model=None,
+                llm_provider="vertex_ai",
+            )
+        # Metadata may still be readable for public objects.
+        pass
+
+    object_path = quote(object_name, safe="")
+    metadata_url = (
+        f"https://storage.googleapis.com/storage/v1/b/{bucket}/o/{object_path}"
+        "?fields=contentType"
+    )
+    try:
+        response = httpx.get(url=metadata_url, headers=headers, timeout=5.0)
+        response.raise_for_status()
+        content_type = response.json().get("contentType")
+        if isinstance(content_type, str) and len(content_type) > 0:
+            return content_type
+    except Exception:
+        return None
+    return None
+
+
+def _normalize_and_validate_gemini_mime_type(
+    mime_type: str, model: Optional[str]
+) -> str:
+    normalized_mime_type = _GEMINI_MIME_TYPE_ALIASES.get(
+        mime_type.strip().lower(), mime_type.strip().lower()
+    )
+    try:
+        file_extension = get_file_extension_from_mime_type(normalized_mime_type)
+        file_type = get_file_type_from_extension(file_extension)
+    except ValueError:
+        raise litellm.BadRequestError(
+            message=f"File type not supported by gemini - {normalized_mime_type}",
+            model=model,
+            llm_provider="vertex_ai",
+        )
+
+    if not is_gemini_1_5_accepted_file_type(file_type):
+        raise litellm.BadRequestError(
+            message=f"File type not supported by gemini - {file_type}",
+            model=model,
+            llm_provider="vertex_ai",
+        )
+
+    return get_file_mime_type_for_file_type(file_type)
+
+
 def _process_gemini_media(
     image_url: str,
     format: Optional[str] = None,
     media_resolution_enum: Optional[Dict[str, str]] = None,
     model: Optional[str] = None,
     video_metadata: Optional[Dict[str, Any]] = None,
+    vertex_project: Optional[str] = None,
+    vertex_credentials: Optional[Any] = None,
 ) -> PartType:
     """
     Given a media URL (image, audio, or video), return the appropriate PartType for Gemini
@@ -193,20 +315,55 @@ def _process_gemini_media(
     try:
         # GCS URIs
         if "gs://" in image_url:
-            # Figure out file type
             extension_with_dot = os.path.splitext(image_url)[-1]  # Ex: ".png"
             extension = extension_with_dot[1:]  # Ex: "png"
 
             if not format:
-                file_type = get_file_type_from_extension(extension)
+                mime_type: Optional[str] = None
+                # For extension-less gs:// URIs, we cannot infer from path.
+                # If callers pass `format`/`mime_type`, this branch is skipped.
+                if extension:
+                    file_type = get_file_type_from_extension(extension)
 
-                # Validate the file type is supported by Gemini
-                if not is_gemini_1_5_accepted_file_type(file_type):
-                    raise Exception(f"File type not supported by gemini - {file_type}")
+                    # Validate the file type is supported by Gemini
+                    if not is_gemini_1_5_accepted_file_type(file_type):
+                        raise litellm.BadRequestError(
+                            message=f"File type not supported by gemini - {file_type}",
+                            model=model,
+                            llm_provider="vertex_ai",
+                        )
 
-                mime_type = get_file_mime_type_for_file_type(file_type)
+                    mime_type = get_file_mime_type_for_file_type(file_type)
+                else:
+                    mime_type = _get_gcs_object_content_type(
+                        image_url=image_url,
+                        vertex_project=vertex_project,
+                        vertex_credentials=vertex_credentials,
+                    )
+                    if mime_type is None:
+                        raise litellm.BadRequestError(
+                            message=(
+                                f"Unable to determine mime type for gs URI: {image_url}. "
+                                "This gs:// URI has no file extension and GCS metadata "
+                                "lookup failed. Set it explicitly using image_url.format "
+                                "(or image_url.mime_type/content_type) or "
+                                "message.content[].file.format."
+                            ),
+                            model=model,
+                            llm_provider="vertex_ai",
+                        )
             else:
                 mime_type = format
+            if mime_type is None:
+                raise litellm.BadRequestError(
+                    message=f"File type not supported by gemini - {image_url}",
+                    model=model,
+                    llm_provider="vertex_ai",
+                )
+            mime_type = _normalize_and_validate_gemini_mime_type(
+                mime_type=mime_type,
+                model=model,
+            )
             file_data = FileDataType(mime_type=mime_type, file_uri=image_url)
             part: PartType = {"file_data": file_data}
             return _apply_gemini_metadata(
@@ -258,8 +415,6 @@ def _snake_to_camel(snake_str: str) -> str:
 
 def _camel_to_snake(camel_str: str) -> str:
     """Convert camelCase to snake_case"""
-    import re
-
     return re.sub(r"(?<!^)(?=[A-Z])", "_", camel_str).lower()
 
 
@@ -311,6 +466,7 @@ def check_if_part_exists_in_parts(
 def _gemini_convert_messages_with_history(  # noqa: PLR0915
     messages: List[AllMessageValues],
     model: Optional[str] = None,
+    litellm_params: Optional[dict] = None,
 ) -> List[ContentType]:
     """
     Converts given messages from OpenAI format to Gemini format
@@ -326,6 +482,16 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
 
     msg_i = 0
     tool_call_responses = []
+    vertex_project = None
+    vertex_credentials = None
+    if litellm_params:
+        vertex_project = litellm_params.get("vertex_project") or litellm_params.get(
+            "vertex_ai_project"
+        )
+        vertex_credentials = litellm_params.get(
+            "vertex_credentials"
+        ) or litellm_params.get("vertex_ai_credentials")
+
     try:
         while msg_i < len(messages):
             user_content: List[PartType] = []
@@ -353,7 +519,11 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                             media_resolution_enum: Optional[Dict[str, str]] = None
                             if isinstance(img_element["image_url"], dict):
                                 image_url = img_element["image_url"]["url"]
-                                format = img_element["image_url"].get("format")
+                                format = (
+                                    img_element["image_url"].get("format")
+                                    or img_element["image_url"].get("mime_type")
+                                    or img_element["image_url"].get("content_type")
+                                )
                                 detail = img_element["image_url"].get("detail")
                                 media_resolution_enum = (
                                     _convert_detail_to_media_resolution_enum(detail)
@@ -365,6 +535,8 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                                 format=format,
                                 media_resolution_enum=media_resolution_enum,
                                 model=model,
+                                vertex_project=vertex_project,
+                                vertex_credentials=vertex_credentials,
                             )
                             _parts.append(_part)
                         elif element["type"] == "input_audio":
@@ -390,12 +562,18 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                                     image_url=openai_image_str,
                                     format=audio_format_modified,
                                     model=model,
+                                    vertex_project=vertex_project,
+                                    vertex_credentials=vertex_credentials,
                                 )
                                 _parts.append(_part)
                         elif element["type"] == "file":
                             file_element = cast(ChatCompletionFileObject, element)
                             file_id = file_element["file"].get("file_id")
-                            format = file_element["file"].get("format")
+                            format = (
+                                file_element["file"].get("format")
+                                or file_element["file"].get("mime_type")
+                                or file_element["file"].get("content_type")
+                            )
                             file_data = file_element["file"].get("file_data")
                             detail = file_element["file"].get("detail")
                             video_metadata = file_element["file"].get("video_metadata")
@@ -417,13 +595,23 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                                     model=model,
                                     media_resolution_enum=media_resolution_enum,
                                     video_metadata=video_metadata,
+                                    vertex_project=vertex_project,
+                                    vertex_credentials=vertex_credentials,
                                 )
                                 _parts.append(_part)
-                            except Exception:
-                                raise Exception(
-                                    "Unable to determine mime type for file_id: {}, set this explicitly using message[{}].content[{}].file.format".format(
-                                        file_id, msg_i, element_idx
-                                    )
+                            except litellm.BadRequestError:
+                                raise
+                            except Exception as e:
+                                raise litellm.BadRequestError(
+                                    message=(
+                                        "Unable to determine mime type for file: "
+                                        f"{file_id or 'provided data'}, set this explicitly "
+                                        f"using message[{msg_i}].content[{element_idx}]."
+                                        "file.format (or file.mime_type/content_type). "
+                                        f"Original error: {str(e)}"
+                                    ),
+                                    model=model,
+                                    llm_provider="vertex_ai",
                                 )
                     user_content.extend(_parts)
                 elif _message_content is not None and isinstance(_message_content, str):
@@ -539,6 +727,8 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                                         format=format,
                                         media_resolution_enum=media_resolution_enum,
                                         model=model,
+                                        vertex_project=vertex_project,
+                                        vertex_credentials=vertex_credentials,
                                     )
                                     assistant_content.append(_part)
 
@@ -713,11 +903,11 @@ def _transform_request_body(  # noqa: PLR0915
     try:
         if custom_llm_provider == "gemini":
             content = litellm.GoogleAIStudioGeminiConfig()._transform_messages(
-                messages=messages, model=model
+                messages=messages, model=model, litellm_params=litellm_params
             )
         else:
             content = litellm.VertexGeminiConfig()._transform_messages(
-                messages=messages, model=model
+                messages=messages, model=model, litellm_params=litellm_params
             )
         tools: Optional[Tools] = optional_params.pop("tools", None)
         tool_choice: Optional[ToolConfig] = optional_params.pop("tool_choice", None)

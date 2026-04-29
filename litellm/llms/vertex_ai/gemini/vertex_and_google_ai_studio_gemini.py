@@ -2533,9 +2533,14 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         return model_response
 
     def _transform_messages(
-        self, messages: List[AllMessageValues], model: Optional[str] = None
+        self,
+        messages: List[AllMessageValues],
+        model: Optional[str] = None,
+        litellm_params: Optional[dict] = None,
     ) -> List[ContentType]:
-        return _gemini_convert_messages_with_history(messages=messages, model=model)
+        return _gemini_convert_messages_with_history(
+            messages=messages, model=model, litellm_params=litellm_params
+        )
 
     def get_error_class(
         self, error_message: str, status_code: int, headers: Union[Dict, httpx.Headers]
