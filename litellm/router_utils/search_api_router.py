@@ -28,13 +28,13 @@ class SearchAPIRouter:
     ) -> Tuple[Optional[str], Optional[str]]:
         """
         Resolve search provider credentials from tool configuration ONLY.
-        
+
         Credentials are stored only in search_tool.litellm_params, never in team/key metadata.
         This ensures secrets are not exposed in team/key API responses.
-        
+
         Args:
             tool_litellm_params: Search tool litellm_params with credentials
-            
+
         Returns:
             Tuple of (api_key, api_base) from tool configuration
         """
