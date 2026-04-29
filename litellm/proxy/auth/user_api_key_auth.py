@@ -1066,6 +1066,15 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                     _end_user_object.object_permission
                 )
 
+            # Per-model budget check for cached PROXY_ADMIN keys
+            await _check_model_max_budget(
+                valid_token=valid_token,
+                request_data=request_data,
+                route=route,
+                model_max_budget_limiter=model_max_budget_limiter,
+                prisma_client=prisma_client,
+            )
+
             return valid_token
 
         if (
@@ -1142,6 +1151,15 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
 
             _user_api_key_obj = update_valid_token_with_end_user_params(
                 valid_token=_user_api_key_obj, end_user_params=end_user_params
+            )
+
+            # Per-model budget check for master key requests
+            await _check_model_max_budget(
+                valid_token=_user_api_key_obj,
+                request_data=request_data,
+                route=route,
+                model_max_budget_limiter=model_max_budget_limiter,
+                prisma_client=prisma_client,
             )
 
             return _user_api_key_obj
@@ -2105,6 +2123,55 @@ async def _lookup_end_user_and_apply_budget(
             raise e
         verbose_proxy_logger.debug(f"Unable to find user in db. Error - {str(e)}")
     return valid_token, end_user_object
+
+
+async def _check_model_max_budget(
+    valid_token: UserAPIKeyAuth,
+    request_data: dict,
+    route: str,
+    model_max_budget_limiter: "litellm.proxy.hooks.model_max_budget_limiter._PROXY_VirtualKeyModelMaxBudgetLimiter",
+    prisma_client: Optional["PrismaClient"] = None,
+) -> None:
+    """
+    Run per-model budget checks for both key-level and end-user-level budgets.
+
+    Called on early-return auth paths (cached PROXY_ADMIN, master key) that
+    otherwise skip the main budget-check block.
+    """
+    if not RouteChecks.is_llm_api_route(route=route):
+        return
+
+    current_model = request_data.get("model", None)
+    if current_model is None:
+        return
+
+    # Key-level model_max_budget
+    max_budget_per_model = valid_token.model_max_budget
+    if (
+        max_budget_per_model is not None
+        and isinstance(max_budget_per_model, dict)
+        and len(max_budget_per_model) > 0
+        and prisma_client is not None
+        and valid_token.token is not None
+    ):
+        await model_max_budget_limiter.is_key_within_model_budget(
+            user_api_key_dict=valid_token,
+            model=current_model,
+        )
+
+    # End-user model_max_budget
+    end_user_mmb = valid_token.end_user_model_max_budget
+    if (
+        end_user_mmb is not None
+        and isinstance(end_user_mmb, dict)
+        and len(end_user_mmb) > 0
+        and valid_token.end_user_id is not None
+    ):
+        await model_max_budget_limiter.is_end_user_within_model_budget(
+            end_user_id=valid_token.end_user_id,
+            end_user_model_max_budget=end_user_mmb,
+            model=current_model,
+        )
 
 
 async def _enforce_key_and_fallback_model_access(
