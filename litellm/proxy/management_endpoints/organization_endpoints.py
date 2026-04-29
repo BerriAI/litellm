@@ -500,6 +500,12 @@ async def update_organization(
     if data.updated_by is None:
         data.updated_by = user_api_key_dict.user_id
 
+    if data.organization_id is None:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "organization_id is required"},
+        )
+
     # IDOR guard: only proxy admins / org admins of THIS org may update
     # it. Without this, any authenticated key holder could rewrite
     # another organization's metadata, budgets, and object permissions.
