@@ -581,7 +581,21 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                 msg_i += 1
 
             if assistant_content:
-                contents.append(ContentType(role="model", parts=assistant_content))
+                # Split assistant_content if it mixes parts WITH and WITHOUT
+                # thoughtSignature. Gemini rejects requests where signed and
+                # unsigned parts coexist in the same message.
+                # Reference: https://ai.google.dev/gemini-api/docs/thought-signatures
+                signed = [p for p in assistant_content if p.get("thoughtSignature")]
+                unsigned = [
+                    p for p in assistant_content if not p.get("thoughtSignature")
+                ]
+                if signed and unsigned:
+                    # Emit unsigned parts (text) first, then signed parts
+                    # (functionCall / thinking) in a separate message.
+                    contents.append(ContentType(role="model", parts=unsigned))
+                    contents.append(ContentType(role="model", parts=signed))
+                else:
+                    contents.append(ContentType(role="model", parts=assistant_content))
 
             ## APPEND TOOL CALL MESSAGES ##
             tool_call_message_roles = ["tool", "function"]
