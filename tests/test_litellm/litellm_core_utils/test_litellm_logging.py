@@ -1536,6 +1536,117 @@ def test_get_usage_as_dict():
     assert result == {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
 
 
+def test_normalize_usage_cache_tokens_openai():
+    """
+    Test that prompt_tokens_details.cached_tokens from OpenAI responses
+    gets promoted to cache_read_input_tokens at the top level.
+    """
+    from litellm.litellm_core_utils.litellm_logging import \
+        StandardLoggingPayloadSetup
+
+    # OpenAI-style: cached_tokens nested in prompt_tokens_details, no top-level cache_read_input_tokens
+    usage = {
+        "prompt_tokens": 100,
+        "completion_tokens": 50,
+        "total_tokens": 150,
+        "prompt_tokens_details": {"cached_tokens": 30, "audio_tokens": 0},
+    }
+    result = StandardLoggingPayloadSetup._normalize_usage_cache_tokens(usage)
+    assert result["cache_read_input_tokens"] == 30
+
+
+def test_normalize_usage_cache_tokens_anthropic_not_overwritten():
+    """
+    Test that existing top-level cache_read_input_tokens (Anthropic) is NOT
+    overwritten by prompt_tokens_details.cached_tokens.
+    """
+    from litellm.litellm_core_utils.litellm_logging import \
+        StandardLoggingPayloadSetup
+
+    usage = {
+        "prompt_tokens": 100,
+        "completion_tokens": 50,
+        "total_tokens": 150,
+        "cache_read_input_tokens": 40,
+        "prompt_tokens_details": {"cached_tokens": 40},
+    }
+    result = StandardLoggingPayloadSetup._normalize_usage_cache_tokens(usage)
+    assert result["cache_read_input_tokens"] == 40
+
+
+def test_normalize_usage_cache_tokens_no_details():
+    """
+    Test normalization is a no-op when prompt_tokens_details is absent.
+    """
+    from litellm.litellm_core_utils.litellm_logging import \
+        StandardLoggingPayloadSetup
+
+    usage = {"prompt_tokens": 100, "completion_tokens": 50, "total_tokens": 150}
+    result = StandardLoggingPayloadSetup._normalize_usage_cache_tokens(usage)
+    assert "cache_read_input_tokens" not in result
+
+
+def test_normalize_usage_cache_creation_tokens():
+    """
+    Test that prompt_tokens_details.cache_creation_tokens gets promoted
+    to cache_creation_input_tokens at the top level.
+    """
+    from litellm.litellm_core_utils.litellm_logging import \
+        StandardLoggingPayloadSetup
+
+    usage = {
+        "prompt_tokens": 100,
+        "completion_tokens": 50,
+        "total_tokens": 150,
+        "prompt_tokens_details": {"cached_tokens": 30, "cache_creation_tokens": 70},
+    }
+    result = StandardLoggingPayloadSetup._normalize_usage_cache_tokens(usage)
+    assert result["cache_read_input_tokens"] == 30
+    assert result["cache_creation_input_tokens"] == 70
+
+
+def test_get_usage_as_dict_openai_cached_tokens():
+    """
+    End-to-end: get_usage_as_dict promotes OpenAI cached_tokens to
+    cache_read_input_tokens for the daily spend writer.
+    """
+    from litellm.litellm_core_utils.litellm_logging import \
+        StandardLoggingPayloadSetup
+
+    response_obj = {
+        "usage": {
+            "prompt_tokens": 100,
+            "completion_tokens": 50,
+            "total_tokens": 150,
+            "prompt_tokens_details": {"cached_tokens": 25},
+        }
+    }
+    result = StandardLoggingPayloadSetup.get_usage_as_dict(response_obj=response_obj)
+    assert result["cache_read_input_tokens"] == 25
+
+
+def test_get_usage_as_dict_combined_usage_object_cached_tokens():
+    """
+    End-to-end: get_usage_as_dict with combined_usage_object that has
+    prompt_tokens_details.cached_tokens promotes to cache_read_input_tokens.
+    """
+    from litellm.litellm_core_utils.litellm_logging import \
+        StandardLoggingPayloadSetup
+    from litellm.types.utils import Usage
+
+    combined = Usage(
+        prompt_tokens=100,
+        completion_tokens=50,
+        total_tokens=150,
+        prompt_tokens_details={"cached_tokens": 35},
+    )
+    result = StandardLoggingPayloadSetup.get_usage_as_dict(
+        response_obj=None,
+        combined_usage_object=combined,
+    )
+    assert result["cache_read_input_tokens"] == 35
+
+
 def test_append_system_prompt_messages():
     """
     Test append_system_prompt_messages prepends system message from kwargs to messages list.

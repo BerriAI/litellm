@@ -4908,27 +4908,62 @@ class StandardLoggingPayloadSetup:
         """
         _empty: dict = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
         if combined_usage_object is not None:
-            return combined_usage_object.model_dump()
+            result = combined_usage_object.model_dump()
+            return StandardLoggingPayloadSetup._normalize_usage_cache_tokens(result)
         if not response_obj:
             return _empty
         _raw = response_obj.get("usage", None)
         if _raw is None:
             return _empty
         if isinstance(_raw, ResponseAPIUsage):
-            return ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(
+            result = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(
                 _raw
             ).model_dump()
+            return StandardLoggingPayloadSetup._normalize_usage_cache_tokens(result)
         if isinstance(_raw, dict):
             if ResponseAPILoggingUtils._is_response_api_usage(_raw):
-                return (
+                result = (
                     ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(
                         _raw
                     ).model_dump()
                 )
-            return _raw
+                return StandardLoggingPayloadSetup._normalize_usage_cache_tokens(result)
+            return StandardLoggingPayloadSetup._normalize_usage_cache_tokens(_raw)
         if isinstance(_raw, Usage):
-            return _raw.model_dump()
+            result = _raw.model_dump()
+            return StandardLoggingPayloadSetup._normalize_usage_cache_tokens(result)
         return _empty
+
+    @staticmethod
+    def _normalize_usage_cache_tokens(usage_dict: dict) -> dict:
+        """
+        Promote prompt_tokens_details.cached_tokens → cache_read_input_tokens
+        and prompt_tokens_details.cache_creation_tokens → cache_creation_input_tokens
+        when the top-level fields are missing or zero.
+
+        OpenAI returns cached tokens nested in prompt_tokens_details, while
+        Anthropic/DeepSeek return them as top-level fields. The daily spend
+        tables expect cache_read_input_tokens at the top level, so this
+        normalization ensures all providers' cached tokens are tracked.
+        """
+        prompt_details = usage_dict.get("prompt_tokens_details")
+        if not prompt_details:
+            return usage_dict
+
+        if isinstance(prompt_details, dict):
+            cached = prompt_details.get("cached_tokens")
+            creation = prompt_details.get("cache_creation_tokens")
+        else:
+            cached = getattr(prompt_details, "cached_tokens", None)
+            creation = getattr(prompt_details, "cache_creation_tokens", None)
+
+        extra: dict = {}
+        if cached and not usage_dict.get("cache_read_input_tokens"):
+            extra["cache_read_input_tokens"] = cached
+        if creation and not usage_dict.get("cache_creation_input_tokens"):
+            extra["cache_creation_input_tokens"] = creation
+
+        return {**usage_dict, **extra} if extra else usage_dict
 
     @staticmethod
     def get_model_cost_information(
