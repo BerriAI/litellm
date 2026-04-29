@@ -112,7 +112,7 @@ class AzureFoundryFlux2ImageEditConfig(OpenAIImageEditConfig):
         # Build request body with required params
         request_body: Dict[str, Any] = {
             "prompt": prompt,
-            "image": image_b64,
+            "input_image": image_b64,
             "model": model,
         }
 
