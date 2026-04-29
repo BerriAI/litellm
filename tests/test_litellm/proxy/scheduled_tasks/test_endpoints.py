@@ -193,15 +193,17 @@ class _FakeTx:
 
     async def query_raw(self, query: str, *args) -> List[Dict[str, Any]]:
         # Model the production claim query: rows where status='pending',
-        # next_run_at <= now, optional agent_id and actions filters, ordered
-        # by next_run_at, limited.
-        agent_id, actions, limit = args
+        # next_run_at <= now, owner_token = $1, optional agent_id and
+        # actions filters, ordered by next_run_at, limited.
+        owner_token, agent_id, actions, limit = args
         now = _now()
         out: List[Dict[str, Any]] = []
         for r in sorted(self._table.rows, key=lambda x: x.next_run_at):
             if r.status != "pending":
                 continue
             if r.next_run_at > now:
+                continue
+            if r.owner_token != owner_token:
                 continue
             if agent_id is not None and r.agent_id != agent_id:
                 continue
@@ -697,3 +699,99 @@ class TestLazyExpiry:
         body = r.json()
         statuses = {t["task_id"]: t["status"] for t in body["tasks"]}
         assert statuses["exp-1"] == "expired"
+
+
+class TestDueTenantIsolation:
+    """
+    Regression for the bypass surfaced in PR review (Greptile/Veria):
+        ($1::text IS NULL OR agent_id = $1)
+    With agent_id=NULL on the calling key, the IS NULL branch matched
+    every row in the table and leaked check_prompt / action_args across
+    tenants. Fix: claim must always scope by owner_token.
+    """
+
+    def setup_method(self):
+        self.prisma = _make_prisma()
+        self.client = _make_app(self.prisma)
+
+    def test_caller_with_null_agent_id_does_not_see_other_owners_tasks(self):
+        # Seed two due rows owned by a different key, no agent_id on either.
+        self.prisma.db.litellm_scheduledtasktable.rows.append(
+            _make_row(
+                task_id="other-1",
+                owner_token="hashed-token-foreign",
+                agent_id=None,
+                next_run_at=_now() - timedelta(seconds=10),
+                check_prompt="leaked secret prompt",
+            )
+        )
+        self.prisma.db.litellm_scheduledtasktable.rows.append(
+            _make_row(
+                task_id="other-2",
+                owner_token="hashed-token-foreign",
+                agent_id=None,
+                next_run_at=_now() - timedelta(seconds=10),
+                action_args={"channel": "secret"},
+            )
+        )
+
+        # Caller has its own (different) hashed owner_token and NULL
+        # agent_id (the override below intentionally omits agent_id, but the
+        # default _make_app fixture sets one — patch the override).
+        from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+        def _null_agent_auth():
+            return UserAPIKeyAuth(
+                api_key=_TEST_API_KEY,
+                user_id="user-a",
+                team_id="team-a",
+                # agent_id intentionally None — this is the bypass case.
+            )
+
+        self.client.app.dependency_overrides[user_api_key_auth] = _null_agent_auth
+
+        with _patch_prisma(self.prisma):
+            r = self.client.get("/v1/tasks/due")
+        assert r.status_code == 200
+        body = r.json()
+        ids = [t["task_id"] for t in body["tasks"]]
+        assert (
+            "other-1" not in ids
+        ), "TENANT BYPASS: caller with NULL agent_id claimed foreign task other-1"
+        assert (
+            "other-2" not in ids
+        ), "TENANT BYPASS: caller with NULL agent_id claimed foreign task other-2"
+
+        # Foreign rows must not have been mutated either (no schedule advance,
+        # no flip-to-fired by the bypass call).
+        for r in self.prisma.db.litellm_scheduledtasktable.rows:
+            if r.task_id in ("other-1", "other-2"):
+                assert (
+                    r.status == "pending"
+                ), f"TENANT BYPASS: foreign row {r.task_id} was mutated to {r.status!r}"
+
+    def test_caller_sees_own_tasks_with_null_agent_id(self):
+        # Sanity: caller with NULL agent_id still claims its own rows.
+        from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+        def _null_agent_auth():
+            return UserAPIKeyAuth(
+                api_key=_TEST_API_KEY,
+                user_id="user-a",
+                team_id="team-a",
+            )
+
+        self.client.app.dependency_overrides[user_api_key_auth] = _null_agent_auth
+
+        self.prisma.db.litellm_scheduledtasktable.rows.append(
+            _make_row(
+                task_id="own-1",
+                agent_id=None,
+                next_run_at=_now() - timedelta(seconds=10),
+            )
+        )
+        with _patch_prisma(self.prisma):
+            r = self.client.get("/v1/tasks/due")
+        assert r.status_code == 200
+        ids = [t["task_id"] for t in r.json()["tasks"]]
+        assert ids == ["own-1"]

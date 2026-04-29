@@ -264,6 +264,7 @@ async def cancel_task_for_owner(
 async def claim_due(
     prisma_client: Any,
     *,
+    owner_token: str,
     agent_id: Optional[str],
     actions: Optional[List[str]],
     limit: int,
@@ -274,7 +275,15 @@ async def claim_due(
     APPROVED RAW-SQL EXCEPTION (CLAUDE.md): SELECT FOR UPDATE SKIP LOCKED
     is required for multi-pod safety and is not expressible via Prisma
     model methods. Per-row writes use Prisma inside the same transaction.
+
+    SECURITY: owner_token is required. Without it, any authenticated key
+    whose agent_id is NULL would have matched every task in the table via
+    the `($n::text IS NULL OR agent_id = $n)` pattern, leaking
+    check_prompt / action_args across tenants. Always scope claims to the
+    rows the calling key owns.
     """
+    if not owner_token:
+        raise ValueError("owner_token is required for claim_due")
     now = datetime.now(timezone.utc)
 
     async with prisma_client.db.tx(timeout=timedelta(seconds=30)) as tx:
@@ -287,12 +296,14 @@ async def claim_due(
               FROM "LiteLLM_ScheduledTaskTable"
              WHERE status = 'pending'
                AND next_run_at <= now()
-               AND ($1::text IS NULL OR agent_id = $1)
-               AND ($2::text[] IS NULL OR action = ANY($2))
+               AND owner_token = $1
+               AND ($2::text IS NULL OR agent_id = $2)
+               AND ($3::text[] IS NULL OR action = ANY($3))
              ORDER BY next_run_at
-             LIMIT $3
+             LIMIT $4
              FOR UPDATE SKIP LOCKED
             """,
+            owner_token,
             agent_id,
             actions,
             limit,

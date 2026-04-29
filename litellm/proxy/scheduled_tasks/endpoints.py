@@ -188,7 +188,7 @@ async def get_due_tasks(
     Schedule advance happens server-side: recurring rows get a fresh
     next_run_at, fire_once rows flip to 'fired'.
     """
-    _require_token(user_api_key_dict)
+    owner_token = _require_token(user_api_key_dict)
     prisma_client = _get_prisma_client()
 
     parsed_actions: Optional[List[str]] = None
@@ -199,6 +199,7 @@ async def get_due_tasks(
 
     rows = await store.claim_due(
         prisma_client,
+        owner_token=owner_token,
         agent_id=user_api_key_dict.agent_id,
         actions=parsed_actions,
         limit=limit,
