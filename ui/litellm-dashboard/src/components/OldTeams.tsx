@@ -512,11 +512,6 @@ const Teams: React.FC<TeamProps> = ({
           }
         }
 
-        // Transform integrations into object_permission
-        const hasAgents =
-          formValues.allowed_agents_and_groups &&
-          ((formValues.allowed_agents_and_groups.agents?.length ?? 0) > 0 ||
-            (formValues.allowed_agents_and_groups.accessGroups?.length ?? 0) > 0);
         const hasSearchTools =
           Array.isArray(formValues.object_permission_search_tools) &&
           formValues.object_permission_search_tools.length > 0;
@@ -526,9 +521,7 @@ const Teams: React.FC<TeamProps> = ({
           (formValues.allowed_mcp_servers_and_groups &&
             (formValues.allowed_mcp_servers_and_groups.servers?.length > 0 ||
               formValues.allowed_mcp_servers_and_groups.accessGroups?.length > 0 ||
-              formValues.allowed_mcp_servers_and_groups.toolPermissions)) ||
-          hasAgents ||
-          hasSearchTools
+              formValues.allowed_mcp_servers_and_groups.toolPermissions))
         ) {
           if (!formValues.object_permission) {
             formValues.object_permission = {};
