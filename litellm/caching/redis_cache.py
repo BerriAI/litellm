@@ -1259,10 +1259,11 @@ class RedisCache(BaseCache):
     async def async_delete_cache(self, key: str):
         # typed as Any, redis python lib has incomplete type stubs for RedisCluster and does not include `delete`
         _redis_client: Any = self.init_async_client()
-        # keys is str
+        key = self.check_and_fix_namespace(key=key)
         return await _redis_client.delete(key)
 
-    def delete_cache(self, key):
+    def delete_cache(self, key: str):
+        key = self.check_and_fix_namespace(key=key)
         self.redis_client.delete(key)
 
     async def _pipeline_increment_helper(
