@@ -205,26 +205,23 @@ class DBSpendUpdateWriter:
                     "disable_spend_logs=True. Skipping writing spend logs to db. Other spend updates - Key/User/Team table will still occur."
                 )
 
-            # Single task replaces 11 create_task() calls.
-            # Skip spend-counter updates entirely for FREE_MODELS requests so that
-            # user/key/team/org/tag budgets are not consumed by free-tier traffic.
-            # Analytics (spend logs + daily tables) still land via _insert_spend_log_to_db above.
-            if not is_free_model:
-                asyncio.create_task(
-                    self._batch_database_updates(
-                        response_cost=response_cost,
-                        user_id=user_id,
-                        hashed_token=hashed_token,
-                        team_id=team_id,
-                        org_id=org_id,
-                        end_user_id=end_user_id,
-                        prisma_client=prisma_client,
-                        user_api_key_cache=user_api_key_cache,
-                        litellm_proxy_budget_name=litellm_proxy_budget_name,
-                        payload_copy=payload_copy,
-                        request_tags=request_tags,
-                    )
+            # Always write daily analytics tables; skip budget counter updates for FREE_MODELS.
+            asyncio.create_task(
+                self._batch_database_updates(
+                    response_cost=response_cost,
+                    user_id=user_id,
+                    hashed_token=hashed_token,
+                    team_id=team_id,
+                    org_id=org_id,
+                    end_user_id=end_user_id,
+                    prisma_client=prisma_client,
+                    user_api_key_cache=user_api_key_cache,
+                    litellm_proxy_budget_name=litellm_proxy_budget_name,
+                    payload_copy=payload_copy,
+                    request_tags=request_tags,
+                    skip_spend_counters=is_free_model,
                 )
+            )
 
             self._enqueue_tool_registry_upsert(
                 kwargs=kwargs,
@@ -366,87 +363,95 @@ class DBSpendUpdateWriter:
         litellm_proxy_budget_name: Optional[str],
         payload_copy: SpendLogsPayload,
         request_tags: Optional[Any],
+        skip_spend_counters: bool = False,
     ):
         """
-        Runs all 11 spend-update helpers sequentially inside a single asyncio task.
+        Runs all spend-update helpers sequentially inside a single asyncio task.
 
         Each helper is wrapped in try/except so one failure doesn't prevent the others.
+        When skip_spend_counters=True (FREE_MODELS), budget counter updates are skipped
+        but daily analytics tables are still written.
         """
-        try:
-            await self._update_user_db(
-                response_cost=response_cost,
-                user_id=user_id,
-                prisma_client=prisma_client,
-                user_api_key_cache=user_api_key_cache,
-                litellm_proxy_budget_name=litellm_proxy_budget_name,
-                end_user_id=end_user_id,
-            )
-        except Exception:
-            verbose_proxy_logger.debug(
-                "_batch_database_updates: _update_user_db failed: %s",
-                traceback.format_exc(),
-            )
+        if not skip_spend_counters:
+            try:
+                await self._update_user_db(
+                    response_cost=response_cost,
+                    user_id=user_id,
+                    prisma_client=prisma_client,
+                    user_api_key_cache=user_api_key_cache,
+                    litellm_proxy_budget_name=litellm_proxy_budget_name,
+                    end_user_id=end_user_id,
+                )
+            except Exception:
+                verbose_proxy_logger.debug(
+                    "_batch_database_updates: _update_user_db failed: %s",
+                    traceback.format_exc(),
+                )
 
-        try:
-            await self._update_key_db(
-                response_cost=response_cost,
-                hashed_token=hashed_token,
-                prisma_client=prisma_client,
-            )
-        except Exception:
-            verbose_proxy_logger.debug(
-                "_batch_database_updates: _update_key_db failed: %s",
-                traceback.format_exc(),
-            )
+            try:
+                await self._update_key_db(
+                    response_cost=response_cost,
+                    hashed_token=hashed_token,
+                    prisma_client=prisma_client,
+                )
+            except Exception:
+                verbose_proxy_logger.debug(
+                    "_batch_database_updates: _update_key_db failed: %s",
+                    traceback.format_exc(),
+                )
 
-        try:
-            await self._update_team_db(
-                response_cost=response_cost,
-                team_id=team_id,
-                user_id=user_id,
-                prisma_client=prisma_client,
-            )
-        except Exception:
-            verbose_proxy_logger.debug(
-                "_batch_database_updates: _update_team_db failed: %s",
-                traceback.format_exc(),
-            )
+            try:
+                await self._update_team_db(
+                    response_cost=response_cost,
+                    team_id=team_id,
+                    user_id=user_id,
+                    prisma_client=prisma_client,
+                )
+            except Exception:
+                verbose_proxy_logger.debug(
+                    "_batch_database_updates: _update_team_db failed: %s",
+                    traceback.format_exc(),
+                )
 
-        try:
-            await self._update_org_db(
-                response_cost=response_cost,
-                org_id=org_id,
-                prisma_client=prisma_client,
-            )
-        except Exception:
-            verbose_proxy_logger.debug(
-                "_batch_database_updates: _update_org_db failed: %s",
-                traceback.format_exc(),
-            )
+            try:
+                await self._update_org_db(
+                    response_cost=response_cost,
+                    org_id=org_id,
+                    prisma_client=prisma_client,
+                )
+            except Exception:
+                verbose_proxy_logger.debug(
+                    "_batch_database_updates: _update_org_db failed: %s",
+                    traceback.format_exc(),
+                )
 
-        try:
-            await self._update_tag_db(
-                response_cost=response_cost,
-                request_tags=request_tags,
-                prisma_client=prisma_client,
-            )
-        except Exception:
-            verbose_proxy_logger.debug(
-                "_batch_database_updates: _update_tag_db failed: %s",
-                traceback.format_exc(),
-            )
+            try:
+                await self._update_tag_db(
+                    response_cost=response_cost,
+                    request_tags=request_tags,
+                    prisma_client=prisma_client,
+                )
+            except Exception:
+                verbose_proxy_logger.debug(
+                    "_batch_database_updates: _update_tag_db failed: %s",
+                    traceback.format_exc(),
+                )
 
-        _agent_id_for_spend = payload_copy.get("agent_id")
-        try:
-            await self._update_agent_db(
-                response_cost=response_cost,
-                agent_id=_agent_id_for_spend,
-                prisma_client=prisma_client,
-            )
-        except Exception:
+            _agent_id_for_spend = payload_copy.get("agent_id")
+            try:
+                await self._update_agent_db(
+                    response_cost=response_cost,
+                    agent_id=_agent_id_for_spend,
+                    prisma_client=prisma_client,
+                )
+            except Exception:
+                verbose_proxy_logger.debug(
+                    "_batch_database_updates: _update_agent_db failed: %s",
+                    traceback.format_exc(),
+                )
+        else:
             verbose_proxy_logger.debug(
-                "_batch_database_updates: _update_agent_db failed: %s",
-                traceback.format_exc(),
+                "_batch_database_updates: skip_spend_counters=True, skipping budget counter updates"
             )
 
         try:
