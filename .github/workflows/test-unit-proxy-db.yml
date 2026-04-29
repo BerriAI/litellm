@@ -119,7 +119,9 @@ jobs:
 
           # ---- test_proxy_utils.py, single shard, worksteal distribution ----
           - test-group: proxy-utils
-            test-path: "tests/proxy_unit_tests/test_proxy_utils.py"
+            test-path: >-
+              tests/proxy_unit_tests/test_proxy_utils.py
+              tests/proxy_unit_tests/test_deprecated_key_lookup.py
             workers: 4
             dist: worksteal
             timeout: 15
