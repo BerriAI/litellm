@@ -17327,7 +17327,8 @@
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_response_schema": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_tool_choice": true
     },
     "github_copilot/gpt-5-mini": {
         "litellm_provider": "github_copilot",
@@ -17338,7 +17339,8 @@
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_response_schema": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_tool_choice": true
     },
     "github_copilot/gpt-5.1": {
         "litellm_provider": "github_copilot",
@@ -17353,7 +17355,8 @@
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_response_schema": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_tool_choice": true
     },
     "github_copilot/gpt-5.1-codex-max": {
         "litellm_provider": "github_copilot",
@@ -17367,7 +17370,8 @@
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_response_schema": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_tool_choice": true
     },
     "github_copilot/gpt-5.2": {
         "litellm_provider": "github_copilot",
@@ -17382,7 +17386,8 @@
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_response_schema": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_tool_choice": true
     },
     "github_copilot/gpt-5.3-codex": {
         "litellm_provider": "github_copilot",
@@ -17396,7 +17401,8 @@
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_response_schema": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_tool_choice": true
     },
     "github_copilot/text-embedding-3-small": {
         "litellm_provider": "github_copilot",
@@ -17429,7 +17435,8 @@
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_response_schema": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_tool_choice": true
     },
     "chatgpt/gpt-5.4-pro": {
         "litellm_provider": "chatgpt",
@@ -17443,7 +17450,8 @@
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_response_schema": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_tool_choice": true
     },
     "chatgpt/gpt-5.3-codex": {
         "litellm_provider": "chatgpt",
@@ -17457,7 +17465,8 @@
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_response_schema": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_tool_choice": true
     },
     "chatgpt/gpt-5.3-codex-spark": {
         "litellm_provider": "chatgpt",
@@ -17471,7 +17480,8 @@
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_response_schema": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_tool_choice": true
     },
     "chatgpt/gpt-5.3-instant": {
         "litellm_provider": "chatgpt",
@@ -17486,7 +17496,8 @@
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_response_schema": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_tool_choice": true
     },
     "chatgpt/gpt-5.3-chat-latest": {
         "litellm_provider": "chatgpt",
@@ -17501,7 +17512,8 @@
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_response_schema": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_tool_choice": true
     },
     "chatgpt/gpt-5.2-codex": {
         "litellm_provider": "chatgpt",
@@ -17515,7 +17527,8 @@
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_response_schema": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_tool_choice": true
     },
     "chatgpt/gpt-5.2": {
         "litellm_provider": "chatgpt",
@@ -17530,7 +17543,8 @@
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_response_schema": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_tool_choice": true
     },
     "chatgpt/gpt-5.1-codex-max": {
         "litellm_provider": "chatgpt",
@@ -17544,7 +17558,8 @@
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_response_schema": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_tool_choice": true
     },
     "chatgpt/gpt-5.1-codex-mini": {
         "litellm_provider": "chatgpt",
@@ -17558,7 +17573,8 @@
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_response_schema": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_tool_choice": true
     },
     "gigachat/GigaChat-2-Lite": {
         "input_cost_per_token": 0.0,
@@ -17674,7 +17690,8 @@
         "max_tokens": 32000,
         "mode": "chat",
         "output_cost_per_token": 1.4e-05,
-        "supports_function_calling": true
+        "supports_function_calling": true,
+        "supports_tool_choice": true
     },
     "gmi/openai/gpt-5.1": {
         "input_cost_per_token": 1.25e-06,
@@ -17684,7 +17701,8 @@
         "max_tokens": 32000,
         "mode": "chat",
         "output_cost_per_token": 1e-05,
-        "supports_function_calling": true
+        "supports_function_calling": true,
+        "supports_tool_choice": true
     },
     "gmi/openai/gpt-5": {
         "input_cost_per_token": 1.25e-06,
@@ -17694,7 +17712,8 @@
         "max_tokens": 32000,
         "mode": "chat",
         "output_cost_per_token": 1e-05,
-        "supports_function_calling": true
+        "supports_function_calling": true,
+        "supports_tool_choice": true
     },
     "gmi/openai/gpt-4o": {
         "input_cost_per_token": 2.5e-06,
@@ -27868,21 +27887,24 @@
         "mode": "responses",
         "supports_web_search": true,
         "supports_reasoning": true,
-        "supports_function_calling": true
+        "supports_function_calling": true,
+        "supports_tool_choice": true
     },
     "perplexity/openai/gpt-5.1": {
         "litellm_provider": "perplexity",
         "mode": "responses",
         "supports_web_search": true,
         "supports_reasoning": false,
-        "supports_function_calling": true
+        "supports_function_calling": true,
+        "supports_tool_choice": true
     },
     "perplexity/openai/gpt-5-mini": {
         "litellm_provider": "perplexity",
         "mode": "responses",
         "supports_web_search": true,
         "supports_reasoning": false,
-        "supports_function_calling": true
+        "supports_function_calling": true,
+        "supports_tool_choice": true
     },
     "perplexity/anthropic/claude-opus-4-6": {
         "litellm_provider": "perplexity",
@@ -28485,7 +28507,8 @@
         "litellm_provider": "replicate",
         "mode": "chat",
         "supports_function_calling": true,
-        "supports_system_messages": true
+        "supports_system_messages": true,
+        "supports_tool_choice": true
     },
     "replicate/openai/gpt-5-mini": {
         "input_cost_per_token": 2.5e-07,
