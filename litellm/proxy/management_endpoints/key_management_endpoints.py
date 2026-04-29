@@ -3032,7 +3032,11 @@ async def generate_key_helper_fn(  # noqa: PLR0915
     access_group_ids: Optional[list] = None,
     budget_limits: Optional[list] = None,  # multiple concurrent budget windows
 ):
-    from litellm.proxy.proxy_server import premium_user, prisma_client, user_api_key_cache
+    from litellm.proxy.proxy_server import (
+        premium_user,
+        prisma_client,
+        user_api_key_cache,
+    )
 
     if prisma_client is None:
         raise Exception(
