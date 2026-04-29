@@ -3,7 +3,10 @@
 from typing import Optional, Union
 
 import litellm
-from litellm.utils import _is_explicitly_disabled_factory, _supports_factory
+from litellm.utils import (
+    _is_explicitly_disabled_factory,
+    _supports_factory,
+)
 
 from .gpt_transformation import OpenAIGPTConfig
 
@@ -162,12 +165,12 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
                 "extra_headers",
             ]
 
-        from litellm.utils import supports_tool_choice
-
         base_gpt_series_params = super().get_supported_openai_params(model=model)
         gpt_5_only_params = ["reasoning_effort", "verbosity"]
         base_gpt_series_params.extend(gpt_5_only_params)
-        if not supports_tool_choice(model=model):
+        if _is_explicitly_disabled_factory(
+            model=model, custom_llm_provider=None, key="supports_tool_choice"
+        ):
             base_gpt_series_params.remove("tool_choice")
 
         non_supported_params = [

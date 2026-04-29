@@ -71,11 +71,6 @@ class AzureOpenAIGPT5Config(AzureOpenAIConfig, OpenAIGPT5Config):
         """
         params = OpenAIGPT5Config.get_supported_openai_params(self, model=model)
 
-        # Azure supports tool_choice for GPT-5 deployments, but the base GPT-5 config
-        # can drop it when the deployment name isn't in the OpenAI model registry.
-        if "tool_choice" not in params:
-            params.append("tool_choice")
-
         # Only gpt-5.2+ has been verified to support logprobs on Azure.
         # The base OpenAI class includes logprobs for gpt-5.1+, but Azure
         # hasn't verified support for gpt-5.1, so remove them unless gpt-5.2/5.4+.
