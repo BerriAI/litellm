@@ -150,6 +150,7 @@ class HostedVLLMEmbeddingConfig(BaseEmbeddingConfig):
             "dimensions",
             "encoding_format",
             "user",
+            "truncate_prompt_tokens",
         ]
 
     def map_openai_params(
