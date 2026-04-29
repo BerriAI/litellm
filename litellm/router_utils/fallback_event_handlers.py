@@ -119,10 +119,22 @@ async def run_async_fallback(
 
     error_from_fallbacks = original_exception
 
+    # Snapshot original kwargs before the fallback loop so that each
+    # iteration starts from a clean, unmutated copy.
+    from litellm.litellm_core_utils.core_helpers import safe_deep_copy
+
+    base_kwargs = safe_deep_copy(kwargs)
+
     for mg in fallback_model_group:
         if mg == original_model_group:
             continue
         try:
+            # Each iteration gets a fresh copy from the clean original
+            # to prevent provider-specific mutations (e.g., Bedrock
+            # popping 'tools' from optional_params) from corrupting
+            # subsequent fallback calls. See: #24764
+            kwargs = safe_deep_copy(base_kwargs)
+
             # LOGGING
             kwargs = litellm_router.log_retry(kwargs=kwargs, e=original_exception)
             verbose_router_logger.info(f"Falling back to model_group = {mg}")
@@ -255,3 +267,4 @@ def run_non_standard_fallback_format(
     fallbacks: Union[List[str], List[Dict[str, Any]]], model_group: str
 ):
     pass
+
