@@ -46,6 +46,8 @@ interface GlobalRetryPolicyObject {
   [retryPolicyKey: string]: number;
 }
 
+const HEALTH_PAGE_SIZE = 50;
+
 const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({ premiumUser, teams }) => {
   const { accessToken, token, userRole, userId: userID } = useAuthorized();
   const [addModelForm] = Form.useForm();
@@ -63,7 +65,6 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({ premiumUser, te
   const [selectedTeamId, setSelectedTeamId] = useState<string | null>(null);
   const [selectedTabIndex, setSelectedTabIndex] = useState(0);
   const [healthCurrentPage, setHealthCurrentPage] = useState(1);
-  const healthPageSize = 50;
   const [showMissingProviderBanner, setShowMissingProviderBanner] = useState(() => {
     if (typeof window !== "undefined") {
       return localStorage.getItem("hideMissingProviderBanner") !== "true";
@@ -75,7 +76,7 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({ premiumUser, te
   const { data: modelDataResponse, isLoading: isLoadingModels, refetch: refetchModels } = useModelsInfo();
   const { data: healthModelDataResponse, isLoading: isLoadingHealthModels } = useModelsInfo(
     healthCurrentPage,
-    healthPageSize,
+    HEALTH_PAGE_SIZE,
   );
   const { data: modelCostMapData, isLoading: isLoadingModelCostMap } = useModelCostMap();
   const { data: credentialsResponse, isLoading: isLoadingCredentials } = useCredentials();
@@ -141,9 +142,9 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({ premiumUser, te
       total_count: healthModelDataResponse?.total_count ?? 0,
       current_page: healthModelDataResponse?.current_page ?? healthCurrentPage,
       total_pages: healthModelDataResponse?.total_pages ?? 1,
-      size: healthModelDataResponse?.size ?? healthPageSize,
+      size: healthModelDataResponse?.size ?? HEALTH_PAGE_SIZE,
     };
-  }, [healthModelDataResponse, healthCurrentPage, healthPageSize]);
+  }, [healthModelDataResponse, healthCurrentPage]);
 
   const isProxyAdmin = userRole && isProxyAdminRole(userRole);
   const isInternalUser = userRole && internalUserRoles.includes(userRole);
@@ -469,7 +470,7 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({ premiumUser, te
                     isLoading={isLoadingHealthModels}
                     paginationMeta={healthPaginationMeta}
                     currentPage={healthCurrentPage}
-                    pageSize={healthPageSize}
+                    pageSize={HEALTH_PAGE_SIZE}
                     onPageChange={setHealthCurrentPage}
                   />
                 </TabPanel>
