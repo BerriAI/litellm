@@ -77,9 +77,7 @@ async def create_task(
 ) -> Any:
     return await prisma_client.db.litellm_scheduledtasktable.create(
         data={
-            # Prisma exposes the FK via the relation field (`owner_key`),
-            # not the scalar column. Use connect to satisfy the input type.
-            "owner_key": {"connect": {"token": owner_token}},
+            "owner_token": owner_token,
             "user_id": user_id,
             "team_id": team_id,
             "agent_id": agent_id,

@@ -40,13 +40,6 @@ CREATE INDEX "LiteLLM_ScheduledTaskTable_team_id_idx"
 CREATE INDEX "LiteLLM_ScheduledTaskTable_agent_id_status_idx"
     ON "LiteLLM_ScheduledTaskTable" ("agent_id", "status");
 
--- AddForeignKey
-ALTER TABLE "LiteLLM_ScheduledTaskTable"
-    ADD CONSTRAINT "LiteLLM_ScheduledTaskTable_owner_token_fkey"
-    FOREIGN KEY ("owner_token")
-    REFERENCES "LiteLLM_VerificationToken" ("token")
-    ON DELETE CASCADE ON UPDATE CASCADE;
-
 -- Hand-appended (Prisma cannot express partial indexes or CHECK constraints):
 
 -- Partial index over rows the ticker actually scans.

@@ -410,7 +410,6 @@ model LiteLLM_VerificationToken {
     litellm_project_table LiteLLM_ProjectTable?   @relation(fields: [project_id], references: [project_id])
     object_permission LiteLLM_ObjectPermissionTable?   @relation(fields: [object_permission_id], references: [object_permission_id])
     jwt_key_mappings LiteLLM_JWTKeyMapping[]
-    scheduled_tasks LiteLLM_ScheduledTaskTable[]
 
     // SELECT COUNT(*) FROM (SELECT "public"."LiteLLM_VerificationToken"."token" FROM "public"."LiteLLM_VerificationToken" WHERE ("public"."LiteLLM_VerificationToken"."user_id" = $1 AND ("public"."LiteLLM_VerificationToken"."team_id" IS NULL OR "public"."LiteLLM_VerificationToken"."team_id" <> $2)) OFFSET $3 ) AS "sub"
     // SELECT ... FROM "public"."LiteLLM_VerificationToken" WHERE "public"."LiteLLM_VerificationToken"."user_id" = $1 OFFSET $2
@@ -1295,8 +1294,12 @@ model LiteLLM_AdaptiveRouterSession {
 
 model LiteLLM_ScheduledTaskTable {
   task_id              String    @id @default(uuid())
+  // owner_token holds the hashed verification token of the calling key.
+  // Intentionally not declared as a foreign key — the proxy's master key
+  // has no row in LiteLLM_VerificationToken, so a hard FK would block any
+  // master-key caller from creating a task. Cleanup of orphaned rows is
+  // an operator responsibility.
   owner_token          String
-  owner_key            LiteLLM_VerificationToken @relation(fields: [owner_token], references: [token], onDelete: Cascade)
   user_id              String?
   team_id              String?
   agent_id             String?
