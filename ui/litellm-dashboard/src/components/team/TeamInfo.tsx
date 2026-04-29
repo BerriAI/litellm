@@ -46,6 +46,7 @@ import EditLoggingSettings from "./EditLoggingSettings";
 import RouterSettingsAccordion, { RouterSettingsAccordionRef } from "../common_components/RouterSettingsAccordion";
 import MemberModal from "./EditMembership";
 import MemberPermissions from "./member_permissions";
+import MyUserTab from "./MyUserTab";
 import {
   getTeamInfoDefaultTab,
   getTeamInfoVisibleTabs,
@@ -852,6 +853,11 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                 />
               </Grid>
             ),
+          },
+          {
+            key: TEAM_INFO_TAB_KEYS.MY_USER,
+            label: TEAM_INFO_TAB_LABELS[TEAM_INFO_TAB_KEYS.MY_USER],
+            children: <MyUserTab teamId={teamId} />,
           },
           {
             key: TEAM_INFO_TAB_KEYS.VIRTUAL_KEYS,
