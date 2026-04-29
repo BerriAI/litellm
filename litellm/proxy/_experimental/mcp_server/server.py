@@ -2710,6 +2710,8 @@ if MCP_AVAILABLE:
                         await server.run(streams[0], streams[1], options)
                     except Exception as session_e:
                         verbose_logger.exception(f"Error in SSE session: {session_e}")
+        except HTTPException:
+            raise
         except Exception as e:
             verbose_logger.exception(f"Error handling MCP request: {e}")
             # Instead of re-raising, try to send a graceful error response
