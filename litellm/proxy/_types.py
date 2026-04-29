@@ -904,6 +904,7 @@ class LiteLLM_ObjectPermissionBase(LiteLLMPydanticObjectBase):
     agents: Optional[List[str]] = None
     agent_access_groups: Optional[List[str]] = None
     models: Optional[List[str]] = None
+    search_tools: Optional[List[str]] = None
 
 
 class BudgetLimitEntry(LiteLLMPydanticObjectBase):
@@ -1695,28 +1696,6 @@ class OrgMember(MemberBase):
     ]
 
 
-class SearchProviderCredentials(LiteLLMPydanticObjectBase):
-    """
-    Per-team credentials for a search provider.
-    """
-
-    api_key: Optional[str] = None
-    api_base: Optional[str] = None
-
-
-class TeamSearchProviderConfig(LiteLLMPydanticObjectBase):
-    """
-    Structured team-level search provider credentials.
-    Stored in team metadata under `search_provider_config`.
-    """
-
-    tavily: Optional[SearchProviderCredentials] = None
-    perplexity: Optional[SearchProviderCredentials] = None
-    brave: Optional[SearchProviderCredentials] = None
-    exa: Optional[SearchProviderCredentials] = None
-    serper: Optional[SearchProviderCredentials] = None
-
-
 class TeamBase(LiteLLMPydanticObjectBase):
     team_alias: Optional[str] = None
     team_id: Optional[str] = None
@@ -1738,7 +1717,6 @@ class TeamBase(LiteLLMPydanticObjectBase):
     )
 
     models: list = []
-    allowed_search_tools: list = []  # list of search_tool_name values team can access
     blocked: bool = False
     router_settings: Optional[dict] = None
     access_group_ids: Optional[List[str]] = None
@@ -1957,6 +1935,7 @@ class LiteLLM_ObjectPermissionTable(LiteLLMPydanticObjectBase):
     agent_access_groups: Optional[List[str]] = []
     mcp_toolsets: Optional[List[str]] = None
     blocked_tools: Optional[List[str]] = []
+    search_tools: Optional[List[str]] = []
 
 
 class LiteLLM_TeamTable(TeamBase):
@@ -2445,7 +2424,6 @@ class LiteLLM_VerificationToken(LiteLLMPydanticObjectBase):
     max_budget: Optional[float] = None
     expires: Optional[Union[str, datetime]] = None
     models: List = []
-    allowed_search_tools: List = []  # list of search_tool_name values key can access
     aliases: Dict = {}
     config: Dict = {}
     user_id: Optional[str] = None

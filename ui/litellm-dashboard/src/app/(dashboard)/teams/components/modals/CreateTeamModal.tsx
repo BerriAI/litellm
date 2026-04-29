@@ -17,7 +17,6 @@ import { useQueryClient } from "@tanstack/react-query";
 import NotificationsManager from "@/components/molecules/notifications_manager";
 import {
   fetchMCPAccessGroups,
-  fetchSearchTools,
   getGuardrailsList,
   getPoliciesList,
   Organization,
@@ -27,6 +26,7 @@ import {
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { organizationKeys } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 import MCPToolPermissions from "@/components/mcp_server_management/MCPToolPermissions";
+import SearchToolSelector from "@/components/SearchTools/SearchToolSelector";
 
 interface ModelAliases {
   [key: string]: string;
@@ -88,7 +88,6 @@ const CreateTeamModal = ({
   const [modelsToPick, setModelsToPick] = useState<string[]>([]);
   const [guardrailsList, setGuardrailsList] = useState<string[]>([]);
   const [policiesList, setPoliciesList] = useState<string[]>([]);
-  const [searchToolNames, setSearchToolNames] = useState<string[]>([]);
   const [mcpAccessGroups, setMcpAccessGroups] = useState<string[]>([]);
   const [mcpAccessGroupsLoaded, setMcpAccessGroupsLoaded] = useState(false);
 
@@ -167,24 +166,6 @@ const CreateTeamModal = ({
     fetchPolicies();
   }, [accessToken]);
 
-  useEffect(() => {
-    const loadSearchTools = async () => {
-      try {
-        if (!accessToken) return;
-        const response = await fetchSearchTools(accessToken);
-        const tools = Array.isArray(response?.data) ? response.data : [];
-        setSearchToolNames(
-          tools
-            .map((tool: any) => tool?.search_tool_name)
-            .filter((name: unknown): name is string => typeof name === "string" && name.length > 0),
-        );
-      } catch (error) {
-        console.error("Failed to fetch search tools for team create modal:", error);
-      }
-    };
-    loadSearchTools();
-  }, [accessToken]);
-
   const handleCreate = async (formValues: Record<string, any>) => {
     try {
       console.log(`formValues: ${JSON.stringify(formValues)}`);
@@ -239,15 +220,27 @@ const CreateTeamModal = ({
           }
         }
 
-        // Transform allowed_vector_store_ids and allowed_mcp_servers_and_groups into object_permission
+        // Transform integrations into object_permission (vector stores, MCP, agents, search tools)
+        const hasAgents =
+          formValues.allowed_agents_and_groups &&
+          ((formValues.allowed_agents_and_groups.agents?.length ?? 0) > 0 ||
+            (formValues.allowed_agents_and_groups.accessGroups?.length ?? 0) > 0);
+        const hasSearchTools =
+          Array.isArray(formValues.object_permission_search_tools) &&
+          formValues.object_permission_search_tools.length > 0;
+
         if (
           (formValues.allowed_vector_store_ids && formValues.allowed_vector_store_ids.length > 0) ||
           (formValues.allowed_mcp_servers_and_groups &&
             (formValues.allowed_mcp_servers_and_groups.servers?.length > 0 ||
               formValues.allowed_mcp_servers_and_groups.accessGroups?.length > 0 ||
-              formValues.allowed_mcp_servers_and_groups.toolPermissions))
+              formValues.allowed_mcp_servers_and_groups.toolPermissions)) ||
+          hasAgents ||
+          hasSearchTools
         ) {
-          formValues.object_permission = {};
+          if (!formValues.object_permission) {
+            formValues.object_permission = {};
+          }
           if (formValues.allowed_vector_store_ids && formValues.allowed_vector_store_ids.length > 0) {
             formValues.object_permission.vector_stores = formValues.allowed_vector_store_ids;
             delete formValues.allowed_vector_store_ids;
@@ -265,9 +258,6 @@ const CreateTeamModal = ({
 
           // Add tool permissions separately
           if (formValues.mcp_tool_permissions && Object.keys(formValues.mcp_tool_permissions).length > 0) {
-            if (!formValues.object_permission) {
-              formValues.object_permission = {};
-            }
             formValues.object_permission.mcp_tool_permissions = formValues.mcp_tool_permissions;
             delete formValues.mcp_tool_permissions;
           }
@@ -275,9 +265,6 @@ const CreateTeamModal = ({
           // Handle agent permissions
           if (formValues.allowed_agents_and_groups) {
             const { agents, accessGroups } = formValues.allowed_agents_and_groups;
-            if (!formValues.object_permission) {
-              formValues.object_permission = {};
-            }
             if (agents && agents.length > 0) {
               formValues.object_permission.agents = agents;
             }
@@ -285,6 +272,11 @@ const CreateTeamModal = ({
               formValues.object_permission.agent_access_groups = accessGroups;
             }
             delete formValues.allowed_agents_and_groups;
+          }
+
+          if (hasSearchTools) {
+            formValues.object_permission.search_tools = formValues.object_permission_search_tools;
+            delete formValues.object_permission_search_tools;
           }
         }
 
@@ -420,27 +412,6 @@ const CreateTeamModal = ({
                 </Select2.Option>
               ))}
             </Select2>
-          </Form.Item>
-
-          <Form.Item
-            label={
-              <span>
-                Allowed Search Tools{" "}
-                <Tooltip title="Select which search tools this team can access. Leave empty to allow all search tools.">
-                  <InfoCircleOutlined style={{ marginLeft: "4px" }} />
-                </Tooltip>
-              </span>
-            }
-            name="allowed_search_tools"
-          >
-            <Select2
-              mode="multiple"
-              placeholder="Select search tools (empty = all search tools allowed)"
-              style={{ width: "100%" }}
-              options={searchToolNames.map((name) => ({ label: name, value: name }))}
-              showSearch
-              optionFilterProp="label"
-            />
           </Form.Item>
 
           <Accordion className="mt-8 mb-8">
@@ -772,6 +743,34 @@ const CreateTeamModal = ({
                   value={form.getFieldValue("allowed_agents_and_groups")}
                   accessToken={accessToken || ""}
                   placeholder="Select agents or access groups (optional)"
+                />
+              </Form.Item>
+            </AccordionBody>
+          </Accordion>
+
+          <Accordion className="mt-8 mb-8">
+            <AccordionHeader>
+              <b>Search Tool Settings</b>
+            </AccordionHeader>
+            <AccordionBody>
+              <Form.Item
+                label={
+                  <span>
+                    Allowed Search Tools{" "}
+                    <Tooltip title="Select which search tools this team can access. Leave empty to allow all search tools.">
+                      <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                    </Tooltip>
+                  </span>
+                }
+                name="object_permission_search_tools"
+                className="mt-4"
+                help="Restrict which configured search tools keys on this team may call."
+              >
+                <SearchToolSelector
+                  onChange={(vals: string[]) => form.setFieldValue("object_permission_search_tools", vals)}
+                  value={form.getFieldValue("object_permission_search_tools")}
+                  accessToken={accessToken || ""}
+                  placeholder="Select search tools (optional, empty = all allowed)"
                 />
               </Form.Item>
             </AccordionBody>

@@ -2962,6 +2962,18 @@ async def can_user_call_model(
     )
 
 
+def _search_tool_names_from_object_permission(
+    object_permission: Optional[LiteLLM_ObjectPermissionTable],
+) -> List[str]:
+    """Return allowlisted search tool names from object_permission (empty = unrestricted)."""
+    if object_permission is None:
+        return []
+    raw = object_permission.search_tools
+    if not raw:
+        return []
+    return list(raw)
+
+
 def _can_object_call_search_tool(
     search_tool_name: str,
     allowed_search_tools: List[str],
@@ -3022,7 +3034,9 @@ async def can_key_call_search_tool(
     """
     return _can_object_call_search_tool(
         search_tool_name=search_tool_name,
-        allowed_search_tools=valid_token.allowed_search_tools or [],
+        allowed_search_tools=_search_tool_names_from_object_permission(
+            valid_token.object_permission
+        ),
         object_type="key",
     )
 
@@ -3051,7 +3065,9 @@ async def can_team_call_search_tool(
         
     return _can_object_call_search_tool(
         search_tool_name=search_tool_name,
-        allowed_search_tools=team_object.allowed_search_tools or [],
+        allowed_search_tools=_search_tool_names_from_object_permission(
+            team_object.object_permission
+        ),
         object_type="team",
     )
 

@@ -400,3 +400,48 @@ async def validate_key_mcp_servers_against_team(
                         )
                     },
                 )
+
+
+def _extract_requested_search_tools(object_permission: Optional[dict]) -> List[str]:
+    """Return search_tool_name values from a key's object_permission dict."""
+    if not object_permission or not isinstance(object_permission, dict):
+        return []
+    raw = object_permission.get("search_tools")
+    if not isinstance(raw, list):
+        return []
+    return [str(x) for x in raw if x]
+
+
+async def validate_key_search_tools_against_team(
+    object_permission: Optional[dict],
+    team_obj: Optional["LiteLLM_TeamTableCachedObj"],
+) -> None:
+    """
+    Validate key object_permission.search_tools is a subset of the team's allowlist.
+
+    Empty team allowlist means no restriction at team layer (skip).
+    """
+    requested = _extract_requested_search_tools(object_permission)
+    if not requested:
+        return
+
+    team_tools: List[str] = []
+    if team_obj is not None and team_obj.object_permission is not None:
+        st = team_obj.object_permission.search_tools
+        if st:
+            team_tools = list(st)
+
+    if not team_tools:
+        return
+
+    disallowed = set(requested) - set(team_tools)
+    if disallowed:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "error": (
+                    f"Key requests search tools not allowed by team '{team_obj.team_id}': "
+                    f"{sorted(disallowed)}. Team allows: {sorted(team_tools)}."
+                )
+            },
+        )
