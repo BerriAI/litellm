@@ -14,12 +14,10 @@ For non-Anthropic models (e.g., Bedrock, OpenAI, etc.):
   execution automatically and returns final response with file_ids
 
 Usage:
-    # Simple - LiteLLM handles everything automatically via proxy
-    # The container parameter triggers the SkillsInjectionHook
     response = await litellm.acompletion(
         model="gpt-4o-mini",
         messages=[{"role": "user", "content": "Create a bouncing ball GIF"}],
-        container={"skills": [{"skill_id": "litellm:skill_abc123"}]},
+        container={"skills": [{"skill_id": "litellm_skill_abc123"}]},
     )
     # Response includes file_ids for generated files
 """
@@ -43,7 +41,7 @@ class SkillsInjectionHook(CustomLogger):
     Pre/Post-call hook that processes skills from container.skills parameter.
 
     Pre-call (async_pre_call_hook):
-    - Skills with 'litellm:' prefix are fetched from LiteLLM DB
+    - Skills with 'litellm_' prefix are fetched from LiteLLM DB
     - For Anthropic models: native skills pass through, LiteLLM skills converted to tools
     - For non-Anthropic models: LiteLLM skills are converted to tools + execute_code tool
 
@@ -78,7 +76,7 @@ class SkillsInjectionHook(CustomLogger):
         Process skills from container.skills before the LLM call.
 
         1. Check if container.skills exists in request
-        2. Separate skills by prefix (litellm: vs native)
+        2. Separate skills by prefix (litellm_ vs native)
         3. Fetch LiteLLM skills from database
         4. For Anthropic: keep native skills in container
         5. For non-Anthropic: convert LiteLLM skills to tools, inject content, add execute_code
@@ -99,38 +97,84 @@ class SkillsInjectionHook(CustomLogger):
             f"SkillsInjectionHook: Processing {len(skills)} skills"
         )
 
+        from fastapi import HTTPException
+
+        from litellm.llms.litellm_proxy.skills.skill_applicator import (
+            SkillApplicator,
+            get_provider_from_model,
+        )
+
+        model = data.get("model", "")
+        provider = get_provider_from_model(model)
+        applicator = SkillApplicator()
+
         litellm_skills: List[LiteLLM_SkillsTable] = []
         anthropic_skills: List[Dict[str, Any]] = []
 
-        # Separate skills by prefix
+        # Classify and validate skills
         for skill in skills:
             if not isinstance(skill, dict):
                 continue
 
             skill_id = skill.get("skill_id", "")
-            if skill_id.startswith("litellm_"):
-                # Fetch from LiteLLM DB
+
+            if skill_id.startswith("litellm_skill_"):
+                # LiteLLM gateway-managed skill — fetch from DB
                 db_skill = await self._fetch_skill_from_db(skill_id)
                 if db_skill:
                     litellm_skills.append(db_skill)
                 else:
-                    verbose_proxy_logger.warning(
-                        f"SkillsInjectionHook: Skill '{skill_id}' not found in LiteLLM DB"
+                    raise HTTPException(
+                        status_code=404,
+                        detail=f"Skill not found: {skill_id}",
                     )
-            else:
-                # Native Anthropic skill - pass through
+            elif skill_id.startswith("skill_"):
+                # Native Anthropic skill — only allowed with native-skills providers
+                if not applicator.supports_native_skills(provider):
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Anthropic skill '{skill_id}' cannot be used with "
+                        f"model '{model}' (provider '{provider}' does not support "
+                        f"native skills). Use a litellm_skill_* ID instead.",
+                    )
                 anthropic_skills.append(skill)
+            else:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid skill_id '{skill_id}'. Must start with "
+                    f"'litellm_skill_' (gateway skill) or 'skill_' (Anthropic native).",
+                )
 
-        # Check if using messages API spec (anthropic_messages call type)
-        # Messages API always uses Anthropic-style tool format
+        # When the request comes through /v1/messages (anthropic_messages),
+        # we must inject into the top-level 'system' param because
+        # anthropic_messages() has separate 'messages' and 'system' params.
         use_anthropic_format = call_type == "anthropic_messages"
 
-        if len(litellm_skills) > 0:
+        if litellm_skills and applicator.supports_native_skills(provider):
+            # Native skills path: convert to tools + system prompt
             data = self._process_for_messages_api(
                 data=data,
                 litellm_skills=litellm_skills,
                 use_anthropic_format=use_anthropic_format,
             )
+        elif litellm_skills:
+            # Non-native path: inject into system prompt only
+            skill_contents = []
+            for skill in litellm_skills:
+                content = applicator._format_skill_content(skill)
+                if content:
+                    skill_contents.append(content)
+
+            if skill_contents:
+                data = self.prompt_handler.inject_skill_content_to_messages(
+                    data, skill_contents, use_anthropic_format=use_anthropic_format
+                )
+
+        # Rebuild container: keep only native Anthropic skills
+        if anthropic_skills:
+            data["container"] = {"skills": anthropic_skills}
+        else:
+            data.pop("container", None)
 
         return data
 
@@ -908,9 +952,5 @@ print('No executable skill module found')
         return response
 
 
-# Global instance for registration
+# Global instance for registration (registered when skills_mode is enabled)
 skills_injection_hook = SkillsInjectionHook()
-
-import litellm
-
-litellm.logging_callback_manager.add_litellm_callback(skills_injection_hook)
