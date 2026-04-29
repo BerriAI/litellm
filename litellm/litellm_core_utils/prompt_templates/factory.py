@@ -4046,6 +4046,13 @@ def _convert_to_bedrock_tool_call_result(
                     tool_result_content_blocks.append(
                         BedrockToolResultContentBlock(document=_block["document"])
                     )
+                else:
+                    verbose_logger.warning(
+                        "Bedrock Converse: unrecognized BedrockContentBlock keys "
+                        "%s for image_url tool-result block %s; dropping.",
+                        list(_block.keys()),
+                        content,
+                    )
             elif content["type"] == "file":
                 # Match the user-message path (_process_file_message): accept
                 # either file_data (base64 data URI) or file_id (server-side
@@ -4076,6 +4083,13 @@ def _convert_to_bedrock_tool_call_result(
                 elif "image" in _file_block:
                     tool_result_content_blocks.append(
                         BedrockToolResultContentBlock(image=_file_block["image"])
+                    )
+                else:
+                    verbose_logger.warning(
+                        "Bedrock Converse: unrecognized BedrockContentBlock keys "
+                        "%s for file tool-result block %s; dropping.",
+                        list(_file_block.keys()),
+                        content,
                     )
 
     message.get("name", "")
