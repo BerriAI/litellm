@@ -4854,14 +4854,17 @@ class ProxyUpdateSpend:
                         ) in end_user_list_transactions.items():
                             if litellm.max_end_user_budget is not None:
                                 pass
+                            _create_data: dict = {
+                                "user_id": end_user_id,
+                                "spend": response_cost,
+                                "blocked": False,
+                            }
+                            if litellm.max_end_user_budget_id is not None:
+                                _create_data["budget_id"] = litellm.max_end_user_budget_id
                             batcher.litellm_endusertable.upsert(
                                 where={"user_id": end_user_id},
                                 data={
-                                    "create": {
-                                        "user_id": end_user_id,
-                                        "spend": response_cost,
-                                        "blocked": False,
-                                    },
+                                    "create": _create_data,
                                     "update": {"spend": {"increment": response_cost}},
                                 },
                             )

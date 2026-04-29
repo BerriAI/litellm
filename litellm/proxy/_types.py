@@ -2974,6 +2974,7 @@ class LiteLLM_EndUserTable(LiteLLMPydanticObjectBase):
     spend: float = 0.0
     allowed_model_region: Optional[AllowedModelRegion] = None
     default_model: Optional[str] = None
+    budget_id: Optional[str] = None
     litellm_budget_table: Optional[LiteLLM_BudgetTable] = None
     object_permission_id: Optional[str] = None
     object_permission: Optional[LiteLLM_ObjectPermissionTable] = None

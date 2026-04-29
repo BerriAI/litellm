@@ -998,9 +998,26 @@ async def _apply_default_budget_to_end_user(
     if default_budget is not None:
         # Apply default budget to end user object
         end_user_obj.litellm_budget_table = default_budget
-        verbose_proxy_logger.debug(
-            f"Applied default budget {litellm.max_end_user_budget_id} to end user {end_user_obj.user_id}"
-        )
+
+        # Backfill budget_id to DB for existing users that were created without it
+        if end_user_obj.budget_id is None:
+            try:
+                await prisma_client.db.litellm_endusertable.update(
+                    where={"user_id": end_user_obj.user_id},
+                    data={"budget_id": litellm.max_end_user_budget_id},
+                )
+                end_user_obj.budget_id = litellm.max_end_user_budget_id
+                verbose_proxy_logger.debug(
+                    f"Persisted default budget_id {litellm.max_end_user_budget_id} to end user {end_user_obj.user_id}"
+                )
+            except Exception:
+                verbose_proxy_logger.debug(
+                    f"Failed to persist default budget_id for end user {end_user_obj.user_id}"
+                )
+        else:
+            verbose_proxy_logger.debug(
+                f"Applied default budget {litellm.max_end_user_budget_id} to end user {end_user_obj.user_id}"
+            )
 
     return end_user_obj
 
