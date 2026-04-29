@@ -21,27 +21,39 @@ MCP_TOOL_PREFIX_FORMAT = "{server_name}{separator}{tool_name}"
 # When LITELLM_USE_SHORT_MCP_TOOL_PREFIX is truthy the prefix attached to MCP
 # tool / prompt / resource / resource-template names switches from the
 # (potentially long) human-readable server name to a deterministic three
-# character base62 ID derived from the server's ``server_id``.
+# character ID derived from the server's ``server_id``.
 #
-# Why three characters and base62 ([0-9A-Za-z])?
-#   * 62**3 = 238_328 distinct IDs — the chance of a real local tool name
-#     happening to begin with the exact prefix LiteLLM assigned to a given
-#     MCP server is negligible in practice.
-#   * The IDs are short enough that prefixed tool names stay well under the
-#     60-character upper bound enforced by some model APIs (Anthropic etc.)
-#     even for long upstream tool names.
-#   * The mapping is deterministic (SHA-256 of ``server_id`` → first three
-#     base62 chars), which means the prefix is stable across processes,
-#     workers and restarts without any persistence layer.  Two servers with
-#     different ``server_id`` values can in principle hash to the same
-#     three chars, but for the reverse-lookup path we register every known
-#     form of the prefix anyway, so a collision only affects the cosmetic
-#     emitted name, not routing correctness.
+# Why three characters?
+#   * The first character is restricted to 52 alphabetic characters
+#     ([A-Za-z]) and the remaining two characters use the full base62
+#     alphabet ([0-9A-Za-z]).  That guarantees the prefix never starts
+#     with a digit so it remains a valid identifier for every model API
+#     (some providers historically required a leading alphabetic char).
+#   * 52 * 62 * 62 = 199_888 distinct IDs.  The chance of a real local
+#     tool name happening to begin with the exact prefix LiteLLM assigned
+#     to a given MCP server is negligible in practice.
+#   * The IDs are short enough that prefixed tool names stay well under
+#     the 60-character upper bound enforced by some model APIs (Anthropic
+#     etc.) even for long upstream tool names.
+#   * The mapping is deterministic (SHA-256 of ``server_id`` → three
+#     characters drawn from the alphabets above), so the prefix is stable
+#     across processes, workers and restarts without any persistence
+#     layer.  Two servers with different ``server_id`` values can in
+#     principle hash to the same three chars; that natural-hash collision
+#     IS a routing-correctness issue (the second registrant would otherwise
+#     have its tools misrouted to the first), so registration goes through
+#     ``MCPServerManager._assign_unique_short_prefix`` which rehashes with
+#     a deterministic attempt counter until it finds an unused prefix and
+#     caches the result on ``MCPServer.short_prefix``.  A collision is
+#     logged at INFO when it happens.
 #
 # This flag is intentionally opt-in for the first release so customers can
 # migrate.  It will become the default in a future release.
 SHORT_MCP_TOOL_PREFIX_LENGTH = 3
 _BASE62_ALPHABET = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+# Subset of _BASE62_ALPHABET used for the *first* character only, to
+# guarantee the prefix never starts with a digit.
+_BASE52_ALPHA_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
 
 
 def is_short_mcp_tool_prefix_enabled() -> bool:
@@ -55,15 +67,17 @@ def is_short_mcp_tool_prefix_enabled() -> bool:
 
 
 def compute_short_server_prefix(server_id: str, attempt: int = 0) -> str:
-    """Derive the deterministic three-character base62 prefix for a server.
+    """Derive the deterministic three-character prefix for a server.
 
     Uses SHA-256 of ``f"{server_id}#{attempt}"`` and folds the first eight
-    bytes into a base62 string.  Pass ``attempt > 0`` to rehash to a
-    different prefix when the natural hash collides with a prefix already
-    assigned to another server (see
-    ``MCPServerManager._assign_unique_short_prefix``).  An empty server_id
-    raises ValueError — short prefixes require a stable identifier to be
-    deterministic.
+    bytes into a fixed-length string whose first character is drawn from
+    ``_BASE52_ALPHA_ALPHABET`` (so the prefix never starts with a digit)
+    and whose remaining characters are drawn from the full base62
+    alphabet.  Pass ``attempt > 0`` to rehash to a different prefix when
+    the natural hash collides with a prefix already assigned to another
+    server (see ``MCPServerManager._assign_unique_short_prefix``).  An
+    empty ``server_id`` raises ``ValueError`` — short prefixes require a
+    stable identifier to be deterministic.
     """
     if not server_id:
         raise ValueError("compute_short_server_prefix requires a non-empty server_id")
@@ -71,10 +85,17 @@ def compute_short_server_prefix(server_id: str, attempt: int = 0) -> str:
     seed = server_id if attempt == 0 else f"{server_id}#{attempt}"
     digest = hashlib.sha256(seed.encode("utf-8")).digest()
     value = int.from_bytes(digest[:8], "big")
+
+    # Build chars from least-significant to most-significant; we reverse
+    # at the end so the first emitted char comes from the high-order
+    # bits of the digest (which is the position we constrain to be
+    # alphabetic).
     chars = []
-    for _ in range(SHORT_MCP_TOOL_PREFIX_LENGTH):
-        value, idx = divmod(value, len(_BASE62_ALPHABET))
-        chars.append(_BASE62_ALPHABET[idx])
+    for position in range(SHORT_MCP_TOOL_PREFIX_LENGTH):
+        is_first_char = position == SHORT_MCP_TOOL_PREFIX_LENGTH - 1
+        alphabet = _BASE52_ALPHA_ALPHABET if is_first_char else _BASE62_ALPHABET
+        value, idx = divmod(value, len(alphabet))
+        chars.append(alphabet[idx])
     return "".join(reversed(chars))
 
 
