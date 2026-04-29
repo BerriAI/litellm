@@ -1680,6 +1680,16 @@ class Usage(SafeAttributeModel, CompletionUsage):
         ):
             self._cache_read_input_tokens = params["prompt_cache_hit_tokens"]
 
+        ## OPENAI-STYLE MAPPING ##
+        # Providers using OpenAI format (Moonshot/Kimi, OpenAI with prompt caching,
+        # and other OpenAI-compatible providers) return cached tokens in
+        # prompt_tokens_details.cached_tokens but not as a top-level field.
+        # Propagate to _cache_read_input_tokens for spend logging consistency.
+        if self._cache_read_input_tokens == 0 and _prompt_tokens_details is not None:
+            _ptd_cached = getattr(_prompt_tokens_details, "cached_tokens", 0) or 0
+            if _ptd_cached > 0:
+                self._cache_read_input_tokens = _ptd_cached
+
         for k, v in params.items():
             setattr(self, k, v)
 
