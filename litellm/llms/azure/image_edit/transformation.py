@@ -20,6 +20,8 @@ class AzureImageEditConfig(OpenAIImageEditConfig):
         api_base: Optional[str] = None,
     ) -> dict:
         _litellm_params = GenericLiteLLMParams(**(litellm_params or {}))
+        # Only override when api_key is truthy; empty string is not a valid key
+        # and _base_validate_azure_environment treats None as "no explicit key".
         if api_key:
             _litellm_params.api_key = api_key
         return BaseAzureLLM._base_validate_azure_environment(
