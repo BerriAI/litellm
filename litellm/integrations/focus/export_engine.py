@@ -11,7 +11,8 @@ from litellm._logging import verbose_logger
 from .database import FocusLiteLLMDatabase
 from .destinations import FocusDestinationFactory, FocusTimeWindow
 from .serializers import FocusCsvSerializer, FocusParquetSerializer, FocusSerializer
-from .transformer import FocusTransformer
+from .spend_logs_database import FocusSpendLogsDatabase
+from .transformer import FocusSkuTransformer, FocusTransformer
 
 
 class FocusExportEngine:
@@ -24,6 +25,7 @@ class FocusExportEngine:
         export_format: str,
         prefix: str,
         destination_config: Optional[dict[str, Any]] = None,
+        sku_breakdown: bool = False,
     ) -> None:
         self.provider = provider
         self.export_format = export_format
@@ -34,8 +36,22 @@ class FocusExportEngine:
             config=destination_config,
         )
         self._serializer = self._init_serializer()
-        self._transformer = FocusTransformer()
-        self._database = FocusLiteLLMDatabase()
+        self._database, self._transformer = FocusExportEngine._make_pipeline(sku_breakdown)
+
+    @staticmethod
+    def _make_pipeline(
+        sku_breakdown: bool,
+    ) -> tuple["FocusSpendLogsDatabase | FocusLiteLLMDatabase", "FocusSkuTransformer | FocusTransformer"]:
+        """Return the (database, transformer) pair for the given breakdown mode.
+
+        Single source of truth for SKU dispatch — used by both the engine
+        constructor and the dry-run endpoint so both stay in sync automatically.
+        """
+        # SKU breakdown uses SpendLogs (per-request, has request_id) instead of
+        # DailyUserSpend (daily aggregate, no request_id).
+        database = FocusSpendLogsDatabase() if sku_breakdown else FocusLiteLLMDatabase()
+        transformer = FocusSkuTransformer() if sku_breakdown else FocusTransformer()
+        return database, transformer
 
     def _init_serializer(self) -> FocusSerializer:
         if self.export_format == "csv":
