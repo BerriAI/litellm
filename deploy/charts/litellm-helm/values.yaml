@@ -137,6 +137,24 @@ ingress:
   #    hosts:
   #      - chart-example.local
 
+httpRoute:
+  enabled: false
+  gatewayName: "" # required when httpRoute.enabled is true
+  gatewayNamespace: ""
+  gatewayGroup: ""
+  gatewayKind: ""
+  gatewaySectionName: ""
+  annotations: {}
+  hostnames: []
+  rules: []
+  # - matches:
+  #     - path:
+  #         type: PathPrefix
+  #         value: /
+  #   backendRefs:
+  #   - name: litellm
+  #     port: 4000
+
 # masterkey: changeit
 
 # if set, use this secret for the master key; otherwise, autogenerate a new one
