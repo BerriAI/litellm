@@ -12637,7 +12637,13 @@ async def update_config(  # noqa: PLR0915
             existing_cb = existing.get("success_callback")
             if isinstance(incoming_cb, list):
                 if isinstance(existing_cb, list):
-                    merged["success_callback"] = list(set(existing_cb + incoming_cb))
+                    # Normalize the existing list too — a row written by a
+                    # different code path may still hold mixed-case names,
+                    # which would otherwise dedup-miss against the lowercase
+                    # incoming entries.
+                    merged["success_callback"] = list(
+                        set(normalize_callback_names(existing_cb) + incoming_cb)
+                    )
                 else:
                     merged["success_callback"] = list(set(incoming_cb))
 
