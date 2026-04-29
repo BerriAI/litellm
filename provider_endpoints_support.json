@@ -2554,13 +2554,13 @@
         "rerank": false
       }
     },
-    "charity_engine": {
-      "display_name": "Charity Engine (`charity_engine`)",
-      "url": "https://docs.litellm.ai/docs/providers/charity_engine",
+    "rapid_mlx": {
+      "display_name": "Rapid-MLX (`rapid_mlx`)",
+      "url": "https://docs.litellm.ai/docs/providers/rapid_mlx",
       "endpoints": {
         "chat_completions": true,
-        "messages": true,
-        "responses": true,
+        "messages": false,
+        "responses": false,
         "embeddings": false,
         "image_generations": false,
         "audio_transcriptions": false,
