@@ -17,7 +17,13 @@ from litellm.cost_calculator import (
     response_cost_calculator,
 )
 from litellm.types.llms.openai import OpenAIRealtimeStreamList
-from litellm.types.utils import ModelResponse, PromptTokensDetailsWrapper, Usage
+from litellm.types.utils import (
+    CacheCreationTokenDetails,
+    CompletionTokensDetailsWrapper,
+    ModelResponse,
+    PromptTokensDetailsWrapper,
+    Usage,
+)
 from litellm.utils import TranscriptionResponse
 
 
@@ -1104,6 +1110,388 @@ def test_azure_ai_cache_cost_calculation():
     assert (
         abs(output_cost - expected_output_cost) < 1e-10
     ), f"Output cost mismatch: got {output_cost}, expected {expected_output_cost}"
+
+
+def _gpt_5_4_cached_usage() -> Usage:
+    return Usage(
+        prompt_tokens=6074,
+        completion_tokens=285,
+        total_tokens=6359,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            text_tokens=None,
+            audio_tokens=0,
+            image_tokens=None,
+            cached_tokens=3456,
+        ),
+        completion_tokens_details=CompletionTokensDetailsWrapper(
+            text_tokens=None,
+            audio_tokens=0,
+            image_tokens=None,
+            reasoning_tokens=0,
+            accepted_prediction_tokens=0,
+            rejected_prediction_tokens=0,
+        ),
+    )
+
+
+def _gpt_5_4_custom_cost_per_token():
+    return {
+        "input_cost_per_token": 2.5e-6,
+        "output_cost_per_token": 1.5e-5,
+        "cache_read_input_token_cost": 2.5e-7,
+    }
+
+
+def _expected_gpt_5_4_cached_costs():
+    raw_input_cost = (6074 - 3456) * 2.5e-6
+    cache_read_cost = 3456 * 2.5e-7
+    output_cost = 285 * 1.5e-5
+    return raw_input_cost, cache_read_cost, output_cost
+
+
+@pytest.mark.parametrize(
+    "model,custom_llm_provider",
+    [
+        ("openai/gpt-5.4", "openai"),
+        ("custom_openai/openai/gpt-5.4", "custom_openai"),
+    ],
+)
+def test_completion_cost_custom_cost_per_token_uses_cached_token_pricing(
+    model, custom_llm_provider
+):
+    """
+    Explicit custom token pricing must not bill cached input tokens at the
+    regular input rate. This covers both OpenAI-format names seen in proxy
+    chains: the public model name and the custom_openai/provider-prefixed key.
+    """
+    usage = _gpt_5_4_cached_usage()
+    response = ModelResponse(
+        id="test-id",
+        created=1234567890,
+        model=model,
+        object="chat.completion",
+        choices=[],
+        usage=usage,
+    )
+
+    result_cost = completion_cost(
+        completion_response=response,
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        custom_cost_per_token=_gpt_5_4_custom_cost_per_token(),
+    )
+
+    raw_input_cost, cache_read_cost, output_cost = _expected_gpt_5_4_cached_costs()
+    assert result_cost == pytest.approx(raw_input_cost + cache_read_cost + output_cost)
+
+
+def test_completion_cost_custom_cost_per_token_uses_flex_cache_pricing():
+    usage = Usage(
+        prompt_tokens=100,
+        completion_tokens=10,
+        total_tokens=110,
+        prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=40),
+    )
+    response = ModelResponse(
+        id="test-id",
+        created=1234567890,
+        model="openai/gpt-5.4",
+        object="chat.completion",
+        choices=[],
+        usage=usage,
+    )
+
+    result_cost = completion_cost(
+        completion_response=response,
+        model="openai/gpt-5.4",
+        custom_llm_provider="openai",
+        custom_cost_per_token={
+            "input_cost_per_token": 1e-6,
+            "output_cost_per_token": 10e-6,
+            "cache_read_input_token_cost": 0.5e-6,
+            "input_cost_per_token_flex": 0.2e-6,
+            "output_cost_per_token_flex": 2e-6,
+            "cache_read_input_token_cost_flex": 0.1e-6,
+        },
+        service_tier="flex",
+    )
+
+    expected_cost = 60 * 0.2e-6 + 40 * 0.1e-6 + 10 * 2e-6
+    assert result_cost == pytest.approx(expected_cost)
+
+
+def test_completion_cost_custom_cost_per_token_uses_above_threshold_cache_pricing():
+    usage = Usage(
+        prompt_tokens=210000,
+        completion_tokens=100,
+        total_tokens=210100,
+        prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=10000),
+    )
+    response = ModelResponse(
+        id="test-id",
+        created=1234567890,
+        model="openai/gpt-5.4",
+        object="chat.completion",
+        choices=[],
+        usage=usage,
+    )
+
+    result_cost = completion_cost(
+        completion_response=response,
+        model="openai/gpt-5.4",
+        custom_llm_provider="openai",
+        custom_cost_per_token={
+            "input_cost_per_token": 1e-6,
+            "output_cost_per_token": 2e-6,
+            "cache_read_input_token_cost": 0.1e-6,
+            "input_cost_per_token_above_200k_tokens": 3e-6,
+            "output_cost_per_token_above_200k_tokens": 4e-6,
+            "cache_read_input_token_cost_above_200k_tokens": 0.3e-6,
+        },
+    )
+
+    expected_cost = 200000 * 3e-6 + 10000 * 0.3e-6 + 100 * 4e-6
+    assert result_cost == pytest.approx(expected_cost)
+
+
+def test_completion_cost_custom_cost_per_token_uses_priority_above_threshold_cache_pricing():
+    usage = Usage(
+        prompt_tokens=210000,
+        completion_tokens=100,
+        total_tokens=210100,
+        prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=10000),
+    )
+    response = ModelResponse(
+        id="test-id",
+        created=1234567890,
+        model="openai/gpt-5.4",
+        object="chat.completion",
+        choices=[],
+        usage=usage,
+    )
+
+    result_cost = completion_cost(
+        completion_response=response,
+        model="openai/gpt-5.4",
+        custom_llm_provider="openai",
+        custom_cost_per_token={
+            "input_cost_per_token": 1e-6,
+            "output_cost_per_token": 2e-6,
+            "cache_read_input_token_cost": 0.1e-6,
+            "input_cost_per_token_above_200k_tokens": 3e-6,
+            "output_cost_per_token_above_200k_tokens": 4e-6,
+            "cache_read_input_token_cost_above_200k_tokens": 0.3e-6,
+            "input_cost_per_token_above_200k_tokens_priority": 5e-6,
+            "output_cost_per_token_above_200k_tokens_priority": 6e-6,
+            "cache_read_input_token_cost_above_200k_tokens_priority": 0.9e-6,
+        },
+        service_tier="priority",
+    )
+
+    expected_cost = 200000 * 5e-6 + 10000 * 0.9e-6 + 100 * 6e-6
+    assert result_cost == pytest.approx(expected_cost)
+
+
+def test_completion_cost_custom_cost_per_token_uses_priority_cache_creation_details():
+    usage = Usage(
+        prompt_tokens=150,
+        completion_tokens=10,
+        total_tokens=160,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            text_tokens=50,
+            cached_tokens=20,
+            cache_creation_tokens=80,
+            cache_creation_token_details=CacheCreationTokenDetails(
+                ephemeral_5m_input_tokens=30,
+                ephemeral_1h_input_tokens=50,
+            ),
+        ),
+    )
+    response = ModelResponse(
+        id="test-id",
+        created=1234567890,
+        model="openai/gpt-5.4",
+        object="chat.completion",
+        choices=[],
+        usage=usage,
+    )
+
+    result_cost = completion_cost(
+        completion_response=response,
+        model="openai/gpt-5.4",
+        custom_llm_provider="openai",
+        custom_cost_per_token={
+            "input_cost_per_token": 1e-6,
+            "output_cost_per_token": 2e-6,
+            "cache_read_input_token_cost": 0.1e-6,
+            "cache_creation_input_token_cost": 1.5e-6,
+            "cache_creation_input_token_cost_above_1hr": 2e-6,
+            "input_cost_per_token_priority": 3e-6,
+            "output_cost_per_token_priority": 4e-6,
+            "cache_read_input_token_cost_priority": 0.3e-6,
+            "cache_creation_input_token_cost_priority": 3.5e-6,
+        },
+        service_tier="priority",
+    )
+
+    expected_cost = 50 * 3e-6 + 20 * 0.3e-6 + 30 * 3.5e-6 + 50 * 2e-6 + 10 * 4e-6
+    assert result_cost == pytest.approx(expected_cost)
+
+
+@pytest.mark.parametrize(
+    "model,custom_llm_provider,registered_key",
+    [
+        ("openai/gpt-5.4", "openai", "openai/gpt-5.4"),
+        (
+            "custom_openai/openai/gpt-5.4",
+            "custom_openai",
+            "custom_openai/openai/gpt-5.4",
+        ),
+    ],
+)
+def test_completion_cost_model_map_pricing_uses_cached_tokens_without_custom_cost_per_token(
+    model, custom_llm_provider, registered_key
+):
+    """
+    The regular model-cost-map path already applies cache-read pricing without
+    passing completion_cost(custom_cost_per_token=...).
+    """
+    litellm.register_model(
+        {
+            registered_key: {
+                "key": registered_key,
+                "input_cost_per_token": 2.5e-6,
+                "output_cost_per_token": 1.5e-5,
+                "cache_read_input_token_cost": 2.5e-7,
+                "litellm_provider": custom_llm_provider,
+                "mode": "chat",
+            }
+        }
+    )
+    usage = _gpt_5_4_cached_usage()
+    response = ModelResponse(
+        id="test-id",
+        created=1234567890,
+        model=model,
+        object="chat.completion",
+        choices=[],
+        usage=usage,
+    )
+
+    result_cost = completion_cost(
+        completion_response=response,
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+    )
+
+    raw_input_cost, cache_read_cost, output_cost = _expected_gpt_5_4_cached_costs()
+    assert result_cost == pytest.approx(raw_input_cost + cache_read_cost + output_cost)
+
+
+def test_completion_cost_breakdown_splits_cache_read_cost_for_custom_openai_model_map():
+    """
+    Proxy logging should expose raw input cost and cache-read cost separately.
+    The total should still include both components.
+    """
+    model = "openai/gpt-5.4"
+    litellm.register_model(
+        {
+            "custom_openai/openai/gpt-5.4": {
+                "key": "custom_openai/openai/gpt-5.4",
+                "input_cost_per_token": 2.5e-6,
+                "output_cost_per_token": 1.5e-5,
+                "cache_read_input_token_cost": 2.5e-7,
+                "litellm_provider": "custom_openai",
+                "mode": "chat",
+            }
+        }
+    )
+
+    usage = _gpt_5_4_cached_usage()
+    response = ModelResponse(
+        id="test-id",
+        created=1234567890,
+        model=model,
+        object="chat.completion",
+        choices=[],
+        usage=usage,
+    )
+
+    class MockLoggingObj:
+        def __init__(self):
+            self.model = model
+            self.cost_breakdown = None
+
+        def set_cost_breakdown(self, **kwargs):
+            self.cost_breakdown = kwargs
+
+    logging_obj = MockLoggingObj()
+
+    result_cost = completion_cost(
+        completion_response=response,
+        model=model,
+        custom_llm_provider="custom_openai",
+        custom_pricing=True,
+        litellm_logging_obj=logging_obj,
+    )
+
+    raw_input_cost, cache_read_cost, output_cost = _expected_gpt_5_4_cached_costs()
+    assert result_cost == pytest.approx(raw_input_cost + cache_read_cost + output_cost)
+    assert logging_obj.cost_breakdown["input_cost"] == pytest.approx(raw_input_cost)
+    assert logging_obj.cost_breakdown["cache_read_cost"] == pytest.approx(
+        cache_read_cost
+    )
+    assert logging_obj.cost_breakdown["output_cost"] == pytest.approx(output_cost)
+
+
+def test_completion_cost_custom_cost_per_token_uses_top_level_cache_tokens_without_prompt_details():
+    """
+    Top-level cache token fields should drive both billing and logging breakdown
+    when prompt_tokens_details is absent.
+    """
+    usage = Usage(prompt_tokens=100, completion_tokens=10, total_tokens=110)
+    usage.prompt_tokens_details = None
+    usage.cache_read_input_tokens = 40
+    response = ModelResponse(
+        id="test-id",
+        created=1234567890,
+        model="openai/gpt-5.4",
+        object="chat.completion",
+        choices=[],
+        usage=usage,
+    )
+
+    class MockLoggingObj:
+        def __init__(self):
+            self.model = "openai/gpt-5.4"
+            self.cost_breakdown = None
+
+        def set_cost_breakdown(self, **kwargs):
+            self.cost_breakdown = kwargs
+
+    logging_obj = MockLoggingObj()
+
+    result_cost = completion_cost(
+        completion_response=response,
+        model="openai/gpt-5.4",
+        custom_llm_provider="openai",
+        custom_cost_per_token={
+            "input_cost_per_token": 1e-6,
+            "output_cost_per_token": 2e-6,
+            "cache_read_input_token_cost": 0.1e-6,
+        },
+        litellm_logging_obj=logging_obj,
+    )
+
+    raw_input_cost = 60 * 1e-6
+    cache_read_cost = 40 * 0.1e-6
+    output_cost = 10 * 2e-6
+    assert result_cost == pytest.approx(raw_input_cost + cache_read_cost + output_cost)
+    assert logging_obj.cost_breakdown["input_cost"] == pytest.approx(raw_input_cost)
+    assert logging_obj.cost_breakdown["cache_read_cost"] == pytest.approx(
+        cache_read_cost
+    )
+    assert logging_obj.cost_breakdown["output_cost"] == pytest.approx(output_cost)
 
 
 def test_cost_discount_vertex_ai():
