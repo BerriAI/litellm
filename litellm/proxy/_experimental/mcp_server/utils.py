@@ -2,10 +2,11 @@
 MCP Server Utilities
 """
 
-from typing import Any, Dict, Mapping, Optional, Tuple
+from typing import Any, Dict, Iterator, Mapping, Optional, Tuple
 
-import os
+import hashlib
 import importlib
+import os
 
 # Constants
 LITELLM_MCP_SERVER_NAME = "litellm-mcp-server"
@@ -13,6 +14,63 @@ LITELLM_MCP_SERVER_VERSION = "1.0.0"
 LITELLM_MCP_SERVER_DESCRIPTION = "MCP Server for LiteLLM"
 MCP_TOOL_PREFIX_SEPARATOR = os.environ.get("MCP_TOOL_PREFIX_SEPARATOR", "-")
 MCP_TOOL_PREFIX_FORMAT = "{server_name}{separator}{tool_name}"
+
+# ---------------------------------------------------------------------------
+# Short-ID tool prefix (opt-in)
+# ---------------------------------------------------------------------------
+# When LITELLM_USE_SHORT_MCP_TOOL_PREFIX is truthy the prefix attached to MCP
+# tool / prompt / resource / resource-template names switches from the
+# (potentially long) human-readable server name to a deterministic three
+# character base62 ID derived from the server's ``server_id``.
+#
+# Why three characters and base62 ([0-9A-Za-z])?
+#   * 62**3 = 238_328 distinct IDs — the chance of a real local tool name
+#     happening to begin with the exact prefix LiteLLM assigned to a given
+#     MCP server is negligible in practice.
+#   * The IDs are short enough that prefixed tool names stay well under the
+#     60-character upper bound enforced by some model APIs (Anthropic etc.)
+#     even for long upstream tool names.
+#   * The mapping is deterministic (SHA-256 of ``server_id`` → first three
+#     base62 chars), which means the prefix is stable across processes,
+#     workers and restarts without any persistence layer.  Two servers with
+#     different ``server_id`` values can in principle hash to the same
+#     three chars, but for the reverse-lookup path we register every known
+#     form of the prefix anyway, so a collision only affects the cosmetic
+#     emitted name, not routing correctness.
+#
+# This flag is intentionally opt-in for the first release so customers can
+# migrate.  It will become the default in a future release.
+SHORT_MCP_TOOL_PREFIX_LENGTH = 3
+_BASE62_ALPHABET = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+
+
+def is_short_mcp_tool_prefix_enabled() -> bool:
+    """Return True when the short-ID tool prefix mode is enabled.
+
+    Read at call time (not import time) so tests and runtime config changes
+    take effect without reimporting the module.
+    """
+    raw = os.environ.get("LITELLM_USE_SHORT_MCP_TOOL_PREFIX", "")
+    return raw.strip().lower() in ("1", "true", "yes", "on")
+
+
+def compute_short_server_prefix(server_id: str) -> str:
+    """Derive the deterministic three-character base62 prefix for a server.
+
+    Uses SHA-256 of the server_id and folds the first eight bytes into a
+    base62 string.  An empty server_id raises ValueError — short prefixes
+    require a stable identifier to be deterministic.
+    """
+    if not server_id:
+        raise ValueError("compute_short_server_prefix requires a non-empty server_id")
+
+    digest = hashlib.sha256(server_id.encode("utf-8")).digest()
+    value = int.from_bytes(digest[:8], "big")
+    chars = []
+    for _ in range(SHORT_MCP_TOOL_PREFIX_LENGTH):
+        value, idx = divmod(value, len(_BASE62_ALPHABET))
+        chars.append(_BASE62_ALPHABET[idx])
+    return "".join(reversed(chars))
 
 
 def is_mcp_available() -> bool:
@@ -82,7 +140,18 @@ def add_server_prefix_to_name(name: str, server_name: str) -> str:
 
 
 def get_server_prefix(server: Any) -> str:
-    """Return the prefix for a server: alias if present, else server_name, else server_id"""
+    """Return the prefix for a server.
+
+    When the short-prefix mode is enabled (``LITELLM_USE_SHORT_MCP_TOOL_PREFIX``)
+    a deterministic three-character base62 ID derived from ``server_id`` is
+    returned.  Otherwise we fall back to the historical behaviour: alias if
+    present, else server_name, else server_id.
+    """
+    if is_short_mcp_tool_prefix_enabled():
+        server_id = getattr(server, "server_id", None)
+        if server_id:
+            return compute_short_server_prefix(server_id)
+
     if hasattr(server, "alias") and server.alias:
         return server.alias
     if hasattr(server, "server_name") and server.server_name:
@@ -90,6 +159,35 @@ def get_server_prefix(server: Any) -> str:
     if hasattr(server, "server_id"):
         return server.server_id
     return ""
+
+
+def iter_known_server_prefixes(server: Any) -> Iterator[str]:
+    """Yield every prefix form that may appear in tool names for ``server``.
+
+    Always includes the *current* prefix returned by ``get_server_prefix``.
+    Additionally yields the historical (alias / server_name / server_id) and
+    short-ID forms so the routing layer can resolve tool names regardless of
+    which prefix mode was active when the client first observed them.
+    """
+    seen = set()
+
+    def _emit(value: Optional[str]) -> Iterator[str]:
+        if value and value not in seen:
+            seen.add(value)
+            yield value
+
+    yield from _emit(get_server_prefix(server))
+
+    server_id = getattr(server, "server_id", None)
+    if server_id:
+        try:
+            yield from _emit(compute_short_server_prefix(server_id))
+        except ValueError:
+            pass
+
+    yield from _emit(getattr(server, "alias", None))
+    yield from _emit(getattr(server, "server_name", None))
+    yield from _emit(server_id)
 
 
 def split_server_prefix_from_name(prefixed_name: str) -> Tuple[str, str]:
