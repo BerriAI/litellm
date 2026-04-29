@@ -288,7 +288,6 @@ class MCPClient:
         transport = await transport_ctx.__aenter__()
         try:
             read_stream, write_stream = transport[0], transport[1]
-            session_ctx = ClientSession(read_stream, write_stream)
             # Build session kwargs with optional callbacks
             session_kwargs: Dict[str, Any] = {}
             if self._sampling_callback is not None:

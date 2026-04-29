@@ -88,8 +88,8 @@ def _resolve_model_from_preferences(
     # Fall back to first available model
     if available_model_names:
         return available_model_names[0]
-    # Last resort
-    return "gpt-4o-mini"
+    # Last resort - use LiteLLM default or return None
+    return getattr(litellm, "default_mcp_sampling_model", None) or "gpt-4o-mini"
 
 
 def _convert_mcp_content_to_openai(

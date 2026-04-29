@@ -221,9 +221,6 @@ if MCP_AVAILABLE:
     ########################################################
     ############ Initialize the MCP Server #################
     ########################################################
-    from fastapi import APIRouter
-
-    router = APIRouter()
     server: Server = Server(
         name=LITELLM_MCP_SERVER_NAME,
         version=LITELLM_MCP_SERVER_VERSION,
@@ -2825,7 +2822,6 @@ if MCP_AVAILABLE:
         return {"enabled": MCP_AVAILABLE}
 
     # Include the MCP router
-    app.include_router(router)
     # Mount SSE handlers using the SDK's documented pattern.
     # We use app.mount for raw ASGI callables to avoid Starlette's request/response wrapper.
     app.mount("/sse", handle_sse_mcp_endpoint)

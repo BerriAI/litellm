@@ -13,7 +13,7 @@ from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
     MCPServer,
     MCPTransport,
 )
-from litellm.proxy._types import LiteLLM_ObjectPermissionTable
+from litellm.proxy._types import LiteLLM_ObjectPermissionTable, UserAPIKeyAuth
 from mcp.types import Tool as MCPTool, CallToolResult
 from mcp.types import TextContent
 
@@ -791,18 +791,31 @@ async def test_list_tools_rest_api_success():
             side_effect=lambda server_ids, client_ip: (server_ids, 0)
         )
 
-        # Mock the _get_tools_for_single_server function
+        # Mock the get_auth_context function to return our mock user auth
         with patch(
-            "litellm.proxy._experimental.mcp_server.rest_endpoints._get_tools_for_single_server"
-        ) as mock_get_tools:
-            mock_get_tools.return_value = mock_tools
+            "litellm.proxy._experimental.mcp_server.server.get_auth_context",
+            return_value=(
+                mock_user_auth,
+                None,
+                ["test-server-123"],
+                None,
+                None,
+                {},
+                None,
+            ),
+        ):
+            # Mock the _get_tools_for_single_server function
+            with patch(
+                "litellm.proxy._experimental.mcp_server.rest_endpoints._get_tools_for_single_server"
+            ) as mock_get_tools:
+                mock_get_tools.return_value = mock_tools
 
-            # Test successful case
-            response = await list_tool_rest_api(
-                request=mock_request,
-                server_id="test-server-123",
-                user_api_key_dict=mock_user_auth,
-            )
+                # Test successful case
+                response = await list_tool_rest_api(
+                    request=mock_request,
+                    server_id="test-server-123",
+                    user_api_key_dict=mock_user_auth,
+                )
 
             assert isinstance(response, dict)
             assert len(response["tools"]) == 1
@@ -2764,6 +2777,18 @@ async def test_call_mcp_tool_uses_manager_permission_lookup():
             "litellm.proxy._experimental.mcp_server.server.MCPRequestHandler.is_tool_allowed",
             return_value=True,
         ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.get_auth_context",
+            return_value=(
+                UserAPIKeyAuth(api_key="test", user_id="test"),
+                None,
+                ["test_server"],
+                None,
+                None,
+                {},
+                None,
+            ),
+        ),
     ):
         mock_get_allowed.return_value = [mock_server.server_id]
         mock_tool_registry.get_tool.return_value = None
@@ -2840,6 +2865,18 @@ async def test_call_mcp_tool_resolves_unprefixed_tool_name_and_checks_permission
             "litellm.proxy._experimental.mcp_server.server.MCPRequestHandler.is_tool_allowed",
             return_value=True,
         ) as mock_is_allowed,
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.get_auth_context",
+            return_value=(
+                UserAPIKeyAuth(api_key="test", user_id="test"),
+                None,
+                ["test_server"],
+                None,
+                None,
+                {},
+                None,
+            ),
+        ),
     ):
         mock_get_allowed.return_value = [mock_server.server_id]
         mock_tool_registry.get_tool.return_value = None
