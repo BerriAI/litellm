@@ -1137,6 +1137,11 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             non_default_params=non_default_params, optional_params=optional_params
         )
 
+        # Anthropic requires tools to be specified if tool_choice is specified.
+        # If tools were stripped out (e.g. intercepted), we must also remove tool_choice.
+        if "tool_choice" in optional_params and not optional_params.get("tools"):
+            optional_params.pop("tool_choice", None)
+
         return optional_params
 
     def _create_json_tool_call_for_response_format(
