@@ -323,6 +323,7 @@ from litellm.proxy.container_endpoints.endpoints import router as container_rout
 from litellm.proxy.credential_endpoints.endpoints import router as credential_router
 from litellm.proxy.db.db_transaction_queue.spend_log_cleanup import SpendLogCleanup
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
+from litellm.proxy.db.spend_counter_reseed import SpendCounterReseed
 from litellm.proxy.discovery_endpoints import ui_discovery_endpoints_router
 from litellm.proxy.fine_tuning_endpoints.endpoints import router as fine_tuning_router
 from litellm.proxy.fine_tuning_endpoints.endpoints import set_fine_tuning_config
@@ -407,9 +408,6 @@ from litellm.proxy.management_endpoints.organization_endpoints import (
     router as organization_router,
 )
 from litellm.proxy.management_endpoints.policy_endpoints import router as policy_router
-from litellm.proxy.management_endpoints.project_endpoints import (
-    router as project_router,
-)
 from litellm.proxy.management_endpoints.router_settings_endpoints import (
     router as router_settings_router,
 )
@@ -428,6 +426,7 @@ from litellm.proxy.management_endpoints.team_endpoints import (
 from litellm.proxy.management_endpoints.tool_management_endpoints import (
     router as tool_management_router,
 )
+from litellm.proxy.memory.memory_endpoints import router as memory_router
 from litellm.proxy.management_endpoints.ui_sso import (
     get_disabled_non_admin_personal_key_creation,
 )
@@ -498,14 +497,18 @@ from litellm.proxy.utils import (
     _get_redoc_url,
     _is_projected_spend_over_limit,
     _is_valid_team_configs,
+    get_config_param,
     get_custom_url,
     get_error_message_str,
     get_server_root_path,
     handle_exception_on_proxy,
     hash_password,
     hash_token,
+    invalidate_config_param,
+    litellm_config_cache,
     migrate_passwords_to_scrypt_async,
     model_dump_with_preserved_fields,
+    prefetch_config_params,
     update_spend,
 )
 from litellm.proxy.vector_store_endpoints.endpoints import router as vector_store_router
@@ -951,6 +954,17 @@ async def proxy_startup_event(app: FastAPI):  # noqa: PLR0915
         asyncio.create_task(
             _run_background_health_check()
         )  # start the background health check coroutine.
+
+    # Start adaptive-router queue flusher unconditionally — adaptive routers
+    # may be added later via `/config/reload`, and the flusher is a no-op when
+    # `llm_router.adaptive_routers` is empty. Per-router DB state is loaded
+    # lazily by the flusher on first tick (see `_state_loaded` flag) so
+    # hot-reloaded routers also get their persisted priors.
+    if llm_router is not None and getattr(llm_router, "adaptive_routers", None):
+        for _ar in llm_router.adaptive_routers.values():
+            await _ar.load_state_from_db(prisma_client)
+            _ar._state_loaded = True
+    asyncio.create_task(_adaptive_router_flusher_loop())
 
     ## [Optional] Initialize dd tracer
     ProxyStartupEvent._init_dd_tracer()
@@ -1766,7 +1780,8 @@ async def get_current_spend(counter_key: str, fallback_spend: float) -> float:
     Fallback chain:
     1. Redis counter (cross-pod, authoritative)
     2. In-memory counter (single-instance or Redis failure)
-    3. Cached object's .spend from DB (cold start, no counter yet)
+    3. Reseed from authoritative DB spend (counter expired, cross-pod stale)
+    4. Caller-supplied fallback (DB unavailable, cold start)
     """
     # 1. Try Redis first (cross-pod authoritative)
     if spend_counter_cache.redis_cache is not None:
@@ -1786,7 +1801,16 @@ async def get_current_spend(counter_key: str, fallback_spend: float) -> float:
     if val is not None:
         return float(val)
 
-    # 3. Final fallback: cached object's spend from DB
+    # 3. Reseed from DB - fallback_spend lags cross-pod, would allow bypass.
+    db_spend = await SpendCounterReseed.coalesced(
+        prisma_client=prisma_client,
+        spend_counter_cache=spend_counter_cache,
+        counter_key=counter_key,
+    )
+    if db_spend is not None:
+        return db_spend
+
+    # 4. Caller-supplied fallback (DB unavailable).
     return fallback_spend
 
 
@@ -1903,32 +1927,42 @@ async def _init_and_increment_spend_counter(
     increment: float,
 ):
     """
-    Initialize counter from cached object's DB-loaded spend if not yet set,
-    then atomically increment in both in-memory and Redis.
+    Initialize counter from the authoritative DB spend value if not yet
+    set, then atomically increment in both in-memory and Redis.
 
     On first access per pod:
-    1. Check spend_counter_cache (in-memory -> Redis via DualCache for init check)
-    2. If not found anywhere, read base spend from user_api_key_cache (DB-loaded object)
+    1. Check spend_counter_cache (in-memory -> Redis via DualCache)
+    2. If not found, reseed from the DB via `SpendCounterReseed.coalesced`.
+       Falls back to the cached object's `.spend` via user_api_key_cache
+       only if prisma is unavailable, since that value can lag the flusher.
     3. Seed counter via async_increment_cache (not async_set_cache) to avoid a
        check-then-set race: if two pods cold-start simultaneously, both may see
-       the counter as absent and seed it. Using increment instead of set means
-       the worst case is over-counting (conservative — blocks slightly early)
-       rather than under-counting (would allow overspend).
+       the counter as absent and seed it. Using increment means the worst case
+       is over-counting (conservative, blocks slightly early) rather than
+       under-counting (would allow overspend).
     4. Increment atomically (both in-memory + Redis)
     """
     current = await spend_counter_cache.async_get_cache(key=counter_key)
     if current is None:
-        source = await user_api_key_cache.async_get_cache(key=source_cache_key)
-        base_spend = 0.0
-        if source is not None:
-            if isinstance(source, dict):
-                base_spend = source.get("spend", 0.0) or 0.0
-            else:
-                base_spend = getattr(source, "spend", 0.0) or 0.0
-        if base_spend > 0:
-            await spend_counter_cache.async_increment_cache(
-                key=counter_key, value=base_spend
-            )
+        # Shares the per-counter lock with get_current_spend.
+        db_spend = await SpendCounterReseed.coalesced(
+            prisma_client=prisma_client,
+            spend_counter_cache=spend_counter_cache,
+            counter_key=counter_key,
+        )
+        if db_spend is None:
+            # DB unavailable - fall back to in-process cache (may be stale).
+            source = await user_api_key_cache.async_get_cache(key=source_cache_key)
+            base_spend: float = 0.0
+            if source is not None:
+                if isinstance(source, dict):
+                    base_spend = source.get("spend", 0.0) or 0.0
+                else:
+                    base_spend = getattr(source, "spend", 0.0) or 0.0
+            if base_spend > 0:
+                await spend_counter_cache.async_increment_cache(
+                    key=counter_key, value=base_spend
+                )
 
     await spend_counter_cache.async_increment_cache(key=counter_key, value=increment)
 
@@ -2442,6 +2476,38 @@ def _write_health_state_to_router_cache(
         )
 
 
+_ADAPTIVE_ROUTER_FLUSH_INTERVAL_SECONDS = 10
+
+
+async def _adaptive_router_flusher_loop():
+    """
+    Drain every AdaptiveRouter's in-memory state + session aggregators into
+    Postgres on a fixed cadence. Hot-path writes go to memory; this loop is
+    the only writer to the adaptive router DB tables.
+    """
+    global llm_router, prisma_client
+    while True:
+        try:
+            await asyncio.sleep(_ADAPTIVE_ROUTER_FLUSH_INTERVAL_SECONDS)
+            adaptive_routers = getattr(llm_router, "adaptive_routers", None) or {}
+            if not adaptive_routers or prisma_client is None:
+                continue
+            for ar in adaptive_routers.values():
+                # Lazy state load: covers adaptive routers registered via
+                # `/config/reload` after proxy boot.
+                if not getattr(ar, "_state_loaded", False):
+                    try:
+                        await ar.load_state_from_db(prisma_client)
+                    finally:
+                        ar._state_loaded = True
+                await ar.queue.flush_state_to_db(prisma_client)
+                await ar.queue.flush_session_to_db(prisma_client)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            verbose_proxy_logger.exception("adaptive_router flusher iteration failed")
+
+
 async def _run_background_health_check():
     """
     Periodically run health checks in the background on the endpoints.
@@ -2867,8 +2933,13 @@ class ProxyConfig:
             ## INIT PROXY REDIS USAGE CLIENT ##
             redis_usage_cache = litellm.cache.cache
             spend_counter_cache.redis_cache = redis_usage_cache
+            litellm_config_cache.redis_cache = redis_usage_cache
             # Note: PKCE verifier storage uses redis_usage_cache directly (not
             # user_api_key_cache) to avoid routing all API-key lookups through Redis.
+        elif litellm_config_cache.redis_cache is None:
+            verbose_proxy_logger.info(
+                "litellm_config_cache: no Redis configured; cluster-wide cache sharing disabled."
+            )
 
     def switch_on_llm_response_caching(self):
         """
@@ -4784,10 +4855,7 @@ class ProxyConfig:
             "environment_variables",
         ]
         for k in keys:
-            response = prisma_client.get_generic_data(
-                key="param_name", value=k, table_name="config"
-            )
-            _tasks.append(response)
+            _tasks.append(get_config_param(prisma_client, k))
 
         responses = await asyncio.gather(*_tasks)
         for response in responses:
@@ -4869,6 +4937,19 @@ class ProxyConfig:
         global llm_router, llm_model_list, master_key, general_settings
 
         try:
+            # warm the config cache so the per-param reads below all hit
+            await prefetch_config_params(
+                prisma_client,
+                [
+                    "general_settings",
+                    "router_settings",
+                    "litellm_settings",
+                    "environment_variables",
+                    "model_cost_map_reload_config",
+                    "anthropic_beta_headers_reload_config",
+                ],
+            )
+
             # Only load models from DB if "models" is in supported_db_objects (or if supported_db_objects is not set)
             if self._should_load_db_object(object_type="models"):
                 new_models = await self._get_models_from_db(prisma_client=prisma_client)
@@ -4878,8 +4959,8 @@ class ProxyConfig:
                     new_models=new_models, proxy_logging_obj=proxy_logging_obj
                 )
 
-            db_general_settings = await prisma_client.db.litellm_config.find_first(
-                where={"param_name": "general_settings"}
+            db_general_settings = await get_config_param(
+                prisma_client, "general_settings"
             )
 
             # update general settings
@@ -4972,10 +5053,7 @@ class ProxyConfig:
         from litellm.proxy.hooks.mcp_semantic_filter import SemanticToolFilterHook
 
         try:
-            # Load litellm_settings from DB
-            config_record = await prisma_client.db.litellm_config.find_unique(
-                where={"param_name": "litellm_settings"}
-            )
+            config_record = await get_config_param(prisma_client, "litellm_settings")
 
             if config_record is None or config_record.param_value is None:
                 return
@@ -5130,8 +5208,8 @@ class ProxyConfig:
         """
         try:
             # Get model cost map reload configuration from database
-            config_record = await prisma_client.db.litellm_config.find_unique(
-                where={"param_name": "model_cost_map_reload_config"}
+            config_record = await get_config_param(
+                prisma_client, "model_cost_map_reload_config"
             )
 
             if config_record is None or config_record.param_value is None:
@@ -5226,6 +5304,7 @@ class ProxyConfig:
                         },
                     },
                 )
+                await invalidate_config_param("model_cost_map_reload_config")
 
                 verbose_proxy_logger.info(
                     f"Model cost map reloaded successfully. Models count: {len(new_model_cost_map) if new_model_cost_map else 0}"
@@ -5245,8 +5324,8 @@ class ProxyConfig:
         """
         try:
             # Get anthropic beta headers reload configuration from database
-            config_record = await prisma_client.db.litellm_config.find_unique(
-                where={"param_name": "anthropic_beta_headers_reload_config"}
+            config_record = await get_config_param(
+                prisma_client, "anthropic_beta_headers_reload_config"
             )
 
             if config_record is None or config_record.param_value is None:
@@ -5334,6 +5413,7 @@ class ProxyConfig:
                         },
                     },
                 )
+                await invalidate_config_param("anthropic_beta_headers_reload_config")
 
                 # Count providers in config
                 provider_count = sum(
@@ -6626,6 +6706,10 @@ class ProxyStartupEvent:
         Args:
             scheduler: The scheduler to add the background jobs to
         """
+        global prisma_client
+        global proxy_logging_obj
+        global user_api_key_cache
+
         ########################################################
         # CloudZero Background Job
         ########################################################
@@ -6699,8 +6783,6 @@ class ProxyStartupEvent:
                 )
 
                 # Get prisma_client and proxy_logging_obj from global scope
-                global prisma_client
-                global proxy_logging_obj
                 if prisma_client is not None:
                     # Reuse the PodLockManager from db_spend_update_writer
                     pod_lock_manager = (
@@ -6728,6 +6810,83 @@ class ProxyStartupEvent:
         else:
             verbose_proxy_logger.debug(
                 "Key rotation disabled (set LITELLM_KEY_ROTATION_ENABLED=true to enable)"
+            )
+
+        await cls._initialize_expired_ui_session_key_cleanup_background_job(
+            scheduler=scheduler
+        )
+
+    @classmethod
+    async def _initialize_expired_ui_session_key_cleanup_background_job(
+        cls, scheduler: AsyncIOScheduler
+    ):
+        """
+        Initialize the expired UI session key cleanup background job.
+        """
+        global prisma_client
+        global proxy_logging_obj
+        global user_api_key_cache
+
+        ########################################################
+        # Expired UI Session Key Cleanup Background Job
+        ########################################################
+        from litellm.constants import (
+            EXPIRED_UI_SESSION_KEY_CLEANUP_JOB_NAME,
+            LITELLM_EXPIRED_UI_SESSION_KEY_CLEANUP_ENABLED,
+            LITELLM_EXPIRED_UI_SESSION_KEY_CLEANUP_INTERVAL_SECONDS,
+        )
+
+        expired_ui_session_key_cleanup_enabled: Optional[bool] = str_to_bool(
+            LITELLM_EXPIRED_UI_SESSION_KEY_CLEANUP_ENABLED
+        )
+        verbose_proxy_logger.debug(
+            "expired_ui_session_key_cleanup_enabled: "
+            f"{expired_ui_session_key_cleanup_enabled}"
+        )
+
+        if expired_ui_session_key_cleanup_enabled is True:
+            try:
+                from litellm.proxy.common_utils.expired_ui_session_key_cleanup_manager import (
+                    ExpiredUISessionKeyCleanupManager,
+                )
+
+                if prisma_client is not None:
+                    pod_lock_manager = (
+                        proxy_logging_obj.db_spend_update_writer.pod_lock_manager
+                    )
+                    expired_ui_session_key_cleanup_manager = (
+                        ExpiredUISessionKeyCleanupManager(
+                            prisma_client=prisma_client,
+                            user_api_key_cache=user_api_key_cache,
+                            pod_lock_manager=pod_lock_manager,
+                        )
+                    )
+                    verbose_proxy_logger.debug(
+                        "Expired UI session key cleanup background job scheduled "
+                        "every "
+                        f"{LITELLM_EXPIRED_UI_SESSION_KEY_CLEANUP_INTERVAL_SECONDS} "
+                        "seconds "
+                        "(LITELLM_EXPIRED_UI_SESSION_KEY_CLEANUP_ENABLED=true)"
+                    )
+                    scheduler.add_job(
+                        expired_ui_session_key_cleanup_manager.cleanup_expired_keys,
+                        "interval",
+                        seconds=LITELLM_EXPIRED_UI_SESSION_KEY_CLEANUP_INTERVAL_SECONDS,
+                        id=EXPIRED_UI_SESSION_KEY_CLEANUP_JOB_NAME,
+                    )
+                else:
+                    verbose_proxy_logger.warning(
+                        "Expired UI session key cleanup enabled but prisma_client "
+                        "not available"
+                    )
+            except Exception as e:
+                verbose_proxy_logger.warning(
+                    f"Failed to setup expired UI session key cleanup job: {e}"
+                )
+        else:
+            verbose_proxy_logger.debug(
+                "Expired UI session key cleanup disabled (set "
+                "LITELLM_EXPIRED_UI_SESSION_KEY_CLEANUP_ENABLED=true to enable)"
             )
 
     @classmethod
@@ -7246,6 +7405,7 @@ async def chat_completion(  # noqa: PLR0915
             and user_api_key_dict.agent_id is not None
         ):
             data["metadata"]["agent_id"] = user_api_key_dict.agent_id
+
     base_llm_response_processor = ProxyBaseLLMRequestProcessing(data=data)
     try:
         result = await base_llm_response_processor.base_process_llm_request(
@@ -12532,6 +12692,7 @@ async def update_config(  # noqa: PLR0915
                         "update": {"param_value": v},
                     },
                 )
+                await invalidate_config_param(k)
 
         ### OLD LOGIC [TODO] MOVE TO DB ###
 
@@ -12719,6 +12880,7 @@ async def update_config_general_settings(
             "update": {"param_value": json.dumps(general_settings)},  # type: ignore
         },
     )
+    await invalidate_config_param("general_settings")
 
     return response
 
@@ -13002,6 +13164,7 @@ async def delete_config_general_settings(
             "update": {"param_value": json.dumps(general_settings)},  # type: ignore
         },
     )
+    await invalidate_config_param("general_settings")
 
     return response
 
@@ -13367,6 +13530,7 @@ async def reload_model_cost_map(
                 },
             },
         )
+        await invalidate_config_param("model_cost_map_reload_config")
 
         models_count = len(new_model_cost_map) if new_model_cost_map else 0
         verbose_proxy_logger.info(
@@ -13436,6 +13600,7 @@ async def schedule_model_cost_map_reload(
                 },
             },
         )
+        await invalidate_config_param("model_cost_map_reload_config")
 
         verbose_proxy_logger.info(
             f"Model cost map reload scheduled for every {hours} hours"
@@ -13489,6 +13654,7 @@ async def cancel_model_cost_map_reload(
         await prisma_client.db.litellm_config.delete(
             where={"param_name": "model_cost_map_reload_config"}
         )
+        await invalidate_config_param("model_cost_map_reload_config")
 
         verbose_proxy_logger.info("Model cost map reload schedule cancelled")
 
@@ -13719,6 +13885,7 @@ async def reload_anthropic_beta_headers(
                 },
             },
         )
+        await invalidate_config_param("anthropic_beta_headers_reload_config")
 
         provider_count = sum(
             1 for k in new_config.keys() if k not in ["provider_aliases", "description"]
@@ -13792,6 +13959,7 @@ async def schedule_anthropic_beta_headers_reload(
                 },
             },
         )
+        await invalidate_config_param("anthropic_beta_headers_reload_config")
 
         verbose_proxy_logger.info(
             f"Anthropic beta headers reload scheduled for every {hours} hours"
@@ -13845,6 +14013,7 @@ async def cancel_anthropic_beta_headers_reload(
         await prisma_client.db.litellm_config.delete(
             where={"param_name": "anthropic_beta_headers_reload_config"}
         )
+        await invalidate_config_param("anthropic_beta_headers_reload_config")
 
         verbose_proxy_logger.info("Anthropic beta headers reload schedule cancelled")
 
@@ -13968,6 +14137,38 @@ async def home(request: Request):
     return "LiteLLM: RUNNING"
 
 
+@router.get(
+    "/adaptive_router/state",
+    tags=["adaptive_router"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def get_adaptive_router_state(
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """Return live bandit posteriors + queue depth for every configured adaptive router.
+
+    Admin-only. Returns 404 if no adaptive router is configured.
+
+    Response shape: `{"routers": [<snapshot>, ...]}` — one snapshot per
+    adaptive-router deployment. Each snapshot's `router_name` field identifies
+    which deployment it came from.
+    """
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+        raise HTTPException(
+            status_code=403,
+            detail={"error": CommonProxyErrors.not_allowed_access.value},
+        )
+    if llm_router is None or not llm_router.adaptive_routers:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": "No adaptive_router is configured on this proxy."},
+        )
+    snapshots = [
+        await ar.get_state_snapshot() for ar in llm_router.adaptive_routers.values()
+    ]
+    return {"routers": snapshots}
+
+
 @router.get("/routes", dependencies=[Depends(user_api_key_auth)])
 async def get_routes():
     """
@@ -14051,7 +14252,6 @@ app.include_router(team_router)
 app.include_router(ui_sso_router)
 app.include_router(scim_router)
 app.include_router(organization_router)
-app.include_router(project_router)
 app.include_router(customer_router)
 app.include_router(spend_management_router)
 app.include_router(cloudzero_router)
@@ -14076,6 +14276,7 @@ app.include_router(model_management_router)
 app.include_router(model_access_group_management_router)
 app.include_router(tag_management_router)
 app.include_router(tool_management_router)
+app.include_router(memory_router)
 app.include_router(cost_tracking_settings_router)
 app.include_router(router_settings_router)
 app.include_router(fallback_management_router)
