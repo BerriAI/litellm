@@ -2779,13 +2779,16 @@ class MCPServerManager:
             if existing_server is not None and existing_server.short_prefix:
                 new_server.short_prefix = existing_server.short_prefix
             new_registry[server.server_id] = new_server
-            await self._maybe_register_openapi_tools(new_server)
 
         # Swap in the new registry first so _assign_unique_short_prefix
         # sees the complete set when checking for collisions.
         self.registry = new_registry
         for new_server in new_registry.values():
             self._assign_unique_short_prefix(new_server)
+            # Register OpenAPI tools *after* the final short prefix is assigned
+            # so the tools are stored in the global registry under the same
+            # prefix that lookups will use.
+            await self._maybe_register_openapi_tools(new_server)
 
         verbose_logger.debug(
             "MCP registry refreshed (%s servers in registry)", len(new_registry)
