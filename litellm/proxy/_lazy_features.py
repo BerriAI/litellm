@@ -1,0 +1,307 @@
+"""
+Lazy registration for optional feature routers. Each LAZY_FEATURES entry
+imports its module only on the first request matching its path prefix,
+saving ~700 MB at idle for deployments that don't use these features.
+First hit pays the import cost (1-3 s for heavy modules); /openapi.json
+omits each feature's routes until the feature is warmed.
+"""
+
+import asyncio
+import importlib
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Callable, Tuple
+
+from starlette.types import Receive, Scope, Send
+
+from litellm._logging import verbose_proxy_logger
+
+if TYPE_CHECKING:
+    from fastapi import FastAPI
+
+
+def _include_router(attr_name: str = "router") -> Callable[["FastAPI", object], None]:
+    def _register(app: "FastAPI", module: object) -> None:
+        app.include_router(getattr(module, attr_name))
+
+    return _register
+
+
+def _mount_app(
+    prefix: str, attr_name: str = "app"
+) -> Callable[["FastAPI", object], None]:
+    def _register(app: "FastAPI", module: object) -> None:
+        app.mount(path=prefix, app=getattr(module, attr_name))
+
+    return _register
+
+
+@dataclass(frozen=True)
+class LazyFeature:
+    name: str
+    module_path: str
+    path_prefixes: Tuple[str, ...]
+    register_fn: Callable[["FastAPI", object], None] = field(
+        default_factory=lambda: _include_router("router")
+    )
+    # For routes whose path has a leading parameter (e.g. /{server}/authorize)
+    # — startswith can't match those, so the matcher also checks endswith.
+    path_suffixes: Tuple[str, ...] = ()
+
+
+LAZY_FEATURES: Tuple[LazyFeature, ...] = (
+    LazyFeature(
+        name="guardrails",
+        module_path="litellm.proxy.guardrails.guardrail_endpoints",
+        path_prefixes=(
+            "/guardrails",
+            "/v2/guardrails",
+            "/apply_guardrail",
+            "/policies/usage",
+        ),
+    ),
+    LazyFeature(
+        name="policies",
+        module_path="litellm.proxy.management_endpoints.policy_endpoints",
+        # Trailing slash to avoid matching /policies/... (policy_engine).
+        path_prefixes=("/policy/", "/utils/test_policies_and_guardrails"),
+    ),
+    LazyFeature(
+        name="policy_engine",
+        module_path="litellm.proxy.policy_engine.policy_endpoints",
+        path_prefixes=("/policies",),
+    ),
+    LazyFeature(
+        name="policy_resolve",
+        module_path="litellm.proxy.policy_engine.policy_resolve_endpoints",
+        path_prefixes=("/policies/resolve", "/policies/attachments/estimate-impact"),
+    ),
+    LazyFeature(
+        name="agents",
+        module_path="litellm.proxy.agent_endpoints.endpoints",
+        path_prefixes=("/v1/agents", "/agents", "/agent/"),
+    ),
+    LazyFeature(
+        name="a2a",
+        module_path="litellm.proxy.agent_endpoints.a2a_endpoints",
+        path_prefixes=("/a2a", "/v1/a2a"),
+    ),
+    LazyFeature(
+        name="vector_stores",
+        module_path="litellm.proxy.vector_store_endpoints.endpoints",
+        path_prefixes=("/v1/vector_stores", "/vector_stores", "/v1/indexes"),
+    ),
+    LazyFeature(
+        name="vector_store_management",
+        module_path="litellm.proxy.vector_store_endpoints.management_endpoints",
+        # Trailing slash to avoid matching /vector_stores/... (vector_stores).
+        path_prefixes=("/vector_store/", "/v1/vector_store/"),
+    ),
+    LazyFeature(
+        name="vector_store_files",
+        # Routes appear under both /v1/vector_stores/{id}/files and the
+        # un-versioned form, so both prefixes must trigger the load.
+        module_path="litellm.proxy.vector_store_files_endpoints.endpoints",
+        path_prefixes=("/v1/vector_stores", "/vector_stores"),
+    ),
+    LazyFeature(
+        name="tools",
+        module_path="litellm.proxy.management_endpoints.tool_management_endpoints",
+        path_prefixes=("/v1/tool", "/tool"),
+    ),
+    LazyFeature(
+        name="search_tools",
+        module_path="litellm.proxy.search_endpoints.search_tool_management",
+        path_prefixes=("/search_tools",),
+    ),
+    # mcp_management owns most /v1/mcp/* admin routes; mcp_app is the mounted
+    # streaming sub-app at /mcp.
+    LazyFeature(
+        name="mcp_management",
+        module_path="litellm.proxy.management_endpoints.mcp_management_endpoints",
+        path_prefixes=("/v1/mcp/",),
+    ),
+    LazyFeature(
+        # Also serves /.well-known/oauth-* (OAuth metadata discovery).
+        # No /mcp/oauth prefix here: the mounted /mcp sub-app would
+        # shadow it, and there are no actual routes there anyway.
+        name="mcp_byok_oauth",
+        module_path="litellm.proxy._experimental.mcp_server.byok_oauth_endpoints",
+        path_prefixes=("/v1/mcp/oauth", "/.well-known/oauth-"),
+    ),
+    LazyFeature(
+        # Serves OAuth dance endpoints (/authorize, /token, /callback,
+        # /register) plus several /.well-known/ discovery URLs at the proxy
+        # root — needed for MCP-over-OAuth flows even before /mcp is hit.
+        name="mcp_discoverable",
+        module_path="litellm.proxy._experimental.mcp_server.discoverable_endpoints",
+        path_prefixes=(
+            "/.well-known/oauth-",
+            "/.well-known/openid-configuration",
+            "/.well-known/jwks.json",
+            "/authorize",
+            "/token",
+            "/callback",
+            "/register",
+        ),
+        # Catches the /{mcp_server_name}/authorize|token|register variants.
+        path_suffixes=("/authorize", "/token", "/register"),
+    ),
+    LazyFeature(
+        name="mcp_rest",
+        module_path="litellm.proxy._experimental.mcp_server.rest_endpoints",
+        path_prefixes=("/mcp-rest",),
+    ),
+    LazyFeature(
+        # Hardcoded /mcp matches BASE_MCP_ROUTE; importing the constant
+        # here would defeat lazy loading.
+        name="mcp_app",
+        module_path="litellm.proxy._experimental.mcp_server.server",
+        path_prefixes=("/mcp",),
+        register_fn=_mount_app("/mcp", attr_name="app"),
+    ),
+    LazyFeature(
+        name="config_overrides",
+        module_path="litellm.proxy.management_endpoints.config_override_endpoints",
+        path_prefixes=("/config_overrides",),
+    ),
+    LazyFeature(
+        name="realtime",
+        module_path="litellm.proxy.realtime_endpoints.endpoints",
+        path_prefixes=("/openai/v1/realtime", "/v1/realtime", "/realtime"),
+    ),
+    LazyFeature(
+        name="anthropic_passthrough",
+        module_path="litellm.proxy.anthropic_endpoints.endpoints",
+        path_prefixes=("/v1/messages", "/anthropic", "/api/event_logging"),
+    ),
+    LazyFeature(
+        name="anthropic_skills",
+        module_path="litellm.proxy.anthropic_endpoints.skills_endpoints",
+        path_prefixes=("/v1/skills", "/skills"),
+    ),
+    LazyFeature(
+        name="langfuse_passthrough",
+        module_path="litellm.proxy.vertex_ai_endpoints.langfuse_endpoints",
+        path_prefixes=("/langfuse",),
+    ),
+    LazyFeature(
+        name="evals",
+        module_path="litellm.proxy.openai_evals_endpoints.endpoints",
+        path_prefixes=("/v1/evals", "/evals"),
+    ),
+    LazyFeature(
+        name="claude_code_marketplace",
+        module_path="litellm.proxy.anthropic_endpoints.claude_code_endpoints",
+        path_prefixes=("/claude-code",),
+        register_fn=_include_router("claude_code_marketplace_router"),
+    ),
+    LazyFeature(
+        name="scim",
+        module_path="litellm.proxy.management_endpoints.scim.scim_v2",
+        path_prefixes=("/scim",),
+        register_fn=_include_router("scim_router"),
+    ),
+    LazyFeature(
+        name="cloudzero",
+        module_path="litellm.proxy.spend_tracking.cloudzero_endpoints",
+        path_prefixes=("/cloudzero",),
+    ),
+    LazyFeature(
+        name="vantage",
+        module_path="litellm.proxy.spend_tracking.vantage_endpoints",
+        path_prefixes=("/vantage",),
+    ),
+    LazyFeature(
+        name="usage_ai",
+        module_path="litellm.proxy.management_endpoints.usage_endpoints",
+        path_prefixes=("/usage/ai",),
+    ),
+    LazyFeature(
+        name="prompts",
+        module_path="litellm.proxy.prompts.prompt_endpoints",
+        path_prefixes=("/prompts", "/utils/dotprompt_json_converter"),
+    ),
+    LazyFeature(
+        name="jwt_mappings",
+        module_path="litellm.proxy.management_endpoints.jwt_key_mapping_endpoints",
+        path_prefixes=("/jwt/key/mapping",),
+    ),
+    LazyFeature(
+        name="compliance",
+        module_path="litellm.proxy.management_endpoints.compliance_endpoints",
+        path_prefixes=("/compliance",),
+    ),
+    LazyFeature(
+        name="access_groups",
+        module_path="litellm.proxy.management_endpoints.access_group_endpoints",
+        path_prefixes=("/access_group", "/v1/access_group", "/v1/unified_access_group"),
+    ),
+)
+
+
+class LazyFeatureMiddleware:
+    """ASGI middleware that imports + registers a feature router on first
+    matching request. Idempotent; once loaded, subsequent requests skip."""
+
+    def __init__(
+        self,
+        app,
+        fastapi_app: "FastAPI",
+        features: Tuple[LazyFeature, ...] = LAZY_FEATURES,
+    ):
+        self.app = app
+        self._fastapi_app = fastapi_app
+        self._features = features
+        self._loaded: set = set()
+        # Per-feature locks so independent features can load in parallel.
+        self._locks: dict = {}
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        # Short-circuit once every feature has loaded.
+        if scope["type"] in ("http", "websocket") and len(self._loaded) < len(
+            self._features
+        ):
+            path = scope.get("path", "")
+            for feat in self._features:
+                if feat.module_path in self._loaded:
+                    continue
+                if any(path.startswith(p) for p in feat.path_prefixes) or any(
+                    path.endswith(s) for s in feat.path_suffixes
+                ):
+                    await self._load(feat)
+        await self.app(scope, receive, send)
+
+    async def _load(self, feat: LazyFeature) -> None:
+        lock = self._locks.setdefault(feat.module_path, asyncio.Lock())
+        async with lock:
+            if feat.module_path in self._loaded:
+                return
+            try:
+                # Import on a thread (heavy modules take 1-3 s). register_fn
+                # mutates app.router.routes, so it stays on the loop thread.
+                loop = asyncio.get_running_loop()
+                module = await loop.run_in_executor(
+                    None, importlib.import_module, feat.module_path
+                )
+                feat.register_fn(self._fastapi_app, module)
+                self._loaded.add(feat.module_path)
+                self._fastapi_app.openapi_schema = None
+                verbose_proxy_logger.info(
+                    "Lazy-loaded optional feature %r (module: %s)",
+                    feat.name,
+                    feat.module_path,
+                )
+            except Exception as exc:
+                # Mark loaded anyway so we don't retry on every request.
+                self._loaded.add(feat.module_path)
+                verbose_proxy_logger.warning(
+                    "Failed to lazy-load optional feature %r (module: %s): %s. "
+                    "This feature's endpoints will return 404 until restart.",
+                    feat.name,
+                    feat.module_path,
+                    exc,
+                )
+
+
+def attach_lazy_features(app: "FastAPI") -> None:
+    app.add_middleware(LazyFeatureMiddleware, fastapi_app=app)
