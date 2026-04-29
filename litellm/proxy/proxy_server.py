@@ -605,6 +605,7 @@ from fastapi.responses import (
     JSONResponse,
     ORJSONResponse,
     RedirectResponse,
+    Response,
     StreamingResponse,
 )
 from fastapi.routing import APIRouter
@@ -12321,8 +12322,6 @@ async def get_image():
         except OSError as e:
             # Read-only assets dir: serve the validated bytes inline
             # rather than dropping them and returning the default logo.
-            from fastapi.responses import Response
-
             verbose_proxy_logger.debug(
                 "Could not write logo cache to %s: %s — serving inline", cache_path, e
             )
@@ -12335,8 +12334,6 @@ async def get_image():
 @app.get("/get_favicon", include_in_schema=False)
 async def get_favicon():
     """Get custom favicon for the admin UI."""
-    from fastapi.responses import Response
-
     from litellm.proxy.common_utils.static_asset_utils import (
         fetch_validated_image_bytes,
         resolve_local_asset_path,
