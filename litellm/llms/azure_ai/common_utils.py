@@ -46,7 +46,6 @@ class AzureFoundryModelInfo(BaseLLMModelInfo):
         return (
             api_key
             or litellm.api_key
-            or litellm.openai_key
             or get_secret_str("AZURE_AI_API_KEY")
         )
 
