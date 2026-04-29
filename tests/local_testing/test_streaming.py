@@ -1241,7 +1241,7 @@ def test_bedrock_claude_3_streaming():
     try:
         litellm.set_verbose = True
         response: ModelResponse = completion(  # type: ignore
-            model="bedrock/anthropic.claude-3-sonnet-20240229-v1:0",
+            model=os.environ["BEDROCK_ANTHROPIC_MODEL"],
             messages=messages,
             max_tokens=10,  # type: ignore
             stream=True,

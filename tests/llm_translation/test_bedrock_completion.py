@@ -475,7 +475,7 @@ def test_bedrock_claude_3(image_url):
             ],
         }
         response: ModelResponse = completion(
-            model="bedrock/anthropic.claude-3-sonnet-20240229-v1:0",
+            model=os.environ["BEDROCK_ANTHROPIC_MODEL"],
             num_retries=3,
             **data,
         )  # type: ignore
@@ -602,7 +602,7 @@ def test_bedrock_claude_3_tool_calling():
             }
         ]
         response: ModelResponse = completion(
-            model="bedrock/anthropic.claude-3-sonnet-20240229-v1:0",
+            model=os.environ["BEDROCK_ANTHROPIC_MODEL"],
             messages=messages,
             tools=tools,
             tool_choice="auto",
@@ -630,7 +630,7 @@ def test_bedrock_claude_3_tool_calling():
         )
         # In the second response, Claude should deduce answer from tool results
         second_response = completion(
-            model="bedrock/anthropic.claude-3-sonnet-20240229-v1:0",
+            model=os.environ["BEDROCK_ANTHROPIC_MODEL"],
             messages=messages,
             tools=tools,
             tool_choice="auto",
@@ -939,7 +939,7 @@ def test_bedrock_tool_calling():
     """
     litellm.set_verbose = True
     response = litellm.completion(
-        model="bedrock/anthropic.claude-3-sonnet-20240229-v1:0",
+        model=os.environ["BEDROCK_ANTHROPIC_MODEL"],
         fallbacks=["bedrock/meta.llama3-1-8b-instruct-v1:0"],
         messages=[
             {
@@ -2887,7 +2887,7 @@ async def test_bedrock_stream_thinking_content_openwebui():
     ```
     """
     response = await litellm.acompletion(
-        model="bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+        model=os.environ["BEDROCK_ANTHROPIC_MODEL"],
         messages=[{"role": "user", "content": "Hello who is this?"}],
         stream=True,
         max_tokens=1080,
