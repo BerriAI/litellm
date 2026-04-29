@@ -165,6 +165,97 @@ def test_prepare_local_mcp_request_extra_headers_case_insensitive():
     }
 
 
+def test_prepare_local_mcp_request_extra_headers_ignores_empty_and_invalid_entries():
+    try:
+        from litellm.proxy._experimental.mcp_server.server import (
+            _prepare_local_mcp_request_extra_headers,
+        )
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    server = MCPServer(
+        server_id="server-case",
+        name="server",
+        transport=MCPTransport.http,
+        extra_headers=["X-TOKEN"],
+    )
+    server.extra_headers = [None, "X-TOKEN"]  # type: ignore[list-item]
+
+    assert (
+        _prepare_local_mcp_request_extra_headers(
+            server=server,
+            raw_headers=None,
+        )
+        is None
+    )
+    assert _prepare_local_mcp_request_extra_headers(
+        server=server,
+        raw_headers={"x-token": "request-token"},
+    ) == {"X-TOKEN": "request-token"}
+
+
+@pytest.mark.asyncio
+async def test_execute_local_mcp_tool_sets_request_extra_headers_context():
+    try:
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+        from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
+            _request_auth_header,
+            _request_extra_headers,
+        )
+        from litellm.proxy._experimental.mcp_server.server import execute_mcp_tool
+        from litellm.proxy._experimental.mcp_server.tool_registry import (
+            global_mcp_tool_registry,
+        )
+        from litellm.types.mcp import MCPAuth
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    server = MCPServer(
+        server_id="server-local",
+        name="server",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.api_key,
+        extra_headers=["X-TOKEN"],
+    )
+    tool_name = "server-tool"
+    captured_context = {}
+
+    async def local_handler(**kwargs):
+        captured_context["auth"] = _request_auth_header.get()
+        captured_context["extra_headers"] = _request_extra_headers.get()
+        return "ok"
+
+    global_mcp_server_manager.registry[server.server_id] = server
+    global_mcp_server_manager.tool_name_to_mcp_server_name_mapping[tool_name] = (
+        server.name
+    )
+    global_mcp_tool_registry.register_tool(
+        name=tool_name,
+        description="test tool",
+        input_schema={},
+        handler=local_handler,
+    )
+
+    response = await execute_mcp_tool(
+        name=tool_name,
+        arguments={},
+        allowed_mcp_servers=[server],
+        start_time=datetime.now(),
+        mcp_auth_header="request-auth",
+        raw_headers={"x-token": "request-token"},
+    )
+
+    assert response.isError is False
+    assert captured_context == {
+        "auth": "ApiKey request-auth",
+        "extra_headers": {"X-TOKEN": "request-token"},
+    }
+    assert _request_auth_header.get() is None
+    assert _request_extra_headers.get() is None
+
+
 @pytest.mark.asyncio
 async def test_get_prompts_from_mcp_servers_success():
     try:
