@@ -5733,12 +5733,26 @@ async def get_available_models_for_user(
         include_model_access_groups=include_model_access_groups,
     )
 
+    # If key has access_group_ids but no native models, resolve from DB so the
+    # model list reflects the access group restriction instead of falling back
+    # to team models (issue #23850).
+    if not key_models and user_api_key_dict.access_group_ids:
+        from litellm.proxy.auth.auth_checks import _get_models_from_access_groups
+
+        key_models = await _get_models_from_access_groups(
+            access_group_ids=user_api_key_dict.access_group_ids,
+        )
+
     # Get team models
     team_models: List[str] = user_api_key_dict.team_models
 
-    # If specific team_id is provided, validate and get team models
+    # If specific team_id is provided, validate and get team models.
+    # Do NOT reset key_models when the key has access_group_ids — the access
+    # group restriction must remain in force even when a team_id is specified,
+    # otherwise any caller can bypass it via ?team_id=xxx (issue #23850).
     if team_id and prisma_client and proxy_logging_obj and user_api_key_cache:
-        key_models = []
+        if not user_api_key_dict.access_group_ids:
+            key_models = []
         team_object = await get_team_object(
             team_id=team_id,
             prisma_client=prisma_client,

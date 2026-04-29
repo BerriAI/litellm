@@ -11173,6 +11173,15 @@ async def model_info_v1(  # noqa: PLR0915
         proxy_model_list=proxy_model_list,
         model_access_groups=model_access_groups,
     )
+    # If key has access_group_ids but no native models, resolve from DB so the
+    # model list reflects the access group restriction instead of falling back
+    # to team models (issue #23850).
+    if not key_models and user_api_key_dict.access_group_ids:
+        from litellm.proxy.auth.auth_checks import _get_models_from_access_groups
+
+        key_models = await _get_models_from_access_groups(
+            access_group_ids=user_api_key_dict.access_group_ids,
+        )
     team_models = get_team_models(
         team_models=user_api_key_dict.team_models,
         proxy_model_list=proxy_model_list,

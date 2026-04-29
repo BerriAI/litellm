@@ -1146,3 +1146,56 @@ async def test_can_key_call_model_via_access_group_ids():
             valid_token=user_api_key_object,
             llm_router=router,
         )
+
+
+@pytest.mark.asyncio
+async def test_can_key_call_model_access_group_ids_denies_when_models_empty():
+    """
+    Issue #23850: a key with models=[] and access_group_ids must NOT be able to
+    call a model that is outside the access group, even though models=[] would
+    normally grant all-model access.
+    """
+    from unittest.mock import AsyncMock, patch
+
+    from litellm.proxy.auth.auth_checks import can_key_call_model
+
+    user_api_key_object = UserAPIKeyAuth(
+        token="test-token",
+        models=[],
+        access_group_ids=["ag-limited"],
+    )
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "openai/gpt-4", "api_key": "test"},
+            },
+            {
+                "model_name": "claude-3",
+                "litellm_params": {"model": "anthropic/claude-3", "api_key": "test"},
+            },
+        ]
+    )
+
+    # Access group only grants gpt-4 — claude-3 must be denied
+    with patch(
+        "litellm.proxy.auth.auth_checks._get_models_from_access_groups",
+        new_callable=AsyncMock,
+        return_value=["gpt-4"],
+    ):
+        # Allowed model — must pass
+        await can_key_call_model(
+            model="gpt-4",
+            llm_model_list=[],
+            valid_token=user_api_key_object,
+            llm_router=router,
+        )
+
+        # Denied model — must raise
+        with pytest.raises(Exception):
+            await can_key_call_model(
+                model="claude-3",
+                llm_model_list=[],
+                valid_token=user_api_key_object,
+                llm_router=router,
+            )

@@ -2832,6 +2832,15 @@ async def can_key_call_model(
         - Exception: If token not allowed to call model
     """
     try:
+        if not valid_token.models and valid_token.access_group_ids:
+            # models=[] with access_group_ids means "restrict to access groups",
+            # not "allow all". Force fallback to access group resolution (#23850).
+            raise ProxyException(
+                message="key not allowed to call model - access restricted by access_group_ids",
+                type=ProxyErrorTypes.budget_exceeded,
+                param="model",
+                code=403,
+            )
         return _can_object_call_model(
             model=model,
             llm_router=llm_router,
