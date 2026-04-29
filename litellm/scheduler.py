@@ -137,7 +137,10 @@ class Scheduler:
             if response is None or not isinstance(response, list):
                 return []
             elif isinstance(response, list):
-                return response
+                # JSON deserializes tuples as lists. heapq requires
+                # consistent types for comparison, so normalize back
+                # to tuples to match what heapq.heappush produces.
+                return [tuple(item) if isinstance(item, list) else item for item in response]
         return self.queue
 
     async def save_queue(self, queue: list, model_name: str) -> None:
