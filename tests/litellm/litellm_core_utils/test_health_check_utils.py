@@ -43,9 +43,7 @@ def test_filter_keeps_max_tokens_for_completion_mode():
     ``litellm.atext_completion`` accepts ``max_tokens``; stripping it would
     silently remove the ``BACKGROUND_HEALTH_CHECK_MAX_TOKENS`` cost cap.
     """
-    filtered = _filter_model_params(
-        model_params=_sample_params(), keep_max_tokens=True
-    )
+    filtered = _filter_model_params(model_params=_sample_params(), keep_max_tokens=True)
 
     assert "messages" not in filtered
     assert filtered.get("max_tokens") == 5

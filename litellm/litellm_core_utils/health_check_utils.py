@@ -13,14 +13,10 @@ _COMPLETION_HEALTH_CHECK_STRIP_KEYS = {"messages"}
 #: ``400 Unknown parameter: 'max_tokens'``. ``atext_completion`` does accept
 #: ``max_tokens``, so the ``completion`` mode keeps it (preserves the
 #: ``BACKGROUND_HEALTH_CHECK_MAX_TOKENS`` cost cap).
-_NON_CHAT_HEALTH_CHECK_STRIP_KEYS = _COMPLETION_HEALTH_CHECK_STRIP_KEYS | {
-    "max_tokens"
-}
+_NON_CHAT_HEALTH_CHECK_STRIP_KEYS = _COMPLETION_HEALTH_CHECK_STRIP_KEYS | {"max_tokens"}
 
 
-def _filter_model_params(
-    model_params: dict, *, keep_max_tokens: bool = False
-) -> dict:
+def _filter_model_params(model_params: dict, *, keep_max_tokens: bool = False) -> dict:
     """Strip chat-only params before invoking a non-chat health check handler.
 
     ``litellm.acompletion`` is the only mode handler that consumes
