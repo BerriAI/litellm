@@ -159,10 +159,10 @@ end
 """
 
 # Lua script for atomic decrement of max_parallel_requests
-# This resets TTL to keep the counter alive for active keys
+# Note: TTL is NOT refreshed on decrement to avoid counter drift.
+# The TTL set on INCR is the authority; DECR should not extend key lifetime.
 MAX_PARALLEL_REQUESTS_DECREMENT_SCRIPT = """
 local counter_key = KEYS[1]
-local ttl_seconds = tonumber(ARGV[1])
 
 -- Get current counter value
 local current = redis.call('GET', counter_key)
@@ -175,8 +175,10 @@ end
 local previous_count = current_count
 current_count = redis.call('DECR', counter_key)
 
--- Always refresh TTL after decrement (key now exists)
-redis.call('EXPIRE', counter_key, ttl_seconds)
+-- Note: We intentionally do NOT refresh TTL here.
+-- Refreshing TTL on decrement causes counter drift - each completed request
+-- extends the key's lifetime, potentially keeping a positive counter alive
+-- indefinitely even when no requests are active.
 
 -- Return: previous_count, current_count
 return {previous_count, current_count}
@@ -1556,12 +1558,12 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             rate_limit_type="max_parallel_requests",
         )
 
-        # Use Lua script for atomic decrement with TTL reset
+        # Use Lua script for atomic decrement (no TTL refresh to avoid counter drift)
         if self.max_parallel_requests_decrement_script is not None:
             try:
                 results = await self.max_parallel_requests_decrement_script(
                     keys=[counter_key],
-                    args=[self.max_parallel_requests_ttl],
+                    args=[],
                 )
                 # Results: [previous_count, current_count]
                 previous_count = results[0]
@@ -1571,7 +1573,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 )
                 # Emit Prometheus metric
                 if user_api_key_dict:
-                    await self._emit_parallel_requests_metric(
+                    await self.gi(
                         user_api_key_dict=user_api_key_dict,
                         current_count=current_count,
                         previous_count=previous_count,
@@ -1592,10 +1594,11 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         previous_count = current_count
 
         if current_count > 0:
+            # Note: TTL is NOT passed on decrement to avoid counter drift.
+            # The TTL set on INCR is the authority; DECR should not extend key lifetime.
             current_count = await self.internal_usage_cache.async_increment_cache(
                 key=counter_key,
                 value=-1,
-                ttl=self.max_parallel_requests_ttl,
                 litellm_parent_otel_span=parent_otel_span,
             ) or 0
 
