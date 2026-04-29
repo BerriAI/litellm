@@ -152,11 +152,18 @@ async def search(
 
             # Check team-level access if key is associated with a team
             if user_api_key_dict.team_id:
+                from litellm.proxy.proxy_server import (
+                    prisma_client,
+                    proxy_logging_obj,
+                    user_api_key_cache,
+                )
+
                 team_object = await get_team_object(
                     team_id=user_api_key_dict.team_id,
-                    user_api_key_cache=None,  # Will use internal cache
-                    parent_otel_span=None,
-                    proxy_logging_obj=None,
+                    prisma_client=prisma_client,
+                    user_api_key_cache=user_api_key_cache,
+                    parent_otel_span=user_api_key_dict.parent_otel_span,
+                    proxy_logging_obj=proxy_logging_obj,
                 )
                 await can_team_call_search_tool(
                     search_tool_name=search_tool_name_value,

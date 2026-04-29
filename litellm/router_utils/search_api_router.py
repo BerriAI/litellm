@@ -10,7 +10,6 @@ import traceback
 from functools import partial
 from typing import Any, Callable, Dict, Optional, Tuple
 
-import litellm
 from litellm._logging import verbose_router_logger
 
 
@@ -22,38 +21,10 @@ class SearchAPIRouter:
     """
 
     @staticmethod
-    def _get_team_config_from_default_settings(
-        team_id: Optional[str],
-    ) -> Optional[Dict[str, Any]]:
-        """
-        Resolve team config from litellm.default_team_settings.
-
-        This allows search requests to read per-team settings from proxy config
-        (YAML) similar to completion paths that use ProxyConfig.load_team_config().
-        """
-        if not team_id:
-            return None
-
-        default_team_settings = getattr(litellm, "default_team_settings", None)
-        if not isinstance(default_team_settings, list):
-            return None
-
-        for team_setting in default_team_settings:
-            if (
-                isinstance(team_setting, dict)
-                and team_setting.get("team_id") == team_id
-            ):
-                return team_setting
-        return None
-
-    @staticmethod
     def _resolve_search_provider_credentials(
         *,
         search_provider: str,
         tool_litellm_params: Dict[str, Any],
-        request_metadata: Optional[Dict[str, Any]] = None,
-        team_metadata: Optional[Dict[str, Any]] = None,
-        team_config: Optional[Dict[str, Any]] = None,
     ) -> Tuple[Optional[str], Optional[str]]:
         """
         Resolve search provider credentials from tool configuration ONLY.
@@ -255,37 +226,13 @@ class SearchAPIRouter:
                     f"search_provider not found in litellm_params for search tool '{search_tool_name}'"
                 )
 
-            request_metadata = kwargs.get("metadata")
-            litellm_metadata = kwargs.get("litellm_metadata")
-            if not isinstance(request_metadata, dict) and isinstance(
-                litellm_metadata, dict
-            ):
-                request_metadata = litellm_metadata
-
-            team_metadata = {}
-            team_id: Optional[str] = None
-            if isinstance(request_metadata, dict):
-                _team_metadata = request_metadata.get("user_api_key_team_metadata")
-                if isinstance(_team_metadata, dict):
-                    team_metadata = _team_metadata
-                _team_id = request_metadata.get("user_api_key_team_id")
-                if isinstance(_team_id, str):
-                    team_id = _team_id
-
-            team_config = SearchAPIRouter._get_team_config_from_default_settings(
-                team_id=team_id
-            )
-
             api_key, api_base = SearchAPIRouter._resolve_search_provider_credentials(
                 search_provider=search_provider,
                 tool_litellm_params=litellm_params,
-                request_metadata=request_metadata,
-                team_metadata=team_metadata,
-                team_config=team_config,
             )
 
             verbose_router_logger.debug(
-                f"Selected search tool with provider: {search_provider}, team_id={team_id}"
+                f"Selected search tool with provider: {search_provider}"
             )
 
             # Call the original search function with the provider config

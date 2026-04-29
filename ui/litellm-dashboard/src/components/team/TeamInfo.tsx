@@ -3,7 +3,6 @@ import { organizationKeys, useOrganizations } from "@/app/(dashboard)/hooks/orga
 import { useQueryClient } from "@tanstack/react-query";
 import UserSearchModal from "@/components/common_components/user_search_modal";
 import {
-  fetchSearchTools,
   getPoliciesList,
   getPolicyInfoWithGuardrails,
   Member,
@@ -43,6 +42,7 @@ import { fetchMCPAccessGroups } from "../networking";
 import ObjectPermissionsView from "../object_permissions_view";
 import NumericalInput from "../shared/numerical_input";
 import VectorStoreSelector from "../vector_store_management/VectorStoreSelector";
+import SearchToolSelector from "../SearchTools/SearchToolSelector";
 import EditLoggingSettings from "./EditLoggingSettings";
 import RouterSettingsAccordion, { RouterSettingsAccordionRef } from "../common_components/RouterSettingsAccordion";
 import MemberModal from "./EditMembership";
@@ -103,7 +103,6 @@ export interface TeamData {
     } | null;
     created_at: string;
     access_group_ids?: string[];
-    allowed_search_tools?: string[];
     default_team_member_models?: string[];
     access_group_models?: string[];
     access_group_mcp_server_ids?: string[];
@@ -120,6 +119,7 @@ export interface TeamData {
       vector_stores: string[];
       agents?: string[];
       agent_access_groups?: string[];
+      search_tools?: string[];
     };
     team_member_budget_table: {
       max_budget: number;
@@ -193,7 +193,6 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   const { data: guardrailsData, isLoading: isGuardrailsLoading } = useGuardrails();
   const globalGuardrailNames = guardrailsData?.globalGuardrailNames ?? new Set<string>();
   const [policiesList, setPoliciesList] = useState<string[]>([]);
-  const [searchToolNames, setSearchToolNames] = useState<string[]>([]);
   const [policyGuardrails, setPolicyGuardrails] = useState<Record<string, string[]>>({});
   const [loadingPolicies, setLoadingPolicies] = useState(false);
   const [memberToDelete, setMemberToDelete] = useState<Member | null>(null);
@@ -301,24 +300,6 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
     };
 
     fetchPolicies();
-  }, [accessToken]);
-
-  useEffect(() => {
-    const loadSearchTools = async () => {
-      try {
-        if (!accessToken) return;
-        const response = await fetchSearchTools(accessToken);
-        const tools = Array.isArray(response?.data) ? response.data : [];
-        setSearchToolNames(
-          tools
-            .map((tool: any) => tool?.search_tool_name)
-            .filter((name: unknown): name is string => typeof name === "string" && name.length > 0),
-        );
-      } catch (error) {
-        console.error("Failed to fetch search tools in team info:", error);
-      }
-    };
-    loadSearchTools();
   }, [accessToken]);
 
   // Fetch resolved guardrails for all policies
@@ -525,7 +506,6 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         team_id: teamId,
         team_alias: values.team_alias,
         models: values.models,
-        allowed_search_tools: values.allowed_search_tools || [],
         tpm_limit: sanitizeNumeric(values.tpm_limit),
         rpm_limit: sanitizeNumeric(values.rpm_limit),
         model_tpm_limit: modelTpmLimit,
@@ -613,6 +593,10 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       // Handle vector stores permissions
       if (values.vector_stores && values.vector_stores.length > 0) {
         updateData.object_permission.vector_stores = values.vector_stores;
+      }
+
+      if (Array.isArray(values.object_permission_search_tools)) {
+        updateData.object_permission.search_tools = values.object_permission_search_tools;
       }
 
       // Pass access_group_ids to the update request
@@ -948,7 +932,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                       models: info.models,
                       tpm_limit: info.tpm_limit,
                       rpm_limit: info.rpm_limit,
-                      allowed_search_tools: info.allowed_search_tools || [],
+                      object_permission_search_tools: info.object_permission?.search_tools || [],
                       modelLimits: Array.from(
                         new Set([
                           ...Object.keys(info.metadata?.model_tpm_limit ?? {}),
@@ -1028,23 +1012,6 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                         }}
                         context="team"
                         dataTestId="models-select"
-                      />
-                    </Form.Item>
-
-                    <Form.Item
-                      label="Allowed Search Tools"
-                      name="allowed_search_tools"
-                      tooltip="Select which search tools this team can access. Leave empty to allow all search tools."
-                    >
-                      <Select
-                        mode="multiple"
-                        placeholder="Select search tools (empty = all tools allowed)"
-                        style={{ width: "100%" }}
-                        options={searchToolNames.map((name) => ({ label: name, value: name }))}
-                        showSearch
-                        filterOption={(input, option) =>
-                          (option?.label ?? "").toLowerCase().includes(input.toLowerCase())
-                        }
                       />
                     </Form.Item>
 
@@ -1418,6 +1385,26 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                         placeholder="Select agents or access groups (optional)"
                       />
                     </Form.Item>
+
+                    <Accordion className="mt-4 mb-4">
+                      <AccordionHeader>
+                        <b>Search Tool Settings</b>
+                      </AccordionHeader>
+                      <AccordionBody>
+                        <Form.Item
+                          label="Allowed Search Tools"
+                          name="object_permission_search_tools"
+                          tooltip="Select which search tools this team can access. Leave empty to allow all search tools."
+                        >
+                          <SearchToolSelector
+                            onChange={(vals: string[]) => form.setFieldValue("object_permission_search_tools", vals)}
+                            value={form.getFieldValue("object_permission_search_tools")}
+                            accessToken={accessToken || ""}
+                            placeholder="Select search tools (optional, empty = all allowed)"
+                          />
+                        </Form.Item>
+                      </AccordionBody>
+                    </Accordion>
 
                     <Form.Item label="Organization" name="organization_id">
                       <Select

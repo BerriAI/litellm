@@ -65,6 +65,7 @@ from litellm.proxy.management_helpers.object_permission_utils import (
     attach_object_permission_to_dict,
     handle_update_object_permission_common,
     validate_key_mcp_servers_against_team,
+    validate_key_search_tools_against_team,
 )
 from litellm.proxy.management_helpers.team_member_permission_checks import (
     TeamMemberPermissionChecks,
@@ -765,6 +766,10 @@ async def _common_key_generation_helper(  # noqa: PLR0915
 
     # Validate MCP servers in object_permission are within team scope
     await validate_key_mcp_servers_against_team(
+        object_permission=data_json.get("object_permission"),
+        team_obj=team_table,
+    )
+    await validate_key_search_tools_against_team(
         object_permission=data_json.get("object_permission"),
         team_obj=team_table,
     )
@@ -2007,6 +2012,10 @@ async def _validate_mcp_servers_for_key_update(
             else dict(data.object_permission)  # type: ignore[arg-type]
         )
     await validate_key_mcp_servers_against_team(
+        object_permission=object_permission_dict,
+        team_obj=effective_team_obj,
+    )
+    await validate_key_search_tools_against_team(
         object_permission=object_permission_dict,
         team_obj=effective_team_obj,
     )
