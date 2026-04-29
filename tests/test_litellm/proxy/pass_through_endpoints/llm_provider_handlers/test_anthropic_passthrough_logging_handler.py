@@ -322,6 +322,108 @@ class TestAzureAnthropicCostCalculation:
         assert call_kwargs["custom_llm_provider"] == "azure_ai"
 
 
+class TestAnthropicPassthroughModelPrefixInKwargs:
+    """Regression tests for #25250 — kwargs['model'] must carry provider prefix."""
+
+    def _create_mock_logging_obj(
+        self, model: str = None, custom_llm_provider: str = None
+    ) -> MagicMock:
+        mock = MagicMock()
+        details: Dict[str, Any] = {}
+        if model:
+            details["model"] = model
+        if custom_llm_provider:
+            details["custom_llm_provider"] = custom_llm_provider
+        mock.model_call_details = details
+        mock.litellm_call_id = "test-call-id"
+        return mock
+
+    @patch("litellm.completion_cost")
+    def test_kwargs_model_includes_provider_prefix(self, mock_completion_cost):
+        """kwargs['model'] should contain the provider-prefixed name so
+        Prometheus and other callbacks emit consistent metric labels."""
+        from litellm.types.utils import ModelResponse
+
+        mock_completion_cost.return_value = 0.001
+
+        logging_obj = self._create_mock_logging_obj(
+            model="global.anthropic.claude-opus-4-6-v1",
+            custom_llm_provider="bedrock",
+        )
+
+        mock_response = MagicMock(spec=ModelResponse)
+        mock_response.id = "test-id"
+        mock_response.model = "global.anthropic.claude-opus-4-6-v1"
+
+        kwargs: Dict[str, Any] = {}
+
+        AnthropicPassthroughLoggingHandler._create_anthropic_response_logging_payload(
+            litellm_model_response=mock_response,
+            model="global.anthropic.claude-opus-4-6-v1",
+            kwargs=kwargs,
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+            logging_obj=logging_obj,
+        )
+
+        assert kwargs["model"] == "bedrock/global.anthropic.claude-opus-4-6-v1"
+
+    @patch("litellm.completion_cost")
+    def test_kwargs_model_no_duplicate_prefix(self, mock_completion_cost):
+        """Provider prefix should not be duplicated if already present."""
+        from litellm.types.utils import ModelResponse
+
+        mock_completion_cost.return_value = 0.001
+
+        logging_obj = self._create_mock_logging_obj(
+            model="bedrock/global.anthropic.claude-opus-4-6-v1",
+            custom_llm_provider="bedrock",
+        )
+
+        mock_response = MagicMock(spec=ModelResponse)
+        mock_response.id = "test-id"
+
+        kwargs: Dict[str, Any] = {}
+
+        AnthropicPassthroughLoggingHandler._create_anthropic_response_logging_payload(
+            litellm_model_response=mock_response,
+            model="bedrock/global.anthropic.claude-opus-4-6-v1",
+            kwargs=kwargs,
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+            logging_obj=logging_obj,
+        )
+
+        assert kwargs["model"] == "bedrock/global.anthropic.claude-opus-4-6-v1"
+
+    @patch("litellm.completion_cost")
+    def test_kwargs_model_no_provider(self, mock_completion_cost):
+        """Without custom_llm_provider, kwargs['model'] should stay as-is."""
+        from litellm.types.utils import ModelResponse
+
+        mock_completion_cost.return_value = 0.001
+
+        logging_obj = self._create_mock_logging_obj(
+            model="claude-3-sonnet-20240229",
+        )
+
+        mock_response = MagicMock(spec=ModelResponse)
+        mock_response.id = "test-id"
+
+        kwargs: Dict[str, Any] = {}
+
+        AnthropicPassthroughLoggingHandler._create_anthropic_response_logging_payload(
+            litellm_model_response=mock_response,
+            model="claude-3-sonnet-20240229",
+            kwargs=kwargs,
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+            logging_obj=logging_obj,
+        )
+
+        assert kwargs["model"] == "claude-3-sonnet-20240229"
+
+
 class TestAnthropicBatchPassthroughCostTracking:
     """Test cases for Anthropic batch passthrough cost tracking functionality"""
 

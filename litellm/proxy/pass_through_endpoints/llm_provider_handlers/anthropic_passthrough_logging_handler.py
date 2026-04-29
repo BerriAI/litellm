@@ -143,7 +143,7 @@ class AnthropicPassthroughLoggingHandler:
             )
 
             kwargs["response_cost"] = response_cost
-            kwargs["model"] = model
+            kwargs["model"] = model_for_cost
             passthrough_logging_payload: Optional[PassthroughStandardLoggingPayload] = (  # type: ignore
                 kwargs.get("passthrough_logging_payload")
             )
