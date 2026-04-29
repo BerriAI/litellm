@@ -558,3 +558,71 @@ async def test_handle_session_closed_during_request():
     assert counts["requests"] == 2  # First request failed, second succeeded
     assert counts["sessions"] == 2  # Created 2 sessions for retry
     assert response.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_per_request_timeout_sets_total_to_none():
+    """
+    Verify that the per-request ClientTimeout sets total=None explicitly.
+
+    When total is left as sentinel (unset), aiohttp resolves it to
+    DEFAULT_TIMEOUT.total (300s).  Since the per-request timeout replaces
+    the session-level timeout entirely, this silently caps every request
+    at 300 seconds — even when the caller configured a much longer timeout
+    (e.g. 3600s via sock_read).  Setting total=None disables the overall
+    duration limit so that per-operation timeouts (sock_read, etc.) and
+    the caller's own asyncio.wait_for deadline control the lifetime.
+    """
+    captured_timeouts: list = []
+
+    class CapturingSession:
+        def __init__(self):
+            self.closed = False
+            try:
+                self._loop = asyncio.get_running_loop()
+            except RuntimeError:
+                self._loop = None
+
+        def request(self, *args, **kwargs):
+            captured_timeouts.append(kwargs.get("timeout"))
+
+            class Resp:
+                status = 200
+                headers = {}
+
+                async def __aenter__(self):
+                    return self
+
+                async def __aexit__(self, *a):
+                    pass
+
+                @property
+                def content(self):
+                    class C:
+                        async def iter_chunked(self, size):
+                            yield b""
+
+                    return C()
+
+            return Resp()
+
+    transport = LiteLLMAiohttpTransport(client=lambda: CapturingSession())  # type: ignore
+
+    request = httpx.Request("GET", "http://example.com")
+    request.extensions["timeout"] = {
+        "connect": 3600.0,
+        "read": 3600.0,
+        "pool": 3600.0,
+    }
+
+    await transport.handle_async_request(request)
+
+    assert len(captured_timeouts) == 1
+    ct = captured_timeouts[0]
+    assert ct.total is None, (
+        f"Expected total=None but got {ct.total}; sentinel total resolves "
+        f"to aiohttp DEFAULT_TIMEOUT.total (300s), silently capping requests"
+    )
+    assert ct.sock_read == 3600.0
+    assert ct.sock_connect == 3600.0
+    assert ct.connect == 3600.0
