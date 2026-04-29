@@ -22,10 +22,16 @@ import httpx
 import pytest
 
 from litellm.llms.azure.responses.transformation import AzureOpenAIResponsesAPIConfig
+from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.llms.manus.responses.transformation import ManusResponsesAPIConfig
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
-from litellm.llms.volcengine.responses.transformation import VolcEngineResponsesAPIConfig
-from litellm.responses.streaming_iterator import ResponsesAPIStreamingIterator
+from litellm.llms.volcengine.responses.transformation import (
+    VolcEngineResponsesAPIConfig,
+)
+from litellm.responses.streaming_iterator import (
+    ResponsesAPIStreamingIterator,
+    SyncResponsesAPIStreamingIterator,
+)
 from litellm.types.router import GenericLiteLLMParams
 
 
@@ -157,9 +163,7 @@ async def test_aget_responses_stream_returns_streaming_iterator(
         lambda *a, **kw: fake_client,
     )
 
-    response_id = (
-        "resp_test_stream_resume_with_a_long_enough_id_to_satisfy_validators"
-    )
+    response_id = "resp_test_stream_resume_with_a_long_enough_id_to_satisfy_validators"
     result = await litellm.aget_responses(
         response_id=response_id,
         stream=True,
@@ -173,3 +177,99 @@ async def test_aget_responses_stream_returns_streaming_iterator(
     assert captured["stream"] is True
     assert captured["params"] == {"stream": "true", "starting_after": 6}
     assert response_id in captured["url"]
+
+
+def test_get_responses_stream_returns_sync_streaming_iterator(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import litellm
+    from litellm.llms.custom_httpx import llm_http_handler as handler_module
+
+    captured: dict[str, Any] = {}
+
+    def fake_get(
+        url: str,
+        headers: dict | None = None,
+        params: dict | None = None,
+        stream: bool = False,
+        timeout: Any = None,
+        **_: Any,
+    ) -> httpx.Response:
+        captured["url"] = url
+        captured["params"] = params
+        captured["stream"] = stream
+        captured["timeout"] = timeout
+        return httpx.Response(
+            status_code=200,
+            content=b"",
+            request=httpx.Request("GET", url),
+        )
+
+    fake_client = MagicMock()
+    fake_client.get = MagicMock(side_effect=fake_get)
+    monkeypatch.setattr(
+        handler_module,
+        "_get_httpx_client",
+        lambda *a, **kw: fake_client,
+    )
+
+    response_id = "resp_test_stream_resume_with_a_long_enough_id_to_satisfy_validators"
+    result = litellm.get_responses(
+        response_id=response_id,
+        stream=True,
+        starting_after=6,
+        custom_llm_provider="openai",
+        api_key="sk-test",
+        api_base="https://api.openai.com/v1/responses",
+    )
+
+    assert isinstance(result, SyncResponsesAPIStreamingIterator)
+    assert captured["stream"] is True
+    assert captured["params"] == {"stream": "true", "starting_after": 6}
+    assert response_id in captured["url"]
+
+
+def test_http_handler_get_stream_uses_open_request() -> None:
+    captured: dict[str, Any] = {}
+
+    class DummyClient:
+        def build_request(
+            self,
+            method: str,
+            url: str,
+            params: dict | None = None,
+            headers: dict | None = None,
+            timeout: Any = None,
+        ) -> httpx.Request:
+            captured["method"] = method
+            captured["url"] = url
+            captured["params"] = params
+            captured["headers"] = headers
+            captured["timeout"] = timeout
+            return httpx.Request(method, url, params=params, headers=headers)
+
+        def send(
+            self,
+            request: httpx.Request,
+            stream: bool = False,
+            follow_redirects: Any = None,
+        ) -> httpx.Response:
+            captured["stream"] = stream
+            captured["follow_redirects"] = follow_redirects
+            captured["request_url"] = str(request.url)
+            return httpx.Response(status_code=200, content=b"", request=request)
+
+    handler = HTTPHandler(client=DummyClient())
+    response = handler.get(
+        url="https://api.openai.com/v1/responses/resp_abc?existing=1",
+        params={"stream": "true"},
+        headers={"x-test": "1"},
+        stream=True,
+        timeout=12.0,
+    )
+
+    assert response.status_code == 200
+    assert captured["method"] == "GET"
+    assert captured["params"] == {"stream": "true", "existing": "1"}
+    assert captured["stream"] is True
+    assert captured["timeout"] == 12.0

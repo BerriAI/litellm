@@ -1027,6 +1027,8 @@ class HTTPHandler:
         params: Optional[dict] = None,
         headers: Optional[dict] = None,
         follow_redirects: Optional[bool] = None,
+        stream: bool = False,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
     ):
         # Set follow_redirects to UseClientDefault if None
         _follow_redirects = (
@@ -1035,14 +1037,51 @@ class HTTPHandler:
         params = params or {}
         params.update(self.extract_query_params(url))
 
-        response = self.client.get(
-            url,
-            params=params,
-            headers=headers,
-            follow_redirects=_follow_redirects,
-        )
+        try:
+            if stream or timeout is not None:
+                if timeout is not None:
+                    req = self.client.build_request(
+                        "GET",
+                        url,
+                        params=params,
+                        headers=headers,
+                        timeout=timeout,
+                    )
+                else:
+                    req = self.client.build_request(
+                        "GET",
+                        url,
+                        params=params,
+                        headers=headers,
+                    )
 
-        return response
+                response = self.client.send(
+                    req,
+                    stream=stream,
+                    follow_redirects=_follow_redirects,
+                )
+                if stream:
+                    response.raise_for_status()
+                return response
+
+            response = self.client.get(
+                url,
+                params=params,
+                headers=headers,
+                follow_redirects=_follow_redirects,
+            )
+
+            return response
+        except httpx.TimeoutException:
+            raise litellm.Timeout(
+                message=f"Connection timed out after {timeout} seconds.",
+                model="default-model-name",
+                llm_provider="litellm-httpx-handler",
+            )
+        except httpx.HTTPStatusError as e:
+            _raise_masked_sync_error(e, stream)
+        except Exception as e:
+            raise e
 
     @staticmethod
     def extract_query_params(url: str) -> Dict[str, str]:

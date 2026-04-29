@@ -2701,7 +2701,37 @@ class BaseLLMHTTPHandler:
         )
 
         try:
-            response = sync_httpx_client.get(url=url, headers=headers, params=data)
+            if stream:
+                response = sync_httpx_client.get(
+                    url=url,
+                    headers=headers,
+                    params=data,
+                    stream=True,
+                    timeout=timeout,
+                )
+                request_context: Dict[str, Any] = {
+                    "response_id": response_id,
+                    "stream": True,
+                    "starting_after": starting_after,
+                    "litellm_params": dict(litellm_params),
+                }
+                return SyncResponsesAPIStreamingIterator(
+                    response=response,
+                    model="",
+                    logging_obj=logging_obj,
+                    responses_api_provider_config=responses_api_provider_config,
+                    litellm_metadata=litellm_metadata,
+                    custom_llm_provider=custom_llm_provider,
+                    request_data=request_context,
+                    call_type=CallTypes.responses.value,
+                )
+
+            response = sync_httpx_client.get(
+                url=url,
+                headers=headers,
+                params=data,
+                timeout=timeout,
+            )
         except Exception as e:
             raise self._handle_error(
                 e=e,

@@ -8,10 +8,26 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
+from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.proxy_server import app
 
 
 class TestResponsesAPIEndpoints(unittest.TestCase):
+    @staticmethod
+    def _mock_user_api_key_dict() -> MagicMock:
+        mock_user_api_key_dict = MagicMock()
+        mock_user_api_key_dict.token = "test_token"
+        mock_user_api_key_dict.user_id = "test_user"
+        mock_user_api_key_dict.team_id = None
+        mock_user_api_key_dict.spend = 0.001
+        mock_user_api_key_dict.tpm_limit = None
+        mock_user_api_key_dict.rpm_limit = None
+        mock_user_api_key_dict.max_budget = None
+        mock_user_api_key_dict.allowed_model_region = None
+        mock_user_api_key_dict.api_key = "sk-test-key"
+        mock_user_api_key_dict.metadata = {}
+        return mock_user_api_key_dict
+
     @pytest.mark.asyncio
     @patch("litellm.proxy.proxy_server.llm_router")
     @patch("litellm.proxy.proxy_server.user_api_key_auth")
@@ -134,17 +150,8 @@ class TestResponsesAPIEndpoints(unittest.TestCase):
         from litellm.types.utils import ResponseOutputMessage, ResponseOutputText
 
         # Create mock user API key with initial spend
-        mock_user_api_key_dict = MagicMock()
-        mock_user_api_key_dict.token = "test_token"
-        mock_user_api_key_dict.user_id = "test_user"
-        mock_user_api_key_dict.team_id = None
+        mock_user_api_key_dict = self._mock_user_api_key_dict()
         mock_user_api_key_dict.spend = 0.001  # Initial spend: $0.001
-        mock_user_api_key_dict.tpm_limit = None
-        mock_user_api_key_dict.rpm_limit = None
-        mock_user_api_key_dict.max_budget = None
-        mock_user_api_key_dict.allowed_model_region = None
-        mock_user_api_key_dict.api_key = "sk-test-key"
-        mock_user_api_key_dict.metadata = {}
 
         mock_auth.return_value = mock_user_api_key_dict
 
@@ -196,3 +203,67 @@ class TestResponsesAPIEndpoints(unittest.TestCase):
         assert "x-litellm-response-cost" in response.headers
         response_cost_value = float(response.headers["x-litellm-response-cost"])
         assert response_cost_value == pytest.approx(0.0005, abs=1e-10)
+
+    def test_get_response_forwards_stream_resume_query_params(self):
+        captured: dict = {}
+
+        class FakeProcessor:
+            def __init__(self, data: dict):
+                captured["data"] = data
+
+            async def base_process_llm_request(self, **kwargs):
+                return {"id": "resp_test123", "object": "response", "output": []}
+
+        client = TestClient(app)
+        app.dependency_overrides[user_api_key_auth] = (
+            lambda: self._mock_user_api_key_dict()
+        )
+
+        try:
+            with (
+                patch(
+                    "litellm.proxy.proxy_server._read_request_body",
+                    new=AsyncMock(return_value={}),
+                ),
+                patch(
+                    "litellm.proxy.response_api_endpoints.endpoints.ProxyBaseLLMRequestProcessing",
+                    FakeProcessor,
+                ),
+            ):
+                response = client.get(
+                    "/v1/responses/resp_test123?stream=true&starting_after=6",
+                    headers={"Authorization": "Bearer sk-test-key"},
+                )
+        finally:
+            app.dependency_overrides.clear()
+
+        assert response.status_code == 200
+        assert captured["data"] == {
+            "response_id": "resp_test123",
+            "stream": True,
+            "starting_after": 6,
+        }
+
+    def test_get_response_rejects_non_integer_starting_after(self):
+        client = TestClient(app)
+        app.dependency_overrides[user_api_key_auth] = (
+            lambda: self._mock_user_api_key_dict()
+        )
+
+        try:
+            with patch(
+                "litellm.proxy.proxy_server._read_request_body",
+                new=AsyncMock(return_value={}),
+            ):
+                response = client.get(
+                    "/v1/responses/resp_test123?starting_after=oops",
+                    headers={"Authorization": "Bearer sk-test-key"},
+                )
+        finally:
+            app.dependency_overrides.clear()
+
+        assert response.status_code == 400
+        assert response.json()["detail"] == (
+            "Query parameter 'starting_after' must be an integer "
+            "sequence number, got 'oops'."
+        )
