@@ -503,7 +503,7 @@ async def handle_sampling_create_message(
                 response = await llm_router.acompletion(**completion_kwargs)
             else:
                 response = await litellm.acompletion(**completion_kwargs)
-        except Exception:
+        except ImportError:
             response = await litellm.acompletion(**completion_kwargs)
         # 7. Convert response to MCP format
         result = _convert_openai_response_to_mcp_result(
