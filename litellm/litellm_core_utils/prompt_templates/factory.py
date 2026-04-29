@@ -1042,14 +1042,7 @@ def convert_to_anthropic_tool_invoke_xml(tool_calls: list) -> str:
             )
         else:
             parameters = f"<result>{parsed_args}</result>\n"
-        invokes += (
-            "<invoke>\n"
-            f"<tool_name>{tool_name}</tool_name>\n"
-            "<parameters>\n"
-            f"{parameters}"
-            "</parameters>\n"
-            "</invoke>\n"
-        )
+        invokes += f"<invoke>\n<tool_name>{tool_name}</tool_name>\n<parameters>\n{parameters}</parameters>\n</invoke>\n"
 
     anthropic_tool_invoke = f"<function_calls>\n{invokes}</function_calls>"
 
@@ -1636,7 +1629,8 @@ def convert_to_gemini_tool_call_result(  # noqa: PLR0915
     # We can't determine from openai message format whether it's a successful or
     # error call result so default to the successful result template
     _function_response = VertexFunctionResponse(
-        name=name, response=response_data  # type: ignore
+        name=name,
+        response=response_data,  # type: ignore
     )
 
     # Create part with function_response, and optionally inline_data for images (Computer Use)
@@ -5097,12 +5091,25 @@ def make_valid_bedrock_tool_name(input_tool_name: str) -> str:
     return valid_string
 
 
-def add_cache_point_tool_block(tool: dict) -> Optional[BedrockToolBlock]:
+def add_cache_point_tool_block(
+    tool: dict, model: Optional[str] = None
+) -> Optional[BedrockToolBlock]:
+    from litellm.llms.bedrock.common_utils import is_claude_4_5_on_bedrock
+
     cache_control = tool.get("cache_control", None)
     if cache_control is not None:
         cache_point = cache_control.get("type", "ephemeral")
         if cache_point == "ephemeral":
-            return {"cachePoint": {"type": "default"}}
+            cache_point_block: CachePointBlock = {"type": "default"}
+            if isinstance(cache_control, dict) and "ttl" in cache_control:
+                ttl = cache_control["ttl"]
+                if (
+                    ttl in ["5m", "1h"]
+                    and model is not None
+                    and is_claude_4_5_on_bedrock(model)
+                ):
+                    cache_point_block["ttl"] = ttl
+            return {"cachePoint": cache_point_block}
     return None
 
 
@@ -5132,7 +5139,9 @@ def _is_bedrock_tool_block(tool: dict) -> bool:
     )
 
 
-def _bedrock_tools_pt(tools: List) -> List[BedrockToolBlock]:
+def _bedrock_tools_pt(
+    tools: List, model: Optional[str] = None
+) -> List[BedrockToolBlock]:
     """
     OpenAI tools looks like:
     tools = [
@@ -5248,7 +5257,7 @@ def _bedrock_tools_pt(tools: List) -> List[BedrockToolBlock]:
         tool_block_list.append(tool_block)
 
         ## ADD CACHE POINT TOOL BLOCK ##
-        cache_point_tool_block = add_cache_point_tool_block(tool)
+        cache_point_tool_block = add_cache_point_tool_block(tool, model=model)
         if cache_point_tool_block is not None:
             tool_block_list.append(cache_point_tool_block)
 

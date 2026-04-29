@@ -467,6 +467,86 @@ def test_bedrock_invoke_messages_transform_converts_custom_tool_schema_type_to_o
     assert result["tools"][0]["type"] == "custom"
 
 
+def test_remove_ttl_from_cache_control_processes_tools():
+    """
+    Ensure _remove_ttl_from_cache_control also sanitizes cache_control on tools.
+
+    Without this, tools keep unsupported ttl values while system/messages have
+    them stripped, causing TTL ordering violations on Bedrock.
+    """
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+
+    # Tools with ttl should have it stripped for non-Claude-4.5 models
+    request = {
+        "tools": [
+            {
+                "name": "get_weather",
+                "input_schema": {"type": "object"},
+                "cache_control": {"type": "ephemeral", "ttl": "1h"},
+            },
+            {
+                "name": "get_time",
+                "input_schema": {"type": "object"},
+            },
+        ],
+        "system": [
+            {
+                "type": "text",
+                "text": "You are helpful.",
+                "cache_control": {"type": "ephemeral", "ttl": "1h"},
+            }
+        ],
+        "messages": [],
+    }
+
+    cfg._remove_ttl_from_cache_control(
+        request, model="anthropic.claude-3-5-sonnet-20241022-v2:0"
+    )
+
+    # Tool ttl should be stripped
+    assert "ttl" not in request["tools"][0]["cache_control"]
+    assert request["tools"][0]["cache_control"]["type"] == "ephemeral"
+    # Tool without cache_control should be unchanged
+    assert "cache_control" not in request["tools"][1]
+    # System ttl should also be stripped
+    assert "ttl" not in request["system"][0]["cache_control"]
+
+
+def test_remove_ttl_from_cache_control_preserves_tools_ttl_for_claude_4_5():
+    """
+    For Claude 4.5+ models, ttl in ["5m", "1h"] should be preserved on tools,
+    just like it is for system and messages.
+    """
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+
+    request = {
+        "tools": [
+            {
+                "name": "get_weather",
+                "input_schema": {"type": "object"},
+                "cache_control": {"type": "ephemeral", "ttl": "1h"},
+            },
+        ],
+        "system": [
+            {
+                "type": "text",
+                "text": "You are helpful.",
+                "cache_control": {"type": "ephemeral", "ttl": "1h"},
+            }
+        ],
+    }
+
+    cfg._remove_ttl_from_cache_control(
+        request, model="us.anthropic.claude-sonnet-4-5-20250514-v1:0"
+    )
+
+    # Both tools and system should preserve ttl for Claude 4.5
+    assert request["tools"][0]["cache_control"]["ttl"] == "1h"
+    assert request["system"][0]["cache_control"]["ttl"] == "1h"
+
+
 def test_remove_scope_from_cache_control():
     """Ensure scope field is removed from cache_control for Bedrock (not supported)."""
 
