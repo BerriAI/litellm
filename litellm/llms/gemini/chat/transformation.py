@@ -103,7 +103,10 @@ class GoogleAIStudioGeminiConfig(VertexGeminiConfig):
         return supported_params
 
     def _transform_messages(
-        self, messages: List[AllMessageValues], model: Optional[str] = None
+        self,
+        messages: List[AllMessageValues],
+        model: Optional[str] = None,
+        litellm_params: Optional[dict] = None,
     ) -> List[ContentType]:
         """
         Google AI Studio Gemini does not support HTTP/HTTPS URLs for files.
@@ -160,4 +163,6 @@ class GoogleAIStudioGeminiConfig(VertexGeminiConfig):
                             except Exception:
                                 # If conversion fails, leave as is and let the API handle it
                                 pass
-        return _gemini_convert_messages_with_history(messages=messages, model=model)
+        return _gemini_convert_messages_with_history(
+            messages=messages, model=model, litellm_params=litellm_params
+        )
