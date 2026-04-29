@@ -91,6 +91,40 @@ async def _get_next_sequence_number(prisma_client: Any, run_id: str, table: str)
     return (rows[0].sequence_number + 1) if rows else 0
 
 
+async def _create_with_sequence(
+    prisma_client: Any,
+    table: str,
+    run_id: str,
+    row_data: Dict[str, Any],
+    *,
+    max_retries: int = 5,
+) -> Any:
+    """Insert a row, retrying on unique-constraint collisions from concurrent sequence reads.
+
+    The SELECT-MAX → INSERT pattern in _get_next_sequence_number is not atomic.
+    Under concurrent writes two callers can read the same MAX and race to INSERT
+    with the same sequence_number.  The @@unique([run_id, sequence_number])
+    constraint on both tables prevents silent corruption; this helper catches that
+    error and re-reads the MAX before retrying, capped at max_retries attempts.
+    """
+    for attempt in range(max_retries):
+        seq = await _get_next_sequence_number(prisma_client, run_id, table)
+        try:
+            if table == "events":
+                return await prisma_client.db.litellm_workflowevent.create(
+                    data={**row_data, "sequence_number": seq}
+                )
+            else:
+                return await prisma_client.db.litellm_workflowmessage.create(
+                    data={**row_data, "sequence_number": seq}
+                )
+        except Exception as e:
+            is_last = attempt == max_retries - 1
+            if "unique" in str(e).lower() and not is_last:
+                continue
+            raise
+
+
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
@@ -260,18 +294,14 @@ async def append_workflow_event(
         )
 
     try:
-        seq = await _get_next_sequence_number(prisma_client, run_id, "events")
-        event_data: Dict[str, Any] = {
+        row_data: Dict[str, Any] = {
             "run_id": run_id,
             "event_type": data.event_type,
             "step_name": data.step_name,
-            "sequence_number": seq,
         }
         if data.data is not None:
-            event_data["data"] = _json(data.data)
-        event = await prisma_client.db.litellm_workflowevent.create(
-            data=event_data
-        )
+            row_data["data"] = _json(data.data)
+        event = await _create_with_sequence(prisma_client, "events", run_id, row_data)
 
         new_status = _EVENT_STATUS_MAP.get(data.event_type)
         if new_status:
@@ -333,16 +363,14 @@ async def append_workflow_message(
         )
 
     try:
-        seq = await _get_next_sequence_number(prisma_client, run_id, "messages")
-        msg_data: Dict[str, Any] = {
+        row_data: Dict[str, Any] = {
             "run_id": run_id,
             "role": data.role,
             "content": data.content,
-            "sequence_number": seq,
         }
         if data.session_id is not None:
-            msg_data["session_id"] = data.session_id
-        msg = await prisma_client.db.litellm_workflowmessage.create(data=msg_data)
+            row_data["session_id"] = data.session_id
+        msg = await _create_with_sequence(prisma_client, "messages", run_id, row_data)
         return msg
     except Exception as e:
         verbose_proxy_logger.exception("Error appending workflow message: %s", e)
