@@ -3,7 +3,7 @@ from typing import Any, Dict, FrozenSet
 from fastapi import Request
 
 from litellm._logging import verbose_proxy_logger
-from litellm.proxy._types import CommonProxyErrors, UserAPIKeyAuth
+from litellm.proxy._types import UserAPIKeyAuth
 
 # OAuth2-proxy header trust is for **identity assertion** from a trusted
 # upstream auth proxy (oauth2-proxy, Authelia, etc.). The allowlist below
@@ -42,31 +42,19 @@ async def handle_oauth2_proxy_request(request: Request) -> UserAPIKeyAuth:
 
     The auth model assumes the proxy is deployed behind a trusted OAuth2
     reverse proxy that injects authenticated identity headers (e.g.
-    oauth2-proxy, Authelia). Two safeguards above and beyond that
-    deployment assumption:
+    oauth2-proxy, Authelia).
 
-    1. **Premium gate.** The sibling auth paths (``enable_oauth2_auth``
-       and ``enable_jwt_auth``) require ``premium_user``; this path
-       previously did not, which let any open-source deployment turn
-       the feature on without realising it requires a hardened
-       deployment topology.
-    2. **Identity-only allowlist.** ``oauth2_config_mappings`` maps
-       header names to ``UserAPIKeyAuth`` fields. Without an allowlist,
-       an admin who maps the wrong header to ``user_role`` lets any
-       caller send ``X-User-Role: proxy_admin`` and gain full admin
-       privileges (Pydantic coerces the string into the enum). Only
-       fields in ``ALLOWED_OAUTH2_PROXY_FIELDS`` (identity assertion
-       only — see the constant's comment) may be mapped; any other
-       mapping is rejected at request time so the misconfiguration
-       surfaces loudly rather than as a silent privesc.
+    **Identity-only allowlist.** ``oauth2_config_mappings`` maps header
+    names to ``UserAPIKeyAuth`` fields. Without an allowlist, an admin
+    who maps the wrong header to ``user_role`` lets any caller send
+    ``X-User-Role: proxy_admin`` and gain full admin privileges
+    (Pydantic coerces the string into the enum). Only fields in
+    ``ALLOWED_OAUTH2_PROXY_FIELDS`` (identity assertion only — see the
+    constant's comment) may be mapped; any other mapping is rejected at
+    request time so the misconfiguration surfaces loudly rather than as
+    a silent privesc.
     """
-    from litellm.proxy.proxy_server import general_settings, premium_user
-
-    if premium_user is not True:
-        raise ValueError(
-            "Oauth2 proxy auth is an enterprise-only feature. "
-            + CommonProxyErrors.not_premium_user.value
-        )
+    from litellm.proxy.proxy_server import general_settings
 
     verbose_proxy_logger.debug("Handling oauth2 proxy request")
     oauth2_config_mappings: Dict[str, str] = (
