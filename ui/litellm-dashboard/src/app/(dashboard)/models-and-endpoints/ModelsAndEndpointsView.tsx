@@ -62,6 +62,8 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({ premiumUser, te
   const [selectedModelId, setSelectedModelId] = useState<string | null>(null);
   const [selectedTeamId, setSelectedTeamId] = useState<string | null>(null);
   const [selectedTabIndex, setSelectedTabIndex] = useState(0);
+  const [healthCurrentPage, setHealthCurrentPage] = useState(1);
+  const healthPageSize = 50;
   const [showMissingProviderBanner, setShowMissingProviderBanner] = useState(() => {
     if (typeof window !== "undefined") {
       return localStorage.getItem("hideMissingProviderBanner") !== "true";
@@ -71,6 +73,10 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({ premiumUser, te
 
   const queryClient = useQueryClient();
   const { data: modelDataResponse, isLoading: isLoadingModels, refetch: refetchModels } = useModelsInfo();
+  const { data: healthModelDataResponse, isLoading: isLoadingHealthModels } = useModelsInfo(
+    healthCurrentPage,
+    healthPageSize,
+  );
   const { data: modelCostMapData, isLoading: isLoadingModelCostMap } = useModelCostMap();
   const { data: credentialsResponse, isLoading: isLoadingCredentials } = useCredentials();
   const credentialsList = credentialsResponse?.credentials || [];
@@ -104,12 +110,12 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({ premiumUser, te
     return modelDataResponse.data.map((model: any) => model.model_name);
   }, [modelDataResponse?.data]);
 
-  const allModelIdsOnProxy = useMemo<string[]>(() => {
-    if (!modelDataResponse?.data) return [];
-    return modelDataResponse.data
+  const healthModelIdsOnProxy = useMemo<string[]>(() => {
+    if (!healthModelDataResponse?.data) return [];
+    return healthModelDataResponse.data
       .map((model: any) => model.model_info?.id)
       .filter((id: string | undefined): id is string => Boolean(id));
-  }, [modelDataResponse?.data]);
+  }, [healthModelDataResponse?.data]);
 
   const getProviderFromModel = (model: string) => {
     if (modelCostMapData !== null && modelCostMapData !== undefined) {
@@ -124,6 +130,20 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({ premiumUser, te
     if (!modelDataResponse?.data) return { data: [] };
     return transformModelData(modelDataResponse, getProviderFromModel);
   }, [modelDataResponse?.data, getProviderFromModel]);
+
+  const processedHealthModelData = useMemo(() => {
+    if (!healthModelDataResponse?.data) return { data: [] };
+    return transformModelData(healthModelDataResponse, getProviderFromModel);
+  }, [healthModelDataResponse?.data, getProviderFromModel]);
+
+  const healthPaginationMeta = useMemo(() => {
+    return {
+      total_count: healthModelDataResponse?.total_count ?? 0,
+      current_page: healthModelDataResponse?.current_page ?? healthCurrentPage,
+      total_pages: healthModelDataResponse?.total_pages ?? 1,
+      size: healthModelDataResponse?.size ?? healthPageSize,
+    };
+  }, [healthModelDataResponse, healthCurrentPage, healthPageSize]);
 
   const isProxyAdmin = userRole && isProxyAdminRole(userRole);
   const isInternalUser = userRole && internalUserRoles.includes(userRole);
@@ -166,7 +186,7 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({ premiumUser, te
 
   const handleRefreshClick = () => {
     const currentDate = new Date();
-    setLastRefreshed(currentDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
+    setLastRefreshed(currentDate.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }));
     queryClient.invalidateQueries({ queryKey: ["models", "list"] });
     refetchModels();
   };
@@ -441,11 +461,16 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({ premiumUser, te
                 <TabPanel>
                   <HealthCheckComponent
                     accessToken={accessToken}
-                    modelData={processedModelData}
-                    all_models_on_proxy={allModelIdsOnProxy}
+                    modelData={processedHealthModelData}
+                    all_models_on_proxy={healthModelIdsOnProxy}
                     getDisplayModelName={getDisplayModelName}
                     setSelectedModelId={setSelectedModelId}
                     teams={teams}
+                    isLoading={isLoadingHealthModels}
+                    paginationMeta={healthPaginationMeta}
+                    currentPage={healthCurrentPage}
+                    pageSize={healthPageSize}
+                    onPageChange={setHealthCurrentPage}
                   />
                 </TabPanel>
                 <ModelRetrySettingsTab
