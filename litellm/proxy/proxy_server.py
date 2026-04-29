@@ -2290,11 +2290,9 @@ def run_ollama_serve():
         with open(os.devnull, "w") as devnull:
             subprocess.Popen(command, stdout=devnull, stderr=devnull)
     except Exception as e:
-        verbose_proxy_logger.debug(
-            f"""
+        verbose_proxy_logger.debug(f"""
             LiteLLM Warning: proxy started with `ollama` model\n`ollama serve` failed with Exception{e}. \nEnsure you run `ollama serve`
-        """
-        )
+        """)
 
 
 def _get_process_rss_mb() -> Optional[float]:
@@ -14526,3 +14524,27 @@ async def dynamic_mcp_route(mcp_server_name: str, request: Request):
 app.mount(path=BASE_MCP_ROUTE, app=mcp_app)
 app.include_router(mcp_rest_endpoints_router)
 app.include_router(mcp_discoverable_endpoints_router)
+
+
+# Rewrite /mcp -> /mcp/ internally to avoid 307 redirect from Starlette's
+# mounted sub-application routing.  Many MCP clients (e.g. Claude Code) send
+# POST /mcp and do not follow redirects for POST, which drops the request body.
+# Using a pure ASGI middleware (not BaseHTTPMiddleware) keeps SSE streaming intact.
+class _MCPTrailingSlashMiddleware:
+    """Transparently append '/' to the MCP mount path so Starlette serves it
+    directly instead of responding with 307 Temporary Redirect."""
+
+    def __init__(self, app: Any) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
+        if scope["type"] == "http" and scope.get("path") == BASE_MCP_ROUTE:
+            scope = dict(
+                scope,
+                path=BASE_MCP_ROUTE + "/",
+                raw_path=(scope.get("raw_path") or BASE_MCP_ROUTE.encode()) + b"/",
+            )
+        await self.app(scope, receive, send)
+
+
+app.add_middleware(_MCPTrailingSlashMiddleware)
