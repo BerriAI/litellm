@@ -20,6 +20,7 @@ from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
     MaskedHTTPStatusError,
+    _safe_aclose_response,
     _raise_masked_async_error,
     _raise_masked_sync_error,
     _safe_aread_response,
@@ -174,6 +175,13 @@ class TestSafeResponseHelpers:
         result = await _safe_aread_response(response)
         assert result == b""
 
+    @pytest.mark.asyncio
+    async def test_safe_aclose_response_error(self):
+        response = MagicMock(spec=httpx.Response)
+        response.aclose = AsyncMock(side_effect=Exception("async close failure"))
+        await _safe_aclose_response(response)
+        response.aclose.assert_awaited_once()
+
 
 class TestRaiseMaskedError:
     def test_sync_non_stream(self):
@@ -232,6 +240,21 @@ class TestRaiseMaskedError:
         assert err.message is not None
 
     @pytest.mark.asyncio
+    async def test_async_stream_closes_response(self):
+        orig = _make_httpx_status_error(
+            url="https://api.example.com?key=LEAKED_KEY", body="async stream"
+        )
+        with patch.object(
+            orig.response,
+            "aclose",
+            new=AsyncMock(return_value=None),
+        ) as close_mock:
+            with pytest.raises(MaskedHTTPStatusError):
+                await _raise_masked_async_error(orig, stream=True)
+
+        close_mock.assert_awaited_once()
+
+    @pytest.mark.asyncio
     async def test_async_breaks_chain(self):
         orig = _make_httpx_status_error()
         with pytest.raises(MaskedHTTPStatusError) as exc_info:
@@ -286,3 +309,44 @@ class TestHTTPHandlerErrorPaths:
                 await getattr(async_handler, method)(**kwargs)
 
             assert "SECRET" not in str(exc_info.value.request.url)
+
+    @pytest.mark.asyncio
+    async def test_async_get_stream_routes_status_errors_through_masked_handler(
+        self, async_handler
+    ):
+        request = httpx.Request("GET", "https://api.test.com?key=SECRET")
+        response = httpx.Response(status_code=500, request=request, content=b"boom")
+
+        with (
+            patch.object(
+                async_handler.client,
+                "build_request",
+                return_value=request,
+            ),
+            patch.object(
+                async_handler.client,
+                "send",
+                new=AsyncMock(return_value=response),
+            ),
+            patch(
+                "litellm.llms.custom_httpx.http_handler._raise_masked_async_error",
+                new=AsyncMock(
+                    side_effect=MaskedHTTPStatusError(
+                        _make_httpx_status_error(
+                            status_code=500,
+                            url="https://api.test.com?key=SECRET",
+                            body="boom",
+                        ),
+                        message="boom",
+                        text="boom",
+                    )
+                ),
+            ) as masked_handler,
+        ):
+            with pytest.raises(MaskedHTTPStatusError):
+                await async_handler.get(
+                    url="https://api.test.com?key=SECRET", stream=True
+                )
+
+        masked_handler.assert_awaited_once()
+        assert masked_handler.await_args.kwargs == {"stream": True}

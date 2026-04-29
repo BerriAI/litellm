@@ -332,7 +332,12 @@ class VolcEngineResponsesAPIConfig(OpenAIResponsesAPIConfig):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
+        stream: bool = False,
+        starting_after: Optional[int] = None,
     ) -> Tuple[str, Dict]:
+        # Volcengine does not support cursor-based stream resume on retrieve;
+        # ``stream`` and ``starting_after`` are accepted for signature parity
+        # with the base class and silently ignored.
         url = f"{api_base}/{response_id}"
         data: Dict = {}
         return url, data

@@ -1365,19 +1365,31 @@ async def aget_responses(
     timeout: Optional[Union[float, httpx.Timeout]] = None,
     # LiteLLM specific params,
     custom_llm_provider: Optional[str] = None,
+    stream: bool = False,
+    starting_after: Optional[int] = None,
     **kwargs,
-) -> ResponsesAPIResponse:
+) -> Union[ResponsesAPIResponse, BaseResponsesAPIStreamingIterator]:
     """
     Async: Fetch a response by its ID.
 
-    GET /v1/responses/{response_id} endpoint in the responses API
+    GET /v1/responses/{response_id} endpoint in the responses API.
 
     Args:
         response_id: The ID of the response to fetch.
         custom_llm_provider: Optional provider name. If not specified, will be decoded from response_id.
+        stream: When ``True``, opens an SSE stream to resume the response from
+            ``starting_after`` and returns a streaming iterator instead of a
+            single :class:`ResponsesAPIResponse`. Equivalent to the OpenAI
+            Python SDK call
+            ``client.responses.retrieve(id, stream=True, starting_after=N)``.
+        starting_after: The last ``sequence_number`` the caller has already
+            received from the original stream. Only meaningful when
+            ``stream=True``.
 
     Returns:
-        The response object with complete information about the stored response.
+        The response object with complete information about the stored
+        response, or a :class:`ResponsesAPIStreamingIterator` when
+        ``stream=True``.
     """
     local_vars = locals()
     try:
@@ -1403,6 +1415,8 @@ async def aget_responses(
             extra_query=extra_query,
             extra_body=extra_body,
             timeout=timeout,
+            stream=stream,
+            starting_after=starting_after,
             **kwargs,
         )
 
@@ -1444,19 +1458,30 @@ def get_responses(
     timeout: Optional[Union[float, httpx.Timeout]] = None,
     # LiteLLM specific params,
     custom_llm_provider: Optional[str] = None,
+    stream: bool = False,
+    starting_after: Optional[int] = None,
     **kwargs,
-) -> Union[ResponsesAPIResponse, Coroutine[Any, Any, ResponsesAPIResponse]]:
+) -> Union[
+    ResponsesAPIResponse,
+    BaseResponsesAPIStreamingIterator,
+    Coroutine[Any, Any, Union[ResponsesAPIResponse, BaseResponsesAPIStreamingIterator]],
+]:
     """
     Fetch a response by its ID.
 
-    GET /v1/responses/{response_id} endpoint in the responses API
+    GET /v1/responses/{response_id} endpoint in the responses API.
 
     Args:
         response_id: The ID of the response to fetch.
         custom_llm_provider: Optional provider name. If not specified, will be decoded from response_id.
+        stream: When ``True``, opens an SSE stream to resume the response from
+            ``starting_after``. Returns a streaming iterator instead of a
+            single :class:`ResponsesAPIResponse`.
+        starting_after: The last ``sequence_number`` already received by the
+            caller. Only meaningful when ``stream=True``.
 
     Returns:
-        The response object with complete information about the stored response.
+        The response object, or a streaming iterator when ``stream=True``.
     """
     local_vars = locals()
     try:
@@ -1499,7 +1524,7 @@ def get_responses(
         # Pre Call logging
         litellm_logging_obj.update_from_kwargs(
             kwargs=local_vars,
-            model=None,
+            model=kwargs.get("model"),
             optional_params={
                 "response_id": response_id,
             },
@@ -1522,6 +1547,9 @@ def get_responses(
             _is_async=_is_async,
             client=kwargs.get("client"),
             shared_session=kwargs.get("shared_session"),
+            stream=stream,
+            starting_after=starting_after,
+            litellm_metadata=kwargs.get("litellm_metadata"),
         )
 
         # Update the responses_api_response_id with the model_id

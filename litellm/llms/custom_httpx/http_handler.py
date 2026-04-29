@@ -337,6 +337,14 @@ async def _safe_aread_response(response: httpx.Response) -> bytes:
         return b""
 
 
+async def _safe_aclose_response(response: httpx.Response) -> None:
+    """Safely close an async response, ignoring transport cleanup failures."""
+    try:
+        await response.aclose()
+    except Exception:
+        pass
+
+
 def _safe_read_response(response: httpx.Response) -> bytes:
     """Safely read sync response body, falling back to empty bytes on errors."""
     try:
@@ -357,7 +365,10 @@ def _raise_masked_sync_error(e: httpx.HTTPStatusError, stream: bool) -> None:
 async def _raise_masked_async_error(e: httpx.HTTPStatusError, stream: bool) -> None:
     """Raise a MaskedHTTPStatusError for async HTTP handlers."""
     if stream:
-        _body = mask_sensitive_info(await _safe_aread_response(e.response))
+        try:
+            _body = mask_sensitive_info(await _safe_aread_response(e.response))
+        finally:
+            await _safe_aclose_response(e.response)
         raise MaskedHTTPStatusError(e, message=_body, text=_body) from None
     _text = mask_sensitive_info(_safe_get_response_text(e.response))
     raise MaskedHTTPStatusError(e, message=_text, text=_text) from None
@@ -486,6 +497,8 @@ class AsyncHTTPHandler:
         params: Optional[dict] = None,
         headers: Optional[dict] = None,
         follow_redirects: Optional[bool] = None,
+        stream: bool = False,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
     ):
         # Set follow_redirects to UseClientDefault if None
         _follow_redirects = (
@@ -494,6 +507,27 @@ class AsyncHTTPHandler:
 
         params = params or {}
         params.update(HTTPHandler.extract_query_params(url))
+
+        if stream:
+            # Build and send an open SSE-style stream request. Caller is
+            # responsible for iterating ``response.aiter_lines()`` and
+            # eventually awaiting ``response.aclose()`` to release the
+            # underlying connection back to the pool.
+            req = self.client.build_request(
+                "GET",
+                url,
+                params=params,
+                headers=headers,
+                timeout=timeout if timeout is not None else self.timeout,
+            )
+            response = await self.client.send(
+                req, stream=True, follow_redirects=_follow_redirects
+            )
+            try:
+                response.raise_for_status()
+            except httpx.HTTPStatusError as e:
+                await _raise_masked_async_error(e, stream=True)
+            return response
 
         response = await self.client.get(
             url, params=params, headers=headers, follow_redirects=_follow_redirects  # type: ignore
@@ -1007,6 +1041,8 @@ class HTTPHandler:
         params: Optional[dict] = None,
         headers: Optional[dict] = None,
         follow_redirects: Optional[bool] = None,
+        stream: bool = False,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
     ):
         # Set follow_redirects to UseClientDefault if None
         _follow_redirects = (
@@ -1015,14 +1051,51 @@ class HTTPHandler:
         params = params or {}
         params.update(self.extract_query_params(url))
 
-        response = self.client.get(
-            url,
-            params=params,
-            headers=headers,
-            follow_redirects=_follow_redirects,
-        )
+        try:
+            if stream or timeout is not None:
+                if timeout is not None:
+                    req = self.client.build_request(
+                        "GET",
+                        url,
+                        params=params,
+                        headers=headers,
+                        timeout=timeout,
+                    )
+                else:
+                    req = self.client.build_request(
+                        "GET",
+                        url,
+                        params=params,
+                        headers=headers,
+                    )
 
-        return response
+                response = self.client.send(
+                    req,
+                    stream=stream,
+                    follow_redirects=_follow_redirects,
+                )
+                if stream:
+                    response.raise_for_status()
+                return response
+
+            response = self.client.get(
+                url,
+                params=params,
+                headers=headers,
+                follow_redirects=_follow_redirects,
+            )
+
+            return response
+        except httpx.TimeoutException:
+            raise litellm.Timeout(
+                message=f"Connection timed out after {timeout} seconds.",
+                model="default-model-name",
+                llm_provider="litellm-httpx-handler",
+            )
+        except httpx.HTTPStatusError as e:
+            _raise_masked_sync_error(e, stream)
+        except Exception as e:
+            raise e
 
     @staticmethod
     def extract_query_params(url: str) -> Dict[str, str]:

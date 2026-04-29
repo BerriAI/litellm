@@ -249,18 +249,29 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
+        stream: bool = False,
+        starting_after: Optional[int] = None,
     ) -> Tuple[str, Dict]:
         """
-        Transform the get response API request into a URL and data
+        Transform the get response API request into a URL and data.
 
-        OpenAI API expects the following request
-        - GET /v1/responses/{response_id}
+        Azure OpenAI follows the same shape as OpenAI for retrieve:
+        - GET /openai/responses/{response_id}?api-version=...
+
+        For cursor-based stream resume, Azure also accepts ``stream`` and
+        ``starting_after`` as query parameters (verified empirically against
+        api-version 2025-04-01-preview); we surface them via the returned
+        ``data`` dict so the HTTP layer can attach them.
         """
         get_url = self._construct_url_for_response_id_in_path(
             api_base=api_base, response_id=response_id
         )
         data: Dict = {}
-        verbose_logger.debug(f"get response url={get_url}")
+        if stream:
+            data["stream"] = "true"
+        if starting_after is not None:
+            data["starting_after"] = starting_after
+        verbose_logger.debug(f"get response url={get_url} data={data}")
         return get_url, data
 
     def transform_list_input_items_request(
