@@ -2,6 +2,7 @@ from enum import Enum
 from typing import Any, Dict, List, Literal, Optional, Union
 
 from typing_extensions import (
+    NotRequired,
     Required,
     TypedDict,
 )
@@ -602,6 +603,13 @@ class InputConfig(TypedDict):
     gcsSource: GcsSource
 
 
+class InstanceConfig(TypedDict, total=False):
+    instanceType: str
+    keyField: str
+    includedFields: List[str]
+    excludedFields: List[str]
+
+
 class GcsDestination(TypedDict):
     outputUriPrefix: str
 
@@ -664,6 +672,7 @@ class VertexAIBatchPredictionJob(TypedDict):
     displayName: str
     model: str
     inputConfig: InputConfig
+    instanceConfig: NotRequired[InstanceConfig]
     outputConfig: OutputConfig
 
 
