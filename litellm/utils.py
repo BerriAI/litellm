@@ -9242,6 +9242,12 @@ class ProviderConfigManager:
             )
 
             return AWSPollyTextToSpeechConfig()
+        elif litellm.LlmProviders.MODELSLAB == provider:
+            from litellm.llms.modelslab.text_to_speech.transformation import (
+                ModelsLabTextToSpeechConfig,
+            )
+
+            return ModelsLabTextToSpeechConfig()
         return None
 
     @staticmethod
