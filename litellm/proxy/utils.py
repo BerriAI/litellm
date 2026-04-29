@@ -4717,13 +4717,18 @@ async def send_email(
     # Attach the body to the email
     email_message.attach(MIMEText(html, "html"))
 
+    smtp_use_ssl = os.getenv("SMTP_USE_SSL", "False") == "True"
+    use_ssl = smtp_use_ssl or smtp_port == 465
+
     try:
-        # Establish a secure connection with the SMTP server
-        with smtplib.SMTP(
-            host=smtp_host,
-            port=smtp_port,
-        ) as server:
-            if os.getenv("SMTP_TLS", "True") != "False":
+        # Port 465 requires implicit SSL (SMTP_SSL); port 587 uses STARTTLS.
+        if use_ssl:
+            server_ctx = smtplib.SMTP_SSL(host=smtp_host, port=smtp_port)
+        else:
+            server_ctx = smtplib.SMTP(host=smtp_host, port=smtp_port)
+
+        with server_ctx as server:
+            if not use_ssl and os.getenv("SMTP_TLS", "True") != "False":
                 server.starttls()
 
             # Login to your email account only if smtp_username and smtp_password are provided
