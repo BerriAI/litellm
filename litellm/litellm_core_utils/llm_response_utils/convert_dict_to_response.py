@@ -108,12 +108,20 @@ def convert_tool_call_to_json_mode(
         convert_tool_call_to_json_mode=convert_tool_call_to_json_mode,
     ):
         # to support 'json_schema' logic on older models
-        json_mode_content_str: Optional[str] = tool_calls[0]["function"].get(
-            "arguments"
-        )
+        json_mode_content_str: Optional[str] = None
+        filtered_tool_calls = []
+        for tool in tool_calls:
+            if tool["function"]["name"] == RESPONSE_FORMAT_TOOL_NAME:
+                json_mode_content_str = tool["function"].get("arguments")
+            else:
+                filtered_tool_calls.append(tool)
+
         if json_mode_content_str is not None:
-            message = litellm.Message(content=json_mode_content_str)
-            finish_reason = "stop"
+            message = litellm.Message(
+                content=json_mode_content_str,
+                tool_calls=filtered_tool_calls if len(filtered_tool_calls) > 0 else None,
+            )
+            finish_reason = "stop" if len(filtered_tool_calls) == 0 else "tool_calls"
             return message, finish_reason
     return None, None
 
@@ -434,13 +442,10 @@ def _should_convert_tool_call_to_json_mode(
     """
     Determine if tool calls should be converted to JSON mode
     """
-    if (
-        convert_tool_call_to_json_mode
-        and tool_calls is not None
-        and len(tool_calls) == 1
-        and tool_calls[0]["function"]["name"] == RESPONSE_FORMAT_TOOL_NAME
-    ):
-        return True
+    if convert_tool_call_to_json_mode and tool_calls is not None:
+        for tool in tool_calls:
+            if tool["function"]["name"] == RESPONSE_FORMAT_TOOL_NAME:
+                return True
     return False
 
 
@@ -562,12 +567,28 @@ def convert_to_model_response_object(  # noqa: PLR0915
                     convert_tool_call_to_json_mode=convert_tool_call_to_json_mode,
                 ):
                     # to support 'json_schema' logic on older models
-                    json_mode_content_str: Optional[str] = tool_calls[0][
-                        "function"
-                    ].get("arguments")
+                    json_mode_content_str: Optional[str] = None
+                    filtered_tool_calls = []
+                    for _tc in tool_calls:
+                        if _tc["function"]["name"] == RESPONSE_FORMAT_TOOL_NAME:
+                            json_mode_content_str = _tc["function"].get("arguments")
+                        else:
+                            filtered_tool_calls.append(_tc)
+
+                    if len(filtered_tool_calls) == 0:
+                        tool_calls = None
+                    else:
+                        tool_calls = filtered_tool_calls
+
                     if json_mode_content_str is not None:
-                        message = litellm.Message(content=json_mode_content_str)
-                        finish_reason = "stop"
+                        if tool_calls is None:
+                            message = litellm.Message(content=json_mode_content_str)
+                            finish_reason = "stop"
+                        else:
+                            if choice["message"].get("content") is None:
+                                choice["message"]["content"] = json_mode_content_str
+                            elif isinstance(choice["message"].get("content"), str):
+                                choice["message"]["content"] += f"\n{json_mode_content_str}"
                 if message is None:
                     # Preserve provider_specific_fields if already present
                     # in the response (e.g. from proxy passthrough)

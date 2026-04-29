@@ -1054,6 +1054,10 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                         "sonnet-4-6",
                         "sonnet_4.6",
                         "sonnet_4_6",
+                        "haiku-4.5",
+                        "haiku-4-5",
+                        "haiku_4.5",
+                        "haiku_4_5",
                     }
                 ):
                     _output_format = (
