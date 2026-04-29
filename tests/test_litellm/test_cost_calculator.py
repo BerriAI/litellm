@@ -17,8 +17,14 @@ from litellm.cost_calculator import (
     response_cost_calculator,
 )
 from litellm.types.llms.openai import OpenAIRealtimeStreamList
-from litellm.types.utils import ModelResponse, PromptTokensDetailsWrapper, Usage
-from litellm.utils import TranscriptionResponse
+from litellm.types.utils import (
+    Choices,
+    Message,
+    ModelResponse,
+    PromptTokensDetailsWrapper,
+    Usage,
+)
+from litellm.utils import TranscriptionResponse, _invalidate_model_cost_lowercase_map
 
 
 def test_completion_cost_uses_response_model_for_dynamic_routing():
@@ -46,6 +52,52 @@ def test_completion_cost_uses_response_model_for_dynamic_routing():
     )
 
     assert cost > 0, "Cost should be calculated using response model"
+
+
+def test_completion_cost_anthropic_dated_snapshot_model_id():
+    """
+    Anthropic can return dated snapshot ids in message responses (e.g. with context-1m beta).
+    model_cost uses undated keys (claude-sonnet-4-6); cost must still compute.
+    """
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    _invalidate_model_cost_lowercase_map()
+
+    response = ModelResponse(
+        id="msg_test",
+        choices=[
+            Choices(
+                finish_reason="stop",
+                index=0,
+                message=Message(
+                    content="ok",
+                    role="assistant",
+                    tool_calls=None,
+                    function_call=None,
+                ),
+            )
+        ],
+        created=1725036547,
+        model="claude-sonnet-4-6-20260219",
+        object="chat.completion",
+        system_fingerprint=None,
+        usage=Usage(
+            completion_tokens=5,
+            prompt_tokens=100,
+            total_tokens=105,
+        ),
+    )
+
+    cost = completion_cost(
+        completion_response=response, custom_llm_provider="anthropic"
+    )
+    assert cost is not None and cost > 0
+
+    base = litellm.get_model_info(
+        model="claude-sonnet-4-6", custom_llm_provider="anthropic"
+    )
+    expected = 100 * base["input_cost_per_token"] + 5 * base["output_cost_per_token"]
+    assert abs(cost - expected) < 1e-9
 
 
 def test_cost_calculator_with_response_cost_in_additional_headers():

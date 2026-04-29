@@ -183,9 +183,11 @@ async def test_get_prompt_info_by_base_id():
         # We also need to mock get_prompt_callback_by_id to avoid content extraction errors/logic
         mock_registry.get_prompt_callback_by_id.return_value = None
 
-        response = await get_prompt_info(
-            prompt_id="test_prompt", user_api_key_dict=mock_user_auth
-        )
+        # get_prompt_info awaits prisma when connected; default MagicMock is not awaitable
+        with patch("litellm.proxy.proxy_server.prisma_client", None):
+            response = await get_prompt_info(
+                prompt_id="test_prompt", user_api_key_dict=mock_user_auth
+            )
 
         assert (
             response.prompt_spec.prompt_id == "test_prompt"
