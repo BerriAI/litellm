@@ -328,12 +328,12 @@ AZURE_FILE_SEARCH_COST_PER_GB_PER_DAY = float(
 )
 AZURE_COMPUTER_USE_INPUT_COST_PER_1K_TOKENS = float(
     os.getenv(
-        "AZURE_COMPUTER_USE_INPUT_COST_PER_1K_TOKENS", 3.0
+        "AZURE_COMPUTER_USE_INPUT_COST_PER_1K_TOKENS", 0.003
     )  # $0.003 USD per 1K Tokens
 )
 AZURE_COMPUTER_USE_OUTPUT_COST_PER_1K_TOKENS = float(
     os.getenv(
-        "AZURE_COMPUTER_USE_OUTPUT_COST_PER_1K_TOKENS", 12.0
+        "AZURE_COMPUTER_USE_OUTPUT_COST_PER_1K_TOKENS", 0.012
     )  # $0.012 USD per 1K Tokens
 )
 AZURE_VECTOR_STORE_COST_PER_GB_PER_DAY = float(
@@ -409,9 +409,6 @@ CACHED_STREAMING_CHUNK_DELAY = float(os.getenv("CACHED_STREAMING_CHUNK_DELAY", 0
 AUDIO_SPEECH_CHUNK_SIZE = int(
     os.getenv("AUDIO_SPEECH_CHUNK_SIZE", 8192)
 )  # chunk_size for audio speech streaming. Balance between latency and memory usage
-MAX_SIZE_PER_ITEM_IN_MEMORY_CACHE_IN_KB = int(
-    os.getenv("MAX_SIZE_PER_ITEM_IN_MEMORY_CACHE_IN_KB", 512)
-)
 DEFAULT_MAX_TOKENS_FOR_TRITON = int(os.getenv("DEFAULT_MAX_TOKENS_FOR_TRITON", 2000))
 #### Networking settings ####
 # Sentinel used when `REQUEST_TIMEOUT` is unset: `litellm.request_timeout` keeps this
@@ -874,7 +871,7 @@ clarifai_models: set = set(
         "clarifai/qwen.qwenLM.Qwen3-30B-A3B-Instruct-2507",
         "clarifai/qwen.qwen3.qwen3-next-80B-A3B-Thinking",
         "clarifai/openai.chat-completion.gpt-oss-120b",
-        "clarifai/qwen.qwenLM.Qwen3-30B-A3B-Thinking-2507"
+        "clarifai/qwen.qwenLM.Qwen3-30B-A3B-Thinking-2507",
         "clarifai/openai.chat-completion.gpt-5-nano",
         "clarifai/openai.chat-completion.gpt-4o",
         "clarifai/gcp.generate.gemini-2_5-pro",
