@@ -178,11 +178,15 @@ class OvalixGuardrail(CustomGuardrail):
             return metadata["user_api_key_user_id"]
         return "unknown"
 
+    def _get_tracker_actor_id(self, data: dict) -> str:
+        """Opaque actor id for Tracker API payloads (hash of _get_actor; avoids sending PII)."""
+        return hashlib.sha256(self._get_actor(data).encode()).hexdigest()[:8]
+
     def _get_session_id(self, data: dict) -> str:
         """Return a unique identifier for the chat/session (actor + date + application_id)."""
-        actor = hashlib.sha256(self._get_actor(data).encode()).hexdigest()[:8]
+        actor_hash = self._get_tracker_actor_id(data)
         today = datetime.datetime.now().strftime("%Y-%m-%d")
-        return f"{actor}_{today}_{self._application_id}"
+        return f"{actor_hash}_{today}_{self._application_id}"
 
     async def _call_checkpoint(
         self,
@@ -236,7 +240,7 @@ class OvalixGuardrail(CustomGuardrail):
         if not self._pre_checkpoint_id and not self._post_checkpoint_id:
             return inputs
 
-        actor = self._get_actor(request_data)
+        tracker_actor_id = self._get_tracker_actor_id(request_data)
         session_id = self._get_session_id(request_data)
         texts = inputs.get("texts") or []
         if not texts or not isinstance(texts, list):
@@ -246,13 +250,13 @@ class OvalixGuardrail(CustomGuardrail):
             if not self._post_checkpoint_id:
                 return inputs
             corrected_llm_responses = await self._generate_post_guardrail_llm_texts(
-                texts, actor, session_id, self._post_checkpoint_id
+                texts, tracker_actor_id, session_id, self._post_checkpoint_id
             )
             return {**inputs, "texts": corrected_llm_responses}
 
         if self._pre_checkpoint_id:
             post_guardrail_texts = await self._generate_post_guardrail_llm_texts(
-                texts, actor, session_id, self._pre_checkpoint_id
+                texts, tracker_actor_id, session_id, self._pre_checkpoint_id
             )
             return {**inputs, "texts": post_guardrail_texts}
         return inputs

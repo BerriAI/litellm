@@ -2,6 +2,7 @@
 Unit tests for Ovalix guardrail: config resolution and apply_guardrail behavior
 with mocked Tracker service responses (allow, anonymize, block).
 """
+
 import os
 from typing import Any, List
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -167,7 +168,7 @@ class TestOvalixGuardrail:
                 result = await guardrail._call_checkpoint(
                     content="hello",
                     checkpoint_id="pre-1",
-                    actor="user@test.com",
+                    actor="a1b2c3d4",
                     session_id="session-1",
                 )
 
@@ -180,7 +181,7 @@ class TestOvalixGuardrail:
             body = call_args.kwargs["json"]
             assert body["application_id"] == "app-1"
             assert body["checkpoint_id"] == "pre-1"
-            assert body["actor"] == "user@test.com"
+            assert body["actor"] == "a1b2c3d4"
             assert body["session_id"] == "session-1"
             assert body["data_type"] == "TEXT"
             assert body["data"] == {"content": "hello"}
@@ -578,6 +579,17 @@ class TestOvalixGuardrail:
             }
         }
         assert guardrail._get_actor(data) == "primary@test.com"
+
+    def test_get_tracker_actor_id_is_hash_not_raw_pii(self, guardrail_with_env):
+        """Tracker API actor field uses a short hash of _get_actor, not email/user id."""
+        guardrail = guardrail_with_env
+        data = {"metadata": {"user_api_key_user_email": "user@example.com"}}
+        raw = guardrail._get_actor(data)
+        hashed = guardrail._get_tracker_actor_id(data)
+        assert raw == "user@example.com"
+        assert hashed != raw
+        assert len(hashed) == 8
+        assert all(c in "0123456789abcdef" for c in hashed)
 
     def test_get_session_id_deterministic_and_includes_app_id(self, guardrail_with_env):
         """Session ID is stable for same actor/day and includes application_id."""
