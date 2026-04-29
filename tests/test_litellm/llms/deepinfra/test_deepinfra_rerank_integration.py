@@ -370,8 +370,7 @@ def test_deepinfra_rerank_request_format(mock_post):
     request_data = json.loads(mock_post.call_args.kwargs["data"])
     assert request_data["queries"] == [
         "test query",
-        "test query",
-    ]  # DeepInfra requires queries to match documents length
+    ]  # Single-element array; Deepinfra broadcasts across all documents
     assert request_data["documents"] == ["doc1", "doc2"]
     assert request_data["instruction"] == "custom instruction"
     assert request_data["webhook"] == "https://webhook.example.com"

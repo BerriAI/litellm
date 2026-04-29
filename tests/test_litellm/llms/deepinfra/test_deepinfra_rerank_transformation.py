@@ -54,8 +54,7 @@ class TestDeepinfraRerankTransform:
         )
         assert params["queries"] == [
             "test query",
-            "test query",
-        ]  # DeepInfra requires queries to match documents length
+        ]  # Single-element array; Deepinfra broadcasts across all documents
         assert params["documents"] == ["doc1", "doc2"]
 
     def test_map_cohere_rerank_params_with_non_default(self):
@@ -228,16 +227,10 @@ class TestDeepinfraRerankTransform:
         assert "documents" in supported_params
         assert len(supported_params) == 2
 
-    def test_query_replication_for_deepinfra_requirement(self):
-        """Test that queries are replicated to match documents length as required by DeepInfra."""
-        # Test with different document lengths
-        test_cases = [
-            (["doc1"], ["query1"]),
-            (["doc1", "doc2"], ["query1", "query1"]),
-            (["doc1", "doc2", "doc3"], ["query1", "query1", "query1"]),
-        ]
-
-        for documents, expected_queries in test_cases:
+    def test_query_single_element_array_for_deepinfra(self):
+        """Test that queries is a single-element array regardless of document count; Deepinfra broadcasts it."""
+        for num_docs in [1, 2, 3, 10]:
+            documents = [f"doc{i}" for i in range(num_docs)]
             params = self.config.map_cohere_rerank_params(
                 non_default_params={},
                 model=self.model,
@@ -245,12 +238,7 @@ class TestDeepinfraRerankTransform:
                 query="query1",
                 documents=documents,
             )
-            assert (
-                params["queries"] == expected_queries
-            ), f"Failed for {len(documents)} documents"
-            assert len(params["queries"]) == len(
-                documents
-            ), "Queries length must match documents length"
+            assert params["queries"] == ["query1"], f"Failed for {num_docs} documents"
 
     def test_get_error_class_basic(self):
         """Test error class generation for basic error."""
