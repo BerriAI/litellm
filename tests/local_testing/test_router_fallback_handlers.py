@@ -312,3 +312,107 @@ async def test_multiple_fallbacks(function_name):
         result._hidden_params["api_base"]
         == "https://exampleopenaiendpoint-production.up.railway.app/"
     )
+
+
+@pytest.mark.asyncio
+async def test_fallback_kwargs_not_mutated():
+    """
+    Verify that each fallback attempt receives a fresh copy of kwargs.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/24764:
+    When a provider handler mutates kwargs (e.g. Bedrock pops `tools`),
+    subsequent fallback attempts should still see the original parameters.
+
+    We verify this by patching `safe_deep_copy` with a wrapper that tracks
+    calls, ensuring it is invoked once per fallback iteration.  If the
+    `safe_deep_copy` call is removed, only a shallow reference is passed and
+    `safe_deep_copy` is never called — causing this test to fail.
+    """
+    from litellm.litellm_core_utils.core_helpers import (
+        safe_deep_copy as _real_safe_deep_copy,
+    )
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "primary-model",
+                "litellm_params": {
+                    "model": "openai/primary",
+                    "api_key": "fake-key",
+                    "api_base": "http://localhost:1/",
+                },
+            },
+            {
+                "model_name": "fallback-a",
+                "litellm_params": {
+                    "model": "openai/fallback-a",
+                    "api_key": "fake-key",
+                    "api_base": "http://localhost:2/",
+                },
+            },
+            {
+                "model_name": "fallback-b",
+                "litellm_params": {
+                    "model": "openai/fallback-b",
+                    "api_key": "fake-key",
+                    "api_base": "http://localhost:3/",
+                },
+            },
+        ],
+    )
+
+    async def mock_async_function_with_fallbacks(*args, **kwargs):
+        """Always fail so the fallback loop keeps going."""
+        raise litellm.exceptions.ServiceUnavailableError(
+            message="simulated timeout",
+            model="test",
+            llm_provider="openai",
+        )
+
+    router.async_function_with_fallbacks = mock_async_function_with_fallbacks
+
+    original_tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "classify",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        }
+    ]
+    original_tool_choice = {
+        "type": "function",
+        "function": {"name": "classify"},
+    }
+
+    request_kwargs: Dict[str, Any] = {
+        "messages": [{"role": "user", "content": "test"}],
+        "tools": original_tools,
+        "tool_choice": original_tool_choice,
+        "stream": True,
+        "metadata": {},
+    }
+
+    with patch(
+        "litellm.router_utils.fallback_event_handlers.safe_deep_copy",
+        wraps=_real_safe_deep_copy,
+    ) as mock_sdc:
+        with pytest.raises(Exception):
+            await run_async_fallback(
+                litellm_router=router,
+                original_function=router._acompletion,
+                num_retries=0,
+                fallback_model_group=["fallback-a", "fallback-b"],
+                original_model_group="primary-model",
+                original_exception=Exception("primary failed"),
+                max_fallbacks=5,
+                fallback_depth=0,
+                **request_kwargs,
+            )
+
+        # safe_deep_copy must be called once per fallback model group iteration.
+        # If the deep-copy is ever removed, this assertion will fail.
+        assert mock_sdc.call_count == 2, (
+            f"Expected safe_deep_copy to be called once per fallback attempt (2), "
+            f"but was called {mock_sdc.call_count} times"
+        )
