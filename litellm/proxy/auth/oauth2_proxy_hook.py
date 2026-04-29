@@ -100,9 +100,7 @@ async def handle_oauth2_proxy_request(request: Request) -> UserAPIKeyAuth:
         value = request.headers.get(header)
         if not value:
             continue
-        if key == "max_budget":
-            auth_data[key] = float(value)
-        elif key == "models":
+        if key == "models":
             auth_data[key] = [model.strip() for model in value.split(",")]
         else:
             auth_data[key] = value

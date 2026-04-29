@@ -45,24 +45,32 @@ def _request_with_headers(headers: dict) -> Request:
 
 
 @pytest.fixture
-def premium_proxy_settings(monkeypatch):
+def configure_proxy(monkeypatch):
     """
-    Patch the proxy_server module attributes the hook reads so each test
-    starts from "premium=True, mapping={user_id: x-user-id}".
+    Yields a callable that sets ``premium_user`` and
+    ``oauth2_config_mappings`` on the proxy_server module for the
+    duration of one test. Default is premium=True with a single
+    ``user_id -> x-user-id`` mapping.
     """
     import litellm.proxy.proxy_server as proxy_server
 
-    monkeypatch.setattr(proxy_server, "premium_user", True, raising=False)
-    monkeypatch.setattr(
-        proxy_server,
-        "general_settings",
-        {"oauth2_config_mappings": {"user_id": "x-user-id"}},
-        raising=False,
-    )
+    def _configure(*, premium=True, mappings=None):
+        if mappings is None:
+            mappings = {"user_id": "x-user-id"}
+        monkeypatch.setattr(proxy_server, "premium_user", premium, raising=False)
+        monkeypatch.setattr(
+            proxy_server,
+            "general_settings",
+            {"oauth2_config_mappings": mappings},
+            raising=False,
+        )
+
+    return _configure
 
 
 @pytest.mark.asyncio
-async def test_returns_auth_for_simple_user_id_mapping(premium_proxy_settings):
+async def test_returns_auth_for_simple_user_id_mapping(configure_proxy):
+    configure_proxy()
     request = _request_with_headers({"x-user-id": "alice"})
 
     auth = await handle_oauth2_proxy_request(request)
@@ -72,16 +80,8 @@ async def test_returns_auth_for_simple_user_id_mapping(premium_proxy_settings):
 
 
 @pytest.mark.asyncio
-async def test_rejects_when_not_premium(monkeypatch):
-    import litellm.proxy.proxy_server as proxy_server
-
-    monkeypatch.setattr(proxy_server, "premium_user", False, raising=False)
-    monkeypatch.setattr(
-        proxy_server,
-        "general_settings",
-        {"oauth2_config_mappings": {"user_id": "x-user-id"}},
-        raising=False,
-    )
+async def test_rejects_when_not_premium(configure_proxy):
+    configure_proxy(premium=False)
     request = _request_with_headers({"x-user-id": "alice"})
 
     with pytest.raises(ValueError, match="enterprise"):
@@ -93,22 +93,11 @@ async def test_rejects_when_not_premium(monkeypatch):
     sorted(PRIVILEGED_OAUTH2_PROXY_FIELDS),
 )
 @pytest.mark.asyncio
-async def test_refuses_to_map_privileged_fields(monkeypatch, privileged_field):
-    """
-    The exact privesc shape from GHSA-5c3m-qffq-4r9m: an admin maps
-    ``user_role`` (or any other privileged field) to a header and a
-    caller forges ``X-User-Role: proxy_admin``. The hook must reject
-    this configuration outright at request time.
-    """
-    import litellm.proxy.proxy_server as proxy_server
-
-    monkeypatch.setattr(proxy_server, "premium_user", True, raising=False)
-    monkeypatch.setattr(
-        proxy_server,
-        "general_settings",
-        {"oauth2_config_mappings": {privileged_field: f"x-{privileged_field}"}},
-        raising=False,
-    )
+async def test_refuses_to_map_privileged_fields(configure_proxy, privileged_field):
+    # GHSA-5c3m-qffq-4r9m attack shape: admin maps a privileged field
+    # to a header and a caller forges the value. The hook must reject
+    # the misconfiguration outright at request time.
+    configure_proxy(mappings={privileged_field: f"x-{privileged_field}"})
     request = _request_with_headers({f"x-{privileged_field}": "proxy_admin"})
 
     with pytest.raises(ValueError) as exc:
@@ -117,26 +106,13 @@ async def test_refuses_to_map_privileged_fields(monkeypatch, privileged_field):
 
 
 @pytest.mark.asyncio
-async def test_user_role_header_forgery_attack_is_blocked(monkeypatch):
-    """
-    End-to-end shape from the GHSA: with ``user_role`` mapped, a forged
-    ``X-User-Role: proxy_admin`` header would have produced a
-    ``UserAPIKeyAuth`` with PROXY_ADMIN role. Now the request raises
-    before any auth object is constructed.
-    """
-    import litellm.proxy.proxy_server as proxy_server
-
-    monkeypatch.setattr(proxy_server, "premium_user", True, raising=False)
-    monkeypatch.setattr(
-        proxy_server,
-        "general_settings",
-        {
-            "oauth2_config_mappings": {
-                "user_id": "x-user-id",
-                "user_role": "x-user-role",
-            }
-        },
-        raising=False,
+async def test_user_role_header_forgery_attack_is_blocked(configure_proxy):
+    # End-to-end form of the privesc: with ``user_role`` mapped, the
+    # forged ``X-User-Role: proxy_admin`` header would have produced
+    # a ``UserAPIKeyAuth(user_role=PROXY_ADMIN)``. Now rejected before
+    # any auth object is constructed.
+    configure_proxy(
+        mappings={"user_id": "x-user-id", "user_role": "x-user-role"},
     )
     request = _request_with_headers(
         {
@@ -150,27 +126,16 @@ async def test_user_role_header_forgery_attack_is_blocked(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_safe_fields_still_pass_through(monkeypatch):
-    """
-    Sanity check that non-privileged fields (the documented use case
-    for OAuth2 proxy auth — asserting identity from a trusted upstream)
-    still work after the fix.
-    """
-    import litellm.proxy.proxy_server as proxy_server
-
-    monkeypatch.setattr(proxy_server, "premium_user", True, raising=False)
-    monkeypatch.setattr(
-        proxy_server,
-        "general_settings",
-        {
-            "oauth2_config_mappings": {
-                "user_id": "x-user-id",
-                "user_email": "x-user-email",
-                "team_id": "x-team-id",
-                "models": "x-models",
-            }
+async def test_safe_fields_still_pass_through(configure_proxy):
+    # The documented use case for OAuth2 proxy auth: identity assertion
+    # from a trusted upstream. Must remain unaffected by the denylist.
+    configure_proxy(
+        mappings={
+            "user_id": "x-user-id",
+            "user_email": "x-user-email",
+            "team_id": "x-team-id",
+            "models": "x-models",
         },
-        raising=False,
     )
     request = _request_with_headers(
         {
