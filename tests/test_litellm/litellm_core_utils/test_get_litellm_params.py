@@ -95,6 +95,30 @@ class TestGetLitellmParamsBaseModel:
         assert result["base_model"] is None
 
 
+class TestGetLitellmParamsCustomLlmProvider:
+    """Verify custom_llm_provider handling — explicit value vs kwargs."""
+
+    def test_explicit_custom_llm_provider(self):
+        """Explicit custom_llm_provider should appear in result."""
+        result = get_litellm_params(custom_llm_provider="hosted_vllm")
+        assert result["custom_llm_provider"] == "hosted_vllm"
+
+    def test_custom_llm_provider_not_in_kwargs(self):
+        """When custom_llm_provider is not passed, it defaults to None.
+
+        This mirrors the bug in embedding()/transcription()/speech() where
+        custom_llm_provider was extracted as a named parameter and thus
+        removed from **kwargs before being passed to get_litellm_params().
+        """
+        result = get_litellm_params(**{"api_key": "test"})
+        assert result["custom_llm_provider"] is None
+
+    def test_explicit_custom_llm_provider_with_kwargs(self):
+        """Explicit custom_llm_provider should not be overridden by kwargs."""
+        result = get_litellm_params(custom_llm_provider="hosted_vllm", api_key="test")
+        assert result["custom_llm_provider"] == "hosted_vllm"
+
+
 class TestGetLitellmParamsExplicitFields:
     """Verify explicit parameters are always present in the result."""
 
