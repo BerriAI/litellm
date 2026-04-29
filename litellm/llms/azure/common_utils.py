@@ -553,6 +553,9 @@ class BaseAzureLLM(BaseOpenAILLM):
 
         max_retries = litellm_params.get("max_retries")
         timeout = litellm_params.get("timeout")
+        verbose_logger.debug(
+            "Azure initialize_azure_sdk_client litellm_params timeout=%s", timeout
+        )
         if (
             not api_key
             and azure_ad_token_provider is None

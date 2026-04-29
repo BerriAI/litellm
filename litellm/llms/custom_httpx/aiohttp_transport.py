@@ -292,6 +292,7 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
     ) -> httpx.Response:
         timeout = request.extensions.get("timeout", {})
         sni_hostname = request.extensions.get("sni_hostname")
+        verbose_logger.debug("AiohttpTransport.handle_async_request timeout=%s", timeout)
 
         # Use helper to ensure we have a valid session for the current event loop
         client_session = self._get_valid_client_session()
