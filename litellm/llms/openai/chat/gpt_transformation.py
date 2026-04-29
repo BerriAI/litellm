@@ -56,7 +56,7 @@ from litellm.types.utils import (
 from litellm.utils import convert_to_model_response_object
 
 from ..common_utils import OpenAIError
-from ..common_utils import patch_deepseek_v4_reasoning_messages
+from ..deepseek_reasoning_utils import patch_deepseek_v4_reasoning_messages
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj

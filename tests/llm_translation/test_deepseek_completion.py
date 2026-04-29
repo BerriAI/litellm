@@ -241,3 +241,15 @@ def test_deepseek_reasoner_transform_request_does_not_inject_reasoning_content()
     )
 
     assert "reasoning_content" not in request["messages"][1]
+
+
+def test_get_openai_credentials_preserves_organization_field():
+    from litellm.llms.openai.common_utils import get_openai_credentials
+
+    credentials = get_openai_credentials(
+        api_base="https://example.com/v1",
+        api_key="test-key",
+        organization="test-org",
+    )
+
+    assert credentials.organization == "test-org"

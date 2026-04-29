@@ -58,9 +58,9 @@ from .chat.o_series_transformation import OpenAIOSeriesConfig
 from .common_utils import (
     BaseOpenAILLM,
     OpenAIError,
-    patch_deepseek_v4_reasoning_messages,
     drop_params_from_unprocessable_entity_error,
 )
+from .deepseek_reasoning_utils import patch_deepseek_v4_reasoning_messages
 
 openaiOSeriesConfig = OpenAIOSeriesConfig()
 openAIGPT5Config = OpenAIGPT5Config()
