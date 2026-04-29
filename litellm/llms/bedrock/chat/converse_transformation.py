@@ -1003,7 +1003,7 @@ class AmazonConverseConfig(BaseConfig):
                 description=description,
             )
             optional_params["outputConfig"] = output_config
-        else:
+        elif json_schema is not None:
             # Fallback: translate to a synthetic tool call
             # https://docs.anthropic.com/en/docs/build-with-claude/tool-use#json-mode
             _tool = self._create_json_tool_call_for_response_format(
@@ -1025,6 +1025,12 @@ class AmazonConverseConfig(BaseConfig):
                 )
             if non_default_params.get("stream", False) is True:
                 optional_params["fake_stream"] = True
+        # else: response_format=json_object with no schema.
+        # Don't inject the synthetic json_tool_call tool here. When no
+        # schema is given, _create_json_tool_call_for_response_format
+        # produces an empty schema (properties: {}), and the model
+        # returns {} instead of the requested JSON. The model already
+        # returns JSON when the prompt asks for it.
 
         optional_params["json_mode"] = True
         return optional_params
@@ -1293,17 +1299,21 @@ class AmazonConverseConfig(BaseConfig):
             )
 
             # Process regular function tools using existing logic
-            bedrock_tools = _bedrock_tools_pt(regular_tools)
+            bedrock_tools = _bedrock_tools_pt(regular_tools, model=model)
 
             # Add computer use tools and anthropic_beta if needed (only when computer use tools are present)
             if computer_use_tools:
                 # Determine the correct computer-use beta header based on model
-                # "computer-use-2025-11-24" for Claude Opus 4.6, Claude Opus 4.5
+                # "computer-use-2025-11-24" for Claude Opus 4.7, Opus 4.6, and Opus 4.5
                 # "computer-use-2025-01-24" for Claude Sonnet 4.5, Haiku 4.5, Opus 4.1, Sonnet 4, Opus 4, and Sonnet 3.7
                 # "computer-use-2024-10-22" for older models
                 model_lower = model.lower()
                 if (
-                    "opus-4.6" in model_lower
+                    "opus-4.7" in model_lower
+                    or "opus_4.7" in model_lower
+                    or "opus-4-7" in model_lower
+                    or "opus_4_7" in model_lower
+                    or "opus-4.6" in model_lower
                     or "opus_4.6" in model_lower
                     or "opus-4-6" in model_lower
                     or "opus_4_6" in model_lower
@@ -1357,7 +1367,7 @@ class AmazonConverseConfig(BaseConfig):
                 additional_request_params["tools"] = transformed_computer_tools
         else:
             # No computer use tools, process all tools as regular tools
-            bedrock_tools = _bedrock_tools_pt(filtered_tools)
+            bedrock_tools = _bedrock_tools_pt(filtered_tools, model=model)
 
         # Append pre-formatted tools (systemTool etc.) after transformation
         bedrock_tools.extend(pre_formatted_tools)
@@ -1747,9 +1757,7 @@ class AmazonConverseConfig(BaseConfig):
 
         return message, returned_finish_reason
 
-    def _translate_message_content(
-        self, content_blocks: List[ContentBlock]
-    ) -> Tuple[
+    def _translate_message_content(self, content_blocks: List[ContentBlock]) -> Tuple[
         str,
         List[ChatCompletionToolCallChunk],
         Optional[List[BedrockConverseReasoningContentBlock]],
@@ -1766,9 +1774,9 @@ class AmazonConverseConfig(BaseConfig):
         """
         content_str = ""
         tools: List[ChatCompletionToolCallChunk] = []
-        reasoningContentBlocks: Optional[
-            List[BedrockConverseReasoningContentBlock]
-        ] = None
+        reasoningContentBlocks: Optional[List[BedrockConverseReasoningContentBlock]] = (
+            None
+        )
         citationsContentBlocks: Optional[List[CitationsContentBlock]] = None
         for idx, content in enumerate(content_blocks):
             """
@@ -1979,9 +1987,9 @@ class AmazonConverseConfig(BaseConfig):
         chat_completion_message: ChatCompletionResponseMessage = {"role": "assistant"}
         content_str = ""
         tools: List[ChatCompletionToolCallChunk] = []
-        reasoningContentBlocks: Optional[
-            List[BedrockConverseReasoningContentBlock]
-        ] = None
+        reasoningContentBlocks: Optional[List[BedrockConverseReasoningContentBlock]] = (
+            None
+        )
         citationsContentBlocks: Optional[List[CitationsContentBlock]] = None
 
         if message is not None:
@@ -2000,17 +2008,17 @@ class AmazonConverseConfig(BaseConfig):
             provider_specific_fields["citationsContent"] = citationsContentBlocks
 
         if provider_specific_fields:
-            chat_completion_message[
-                "provider_specific_fields"
-            ] = provider_specific_fields
+            chat_completion_message["provider_specific_fields"] = (
+                provider_specific_fields
+            )
 
         if reasoningContentBlocks is not None:
-            chat_completion_message[
-                "reasoning_content"
-            ] = self._transform_reasoning_content(reasoningContentBlocks)
-            chat_completion_message[
-                "thinking_blocks"
-            ] = self._transform_thinking_blocks(reasoningContentBlocks)
+            chat_completion_message["reasoning_content"] = (
+                self._transform_reasoning_content(reasoningContentBlocks)
+            )
+            chat_completion_message["thinking_blocks"] = (
+                self._transform_thinking_blocks(reasoningContentBlocks)
+            )
         chat_completion_message["content"] = content_str
         filtered_tools = self._filter_json_mode_tools(
             json_mode=json_mode,
@@ -2029,6 +2037,12 @@ class AmazonConverseConfig(BaseConfig):
         ## HANDLE TOOL CALLS
         _message = Message(**chat_completion_message)
         initial_finish_reason = map_finish_reason(completion_response["stopReason"])
+
+        # When json_mode filtered out all synthetic tool calls the response
+        # is plain content, not a pending tool invocation. Fix finish_reason
+        # so callers (e.g. OpenAI SDK) don't misinterpret it.
+        if json_mode and not filtered_tools and tools:
+            initial_finish_reason = "stop"
 
         (
             returned_message,

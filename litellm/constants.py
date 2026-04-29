@@ -164,6 +164,7 @@ MCP_STDIO_ALLOWED_COMMANDS: frozenset = frozenset(
 LITELLM_UI_ALLOW_HEADERS = [
     "x-litellm-semantic-filter",
     "x-litellm-semantic-filter-tools",
+    "x-litellm-adaptive-router-model",
 ]
 
 # Gemini model-specific minimal thinking budget constants
@@ -1126,6 +1127,7 @@ BEDROCK_CONVERSE_MODELS = [
     "openai.gpt-oss-120b-1:0",
     "anthropic.claude-haiku-4-5-20251001-v1:0",
     "anthropic.claude-sonnet-4-5-20250929-v1:0",
+    "anthropic.claude-opus-4-7",
     "anthropic.claude-opus-4-6-v1:0",
     "anthropic.claude-opus-4-6-v1",
     "anthropic.claude-sonnet-4-6",
@@ -1359,6 +1361,25 @@ try:
     )
 except (ValueError, TypeError):
     BACKGROUND_HEALTH_CHECK_MAX_TOKENS = None
+
+
+_background_health_check_max_tokens_reasoning_env = os.getenv(
+    "BACKGROUND_HEALTH_CHECK_MAX_TOKENS_REASONING"
+)
+try:
+    _raw_background_health_check_max_tokens_reasoning = (
+        _background_health_check_max_tokens_reasoning_env.strip()
+        if _background_health_check_max_tokens_reasoning_env is not None
+        else ""
+    )
+    BACKGROUND_HEALTH_CHECK_MAX_TOKENS_REASONING: Optional[int] = (
+        int(_raw_background_health_check_max_tokens_reasoning)
+        if _raw_background_health_check_max_tokens_reasoning
+        else None
+    )
+except (ValueError, TypeError):
+    BACKGROUND_HEALTH_CHECK_MAX_TOKENS_REASONING = None
+
 LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME = "litellm-internal-health-check"
 LITTELM_CLI_SERVICE_ACCOUNT_NAME = "litellm-cli"
 LITELLM_INTERNAL_JOBS_SERVICE_ACCOUNT_NAME = "litellm_internal_jobs"
@@ -1375,6 +1396,15 @@ LITELLM_KEY_ROTATION_LOCK_TTL_SECONDS = int(
     os.getenv("LITELLM_KEY_ROTATION_LOCK_TTL_SECONDS", 600)
 )  # 10 minutes default — caps the deadlock window if a pod crashes mid-rotation
 UI_SESSION_TOKEN_TEAM_ID = "litellm-dashboard"
+LITELLM_EXPIRED_UI_SESSION_KEY_CLEANUP_ENABLED = os.getenv(
+    "LITELLM_EXPIRED_UI_SESSION_KEY_CLEANUP_ENABLED", "false"
+)
+LITELLM_EXPIRED_UI_SESSION_KEY_CLEANUP_INTERVAL_SECONDS = int(
+    os.getenv("LITELLM_EXPIRED_UI_SESSION_KEY_CLEANUP_INTERVAL_SECONDS", 86400)
+)  # 24 hours default
+LITELLM_EXPIRED_UI_SESSION_KEY_CLEANUP_BATCH_SIZE = int(
+    os.getenv("LITELLM_EXPIRED_UI_SESSION_KEY_CLEANUP_BATCH_SIZE", 1000)
+)
 LITELLM_PROXY_ADMIN_NAME = "default_user_id"
 
 ########################### CLI SSO AUTHENTICATION CONSTANTS ###########################
@@ -1404,10 +1434,14 @@ CLOUDZERO_MAX_FETCHED_DATA_RECORDS = int(
 )
 SPEND_LOG_CLEANUP_JOB_NAME = "spend_log_cleanup"
 KEY_ROTATION_JOB_NAME = "litellm_key_rotation_job"
+EXPIRED_UI_SESSION_KEY_CLEANUP_JOB_NAME = "litellm_expired_ui_session_key_cleanup_job"
 SPEND_LOG_RUN_LOOPS = int(os.getenv("SPEND_LOG_RUN_LOOPS", 500))
 SPEND_LOG_CLEANUP_BATCH_SIZE = int(os.getenv("SPEND_LOG_CLEANUP_BATCH_SIZE", 1000))
 SPEND_LOG_QUEUE_SIZE_THRESHOLD = int(os.getenv("SPEND_LOG_QUEUE_SIZE_THRESHOLD", 100))
 SPEND_LOG_QUEUE_POLL_INTERVAL = float(os.getenv("SPEND_LOG_QUEUE_POLL_INTERVAL", 2.0))
+SPEND_COUNTER_RESEED_LOCKS_MAX_SIZE = int(
+    os.getenv("SPEND_COUNTER_RESEED_LOCKS_MAX_SIZE", 10000)
+)
 DEFAULT_CRON_JOB_LOCK_TTL_SECONDS = int(
     os.getenv("DEFAULT_CRON_JOB_LOCK_TTL_SECONDS", 60)
 )  # 1 minute

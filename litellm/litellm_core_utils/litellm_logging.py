@@ -36,7 +36,7 @@ from litellm import (
     log_raw_request_response,
     turn_off_message_logging,
 )
-from litellm._logging import _is_debugging_on, verbose_logger
+from litellm._logging import _is_debugging_on, _redact_string, verbose_logger
 from litellm._uuid import uuid
 from litellm.batches.batch_utils import _handle_completed_batch
 from litellm.caching.caching import DualCache, InMemoryCache
@@ -415,6 +415,12 @@ class Logging(LiteLLMLoggingBaseClass):
             "applied_guardrails": applied_guardrails,
             "model": model,
         }
+
+        # Set by proxy request handlers to defer spend-log fire until after
+        # post_call guardrails have run; the @client decorator then stores the
+        # enqueue closure here instead of firing it immediately.
+        self._defer_async_logging: bool = False
+        self._enqueue_deferred_logging: Optional[Callable[[], None]] = None
 
     def process_dynamic_callbacks(self):
         """
@@ -1461,6 +1467,8 @@ class Logging(LiteLLMLoggingBaseClass):
             LiteLLMRealtimeStreamLoggingObject,
             OpenAIModerationResponse,
             "SearchResponse",
+            dict,
+            list,
         ],
         cache_hit: Optional[bool] = None,
         litellm_model_name: Optional[str] = None,
@@ -1719,12 +1727,18 @@ class Logging(LiteLLMLoggingBaseClass):
             return
         if self.model_call_details.get("litellm_params") is None:
             return
-        self.model_call_details["litellm_params"].setdefault("metadata", {})
-        if self.model_call_details["litellm_params"]["metadata"] is None:
-            self.model_call_details["litellm_params"]["metadata"] = {}
-        self.model_call_details["litellm_params"]["metadata"]["hidden_params"] = (
-            getattr(logging_result, "_hidden_params", {})
-        )
+        metadata_hidden_params = hidden_params.copy()
+        response_cost = self.model_call_details.get("response_cost")
+        if (
+            metadata_hidden_params.get("response_cost") is None
+            and response_cost is not None
+        ):
+            metadata_hidden_params["response_cost"] = response_cost
+
+        litellm_params = self.model_call_details["litellm_params"]
+        metadata = litellm_params.get("metadata") or {}
+        litellm_params["metadata"] = metadata
+        metadata["hidden_params"] = metadata_hidden_params
 
     def _process_hidden_params_and_response_cost(
         self,
@@ -1732,6 +1746,7 @@ class Logging(LiteLLMLoggingBaseClass):
         start_time,
         end_time,
     ):
+        """Resolve hidden params, compute response cost, and emit the standard logging payload."""
         hidden_params = getattr(logging_result, "_hidden_params", {})
         if hidden_params:
             if self.model_call_details.get("litellm_params") is not None:
@@ -1865,24 +1880,12 @@ class Logging(LiteLLMLoggingBaseClass):
             ):
                 if self._is_recognized_call_type_for_logging(
                     logging_result=logging_result
-                ):
+                ) or isinstance(logging_result, (dict, list)):
                     self._process_hidden_params_and_response_cost(
                         logging_result=logging_result,
                         start_time=start_time,
                         end_time=end_time,
                     )
-                elif isinstance(result, dict) or isinstance(result, list):
-                    self.model_call_details["standard_logging_object"] = (
-                        self._build_standard_logging_payload(
-                            result, start_time, end_time
-                        )
-                    )
-                    if (
-                        standard_logging_payload := self.model_call_details.get(
-                            "standard_logging_object"
-                        )
-                    ) is not None:
-                        emit_standard_logging_payload(standard_logging_payload)
             elif standard_logging_object is not None:
                 self.model_call_details["standard_logging_object"] = (
                     standard_logging_object
@@ -2854,7 +2857,11 @@ class Logging(LiteLLMLoggingBaseClass):
 
         self.model_call_details["log_event_type"] = "failed_api_call"
         self.model_call_details["exception"] = exception
-        self.model_call_details["traceback_exception"] = traceback_exception
+        self.model_call_details["traceback_exception"] = (
+            _redact_string(traceback_exception)
+            if isinstance(traceback_exception, str)
+            else traceback_exception
+        )
         self.model_call_details["end_time"] = end_time
         self.model_call_details.setdefault("original_response", None)
         self.model_call_details["response_cost"] = 0
@@ -2876,7 +2883,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 end_time=end_time,
                 logging_obj=self,
                 status="failure",
-                error_str=str(exception),
+                error_str=_redact_string(str(exception)),
                 original_exception=exception,
                 standard_built_in_tools_params=self.standard_built_in_tools_params,
             )
@@ -3513,6 +3520,8 @@ def _get_masked_values(
     mask_all_values: bool = False,
     unmasked_length: int = 4,
     number_of_asterisks: Optional[int] = 4,
+    _depth: int = 0,
+    _max_depth: int = 20,
 ) -> dict:
     """
     Internal debugging helper function
@@ -3529,38 +3538,49 @@ def _get_masked_values(
         "key",
         "secret",
         "vertex_credentials",
+        "credentials",
+        "password",
+        "passwd",
     ]
+
+    def _mask_value(v: Any) -> Any:
+        if isinstance(v, dict):
+            if _depth >= _max_depth:
+                return v
+            return _get_masked_values(
+                v,
+                ignore_sensitive_values=ignore_sensitive_values,
+                mask_all_values=mask_all_values,
+                unmasked_length=unmasked_length,
+                number_of_asterisks=number_of_asterisks,
+                _depth=_depth + 1,
+                _max_depth=_max_depth,
+            )
+        if not isinstance(v, str):
+            return v
+        if len(v) <= unmasked_length:
+            return "*****"
+        if number_of_asterisks is not None:
+            return (
+                v[: unmasked_length // 2]
+                + "*" * number_of_asterisks
+                + v[-unmasked_length // 2 :]
+            )
+        return (
+            v[: unmasked_length // 2]
+            + "*" * (len(v) - unmasked_length)
+            + v[-unmasked_length // 2 :]
+        )
+
     return {
         k: (
-            # If ignore_sensitive_values is True, or if this key doesn't contain sensitive keywords, return original value
             v
             if ignore_sensitive_values
             or not any(
                 sensitive_keyword in k.lower()
                 for sensitive_keyword in sensitive_keywords
             )
-            else (
-                # Apply masking to sensitive keys
-                (
-                    v[: unmasked_length // 2]
-                    + "*" * number_of_asterisks
-                    + v[-unmasked_length // 2 :]
-                )
-                if (
-                    isinstance(v, str)
-                    and len(v) > unmasked_length
-                    and number_of_asterisks is not None
-                )
-                else (
-                    (
-                        v[: unmasked_length // 2]
-                        + "*" * (len(v) - unmasked_length)
-                        + v[-unmasked_length // 2 :]
-                    )
-                    if (isinstance(v, str) and len(v) > unmasked_length)
-                    else ("*****" if isinstance(v, str) else v)
-                )
-            )
+            else _mask_value(v)
         )
         for k, v in sensitive_object.items()
     }
@@ -5415,11 +5435,6 @@ def get_standard_logging_object_payload(
             completion_start_time_float=completion_start_time_float,
             stream=kwargs.get("stream", False),
         )
-        # clean up litellm hidden params
-        clean_hidden_params = StandardLoggingPayloadSetup.get_hidden_params(
-            hidden_params
-        )
-
         # clean up litellm metadata
         clean_metadata = StandardLoggingPayloadSetup.get_standard_logging_metadata(
             metadata=metadata,
@@ -5453,6 +5468,18 @@ def get_standard_logging_object_payload(
         ## Get model cost information ##
         base_model = _get_base_model_from_metadata(model_call_details=kwargs)
         custom_pricing = use_custom_pricing_for_model(litellm_params=litellm_params)
+        raw_response_cost = kwargs.get("response_cost")
+        response_cost: float = raw_response_cost or 0.0
+
+        # clean up litellm hidden params
+        clean_hidden_params = StandardLoggingPayloadSetup.get_hidden_params(
+            hidden_params
+        )
+        if (
+            clean_hidden_params["response_cost"] is None
+            and raw_response_cost is not None
+        ):
+            clean_hidden_params["response_cost"] = response_cost
 
         model_cost_information = StandardLoggingPayloadSetup.get_model_cost_information(
             base_model=base_model,
@@ -5461,7 +5488,6 @@ def get_standard_logging_object_payload(
             init_response_obj=init_response_obj,
             api_base=litellm_params.get("api_base"),
         )
-        response_cost: float = kwargs.get("response_cost", 0) or 0.0
 
         error_information = StandardLoggingPayloadSetup.get_error_information(
             original_exception=original_exception,
@@ -5508,6 +5534,8 @@ def get_standard_logging_object_payload(
 
         payload: StandardLoggingPayload = StandardLoggingPayload(
             id=str(id),
+            litellm_call_id=kwargs.get("litellm_call_id")
+            or litellm_params.get("litellm_call_id"),
             trace_id=StandardLoggingPayloadSetup._get_standard_logging_payload_trace_id(
                 logging_obj=logging_obj,
                 litellm_params=litellm_params,

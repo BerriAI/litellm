@@ -71,6 +71,14 @@ export function useLogFilterLogic({
   const [filters, setFilters] = useState<LogFilterState>(defaultFilters);
   const [backendFilteredLogs, setBackendFilteredLogs] = useState<PaginatedResponse | null>(null);
   const lastSearchTimestamp = useRef(0);
+
+  // Refs that always hold the latest filters and hasBackendFilters values.
+  // The sort/page/time effect below intentionally omits these from its dep array
+  // to avoid double-fetches when a filter changes; reading from refs instead of
+  // the closure prevents stale-closure bugs (e.g. the effect using a snapshot of
+  // filters taken before the user selected Key Alias).
+  const filtersRef = useRef(filters);
+  const hasBackendFiltersRef = useRef(false);
   const performSearch = useCallback(
     async (filters: LogFilterState, page = 1) => {
       if (!accessToken) return;
@@ -152,18 +160,25 @@ export function useLogFilterLogic({
     [filters],
   );
 
+  // Keep refs in sync on every render so the sort/page/time effect always reads
+  // the latest values without those values being in its dep array.
+  useEffect(() => {
+    filtersRef.current = filters;
+    hasBackendFiltersRef.current = hasBackendFilters;
+  }, [filters, hasBackendFilters]);
+
   // Refetch when sort, page, or time range changes (backend filters use their own fetch, not the main query)
   useEffect(() => {
-    if (hasBackendFilters && accessToken) {
+    if (hasBackendFiltersRef.current && accessToken) {
       // Cancel any pending debounced search to prevent it from overwriting this page's results
       debouncedSearch.cancel();
-      performSearch(filters, currentPage);
+      performSearch(filtersRef.current, currentPage);
     }
-    // Intentionally omitted from deps:
-    // - `filters` / `debouncedSearch` / `performSearch`: filter changes are handled by
-    //   handleFilterChange → debouncedSearch; adding them here would double-fetch on filter apply.
-    // - `hasBackendFilters` / `accessToken`: stable across sort/page/time changes; including them
-    //   would cause spurious re-runs when the filter state first becomes active.
+    // filters / hasBackendFilters are read via refs — avoids stale-closure bugs
+    // when sort/page/time changes after a filter (e.g. Key Alias) was set.
+    // debouncedSearch / performSearch: filter changes go through handleFilterChange
+    // → debouncedSearch; adding them here would cause double-fetches on filter apply.
+    // accessToken: stable across sort/page/time changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sortBy, sortOrder, currentPage, startTime, endTime, isCustomDate]);
 
@@ -299,6 +314,20 @@ export function useLogFilterLogic({
     setCurrentPage(1);
   };
 
+  // Expose a filter-aware refetch so callers (e.g. the manual Fetch button) can
+  // refresh results while keeping all active backend filters intact.  The plain
+  // `logs.refetch()` in the parent only re-runs the main TanStack Query, which
+  // does not carry key_alias or other backend-only filter params.
+  const refetchWithFilters = useCallback(
+    (page = currentPage) => {
+      if (hasBackendFilters && accessToken) {
+        debouncedSearch.cancel();
+        performSearch(filters, page);
+      }
+    },
+    [hasBackendFilters, accessToken, filters, currentPage, performSearch, debouncedSearch],
+  );
+
   return {
     filters,
     filteredLogs,
@@ -306,5 +335,6 @@ export function useLogFilterLogic({
     allTeams,
     handleFilterChange,
     handleFilterReset,
+    refetchWithFilters,
   };
 }

@@ -355,11 +355,12 @@ async def test_daily_reports_redis_cache_scheduler():
         ]
     )
 
-    with patch.object(
-        slack_alerting, "send_alert", new=AsyncMock()
-    ) as mock_send_alert, patch.object(
-        redis_cache, "async_set_cache", new=AsyncMock()
-    ) as mock_redis_set_cache:
+    with (
+        patch.object(slack_alerting, "send_alert", new=AsyncMock()) as mock_send_alert,
+        patch.object(
+            redis_cache, "async_set_cache", new=AsyncMock()
+        ) as mock_redis_set_cache,
+    ):
         # initial call - expect empty
         await slack_alerting._run_scheduler_helper(llm_router=router)
 

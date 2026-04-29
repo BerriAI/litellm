@@ -82,7 +82,9 @@ class TestShouldRedactMessageLogging:
     def test_enable_redaction_via_header_in_litellm_metadata(self):
         """Headers inside litellm_metadata (SDK direct call) should work."""
         details = _make_model_call_details(
-            litellm_metadata={"headers": {"x-litellm-enable-message-redaction": "true"}},
+            litellm_metadata={
+                "headers": {"x-litellm-enable-message-redaction": "true"}
+            },
         )
         assert should_redact_message_logging(details) is True
 
