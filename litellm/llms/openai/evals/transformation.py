@@ -191,6 +191,15 @@ class OpenAIEvalsConfig(BaseEvalsAPIConfig):
         # Build request body
         request_body = {k: v for k, v in update_request.items() if v is not None}
 
+        # OpenAI requires all metadata values to be strings.
+        # The proxy may inject non-string values (e.g. queue_time_seconds as float),
+        # so convert them here to avoid 400 errors.
+        if "metadata" in request_body and isinstance(request_body["metadata"], dict):
+            request_body["metadata"] = {
+                k: str(v) if not isinstance(v, str) else v
+                for k, v in request_body["metadata"].items()
+            }
+
         verbose_logger.debug(
             "Update eval request - URL: %s, body: %s", url, request_body
         )
