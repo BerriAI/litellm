@@ -12270,13 +12270,25 @@ async def get_image():
     logo_path = os.getenv("UI_LOGO_PATH", default_logo)
     verbose_proxy_logger.debug("Reading logo from path: %s", logo_path)
 
-    # If UI_LOGO_PATH points to a local file, serve it directly (skip cache)
+    # ``/get_image`` is unauthenticated. Validate any admin-configured local
+    # path against an allowlist of asset roots — without this guard, an
+    # env var like ``UI_LOGO_PATH=/etc/passwd`` lets any caller exfiltrate
+    # the file via this endpoint.
+    from litellm.proxy.common_utils.static_asset_utils import (
+        fetch_validated_image_bytes,
+        resolve_local_asset_path,
+    )
+
+    allowed_local_roots = [assets_dir, current_dir]
+
     if logo_path != default_logo and not logo_path.startswith(("http://", "https://")):
-        if os.path.exists(logo_path):
-            return FileResponse(logo_path, media_type="image/jpeg")
-        # Custom path doesn't exist — fall back to default
+        safe_logo = resolve_local_asset_path(logo_path, allowed_local_roots)
+        if safe_logo is not None:
+            return FileResponse(safe_logo, media_type="image/jpeg")
         verbose_proxy_logger.warning(
-            f"UI_LOGO_PATH '{logo_path}' does not exist, falling back to default logo"
+            "UI_LOGO_PATH %r is outside the allowed asset roots or does not "
+            "exist, falling back to default logo",
+            logo_path,
         )
         logo_path = default_logo
 
@@ -12286,32 +12298,21 @@ async def get_image():
 
     # Check if the logo path is an HTTP/HTTPS URL
     if logo_path.startswith(("http://", "https://")):
-        try:
-            # Download the image and cache it
-            from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
-            from litellm.types.llms.custom_http import httpxSpecialProvider
-
-            async_client = get_async_httpx_client(
-                llm_provider=httpxSpecialProvider.UI,
-                params={"timeout": 5.0},
-            )
-            response = await async_client.get(logo_path)
-            if response.status_code == 200:
-                # Save the image to a local file
+        # SSRF + content-type validation — the helper rejects
+        # private/internal/cloud-metadata targets and non-image responses.
+        image_bytes = await fetch_validated_image_bytes(logo_path)
+        if image_bytes is not None:
+            try:
                 with open(cache_path, "wb") as f:
-                    f.write(response.content)
-
-                # Return the cached image as a FileResponse
+                    f.write(image_bytes)
                 return FileResponse(cache_path, media_type="image/jpeg")
-            else:
-                # Handle the case when the image cannot be downloaded
-                return FileResponse(default_logo, media_type="image/jpeg")
-        except Exception as e:
-            # Handle any exceptions during the download (e.g., timeout, connection error)
-            verbose_proxy_logger.debug(f"Error downloading logo from {logo_path}: {e}")
-            return FileResponse(default_logo, media_type="image/jpeg")
+            except OSError as e:
+                verbose_proxy_logger.debug(
+                    "Could not write logo cache to %s: %s", cache_path, e
+                )
+        return FileResponse(default_logo, media_type="image/jpeg")
     else:
-        # Return the local image file if the logo path is not an HTTP/HTTPS URL
+        # Default logo (resolved from the bundled asset, not user-controlled).
         return FileResponse(logo_path, media_type="image/jpeg")
 
 
@@ -12320,8 +12321,14 @@ async def get_favicon():
     """Get custom favicon for the admin UI."""
     from fastapi.responses import Response
 
+    from litellm.proxy.common_utils.static_asset_utils import (
+        fetch_validated_image_bytes,
+        resolve_local_asset_path,
+    )
+
     current_dir = os.path.dirname(os.path.abspath(__file__))
     default_favicon = os.path.join(current_dir, "_experimental", "out", "favicon.ico")
+    favicon_assets_dir = os.path.dirname(default_favicon)
 
     favicon_url = os.getenv("LITELLM_FAVICON_URL", "")
 
@@ -12331,42 +12338,30 @@ async def get_favicon():
         raise HTTPException(status_code=404, detail="Default favicon not found")
 
     if favicon_url.startswith(("http://", "https://")):
-        try:
-            from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
-            from litellm.types.llms.custom_http import httpxSpecialProvider
-
-            async_client = get_async_httpx_client(
-                llm_provider=httpxSpecialProvider.UI,
-                params={"timeout": 5.0},
-            )
-            response = await async_client.get(favicon_url)
-            if response.status_code == 200:
-                content_type = response.headers.get("content-type", "image/x-icon")
-                return Response(
-                    content=response.content,
-                    media_type=content_type,
-                )
-            else:
-                verbose_proxy_logger.warning(
-                    "Failed to fetch favicon from %s: status %s",
-                    favicon_url,
-                    response.status_code,
-                )
-                if os.path.exists(default_favicon):
-                    return FileResponse(default_favicon, media_type="image/x-icon")
-                raise HTTPException(status_code=404, detail="Favicon not found")
-        except HTTPException:
-            raise
-        except Exception as e:
-            verbose_proxy_logger.debug(
-                "Error downloading favicon from %s: %s", favicon_url, e
-            )
-            if os.path.exists(default_favicon):
-                return FileResponse(default_favicon, media_type="image/x-icon")
-            raise HTTPException(status_code=404, detail="Favicon not found")
+        # SSRF + content-type validation — the helper rejects
+        # private/internal/cloud-metadata targets and non-image responses.
+        image_bytes = await fetch_validated_image_bytes(favicon_url)
+        if image_bytes is not None:
+            return Response(content=image_bytes, media_type="image/x-icon")
+        verbose_proxy_logger.warning(
+            "Failed to fetch favicon from %s — falling back to default", favicon_url
+        )
+        if os.path.exists(default_favicon):
+            return FileResponse(default_favicon, media_type="image/x-icon")
+        raise HTTPException(status_code=404, detail="Favicon not found")
     else:
-        if os.path.exists(favicon_url):
-            return FileResponse(favicon_url, media_type="image/x-icon")
+        # ``/get_favicon`` is unauthenticated. Validate any admin-configured
+        # local path against an allowlist of asset roots — see ``/get_image``
+        # for the LFI threat-model rationale.
+        allowed_local_roots = [favicon_assets_dir, current_dir]
+        safe_favicon = resolve_local_asset_path(favicon_url, allowed_local_roots)
+        if safe_favicon is not None:
+            return FileResponse(safe_favicon, media_type="image/x-icon")
+        verbose_proxy_logger.warning(
+            "LITELLM_FAVICON_URL %r is outside the allowed asset roots or "
+            "does not exist, falling back to default favicon",
+            favicon_url,
+        )
         if os.path.exists(default_favicon):
             return FileResponse(default_favicon, media_type="image/x-icon")
         raise HTTPException(status_code=404, detail="Favicon not found")
