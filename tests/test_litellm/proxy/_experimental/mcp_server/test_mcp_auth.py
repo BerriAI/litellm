@@ -40,11 +40,13 @@ async def test_get_or_extract_auth_context_fallback():
     auth_data = UserAPIKeyAuth(api_key="fallback-key")
     auth_user = MCPAuthenticatedUser(user_api_key_auth=auth_data)
 
-    # Mock request_ctx.get().session._read_stream._litellm_auth_context
+    # Mock request_ctx.get().session._read_stream
     mock_session = MagicMock()
     mock_read_stream = MagicMock()
-    mock_read_stream._litellm_auth_context = auth_user
     mock_session._read_stream = mock_read_stream
+
+    from litellm.proxy._experimental.mcp_server.server import _session_auth_storage
+    _session_auth_storage[mock_read_stream] = auth_user
 
     mock_request_ctx = MagicMock()
     mock_request_ctx.get.return_value.session = mock_session

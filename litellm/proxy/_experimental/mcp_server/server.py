@@ -102,6 +102,13 @@ try:
         Tool,
     )
     from mcp.server.session import ServerSession as _McpServerSession
+    import weakref
+
+    # Storage for session-specific auth context to avoid fragile monkey-patching
+    # and context-leakage between concurrent SSE sessions.
+    _session_auth_storage: "weakref.WeakKeyDictionary[Any, MCPAuthenticatedUser]" = (
+        weakref.WeakKeyDictionary()
+    )
 
     active_mcp_session_var: contextvars.ContextVar[Optional[_McpServerSession]] = (
         contextvars.ContextVar("active_mcp_session", default=None)
@@ -243,20 +250,12 @@ if MCP_AVAILABLE:
         json_response=False,  # enables SSE streaming
         stateless=True,
     )
-    # Create SSE session manager
-    sse_session_manager = StreamableHTTPSessionManager(
-        app=server,
-        event_store=None,
-        json_response=False,  # Use SSE responses for this endpoint
-        stateless=True,
-    )
     # Context managers for proper lifecycle management
     _session_manager_cm = None
-    _sse_session_manager_cm = None
 
     async def initialize_session_managers():
         """Initialize the session managers. Can be called from main app lifespan."""
-        global _SESSION_MANAGERS_INITIALIZED, _session_manager_cm, _sse_session_manager_cm
+        global _SESSION_MANAGERS_INITIALIZED, _session_manager_cm
         # Use async lock to prevent concurrent initialization
         async with _INITIALIZATION_LOCK:
             if _SESSION_MANAGERS_INITIALIZED:
@@ -264,10 +263,8 @@ if MCP_AVAILABLE:
             verbose_logger.info("Initializing MCP session managers...")
             # Start the session managers with context managers
             _session_manager_cm = session_manager.run()
-            _sse_session_manager_cm = sse_session_manager.run()
             # Enter the context managers
             await _session_manager_cm.__aenter__()
-            await _sse_session_manager_cm.__aenter__()
             _SESSION_MANAGERS_INITIALIZED = True
             verbose_logger.info(
                 "MCP Server started with StreamableHTTP session manager and SSE transport!"
@@ -275,18 +272,15 @@ if MCP_AVAILABLE:
 
     async def shutdown_session_managers():
         """Shutdown the session managers."""
-        global _SESSION_MANAGERS_INITIALIZED, _session_manager_cm, _sse_session_manager_cm
+        global _SESSION_MANAGERS_INITIALIZED, _session_manager_cm
         if _SESSION_MANAGERS_INITIALIZED:
             verbose_logger.info("Shutting down MCP session managers...")
             try:
                 if _session_manager_cm:
                     await _session_manager_cm.__aexit__(None, None, None)
-                if _sse_session_manager_cm:
-                    await _sse_session_manager_cm.__aexit__(None, None, None)
             except Exception as e:
                 verbose_logger.exception(f"Error during session manager shutdown: {e}")
             _session_manager_cm = None
-            _sse_session_manager_cm = None
             _SESSION_MANAGERS_INITIALIZED = False
 
     @contextlib.asynccontextmanager
@@ -2688,10 +2682,11 @@ if MCP_AVAILABLE:
                         "SSE connection established, running server loop..."
                     )
 
-                    # ContextVars can sometimes be lost when the MCP SDK spawns internal tasks
+                    # ContextVars are lost when the MCP SDK spawns internal tasks
                     # (e.g. _receive_loop), so tool handlers can't read auth_context_var reliably.
-                    # Storing it on the read_stream ensures it's isolated per SSE session.
-                    streams[0]._litellm_auth_context = MCPAuthenticatedUser(  # type: ignore
+                    # Storing it in session-isolated storage ensures it's isolated per SSE session.
+                    # We store it before calling server.run so it's available for the session's lifespan.
+                    _session_auth_storage[streams[0]] = MCPAuthenticatedUser(  # type: ignore
                         user_api_key_auth=user_api_key_auth,
                         mcp_auth_header=mcp_auth_header,
                         mcp_servers=mcp_servers,
@@ -2748,15 +2743,9 @@ if MCP_AVAILABLE:
                 raw_headers,
             ) = await extract_mcp_auth_context(scope, path)
             _sse_client_ip = IPAddressUtils.get_mcp_client_ip(request)
-            set_auth_context(
-                user_api_key_auth=user_api_key_auth,
-                mcp_auth_header=mcp_auth_header,
-                mcp_servers=mcp_servers,
-                mcp_server_auth_headers=mcp_server_auth_headers,
-                oauth2_headers=oauth2_headers,
-                raw_headers=raw_headers,
-                client_ip=_sse_client_ip,
-            )
+            # set_auth_context here is a no-op for actual tool execution since the SDK 
+            # processes messages in background tasks that don't inherit this ContextVar.
+            # Authentication must be recovered from the session-auth-storage during execution.
         except HTTPException:
             raise
         except Exception as e:
@@ -2923,7 +2912,7 @@ if MCP_AVAILABLE:
 
                 session = request_ctx.get().session
                 read_stream = getattr(session, "_read_stream", None)
-                stored = getattr(read_stream, "_litellm_auth_context", None)
+                stored = _session_auth_storage.get(read_stream) if read_stream else None
             except Exception as e:
                 verbose_logger.debug(
                     f"get_or_extract_auth_context FALLBACK failed: {e}"

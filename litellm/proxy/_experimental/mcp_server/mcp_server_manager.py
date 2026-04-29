@@ -1282,6 +1282,7 @@ class MCPServerManager:
         extra_headers: Optional[Dict[str, str]] = None,
         add_prefix: bool = True,
         raw_headers: Optional[Dict[str, str]] = None,
+        user_api_key_auth: Optional[UserAPIKeyAuth] = None,
     ) -> List[MCPTool]:
         """
         Helper method to get tools from a single MCP server with prefixed names.
@@ -1315,6 +1316,7 @@ class MCPServerManager:
                 mcp_auth_header=mcp_auth_header,
                 extra_headers=extra_headers,
                 stdio_env=stdio_env,
+                user_api_key_auth=user_api_key_auth,
             )
 
             ## HANDLE OPENAPI TOOLS
