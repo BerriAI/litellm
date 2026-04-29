@@ -2544,6 +2544,14 @@ class TestPriceDataReloadAPI:
 class TestPriceDataReloadIntegration:
     """Integration tests for the complete price data reload feature"""
 
+    @pytest.fixture(autouse=True)
+    def _flush_litellm_config_cache(self):
+        from litellm.proxy.utils import litellm_config_cache
+
+        litellm_config_cache.flush_cache()
+        yield
+        litellm_config_cache.flush_cache()
+
     @pytest.fixture
     def client_with_auth(self):
         """Create a test client with authentication"""
@@ -2601,6 +2609,7 @@ class TestPriceDataReloadIntegration:
     def test_distributed_reload_check_function(self):
         """Test the _check_and_reload_model_cost_map function"""
         from litellm.proxy.proxy_server import ProxyConfig
+        from litellm.proxy.utils import litellm_config_cache
 
         proxy_config = ProxyConfig()
 
@@ -2609,14 +2618,19 @@ class TestPriceDataReloadIntegration:
 
         # Test case 1: No config in database
         mock_prisma.db.litellm_config.find_unique = AsyncMock(return_value=None)
+        # _check_and_reload_model_cost_map routes through get_config_param,
+        # which calls prisma.get_generic_data on a cache miss.
+        mock_prisma.get_generic_data = AsyncMock(return_value=None)
 
         # Should return early without reloading
         asyncio.run(proxy_config._check_and_reload_model_cost_map(mock_prisma))
 
         # Test case 2: Config with interval but not time to reload
+        litellm_config_cache.flush_cache()
         mock_config = MagicMock()
         mock_config.param_value = {"interval_hours": 6, "force_reload": False}
         mock_prisma.db.litellm_config.find_unique = AsyncMock(return_value=mock_config)
+        mock_prisma.get_generic_data = AsyncMock(return_value=mock_config)
 
         # Mock current time and last reload time
         with patch(
@@ -2632,8 +2646,10 @@ class TestPriceDataReloadIntegration:
                 asyncio.run(proxy_config._check_and_reload_model_cost_map(mock_prisma))
 
         # Test case 3: Config with force reload
+        litellm_config_cache.flush_cache()
         mock_config.param_value = {"interval_hours": 6, "force_reload": True}
         mock_prisma.db.litellm_config.find_unique = AsyncMock(return_value=mock_config)
+        mock_prisma.get_generic_data = AsyncMock(return_value=mock_config)
         mock_prisma.db.litellm_config.upsert = AsyncMock(return_value=None)
 
         original_model_cost = litellm.model_cost.copy()
@@ -2675,6 +2691,8 @@ class TestPriceDataReloadIntegration:
         mock_config = MagicMock()
         mock_config.param_value = {"interval_hours": 24, "force_reload": True}
         mock_prisma.db.litellm_config.find_unique = AsyncMock(return_value=mock_config)
+        # _check_and_reload_model_cost_map now reads through get_generic_data.
+        mock_prisma.get_generic_data = AsyncMock(return_value=mock_config)
         mock_prisma.db.litellm_config.upsert = AsyncMock(return_value=None)
 
         original_model_cost = litellm.model_cost.copy()
@@ -2770,6 +2788,8 @@ class TestPriceDataReloadIntegration:
         mock_config = MagicMock()
         mock_config.param_value = {"interval_hours": 12, "force_reload": True}
         mock_prisma.db.litellm_config.find_unique = AsyncMock(return_value=mock_config)
+        # _check_and_reload_anthropic_beta_headers now reads through get_generic_data.
+        mock_prisma.get_generic_data = AsyncMock(return_value=mock_config)
         mock_prisma.db.litellm_config.upsert = AsyncMock(return_value=None)
 
         with patch(
