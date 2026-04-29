@@ -2098,6 +2098,82 @@ class ProxyLogging:
             raise e
         return response
 
+    async def async_post_guardrail_log_success_event(
+        self,
+        data: dict,
+        response: LLMResponseTypes,
+        user_api_key_dict: UserAPIKeyAuth,
+        logging_obj: Optional[Any] = None,
+    ) -> None:
+        """
+        Invoke async_post_guardrail_log_success_event on CustomLogger callbacks that
+        override the method (not the base no-op). Called after post_call_success_hook
+        so loggers see the post-guardrail response. end_time is when this hook runs;
+        llm_end_time in kwargs is when the LLM call finished (pre-guardrail).
+        """
+        try:
+            kwargs = dict(data)
+            if logging_obj is not None and getattr(
+                logging_obj, "model_call_details", None
+            ):
+                # Merge so request data wins overall, but model_call_details wins for
+                # start_time so callbacks get accurate LLM start. end_time in kwargs is
+                # left to match the end_time argument (hook run time); use llm_end_time for LLM-only end.
+                kwargs = {**logging_obj.model_call_details, **kwargs}
+                if "start_time" in logging_obj.model_call_details:
+                    kwargs["start_time"] = logging_obj.model_call_details["start_time"]
+            kwargs["user_api_key_dict"] = user_api_key_dict
+            start_time = None
+            if logging_obj is not None:
+                start_time = getattr(logging_obj, "completion_start_time", None) or (
+                    kwargs.get("start_time")
+                    if isinstance(kwargs.get("start_time"), datetime)
+                    else None
+                )
+                if getattr(logging_obj, "model_call_details", {}).get("end_time"):
+                    kwargs["llm_end_time"] = logging_obj.model_call_details["end_time"]
+            if start_time is None:
+                _kwarg_start = kwargs.get("start_time")
+                if isinstance(_kwarg_start, datetime):
+                    start_time = _kwarg_start
+                if getattr(logging_obj, "model_call_details", {}).get("end_time"):
+                    kwargs["llm_end_time"] = logging_obj.model_call_details["end_time"]
+
+            for callback in litellm.callbacks:
+                _callback: Optional[CustomLogger] = None
+                if isinstance(callback, str):
+                    _callback = litellm.litellm_core_utils.litellm_logging.get_custom_logger_compatible_class(
+                        cast(_custom_logger_compatible_callbacks_literal, callback)
+                    )
+                else:
+                    _callback = callback  # type: ignore
+
+                if _callback is None or isinstance(_callback, CustomGuardrail):
+                    continue
+                if not isinstance(_callback, CustomLogger):
+                    continue
+                if (
+                    type(_callback).async_post_guardrail_log_success_event
+                    is CustomLogger.async_post_guardrail_log_success_event
+                ):
+                    continue
+                try:
+                    end_time = datetime.now(timezone.utc)
+                    await _callback.async_post_guardrail_log_success_event(
+                        kwargs=dict(kwargs),
+                        response_obj=response,
+                        start_time=start_time,
+                        end_time=end_time,
+                    )
+                except Exception as e:
+                    verbose_proxy_logger.exception(
+                        "Error in async_post_guardrail_log_success_event: %s", e
+                    )
+        except Exception as e:
+            verbose_proxy_logger.exception(
+                "Error in async_post_guardrail_log_success_event: %s", e
+            )
+
     async def post_call_response_headers_hook(
         self,
         data: dict,
