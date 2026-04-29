@@ -242,7 +242,7 @@ if MCP_AVAILABLE:
     # client-visible POST path becomes /mcp/messages.
     from mcp.server.sse import SseServerTransport as _McpSseServerTransport
 
-    sse = _McpSseServerTransport("/messages")
+    sse = _McpSseServerTransport("/mcp/messages")
     # Create session managers (StreamableHTTP — stateless by default)
     session_manager = StreamableHTTPSessionManager(
         app=server,
@@ -2743,7 +2743,7 @@ if MCP_AVAILABLE:
                 raw_headers,
             ) = await extract_mcp_auth_context(scope, path)
             _sse_client_ip = IPAddressUtils.get_mcp_client_ip(request)
-            # set_auth_context here is a no-op for actual tool execution since the SDK 
+            # set_auth_context here is a no-op for actual tool execution since the SDK
             # processes messages in background tasks that don't inherit this ContextVar.
             # Authentication must be recovered from the session-auth-storage during execution.
         except HTTPException:
@@ -2788,7 +2788,7 @@ if MCP_AVAILABLE:
 
             session = request_ctx.get().session
             read_stream = getattr(session, "_read_stream", None)
-            return getattr(read_stream, "_litellm_auth_context", None)
+            return _session_auth_storage.get(read_stream) if read_stream else None
         except Exception:
             return None
 

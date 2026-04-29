@@ -46,6 +46,7 @@ async def test_get_or_extract_auth_context_fallback():
     mock_session._read_stream = mock_read_stream
 
     from litellm.proxy._experimental.mcp_server.server import _session_auth_storage
+
     _session_auth_storage[mock_read_stream] = auth_user
 
     mock_request_ctx = MagicMock()

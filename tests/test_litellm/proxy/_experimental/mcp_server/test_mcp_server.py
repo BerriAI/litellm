@@ -853,21 +853,16 @@ async def test_concurrent_initialize_session_managers():
     # Reset state before test
     original_initialized = mcp_server._SESSION_MANAGERS_INITIALIZED
     original_session_cm = mcp_server._session_manager_cm
-    original_sse_session_cm = mcp_server._sse_session_manager_cm
 
     try:
         mcp_server._SESSION_MANAGERS_INITIALIZED = False
         mcp_server._session_manager_cm = None
-        mcp_server._sse_session_manager_cm = None
 
         # Mock the session managers to avoid actual MCP initialization
         with (
             patch(
                 "litellm.proxy._experimental.mcp_server.server.session_manager"
             ) as mock_session_manager,
-            patch(
-                "litellm.proxy._experimental.mcp_server.server.sse_session_manager"
-            ) as mock_sse_session_manager,
             patch("litellm.proxy._experimental.mcp_server.server.verbose_logger"),
         ):
             # Mock the run() method to return a mock context manager
@@ -876,7 +871,6 @@ async def test_concurrent_initialize_session_managers():
             mock_cm.__aexit__ = AsyncMock()
 
             mock_session_manager.run.return_value = mock_cm
-            mock_sse_session_manager.run.return_value = mock_cm
 
             # Create multiple concurrent tasks that call initialize_session_managers
             async def init_task():
@@ -896,14 +890,11 @@ async def test_concurrent_initialize_session_managers():
             assert (
                 mock_session_manager.run.call_count == 1
             ), f"Expected 1 call to session_manager.run(), got {mock_session_manager.run.call_count}"
-            assert (
-                mock_sse_session_manager.run.call_count == 1
-            ), f"Expected 1 call to sse_session_manager.run(), got {mock_sse_session_manager.run.call_count}"
 
             # The context managers should only be entered once each
             assert (
-                mock_cm.__aenter__.call_count == 2
-            ), f"Expected 2 calls to __aenter__ (one for each session manager), got {mock_cm.__aenter__.call_count}"
+                mock_cm.__aenter__.call_count == 1
+            ), f"Expected 1 call to __aenter__ (one for each session manager), got {mock_cm.__aenter__.call_count}"
 
             # State should be properly set
             assert mcp_server._SESSION_MANAGERS_INITIALIZED is True
@@ -912,7 +903,6 @@ async def test_concurrent_initialize_session_managers():
         # Restore original state
         mcp_server._SESSION_MANAGERS_INITIALIZED = original_initialized
         mcp_server._session_manager_cm = original_session_cm
-        mcp_server._sse_session_manager_cm = original_sse_session_cm
 
 
 @pytest.mark.asyncio
@@ -1077,20 +1067,13 @@ async def test_oauth2_headers_passed_to_mcp_client():
     captured_client_args = {}
 
     async def mock_create_mcp_client(
-        server,
-        mcp_auth_header=None,
-        extra_headers=None,
-        stdio_env=None,
+        *args,
+        **kwargs,
     ):
         # Capture the arguments for verification
-        captured_client_args.update(
-            {
-                "server": server,
-                "mcp_auth_header": mcp_auth_header,
-                "extra_headers": extra_headers,
-                "stdio_env": stdio_env,
-            }
-        )
+        captured_client_args.update(kwargs)
+        if args and len(args) > 0:
+            captured_client_args["server"] = args[0]
         # Return a mock client that doesn't actually connect
         mock_client = MagicMock()
         return mock_client
