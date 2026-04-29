@@ -128,26 +128,21 @@ class VertexAIPartnerModelsTokenCounter(VertexBase):
         # Extract Vertex AI credentials and settings
         vertex_credentials = self.get_vertex_ai_credentials(litellm_params)
         vertex_project = self.get_vertex_ai_project(litellm_params)
+        vertex_location = self.get_vertex_ai_location(litellm_params)
 
-        # Check for count_tokens specific location override
-        vertex_count_tokens_location = litellm_params.get(
+        # Resolve the location used for the count-tokens endpoint with the
+        # following precedence:
+        #   1. vertex_count_tokens_location (explicit override) wins
+        #   2. vertex_location (if explicitly set) is respected
+        #   3. Claude models with no location set default to us-east5
+        # Supported Claude regions: us-east5, europe-west1, asia-southeast1
+        # https://docs.cloud.google.com/vertex-ai/generative-ai/docs/partner-models/claude/count-tokens
+        explicit_count_tokens_location = litellm_params.get(
             "vertex_count_tokens_location"
         )
-        vertex_location_raw = self.get_vertex_ai_location(litellm_params)
-
-        # Determine final location with precedence:
-        # 1. vertex_count_tokens_location (if provided)
-        # 2. vertex_location (if provided)
-        # 3. Default to us-east5 for Claude models when no location is set
-        # Supported regions: us-east5, europe-west1, asia-southeast1
-        # https://docs.cloud.google.com/vertex-ai/generative-ai/docs/partner-models/claude/count-tokens
-        if vertex_count_tokens_location:
-            vertex_location: str = vertex_count_tokens_location
-        elif vertex_location_raw:
-            vertex_location = vertex_location_raw
-        elif "claude" in model.lower():
-            vertex_location = "us-east5"
-        else:
+        if explicit_count_tokens_location:
+            vertex_location = explicit_count_tokens_location
+        elif not vertex_location and "claude" in model.lower():
             vertex_location = "us-east5"
 
         # Get access token and resolved project ID
