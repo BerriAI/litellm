@@ -8582,10 +8582,10 @@ class BaseLLMHTTPHandler:
                 vector_store_id=vector_store_id,
                 query=query,
                 vector_store_search_optional_params=vector_store_search_optional_params,
-                extra_body=extra_body,
                 api_base=api_base,
                 litellm_logging_obj=logging_obj,
                 litellm_params=dict(litellm_params),
+                extra_body=extra_body,
             )
         else:
             (
@@ -8595,10 +8595,10 @@ class BaseLLMHTTPHandler:
                 vector_store_id=vector_store_id,
                 query=query,
                 vector_store_search_optional_params=vector_store_search_optional_params,
-                extra_body=extra_body,
                 api_base=api_base,
                 litellm_logging_obj=logging_obj,
                 litellm_params=dict(litellm_params),
+                extra_body=extra_body,
             )
         all_optional_params: Dict[str, Any] = dict(litellm_params)
         all_optional_params.update(vector_store_search_optional_params or {})
@@ -8696,10 +8696,10 @@ class BaseLLMHTTPHandler:
             vector_store_id=vector_store_id,
             query=query,
             vector_store_search_optional_params=vector_store_search_optional_params,
-            extra_body=extra_body,
             api_base=api_base,
             litellm_logging_obj=logging_obj,
             litellm_params=dict(litellm_params),
+            extra_body=extra_body,
         )
 
         all_optional_params: Dict[str, Any] = dict(litellm_params)
