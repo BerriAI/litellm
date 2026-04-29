@@ -499,3 +499,98 @@ class TestThinkingSummaryPreservation:
         assert result == {
             "reasoning_effort": {"effort": "medium", "summary": "concise"}
         }
+
+
+def test_anthropic_messages_handler_passes_litellm_params_timeout_to_base_handler():
+    """The wrapper in this module must read `litellm_params.timeout` (set by
+    the router from the caller's `timeout` / `stream_timeout`) and forward it
+    to `BaseLLMHTTPHandler.anthropic_messages_handler` so the proxy honors
+    per-request timeouts on /v1/messages — same as /chat/completions does."""
+    from litellm.llms.anthropic.experimental_pass_through.messages.handler import (
+        anthropic_messages_handler,
+        base_llm_http_handler,
+    )
+
+    with patch.object(
+        base_llm_http_handler,
+        "anthropic_messages_handler",
+        return_value=MagicMock(),
+    ) as mock_base:
+        try:
+            anthropic_messages_handler(
+                max_tokens=100,
+                messages=[{"role": "user", "content": "hi"}],
+                model="anthropic/claude-sonnet-4-20250514",
+                api_key="test-key",
+                timeout=0.5,
+            )
+        except (ValueError, TypeError, AttributeError):
+            # downstream initialization may fail under mocks; we only care
+            # about what was passed to the base handler
+            pass
+
+    mock_base.assert_called_once()
+    assert mock_base.call_args.kwargs["timeout"] == 0.5
+
+
+def test_anthropic_messages_handler_coerces_string_timeout_to_float():
+    """`GenericLiteLLMParams.timeout` allows `str`, but the httpx-level
+    handlers expect `float | httpx.Timeout`. The wrapper must coerce string
+    inputs to float before forwarding (mirrors the pattern in
+    `litellm/main.py::_sleep_for_timeout`)."""
+    from litellm.llms.anthropic.experimental_pass_through.messages.handler import (
+        anthropic_messages_handler,
+        base_llm_http_handler,
+    )
+
+    with patch.object(
+        base_llm_http_handler,
+        "anthropic_messages_handler",
+        return_value=MagicMock(),
+    ) as mock_base:
+        try:
+            anthropic_messages_handler(
+                max_tokens=100,
+                messages=[{"role": "user", "content": "hi"}],
+                model="anthropic/claude-sonnet-4-20250514",
+                api_key="test-key",
+                timeout="0.5",
+            )
+        except (ValueError, TypeError, AttributeError):
+            pass
+
+    mock_base.assert_called_once()
+    assert mock_base.call_args.kwargs["timeout"] == 0.5
+    assert isinstance(mock_base.call_args.kwargs["timeout"], float)
+
+
+def test_anthropic_messages_handler_prefers_stream_timeout_for_streaming_calls():
+    """When `stream=True` and `litellm_params.stream_timeout` is set, the
+    wrapper must forward `stream_timeout` (not `timeout`) to the base
+    handler — mirrors `Router._get_timeout` so direct (non-router) callers
+    get the same stream/non-stream timeout selection as proxy callers."""
+    from litellm.llms.anthropic.experimental_pass_through.messages.handler import (
+        anthropic_messages_handler,
+        base_llm_http_handler,
+    )
+
+    with patch.object(
+        base_llm_http_handler,
+        "anthropic_messages_handler",
+        return_value=MagicMock(),
+    ) as mock_base:
+        try:
+            anthropic_messages_handler(
+                max_tokens=100,
+                messages=[{"role": "user", "content": "hi"}],
+                model="anthropic/claude-sonnet-4-20250514",
+                api_key="test-key",
+                stream=True,
+                timeout=10.0,
+                stream_timeout=0.5,
+            )
+        except (ValueError, TypeError, AttributeError):
+            pass
+
+    mock_base.assert_called_once()
+    assert mock_base.call_args.kwargs["timeout"] == 0.5

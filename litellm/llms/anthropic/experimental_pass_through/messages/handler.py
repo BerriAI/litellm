@@ -454,6 +454,16 @@ def anthropic_messages_handler(
                 "display": "summarized",
             }
 
+    # Mirror Router._get_timeout: prefer `stream_timeout` when streaming,
+    # fall back to `timeout`. Coerce string form to float for httpx.
+    _resolved_timeout = (
+        litellm_params.stream_timeout
+        if stream and litellm_params.stream_timeout is not None
+        else litellm_params.timeout
+    )
+    if isinstance(_resolved_timeout, str):
+        _resolved_timeout = float(_resolved_timeout)
+
     return base_llm_http_handler.anthropic_messages_handler(
         model=model,
         messages=messages,
@@ -469,5 +479,6 @@ def anthropic_messages_handler(
         api_key=api_key,
         api_base=api_base,
         stream=stream,
+        timeout=_resolved_timeout,
         kwargs=kwargs,
     )
