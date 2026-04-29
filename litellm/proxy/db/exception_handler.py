@@ -232,11 +232,26 @@ async def call_with_db_reconnect_retry(
             first_exc,
         )
 
-        did_reconnect = await prisma_client.attempt_db_reconnect(
-            reason=reason,
-            timeout_seconds=resolved_timeout,
-            lock_timeout_seconds=resolved_lock_timeout,
-        )
+        # Preserve the original transport error in telemetry. If
+        # `attempt_db_reconnect` itself raises (e.g. lock cancellation, timer
+        # error, unexpected internal failure), surfacing that exception
+        # instead of `first_exc` would mask the actual DB transport problem
+        # in `failure_handler` / `db_exceptions` alerts. Chain the reconnect
+        # error as the cause for debuggability without losing the original.
+        try:
+            did_reconnect = await prisma_client.attempt_db_reconnect(
+                reason=reason,
+                timeout_seconds=resolved_timeout,
+                lock_timeout_seconds=resolved_lock_timeout,
+            )
+        except Exception as reconnect_exc:
+            verbose_proxy_logger.warning(
+                "DB reconnect attempt raised; preserving original transport error. "
+                "reason=%s reconnect_error=%s",
+                reason,
+                reconnect_exc,
+            )
+            raise first_exc from reconnect_exc
         if not did_reconnect:
             raise
 
