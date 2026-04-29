@@ -597,7 +597,14 @@ def process_items(schema, depth=0):
             f"Max depth of {DEFAULT_MAX_RECURSE_DEPTH} exceeded while processing schema. Please check the schema for excessive nesting."
         )
     if isinstance(schema, dict):
-        if "items" in schema and schema["items"] == {}:
+        # Vertex requires `items` whenever `type == "array"` (even inside anyOf).
+        # Normalize: empty `items: {}` and missing-items both become {"type": "object"}.
+        type_val = schema.get("type")
+        if (
+            isinstance(type_val, str)
+            and type_val.lower() == "array"
+            and ("items" not in schema or schema.get("items") == {})
+        ):
             schema["items"] = {"type": "object"}
         for key, value in schema.items():
             if isinstance(value, dict):
@@ -710,14 +717,10 @@ def convert_anyof_null_to_nullable(schema, depth=0):
 
         if contains_null:
             # set all types to nullable following guidance found here: https://cloud.google.com/vertex-ai/generative-ai/docs/samples/generativeaionvertexai-gemini-controlled-generation-response-schema-3#generativeaionvertexai_gemini_controlled_generation_response_schema_3-python
+            # Empty `items: {}` on array branches is left in place; downstream
+            # process_items() converts it to {"type": "object"}, which Vertex
+            # requires whenever type == "array" (even inside anyOf).
             for atype in anyof:
-                # Remove items field if type is array and items is empty
-                if (
-                    atype.get("type") == "array"
-                    and "items" in atype
-                    and not atype["items"]
-                ):
-                    atype.pop("items")
                 atype["nullable"] = True
 
     properties = schema.get("properties", None)
