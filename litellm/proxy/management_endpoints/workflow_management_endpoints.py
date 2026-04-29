@@ -17,6 +17,7 @@ import json
 from typing import Any, Dict, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+
 try:
     from prisma.errors import UniqueViolationError
 except ImportError:
