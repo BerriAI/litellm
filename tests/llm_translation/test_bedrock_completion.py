@@ -1323,7 +1323,7 @@ def test_base_aws_llm_get_credentials():
 def test_bedrock_completion_test_2():
     litellm.set_verbose = True
     data = {
-        "model": "bedrock/anthropic.claude-3-7-sonnet-20250219-v1:0",
+        "model": "bedrock/anthropic.claude-sonnet-4-5-20250929-v1:0",
         "messages": [
             {
                 "role": "system",
@@ -1630,7 +1630,7 @@ def test_bedrock_completion_test_4(modify_params):
     litellm.modify_params = modify_params
 
     data = {
-        "model": "anthropic.claude-3-7-sonnet-20250219-v1:0",
+        "model": "anthropic.claude-sonnet-4-5-20250929-v1:0",
         "messages": [
             {
                 "role": "user",
@@ -2115,7 +2115,7 @@ class TestBedrockConverseAnthropicUnitTests(BaseAnthropicChatTest):
 
     def get_base_completion_call_args_with_thinking(self) -> dict:
         return {
-            "model": "bedrock/us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+            "model": "bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
             "thinking": {"type": "enabled", "budget_tokens": 16000},
         }
 
@@ -2828,7 +2828,7 @@ async def test_bedrock_thinking_in_assistant_message(sync_mode):
         client = AsyncHTTPHandler()
 
     params = {
-        "model": "bedrock/us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+        "model": "bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
         "messages": [
             {
                 "role": "assistant",
@@ -2887,7 +2887,7 @@ async def test_bedrock_stream_thinking_content_openwebui():
     ```
     """
     response = await litellm.acompletion(
-        model="bedrock/us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+        model="bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
         messages=[{"role": "user", "content": "Hello who is this?"}],
         stream=True,
         max_tokens=1080,

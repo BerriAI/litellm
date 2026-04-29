@@ -651,6 +651,11 @@ class LiteLLMRoutes(enum.Enum):
         "/health/services",
     ] + info_routes
 
+    # Routes in `global_spend_tracking_routes` return proxy-wide spend across
+    # every team, customer, and api_key. They are intentionally NOT included
+    # here — non-admin roles must not see other tenants' spend. Admin roles go
+    # through their own branches in `route_checks.py`, and a key minted with
+    # the `get_spend_routes` permission retains explicit opt-in access.
     internal_user_routes = (
         [
             "/global/activity",
@@ -662,13 +667,10 @@ class LiteLLMRoutes(enum.Enum):
             "/v2/guardrails/list",
         ]
         + spend_tracking_routes
-        + global_spend_tracking_routes
         + key_management_routes
     )
 
-    internal_user_view_only_routes = (
-        spend_tracking_routes + global_spend_tracking_routes
-    )
+    internal_user_view_only_routes = spend_tracking_routes
 
     self_managed_routes = [
         "/team/member_add",
@@ -677,6 +679,7 @@ class LiteLLMRoutes(enum.Enum):
         "/team/permissions_list",
         "/team/permissions_update",
         "/team/daily/activity",
+        "/team/{team_id}/members/me",
         "/model/new",
         "/model/update",
         "/model/delete",
@@ -4121,6 +4124,12 @@ LiteLLM_ManagementEndpoint_MetadataFields_Premium = [
     "logging",
     "secret_manager_settings",
     "allowed_passthrough_routes",
+]
+
+# Metadata keys that are immutable once set: preserved when an update omits them,
+# and rejected (400) when an update tries to change them.
+LiteLLM_Reserved_Metadata_Fields = [
+    "service_account_id",
 ]
 
 

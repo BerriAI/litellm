@@ -10,6 +10,7 @@ export const pageDescriptions: Record<string, string> = {
   models: "Configure and manage LLM models and endpoints",
   agents: "Create and manage AI agents",
   "mcp-servers": "Configure Model Context Protocol servers",
+  memory: "Inspect and manage agent memory entries stored under /v1/memory",
   guardrails: "Set up content moderation and safety guardrails",
   policies: "Define access control and usage policies",
   "search-tools": "Configure RAG search and retrieval tools",

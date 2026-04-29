@@ -1,3 +1,4 @@
+from typing import Optional
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -5,6 +6,7 @@ import pytest
 from litellm.proxy._types import (
     JWTLiteLLMRoleMap,
     LiteLLM_JWTAuth,
+    LiteLLM_TeamMembership,
     LiteLLM_TeamTable,
     LiteLLM_UserTable,
     LitellmUserRoles,
@@ -2269,3 +2271,299 @@ async def test_find_and_validate_specific_team_id_no_hint_for_valid_field():
 
     error_msg = str(exc_info.value)
     assert "Hint" not in error_msg
+
+
+# ---------------------------------------------------------------------------
+# Single-team DB fallback when JWT does not resolve team_id
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    (
+        "user_id",
+        "user_teams",
+        "get_team_object_return",
+        "expected_team_id",
+        "expect_get_team_called",
+        "expect_get_membership_called",
+    ),
+    [
+        pytest.param(
+            "user_single_team_fb",
+            ["team_only_fb"],
+            "resolved_row",
+            "team_only_fb",
+            True,
+            True,
+            id="one_db_team_resolves_team_and_membership",
+        ),
+        pytest.param(
+            "user_multi_team_fb",
+            ["team_a", "team_b"],
+            "unused",
+            None,
+            False,
+            False,
+            id="two_db_teams_ambiguous_no_fallback",
+        ),
+        pytest.param(
+            "user_zero_teams_fb",
+            [],
+            "unused",
+            None,
+            False,
+            False,
+            id="zero_db_teams_no_fallback",
+        ),
+        pytest.param(
+            "user_orphan_team_fb",
+            ["team_missing_in_db"],
+            "http_404",
+            None,
+            True,
+            False,
+            id="one_team_id_but_row_missing_in_db",
+        ),
+        pytest.param(
+            "user_orphan_team_non404_fb",
+            ["team_err"],
+            "http_500",
+            None,
+            True,
+            False,
+            id="get_team_object_raises_non404_still_no_raise",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_auth_builder_single_team_db_fallback_when_jwt_has_no_team(
+    user_id: str,
+    user_teams: list,
+    get_team_object_return: Optional[str],
+    expected_team_id: Optional[str],
+    expect_get_team_called: bool,
+    expect_get_membership_called: bool,
+) -> None:
+    """
+    JWT does not set team_id (mocks return no team from token/header/routing). Behavior:
+    - exactly one team on user + get_team_object returns a row -> set team + membership
+    - two+ teams, or zero teams -> no get_team_object / no membership
+    - one team id but get_team_object raises (e.g. 404/500) -> skip fallback, no team, no error
+    """
+    if len(user_teams) == 1 and get_team_object_return == "resolved_row":
+        only = user_teams[0]
+        team_table = LiteLLM_TeamTable(team_id=only)
+        membership = LiteLLM_TeamMembership(
+            user_id=user_id, team_id=only, litellm_budget_table=None
+        )
+        get_team_return_value = team_table
+        membership_return_value = membership
+    else:
+        team_table = None
+        membership = None
+        get_team_return_value = None
+        membership_return_value = None
+    # "http_404" / "http_500" use get_team_object.side_effect, not return_value
+
+    user_object = LiteLLM_UserTable(
+        user_id=user_id,
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        teams=user_teams,
+    )
+    jwt_handler = JWTHandler()
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth()
+
+    with (
+        patch.object(jwt_handler, "auth_jwt", new_callable=AsyncMock) as mock_auth_jwt,
+        patch.object(JWTAuthManager, "check_rbac_role", new_callable=AsyncMock),
+        patch.object(jwt_handler, "get_rbac_role", return_value=None),
+        patch.object(jwt_handler, "get_scopes", return_value=[]),
+        patch.object(jwt_handler, "get_object_id", return_value=None),
+        patch.object(
+            JWTAuthManager,
+            "get_user_info",
+            new_callable=AsyncMock,
+            return_value=(user_id, "u@example.com", True),
+        ),
+        patch.object(jwt_handler, "get_org_id", return_value=None),
+        patch.object(jwt_handler, "get_end_user_id", return_value=None),
+        patch.object(
+            JWTAuthManager,
+            "check_admin_access",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
+        patch.object(
+            JWTAuthManager,
+            "find_and_validate_specific_team_id",
+            new_callable=AsyncMock,
+            return_value=(None, None),
+        ),
+        patch.object(JWTAuthManager, "get_all_team_ids", return_value=set()),
+        patch.object(
+            JWTAuthManager,
+            "find_team_with_model_access",
+            new_callable=AsyncMock,
+            return_value=(None, None),
+        ),
+        patch.object(
+            JWTAuthManager,
+            "get_objects",
+            new_callable=AsyncMock,
+            return_value=(user_object, None, None, None),
+        ),
+        patch.object(JWTAuthManager, "map_user_to_teams", new_callable=AsyncMock),
+        patch.object(JWTAuthManager, "validate_object_id", return_value=True),
+        patch.object(
+            JWTAuthManager, "sync_user_role_and_teams", new_callable=AsyncMock
+        ),
+        patch(
+            "litellm.proxy.auth.handle_jwt.get_team_object",
+            new_callable=AsyncMock,
+        ) as mock_get_team,
+        patch(
+            "litellm.proxy.auth.handle_jwt.get_team_membership",
+            new_callable=AsyncMock,
+        ) as mock_get_membership,
+    ):
+        mock_auth_jwt.return_value = {"sub": user_id, "scope": ""}
+        if get_team_object_return in ("http_404", "http_500"):
+            from fastapi import HTTPException
+
+            code = 404 if get_team_object_return == "http_404" else 500
+            mock_get_team.side_effect = HTTPException(
+                status_code=code,
+                detail={
+                    "error": f"Team doesn't exist in db. Team={user_teams[0]}. Create team via `/team/new` call."
+                },
+            )
+        else:
+            mock_get_team.return_value = get_team_return_value
+        if membership_return_value is not None:
+            mock_get_membership.return_value = membership_return_value
+
+        result = await JWTAuthManager.auth_builder(
+            api_key="test_jwt_token",
+            jwt_handler=jwt_handler,
+            request_data={"model": "gpt-4"},
+            general_settings={"enforce_rbac": False},
+            route="/chat/completions",
+            prisma_client=None,
+            user_api_key_cache=None,
+            parent_otel_span=None,
+            proxy_logging_obj=None,
+        )
+
+        assert result["team_id"] == expected_team_id
+        if expected_team_id is not None:
+            assert result["team_object"] == team_table
+            assert result["team_membership"] == membership
+        else:
+            assert result["team_object"] is None
+            if not expect_get_membership_called:
+                assert result["team_membership"] is None
+
+        if expect_get_team_called:
+            mock_get_team.assert_called()
+        else:
+            mock_get_team.assert_not_called()
+        if expect_get_membership_called:
+            mock_get_membership.assert_called_once()
+        else:
+            mock_get_membership.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_auth_builder_single_team_fallback_membership_error_skips_no_raise():
+    """
+    get_team_object succeeds but get_team_membership raises — do not set team; no exception.
+    """
+    from fastapi import HTTPException
+
+    user_id = "u_mem_fail"
+    team_id_val = "team_mem_fail"
+    user_object = LiteLLM_UserTable(
+        user_id=user_id,
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        teams=[team_id_val],
+    )
+    team_table = LiteLLM_TeamTable(team_id=team_id_val)
+    jwt_handler = JWTHandler()
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth()
+
+    with (
+        patch.object(jwt_handler, "auth_jwt", new_callable=AsyncMock) as mock_auth_jwt,
+        patch.object(JWTAuthManager, "check_rbac_role", new_callable=AsyncMock),
+        patch.object(jwt_handler, "get_rbac_role", return_value=None),
+        patch.object(jwt_handler, "get_scopes", return_value=[]),
+        patch.object(jwt_handler, "get_object_id", return_value=None),
+        patch.object(
+            JWTAuthManager,
+            "get_user_info",
+            new_callable=AsyncMock,
+            return_value=(user_id, "u@example.com", True),
+        ),
+        patch.object(jwt_handler, "get_org_id", return_value=None),
+        patch.object(jwt_handler, "get_end_user_id", return_value=None),
+        patch.object(
+            JWTAuthManager,
+            "check_admin_access",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
+        patch.object(
+            JWTAuthManager,
+            "find_and_validate_specific_team_id",
+            new_callable=AsyncMock,
+            return_value=(None, None),
+        ),
+        patch.object(JWTAuthManager, "get_all_team_ids", return_value=set()),
+        patch.object(
+            JWTAuthManager,
+            "find_team_with_model_access",
+            new_callable=AsyncMock,
+            return_value=(None, None),
+        ),
+        patch.object(
+            JWTAuthManager,
+            "get_objects",
+            new_callable=AsyncMock,
+            return_value=(user_object, None, None, None),
+        ),
+        patch.object(JWTAuthManager, "map_user_to_teams", new_callable=AsyncMock),
+        patch.object(JWTAuthManager, "validate_object_id", return_value=True),
+        patch.object(
+            JWTAuthManager, "sync_user_role_and_teams", new_callable=AsyncMock
+        ),
+        patch(
+            "litellm.proxy.auth.handle_jwt.get_team_object",
+            new_callable=AsyncMock,
+        ) as mock_get_team,
+        patch(
+            "litellm.proxy.auth.handle_jwt.get_team_membership",
+            new_callable=AsyncMock,
+        ) as mock_get_membership,
+    ):
+        mock_auth_jwt.return_value = {"sub": user_id, "scope": ""}
+        mock_get_team.return_value = team_table
+        mock_get_membership.side_effect = HTTPException(
+            status_code=500, detail="membership lookup failed"
+        )
+
+        result = await JWTAuthManager.auth_builder(
+            api_key="test_jwt_token",
+            jwt_handler=jwt_handler,
+            request_data={"model": "gpt-4"},
+            general_settings={"enforce_rbac": False},
+            route="/chat/completions",
+            prisma_client=None,
+            user_api_key_cache=None,
+            parent_otel_span=None,
+            proxy_logging_obj=None,
+        )
+
+        assert result["team_id"] is None
+        assert result["team_object"] is None
+        assert result["team_membership"] is None
+        mock_get_team.assert_called()
+        mock_get_membership.assert_called_once()
