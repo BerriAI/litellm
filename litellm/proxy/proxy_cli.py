@@ -142,11 +142,15 @@ class ProxyInitializationHelpers:
         import litellm
         from litellm._logging import _get_uvicorn_json_log_config
 
-        uvicorn_args = {
+        forwarded_allow_ips = os.getenv("FORWARDED_ALLOW_IPS", None)
+        uvicorn_args: dict = {
             "app": "litellm.proxy.proxy_server:app",
             "host": host,
             "port": port,
         }
+        if forwarded_allow_ips is not None:
+            uvicorn_args["proxy_headers"] = True
+            uvicorn_args["forwarded_allow_ips"] = forwarded_allow_ips
         if log_config is not None:
             print(f"Using log_config: {log_config}")  # noqa
             uvicorn_args["log_config"] = log_config
