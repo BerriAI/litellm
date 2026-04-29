@@ -173,7 +173,7 @@ class TestListWorkflowRuns:
         resp = self.client.get("/v1/workflows/runs")
         assert resp.status_code == 200
         data = resp.json()
-        assert data["total"] == 1
+        assert data["count"] == 1
 
     @patch("litellm.proxy.proxy_server.prisma_client")
     def test_list_filters_by_status(self, mock_pc):
@@ -413,6 +413,6 @@ class TestWorkflowMessages:
         resp = self.client.get("/v1/workflows/runs/run-1/messages")
         assert resp.status_code == 200
         data = resp.json()
-        assert data["total"] == 2
+        assert data["count"] == 2
         call_kwargs = self._prisma.db.litellm_workflowmessage.find_many.call_args[1]
         assert call_kwargs["order"] == {"sequence_number": "asc"}

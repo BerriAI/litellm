@@ -14,7 +14,7 @@ GET    /v1/workflows/runs/{run_id}/messages     - Fetch conversation history
 """
 
 import json
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from prisma.errors import UniqueViolationError
@@ -54,8 +54,11 @@ class WorkflowRunCreateRequest(BaseModel):
     metadata: Optional[Dict[str, Any]] = None
 
 
+WorkflowRunStatus = Literal["pending", "running", "paused", "completed", "failed"]
+
+
 class WorkflowRunUpdateRequest(BaseModel):
-    status: Optional[str] = None
+    status: Optional[WorkflowRunStatus] = None
     output: Optional[Dict[str, Any]] = None
     metadata: Optional[Dict[str, Any]] = None
 
@@ -172,7 +175,7 @@ async def list_workflow_runs(
             order={"created_at": "desc"},
             take=limit,
         )
-        return {"runs": runs, "total": len(runs)}
+        return {"runs": runs, "count": len(runs)}
     except Exception as e:
         verbose_proxy_logger.exception("Error listing workflow runs: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
@@ -352,7 +355,7 @@ async def list_workflow_events(
             where={"run_id": run_id},
             order={"sequence_number": "asc"},
         )
-        return {"events": events, "total": len(events)}
+        return {"events": events, "count": len(events)}
     except Exception as e:
         verbose_proxy_logger.exception("Error listing workflow events: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
@@ -441,7 +444,7 @@ async def list_workflow_messages(
             where={"run_id": run_id},
             order={"sequence_number": "asc"},
         )
-        return {"messages": messages, "total": len(messages)}
+        return {"messages": messages, "count": len(messages)}
     except Exception as e:
         verbose_proxy_logger.exception("Error listing workflow messages: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
