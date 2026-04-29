@@ -3,8 +3,10 @@ from typing import Optional, cast
 import httpx
 
 import litellm
+from litellm.llms.azure.common_utils import BaseAzureLLM
 from litellm.llms.openai.image_edit.transformation import OpenAIImageEditConfig
 from litellm.secret_managers.main import get_secret_str
+from litellm.types.router import GenericLiteLLMParams
 from litellm.utils import _add_path_to_api_base
 
 
@@ -17,20 +19,12 @@ class AzureImageEditConfig(OpenAIImageEditConfig):
         litellm_params: Optional[dict] = None,
         api_base: Optional[str] = None,
     ) -> dict:
-        api_key = (
-            api_key
-            or litellm.api_key
-            or litellm.azure_key
-            or get_secret_str("AZURE_OPENAI_API_KEY")
-            or get_secret_str("AZURE_API_KEY")
+        _litellm_params = GenericLiteLLMParams(**(litellm_params or {}))
+        if api_key:
+            _litellm_params.api_key = api_key
+        return BaseAzureLLM._base_validate_azure_environment(
+            headers=headers, litellm_params=_litellm_params
         )
-
-        headers.update(
-            {
-                "Authorization": f"Bearer {api_key}",
-            }
-        )
-        return headers
 
     def get_complete_url(
         self,
