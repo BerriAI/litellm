@@ -1,0 +1,49 @@
+name: PR Build Artifact Label Hello World
+
+on:
+  pull_request:
+    types:
+      - labeled
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  hello-world:
+    name: Hello world for build artifact label
+    runs-on: ubuntu-latest
+    if: >
+      github.event.action == 'labeled' &&
+      github.event.label.name == 'build-ecr-artifact'
+
+    steps:
+      - name: Print hello world context
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          LABEL_NAME: ${{ github.event.label.name }}
+        run: |
+          short_sha="${PR_HEAD_SHA::7}"
+          image_tag="litellm-pr-${PR_NUMBER}"
+          trace_tag="litellm-pr-${PR_NUMBER}-${short_sha}"
+
+          echo "Hello world: PR label trigger worked."
+          echo "Label: ${LABEL_NAME}"
+          echo "PR number: ${PR_NUMBER}"
+          echo "PR head ref: ${PR_HEAD_REF}"
+          echo "PR head SHA: ${PR_HEAD_SHA}"
+          echo "Updater image tag: ${image_tag}"
+          echo "Trace image tag: ${trace_tag}"
+
+          {
+            echo "### Hello world: PR build artifact label trigger"
+            echo
+            echo "- Label: \`${LABEL_NAME}\`"
+            echo "- PR: \`#${PR_NUMBER}\`"
+            echo "- Head ref: \`${PR_HEAD_REF}\`"
+            echo "- Head SHA: \`${PR_HEAD_SHA}\`"
+            echo "- Updater image tag: \`${image_tag}\`"
+            echo "- Trace image tag: \`${trace_tag}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
