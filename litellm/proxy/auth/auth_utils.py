@@ -6,6 +6,7 @@ from typing import Any, List, Optional, Tuple
 
 from fastapi import HTTPException, Request, status
 
+import litellm
 from litellm import Router, provider_list
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import STANDARD_CUSTOMER_ID_HEADERS
@@ -80,17 +81,22 @@ def check_complete_credentials(request_body: dict) -> bool:
     if not (api_key_value and isinstance(api_key_value, str) and api_key_value.strip()):
         return False
 
-    for url_field in ("api_base", "base_url"):
-        url_value = request_body.get(url_field)
-        if not url_value or not isinstance(url_value, str):
-            continue
-        try:
-            validate_url(url_value)
-        except SSRFError as e:
-            raise ValueError(
-                f"Rejected request: client-side {url_field}={url_value!r} "
-                f"is rejected by the SSRF guard ({e})."
-            )
+    # ``validate_url`` itself doesn't consult the toggle; ``safe_get`` /
+    # ``async_safe_get`` do. Mirror that here so admins who explicitly
+    # disabled URL validation (e.g. for an internal Ollama endpoint they
+    # accept the SSRF risk for) aren't blocked at the proxy boundary.
+    if getattr(litellm, "user_url_validation", False):
+        for url_field in ("api_base", "base_url"):
+            url_value = request_body.get(url_field)
+            if not url_value or not isinstance(url_value, str):
+                continue
+            try:
+                validate_url(url_value)
+            except SSRFError as e:
+                raise ValueError(
+                    f"Rejected request: client-side {url_field}={url_value!r} "
+                    f"is rejected by the SSRF guard ({e})."
+                )
 
     return True
 

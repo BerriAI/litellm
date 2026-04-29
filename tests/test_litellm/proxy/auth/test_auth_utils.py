@@ -670,7 +670,17 @@ class TestCheckCompleteCredentialsBlocksSSRF:
     point at private / internal / cloud-metadata addresses. Without this
     the gate accepts ``api_key=anything`` plus a malicious target and the
     proxy is used as an SSRF pivot.
+
+    The check only runs when ``litellm.user_url_validation`` is True, so
+    every test in this class flips the toggle. Tests stay mock-only — no
+    real DNS is performed.
     """
+
+    @pytest.fixture(autouse=True)
+    def _enable_url_validation(self, monkeypatch):
+        import litellm
+
+        monkeypatch.setattr(litellm, "user_url_validation", True, raising=False)
 
     @pytest.mark.parametrize(
         "url_field",
@@ -687,27 +697,57 @@ class TestCheckCompleteCredentialsBlocksSSRF:
         ],
     )
     def test_rejects_private_or_metadata_targets(self, url_field, blocked_url):
-        with pytest.raises(ValueError) as exc_info:
-            check_complete_credentials(
-                {
-                    "model": "gpt-4",
-                    "api_key": "sk-some-clientside-key",
-                    url_field: blocked_url,
-                }
-            )
+        from litellm.litellm_core_utils.url_utils import SSRFError
+
+        with patch(
+            "litellm.proxy.auth.auth_utils.validate_url",
+            side_effect=SSRFError(f"blocked: {blocked_url}"),
+        ):
+            with pytest.raises(ValueError) as exc_info:
+                check_complete_credentials(
+                    {
+                        "model": "gpt-4",
+                        "api_key": "sk-some-clientside-key",
+                        url_field: blocked_url,
+                    }
+                )
         assert url_field in str(exc_info.value)
         assert "SSRF" in str(exc_info.value)
 
-    def test_allows_public_https_target(self):
-        # No DNS / SSRF guard objection on a normal public host.
-        result = check_complete_credentials(
-            {
-                "model": "gpt-4",
-                "api_key": "sk-some-clientside-key",
-                "api_base": "https://api.openai.com/v1",
-            }
-        )
+    def test_allows_public_target_when_validate_url_passes(self):
+        # ``validate_url`` is mocked so no real DNS is performed.
+        with patch(
+            "litellm.proxy.auth.auth_utils.validate_url",
+            return_value=("https://api.openai.com/v1", "api.openai.com"),
+        ):
+            result = check_complete_credentials(
+                {
+                    "model": "gpt-4",
+                    "api_key": "sk-some-clientside-key",
+                    "api_base": "https://api.openai.com/v1",
+                }
+            )
         assert result is True
+
+    def test_skips_url_validation_when_toggle_is_off(self, monkeypatch):
+        # Admins who disable ``user_url_validation`` (default) should not
+        # have requests rejected at the proxy boundary even if the URL
+        # would fail the SSRF guard.
+        import litellm
+
+        monkeypatch.setattr(litellm, "user_url_validation", False, raising=False)
+        with patch(
+            "litellm.proxy.auth.auth_utils.validate_url",
+        ) as mocked:
+            result = check_complete_credentials(
+                {
+                    "model": "gpt-4",
+                    "api_key": "sk-some-clientside-key",
+                    "api_base": "http://127.0.0.1:8080/admin",
+                }
+            )
+        assert result is True
+        mocked.assert_not_called()
 
 
 class TestGetDynamicLitellmParamsClearsAdminConfigOnBaseOverride:
@@ -767,7 +807,14 @@ class TestGetDynamicLitellmParamsClearsAdminConfigOnBaseOverride:
         assert "vertex_credentials" not in out
         assert "vertex_project" not in out
 
-    def test_preserves_admin_config_when_caller_resupplies(self):
+    def test_caller_resupplied_value_overrides_admin_value_on_base_override(self):
+        # When the caller redirects ``api_base`` and *also* supplies their
+        # own value for one of the admin fields (e.g. ``organization``),
+        # the caller's value must win — never the admin's. The naive
+        # ``if field not in request_kwargs: pop`` shape lets a caller echo
+        # the field name with any value (or empty string) to keep the
+        # admin's value forwarded, which is the exfiltration vector this
+        # test guards against.
         from litellm.router_utils.clientside_credential_handler import (
             get_dynamic_litellm_params,
         )
@@ -784,8 +831,32 @@ class TestGetDynamicLitellmParamsClearsAdminConfigOnBaseOverride:
                 "extra_body": {"attacker": "value"},
             },
         )
-        assert out["organization"] == "org-admin"
-        assert out["extra_body"] == {"admin": "value"}
+        assert out["organization"] == "org-attacker"
+        assert out["extra_body"] == {"attacker": "value"}
+
+    def test_field_echo_does_not_preserve_admin_value(self):
+        # Regression: a caller that echoes an admin-config field name with
+        # an *empty* value (or any value) must not be able to keep the
+        # admin's value in ``litellm_params``.
+        from litellm.router_utils.clientside_credential_handler import (
+            get_dynamic_litellm_params,
+        )
+
+        out = get_dynamic_litellm_params(
+            litellm_params={
+                "api_base": "https://admin.upstream/v1",
+                "organization": "org-admin-secret",
+                "extra_body": {"x-admin-only": "secret"},
+            },
+            request_kwargs={
+                "api_base": "https://attacker.example",
+                "organization": "",
+                "extra_body": "",
+            },
+        )
+        assert out["organization"] == ""
+        assert out["extra_body"] == ""
+        assert "org-admin-secret" not in str(out)
 
     def test_no_clearing_when_only_api_key_overridden(self):
         from litellm.router_utils.clientside_credential_handler import (
