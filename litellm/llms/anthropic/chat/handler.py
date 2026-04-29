@@ -83,6 +83,7 @@ async def make_call(
     timeout: Optional[Union[float, httpx.Timeout]],
     json_mode: bool,
     speed: Optional[str] = None,
+    tool_name_reverse_map: Optional[Dict[str, str]] = None,
 ) -> Tuple[Any, httpx.Headers]:
     if client is None:
         client = litellm.module_level_aclient
@@ -117,6 +118,7 @@ async def make_call(
         sync_stream=False,
         json_mode=json_mode,
         speed=speed,
+        tool_name_reverse_map=tool_name_reverse_map,
     )
 
     # LOGGING
@@ -141,6 +143,7 @@ def make_sync_call(
     timeout: Optional[Union[float, httpx.Timeout]],
     json_mode: bool,
     speed: Optional[str] = None,
+    tool_name_reverse_map: Optional[Dict[str, str]] = None,
 ) -> Tuple[Any, httpx.Headers]:
     if client is None:
         client = litellm.module_level_client  # re-use a module level client
@@ -183,6 +186,7 @@ def make_sync_call(
         sync_stream=True,
         json_mode=json_mode,
         speed=speed,
+        tool_name_reverse_map=tool_name_reverse_map,
     )
 
     # LOGGING
@@ -237,6 +241,11 @@ class AnthropicChatCompletion(BaseLLM):
             timeout=timeout,
             json_mode=json_mode,
             speed=optional_params.get("speed") if optional_params else None,
+            tool_name_reverse_map=(
+                litellm_params.get("_anthropic_tool_name_map")
+                if isinstance(litellm_params, dict)
+                else None
+            ),
         )
         streamwrapper = CustomStreamWrapper(
             completion_stream=completion_stream,
@@ -462,6 +471,11 @@ class AnthropicChatCompletion(BaseLLM):
                     timeout=timeout,
                     json_mode=json_mode,
                     speed=optional_params.get("speed") if optional_params else None,
+                    tool_name_reverse_map=(
+                        litellm_params.get("_anthropic_tool_name_map")
+                        if isinstance(litellm_params, dict)
+                        else None
+                    ),
                 )
                 return CustomStreamWrapper(
                     completion_stream=completion_stream,
@@ -526,6 +540,7 @@ class ModelResponseIterator:
         sync_stream: bool,
         json_mode: Optional[bool] = False,
         speed: Optional[str] = None,
+        tool_name_reverse_map: Optional[Dict[str, str]] = None,
     ):
         self.streaming_response = streaming_response
         self.response_iterator = self.streaming_response
@@ -533,6 +548,13 @@ class ModelResponseIterator:
         self.tool_index = -1
         self.json_mode = json_mode
         self.speed = speed
+        # rewritten-name -> caller's original. Built per-request from the
+        # forward map in AnthropicConfig._build_request_tool_name_maps; only
+        # contains entries we actually rewrote, so a tool legitimately named
+        # `foo_bar` is *not* reverse-mapped just because some other tool was
+        # rewritten to `foo_bar` in a different request. Empty/None is the
+        # common case (no '/' or other invalid chars in any tool name).
+        self.tool_name_reverse_map: Dict[str, str] = tool_name_reverse_map or {}
         # Generate response ID once per stream to match OpenAI-compatible behavior
         self.response_id = _generate_id()
 
@@ -792,6 +814,16 @@ class ModelResponseIterator:
                     or content_block_start["content_block"]["type"] == "server_tool_use"
                 ):
                     self.tool_index += 1
+                    # Reverse-map the (sanitized) tool name back to the
+                    # caller's original. No-op when the map is empty.
+                    _stream_tool_name = content_block_start["content_block"]["name"]
+                    if (
+                        self.tool_name_reverse_map
+                        and _stream_tool_name in self.tool_name_reverse_map
+                    ):
+                        _stream_tool_name = self.tool_name_reverse_map[
+                            _stream_tool_name
+                        ]
                     # Use empty string for arguments in content_block_start - actual arguments
                     # come in subsequent content_block_delta chunks and get accumulated.
                     # Using str(input) here would prepend '{}' causing invalid JSON accumulation.
@@ -799,7 +831,7 @@ class ModelResponseIterator:
                         id=content_block_start["content_block"]["id"],
                         type="function",
                         function=ChatCompletionToolCallFunctionChunk(
-                            name=content_block_start["content_block"]["name"],
+                            name=_stream_tool_name,
                             arguments="",
                         ),
                         index=self.tool_index,

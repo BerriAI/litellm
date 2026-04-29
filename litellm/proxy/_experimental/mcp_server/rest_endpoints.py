@@ -976,6 +976,7 @@ if MCP_AVAILABLE:
             build_input_schema,
             load_openapi_spec_async,
             resolve_operation_params,
+            sanitize_openapi_tool_name,
         )
 
         try:
@@ -993,7 +994,12 @@ if MCP_AVAILABLE:
                         operation, path_item, components
                     )
 
-                    op_id = operation.get("operationId", f"{method}_{path}")
+                    raw_op_id = operation.get("operationId", f"{method}_{path}")
+                    # Match what register_tools_from_openapi does so the preview
+                    # the user sees in the dashboard equals the names that get
+                    # registered (and shipped to LLM providers, which enforce
+                    # ^[a-zA-Z0-9_-]+$). See sanitize_openapi_tool_name docstring.
+                    op_id = sanitize_openapi_tool_name(raw_op_id)
                     summary = operation.get("summary", "")
                     description = operation.get("description", summary)
                     input_schema = build_input_schema(resolved_op)

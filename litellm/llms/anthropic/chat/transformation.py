@@ -92,6 +92,106 @@ else:
     LoggingClass = Any
 
 
+# Anthropic requires tool names to match ^[a-zA-Z0-9_-]{1,128}$. Any other
+# character (commonly '/' or '.' from OpenAPI-derived MCP tools, e.g.
+# "actions/download-job-logs-for-workflow-run") must be replaced before
+# the request is sent.
+#
+# A naive "replace [^a-zA-Z0-9_-] with _" is unsafe because it's lossy:
+# `foo/bar` and `foo_bar` both collapse to `foo_bar`. Two tools with the
+# same sanitized name would either 400 at Anthropic (duplicate) or, worse,
+# cause the response side to mis-translate `foo_bar` (a name the caller
+# really did register) back to `foo/bar`.
+#
+# Instead we build a *per-request* forward map (original -> sanitized)
+# whose codomain is unique within the request: when two originals collapse
+# to the same candidate, or when a sanitized name collides with an already-
+# valid name elsewhere in the request, we append numeric suffixes
+# (`_2`, `_3`, ...) until the result is free.
+#
+# The reverse map (sanitized -> original) only contains entries where the
+# original was actually rewritten. So a tool whose name is already valid
+# round-trips identically and is *never* mistakenly re-mapped on the
+# response side.
+_ANTHROPIC_TOOL_NAME_INVALID_CHARS = re.compile(r"[^a-zA-Z0-9_-]")
+_ANTHROPIC_TOOL_NAME_MAX_LEN = 128
+ANTHROPIC_TOOL_NAME_FORWARD_MAP_KEY = "_anthropic_tool_name_forward_map"
+ANTHROPIC_TOOL_NAME_REVERSE_MAP_KEY = "_anthropic_tool_name_map"
+
+
+def _basic_sanitize_anthropic_tool_name(name: str) -> str:
+    """Lossy: replace [^a-zA-Z0-9_-] with '_' and truncate to 128.
+
+    Used as a candidate generator for the per-request forward map.
+    Callers should NOT use this directly for translation -- always go
+    through the forward map so collisions are resolved.
+    """
+    if not isinstance(name, str) or not name:
+        return name
+    return _ANTHROPIC_TOOL_NAME_INVALID_CHARS.sub("_", name)[
+        :_ANTHROPIC_TOOL_NAME_MAX_LEN
+    ]
+
+
+def _build_anthropic_tool_name_maps(
+    original_names: List[str],
+) -> Tuple[Dict[str, str], Dict[str, str]]:
+    """Build (forward, reverse) tool-name maps for a single request.
+
+    forward[original] = sanitized   -- only present when name was rewritten
+    reverse[sanitized] = original   -- inverse of `forward`
+
+    Properties:
+    - All sanitized names satisfy ^[a-zA-Z0-9_-]{1,128}$.
+    - Sanitized names are unique within the request (no two originals
+      collide on the wire).
+    - A name that's already valid AND doesn't collide with another tool's
+      sanitized form passes through untouched and is absent from the maps.
+      That's the key correctness property: response-side translation only
+      runs on entries we actually rewrote, so a tool legitimately named
+      `foo_bar` is never incorrectly retyped to `foo/bar` just because
+      some *other* request had that pair.
+    - Order-dependent: when two originals would clash, the *second* one
+      seen gets the disambiguating suffix. Callers should preserve the
+      caller's tool order (we do).
+    """
+    forward: Dict[str, str] = {}
+    used: set = set()
+    for original in original_names:
+        if not isinstance(original, str) or not original:
+            continue
+        candidate = _basic_sanitize_anthropic_tool_name(original)
+        if candidate == original:
+            # Already valid. Reserve the slot but don't put it in `forward`
+            # -- we want untouched names to skip translation entirely.
+            used.add(candidate)
+            continue
+        # Disambiguate against names already chosen this request.
+        unique = candidate
+        n = 1
+        while unique in used:
+            n += 1
+            suffix = f"_{n}"
+            # Keep within the 128-char cap.
+            head = candidate[: _ANTHROPIC_TOOL_NAME_MAX_LEN - len(suffix)]
+            unique = f"{head}{suffix}"
+        forward[original] = unique
+        used.add(unique)
+    reverse = {v: k for k, v in forward.items()}
+    return forward, reverse
+
+
+def _apply_anthropic_tool_name_forward(
+    name: str, forward: Optional[Dict[str, str]]
+) -> str:
+    """Look up `name` in the forward map; return as-is if absent."""
+    if not isinstance(name, str) or not name:
+        return name
+    if forward and name in forward:
+        return forward[name]
+    return name
+
+
 class AnthropicConfig(AnthropicModelInfo, BaseConfig):
     """
     Reference: https://docs.anthropic.com/claude/reference/messages_post
@@ -378,7 +478,10 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         }
 
     def _map_tool_choice(
-        self, tool_choice: Optional[str], parallel_tool_use: Optional[bool]
+        self,
+        tool_choice: Optional[str],
+        parallel_tool_use: Optional[bool],
+        name_forward_map: Optional[Dict[str, str]] = None,
     ) -> Optional[AnthropicMessagesToolChoice]:
         _tool_choice: Optional[AnthropicMessagesToolChoice] = None
         if tool_choice == "auto":
@@ -402,7 +505,12 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 _tool_name = tool_choice.get("function", {}).get("name")
                 if _tool_name is not None:
                     _tool_choice = AnthropicMessagesToolChoice(type="tool")
-                    _tool_choice["name"] = _tool_name
+                    # Apply the per-request forward map. If the original
+                    # name was already valid (and thus not in the map),
+                    # this is a no-op pass-through.
+                    _tool_choice["name"] = _apply_anthropic_tool_name_forward(
+                        _tool_name, name_forward_map
+                    )
 
         if parallel_tool_use is not None:
             # Anthropic uses 'disable_parallel_tool_use' flag to determine if parallel tool use is allowed
@@ -419,7 +527,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         return _tool_choice
 
     def _map_tool_helper(  # noqa: PLR0915
-        self, tool: ChatCompletionToolParam
+        self,
+        tool: ChatCompletionToolParam,
+        name_forward_map: Optional[Dict[str, str]] = None,
     ) -> Tuple[Optional[AllAnthropicToolsValues], Optional[AnthropicMcpServerTool]]:
         returned_tool: Optional[AllAnthropicToolsValues] = None
         mcp_server: Optional[AnthropicMcpServerTool] = None
@@ -457,7 +567,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             )
 
             _tool = AnthropicMessagesTool(
-                name=tool["function"]["name"],
+                name=_apply_anthropic_tool_name_forward(
+                    tool["function"]["name"], name_forward_map
+                ),
                 input_schema=input_anthropic_schema,
                 type="custom",
             )
@@ -675,7 +787,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         return initial_tool
 
     def _map_tools(
-        self, tools: List
+        self,
+        tools: List,
+        name_forward_map: Optional[Dict[str, str]] = None,
     ) -> Tuple[List[AllAnthropicToolsValues], List[AnthropicMcpServerTool]]:
         anthropic_tools = []
         mcp_servers = []
@@ -683,13 +797,101 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             if "input_schema" in tool:  # assume in anthropic format
                 anthropic_tools.append(tool)
             else:  # assume openai tool call
-                new_tool, mcp_server_tool = self._map_tool_helper(tool)
+                new_tool, mcp_server_tool = self._map_tool_helper(
+                    tool, name_forward_map=name_forward_map
+                )
 
                 if new_tool is not None:
                     anthropic_tools.append(new_tool)
                 if mcp_server_tool is not None:
                     mcp_servers.append(mcp_server_tool)
         return anthropic_tools, mcp_servers
+
+    @staticmethod
+    def _rewrite_tool_names_in_messages(
+        messages: List[AllMessageValues],
+        name_forward_map: Dict[str, str],
+    ) -> List[AllMessageValues]:
+        """Return a copy of `messages` with tool_call/function_call names
+        rewritten using the per-request forward map.
+
+        Only mutates messages whose tool_call/function_call name is *in* the
+        forward map. Names absent from the map (already valid, no collision)
+        round-trip untouched. We only deep-copy the entries we actually
+        change to keep this O(turns-with-rewritten-tools), not O(history).
+        """
+        if not name_forward_map:
+            return messages
+        new_messages: List[AllMessageValues] = []
+        for msg in messages:
+            if not isinstance(msg, dict):
+                new_messages.append(msg)
+                continue
+            tool_calls = msg.get("tool_calls")
+            function_call = msg.get("function_call")
+            if not tool_calls and not function_call:
+                new_messages.append(msg)
+                continue
+            new_msg = dict(msg)
+            if tool_calls:
+                new_calls = []
+                for tc in tool_calls:
+                    if not isinstance(tc, dict):
+                        new_calls.append(tc)
+                        continue
+                    fn = tc.get("function")
+                    fn_name = fn.get("name") if isinstance(fn, dict) else None
+                    if (
+                        isinstance(fn, dict)
+                        and isinstance(fn_name, str)
+                        and fn_name in name_forward_map
+                    ):
+                        new_fn = dict(fn)
+                        new_fn["name"] = name_forward_map[fn_name]
+                        new_tc = dict(tc)
+                        new_tc["function"] = new_fn
+                        new_calls.append(new_tc)
+                    else:
+                        new_calls.append(tc)
+                new_msg["tool_calls"] = new_calls
+            fc_name = (
+                function_call.get("name") if isinstance(function_call, dict) else None
+            )
+            if (
+                isinstance(function_call, dict)
+                and isinstance(fc_name, str)
+                and fc_name in name_forward_map
+            ):
+                new_fc = dict(function_call)
+                new_fc["name"] = name_forward_map[fc_name]
+                new_msg["function_call"] = new_fc
+            new_messages.append(cast(AllMessageValues, new_msg))
+        return new_messages
+
+    @staticmethod
+    def _build_request_tool_name_maps(
+        tools: List,
+    ) -> Tuple[Dict[str, str], Dict[str, str]]:
+        """Build the (forward, reverse) tool-name maps for an OpenAI tools list.
+
+        See _build_anthropic_tool_name_maps for the rules. Pulls the original
+        name out of either ``{"function": {"name": ...}}`` (legacy OpenAI shape)
+        or ``{"name": ...}`` (rare top-level shape).
+        """
+        original_names: List[str] = []
+        for tool in tools or []:
+            if not isinstance(tool, dict):
+                continue
+            original = (
+                tool.get("function", {}).get("name")
+                if isinstance(tool.get("function"), dict)
+                else None
+            )
+            if original is None:
+                original = tool.get("name")
+            if isinstance(original, str) and original:
+                original_names.append(original)
+        return _build_anthropic_tool_name_maps(original_names)
 
     def _detect_tool_search_tools(self, tools: Optional[List]) -> bool:
         """Check if tool search tools are present in the tools list."""
@@ -997,6 +1199,27 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             non_default_params=non_default_params
         )
 
+        # Build per-request tool-name maps once, up-front, so both `tools`
+        # and `tool_choice` see the same forward map regardless of the
+        # order params arrive in non_default_params. See
+        # _build_anthropic_tool_name_maps for the collision-handling rules.
+        _tools_param = non_default_params.get("tools")
+        _tool_name_forward_map: Dict[str, str] = {}
+        _tool_name_reverse_map: Dict[str, str] = {}
+        if _tools_param:
+            (
+                _tool_name_forward_map,
+                _tool_name_reverse_map,
+            ) = self._build_request_tool_name_maps(_tools_param)
+            if _tool_name_forward_map:
+                optional_params[ANTHROPIC_TOOL_NAME_FORWARD_MAP_KEY] = (
+                    _tool_name_forward_map
+                )
+            if _tool_name_reverse_map:
+                optional_params[ANTHROPIC_TOOL_NAME_REVERSE_MAP_KEY] = (
+                    _tool_name_reverse_map
+                )
+
         for param, value in non_default_params.items():
             if param == "max_tokens":
                 optional_params["max_tokens"] = (
@@ -1007,8 +1230,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                     value if isinstance(value, int) else max(1, int(round(value)))
                 )
             elif param == "tools":
-                # check if optional params already has tools
-                anthropic_tools, mcp_servers = self._map_tools(value)
+                anthropic_tools, mcp_servers = self._map_tools(
+                    value, name_forward_map=_tool_name_forward_map
+                )
                 optional_params = self._add_tools_to_optional_params(
                     optional_params=optional_params, tools=anthropic_tools
                 )
@@ -1019,6 +1243,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                     self._map_tool_choice(
                         tool_choice=non_default_params.get("tool_choice"),
                         parallel_tool_use=non_default_params.get("parallel_tool_calls"),
+                        name_forward_map=_tool_name_forward_map,
                     )
                 )
 
@@ -1433,6 +1658,22 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         headers = self.update_headers_with_optional_anthropic_beta(
             headers=headers, optional_params=optional_params
         )
+
+        # Rewrite tool_call names in prior assistant messages using the
+        # per-request forward map so the `tool_use` blocks we end up sending
+        # match the (rewritten) tool names in optional_params["tools"].
+        # Without this, Anthropic still 400s on tool_use.name even if the
+        # tools array is clean.
+        #
+        # Also propagate the reverse map onto litellm_params so
+        # transform_response / streaming can translate response tool_use
+        # names back to the caller's originals.
+        _forward = optional_params.get(ANTHROPIC_TOOL_NAME_FORWARD_MAP_KEY)
+        _reverse = optional_params.get(ANTHROPIC_TOOL_NAME_REVERSE_MAP_KEY)
+        if _forward:
+            messages = self._rewrite_tool_names_in_messages(messages, _forward)
+        if _reverse and isinstance(litellm_params, dict):
+            litellm_params[ANTHROPIC_TOOL_NAME_REVERSE_MAP_KEY] = _reverse
 
         # Separate system prompt from rest of message
         anthropic_system_message_list = self.translate_system_message(messages=messages)
@@ -1886,6 +2127,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         json_mode: Optional[bool] = None,
         prefix_prompt: Optional[str] = None,
         speed: Optional[str] = None,
+        tool_name_reverse_map: Optional[Dict[str, str]] = None,
     ):
         _hidden_params: Dict = {}
         _hidden_params["additional_headers"] = process_anthropic_headers(
@@ -1909,6 +2151,21 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             tool_results,
             compaction_blocks,
         ) = self.extract_response_content(completion_response=completion_response)
+
+        # Reverse-map rewritten tool names back to caller's originals so a
+        # downstream OpenAI-style dispatcher can match on the registered name.
+        # See _build_anthropic_tool_name_maps for why this is keyed on the
+        # per-request reverse map (so a tool legitimately named `foo_bar` is
+        # never incorrectly retyped to `foo/bar`). No-op when the map is
+        # empty (the common case).
+        if tool_name_reverse_map and tool_calls:
+            for tc in tool_calls:
+                fn = tc.get("function") if isinstance(tc, dict) else None
+                if fn is None:
+                    continue
+                _name = fn.get("name")
+                if isinstance(_name, str) and _name in tool_name_reverse_map:
+                    fn["name"] = tool_name_reverse_map[_name]
 
         if (
             prefix_prompt is not None
@@ -2028,6 +2285,11 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
         prefix_prompt = self.get_prefix_prompt(messages=messages)
         speed = optional_params.get("speed")
+        tool_name_reverse_map: Optional[Dict[str, str]] = None
+        if isinstance(litellm_params, dict):
+            _candidate = litellm_params.get(ANTHROPIC_TOOL_NAME_REVERSE_MAP_KEY)
+            if isinstance(_candidate, dict):
+                tool_name_reverse_map = _candidate
 
         model_response = self.transform_parsed_response(
             completion_response=completion_response,
@@ -2036,6 +2298,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             json_mode=json_mode,
             prefix_prompt=prefix_prompt,
             speed=speed,
+            tool_name_reverse_map=tool_name_reverse_map,
         )
         return model_response
 
