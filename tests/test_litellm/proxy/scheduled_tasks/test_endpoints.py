@@ -44,6 +44,7 @@ def _make_row(**kwargs) -> MagicMock:
         "action_args": None,
         "check_prompt": "is it done?",
         "format_prompt": None,
+        "metadata": None,
         "schedule_kind": "interval",
         "schedule_spec": "5m",
         "schedule_tz": None,
@@ -84,18 +85,19 @@ class _FakeScheduledTaskTable:
         # Mirror real Prisma write semantics:
         #  - relation field `owner_key: {connect: {token: X}}` becomes the
         #    scalar `owner_token` column on the row;
-        #  - Json columns (`action_args`) come in as JSON strings and are
-        #    deserialized back to Python on read.
+        #  - Json? columns (`action_args`, `metadata`) come in as JSON
+        #    strings and are deserialised back to Python on read.
         normalized = dict(data)
         if "owner_key" in normalized:
             connect = normalized.pop("owner_key", {}).get("connect", {})
             if "token" in connect:
                 normalized["owner_token"] = connect["token"]
-        if isinstance(normalized.get("action_args"), str):
-            try:
-                normalized["action_args"] = json.loads(normalized["action_args"])
-            except ValueError:
-                pass
+        for json_field in ("action_args", "metadata"):
+            if isinstance(normalized.get(json_field), str):
+                try:
+                    normalized[json_field] = json.loads(normalized[json_field])
+                except ValueError:
+                    pass
         self._counter += 1
         row = _make_row(task_id=f"task-{self._counter}", **normalized)
         self.rows.append(row)
@@ -122,7 +124,7 @@ class _FakeScheduledTaskTable:
         for r in self.rows:
             if r.task_id == where["task_id"]:
                 for k, v in data.items():
-                    if k == "action_args" and isinstance(v, str):
+                    if k in ("action_args", "metadata") and isinstance(v, str):
                         try:
                             v = json.loads(v)
                         except ValueError:
@@ -193,6 +195,7 @@ class _FakeTx:
                     "action_args": r.action_args,
                     "check_prompt": r.check_prompt,
                     "format_prompt": r.format_prompt,
+                    "metadata": r.metadata,
                     "title": r.title,
                 }
             )
@@ -339,6 +342,20 @@ class TestCreate:
                 assert r.status_code == 200, r.text
             r = self.client.post("/v1/tasks", json=_create_payload(title="overflow"))
         assert r.status_code == 429
+
+    def test_metadata_roundtrips(self):
+        payload = _create_payload(metadata={"agent_session": "abc", "tags": [1, 2, 3]})
+        with _patch_prisma(self.prisma):
+            r = self.client.post("/v1/tasks", json=payload)
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["metadata"] == {"agent_session": "abc", "tags": [1, 2, 3]}
+
+    def test_metadata_omitted_when_not_supplied(self):
+        with _patch_prisma(self.prisma):
+            r = self.client.post("/v1/tasks", json=_create_payload())
+        assert r.status_code == 200, r.text
+        assert r.json()["metadata"] is None
 
     def test_expires_in_past_rejected(self):
         payload = _create_payload(

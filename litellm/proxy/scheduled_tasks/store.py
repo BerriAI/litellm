@@ -40,8 +40,13 @@ UPDATABLE_FIELDS = frozenset(
         "action",
         "action_args",
         "format_prompt",
+        "metadata",
     }
 )
+
+# Json? columns that go through Prisma — must be JSON-encoded if present,
+# omitted entirely if None.
+JSON_FIELDS = frozenset({"action_args", "metadata"})
 
 MAX_ACTIVE_TASKS_PER_KEY = 10
 TERMINAL_STATUSES = ("fired", "expired", "cancelled")
@@ -65,6 +70,7 @@ async def create_task(
     action_args: Optional[Dict[str, Any]],
     check_prompt: Optional[str],
     format_prompt: Optional[str],
+    metadata: Optional[Any],
     schedule_kind: str,
     schedule_spec: str,
     schedule_tz: Optional[str],
@@ -90,6 +96,8 @@ async def create_task(
     }
     if action_args is not None:
         data["action_args"] = _encode_json(action_args)
+    if metadata is not None:
+        data["metadata"] = _encode_json(metadata)
     return await prisma_client.db.litellm_scheduledtasktable.create(data=data)
 
 
@@ -149,13 +157,17 @@ async def update_task_for_owner(
     # Mirror the create path: Json columns must be json-encoded for
     # prisma-client-python. Drop the key entirely when caller sent null;
     # passing None to a Json? column is rejected.
-    if "action_args" in fields:
-        if fields["action_args"] is None:
-            fields = {k: v for k, v in fields.items() if k != "action_args"}
-            if not fields:
-                raise ValueError("no fields to update")
+    cleaned: Dict[str, Any] = {}
+    for k, v in fields.items():
+        if k in JSON_FIELDS:
+            if v is None:
+                continue  # skip — Prisma rejects None on Json?
+            cleaned[k] = _encode_json(v)
         else:
-            fields = {**fields, "action_args": _encode_json(fields["action_args"])}
+            cleaned[k] = v
+    if not cleaned:
+        raise ValueError("no fields to update")
+    fields = cleaned
 
     return await prisma_client.db.litellm_scheduledtasktable.update(
         where={"task_id": task_id},
@@ -205,7 +217,8 @@ async def claim_due(
             """
             SELECT task_id, schedule_kind, schedule_spec, schedule_tz,
                    fire_once, expires_at, next_run_at,
-                   action, action_args, check_prompt, format_prompt, title
+                   action, action_args, check_prompt, format_prompt,
+                   metadata, title
               FROM "LiteLLM_ScheduledTaskTable"
              WHERE status = 'pending'
                AND next_run_at <= now()
@@ -264,6 +277,7 @@ async def claim_due(
             "action_args": r["action_args"],
             "check_prompt": r["check_prompt"],
             "format_prompt": r["format_prompt"],
+            "metadata": r["metadata"],
             "scheduled_for": r["next_run_at"],
         }
         for r in rows

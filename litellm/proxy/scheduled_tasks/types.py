@@ -13,6 +13,7 @@ class CreateScheduledTaskRequest(BaseModel):
     action_args: Optional[Dict[str, Any]] = None
     check_prompt: Optional[str] = None
     format_prompt: Optional[str] = None
+    metadata: Optional[Any] = None
 
     schedule_kind: ScheduleKind
     schedule_spec: str
@@ -34,6 +35,7 @@ class UpdateScheduledTaskRequest(BaseModel):
     action: Optional[str] = None
     action_args: Optional[Dict[str, Any]] = None
     format_prompt: Optional[str] = None
+    metadata: Optional[Any] = None
 
 
 class ScheduledTaskResponse(BaseModel):
@@ -48,6 +50,7 @@ class ScheduledTaskResponse(BaseModel):
     action_args: Optional[Dict[str, Any]]
     check_prompt: Optional[str]
     format_prompt: Optional[str]
+    metadata: Optional[Any]
 
     schedule_kind: str
     schedule_spec: str
@@ -73,6 +76,7 @@ class DueTaskResponse(BaseModel):
     action_args: Optional[Dict[str, Any]]
     check_prompt: Optional[str]
     format_prompt: Optional[str]
+    metadata: Optional[Any]
     scheduled_for: datetime
 
 

@@ -57,6 +57,7 @@ def _row_to_response(row) -> ScheduledTaskResponse:
         action_args=row.action_args,
         check_prompt=row.check_prompt,
         format_prompt=row.format_prompt,
+        metadata=getattr(row, "metadata", None),
         schedule_kind=row.schedule_kind,
         schedule_spec=row.schedule_spec,
         schedule_tz=row.schedule_tz,
@@ -136,6 +137,7 @@ async def create_scheduled_task(
         action_args=data.action_args,
         check_prompt=data.check_prompt,
         format_prompt=data.format_prompt,
+        metadata=data.metadata,
         schedule_kind=data.schedule_kind,
         schedule_spec=data.schedule_spec,
         schedule_tz=data.schedule_tz,
@@ -207,6 +209,7 @@ async def get_due_tasks(
                 action_args=r["action_args"],
                 check_prompt=r["check_prompt"],
                 format_prompt=r["format_prompt"],
+                metadata=r.get("metadata"),
                 scheduled_for=r["scheduled_for"],
             )
             for r in rows

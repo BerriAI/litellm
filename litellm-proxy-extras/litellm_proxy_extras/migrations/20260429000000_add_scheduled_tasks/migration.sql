@@ -10,6 +10,7 @@ CREATE TABLE "LiteLLM_ScheduledTaskTable" (
     "action_args" JSONB,
     "check_prompt" TEXT,
     "format_prompt" TEXT,
+    "metadata" JSONB,
     "schedule_kind" TEXT NOT NULL,
     "schedule_spec" TEXT NOT NULL,
     "schedule_tz" TEXT,

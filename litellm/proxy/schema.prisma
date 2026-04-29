@@ -1309,6 +1309,7 @@ model LiteLLM_ScheduledTaskTable {
   action_args          Json?
   check_prompt         String?
   format_prompt        String?
+  metadata             Json?
 
   schedule_kind        String
   schedule_spec        String
