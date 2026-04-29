@@ -1,0 +1,343 @@
+"""
+Unit tests for workflow management endpoints (/v1/workflows/runs/*).
+Uses FastAPI TestClient with a mocked prisma_client.
+"""
+
+import os
+import sys
+from datetime import datetime, timezone
+from typing import Any
+from unittest.mock import AsyncMock, MagicMock, patch
+
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
+sys.path.insert(0, os.path.abspath("../../.."))
+
+from litellm.proxy.management_endpoints.workflow_management_endpoints import router
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _make_run(
+    run_id: str = "run-1",
+    session_id: str = "sess-1",
+    workflow_type: str = "shin-builder",
+    status: str = "pending",
+) -> MagicMock:
+    obj = MagicMock()
+    obj.run_id = run_id
+    obj.session_id = session_id
+    obj.workflow_type = workflow_type
+    obj.status = status
+    obj.created_at = datetime.now(timezone.utc)
+    obj.updated_at = datetime.now(timezone.utc)
+    obj.input = None
+    obj.output = None
+    obj.metadata = None
+    return obj
+
+
+def _make_event(
+    event_id: str = "evt-1",
+    run_id: str = "run-1",
+    event_type: str = "step.started",
+    step_name: str = "grill",
+    sequence_number: int = 0,
+) -> MagicMock:
+    obj = MagicMock()
+    obj.event_id = event_id
+    obj.run_id = run_id
+    obj.event_type = event_type
+    obj.step_name = step_name
+    obj.sequence_number = sequence_number
+    obj.data = None
+    obj.created_at = datetime.now(timezone.utc)
+    return obj
+
+
+def _make_message(
+    message_id: str = "msg-1",
+    run_id: str = "run-1",
+    role: str = "user",
+    content: str = "hello",
+    sequence_number: int = 0,
+) -> MagicMock:
+    obj = MagicMock()
+    obj.message_id = message_id
+    obj.run_id = run_id
+    obj.role = role
+    obj.content = content
+    obj.sequence_number = sequence_number
+    obj.session_id = None
+    obj.created_at = datetime.now(timezone.utc)
+    return obj
+
+
+def _make_prisma_client() -> MagicMock:
+    client = MagicMock()
+    client.db = MagicMock()
+    client.db.litellm_workflowrun = MagicMock()
+    client.db.litellm_workflowevent = MagicMock()
+    client.db.litellm_workflowmessage = MagicMock()
+    return client
+
+
+def _make_app() -> FastAPI:
+    app = FastAPI()
+    app.include_router(router)
+    return app
+
+
+def _override_auth() -> Any:
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    return UserAPIKeyAuth(api_key="sk-test", user_id="admin")
+
+
+# ---------------------------------------------------------------------------
+# Tests
+# ---------------------------------------------------------------------------
+
+
+class TestCreateWorkflowRun:
+    def setup_method(self):
+        from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+        self._prisma = _make_prisma_client()
+        app = _make_app()
+        app.dependency_overrides[user_api_key_auth] = _override_auth
+        self.client = TestClient(app, raise_server_exceptions=True)
+
+    @patch("litellm.proxy.proxy_server.prisma_client")
+    def test_create_returns_run(self, mock_pc):
+        mock_pc.db = self._prisma.db
+        self._prisma.db.litellm_workflowrun.create = AsyncMock(
+            return_value=_make_run()
+        )
+
+        resp = self.client.post(
+            "/v1/workflows/runs",
+            json={"workflow_type": "shin-builder"},
+        )
+        assert resp.status_code == 200
+        self._prisma.db.litellm_workflowrun.create.assert_awaited_once()
+
+    @patch("litellm.proxy.proxy_server.prisma_client", None)
+    def test_create_500_when_no_db(self):
+        resp = self.client.post(
+            "/v1/workflows/runs",
+            json={"workflow_type": "shin-builder"},
+        )
+        assert resp.status_code == 500
+
+
+class TestListWorkflowRuns:
+    def setup_method(self):
+        from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+        self._prisma = _make_prisma_client()
+        app = _make_app()
+        app.dependency_overrides[user_api_key_auth] = _override_auth
+        self.client = TestClient(app, raise_server_exceptions=True)
+
+    @patch("litellm.proxy.proxy_server.prisma_client")
+    def test_list_returns_runs(self, mock_pc):
+        mock_pc.db = self._prisma.db
+        self._prisma.db.litellm_workflowrun.find_many = AsyncMock(
+            return_value=[_make_run()]
+        )
+
+        resp = self.client.get("/v1/workflows/runs")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["total"] == 1
+
+    @patch("litellm.proxy.proxy_server.prisma_client")
+    def test_list_filters_by_status(self, mock_pc):
+        mock_pc.db = self._prisma.db
+        self._prisma.db.litellm_workflowrun.find_many = AsyncMock(return_value=[])
+
+        resp = self.client.get("/v1/workflows/runs?status=running")
+        assert resp.status_code == 200
+        call_kwargs = self._prisma.db.litellm_workflowrun.find_many.call_args[1]
+        assert call_kwargs["where"]["status"] == "running"
+
+    @patch("litellm.proxy.proxy_server.prisma_client")
+    def test_list_filters_by_multiple_statuses(self, mock_pc):
+        mock_pc.db = self._prisma.db
+        self._prisma.db.litellm_workflowrun.find_many = AsyncMock(return_value=[])
+
+        resp = self.client.get("/v1/workflows/runs?status=running,paused")
+        assert resp.status_code == 200
+        call_kwargs = self._prisma.db.litellm_workflowrun.find_many.call_args[1]
+        assert call_kwargs["where"]["status"] == {"in": ["running", "paused"]}
+
+
+class TestGetWorkflowRun:
+    def setup_method(self):
+        from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+        self._prisma = _make_prisma_client()
+        app = _make_app()
+        app.dependency_overrides[user_api_key_auth] = _override_auth
+        self.client = TestClient(app, raise_server_exceptions=True)
+
+    @patch("litellm.proxy.proxy_server.prisma_client")
+    def test_get_existing_run(self, mock_pc):
+        mock_pc.db = self._prisma.db
+        self._prisma.db.litellm_workflowrun.find_unique = AsyncMock(
+            return_value=_make_run()
+        )
+
+        resp = self.client.get("/v1/workflows/runs/run-1")
+        assert resp.status_code == 200
+
+    @patch("litellm.proxy.proxy_server.prisma_client")
+    def test_get_missing_run_returns_404(self, mock_pc):
+        mock_pc.db = self._prisma.db
+        self._prisma.db.litellm_workflowrun.find_unique = AsyncMock(return_value=None)
+
+        resp = self.client.get("/v1/workflows/runs/nonexistent")
+        assert resp.status_code == 404
+
+
+class TestUpdateWorkflowRun:
+    def setup_method(self):
+        from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+        self._prisma = _make_prisma_client()
+        app = _make_app()
+        app.dependency_overrides[user_api_key_auth] = _override_auth
+        self.client = TestClient(app, raise_server_exceptions=True)
+
+    @patch("litellm.proxy.proxy_server.prisma_client")
+    def test_update_status(self, mock_pc):
+        mock_pc.db = self._prisma.db
+        updated = _make_run(status="completed")
+        self._prisma.db.litellm_workflowrun.update = AsyncMock(return_value=updated)
+
+        resp = self.client.patch(
+            "/v1/workflows/runs/run-1", json={"status": "completed"}
+        )
+        assert resp.status_code == 200
+        self._prisma.db.litellm_workflowrun.update.assert_awaited_once()
+
+    @patch("litellm.proxy.proxy_server.prisma_client")
+    def test_update_no_fields_returns_400(self, mock_pc):
+        mock_pc.db = self._prisma.db
+        resp = self.client.patch("/v1/workflows/runs/run-1", json={})
+        assert resp.status_code == 400
+
+
+class TestAppendWorkflowEvent:
+    def setup_method(self):
+        from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+        self._prisma = _make_prisma_client()
+        app = _make_app()
+        app.dependency_overrides[user_api_key_auth] = _override_auth
+        self.client = TestClient(app, raise_server_exceptions=True)
+
+    @patch("litellm.proxy.proxy_server.prisma_client")
+    def test_append_event_updates_run_status(self, mock_pc):
+        mock_pc.db = self._prisma.db
+        self._prisma.db.litellm_workflowevent.find_many = AsyncMock(return_value=[])
+        self._prisma.db.litellm_workflowevent.create = AsyncMock(
+            return_value=_make_event()
+        )
+        self._prisma.db.litellm_workflowrun.update = AsyncMock(
+            return_value=_make_run(status="running")
+        )
+
+        resp = self.client.post(
+            "/v1/workflows/runs/run-1/events",
+            json={"event_type": "step.started", "step_name": "grill"},
+        )
+        assert resp.status_code == 200
+        # run status should be updated to "running"
+        self._prisma.db.litellm_workflowrun.update.assert_awaited_once()
+        update_call = self._prisma.db.litellm_workflowrun.update.call_args[1]
+        assert update_call["data"]["status"] == "running"
+
+    @patch("litellm.proxy.proxy_server.prisma_client")
+    def test_append_event_no_status_update_for_unknown_type(self, mock_pc):
+        mock_pc.db = self._prisma.db
+        self._prisma.db.litellm_workflowevent.find_many = AsyncMock(return_value=[])
+        self._prisma.db.litellm_workflowevent.create = AsyncMock(
+            return_value=_make_event(event_type="custom.event")
+        )
+        self._prisma.db.litellm_workflowrun.update = AsyncMock(
+            return_value=_make_run()
+        )
+
+        resp = self.client.post(
+            "/v1/workflows/runs/run-1/events",
+            json={"event_type": "custom.event", "step_name": "grill"},
+        )
+        assert resp.status_code == 200
+        # no status update for unknown event_type
+        self._prisma.db.litellm_workflowrun.update.assert_not_awaited()
+
+    @patch("litellm.proxy.proxy_server.prisma_client")
+    def test_sequence_number_increments(self, mock_pc):
+        mock_pc.db = self._prisma.db
+        existing = _make_event(sequence_number=4)
+        self._prisma.db.litellm_workflowevent.find_many = AsyncMock(
+            return_value=[existing]
+        )
+        self._prisma.db.litellm_workflowevent.create = AsyncMock(
+            return_value=_make_event(sequence_number=5)
+        )
+        self._prisma.db.litellm_workflowrun.update = AsyncMock(
+            return_value=_make_run()
+        )
+
+        self.client.post(
+            "/v1/workflows/runs/run-1/events",
+            json={"event_type": "step.started", "step_name": "plan"},
+        )
+        create_call = self._prisma.db.litellm_workflowevent.create.call_args[1]
+        assert create_call["data"]["sequence_number"] == 5
+
+
+class TestWorkflowMessages:
+    def setup_method(self):
+        from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+        self._prisma = _make_prisma_client()
+        app = _make_app()
+        app.dependency_overrides[user_api_key_auth] = _override_auth
+        self.client = TestClient(app, raise_server_exceptions=True)
+
+    @patch("litellm.proxy.proxy_server.prisma_client")
+    def test_append_message(self, mock_pc):
+        mock_pc.db = self._prisma.db
+        self._prisma.db.litellm_workflowmessage.find_many = AsyncMock(return_value=[])
+        self._prisma.db.litellm_workflowmessage.create = AsyncMock(
+            return_value=_make_message()
+        )
+
+        resp = self.client.post(
+            "/v1/workflows/runs/run-1/messages",
+            json={"role": "user", "content": "fix the bug"},
+        )
+        assert resp.status_code == 200
+
+    @patch("litellm.proxy.proxy_server.prisma_client")
+    def test_list_messages_ordered(self, mock_pc):
+        mock_pc.db = self._prisma.db
+        self._prisma.db.litellm_workflowmessage.find_many = AsyncMock(
+            return_value=[_make_message(sequence_number=0), _make_message(sequence_number=1, role="assistant")]
+        )
+
+        resp = self.client.get("/v1/workflows/runs/run-1/messages")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["total"] == 2
+        # verify find_many was called with ascending order
+        call_kwargs = self._prisma.db.litellm_workflowmessage.find_many.call_args[1]
+        assert call_kwargs["order"] == {"sequence_number": "asc"}
