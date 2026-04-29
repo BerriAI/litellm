@@ -912,6 +912,9 @@ class TestIsRequestBodySafeBlocksEndpointTargetingFields:
             "posthog_host",
             "braintrust_host",
             "slack_webhook_url",
+            "s3_endpoint_url",
+            "sagemaker_base_url",
+            "deployment_url",
         ],
     )
     def test_endpoint_targeting_field_in_request_body_is_rejected(self, field):

@@ -195,6 +195,14 @@ def is_request_body_safe(
         "posthog_host",
         "braintrust_host",
         "slack_webhook_url",
+        # Provider-specific endpoint overrides that flow into the outbound
+        # request via ``optional_params``. Same threat as ``api_base``:
+        # ``s3_endpoint_url`` redirects Bedrock file uploads to attacker
+        # S3; ``sagemaker_base_url`` redirects all SageMaker traffic;
+        # ``deployment_url`` redirects SAP deployments.
+        "s3_endpoint_url",
+        "sagemaker_base_url",
+        "deployment_url",
     ]
 
     # The blocklist is enforced unconditionally. Legitimate clientside
