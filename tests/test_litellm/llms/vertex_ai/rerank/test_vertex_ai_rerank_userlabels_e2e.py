@@ -31,13 +31,6 @@ def _extract_body(call_kwargs):
     return json.loads(raw) if raw else None
 
 
-VERTEX_DISCOVERY_RANK_URL = (
-    "https://discoveryengine.googleapis.com/v1/projects/"
-    "test-project-2049/locations/global/rankingConfigs/"
-    "default_ranking_config:rank"
-)
-
-
 def _make_mock_rank_response():
     mock_response = MagicMock(spec=httpx.Response)
     mock_response.status_code = 200
