@@ -54,17 +54,22 @@ def is_short_mcp_tool_prefix_enabled() -> bool:
     return raw.strip().lower() in ("1", "true", "yes", "on")
 
 
-def compute_short_server_prefix(server_id: str) -> str:
+def compute_short_server_prefix(server_id: str, attempt: int = 0) -> str:
     """Derive the deterministic three-character base62 prefix for a server.
 
-    Uses SHA-256 of the server_id and folds the first eight bytes into a
-    base62 string.  An empty server_id raises ValueError — short prefixes
-    require a stable identifier to be deterministic.
+    Uses SHA-256 of ``f"{server_id}#{attempt}"`` and folds the first eight
+    bytes into a base62 string.  Pass ``attempt > 0`` to rehash to a
+    different prefix when the natural hash collides with a prefix already
+    assigned to another server (see
+    ``MCPServerManager._assign_unique_short_prefix``).  An empty server_id
+    raises ValueError — short prefixes require a stable identifier to be
+    deterministic.
     """
     if not server_id:
         raise ValueError("compute_short_server_prefix requires a non-empty server_id")
 
-    digest = hashlib.sha256(server_id.encode("utf-8")).digest()
+    seed = server_id if attempt == 0 else f"{server_id}#{attempt}"
+    digest = hashlib.sha256(seed.encode("utf-8")).digest()
     value = int.from_bytes(digest[:8], "big")
     chars = []
     for _ in range(SHORT_MCP_TOOL_PREFIX_LENGTH):
@@ -143,11 +148,18 @@ def get_server_prefix(server: Any) -> str:
     """Return the prefix for a server.
 
     When the short-prefix mode is enabled (``LITELLM_USE_SHORT_MCP_TOOL_PREFIX``)
-    a deterministic three-character base62 ID derived from ``server_id`` is
-    returned.  Otherwise we fall back to the historical behaviour: alias if
-    present, else server_name, else server_id.
+    a three-character base62 ID is returned.  We prefer the cached
+    ``server.short_prefix`` value when set — that field is populated at
+    registration time by ``MCPServerManager._assign_unique_short_prefix``
+    and resolves natural-hash collisions deterministically — and only fall
+    back to the natural hash for ad-hoc / temp-server objects without a
+    cached value.  In default mode the historical behaviour is preserved:
+    alias if present, else server_name, else server_id.
     """
     if is_short_mcp_tool_prefix_enabled():
+        cached = getattr(server, "short_prefix", None)
+        if cached:
+            return cached
         server_id = getattr(server, "server_id", None)
         if server_id:
             return compute_short_server_prefix(server_id)
@@ -177,6 +189,7 @@ def iter_known_server_prefixes(server: Any) -> Iterator[str]:
             yield value
 
     yield from _emit(get_server_prefix(server))
+    yield from _emit(getattr(server, "short_prefix", None))
 
     server_id = getattr(server, "server_id", None)
     if server_id:
