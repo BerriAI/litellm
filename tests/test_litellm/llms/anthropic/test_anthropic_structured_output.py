@@ -131,6 +131,44 @@ class TestAnthropicStructuredOutput:
             ):
                 assert "maxItems" not in nested_item_schema["properties"]["tags"]
 
+    def test_haiku_4_5_uses_native_structured_output(self):
+        """
+        claude-haiku-4-5 supports native structured output via output_format.
+        It should NOT fall back to the json_tool_call synthesis workaround.
+
+        Regression test for https://github.com/BerriAI/litellm/issues/25308
+        """
+        from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+
+        config = AnthropicConfig()
+        response_format = {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "MovieReview",
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "title": {"type": "string"},
+                        "rating": {"type": "number"},
+                    },
+                    "required": ["title", "rating"],
+                },
+            },
+        }
+        optional_params = config.map_openai_params(
+            non_default_params={"response_format": response_format},
+            optional_params={},
+            model="claude-haiku-4-5-20251001",
+            drop_params=False,
+        )
+        # Should use native output_format, not json_tool_call
+        assert (
+            "output_format" in optional_params
+        ), "claude-haiku-4-5 should use native output_format, not json_tool_call"
+        assert not any(
+            t.get("name") == "json_tool_call" for t in optional_params.get("tools", [])
+        ), "claude-haiku-4-5 should not synthesize a json_tool_call"
+
     def test_other_constraints_preserved(self):
         """
         Test that constraints are properly handled (removed from schema, added to description).
