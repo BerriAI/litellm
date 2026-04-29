@@ -457,6 +457,60 @@ def test_fallback_login_has_no_deprecation_banner(client_no_auth):
     assert "<form" in html
 
 
+@pytest.mark.parametrize(
+    "ui_logo_path",
+    [
+        "/etc/litellm/secret-config.json",
+        "/var/secrets/admin.key",
+        "/proc/self/environ",
+        "relative/path/logo.png",
+    ],
+)
+def test_get_logo_url_does_not_disclose_local_paths(
+    client_no_auth, monkeypatch, ui_logo_path
+):
+    # ``/get_logo_url`` is unauthenticated. Returning a local filesystem
+    # path verbatim discloses admin-only config to any caller. Only
+    # browser-loadable HTTP(S) URLs should be returned; for local paths
+    # the dashboard falls back to ``/get_image`` (which has path
+    # containment).
+    monkeypatch.setenv("UI_LOGO_PATH", ui_logo_path)
+
+    response = client_no_auth.get("/get_logo_url")
+
+    assert response.status_code == 200
+    assert response.json() == {"logo_url": ""}
+
+
+def test_get_logo_url_returns_https_url(client_no_auth, monkeypatch):
+    monkeypatch.setenv("UI_LOGO_PATH", "https://cdn.public.example/logo.png")
+
+    response = client_no_auth.get("/get_logo_url")
+
+    assert response.status_code == 200
+    assert response.json() == {"logo_url": "https://cdn.public.example/logo.png"}
+
+
+def test_get_logo_url_returns_http_url(client_no_auth, monkeypatch):
+    # HTTP URLs (typically internal CDN) are still returned — those are
+    # intended to be loaded directly by the browser.
+    monkeypatch.setenv("UI_LOGO_PATH", "http://internal-cdn.corp:8080/logo.png")
+
+    response = client_no_auth.get("/get_logo_url")
+
+    assert response.status_code == 200
+    assert response.json() == {"logo_url": "http://internal-cdn.corp:8080/logo.png"}
+
+
+def test_get_logo_url_returns_empty_when_unset(client_no_auth, monkeypatch):
+    monkeypatch.delenv("UI_LOGO_PATH", raising=False)
+
+    response = client_no_auth.get("/get_logo_url")
+
+    assert response.status_code == 200
+    assert response.json() == {"logo_url": ""}
+
+
 def test_sso_key_generate_shows_deprecation_banner(client_no_auth, monkeypatch):
     # Ensure the route returns the HTML form instead of redirecting
     monkeypatch.setattr(

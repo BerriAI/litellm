@@ -12223,9 +12223,20 @@ async def claim_onboarding_link(data: InvitationClaim):
 
 @app.get("/get_logo_url", include_in_schema=False)
 def get_logo_url():
-    """Get the current logo URL from environment"""
+    """Get the current logo URL from environment.
+
+    Only HTTP(S) URLs are returned — those are intended to be loaded
+    directly by the browser from a public/internal CDN. Local file
+    paths set via ``UI_LOGO_PATH`` are NOT returned: they are admin-
+    only filesystem details, the dashboard falls back to ``/get_image``
+    which serves the file (with path containment) instead. Without
+    this filter, the unauthenticated endpoint would disclose internal
+    hostnames or filesystem paths to any caller.
+    """
     logo_path = os.getenv("UI_LOGO_PATH", "")
-    return {"logo_url": logo_path}
+    if logo_path.startswith(("http://", "https://")):
+        return {"logo_url": logo_path}
+    return {"logo_url": ""}
 
 
 @app.get("/get_image", include_in_schema=False)
