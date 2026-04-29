@@ -264,6 +264,20 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
         # Only pass ssl kwarg when explicitly configured, to avoid
         # overriding the session/connector defaults with None (which is
         # not a valid value for aiohttp's ssl parameter).
+        
+        # Set total = max(pool, connect) + read so aiohttp has a finite overall
+        # deadline.  Per the aiohttp docs, `connect` (pool acquisition) already
+        # encompasses `sock_connect` (TCP handshake) for new connections, so
+        # they are not additive.  `write` is excluded — aiohttp has no
+        # corresponding ClientTimeout field.
+        _sock_connect = timeout.get("connect")
+        _sock_read = timeout.get("read")
+        _pool = timeout.get("pool")
+        _conn_phase_values = [v for v in (_sock_connect, _pool) if v is not None]
+        _conn_phase = max(_conn_phase_values) if _conn_phase_values else None
+        _total_values = [v for v in (_conn_phase, _sock_read) if v is not None]
+        _total = sum(_total_values) if _total_values else None
+
         request_kwargs: Dict[str, Any] = {
             "method": request.method,
             "url": YarlURL(str(request.url), encoded=True),
@@ -272,9 +286,10 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
             "allow_redirects": False,
             "auto_decompress": False,
             "timeout": ClientTimeout(
-                sock_connect=timeout.get("connect"),
-                sock_read=timeout.get("read"),
-                connect=timeout.get("pool"),
+                total=_total,
+                sock_connect=_sock_connect,
+                sock_read=_sock_read,
+                connect=_pool,
             ),
             "proxy": proxy,
             "server_hostname": sni_hostname,
