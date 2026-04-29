@@ -227,7 +227,11 @@ def test_build_vertex_schema():
                     "metadata": {"type": "object"},
                     "callbacks": {
                         "anyOf": [
-                            {"type": "array", "nullable": True},
+                            {
+                                "type": "array",
+                                "items": {"type": "object"},
+                                "nullable": True,
+                            },
                             {"type": "object", "nullable": True},
                         ]
                     },
@@ -289,6 +293,43 @@ def test_process_items_basic():
     }
     process_items(schema)
     assert schema["properties"]["nested"]["items"] == {"type": "object"}
+
+    # Vertex rejects array types missing `items` entirely (not just empty).
+    # Synthesize {"type": "object"} so the request validates.
+    schema = {"type": "array"}
+    process_items(schema)
+    assert schema["items"] == {"type": "object"}
+
+
+def test_build_vertex_schema_array_branch_missing_items_in_anyof():
+    """
+    Regression: an `anyOf` branch with `{"type": "array"}` (no items) must
+    end up with synthesized `items: {"type": "object"}` after the schema
+    transform — Vertex returns INVALID_ARGUMENT otherwise.
+    """
+    from litellm.llms.vertex_ai.common_utils import _build_vertex_schema
+
+    parameters = {
+        "properties": {
+            "callbacks": {
+                "anyOf": [
+                    {"type": "array"},
+                    {"type": "object"},
+                    {"type": "null"},
+                ]
+            }
+        },
+        "type": "object",
+    }
+
+    result = _build_vertex_schema(parameters)
+    callbacks_anyof = result["properties"]["callbacks"]["anyOf"]
+    array_branches = [b for b in callbacks_anyof if b.get("type") == "array"]
+    assert array_branches, "expected an array branch to remain after transform"
+    for branch in array_branches:
+        assert branch.get("items") == {
+            "type": "object"
+        }, f"array branch must have items synthesized; got {branch}"
 
 
 def test_vertex_ai_complex_response_schema():
