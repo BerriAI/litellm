@@ -2316,7 +2316,7 @@ async def get_key_object(
         if isinstance(cached_key_obj, dict):
             return UserAPIKeyAuth(**cached_key_obj)
         elif isinstance(cached_key_obj, UserAPIKeyAuth):
-            return cached_key_obj
+            return cached_key_obj.model_copy(deep=True)
 
     if check_cache_only:
         raise Exception(
@@ -2366,7 +2366,7 @@ async def get_key_object(
         proxy_logging_obj=proxy_logging_obj,
     )
 
-    return _response
+    return _response.model_copy(deep=True)
 
 
 @log_db_metrics
