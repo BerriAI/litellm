@@ -69,7 +69,11 @@ def create_config_class(provider: SimpleProviderConfig):
                 resolved_base = provider.base_url
 
             # Resolve API key
-            resolved_key = api_key or get_secret_str(provider.api_key_env) or provider.default_api_key
+            resolved_key = (
+                api_key
+                or get_secret_str(provider.api_key_env)
+                or provider.default_api_key
+            )
 
             return resolved_base, resolved_key
 
