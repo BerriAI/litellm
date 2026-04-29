@@ -2431,3 +2431,120 @@ def test_reasoning_items_streaming_emitted_on_response_completed():
         ri["encrypted_content"] == encrypted
     ), "encrypted_content must be preserved in streaming"
     assert ri["summary"][0]["text"] == summary_text
+
+
+def test_convert_chat_completion_messages_to_responses_api_assistant_content_with_tool_calls():
+    """
+    Test that assistant messages with both text content and tool_calls preserve the text content.
+
+    When an OpenAI model returns an assistant message like:
+        {"role": "assistant", "content": "Let me check that.", "tool_calls": [...]}
+    the text "Let me check that." must appear as a message item before the function_call items.
+    """
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    handler = LiteLLMResponsesTransformationHandler()
+
+    # Case 1: String content + tool_calls — content must be preserved
+    messages = [
+        {
+            "role": "assistant",
+            "content": "I'll check both cities for you.",
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {
+                        "name": "get_weather",
+                        "arguments": '{"city": "SF"}',
+                    },
+                },
+            ],
+        },
+    ]
+    items, _ = handler.convert_chat_completion_messages_to_responses_api(messages)
+
+    # Should have a message item and a function_call item
+    assert len(items) == 2, f"Expected 2 items, got {len(items)}: {items}"
+
+    message_item = items[0]
+    assert message_item["type"] == "message", f"Expected first item type 'message', got '{message_item['type']}'"
+    assert message_item["role"] == "assistant"
+    assert any(
+        part.get("text") == "I'll check both cities for you."
+        for part in message_item["content"]
+    ), f"Text content not found in message item: {message_item['content']}"
+
+    function_call_item = items[1]
+    assert function_call_item["type"] == "function_call"
+    assert function_call_item["call_id"] == "call_1"
+    assert function_call_item["name"] == "get_weather"
+
+
+def test_convert_chat_completion_messages_to_responses_api_none_content_with_tool_calls():
+    """
+    Test that assistant messages with content=None and tool_calls do not emit a message item.
+    This preserves the existing behavior.
+    """
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    handler = LiteLLMResponsesTransformationHandler()
+
+    messages = [
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_abc",
+                    "type": "function",
+                    "function": {
+                        "name": "get_weather",
+                        "arguments": '{"location": "NYC"}',
+                    },
+                },
+            ],
+        },
+    ]
+    items, _ = handler.convert_chat_completion_messages_to_responses_api(messages)
+
+    # Should only have the function_call item, no message item
+    assert len(items) == 1, f"Expected 1 item, got {len(items)}: {items}"
+    assert items[0]["type"] == "function_call"
+
+
+def test_convert_chat_completion_messages_to_responses_api_empty_content_with_tool_calls():
+    """
+    Test that assistant messages with content="" and tool_calls do not emit an empty message item.
+    """
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    handler = LiteLLMResponsesTransformationHandler()
+
+    messages = [
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "call_xyz",
+                    "type": "function",
+                    "function": {
+                        "name": "search",
+                        "arguments": '{"q": "test"}',
+                    },
+                },
+            ],
+        },
+    ]
+    items, _ = handler.convert_chat_completion_messages_to_responses_api(messages)
+
+    # Should only have the function_call item, no empty message item
+    assert len(items) == 1, f"Expected 1 item, got {len(items)}: {items}"
+    assert items[0]["type"] == "function_call"
