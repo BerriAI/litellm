@@ -2690,7 +2690,7 @@ if MCP_AVAILABLE:
                     verbose_logger.info(
                         "SSE connection established, running server loop..."
                     )
-                    
+
                     # ContextVars can sometimes be lost when the MCP SDK spawns internal tasks
                     # (e.g. _receive_loop), so tool handlers can't read auth_context_var reliably.
                     # Storing it on the read_stream ensures it's isolated per SSE session.
@@ -2770,7 +2770,10 @@ if MCP_AVAILABLE:
 
             error_response = JSONResponse(
                 status_code=500,
-                content={"error": "Authentication processing failed", "details": str(e)},
+                content={
+                    "error": "Authentication processing failed",
+                    "details": str(e),
+                },
             )
             await error_response(scope, receive, send)
             # CRITICAL: Stop execution if auth extraction fails to prevent unauthenticated fall-through
@@ -2936,7 +2939,9 @@ if MCP_AVAILABLE:
                 read_stream = getattr(session, "_read_stream", None)
                 stored = getattr(read_stream, "_litellm_auth_context", None)
             except Exception as e:
-                verbose_logger.debug(f"get_or_extract_auth_context FALLBACK failed: {e}")
+                verbose_logger.debug(
+                    f"get_or_extract_auth_context FALLBACK failed: {e}"
+                )
                 stored = None
 
             verbose_logger.debug(
