@@ -244,6 +244,10 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                 await session.close()
         self._loop_sessions.clear()
 
+    async def async_close(self) -> None:
+        """Close resources held by this guardrail (called on proxy shutdown)."""
+        await self._close_http_session()
+
     def __del__(self):
         """Cleanup: we try to close, but doing async cleanup in __del__ is risky."""
         pass
