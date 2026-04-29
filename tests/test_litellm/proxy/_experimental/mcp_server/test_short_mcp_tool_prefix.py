@@ -205,3 +205,84 @@ class TestManagerShortPrefix:
         prefix = get_server_prefix(server)
         full = add_server_prefix_to_name("get_repo", prefix)
         assert len(full) < 60
+
+
+# ---------------------------------------------------------------------------
+# Collision-resolution at registration time
+# ---------------------------------------------------------------------------
+
+
+class TestShortPrefixCollisionResolution:
+    """``_assign_unique_short_prefix`` must rehash on collision.
+
+    The dedup path is exercised by forcing two distinct ``server_id``
+    values to both hash to the same natural prefix via a monkeypatched
+    ``compute_short_server_prefix``.
+    """
+
+    def test_no_op_when_flag_off(self):
+        manager = MCPServerManager()
+        server = _make_server(server_id="abc")
+        manager._assign_unique_short_prefix(server)
+        assert server.short_prefix is None
+
+    def test_assigns_natural_hash_when_no_collision(self, monkeypatch):
+        from litellm.proxy._experimental.mcp_server import utils as mcp_utils
+
+        monkeypatch.setenv("LITELLM_USE_SHORT_MCP_TOOL_PREFIX", "true")
+        manager = MCPServerManager()
+        server = _make_server(server_id="abc")
+        manager._assign_unique_short_prefix(server)
+
+        assert server.short_prefix == mcp_utils.compute_short_server_prefix("abc")
+
+    def test_rehashes_when_natural_hash_collides(self, monkeypatch):
+        """Two server_ids that natural-hash to the same prefix get
+        deterministic, distinct short prefixes."""
+        monkeypatch.setenv("LITELLM_USE_SHORT_MCP_TOOL_PREFIX", "true")
+
+        # Force every attempt=0 hash to "AAA" and attempt=1 to "AAB".
+        # That way the second server registered must rehash to "AAB".
+        from litellm.proxy._experimental.mcp_server import utils as mcp_utils
+
+        def _fake_hash(server_id: str, attempt: int = 0) -> str:
+            return "AAA" if attempt == 0 else f"AA{chr(ord('A') + attempt)}"
+
+        monkeypatch.setattr(mcp_utils, "compute_short_server_prefix", _fake_hash)
+        # Also patch the symbol that the manager imported at module load.
+        from litellm.proxy._experimental.mcp_server import (
+            mcp_server_manager as mgr_module,
+        )
+
+        monkeypatch.setattr(mgr_module, "compute_short_server_prefix", _fake_hash)
+
+        manager = MCPServerManager()
+        first = _make_server(server_id="server-1", alias="srv1")
+        second = _make_server(server_id="server-2", alias="srv2")
+
+        # Pretend both are already in the registry so dedup sees both.
+        manager.registry[first.server_id] = first
+        manager._assign_unique_short_prefix(first)
+        manager.registry[second.server_id] = second
+        manager._assign_unique_short_prefix(second)
+
+        assert first.short_prefix == "AAA"
+        assert second.short_prefix == "AAB"
+        assert first.short_prefix != second.short_prefix
+
+    def test_cached_prefix_is_reused(self, monkeypatch):
+        monkeypatch.setenv("LITELLM_USE_SHORT_MCP_TOOL_PREFIX", "true")
+        manager = MCPServerManager()
+        server = _make_server(server_id="abc")
+        server.short_prefix = "ZZZ"  # pretend a previous registration set this
+
+        manager._assign_unique_short_prefix(server)
+
+        assert server.short_prefix == "ZZZ"
+
+    def test_get_server_prefix_prefers_cached(self, monkeypatch):
+        monkeypatch.setenv("LITELLM_USE_SHORT_MCP_TOOL_PREFIX", "true")
+        server = _make_server(server_id="abc")
+        server.short_prefix = "Q9q"
+
+        assert get_server_prefix(server) == "Q9q"
