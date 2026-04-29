@@ -45,6 +45,11 @@ jobs:
             const tag = process.env.TAG;
             const commitHash = process.env.COMMIT_HASH;
 
+            // Mark RC / dev / nightly / alpha / beta tags as GitHub pre-releases.
+            // PEP 440 post-releases (e.g. `1.84.0.post1`) and legacy `-stable[.patch.N]`
+            // are stable maintenance releases, not pre-releases.
+            const isPrerelease = /(?:rc|nightly|alpha|beta|\.dev)/i.test(tag);
+
             const cosignSection = [
               `## Verify Docker Image Signature`,
               ``,
@@ -89,7 +94,7 @@ jobs:
                 target_commitish: commitHash,
                 name: tag,
                 owner: context.repo.owner,
-                prerelease: false,
+                prerelease: isPrerelease,
                 repo: context.repo.repo,
                 tag_name: tag,
               });
