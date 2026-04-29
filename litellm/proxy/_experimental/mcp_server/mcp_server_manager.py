@@ -1533,8 +1533,8 @@ class MCPServerManager:
                 header_value
             )
 
-            authorization_servers: List[str] = []
-            resource_scopes: Optional[List[str]] = None
+            authorization_servers = []
+            resource_scopes = None
             if resource_metadata_url:
                 (
                     authorization_servers,
