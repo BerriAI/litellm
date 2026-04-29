@@ -156,6 +156,7 @@ if MCP_AVAILABLE:
     )
     from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
         _request_auth_header,
+        _request_extra_headers,
     )
     from litellm.proxy._experimental.mcp_server.sse_transport import SseServerTransport
     from litellm.proxy._experimental.mcp_server.tool_registry import (
@@ -2123,11 +2124,28 @@ if MCP_AVAILABLE:
                     auth_header_value = f"Basic {mcp_auth_header}"
                 else:
                     auth_header_value = f"Bearer {mcp_auth_header}"
+            extra_headers_dict: Optional[Dict[str, str]] = None
+            if mcp_server and mcp_server.extra_headers and raw_headers:
+                normalized = {
+                    str(k).lower(): v
+                    for k, v in raw_headers.items()
+                    if isinstance(k, str)
+                }
+                extra_headers_dict = {}
+                for header in mcp_server.extra_headers:
+                    if not isinstance(header, str):
+                        continue
+                    val = normalized.get(header.lower())
+                    if val is not None:
+                        extra_headers_dict[header] = val
+
+            _extra_token = _request_extra_headers.set(extra_headers_dict)
             _auth_token = _request_auth_header.set(auth_header_value)
             try:
                 local_content = await _handle_local_mcp_tool(name, arguments)
             finally:
                 _request_auth_header.reset(_auth_token)
+                _request_extra_headers.reset(_extra_token)
             response = CallToolResult(content=cast(Any, local_content), isError=False)
 
         # Try managed MCP server tool (pass the full prefixed name)

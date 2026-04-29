@@ -2037,6 +2037,7 @@ class MCPServerManager:
         server: MCPServer,
         tool_name: str,
         arguments: Dict[str, Any],
+        raw_headers: Optional[Dict[str, str]] = None,
     ) -> CallToolResult:
         """
         Call an OpenAPI tool handler directly.
@@ -2046,14 +2047,20 @@ class MCPServerManager:
         HTTP requests to the API.
 
         Args:
+            server: The MCPServer configuration.
             tool_name: The full tool name (with prefix) to call
             arguments: Tool arguments to pass to the handler
+            raw_headers: Optional raw headers from the inbound request, used to
+                extract headers listed in ``server.extra_headers``.
 
         Returns:
             CallToolResult with the response from the API
         """
         from mcp.types import TextContent
 
+        from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
+            _request_extra_headers,
+        )
         from litellm.proxy._experimental.mcp_server.tool_registry import (
             global_mcp_tool_registry,
         )
@@ -2069,12 +2076,27 @@ class MCPServerManager:
                 isError=True,
             )
 
+        # Build extra_headers dict from raw_headers using the same
+        # normalization pattern as _call_regular_mcp_tool.
+        extra_headers_dict: Optional[Dict[str, str]] = None
+        if server.extra_headers and raw_headers:
+            normalized = {
+                str(k).lower(): v
+                for k, v in raw_headers.items()
+                if isinstance(k, str)
+            }
+            extra_headers_dict = {}
+            for header in server.extra_headers:
+                if not isinstance(header, str):
+                    continue
+                val = normalized.get(header.lower())
+                if val is not None:
+                    extra_headers_dict[header] = val
+
+        _extra_token = _request_extra_headers.set(extra_headers_dict)
         try:
-            # Call the tool handler with the arguments
-            # The handler is an async function that makes the HTTP request
             handler_result = await tool.handler(**arguments)
 
-            # Convert the handler result (string response) to CallToolResult format
             result = CallToolResult(
                 content=[TextContent(type="text", text=str(handler_result))],
                 isError=False,
@@ -2089,6 +2111,8 @@ class MCPServerManager:
                 content=[TextContent(type="text", text=error_msg)],
                 isError=True,
             )
+        finally:
+            _request_extra_headers.reset(_extra_token)
 
     async def pre_call_tool_check(
         self,
@@ -2506,17 +2530,11 @@ class MCPServerManager:
             verbose_logger.debug(
                 "Calling OpenAPI tool %s directly via HTTP handler", name
             )
-            if hook_result.get("extra_headers"):
-                verbose_logger.warning(
-                    "pre_mcp_call hook returned extra_headers for OpenAPI-backed "
-                    "MCP server '%s' — header injection is not supported for "
-                    "OpenAPI servers; headers will be ignored. Use SSE/HTTP "
-                    "transport to enable hook header injection.",
-                    server_name,
-                )
             tasks.append(
                 asyncio.create_task(
-                    self._call_openapi_tool_handler(mcp_server, name, arguments)
+                    self._call_openapi_tool_handler(
+                        mcp_server, name, arguments, raw_headers=raw_headers
+                    )
                 )
             )
         else:

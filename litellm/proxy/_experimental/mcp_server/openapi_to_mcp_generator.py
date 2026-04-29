@@ -31,6 +31,13 @@ _request_auth_header: contextvars.ContextVar[Optional[str]] = contextvars.Contex
     "_request_auth_header", default=None
 )
 
+# Per-request extra headers override for OpenAPI-backed MCP servers.
+# Set this ContextVar before calling a local tool handler to inject headers
+# listed in the server's ``extra_headers`` config into the upstream HTTP request.
+_request_extra_headers: contextvars.ContextVar[Optional[Dict[str, str]]] = (
+    contextvars.ContextVar("_request_extra_headers", default=None)
+)
+
 
 def _sanitize_path_parameter_value(param_value: Any, param_name: str) -> str:
     """Ensure path params cannot introduce directory traversal."""
@@ -315,6 +322,11 @@ def create_tool_function(
         # correct prefix (Bearer / ApiKey / Basic) formatted by the caller in
         # server.py based on the server's configured auth_type.
         effective_headers = dict(headers)
+
+        request_extra = _request_extra_headers.get()
+        if request_extra:
+            effective_headers.update(request_extra)
+
         override_auth = _request_auth_header.get()
         if override_auth:
             effective_headers["Authorization"] = override_auth
