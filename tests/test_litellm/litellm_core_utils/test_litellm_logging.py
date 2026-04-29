@@ -2337,6 +2337,104 @@ def test_merge_hidden_params_from_response_into_metadata_populates_metadata():
     assert meta["hidden_params"]["model_id"] == "mid-test"
 
 
+def test_merge_hidden_params_from_response_into_metadata_backfills_response_cost():
+    """Streaming metadata should include the already-calculated response cost."""
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+
+    logging_obj = LiteLLMLoggingObj(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        call_type="acompletion",
+        start_time=time.time(),
+        litellm_call_id="merge-hp-cost-test",
+        function_id="merge-hp-cost-fn",
+    )
+    logging_obj.model_call_details = {
+        "litellm_params": {"metadata": {}},
+        "response_cost": 0.002,
+    }
+
+    class _Resp:
+        _hidden_params = {"response_cost": None, "model_id": "mid-test"}
+
+    response = _Resp()
+    logging_obj._merge_hidden_params_from_response_into_metadata(response)
+    meta = logging_obj.model_call_details["litellm_params"]["metadata"]
+    assert meta["hidden_params"]["response_cost"] == 0.002
+    assert meta["hidden_params"]["model_id"] == "mid-test"
+    assert response._hidden_params["response_cost"] is None
+
+
+def test_standard_logging_hidden_params_backfills_response_cost_without_mutating_response():
+    """Streaming standard logging payload should expose the calculated response cost."""
+    from datetime import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.types.utils import Usage
+
+    logging_obj = LiteLLMLoggingObj(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        call_type="acompletion",
+        start_time=time.time(),
+        litellm_call_id="standard-hp-cost-test",
+        function_id="standard-hp-cost-fn",
+    )
+    logging_obj.model_call_details = {
+        "litellm_params": {"metadata": {}, "proxy_server_request": {}},
+        "litellm_call_id": "standard-hp-cost-test",
+        "call_type": "acompletion",
+        "stream": True,
+        "model": "gpt-4o-mini",
+        "custom_llm_provider": "openai",
+        "optional_params": {"stream": True},
+        "response_cost": 0.002,
+    }
+    response = ModelResponse(
+        id="standard-hp-cost-response",
+        model="gpt-4o-mini",
+        usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15),
+    )
+    response._hidden_params = {"response_cost": None, "model_id": "mid-test"}
+
+    payload = logging_obj._build_standard_logging_payload(
+        response, datetime.now(), datetime.now()
+    )
+
+    assert payload is not None
+    assert payload["hidden_params"]["response_cost"] == 0.002
+    assert response._hidden_params["response_cost"] is None
+
+
+def test_merge_hidden_params_from_response_into_metadata_preserves_response_cost():
+    """Do not overwrite provider-supplied response cost when it already exists."""
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+
+    logging_obj = LiteLLMLoggingObj(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        call_type="acompletion",
+        start_time=time.time(),
+        litellm_call_id="merge-hp-preserve-cost-test",
+        function_id="merge-hp-preserve-cost-fn",
+    )
+    logging_obj.model_call_details = {
+        "litellm_params": {"metadata": {}},
+        "response_cost": 0.002,
+    }
+
+    class _Resp:
+        _hidden_params = {"response_cost": 0.001, "model_id": "mid-test"}
+
+    logging_obj._merge_hidden_params_from_response_into_metadata(_Resp())
+    meta = logging_obj.model_call_details["litellm_params"]["metadata"]
+    assert meta["hidden_params"]["response_cost"] == 0.001
+    assert meta["hidden_params"]["model_id"] == "mid-test"
+
+
 def test_merge_hidden_params_from_response_into_metadata_no_op_when_empty():
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
@@ -2436,3 +2534,141 @@ def test_get_standard_logging_object_payload_includes_litellm_call_id(logging_ob
 
     assert payload is not None
     assert payload["litellm_call_id"] == call_id
+
+
+def _make_dict_logging_obj():
+    """Build a Logging instance configured for a non-streaming dict result."""
+    obj = LitellmLogging(
+        model="claude-haiku-4-5@20251001",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="acompletion",
+        litellm_call_id="test-call-id",
+        start_time=time.time(),
+        function_id="test-fn",
+    )
+    obj.model_call_details = {
+        "model": "claude-haiku-4-5@20251001",
+        "custom_llm_provider": "vertex_ai",
+        "litellm_params": {"metadata": {}},
+        "response_cost": None,
+    }
+    return obj
+
+
+def test_success_handler_computes_cost_for_dict_response():
+    """Non-streaming dict responses run through the cost calculator."""
+    logging_obj = _make_dict_logging_obj()
+    expected_cost = 0.42
+    with (
+        patch.object(
+            logging_obj,
+            "_response_cost_calculator",
+            return_value=expected_cost,
+        ) as mock_calc,
+        patch.object(
+            logging_obj,
+            "_build_standard_logging_payload",
+            return_value={"response_cost": expected_cost},
+        ),
+        patch(
+            "litellm.litellm_core_utils.litellm_logging.emit_standard_logging_payload"
+        ),
+        patch.object(
+            logging_obj,
+            "_is_recognized_call_type_for_logging",
+            return_value=False,
+        ),
+        patch.object(
+            logging_obj,
+            "_transform_usage_objects",
+            side_effect=lambda result: result,
+        ),
+    ):
+        logging_obj.success_handler(
+            result={"id": "msg_1"},
+            start_time=time.time(),
+            end_time=time.time(),
+        )
+        mock_calc.assert_called_once()
+        assert logging_obj.model_call_details["response_cost"] == expected_cost
+
+
+def test_success_handler_preserves_precomputed_cost_for_dict_response():
+    """Precomputed response_cost on model_call_details must not be overwritten."""
+    logging_obj = _make_dict_logging_obj()
+    precomputed_cost = 1.23
+    logging_obj.model_call_details["response_cost"] = precomputed_cost
+    with (
+        patch.object(
+            logging_obj,
+            "_response_cost_calculator",
+            return_value=9.99,
+        ) as mock_calc,
+        patch.object(
+            logging_obj,
+            "_build_standard_logging_payload",
+            return_value={"response_cost": precomputed_cost},
+        ),
+        patch(
+            "litellm.litellm_core_utils.litellm_logging.emit_standard_logging_payload"
+        ),
+        patch.object(
+            logging_obj,
+            "_is_recognized_call_type_for_logging",
+            return_value=False,
+        ),
+        patch.object(
+            logging_obj,
+            "_transform_usage_objects",
+            side_effect=lambda result: result,
+        ),
+    ):
+        logging_obj.success_handler(
+            result={"id": "msg_2"},
+            start_time=time.time(),
+            end_time=time.time(),
+        )
+        mock_calc.assert_not_called()
+        assert logging_obj.model_call_details["response_cost"] == precomputed_cost
+
+
+def test_success_handler_unified_helper_runs_for_typed_results():
+    """Recognized typed responses still flow through the unified helper."""
+    logging_obj = _make_dict_logging_obj()
+    expected_cost = 0.10
+    typed_result = MagicMock()
+    typed_result._hidden_params = {}
+
+    with (
+        patch.object(
+            logging_obj,
+            "_response_cost_calculator",
+            return_value=expected_cost,
+        ) as mock_calc,
+        patch.object(
+            logging_obj,
+            "_build_standard_logging_payload",
+            return_value={"response_cost": expected_cost},
+        ),
+        patch(
+            "litellm.litellm_core_utils.litellm_logging.emit_standard_logging_payload"
+        ),
+        patch.object(
+            logging_obj,
+            "_is_recognized_call_type_for_logging",
+            return_value=True,
+        ),
+        patch.object(
+            logging_obj,
+            "_transform_usage_objects",
+            side_effect=lambda result: result,
+        ),
+    ):
+        logging_obj.success_handler(
+            result=typed_result,
+            start_time=time.time(),
+            end_time=time.time(),
+        )
+        mock_calc.assert_called_once()
+        assert logging_obj.model_call_details["response_cost"] == expected_cost
