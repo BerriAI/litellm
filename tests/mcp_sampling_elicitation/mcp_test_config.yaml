@@ -8,6 +8,6 @@ litellm_settings:
 mcp_servers:
   test_server:
     transport: stdio
-    command: "c:\\Users\\DELL\\Desktop\\litellm\\.venv\\Scripts\\python.exe"
-    args: ["c:\\Users\\DELL\\Desktop\\litellm\\tests\\mcp_sampling_elicitation\\custom_mcp_server.py"]
+    command: "python"
+    args: ["tests/mcp_sampling_elicitation/custom_mcp_server.py"]
     allow_all_keys: true

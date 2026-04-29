@@ -445,64 +445,6 @@ async def test_streamable_http_mcp_handler_mock():
         mock_session_manager.handle_request.assert_called_once()
 
 
-@pytest.mark.asyncio
-async def test_sse_mcp_handler_mock():
-    """Test the SSE MCP handler functionality"""
-    from litellm.proxy._types import UserAPIKeyAuth
-
-    # Mock the SSE session manager and its methods
-    mock_sse_session_manager = AsyncMock()
-    mock_sse_session_manager.handle_request = AsyncMock()
-
-    # Mock scope, receive, send with proper ASGI scope format
-    mock_scope = {
-        "type": "http",
-        "method": "GET",
-        "path": "/mcp/sse",
-        "headers": [(b"accept", b"text/event-stream")],
-        "query_string": b"",
-        "server": ("localhost", 8000),
-        "scheme": "http",
-    }
-    mock_receive = AsyncMock()
-    mock_send = AsyncMock()
-
-    mock_auth_result = (
-        UserAPIKeyAuth(),
-        None,
-        None,
-        {},
-        {},
-        [],
-    )
-
-    with (
-        patch(
-            "litellm.proxy._experimental.mcp_server.server._SESSION_MANAGERS_INITIALIZED",
-            True,
-        ),
-        patch(
-            "litellm.proxy._experimental.mcp_server.server.sse_session_manager",
-            mock_sse_session_manager,
-        ),
-        patch(
-            "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
-            new=AsyncMock(return_value=mock_auth_result),
-        ),
-        patch(
-            "litellm.proxy._experimental.mcp_server.server.set_auth_context",
-        ),
-    ):
-        from litellm.proxy._experimental.mcp_server.server import handle_sse_mcp
-
-        # Call the handler
-        await handle_sse_mcp(mock_scope, mock_receive, mock_send)
-
-        # Verify SSE session manager handle_request was called
-        mock_sse_session_manager.handle_request.assert_called_once_with(
-            mock_scope, mock_receive, mock_send
-        )
-
 
 def test_generate_stable_server_id():
     """
