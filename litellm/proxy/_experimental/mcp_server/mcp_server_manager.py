@@ -52,6 +52,7 @@ from litellm.proxy._experimental.mcp_server.utils import (
     add_server_prefix_to_name,
     get_server_prefix,
     is_tool_name_prefixed,
+    iter_known_server_prefixes,
     merge_mcp_headers,
     normalize_server_name,
     split_server_prefix_from_name,
@@ -1236,7 +1237,11 @@ class MCPServerManager:
 
             ## HANDLE OPENAPI TOOLS
             if server.spec_path:
-                _tools = global_mcp_tool_registry.list_tools(tool_prefix=server.name)
+                # OpenAPI tools were stored in the registry under the prefix
+                # active at registration time — fetch by that same prefix.
+                _tools = global_mcp_tool_registry.list_tools(
+                    tool_prefix=get_server_prefix(server)
+                )
                 tools = global_mcp_tool_registry.convert_tools_to_mcp_sdk_tool_type(
                     _tools
                 )
@@ -1838,9 +1843,13 @@ class MCPServerManager:
             tool_copy.name = name_to_use
             prefixed_tools.append(tool_copy)
 
-            # Update tool to server mapping for resolution (support both forms)
+            # Register every known prefix form (alias, server_name, server_id,
+            # short ID) so call_tool can resolve regardless of which form a
+            # caller / cached client is using.
             self.tool_name_to_mcp_server_name_mapping[original_name] = prefix
-            self.tool_name_to_mcp_server_name_mapping[prefixed_name] = prefix
+            for known_prefix in iter_known_server_prefixes(server):
+                qualified = add_server_prefix_to_name(original_name, known_prefix)
+                self.tool_name_to_mcp_server_name_mapping[qualified] = prefix
 
         verbose_logger.info(
             f"Successfully fetched {len(prefixed_tools)} tools from server {server.name}"
@@ -2601,37 +2610,43 @@ class MCPServerManager:
         Returns:
             MCPServer if found, None otherwise
         """
+        registry_servers = list(self.get_registry().values())
+
+        # Build prefix → server lookup covering every known form a tool name
+        # may take (alias / server_name / server_id / short ID).  This is what
+        # makes the short-prefix mode work without breaking historical names.
+        prefix_to_server: Dict[str, MCPServer] = {}
+        for server in registry_servers:
+            for known_prefix in iter_known_server_prefixes(server):
+                normalised = normalize_server_name(known_prefix)
+                prefix_to_server.setdefault(normalised, server)
+
         # First try with the original tool name
         if tool_name in self.tool_name_to_mcp_server_name_mapping:
             server_name = self.tool_name_to_mcp_server_name_mapping[tool_name]
-            for server in self.get_registry().values():
-                if normalize_server_name(server.name) == normalize_server_name(
-                    server_name
-                ):
+            normalised_lookup = normalize_server_name(server_name)
+            if normalised_lookup in prefix_to_server:
+                return prefix_to_server[normalised_lookup]
+            for server in registry_servers:
+                if normalize_server_name(server.name) == normalised_lookup:
                     return server
 
-        # If not found and tool name is prefixed, try extracting server name from prefix
-        known_prefixes = {
-            normalize_server_name(get_server_prefix(s))
-            for s in self.get_registry().values()
-            if get_server_prefix(s)
-        }
-        if is_tool_name_prefixed(tool_name, known_server_prefixes=known_prefixes):
+        # If not found and tool name is prefixed, extract the prefix and
+        # match against any known form.
+        if is_tool_name_prefixed(
+            tool_name, known_server_prefixes=set(prefix_to_server.keys())
+        ):
             (
                 original_tool_name,
                 server_name_from_prefix,
             ) = split_server_prefix_from_name(tool_name)
-            if original_tool_name in self.tool_name_to_mcp_server_name_mapping:
-                for server in self.get_registry().values():
-                    if server.server_name is None:
-                        if normalize_server_name(server.name) == normalize_server_name(
-                            server_name_from_prefix
-                        ):
-                            return server
-                    elif normalize_server_name(
-                        server.server_name
-                    ) == normalize_server_name(server_name_from_prefix):
-                        return server
+            normalised_prefix = normalize_server_name(server_name_from_prefix)
+            server = prefix_to_server.get(normalised_prefix)
+            if server is not None and (
+                original_tool_name in self.tool_name_to_mcp_server_name_mapping
+                or tool_name in self.tool_name_to_mcp_server_name_mapping
+            ):
+                return server
 
         return None
 
