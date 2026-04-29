@@ -17,6 +17,7 @@ import json
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from prisma.errors import UniqueViolationError
 from pydantic import BaseModel
 
 from litellm._logging import verbose_proxy_logger
@@ -24,6 +25,8 @@ from litellm.proxy._types import CommonProxyErrors, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 
 router = APIRouter()
+
+_MAX_SEQUENCE_RETRIES = 5
 
 
 def _json(value: Any) -> str:
@@ -89,6 +92,16 @@ async def _get_next_sequence_number(prisma_client: Any, run_id: str, table: str)
             take=1,
         )
     return (rows[0].sequence_number + 1) if rows else 0
+
+
+async def _require_run(prisma_client: Any, run_id: str) -> Any:
+    """Return the run or raise 404 — prevents FK-violation 500s on sub-resource endpoints."""
+    run = await prisma_client.db.litellm_workflowrun.find_unique(
+        where={"run_id": run_id}
+    )
+    if run is None:
+        raise HTTPException(status_code=404, detail=f"Run '{run_id}' not found")
+    return run
 
 
 # ---------------------------------------------------------------------------
@@ -251,7 +264,13 @@ async def append_workflow_event(
     data: WorkflowEventCreateRequest,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
-    """Append an event to the run's event log. Also updates run.status if event_type maps to a status."""
+    """Append an event to the run's event log. Also updates run.status if event_type maps to a status.
+
+    Sequence numbers are assigned with optimistic concurrency: on a unique-constraint
+    collision (concurrent append to same run), we retry up to _MAX_SEQUENCE_RETRIES times
+    with a freshly computed MAX+1. The event+status update runs inside a single DB
+    transaction so the materialized status never desynchronizes from the event log.
+    """
     from litellm.proxy.proxy_server import prisma_client
 
     if prisma_client is None:
@@ -259,31 +278,56 @@ async def append_workflow_event(
             status_code=500, detail=CommonProxyErrors.db_not_connected_error.value
         )
 
-    try:
-        seq = await _get_next_sequence_number(prisma_client, run_id, "events")
-        event_data: Dict[str, Any] = {
-            "run_id": run_id,
-            "event_type": data.event_type,
-            "step_name": data.step_name,
-            "sequence_number": seq,
-        }
-        if data.data is not None:
-            event_data["data"] = _json(data.data)
-        event = await prisma_client.db.litellm_workflowevent.create(
-            data=event_data
-        )
+    # Validate run exists before attempting inserts — avoids FK-violation 500.
+    await _require_run(prisma_client, run_id)
 
-        new_status = _EVENT_STATUS_MAP.get(data.event_type)
-        if new_status:
-            await prisma_client.db.litellm_workflowrun.update(
-                where={"run_id": run_id},
-                data={"status": new_status},
-            )
+    new_status = _EVENT_STATUS_MAP.get(data.event_type)
 
-        return event
-    except Exception as e:
-        verbose_proxy_logger.exception("Error appending workflow event: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
+    for attempt in range(_MAX_SEQUENCE_RETRIES):
+        try:
+            seq = await _get_next_sequence_number(prisma_client, run_id, "events")
+            event_data: Dict[str, Any] = {
+                "run_id": run_id,
+                "event_type": data.event_type,
+                "step_name": data.step_name,
+                "sequence_number": seq,
+            }
+            if data.data is not None:
+                event_data["data"] = _json(data.data)
+
+            # Atomically insert event and update run status in one transaction.
+            async with prisma_client.db.tx() as tx:
+                event = await tx.litellm_workflowevent.create(data=event_data)
+                if new_status:
+                    await tx.litellm_workflowrun.update(
+                        where={"run_id": run_id},
+                        data={"status": new_status},
+                    )
+
+            return event
+
+        except UniqueViolationError:
+            if attempt == _MAX_SEQUENCE_RETRIES - 1:
+                verbose_proxy_logger.exception(
+                    "Sequence number collision after %d retries for run %s",
+                    _MAX_SEQUENCE_RETRIES,
+                    run_id,
+                )
+                raise HTTPException(
+                    status_code=409,
+                    detail="Concurrent write conflict — please retry",
+                )
+            # Re-read MAX+1 on next iteration.
+            continue
+
+        except Exception as e:
+            verbose_proxy_logger.exception("Error appending workflow event: %s", e)
+            raise HTTPException(status_code=500, detail=str(e))
+
+    # Unreachable but satisfies type checkers.
+    raise HTTPException(
+        status_code=500, detail="Failed to append event"
+    )  # pragma: no cover
 
 
 @router.get(
@@ -324,7 +368,11 @@ async def append_workflow_message(
     data: WorkflowMessageCreateRequest,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
-    """Append a conversation message. Stores full content (not truncated)."""
+    """Append a conversation message. Stores full content (not truncated).
+
+    Uses optimistic concurrency for sequence numbers — retries on unique-constraint
+    collision so concurrent appends to the same run don't produce 500 errors.
+    """
     from litellm.proxy.proxy_server import prisma_client
 
     if prisma_client is None:
@@ -332,21 +380,43 @@ async def append_workflow_message(
             status_code=500, detail=CommonProxyErrors.db_not_connected_error.value
         )
 
-    try:
-        seq = await _get_next_sequence_number(prisma_client, run_id, "messages")
-        msg_data: Dict[str, Any] = {
-            "run_id": run_id,
-            "role": data.role,
-            "content": data.content,
-            "sequence_number": seq,
-        }
-        if data.session_id is not None:
-            msg_data["session_id"] = data.session_id
-        msg = await prisma_client.db.litellm_workflowmessage.create(data=msg_data)
-        return msg
-    except Exception as e:
-        verbose_proxy_logger.exception("Error appending workflow message: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
+    # Validate run exists before attempting insert — avoids FK-violation 500.
+    await _require_run(prisma_client, run_id)
+
+    for attempt in range(_MAX_SEQUENCE_RETRIES):
+        try:
+            seq = await _get_next_sequence_number(prisma_client, run_id, "messages")
+            msg_data: Dict[str, Any] = {
+                "run_id": run_id,
+                "role": data.role,
+                "content": data.content,
+                "sequence_number": seq,
+            }
+            if data.session_id is not None:
+                msg_data["session_id"] = data.session_id
+            msg = await prisma_client.db.litellm_workflowmessage.create(data=msg_data)
+            return msg
+
+        except UniqueViolationError:
+            if attempt == _MAX_SEQUENCE_RETRIES - 1:
+                verbose_proxy_logger.exception(
+                    "Sequence number collision after %d retries for run %s",
+                    _MAX_SEQUENCE_RETRIES,
+                    run_id,
+                )
+                raise HTTPException(
+                    status_code=409,
+                    detail="Concurrent write conflict — please retry",
+                )
+            continue
+
+        except Exception as e:
+            verbose_proxy_logger.exception("Error appending workflow message: %s", e)
+            raise HTTPException(status_code=500, detail=str(e))
+
+    raise HTTPException(
+        status_code=500, detail="Failed to append message"
+    )  # pragma: no cover
 
 
 @router.get(
