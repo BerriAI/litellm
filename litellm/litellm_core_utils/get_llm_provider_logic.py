@@ -348,6 +348,7 @@ def get_llm_provider(  # noqa: PLR0915
             or "ft:gpt-3.5-turbo" in model
             or "ft:gpt-4" in model  # catches ft:gpt-4-0613, ft:gpt-4o
             or model in litellm.openai_image_generation_models
+            or model.startswith("gpt-image")
             or model in litellm.openai_video_generation_models
         ):
             custom_llm_provider = "openai"
