@@ -283,3 +283,123 @@ def test_split_preserves_whitespace():
     original = ("line one\n" + "line two\t\tcol\n" + "  indented\n") * 200
     chunks = guardrail.split_text_by_words(original, 500)
     assert "".join(chunks) == original
+
+
+# ---------- Responses API (data["input"]) tests ----------
+
+
+@pytest.mark.asyncio
+async def test_azure_prompt_shield_responses_api_string_input():
+    """Test guardrail works when Responses API sends input as a plain string."""
+    guardrail = AzureContentSafetyPromptShieldGuardrail(
+        guardrail_name="azure_prompt_shield",
+        api_key="test_key",
+        api_base="test_base",
+    )
+    with patch.object(guardrail, "async_make_request") as mock_request:
+        mock_request.return_value = {
+            "userPromptAnalysis": {"attackDetected": False},
+            "documentsAnalysis": [],
+        }
+        await guardrail.async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(api_key="test_key"),
+            cache=None,
+            data={"input": "What is the capital of France?"},
+            call_type="completion",
+        )
+
+        mock_request.assert_called_once()
+        assert (
+            mock_request.call_args.kwargs["user_prompt"]
+            == "What is the capital of France?"
+        )
+
+
+@pytest.mark.asyncio
+async def test_azure_prompt_shield_responses_api_list_input():
+    """Test guardrail works when Responses API sends input as a message list."""
+    guardrail = AzureContentSafetyPromptShieldGuardrail(
+        guardrail_name="azure_prompt_shield",
+        api_key="test_key",
+        api_base="test_base",
+    )
+    with patch.object(guardrail, "async_make_request") as mock_request:
+        mock_request.return_value = {
+            "userPromptAnalysis": {"attackDetected": False},
+            "documentsAnalysis": [],
+        }
+        await guardrail.async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(api_key="test_key"),
+            cache=None,
+            data={
+                "input": [
+                    {"role": "user", "content": "Hello"},
+                    {"role": "assistant", "content": "Hi there"},
+                    {"role": "user", "content": "Tell me about Paris"},
+                ]
+            },
+            call_type="completion",
+        )
+
+        mock_request.assert_called_once()
+        assert (
+            mock_request.call_args.kwargs["user_prompt"]
+            == "Tell me about Paris"
+        )
+
+
+@pytest.mark.asyncio
+async def test_azure_prompt_shield_responses_api_multi_turn_with_tool_output():
+    """Test guardrail filters out non-message items (tool outputs) from input list.
+
+    Responses API lists can contain tool-call output items that lack a "role"
+    key. These must be filtered out so get_user_prompt() can find user messages
+    that appear before them in the list.
+    """
+    guardrail = AzureContentSafetyPromptShieldGuardrail(
+        guardrail_name="azure_prompt_shield",
+        api_key="test_key",
+        api_base="test_base",
+    )
+    with patch.object(guardrail, "async_make_request") as mock_request:
+        mock_request.return_value = {
+            "userPromptAnalysis": {"attackDetected": False},
+            "documentsAnalysis": [],
+        }
+        await guardrail.async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(api_key="test_key"),
+            cache=None,
+            data={
+                "input": [
+                    {"role": "user", "content": "Search for weather in Tokyo"},
+                    {"role": "assistant", "content": "Let me look that up."},
+                    {"role": "user", "content": "Thanks, also check Paris"},
+                    # Tool output — no "role" key, should be filtered out
+                    {"type": "tool_result", "tool_use_id": "abc", "content": "72°F"},
+                ]
+            },
+            call_type="completion",
+        )
+
+        mock_request.assert_called_once()
+        assert "Paris" in mock_request.call_args.kwargs["user_prompt"]
+
+
+@pytest.mark.asyncio
+async def test_azure_prompt_shield_responses_api_no_input():
+    """Test guardrail skips gracefully when neither messages nor input is present."""
+    guardrail = AzureContentSafetyPromptShieldGuardrail(
+        guardrail_name="azure_prompt_shield",
+        api_key="test_key",
+        api_base="test_base",
+    )
+    with patch.object(guardrail, "async_make_request") as mock_request:
+        result = await guardrail.async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(api_key="test_key"),
+            cache=None,
+            data={"model": "gpt-4o"},
+            call_type="completion",
+        )
+
+        mock_request.assert_not_called()
+        assert result == {"model": "gpt-4o"}
