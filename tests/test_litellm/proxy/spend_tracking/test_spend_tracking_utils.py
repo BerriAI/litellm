@@ -1519,3 +1519,96 @@ class TestIsMasterKey:
         master = "sk-master-key-123"
         hashed = hash_token(master)
         assert _is_master_key(api_key=hashed, _master_key=master) is True
+
+
+class TestGetSpendLogsId:
+    """Tests for get_spend_logs_id precedence between response.id and litellm_call_id."""
+
+    def setup_method(self):
+        from litellm.proxy.spend_tracking.spend_tracking_utils import (
+            get_spend_logs_id,
+        )
+
+        self.fn = get_spend_logs_id
+
+    def test_default_prefers_response_id(self):
+        """Without the client-supplied flag, response.id wins (existing behavior)."""
+        result = self.fn(
+            call_type="acompletion",
+            response_obj={"id": "chatcmpl-provider-id"},
+            kwargs={"litellm_call_id": "auto-generated-uuid"},
+        )
+        assert result == "chatcmpl-provider-id"
+
+    def test_default_falls_back_to_litellm_call_id(self):
+        """Without the client-supplied flag, falls back to litellm_call_id when response.id missing."""
+        result = self.fn(
+            call_type="acompletion",
+            response_obj={},
+            kwargs={"litellm_call_id": "auto-generated-uuid"},
+        )
+        assert result == "auto-generated-uuid"
+
+    def test_client_supplied_flag_prefers_litellm_call_id(self):
+        """With client-supplied flag, litellm_call_id wins over response.id."""
+        result = self.fn(
+            call_type="acompletion",
+            response_obj={"id": "chatcmpl-provider-id"},
+            kwargs={
+                "litellm_call_id": "client-correlation-uuid",
+                "litellm_call_id_from_client": True,
+            },
+        )
+        assert result == "client-correlation-uuid"
+
+    def test_client_supplied_flag_falls_back_to_response_id(self):
+        """With client-supplied flag but missing litellm_call_id, falls back to response.id."""
+        result = self.fn(
+            call_type="acompletion",
+            response_obj={"id": "chatcmpl-provider-id"},
+            kwargs={
+                "litellm_call_id": None,
+                "litellm_call_id_from_client": True,
+            },
+        )
+        assert result == "chatcmpl-provider-id"
+
+    def test_client_supplied_flag_false_uses_default_precedence(self):
+        """Explicit False on flag uses default (response.id wins)."""
+        result = self.fn(
+            call_type="acompletion",
+            response_obj={"id": "chatcmpl-provider-id"},
+            kwargs={
+                "litellm_call_id": "auto-uuid",
+                "litellm_call_id_from_client": False,
+            },
+        )
+        assert result == "chatcmpl-provider-id"
+
+    def test_aretrieve_batch_unchanged(self):
+        """The batch hash path is independent of the flag."""
+        result = self.fn(
+            call_type="aretrieve_batch",
+            response_obj={"id": "batch-id", "data": "x"},
+            kwargs={
+                "litellm_call_id": "client-uuid",
+                "litellm_call_id_from_client": True,
+            },
+        )
+        # Hash-based id, not the client uuid
+        assert result is not None
+        assert result != "client-uuid"
+
+    def test_acreate_file_unchanged(self):
+        """The acreate_file hash path is also independent of the flag."""
+        result = self.fn(
+            call_type="acreate_file",
+            response_obj={"id": "file-id", "data": "y"},
+            kwargs={
+                "litellm_call_id": "client-uuid",
+                "litellm_call_id_from_client": True,
+            },
+        )
+        # Hash-based id, not the client uuid
+        assert result is not None
+        assert result != "client-uuid"

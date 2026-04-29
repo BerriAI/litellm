@@ -170,6 +170,12 @@ def get_spend_logs_id(
     if call_type == "aretrieve_batch" or call_type == "acreate_file":
         # Generate a hash from the response object
         id: Optional[str] = generate_hash_from_response(response_obj)
+    elif kwargs.get("litellm_call_id_from_client"):
+        # Client explicitly supplied x-litellm-call-id; honor it so callers
+        # can correlate spend log records with their own request id.
+        id = cast(Optional[str], kwargs.get("litellm_call_id")) or cast(
+            Optional[str], response_obj.get("id")
+        )
     else:
         id = cast(Optional[str], response_obj.get("id")) or cast(
             Optional[str], kwargs.get("litellm_call_id")

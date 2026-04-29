@@ -58,9 +58,16 @@ async def google_generate_content(
     )
 
     # Create logging object with full request metadata so callbacks (e.g. S3) get user/trace_id
-    data["litellm_call_id"] = request.headers.get(
-        "x-litellm-call-id", str(uuid.uuid4())
-    )
+    client_supplied_call_id = request.headers.get("x-litellm-call-id")
+    if client_supplied_call_id:
+        data["litellm_call_id"] = client_supplied_call_id
+        data["litellm_call_id_from_client"] = True
+    else:
+        data["litellm_call_id"] = str(uuid.uuid4())
+        # Defensive: explicitly clear the flag so a body-injected
+        # `litellm_call_id_from_client: true` cannot flip precedence
+        # in get_spend_logs_id when no header was actually supplied.
+        data["litellm_call_id_from_client"] = False
     logging_obj, data = litellm.utils.function_setup(
         original_function="agenerate_content",
         rules_obj=litellm.utils.Rules(),
@@ -121,9 +128,16 @@ async def google_stream_generate_content(
     )
 
     # Create logging object with full request metadata so streaming END callbacks (e.g. S3) get user/trace_id
-    data["litellm_call_id"] = request.headers.get(
-        "x-litellm-call-id", str(uuid.uuid4())
-    )
+    client_supplied_call_id = request.headers.get("x-litellm-call-id")
+    if client_supplied_call_id:
+        data["litellm_call_id"] = client_supplied_call_id
+        data["litellm_call_id_from_client"] = True
+    else:
+        data["litellm_call_id"] = str(uuid.uuid4())
+        # Defensive: explicitly clear the flag so a body-injected
+        # `litellm_call_id_from_client: true` cannot flip precedence
+        # in get_spend_logs_id when no header was actually supplied.
+        data["litellm_call_id_from_client"] = False
     logging_obj, data = litellm.utils.function_setup(
         original_function="agenerate_content_stream",
         rules_obj=litellm.utils.Rules(),
