@@ -309,15 +309,81 @@ class LazyFeatureMiddleware:
 
 
 def attach_lazy_features(app: "FastAPI") -> None:
+    app.include_router(_make_warmup_router(app))
     app.add_middleware(LazyFeatureMiddleware, fastapi_app=app)
 
 
+def _make_warmup_router(app: "FastAPI") -> "APIRouter":
+    """POST /lazy/warm/{name}: load a feature and return its partial openapi
+    so the Swagger plugin can merge in-place without a full /openapi.json refetch."""
+    from fastapi import APIRouter, HTTPException
+    from fastapi.openapi.utils import get_openapi
+
+    router = APIRouter()
+
+    @router.post("/lazy/warm/{name}", include_in_schema=False)
+    async def warm(name: str):
+        feat = next((f for f in LAZY_FEATURES if f.name == name), None)
+        if feat is None:
+            raise HTTPException(404, f"unknown lazy feature: {name}")
+        if feat.persistent_swagger_stub:
+            return {"stub_path": None, "paths": {}, "components": {"schemas": {}}}
+
+        already = any(
+            any(getattr(r, "path", "").startswith(p) for p in feat.path_prefixes)
+            for r in app.routes
+        )
+        if not already:
+            loop = asyncio.get_running_loop()
+            module = await loop.run_in_executor(
+                None, importlib.import_module, feat.module_path
+            )
+            feat.register_fn(app, module)
+            app.openapi_schema = None
+
+        feat_routes = [
+            r
+            for r in app.routes
+            if any(getattr(r, "path", "").startswith(p) for p in feat.path_prefixes)
+        ]
+        full = get_openapi(title=app.title, version=app.version, routes=feat_routes)
+        # Force all operations under one tag so they group under a single Swagger
+        # section — many lazy modules tag routes inconsistently.
+        for path_ops in full.get("paths", {}).values():
+            for op in path_ops.values():
+                if isinstance(op, dict):
+                    op["tags"] = [feat.name]
+        return {
+            "stub_path": feat.path_prefixes[0],
+            "paths": full.get("paths", {}),
+            "components": {"schemas": full.get("components", {}).get("schemas", {})},
+        }
+
+    return router
+
+
 def inject_lazy_stubs(schema: Dict) -> Dict:
-    """Stub openapi entries for unloaded features so Swagger renders sections."""
+    """Inject openapi entries for unloaded features. Uses the snapshot file
+    when available (full route info), otherwise falls back to a single
+    placeholder per feature."""
+    from litellm.proxy._lazy_openapi_snapshot import load_snapshot
+
+    snapshot = load_snapshot()
     paths = schema.setdefault("paths", {})
+    schemas = schema.setdefault("components", {}).setdefault("schemas", {})
+
     for feat in LAZY_FEATURES:
         if feat.module_path in sys.modules and not feat.persistent_swagger_stub:
             continue
+
+        fragment = (snapshot or {}).get(feat.name)
+        if fragment:
+            for p, ops in fragment.get("paths", {}).items():
+                paths.setdefault(p, ops)
+            for name, sch in fragment.get("components", {}).get("schemas", {}).items():
+                schemas.setdefault(name, sch)
+            continue
+
         prefix = feat.path_prefixes[0]
         if prefix in paths:
             continue
@@ -333,8 +399,12 @@ def inject_lazy_stubs(schema: Dict) -> Dict:
 
 def lazy_tag_to_prefix() -> Dict[str, str]:
     """feature.name -> first prefix, used by the Swagger warmup JS plugin.
-    Excludes persistent-stub features (mounted sub-apps) — warming them
-    triggers a streaming hit and no useful new routes appear."""
+    Returns empty when the snapshot is loaded — the plugin is unnecessary
+    because /openapi.json already has full route info."""
+    from litellm.proxy._lazy_openapi_snapshot import load_snapshot
+
+    if load_snapshot():
+        return {}
     return {
         feat.name: feat.path_prefixes[0]
         for feat in LAZY_FEATURES
