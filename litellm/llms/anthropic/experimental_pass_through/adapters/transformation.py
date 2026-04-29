@@ -484,7 +484,12 @@ class LiteLLMAnthropicMessagesAdapter:
                                                 tool_call_id=content.get(
                                                     "tool_use_id", ""
                                                 ),
-                                                content=openai_image_url,
+                                                content=[ChatCompletionImageObject(
+                                                    type="image_url",
+                                                    image_url=ChatCompletionImageUrlObject(
+                                                        url=openai_image_url
+                                                    ),
+                                                )],
                                             )
                                             self._add_cache_control_if_applicable(
                                                 content, tool_result, model
