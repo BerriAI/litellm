@@ -9,6 +9,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 from litellm.proxy.management_endpoints.common_daily_activity import (
+    _adjust_dates_for_timezone,
     _is_user_agent_tag,
     get_api_key_metadata,
     get_daily_activity,
@@ -55,6 +56,27 @@ async def test_get_daily_activity_empty_entity_id_list():
     # Check that team_id is set to empty list
     assert "team_id" in where_conditions
     assert where_conditions["team_id"] == {"in": []}
+
+
+def test_adjust_dates_for_timezone_single_day_pst():
+    """Single-day selection must not bleed into the next UTC day for PST users."""
+    start, end = _adjust_dates_for_timezone("2026-04-23", "2026-04-23", 480)
+    assert start == "2026-04-23"
+    assert end == "2026-04-23"
+
+
+def test_adjust_dates_for_timezone_single_day_ist():
+    """Single-day selection must not bleed into the previous UTC day for IST users."""
+    start, end = _adjust_dates_for_timezone("2026-04-23", "2026-04-23", -330)
+    assert start == "2026-04-23"
+    assert end == "2026-04-23"
+
+
+def test_adjust_dates_for_timezone_no_offset():
+    """UTC users: date range passes through unchanged."""
+    start, end = _adjust_dates_for_timezone("2026-04-23", "2026-04-23", None)
+    assert start == "2026-04-23"
+    assert end == "2026-04-23"
 
 
 def test_is_user_agent_tag():
