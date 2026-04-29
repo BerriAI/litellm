@@ -64,6 +64,44 @@ def _get_models_from_access_groups(
     return all_models
 
 
+def _is_access_group_only_string(
+    model: str,
+    proxy_model_list: List[str],
+    model_access_groups: Dict[str, List[str]],
+) -> bool:
+    """
+    Identify entries in a key/team `models` list that are access-group strings
+    rather than real model identifiers.
+
+    Issue #25550: when a virtual key was created with `models=["foo"]` against
+    an access group "foo" that has since been removed (or that was never
+    defined on any model), "foo" remains in the key but is no longer in
+    `model_access_groups`. The current expansion logic only strips entries
+    that ARE in the access-groups dict, so the stale string passes through
+    /v1/models as if it were a model name.
+
+    A string is treated as access-group-only when none of the markers of a
+    real model identifier are present:
+      - it is in proxy_model_list (a configured proxy model group)
+      - it is in model_access_groups (an active access group; expanded above)
+      - it is in litellm.model_list_set (a known base model id)
+      - it contains "/" (provider-qualified route, e.g. `openai/gpt-4o`)
+      - it contains "*" (wildcard route, expanded by `_get_wildcard_models`)
+      - it starts with "ft:" (OpenAI fine-tune id)
+    """
+    if model in proxy_model_list:
+        return False
+    if model in model_access_groups:
+        return False
+    if model in litellm.model_list_set:
+        return False
+    if "/" in model or "*" in model:
+        return False
+    if model.startswith("ft:"):
+        return False
+    return True
+
+
 async def get_mcp_server_ids(
     user_api_key_dict: UserAPIKeyAuth,
 ) -> List[str]:
@@ -210,6 +248,20 @@ def get_complete_model_list(
         if infer_model_from_keys:
             valid_models = get_valid_models()
             append_unique(valid_models)
+
+    # Drop stale access-group strings carried in key/team `models` (issue #25550).
+    # Only filter the key/team paths — the proxy-admin path above is sourced
+    # from authoritative state (proxy_model_list, model_access_groups keys).
+    if key_models or team_models:
+        unique_models = [
+            m
+            for m in unique_models
+            if not _is_access_group_only_string(
+                model=m,
+                proxy_model_list=proxy_model_list,
+                model_access_groups=model_access_groups,
+            )
+        ]
 
     if only_model_access_groups:
         model_access_groups_to_return: List[str] = []
