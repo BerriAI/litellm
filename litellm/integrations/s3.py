@@ -185,12 +185,36 @@ def get_s3_object_key(
     start_time: datetime,
     s3_file_name: str,
 ) -> str:
+    # `s3_file_name` sometimes comes from an upstream "id" that can be an S3 URI
+    # (e.g. `s3://bucket/some/key.jsonl`). If we include `/` directly in the
+    # object key filename component, it creates extra path segments and can
+    # break S3 bucket/prefix IAM policies.
+    raw_file_name = "" if s3_file_name is None else str(s3_file_name)
+    import hashlib
+    import re
+
+    # Replace any characters outside the safe filename set.
+    # This also converts `/` and `:` into `_`, preventing accidental directory
+    # traversal / extra IAM prefix segments.
+    safe_file_name = re.sub(r"[^A-Za-z0-9._-]+", "_", raw_file_name)
+    safe_file_name = safe_file_name.strip("_")
+
+    if not safe_file_name:
+        # Fall back to a deterministic value to avoid empty keys.
+        safe_file_name = "unknown"
+
+    # Keep keys reasonably small even if `id` is a long URI.
+    max_len = 180
+    if len(safe_file_name) > max_len:
+        suffix_hash = hashlib.sha256(raw_file_name.encode("utf-8")).hexdigest()[:12]
+        safe_file_name = f"{safe_file_name[: max_len - 13]}_{suffix_hash}"
+
     s3_object_key = (
         (s3_path.rstrip("/") + "/" if s3_path else "")
         + prefix
         + start_time.strftime("%Y-%m-%d")
         + "/"
-        + s3_file_name
+        + safe_file_name
     )  # we need the s3 key to include the time, so we log cache hits too
     s3_object_key += ".json"
     return s3_object_key
