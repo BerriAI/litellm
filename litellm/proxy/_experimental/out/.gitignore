@@ -1,0 +1,15 @@
+# Stale Next.js export artifacts.
+#
+# Next.js's `output: "export"` mode produces different file layouts depending
+# on `trailingSlash`:
+#   - trailingSlash: false (current) -> route.html       (e.g. api-reference.html)
+#   - trailingSlash: true            -> route/index.html (e.g. api-reference/index.html)
+#
+# When a build with one setting runs over a working tree that has artifacts
+# from the other setting, the stale files linger as untracked. They've shown
+# up in commits before (1ba2be77 added them, de790fd2 removed them) and keep
+# resurfacing whenever a developer's local environment produces the other
+# format. Only the top-level index.html is canonical for our config; ignore
+# any nested index.html so it stops cluttering `git status`.
+index.html
+!/index.html
