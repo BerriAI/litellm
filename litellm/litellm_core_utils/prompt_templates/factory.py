@@ -1462,6 +1462,7 @@ def convert_to_gemini_tool_call_invoke(
 def convert_to_gemini_tool_call_result(  # noqa: PLR0915
     message: Union[ChatCompletionToolMessage, ChatCompletionFunctionMessage],
     last_message_with_tool_calls: Optional[dict],
+    model: Optional[str] = None,
 ) -> Union[VertexPartType, List[VertexPartType]]:
     """
     OpenAI message with a tool result looks like:
@@ -1588,8 +1589,9 @@ def convert_to_gemini_tool_call_result(  # noqa: PLR0915
                                 f"Failed to process file in tool response: {e}"
                             )
     name: Optional[str] = message.get("name", "")  # type: ignore
+    thought_signature: Optional[str] = None
 
-    # Recover name from last message with tool calls
+    # Recover name and thought signature from last message with tool calls
     if last_message_with_tool_calls:
         tools = last_message_with_tool_calls.get("tool_calls", [])
         msg_tool_call_id = message.get("tool_call_id", None)
@@ -1601,6 +1603,7 @@ def convert_to_gemini_tool_call_result(  # noqa: PLR0915
                 and msg_tool_call_id == prev_tool_call_id
             ):
                 name = tool.get("function", {}).get("name", "")
+                thought_signature = _get_thought_signature_from_tool(dict(tool), model=model)
 
     if not name:
         raise Exception(
@@ -1635,13 +1638,28 @@ def convert_to_gemini_tool_call_result(  # noqa: PLR0915
 
     # Create part with function_response, and optionally inline_data for images (Computer Use)
     _part: VertexPartType = {"function_response": _function_response}
+    if thought_signature:
+        _part["thoughtSignature"] = thought_signature
 
     # For Computer Use, if we have images/files, we need separate parts:
     # - One part with function_response
     # - One part per inline_data item
     # Gemini's PartType is a oneof, so we can't have both in the same part
     if inline_data_list:
-        return [_part] + [{"inline_data": d} for d in inline_data_list]
+        # Gemini 3 "Thinking" models require nesting multimodal content inside functionResponse
+        # to avoid leaking internal transition tokens into the user-visible text.
+        is_gemini_3 = model is not None and "gemini-3" in model
+        if is_gemini_3:
+            _part["function_response"]["parts"] = [{"inline_data": d} for d in inline_data_list]  # type: ignore
+            return _part
+
+        # Backwards-compatible behavior for older Gemini models:
+        # Gemini's PartType is a oneof, so we can't have both function_response + inline_data in one part.
+        extra_parts: List[VertexPartType] = [{"inline_data": d} for d in inline_data_list]
+        for ep in extra_parts:
+            if thought_signature:
+                ep["thoughtSignature"] = thought_signature
+        return [_part] + extra_parts
 
     return _part
 

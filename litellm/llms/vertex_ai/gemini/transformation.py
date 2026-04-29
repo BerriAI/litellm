@@ -590,7 +590,7 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                 and messages[msg_i]["role"] in tool_call_message_roles
             ):
                 _part = convert_to_gemini_tool_call_result(
-                    messages[msg_i], last_message_with_tool_calls  # type: ignore
+                    messages[msg_i], last_message_with_tool_calls, model=model  # type: ignore
                 )
                 msg_i += 1
                 # Handle both single part and list of parts (for Computer Use with images)
