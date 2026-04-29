@@ -248,6 +248,139 @@ class TestGetDynamicProjectName:
         kwargs = {"standard_logging_object": "not-a-dict"}
         assert ArizePhoenixLogger._get_dynamic_project_name(kwargs) is None
 
+    # ------------------------------------------------------------------
+    # Tests for team / key metadata path (the bug reported by Viktor O.)
+    # ------------------------------------------------------------------
+
+    def test_extracts_from_user_api_key_auth_metadata(self):
+        """
+        phoenix_project_name set on a team is merged into
+        user_api_key_auth_metadata by the proxy's pre-call utils.
+        _get_dynamic_project_name must check that nested dict.
+        """
+        kwargs = {
+            "standard_logging_object": {
+                "metadata": {
+                    "user_api_key_auth_metadata": {
+                        "phoenix_project_name": "team-project"
+                    }
+                }
+            }
+        }
+        assert ArizePhoenixLogger._get_dynamic_project_name(kwargs) == "team-project"
+
+    def test_per_request_metadata_takes_priority_over_team_metadata(self):
+        """
+        A per-request phoenix_project_name must win over a team-level one.
+        """
+        kwargs = {
+            "standard_logging_object": {
+                "metadata": {
+                    "phoenix_project_name": "request-project",
+                    "user_api_key_auth_metadata": {
+                        "phoenix_project_name": "team-project"
+                    },
+                }
+            }
+        }
+        assert ArizePhoenixLogger._get_dynamic_project_name(kwargs) == "request-project"
+
+    def test_falls_back_to_team_metadata_when_no_top_level_name(self):
+        """
+        When there is no top-level phoenix_project_name but the team metadata
+        has one, the team value must be returned.
+        """
+        kwargs = {
+            "standard_logging_object": {
+                "metadata": {
+                    # no top-level phoenix_project_name
+                    "user_api_key_auth_metadata": {
+                        "phoenix_project_name": "team-project"
+                    },
+                }
+            }
+        }
+        assert ArizePhoenixLogger._get_dynamic_project_name(kwargs) == "team-project"
+
+    def test_team_metadata_takes_priority_over_litellm_params(self):
+        """
+        Team metadata (via standard_logging_object) must win over
+        litellm_params.metadata (SDK-level).
+        """
+        kwargs = {
+            "standard_logging_object": {
+                "metadata": {
+                    "user_api_key_auth_metadata": {
+                        "phoenix_project_name": "team-project"
+                    }
+                }
+            },
+            "litellm_params": {
+                "metadata": {"phoenix_project_name": "sdk-project"},
+            },
+        }
+        assert ArizePhoenixLogger._get_dynamic_project_name(kwargs) == "team-project"
+
+    def test_empty_user_api_key_auth_metadata_does_not_crash(self):
+        """Empty auth_metadata dict must not raise and must fall through."""
+        kwargs = {
+            "standard_logging_object": {
+                "metadata": {
+                    "user_api_key_auth_metadata": {}
+                }
+            }
+        }
+        assert ArizePhoenixLogger._get_dynamic_project_name(kwargs) is None
+
+    def test_none_user_api_key_auth_metadata_does_not_crash(self):
+        """None auth_metadata must not raise and must fall through."""
+        kwargs = {
+            "standard_logging_object": {
+                "metadata": {
+                    "user_api_key_auth_metadata": None
+                }
+            }
+        }
+        assert ArizePhoenixLogger._get_dynamic_project_name(kwargs) is None
+
+    def test_full_priority_chain_all_sources_present(self):
+        """
+        Full priority chain:
+        per-request > team (user_api_key_auth_metadata) > litellm_params
+        """
+        # Per-request wins
+        kwargs_request = {
+            "standard_logging_object": {
+                "metadata": {
+                    "phoenix_project_name": "request-project",
+                    "user_api_key_auth_metadata": {"phoenix_project_name": "team-project"},
+                }
+            },
+            "litellm_params": {"metadata": {"phoenix_project_name": "sdk-project"}},
+        }
+        assert ArizePhoenixLogger._get_dynamic_project_name(kwargs_request) == "request-project"
+
+        # No per-request → team wins
+        kwargs_team = {
+            "standard_logging_object": {
+                "metadata": {
+                    "user_api_key_auth_metadata": {"phoenix_project_name": "team-project"},
+                }
+            },
+            "litellm_params": {"metadata": {"phoenix_project_name": "sdk-project"}},
+        }
+        assert ArizePhoenixLogger._get_dynamic_project_name(kwargs_team) == "team-project"
+
+        # No per-request, no team → SDK wins
+        kwargs_sdk = {
+            "standard_logging_object": {"metadata": {}},
+            "litellm_params": {"metadata": {"phoenix_project_name": "sdk-project"}},
+        }
+        assert ArizePhoenixLogger._get_dynamic_project_name(kwargs_sdk) == "sdk-project"
+
+        # Nothing → None
+        assert ArizePhoenixLogger._get_dynamic_project_name({}) is None
+
 
 class TestDynamicProjectNameOnSpan:
     """set_arize_phoenix_attributes sets openinference.project.name on the span."""
@@ -276,6 +409,52 @@ class TestDynamicProjectNameOnSpan:
         span.set_attribute.assert_called_once_with(
             "openinference.project.name", "env-project"
         )
+
+    @patch.dict("os.environ", {"PHOENIX_PROJECT_NAME": "env-fallback"}, clear=False)
+    @patch("litellm.integrations.arize._utils.set_attributes")
+    def test_team_metadata_project_name_sets_span_attribute(self, _mock_set_attrs):
+        """
+        Regression test: phoenix_project_name from team metadata (stored in
+        user_api_key_auth_metadata) must be applied to the span, not the env fallback.
+        """
+        span = MagicMock()
+        kwargs = {
+            "standard_logging_object": {
+                "metadata": {
+                    "user_api_key_auth_metadata": {
+                        "phoenix_project_name": "team-project"
+                    }
+                }
+            }
+        }
+        ArizePhoenixLogger.set_arize_phoenix_attributes(span, kwargs, response_obj=None)
+
+        span.set_attribute.assert_called_once_with("openinference.project.name", "team-project")
+
+    @patch.dict(
+        "os.environ",
+        {"PHOENIX_PROJECT_NAME": "env-fallback"},
+        clear=False,
+    )
+    @patch("litellm.integrations.arize._utils.set_attributes")
+    def test_per_request_overrides_team_metadata_on_span(self, _mock_set_attrs):
+        """
+        Per-request phoenix_project_name must override team metadata on the span.
+        """
+        span = MagicMock()
+        kwargs = {
+            "standard_logging_object": {
+                "metadata": {
+                    "phoenix_project_name": "request-project",
+                    "user_api_key_auth_metadata": {
+                        "phoenix_project_name": "team-project"
+                    },
+                }
+            }
+        }
+        ArizePhoenixLogger.set_arize_phoenix_attributes(span, kwargs, response_obj=None)
+
+        span.set_attribute.assert_called_once_with("openinference.project.name", "request-project")
 
 
 if __name__ == "__main__":
