@@ -404,6 +404,7 @@ async def validate_key_mcp_servers_against_team(
                     },
                 )
 
+
 def _extract_requested_search_tools(object_permission: Optional[dict]) -> List[str]:
     """Return search_tool_name values from a key's object_permission dict."""
     if not object_permission or not isinstance(object_permission, dict):
