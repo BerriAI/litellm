@@ -3289,9 +3289,6 @@ async def _check_team_member_budget(
 
         # Per-member override wins; otherwise fall back to the team-level
         # default configured via team.metadata["team_member_budget_id"].
-        # A per-member row whose max_budget is NULL is *not* an override -
-        # it can result from cloning a team default that itself had no cap
-        # at member-add time. Treat it as "no override" and fall through.
         team_member_budget: Optional[float] = None
         if (
             team_membership is not None
