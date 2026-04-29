@@ -3,6 +3,7 @@ import json
 import logging
 import os
 import sys
+import unittest.mock
 from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -799,8 +800,6 @@ class TestMCPServerManager:
             assert server_url == "https://example.com/mcp"
             return discovered_metadata
 
-        manager._descovery_metadata = fake_discovery  # type: ignore[attr-defined]
-
         config = {
             "example": {
                 "url": "https://example.com/mcp",
@@ -811,7 +810,8 @@ class TestMCPServerManager:
             }
         }
 
-        await manager.load_servers_from_config(config)
+        with unittest.mock.patch.object(manager, "_descovery_metadata", side_effect=fake_discovery):
+            await manager.load_servers_from_config(config)
 
         server = next(iter(manager.config_mcp_servers.values()))
         assert server.scopes == ["config"]  # config overrides discovery
@@ -1248,6 +1248,151 @@ class TestMCPServerManager:
         )
         assert server.requires_per_user_auth is False
         assert server.has_client_credentials is True
+
+    @pytest.mark.asyncio
+    async def test_client_creds_without_explicit_token_url_stays_3lo(self):
+        """
+        Regression test: client_id + client_secret without oauth2_flow=client_credentials
+        must stay in the 3LO (authorization_code) path.
+
+        - has_client_credentials must be False (no explicit opt-in via oauth2_flow)
+        - token_url MUST be populated from discovery so exchange_token_with_server()
+          can complete the auth-code exchange (raises HTTP 400 if token_url is None)
+        - authorization_url and scopes must also be populated from discovery
+        """
+        manager = MCPServerManager()
+
+        discovered_metadata = MCPOAuthMetadata(
+            scopes=["read"],
+            authorization_url="https://discovered.example.com/auth",
+            token_url="https://discovered.example.com/token",
+        )
+
+        async def fake_discovery(server_url: str):
+            return discovered_metadata
+
+        with unittest.mock.patch.object(manager, "_descovery_metadata", side_effect=fake_discovery):
+            config = {
+                "github": {
+                    "url": "https://github.example.com/mcp",
+                    "transport": MCPTransport.http,
+                    "auth_type": MCPAuth.oauth2,
+                    "client_id": "my-client-id",
+                    "client_secret": "my-client-secret",
+                    # No oauth2_flow — signals 3LO (user-authorised) flow
+                }
+            }
+
+            await manager.load_servers_from_config(config)
+
+        server = next(iter(manager.config_mcp_servers.values()))
+        assert server.has_client_credentials is False, (
+            "has_client_credentials must be False when oauth2_flow is not set to "
+            "client_credentials — presence of client_id/secret alone is ambiguous"
+        )
+        # token_url must be populated from discovery so the 3LO auth-code exchange works
+        assert server.token_url == "https://discovered.example.com/token", (
+            "Auto-discovered token_url must be preserved for 3LO servers — "
+            "exchange_token_with_server() raises HTTP 400 if token_url is None"
+        )
+        # authorization_url and scopes must also survive from discovery
+        assert server.authorization_url == "https://discovered.example.com/auth"
+        assert server.scopes == ["read"]
+        assert server.needs_user_oauth_token is True
+
+    @pytest.mark.asyncio
+    async def test_explicit_token_url_with_client_creds_routes_2lo(self):
+        """
+        Regression test: explicit token_url + client_id + client_secret must route to
+        2LO (client_credentials) even when discovery is active.
+
+        Discovery should NOT override an explicitly configured token_url.
+        """
+        manager = MCPServerManager()
+
+        discovered_metadata = MCPOAuthMetadata(
+            scopes=["read"],
+            authorization_url="https://discovered.example.com/auth",
+            token_url="https://discovered.example.com/token",
+        )
+
+        async def fake_discovery(server_url: str):
+            return discovered_metadata
+
+        with unittest.mock.patch.object(manager, "_descovery_metadata", side_effect=fake_discovery):
+            config = {
+                "github": {
+                    "url": "https://github.example.com/mcp",
+                    "transport": MCPTransport.http,
+                    "auth_type": MCPAuth.oauth2,
+                    "client_id": "my-client-id",
+                    "client_secret": "my-client-secret",
+                    "token_url": "https://explicit.example.com/token",
+                    "oauth2_flow": "client_credentials",  # explicit 2LO opt-in
+                }
+            }
+
+            await manager.load_servers_from_config(config)
+
+        server = next(iter(manager.config_mcp_servers.values()))
+        # Explicit token_url must be preserved, not overridden by discovery
+        assert server.token_url == "https://explicit.example.com/token", (
+            "Explicit token_url should be used as-is when provided in config"
+        )
+        assert server.has_client_credentials is True, (
+            "has_client_credentials must be True when explicit token_url + client creds are set"
+        )
+        assert server.needs_user_oauth_token is False
+
+    @pytest.mark.asyncio
+    async def test_discovered_token_url_suppressed_for_2lo_without_explicit_token_url(self):
+        """
+        Regression guard for the suppression branch (line 309 in mcp_server_manager.py).
+
+        When oauth2_flow=client_credentials is set WITHOUT an explicit token_url, and
+        discovery returns a token_url, the resolved token_url must be suppressed (set to
+        None) to prevent the proxy from silently using a discovered token endpoint the
+        operator never intended to authorise.
+
+        Expected state after load_servers_from_config:
+        - server.token_url is None   (suppressed, not the discovered value)
+        - server.has_client_credentials is True  (explicit opt-in via oauth2_flow)
+        """
+        manager = MCPServerManager()
+
+        discovered_metadata = MCPOAuthMetadata(
+            scopes=["read"],
+            authorization_url="https://discovered.example.com/auth",
+            token_url="https://discovered.example.com/token",
+        )
+
+        async def fake_discovery(server_url: str):
+            return discovered_metadata
+
+        with unittest.mock.patch.object(manager, "_descovery_metadata", side_effect=fake_discovery):
+            config = {
+                "m2m-server": {
+                    "url": "https://m2m.example.com/mcp",
+                    "transport": MCPTransport.http,
+                    "auth_type": MCPAuth.oauth2,
+                    "client_id": "my-client-id",
+                    "client_secret": "my-client-secret",
+                    "oauth2_flow": "client_credentials",  # explicit 2LO opt-in
+                    # Deliberately NO token_url — triggers the suppression branch
+                }
+            }
+
+            await manager.load_servers_from_config(config)
+
+        server = next(iter(manager.config_mcp_servers.values()))
+        assert server.token_url is None, (
+            "Auto-discovered token_url must be suppressed when oauth2_flow=client_credentials "
+            "is set without an explicit token_url — using a discovered endpoint could grant "
+            "unintended M2M access"
+        )
+        assert server.has_client_credentials is True, (
+            "has_client_credentials must be True: oauth2_flow=client_credentials is set"
+        )
 
     @pytest.mark.asyncio
     async def test_requires_per_user_auth_property_passthrough_auth(self):
