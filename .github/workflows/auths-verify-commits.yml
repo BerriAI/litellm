@@ -1,0 +1,37 @@
+name: Auths Commit Verification
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions: {}
+
+jobs:
+  verify:
+    name: Verify commit signatures
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: ${{ github.event_name == 'pull_request' && 'write' || 'none' }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify commits with Auths
+        uses: auths-dev/verify@v1
+        with:
+          token: .auths/allowed_signers
+          fail-on-unsigned: 'false'
+          skip-merge-commits: 'true'
+          post-pr-comment: ${{ github.event_name == 'pull_request' && 'true' || 'false' }}
+          github-token: ${{ github.event_name == 'pull_request' && secrets.GITHUB_TOKEN || '' }}
