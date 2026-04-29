@@ -16,6 +16,7 @@ Cache keys: ``invalid_vk:{hashed_token}``.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any, Dict, Optional, Union
 
 from fastapi import HTTPException, status
@@ -133,6 +134,37 @@ class InvalidVirtualKeyCache:
             verbose_proxy_logger.debug("InvalidVirtualKeyCache.record_miss: %s", e)
 
     @classmethod
+    async def _deprecated_token_exists(
+        cls,
+        *,
+        hashed_token: str,
+        prisma_client: Any,
+    ) -> Optional[bool]:
+        """
+        Return whether ``hashed_token`` is still valid through key-rotation grace period.
+
+        ``None`` means the probe failed; callers should avoid negative-caching so the
+        regular auth path can attempt the full lookup.
+        """
+        try:
+            deprecated_token_row = (
+                await prisma_client.db.litellm_deprecatedverificationtoken.find_first(
+                    where={
+                        "token": hashed_token,
+                        "revoke_at": {"gt": datetime.now(timezone.utc)},
+                    }
+                )
+            )
+        except Exception as e:
+            verbose_proxy_logger.debug(
+                "InvalidVirtualKeyCache._deprecated_token_exists: deprecated token probe failed, continuing to combined_view: %s",
+                e,
+            )
+            return None
+
+        return deprecated_token_row is not None
+
+    @classmethod
     async def check_invalid_token(
         cls,
         *,
@@ -224,7 +256,17 @@ class InvalidVirtualKeyCache:
             token_probe_failed = True
             token_row = None
 
-        if not token_probe_failed and token_row is None:
+        if token_probe_failed:
+            return False
+
+        if token_row is None:
+            deprecated_token_exists = await cls._deprecated_token_exists(
+                hashed_token=hashed_token,
+                prisma_client=prisma_client,
+            )
+            if deprecated_token_exists is not False:
+                return False
+
             await cls.record_miss(
                 hashed_token=hashed_token,
                 user_api_key_cache=user_api_key_cache,

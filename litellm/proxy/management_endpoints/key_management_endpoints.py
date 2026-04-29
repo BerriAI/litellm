@@ -3889,6 +3889,15 @@ async def _execute_virtual_key_regeneration(
     updated_token_dict["key"] = new_token
     updated_token_dict["token_id"] = updated_token_dict.pop("token")
 
+    await InvalidVirtualKeyCache.delete_invalid_token_cache(
+        hashed_token=new_token_hash,
+        user_api_key_cache=user_api_key_cache,
+    )
+    await InvalidVirtualKeyCache.delete_invalid_token_cache(
+        hashed_token=hashed_api_key,
+        user_api_key_cache=user_api_key_cache,
+    )
+
     if hashed_api_key or key:
         await _delete_cache_key_object(
             hashed_token=_hash_token_if_needed(key),

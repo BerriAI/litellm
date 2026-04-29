@@ -2412,7 +2412,6 @@ async def _lookup_deprecated_key(
 
     # Check cache first
     cached = _deprecated_key_cache.get(hashed_token)
-    cached = _deprecated_key_cache.get(hashed_token)
     if cached is not None:
         active_token_id, cache_expires_at_ts, revoke_at_ts = cached
         if now_ts < cache_expires_at_ts and now_ts < revoke_at_ts:
@@ -2426,12 +2425,13 @@ async def _lookup_deprecated_key(
                 "token": hashed_token,
                 "revoke_at": {"gt": now},
             },
-            select={"active_token_id": True},
+            select={"active_token_id": True, "revoke_at": True},
         )
         if deprecated_row and deprecated_row.active_token_id:
             _deprecated_key_cache[hashed_token] = (
                 deprecated_row.active_token_id,
                 now_ts + _DEPRECATED_KEY_CACHE_TTL_SECONDS,
+                deprecated_row.revoke_at.timestamp(),
             )
             return deprecated_row.active_token_id
         # Only cache positive results; negative lookups are fast on indexed columns

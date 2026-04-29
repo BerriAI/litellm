@@ -40,8 +40,12 @@ async def test_check_invalid_token_empty_cache_db_miss_records_negative_entry():
     user_api_key_cache.async_set_cache = AsyncMock()
 
     find_first = AsyncMock(return_value=None)
+    deprecated_find_first = AsyncMock(return_value=None)
     prisma_client = MagicMock()
     prisma_client.db.litellm_verificationtoken.find_first = find_first
+    prisma_client.db.litellm_deprecatedverificationtoken.find_first = (
+        deprecated_find_first
+    )
 
     result = await InvalidVirtualKeyCache.check_invalid_token(
         api_key=api_key,
@@ -52,6 +56,7 @@ async def test_check_invalid_token_empty_cache_db_miss_records_negative_entry():
 
     assert result is True
     find_first.assert_awaited_once_with(where={"token": hashed})
+    deprecated_find_first.assert_awaited_once()
     user_api_key_cache.async_get_cache.assert_awaited_once_with(key=neg_key)
     user_api_key_cache.async_set_cache.assert_awaited_once_with(
         key=neg_key,
@@ -74,8 +79,12 @@ async def test_check_invalid_token_negative_cache_hit_short_circuits_even_if_db_
     user_api_key_cache.async_set_cache = AsyncMock()
 
     find_first = AsyncMock(return_value=MagicMock(token=hash_token(token=api_key)))
+    deprecated_find_first = AsyncMock(return_value=None)
     prisma_client = MagicMock()
     prisma_client.db.litellm_verificationtoken.find_first = find_first
+    prisma_client.db.litellm_deprecatedverificationtoken.find_first = (
+        deprecated_find_first
+    )
 
     result = await InvalidVirtualKeyCache.check_invalid_token(
         api_key=api_key,
@@ -86,6 +95,7 @@ async def test_check_invalid_token_negative_cache_hit_short_circuits_even_if_db_
 
     assert result is True
     find_first.assert_not_called()
+    deprecated_find_first.assert_not_called()
     user_api_key_cache.async_set_cache.assert_not_called()
 
 
@@ -118,8 +128,12 @@ async def test_check_invalid_token_cache_miss_db_hit_allows_auth_flow():
     user_api_key_cache.async_set_cache = AsyncMock()
 
     find_first = AsyncMock(return_value=MagicMock(token=hashed))
+    deprecated_find_first = AsyncMock(return_value=None)
     prisma_client = MagicMock()
     prisma_client.db.litellm_verificationtoken.find_first = find_first
+    prisma_client.db.litellm_deprecatedverificationtoken.find_first = (
+        deprecated_find_first
+    )
 
     result = await InvalidVirtualKeyCache.check_invalid_token(
         api_key=api_key,
@@ -130,5 +144,42 @@ async def test_check_invalid_token_cache_miss_db_hit_allows_auth_flow():
 
     assert result is False
     find_first.assert_awaited_once_with(where={"token": hashed})
+    deprecated_find_first.assert_not_called()
+    user_api_key_cache.async_get_cache.assert_awaited_once_with(key=neg_key)
+    user_api_key_cache.async_set_cache.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_check_invalid_token_allows_deprecated_key_in_grace_period():
+    """
+    A rotated key can be absent from the active token table but still valid via
+    LiteLLM_DeprecatedVerificationToken. Do not negative-cache that hash.
+    """
+    api_key = _sk_key()
+    hashed = hash_token(token=api_key)
+    neg_key = _negative_cache_key_for(api_key)
+
+    user_api_key_cache = MagicMock()
+    user_api_key_cache.async_get_cache = AsyncMock(return_value=None)
+    user_api_key_cache.async_set_cache = AsyncMock()
+
+    find_first = AsyncMock(return_value=None)
+    deprecated_find_first = AsyncMock(return_value=MagicMock(token=hashed))
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_verificationtoken.find_first = find_first
+    prisma_client.db.litellm_deprecatedverificationtoken.find_first = (
+        deprecated_find_first
+    )
+
+    result = await InvalidVirtualKeyCache.check_invalid_token(
+        api_key=api_key,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        general_settings=_general_settings_positive_ttl(),
+    )
+
+    assert result is False
+    find_first.assert_awaited_once_with(where={"token": hashed})
+    deprecated_find_first.assert_awaited_once()
     user_api_key_cache.async_get_cache.assert_awaited_once_with(key=neg_key)
     user_api_key_cache.async_set_cache.assert_not_called()
