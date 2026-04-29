@@ -223,3 +223,33 @@ async def test_call_with_db_reconnect_retry_uses_auth_defaults_when_unset():
     call_kwargs = client.attempt_db_reconnect.await_args.kwargs
     assert call_kwargs["timeout_seconds"] == 3.0
     assert call_kwargs["lock_timeout_seconds"] == 0.5
+
+
+@pytest.mark.asyncio
+async def test_call_with_db_reconnect_retry_preserves_original_error_when_reconnect_raises():
+    """If `attempt_db_reconnect` itself raises (lock cancellation, timer
+    error, unexpected internal failure), the helper must surface the
+    *original* transport error to telemetry — not the reconnect exception.
+    Otherwise `failure_handler` / `db_exceptions` alerts log the wrong
+    error string and the actual DB transport problem becomes invisible.
+
+    The reconnect error is chained as the `__cause__` for debuggability."""
+    client = MagicMock()
+    reconnect_exc = RuntimeError("simulated reconnect lock cancellation")
+    client.attempt_db_reconnect = AsyncMock(side_effect=reconnect_exc)
+    client._db_auth_reconnect_timeout_seconds = 2.0
+    client._db_auth_reconnect_lock_timeout_seconds = 0.1
+
+    original_exc = httpx.ReadError("transport blip")
+
+    async def _factory():
+        raise original_exc
+
+    with pytest.raises(httpx.ReadError) as exc_info:
+        await call_with_db_reconnect_retry(
+            client, _factory, reason="reconnect_itself_raises"
+        )
+
+    assert exc_info.value is original_exc
+    assert exc_info.value.__cause__ is reconnect_exc
+    client.attempt_db_reconnect.assert_awaited_once()
