@@ -1515,6 +1515,8 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         """Extract image response from parts if present"""
         images: List[ImageURLListItem] = []
         for part in parts:
+            if isinstance(part, dict) and part.get("thought") is True:
+                continue
             if "inlineData" in part:
                 inline_data = part.get("inlineData", {})
                 mime_type = inline_data.get("mimeType", "")
