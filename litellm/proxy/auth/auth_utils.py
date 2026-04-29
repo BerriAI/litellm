@@ -184,24 +184,34 @@ def is_request_body_safe(
         "aws_web_identity_token",
         "aws_role_name",
         "vertex_credentials",
-        # Endpoint-targeting fields that must not flow through clientside.
-        # ``aws_bedrock_runtime_endpoint`` redirects Bedrock traffic to an
-        # arbitrary host; ``langsmith_base_url`` / ``langfuse_host`` are
-        # callback hostnames that, if attacker-controlled, exfiltrate the
-        # request payload (incl. message content + admin-configured
-        # observability keys) to the attacker's server.
+        # Endpoint-targeting fields that retarget the outbound request or
+        # an observability callback. An attacker-controlled value either
+        # exfiltrates the request payload (incl. messages + admin-set
+        # tokens) to the attacker's host, or coerces the proxy into
+        # authenticating against the attacker's host with admin secrets.
         "aws_bedrock_runtime_endpoint",
         "langsmith_base_url",
         "langfuse_host",
+        "posthog_host",
+        "braintrust_host",
+        "slack_webhook_url",
     ]
 
+    # The blocklist is enforced unconditionally. Legitimate clientside
+    # credential / endpoint passthrough goes through one of the two
+    # explicit admin opt-ins (``general_settings.allow_client_side_credentials``
+    # proxy-wide or ``configurable_clientside_auth_params`` per deployment).
+    # Historically there was a third, *implicit*, *caller-controlled* path:
+    # ``check_complete_credentials`` returned True when the caller supplied
+    # any non-empty ``api_key``, which made the entire blocklist a no-op.
+    # That bypass turned every missing entry on the blocklist into an
+    # exploitable SSRF / credential-exfil hole — see GHSA-jh89-88fc-qrfp,
+    # GHSA-3frq-6r6h-7j64, and the chain of veria-admin findings (Dv_m860l,
+    # b_yRJeQ5, stN90yjP, LBlyOAc8, U2TD78kg). Removed: the blocklist now
+    # has a single, predictable failure mode for missing entries (a 400),
+    # not a credential leak.
     for param in banned_params:
-        if (
-            param in request_body
-            and not check_complete_credentials(  # allow client-credentials to be passed to proxy
-                request_body=request_body
-            )
-        ):
+        if param in request_body:
             if general_settings.get("allow_client_side_credentials") is True:
                 return True
             elif (
@@ -216,7 +226,10 @@ def is_request_body_safe(
                 return True
             raise ValueError(
                 f"Rejected Request: {param} is not allowed in request body. "
-                "Enable with `general_settings::allow_client_side_credentials` on proxy config.yaml. "
+                "Clientside passthrough requires explicit admin opt-in via "
+                "either `general_settings.allow_client_side_credentials = true` "
+                "(proxy-wide) or `configurable_clientside_auth_params` on the "
+                "deployment in your proxy config.yaml. "
                 "Relevant Issue: https://huntr.com/bounties/4001e1a2-7b7a-4776-a3ae-e6692ec3d997",
             )
 

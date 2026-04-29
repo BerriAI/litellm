@@ -909,6 +909,9 @@ class TestIsRequestBodySafeBlocksEndpointTargetingFields:
             "aws_bedrock_runtime_endpoint",
             "langsmith_base_url",
             "langfuse_host",
+            "posthog_host",
+            "braintrust_host",
+            "slack_webhook_url",
         ],
     )
     def test_endpoint_targeting_field_in_request_body_is_rejected(self, field):
@@ -921,3 +924,40 @@ class TestIsRequestBodySafeBlocksEndpointTargetingFields:
             )
         # The function lists the offending param name in the error.
         assert field in str(exc.value)
+
+    @pytest.mark.parametrize(
+        "field",
+        ["api_base", "base_url", "user_config", "langfuse_host", "slack_webhook_url"],
+    )
+    def test_api_key_does_not_bypass_blocklist(self, field):
+        # Regression: the historical ``check_complete_credentials`` clause
+        # made the entire blocklist a no-op for any caller that supplied
+        # a non-empty ``api_key``. That bypass turned every missing entry
+        # on the blocklist into an SSRF / credential-exfil hole. Verify
+        # that supplying an api_key (alongside the banned param) does NOT
+        # bypass the gate — it can only be opened by an admin opt-in.
+        with pytest.raises(ValueError) as exc:
+            is_request_body_safe(
+                request_body={
+                    "model": "gpt-4",
+                    "api_key": "sk-anything",
+                    field: "https://attacker.example",
+                },
+                general_settings={},
+                llm_router=None,
+                model="gpt-4",
+            )
+        assert field in str(exc.value)
+
+    def test_admin_opt_in_proxy_wide_still_allows(self):
+        # ``general_settings.allow_client_side_credentials = True`` remains
+        # the documented proxy-wide BYOK opt-in.
+        assert (
+            is_request_body_safe(
+                request_body={"model": "gpt-4", "api_base": "https://my-byok.example"},
+                general_settings={"allow_client_side_credentials": True},
+                llm_router=None,
+                model="gpt-4",
+            )
+            is True
+        )
