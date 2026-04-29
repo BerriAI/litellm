@@ -2340,14 +2340,7 @@ async def test_team_member_budget_check_per_member_override_wins_over_team_defau
 
 @pytest.mark.asyncio
 async def test_team_member_budget_check_null_clone_falls_back_to_team_default():
-    """A per-member budget row with max_budget=NULL is not an explicit
-    no-cap override - it can be the result of cloning a team default that
-    had no value at member-add time. Enforcement must fall through to the
-    team default and apply that cap.
-
-    Pre-fix: NULL on the clone short-circuited the comparison block
-    (team_member_budget = None -> if not None: skipped) so the user
-    spent unbounded against an apparent $65/$X cap."""
+    """Per-member NULL max_budget falls through to the team default cap."""
     from litellm.caching.dual_cache import DualCache
     from litellm.proxy._types import LiteLLM_BudgetTable, LiteLLM_TeamMembership
     from litellm.proxy.utils import ProxyLogging
@@ -2415,10 +2408,7 @@ async def test_team_member_budget_check_null_clone_falls_back_to_team_default():
 
 @pytest.mark.asyncio
 async def test_team_member_budget_check_null_clone_with_null_default_skips_enforcement():
-    """Sanity check: when both the per-member clone AND the team default
-    have max_budget=NULL, enforcement still skips (the team genuinely has
-    no cap configured). Confirms the NULL-fall-through is defensive, not
-    overzealous."""
+    """When per-member and team default are both NULL, enforcement still skips."""
     from litellm.caching.dual_cache import DualCache
     from litellm.proxy._types import LiteLLM_BudgetTable, LiteLLM_TeamMembership
     from litellm.proxy.utils import ProxyLogging
