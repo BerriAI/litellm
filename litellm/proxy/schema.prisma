@@ -1322,7 +1322,6 @@ model LiteLLM_WorkflowRun {
   messages LiteLLM_WorkflowMessage[]
 
   @@index([workflow_type, status])
-  @@index([session_id])
   @@index([created_at])
 }
 
@@ -1355,7 +1354,7 @@ model LiteLLM_WorkflowMessage {
   message_id      String   @id @default(uuid())
   run_id          String
   role            String
-  content         String
+  content         String   @db.Text
   sequence_number Int
   session_id      String?
   created_at      DateTime @default(now())
