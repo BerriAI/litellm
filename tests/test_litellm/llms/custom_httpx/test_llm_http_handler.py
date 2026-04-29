@@ -320,3 +320,140 @@ async def test_async_anthropic_messages_handler_header_priority():
         assert captured_headers["X-Forwarded-Only"] == "keep"
         assert captured_headers["X-Extra-Only"] == "also-keep"
         assert captured_headers["X-Provider-Only"] == "keep-this-too"
+
+
+# Per-request `timeout` is plumbed through the /v1/messages chain
+# (async handler -> retry helper -> httpx post), matching /chat/completions.
+
+
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.asyncio
+async def test_async_anthropic_messages_handler_forwards_timeout_to_retry_helper(
+    stream,
+):
+    """`async_anthropic_messages_handler` must forward `timeout` to
+    `_async_post_anthropic_messages_with_http_error_retry` for both
+    streaming and non-streaming calls."""
+    handler = BaseLLMHTTPHandler()
+
+    mock_config = Mock()
+    mock_config.validate_anthropic_messages_environment = Mock(
+        return_value=({"x-api-key": "test-key"}, "https://api.anthropic.com")
+    )
+    mock_config.transform_anthropic_messages_request = Mock(
+        return_value={"model": "claude-sonnet-4-20250514", "messages": []}
+    )
+    mock_config.get_complete_url = Mock(
+        return_value="https://api.anthropic.com/v1/messages"
+    )
+    mock_config.sign_request = Mock(return_value=({}, b"{}"))
+
+    mock_logging_obj = Mock()
+    mock_logging_obj.update_environment_variables = Mock()
+    mock_logging_obj.update_from_kwargs = Mock()
+    mock_logging_obj.pre_call = Mock()
+    mock_logging_obj.model_call_details = {}
+    mock_logging_obj.stream = False
+
+    with patch.object(
+        handler,
+        "_async_post_anthropic_messages_with_http_error_retry",
+        new_callable=AsyncMock,
+    ) as mock_retry, patch(
+        "litellm.litellm_core_utils.get_provider_specific_headers.ProviderSpecificHeaderUtils.get_provider_specific_headers",
+        return_value=None,
+    ):
+        try:
+            await handler.async_anthropic_messages_handler(
+                model="claude-sonnet-4-20250514",
+                messages=[{"role": "user", "content": "hi"}],
+                anthropic_messages_provider_config=mock_config,
+                anthropic_messages_optional_request_params={},
+                custom_llm_provider="anthropic",
+                litellm_params=GenericLiteLLMParams(),
+                logging_obj=mock_logging_obj,
+                stream=stream,
+                timeout=0.5,
+                kwargs={},
+            )
+        except Exception:
+            # Downstream response transformation may fail under mocks; we
+            # only care about what reached the retry helper.
+            pass
+
+    mock_retry.assert_awaited_once()
+    assert mock_retry.await_args.kwargs["timeout"] == 0.5
+    assert mock_retry.await_args.kwargs["stream"] is stream
+
+
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.asyncio
+async def test_async_post_anthropic_messages_forwards_timeout_to_httpx_post(stream):
+    """`_async_post_anthropic_messages_with_http_error_retry` must forward
+    `timeout` to `async_httpx_client.post` for both streaming and
+    non-streaming requests (router resolves `stream_timeout` vs `timeout`
+    upstream into a single value)."""
+    handler = BaseLLMHTTPHandler()
+
+    mock_response = Mock(status_code=200)
+    mock_response.raise_for_status = Mock(return_value=None)
+
+    mock_client = AsyncMock()
+    mock_client.post = AsyncMock(return_value=mock_response)
+
+    mock_provider_config = Mock()
+    mock_provider_config.max_retry_on_anthropic_messages_http_error = 1
+
+    await handler._async_post_anthropic_messages_with_http_error_retry(
+        async_httpx_client=mock_client,
+        request_url="https://api.anthropic.com/v1/messages",
+        headers={},
+        signed_json_body=None,
+        request_body={"model": "claude-sonnet-4-20250514", "messages": []},
+        stream=stream,
+        logging_obj=Mock(),
+        provider_config=mock_provider_config,
+        litellm_params=GenericLiteLLMParams(),
+        api_key=None,
+        model="claude-sonnet-4-20250514",
+        timeout=0.5,
+    )
+
+    mock_client.post.assert_awaited_once()
+    assert mock_client.post.await_args.kwargs["timeout"] == 0.5
+    assert mock_client.post.await_args.kwargs["stream"] is stream
+
+
+@pytest.mark.asyncio
+async def test_async_post_anthropic_messages_defaults_timeout_to_none_when_unset():
+    """When no `timeout` is supplied, the retry helper must call
+    `async_httpx_client.post(timeout=None)` so AsyncHTTPHandler can fall
+    back to its own default — preserves pre-patch behavior for callers
+    that do not opt into a per-request timeout."""
+    handler = BaseLLMHTTPHandler()
+
+    mock_response = Mock(status_code=200)
+    mock_response.raise_for_status = Mock(return_value=None)
+
+    mock_client = AsyncMock()
+    mock_client.post = AsyncMock(return_value=mock_response)
+
+    mock_provider_config = Mock()
+    mock_provider_config.max_retry_on_anthropic_messages_http_error = 1
+
+    await handler._async_post_anthropic_messages_with_http_error_retry(
+        async_httpx_client=mock_client,
+        request_url="https://api.anthropic.com/v1/messages",
+        headers={},
+        signed_json_body=None,
+        request_body={"model": "claude-sonnet-4-20250514", "messages": []},
+        stream=False,
+        logging_obj=Mock(),
+        provider_config=mock_provider_config,
+        litellm_params=GenericLiteLLMParams(),
+        api_key=None,
+        model="claude-sonnet-4-20250514",
+    )
+
+    mock_client.post.assert_awaited_once()
+    assert mock_client.post.await_args.kwargs["timeout"] is None
