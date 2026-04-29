@@ -4,7 +4,8 @@ from typing import Any, Dict, List, Literal, Optional
 from pydantic import BaseModel, Field
 
 ScheduleKind = Literal["interval", "cron", "once"]
-TaskStatus = Literal["pending", "fired", "expired", "cancelled"]
+TaskStatus = Literal["pending", "fired", "expired", "cancelled", "failed"]
+ReportResult = Literal["success", "error"]
 
 
 class CreateScheduledTaskRequest(BaseModel):
@@ -62,9 +63,18 @@ class ScheduledTaskResponse(BaseModel):
 
     status: str
     last_fired_at: Optional[datetime]
+    consecutive_errors: int = 0
+    last_error: Optional[str] = None
 
     created_at: datetime
     updated_at: datetime
+
+
+class ReportTaskResultRequest(BaseModel):
+    """Agent reports the outcome of one dispatch attempt."""
+
+    result: ReportResult
+    reason: Optional[str] = None
 
 
 class DueTaskResponse(BaseModel):

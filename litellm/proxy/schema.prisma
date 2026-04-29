@@ -1321,6 +1321,8 @@ model LiteLLM_ScheduledTaskTable {
 
   status               String    @default("pending")
   last_fired_at        DateTime?
+  consecutive_errors   Int       @default(0)
+  last_error           String?
 
   created_at           DateTime  @default(now())
   updated_at           DateTime  @updatedAt

@@ -25,6 +25,7 @@ from litellm.proxy.scheduled_tasks.types import (
     DueTaskResponse,
     DueTasksResponse,
     ListScheduledTasksResponse,
+    ReportTaskResultRequest,
     ScheduledTaskResponse,
     UpdateScheduledTaskRequest,
 )
@@ -66,6 +67,8 @@ def _row_to_response(row) -> ScheduledTaskResponse:
         fire_once=row.fire_once,
         status=row.status,
         last_fired_at=row.last_fired_at,
+        consecutive_errors=getattr(row, "consecutive_errors", 0) or 0,
+        last_error=getattr(row, "last_error", None),
         created_at=row.created_at,
         updated_at=row.updated_at,
     )
@@ -314,6 +317,39 @@ async def cancel_scheduled_task(
         prisma_client,
         task_id=task_id,
         owner_token=owner_token,
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="task not found")
+    return _row_to_response(row)
+
+
+@router.post(
+    "/v1/tasks/{task_id}/report",
+    tags=["scheduled tasks"],
+    response_model=ScheduledTaskResponse,
+)
+async def report_task_result(
+    task_id: str,
+    data: ReportTaskResultRequest,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Agent reports outcome of one dispatch attempt.
+
+    success → resets the consecutive-error counter.
+    error   → increments it. On the Nth consecutive error
+              (store.MAX_CONSECUTIVE_ERRORS), status flips to 'failed' and
+              /due stops returning the task. Caller's next list() shows it
+              as failed with last_error set.
+    """
+    owner_token = _require_token(user_api_key_dict)
+    prisma_client = _get_prisma_client()
+    row = await store.report_task_result(
+        prisma_client,
+        task_id=task_id,
+        owner_token=owner_token,
+        result=data.result,
+        reason=data.reason,
     )
     if row is None:
         raise HTTPException(status_code=404, detail="task not found")

@@ -19,6 +19,8 @@ CREATE TABLE "LiteLLM_ScheduledTaskTable" (
     "fire_once" BOOLEAN NOT NULL DEFAULT true,
     "status" TEXT NOT NULL DEFAULT 'pending',
     "last_fired_at" TIMESTAMP(3),
+    "consecutive_errors" INTEGER NOT NULL DEFAULT 0,
+    "last_error" TEXT,
     "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updated_at" TIMESTAMP(3) NOT NULL,
 
@@ -54,7 +56,7 @@ ALTER TABLE "LiteLLM_ScheduledTaskTable"
     CHECK (schedule_kind IN ('interval','cron','once'));
 ALTER TABLE "LiteLLM_ScheduledTaskTable"
     ADD CONSTRAINT "LiteLLM_ScheduledTaskTable_status_check"
-    CHECK (status IN ('pending','fired','expired','cancelled'));
+    CHECK (status IN ('pending','fired','expired','cancelled','failed'));
 ALTER TABLE "LiteLLM_ScheduledTaskTable"
     ADD CONSTRAINT "LiteLLM_ScheduledTaskTable_action_prompt_check"
     CHECK (action <> 'check' OR check_prompt IS NOT NULL);

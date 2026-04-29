@@ -53,6 +53,8 @@ def _make_row(**kwargs) -> MagicMock:
         "fire_once": True,
         "status": "pending",
         "last_fired_at": None,
+        "consecutive_errors": 0,
+        "last_error": None,
         "created_at": now,
         "updated_at": now,
     }
@@ -119,6 +121,29 @@ class _FakeScheduledTaskTable:
     ) -> List[MagicMock]:
         _ = order
         return self._filter(where)
+
+    async def update_many(self, where: Dict[str, Any], data: Dict[str, Any]) -> int:
+        # Minimal Prisma-style filter: support {"lte": <dt>} for expires_at.
+        count = 0
+        for r in self.rows:
+            ok = True
+            for k, v in where.items():
+                if isinstance(v, dict):
+                    actual = getattr(r, k, None)
+                    if "lte" in v:
+                        if actual is None or actual > v["lte"]:
+                            ok = False
+                            break
+                else:
+                    if getattr(r, k, None) != v:
+                        ok = False
+                        break
+            if not ok:
+                continue
+            for k, v in data.items():
+                setattr(r, k, v)
+            count += 1
+        return count
 
     async def update(self, where: Dict[str, Any], data: Dict[str, Any]) -> MagicMock:
         for r in self.rows:
@@ -578,3 +603,97 @@ class TestDue:
         with _patch_prisma(self.prisma):
             r = self.client.get("/v1/tasks/due")
         assert len(r.json()["tasks"]) == 0
+
+
+class TestReport:
+    def setup_method(self):
+        self.prisma = _make_prisma()
+        self.client = _make_app(self.prisma)
+
+    def _seed(self, **kwargs):
+        defaults: Dict[str, Any] = {
+            "task_id": "rep-1",
+            "status": "pending",
+        }
+        defaults.update(kwargs)
+        self.prisma.db.litellm_scheduledtasktable.rows.append(_make_row(**defaults))
+
+    def test_success_clears_counter(self):
+        self._seed(consecutive_errors=2, last_error="prev")
+        with _patch_prisma(self.prisma):
+            r = self.client.post(
+                "/v1/tasks/rep-1/report",
+                json={"result": "success"},
+            )
+        assert r.status_code == 200
+        body = r.json()
+        assert body["consecutive_errors"] == 0
+        assert body["last_error"] is None
+
+    def test_first_error_bumps_counter_no_flip(self):
+        self._seed()
+        with _patch_prisma(self.prisma):
+            r = self.client.post(
+                "/v1/tasks/rep-1/report",
+                json={"result": "error", "reason": "boom"},
+            )
+        assert r.status_code == 200
+        body = r.json()
+        assert body["consecutive_errors"] == 1
+        assert body["last_error"] == "boom"
+        assert body["status"] == "pending"
+
+    def test_third_error_flips_to_failed(self):
+        self._seed(consecutive_errors=2)
+        with _patch_prisma(self.prisma):
+            r = self.client.post(
+                "/v1/tasks/rep-1/report",
+                json={"result": "error", "reason": "still broken"},
+            )
+        assert r.status_code == 200
+        body = r.json()
+        assert body["consecutive_errors"] == 3
+        assert body["status"] == "failed"
+        assert body["last_error"] == "still broken"
+
+    def test_report_foreign_404(self):
+        self.prisma.db.litellm_scheduledtasktable.rows.append(
+            _make_row(task_id="foreign-1", owner_token="sk-other")
+        )
+        with _patch_prisma(self.prisma):
+            r = self.client.post(
+                "/v1/tasks/foreign-1/report",
+                json={"result": "error"},
+            )
+        assert r.status_code == 404
+
+    def test_failed_task_not_returned_by_due(self):
+        self._seed(
+            status="failed",
+            next_run_at=_now() - timedelta(seconds=10),
+        )
+        with _patch_prisma(self.prisma):
+            r = self.client.get("/v1/tasks/due")
+        assert r.json()["tasks"] == []
+
+
+class TestLazyExpiry:
+    def setup_method(self):
+        self.prisma = _make_prisma()
+        self.client = _make_app(self.prisma)
+
+    def test_list_flips_expired_pending_rows(self):
+        self.prisma.db.litellm_scheduledtasktable.rows.append(
+            _make_row(
+                task_id="exp-1",
+                status="pending",
+                next_run_at=_now() + timedelta(hours=1),  # not yet due
+                expires_at=_now() - timedelta(seconds=1),  # already expired
+            )
+        )
+        with _patch_prisma(self.prisma):
+            r = self.client.get("/v1/tasks?include_terminal=true")
+        assert r.status_code == 200
+        body = r.json()
+        statuses = {t["task_id"]: t["status"] for t in body["tasks"]}
+        assert statuses["exp-1"] == "expired"

@@ -49,7 +49,8 @@ UPDATABLE_FIELDS = frozenset(
 JSON_FIELDS = frozenset({"action_args", "metadata"})
 
 MAX_ACTIVE_TASKS_PER_KEY = 10
-TERMINAL_STATUSES = ("fired", "expired", "cancelled")
+MAX_CONSECUTIVE_ERRORS = 3
+TERMINAL_STATUSES = ("fired", "expired", "cancelled", "failed")
 
 
 async def count_active_for_owner(prisma_client: Any, owner_token: str) -> int:
@@ -101,12 +102,32 @@ async def create_task(
     return await prisma_client.db.litellm_scheduledtasktable.create(data=data)
 
 
+async def sweep_expired_for_owner(prisma_client: Any, owner_token: str) -> int:
+    """
+    Lazy expiry: flip pending rows past expires_at to 'expired' before any
+    read returns them. Without this, a task that never fires after its
+    expires_at sits in 'pending' until the next claim that happens to scan
+    it — which may be never if no other rows are ever due.
+
+    Returns count of rows flipped.
+    """
+    return await prisma_client.db.litellm_scheduledtasktable.update_many(
+        where={
+            "owner_token": owner_token,
+            "status": "pending",
+            "expires_at": {"lte": datetime.now(timezone.utc)},
+        },
+        data={"status": "expired"},
+    )
+
+
 async def list_tasks_for_owner(
     prisma_client: Any,
     *,
     owner_token: str,
     include_terminal: bool,
 ) -> List[Any]:
+    await sweep_expired_for_owner(prisma_client, owner_token)
     where: Dict[str, Any] = {"owner_token": owner_token}
     if not include_terminal:
         where["status"] = "pending"
@@ -122,8 +143,52 @@ async def get_task_for_owner(
     task_id: str,
     owner_token: str,
 ) -> Optional[Any]:
+    await sweep_expired_for_owner(prisma_client, owner_token)
     return await prisma_client.db.litellm_scheduledtasktable.find_first(
         where={"task_id": task_id, "owner_token": owner_token},
+    )
+
+
+async def report_task_result(
+    prisma_client: Any,
+    *,
+    task_id: str,
+    owner_token: str,
+    result: str,
+    reason: Optional[str],
+) -> Optional[Any]:
+    """
+    Agent reports outcome of one dispatch attempt.
+
+    success → reset consecutive_errors, clear last_error.
+    error   → bump consecutive_errors. If >= MAX_CONSECUTIVE_ERRORS, flip
+              status to 'failed' so /due stops re-emitting it.
+
+    Scoped by (task_id, owner_token). Returns updated row, or None if not
+    found / not owned.
+    """
+    existing = await prisma_client.db.litellm_scheduledtasktable.find_first(
+        where={"task_id": task_id, "owner_token": owner_token},
+    )
+    if existing is None:
+        return None
+
+    if result == "success":
+        return await prisma_client.db.litellm_scheduledtasktable.update(
+            where={"task_id": task_id},
+            data={"consecutive_errors": 0, "last_error": None},
+        )
+
+    new_count = (existing.consecutive_errors or 0) + 1
+    update: Dict[str, Any] = {
+        "consecutive_errors": new_count,
+        "last_error": reason,
+    }
+    if new_count >= MAX_CONSECUTIVE_ERRORS and existing.status == "pending":
+        update["status"] = "failed"
+    return await prisma_client.db.litellm_scheduledtasktable.update(
+        where={"task_id": task_id},
+        data=update,
     )
 
 
