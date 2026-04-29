@@ -1485,11 +1485,8 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
 
             # Only cache when the key is a real team_id (non-team keys must not use key=None).
             if valid_token.team_id is not None and _team_obj is not None:
-                # Match get_team_object / spend counters: "team_id:{id}". Serialize for Redis
-                # (json.dumps) — same as _cache_team_object in auth_checks.
-                team_cache_key = f"team_id:{valid_token.team_id}"
                 await user_api_key_cache.async_set_cache(
-                    key=team_cache_key,
+                    key=valid_token.team_id,
                     value=_team_obj,
                     model_type=LiteLLM_TeamTableCachedObj,
                 )  # save team table in cache - used for tpm/rpm limiting - tpm_rpm_limiter.py
