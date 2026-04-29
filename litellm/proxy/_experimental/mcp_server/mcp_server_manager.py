@@ -109,6 +109,12 @@ if not _separator_probe.is_valid:
         SEP_986_URL,
     )
 
+_AZURE_ENTRA_HOSTS = {
+    "login.microsoftonline.com",  # Global
+    "login.microsoftonline.us",  # US Government
+    "login.chinacloudapi.cn",  # China
+}
+
 
 def _warn_on_server_name_fields(
     *,
@@ -1503,11 +1509,28 @@ class MCPServerManager:
             client = get_async_httpx_client(llm_provider=httpxSpecialProvider.MCP)
             response = await client.get(server_url)
             response.raise_for_status()
-            verbose_logger.warning(
-                "MCP OAuth discovery unexpectedly succeeded for %s; server did not challenge",
-                server_url,
+            (
+                authorization_servers,
+                resource_scopes,
+            ) = await self._attempt_well_known_discovery(server_url)
+            metadata = await self._fetch_authorization_server_metadata(
+                authorization_servers
             )
-            raise RuntimeError("OAuth discovery must not succeed without a challenge")
+            if (
+                metadata is None
+                and not resource_scopes
+                and authorization_servers
+                and response.status_code == 200
+            ):
+                verbose_logger.warning(
+                    "MCP OAuth discovery for %s received 200 OK without RFC 9728 challenge and no discoverable authorization metadata.",
+                    server_url,
+                )
+            if metadata is None and resource_scopes:
+                return MCPOAuthMetadata(scopes=resource_scopes)
+            if metadata is not None and resource_scopes:
+                metadata.scopes = resource_scopes
+            return metadata
         except HTTPStatusError as exc:
             verbose_logger.debug(
                 "MCP OAuth discovery for %s received status error: %s",
@@ -1525,8 +1548,8 @@ class MCPServerManager:
                 header_value
             )
 
-            authorization_servers: List[str] = []
-            resource_scopes: Optional[List[str]] = None
+            authorization_servers = []
+            resource_scopes = None
             if resource_metadata_url:
                 (
                     authorization_servers,
@@ -1689,6 +1712,9 @@ class MCPServerManager:
                 f"{base}/.well-known/oauth-authorization-server/{path}"
             )
             candidate_urls.append(f"{base}/.well-known/openid-configuration/{path}")
+            candidate_urls.append(
+                f"{issuer_url.rstrip('/')}/.well-known/openid-configuration"
+            )
         candidate_urls.append(f"{base}/.well-known/oauth-authorization-server")
         candidate_urls.append(f"{base}/.well-known/openid-configuration")
         candidate_urls.append(issuer_url.rstrip("/"))
@@ -1728,7 +1754,28 @@ class MCPServerManager:
             ):
                 return metadata
 
-        return None
+        return self._build_azure_authorization_server_metadata(parsed)
+
+    @staticmethod
+    def _build_azure_authorization_server_metadata(
+        parsed_issuer_url: Any,
+    ) -> Optional[MCPOAuthMetadata]:
+        path_parts = [
+            part for part in (parsed_issuer_url.path or "").split("/") if part
+        ]
+        if (
+            parsed_issuer_url.netloc not in _AZURE_ENTRA_HOSTS
+            or len(path_parts) != 2
+            or path_parts[1] != "v2.0"
+        ):
+            return None
+
+        tenant = path_parts[0]
+        base = f"{parsed_issuer_url.scheme}://{parsed_issuer_url.netloc}/{tenant}"
+        return MCPOAuthMetadata(
+            authorization_url=f"{base}/oauth2/v2.0/authorize",
+            token_url=f"{base}/oauth2/v2.0/token",
+        )
 
     @staticmethod
     def _decrypt_credential_field(
