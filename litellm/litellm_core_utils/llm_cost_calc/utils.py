@@ -1,4 +1,3 @@
-# What is this?
 ## Helper utilities for cost_per_token()
 
 from typing import Literal, Optional, Tuple, TypedDict, cast
@@ -659,7 +658,7 @@ def generic_cost_per_token(  # noqa: PLR0915
 
     ## EDGE CASE - text tokens not set or includes cached tokens (double-counting)
     ## Some providers (like xAI) report text_tokens = prompt_tokens (including cached)
-    ## We detect this when: text_tokens + cached_tokens + other > prompt_tokens
+    ## We detect this when: text_tokens + cached_tokens + other > prompt_tokens.
     ## Ref: https://github.com/BerriAI/litellm/issues/19680, #14874, #14875
 
     cache_hit = prompt_tokens_details["cache_hit_tokens"]
@@ -669,25 +668,57 @@ def generic_cost_per_token(  # noqa: PLR0915
     image_tokens = prompt_tokens_details["image_tokens"]
 
     # Check for double-counting: sum of details > prompt_tokens means overlap
-    total_details = (
+    accounted_tokens = (
         text_tokens + cache_hit + audio_tokens + cache_creation + image_tokens
     )
-    has_double_counting = cache_hit > 0 and total_details > usage.prompt_tokens
+    has_double_counting = cache_hit > 0 and accounted_tokens > usage.prompt_tokens
 
-    if (
-        text_tokens == 0 and prompt_tokens_details["image_count"] == 0
-    ) or has_double_counting:
-        text_tokens = (
+    # Some models use alternative billing dimensions that account for prompt_tokens
+    # without being included in the per-token detail fields. When any of these are
+    # active, a gap between accounted_tokens and prompt_tokens is expected and must
+    # NOT be filled:
+    #   - character_count / video_length_seconds: the token gap between accounted_tokens
+    #     and prompt_tokens is already covered by character/video-second billing; filling
+    #     the gap into text_tokens would double-bill that content at the text rate.
+    #   - image_count: additive flat-rate billing; the image-URL tokens are already
+    #     reflected in prompt_tokens and billed separately via input_cost_per_image
+    has_non_token_alternative_billing = (
+        prompt_tokens_details["character_count"] > 0
+        or prompt_tokens_details["video_length_seconds"] > 0
+        or prompt_tokens_details["image_count"] > 0
+    )
+
+    if has_double_counting:
+        # Double-counting fix (xAI etc.): recalculate text_tokens from scratch
+        # Clamp to 0 to prevent negative cost when cache_hit exceeds prompt_tokens
+        text_tokens = max(
+            0,
             usage.prompt_tokens
             - cache_hit
             - audio_tokens
             - cache_creation
-            - image_tokens
+            - image_tokens,
         )
         # Clamp to zero: inconsistent streaming usage
         if text_tokens < 0:
             text_tokens = 0
         prompt_tokens_details["text_tokens"] = text_tokens
+    elif (
+        accounted_tokens < usage.prompt_tokens
+        and not has_non_token_alternative_billing
+    ):
+        # Unaccounted tokens fix: inline documents (PDF, DOCX, etc.) are counted
+        # in prompt_tokens by the provider but not broken out into any detail field.
+        # Add the gap to text_tokens so they are costed at input_cost_per_token.
+        #
+        # This handles both cases:
+        # 1. text_tokens=0 (provider didn't set it) - gap fills the entire remainder
+        # 2. text_tokens>0 but < total (mixed content like PDF+text) - gap fills remainder
+        # Skip filling when has_non_token_alternative_billing is True (character_count,
+        # video_length_seconds, or image_count are active) - those dimensions
+        # already account for the prompt_tokens gap.
+        unaccounted_tokens = usage.prompt_tokens - accounted_tokens
+        prompt_tokens_details["text_tokens"] += unaccounted_tokens
 
     (
         prompt_base_cost,
@@ -708,7 +739,6 @@ def generic_cost_per_token(  # noqa: PLR0915
         cache_creation_cost_above_1hr=cache_creation_cost_above_1hr,
         service_tier=service_tier,
     )
-
     ## CALCULATE OUTPUT COST
     text_tokens = 0
     audio_tokens = 0
