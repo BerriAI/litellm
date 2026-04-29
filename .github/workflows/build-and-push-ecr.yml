@@ -1,0 +1,115 @@
+name: Build and push ECR image
+
+on:
+  # Auto-build only when image content changes — docs/tests/CI don't affect the image
+  push:
+    branches: [main]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - 'tests/**'
+      - '.github/**'
+      - '.circleci/**'
+      - 'cookbook/**'
+      - 'ui/**/*.test.*'
+  # Manual trigger for re-runs or emergency rebuilds
+  workflow_dispatch:
+    inputs:
+      extra_tag:
+        description: 'Additional tag to apply (e.g. noma-v2-cache-cost-fix). Optional.'
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  id-token: write  # OIDC federation to AWS for ECR push
+
+jobs:
+  build:
+    name: Build and push force-multiplier/litellm
+    runs-on: ubuntu-latest
+    # Deploys to the shared prd-ai ECR — gate on the public shipping branch.
+    # Fork branches / PRs shouldn't push, only verified merges.
+    if: github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main'
+
+    env:
+      AWS_REGION: us-east-1
+      ECR_REGISTRY: 246511608293.dkr.ecr.us-east-1.amazonaws.com
+      ECR_REPO: force-multiplier/litellm
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Need full history for meaningful SHA
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Configure AWS credentials (OIDC federation)
+        # Assumes IAM role github-actions-arcadia-litellm-ecr in account 246511608293.
+        # Role trust is scoped to repo:arcadia/litellm:ref:refs/heads/main;
+        # inline policy grants only ECR push on force-multiplier/litellm.
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ECR_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      # The Dockerfile pulls from cgr.dev/chainguard/wolfi-base. Chainguard's
+      # public registry accepts anonymous pulls for the `latest` tag but
+      # rate-limits aggressively; use the org pull token for reliable builds.
+      - name: Login to Chainguard registry
+        uses: docker/login-action@v3
+        with:
+          registry: cgr.dev
+          username: ${{ secrets.CHAINGUARD_PULL_TOKEN_USERNAME }}
+          password: ${{ secrets.CHAINGUARD_PULL_TOKEN_SECRET }}
+
+      - name: Compute tags
+        id: tags
+        run: |
+          SHORT_SHA=$(git rev-parse --short=10 HEAD)
+          echo "short_sha=${SHORT_SHA}" >> "$GITHUB_OUTPUT"
+          # Only publish the commit SHA tag (immutable, traceable). Deliberately
+          # NOT moving `latest` or any named alias — consumers that depend on
+          # specific tags (e.g. the current `noma-v2-complete-fix` deployment)
+          # must not have them reinterpreted underfoot by subsequent builds.
+          # To cut a named release, run workflow_dispatch with extra_tag set.
+          TAG_LIST="${ECR_REGISTRY}/${ECR_REPO}:main-${SHORT_SHA}"
+          if [ -n "${{ inputs.extra_tag }}" ]; then
+            TAG_LIST="${TAG_LIST},${ECR_REGISTRY}/${ECR_REPO}:${{ inputs.extra_tag }}"
+          fi
+          echo "tags<<EOF" >> "$GITHUB_OUTPUT"
+          echo "${TAG_LIST}" | tr ',' '\n' >> "$GITHUB_OUTPUT"
+          echo "EOF" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: ${{ steps.tags.outputs.tags }}
+          # BuildKit cache via GitHub Actions cache backend — keeps subsequent
+          # builds under 2min once the first one populates the cache.
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          platforms: linux/amd64
+
+      - name: Summary
+        run: |
+          echo "## Image pushed to ECR" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Repo**: \`${ECR_REGISTRY}/${ECR_REPO}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Primary tag**: \`main-${{ steps.tags.outputs.short_sha }}\`" >> "$GITHUB_STEP_SUMMARY"
+          ${{ inputs.extra_tag && format('echo "- **Also tagged**: `{0}`" >> "$GITHUB_STEP_SUMMARY"', inputs.extra_tag) || 'echo "- No extra tag applied." >> "$GITHUB_STEP_SUMMARY"' }}
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "To deploy, update \`proxy.image.tag\` in" >> "$GITHUB_STEP_SUMMARY"
+          echo "\`cloud-config-infrastructures/prd/ai/litellm-internal/application.yaml\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "to \`main-${{ steps.tags.outputs.short_sha }}\`." >> "$GITHUB_STEP_SUMMARY"

@@ -49,6 +49,19 @@ class NomaV2GuardrailConfigModel(GuardrailConfigModel):
         default=None,
         description="When true, fail closed on Noma API errors.",
     )
+    streaming_end_of_stream_only: Optional[bool] = Field(
+        default=None,
+        description=(
+            "When true, run the guardrail only once at end of stream in post_call "
+            "streaming. When unset, defaults to False (run every Nth chunk)."
+        ),
+    )
+    streaming_sampling_rate: Optional[int] = Field(
+        default=None,
+        description=(
+            "Run the streaming guardrail on every Nth chunk. When unset, defaults to 5."
+        ),
+    )
 
     @staticmethod
     def ui_friendly_name() -> str:

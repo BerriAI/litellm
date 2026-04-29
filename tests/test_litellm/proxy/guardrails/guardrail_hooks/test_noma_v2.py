@@ -62,6 +62,79 @@ class TestNomaV2Configuration:
         assert guardrail.monitor_mode is False
         assert guardrail.block_failures is True
 
+    def test_init_does_not_set_streaming_attrs_when_unspecified(self):
+        """When YAML omits streaming knobs, the instance must NOT expose the
+        attributes, so UnifiedLLMGuardrails.async_post_call_streaming_iterator_hook's
+        getattr(..., <default>) fallback keeps the unified defaults as the source
+        of truth."""
+        with patch.dict(os.environ, {"NOMA_API_KEY": "test-api-key"}, clear=True):
+            guardrail = NomaV2Guardrail()
+
+        assert not hasattr(guardrail, "streaming_end_of_stream_only")
+        assert not hasattr(guardrail, "streaming_sampling_rate")
+        # getattr with the unified loop's defaults must fall through cleanly.
+        assert getattr(guardrail, "streaming_end_of_stream_only", False) is False
+        assert getattr(guardrail, "streaming_sampling_rate", 5) == 5
+
+    def test_init_stores_streaming_knobs_when_provided(self):
+        """When YAML sets the knobs, they must be stored on the instance under
+        the exact attribute names UnifiedLLMGuardrails reads."""
+        with patch.dict(os.environ, {"NOMA_API_KEY": "test-api-key"}, clear=True):
+            guardrail = NomaV2Guardrail(
+                streaming_end_of_stream_only=True,
+                streaming_sampling_rate=1,
+            )
+
+        assert guardrail.streaming_end_of_stream_only is True
+        assert guardrail.streaming_sampling_rate == 1
+
+    def test_initializer_forwards_streaming_knobs_from_litellm_params(self):
+        """The initialize_guardrail_v2 entrypoint must forward the streaming
+        knobs from LitellmParams to NomaV2Guardrail when they are set, and skip
+        them (leaving defaults intact) when they are not."""
+        from types import SimpleNamespace
+
+        from litellm.proxy.guardrails.guardrail_hooks.noma import (
+            initialize_guardrail_v2,
+        )
+
+        guardrail_dict = {"guardrail_name": "test-noma-v2-guardrail"}
+
+        def _params(**overrides):
+            base = dict(
+                api_key="test-api-key",
+                api_base="https://api.test.noma.security/",
+                application_id="test-app",
+                monitor_mode=False,
+                block_failures=False,
+                mode="post_call",
+                default_on=True,
+            )
+            base.update(overrides)
+            return SimpleNamespace(**base)
+
+        # Case 1: knobs set via YAML -> should land on the instance.
+        with patch("litellm.logging_callback_manager.add_litellm_callback"):
+            cb = initialize_guardrail_v2(
+                litellm_params=_params(
+                    streaming_end_of_stream_only=True,
+                    streaming_sampling_rate=2,
+                ),
+                guardrail=guardrail_dict,
+            )
+        assert cb.streaming_end_of_stream_only is True
+        assert cb.streaming_sampling_rate == 2
+
+        # Case 2: knobs omitted -> instance must NOT have the attributes so
+        # unified defaults apply.
+        with patch("litellm.logging_callback_manager.add_litellm_callback"):
+            cb2 = initialize_guardrail_v2(
+                litellm_params=_params(),
+                guardrail=guardrail_dict,
+            )
+        assert not hasattr(cb2, "streaming_end_of_stream_only")
+        assert not hasattr(cb2, "streaming_sampling_rate")
+
     @pytest.mark.asyncio
     async def test_api_key_auth_path(self, noma_v2_guardrail):
         assert noma_v2_guardrail._get_authorization_header() == "Bearer test-api-key"
