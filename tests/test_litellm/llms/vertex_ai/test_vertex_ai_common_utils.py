@@ -16,6 +16,7 @@ from litellm.llms.vertex_ai.common_utils import (
     get_vertex_location_from_url,
     get_vertex_project_id_from_url,
     set_schema_property_ordering,
+    supports_response_json_schema,
 )
 
 
@@ -1444,3 +1445,36 @@ def test_add_object_type_does_not_add_type_when_anyof_present():
 
     # Verify type was not added (anyOf handles the type)
     assert "type" not in input_schema, "type should not be added when anyOf is present"
+
+
+class TestSupportsResponseJsonSchema:
+    """Test supports_response_json_schema correctly identifies Gemini 2.0+ models."""
+
+    @pytest.mark.parametrize(
+        "model",
+        [
+            "gemini-2.0-flash",
+            "gemini-2.5-flash",
+            "gemini-2.5-pro",
+            "gemini-3.1-flash-lite-preview",
+            "vertex_ai/gemini-3.1-flash-lite-preview",
+            "gemini-3-flash-preview",  # no dot after major version
+            "vertex_ai/gemini-3-flash-preview",
+            "gemini-4-ultra",  # future model
+        ],
+    )
+    def test_gemini_2_plus_returns_true(self, model):
+        assert supports_response_json_schema(model) is True
+
+    @pytest.mark.parametrize(
+        "model",
+        [
+            "gemini-1.5-flash",
+            "gemini-1.5-pro",
+            "vertex_ai/gemini-1.5-flash-001",
+            "chat-bison",
+            "text-bison",
+        ],
+    )
+    def test_older_models_return_false(self, model):
+        assert supports_response_json_schema(model) is False
