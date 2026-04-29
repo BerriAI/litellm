@@ -1249,6 +1249,8 @@ class AmazonConverseConfig(BaseConfig):
             additional_request_params
         )
 
+        additional_request_params.pop("client_metadata", None)
+
         return (
             inference_params,
             additional_request_params,
