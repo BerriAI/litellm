@@ -135,6 +135,36 @@ def test_prepare_mcp_server_headers_case_insensitive_extra_headers():
     assert extra_headers == {"Authorization": "Bearer token"}
 
 
+def test_prepare_local_mcp_request_extra_headers_case_insensitive():
+    try:
+        from litellm.proxy._experimental.mcp_server.server import (
+            _prepare_local_mcp_request_extra_headers,
+        )
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    server = MCPServer(
+        server_id="server-case",
+        name="server",
+        transport=MCPTransport.http,
+        extra_headers=["X-TOKEN", "X-API-Key"],
+    )
+
+    extra_headers = _prepare_local_mcp_request_extra_headers(
+        server=server,
+        raw_headers={
+            "x-token": "request-token",
+            "X-API-KEY": "request-api-key",
+            "x-litellm-api-key": "litellm-key",
+        },
+    )
+
+    assert extra_headers == {
+        "X-TOKEN": "request-token",
+        "X-API-Key": "request-api-key",
+    }
+
+
 @pytest.mark.asyncio
 async def test_get_prompts_from_mcp_servers_success():
     try:
