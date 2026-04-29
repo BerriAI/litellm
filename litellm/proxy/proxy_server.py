@@ -12339,7 +12339,13 @@ async def get_favicon():
 
     current_dir = os.path.dirname(os.path.abspath(__file__))
     default_favicon = os.path.join(current_dir, "_experimental", "out", "favicon.ico")
-    favicon_assets_dir = os.path.dirname(default_favicon)
+    favicon_default_dir = os.path.dirname(default_favicon)
+
+    # Admin-managed asset directory (parallels ``/get_image``). Custom
+    # favicons placed here remain readable post-fix.
+    is_non_root = os.getenv("LITELLM_NON_ROOT", "").lower() == "true"
+    default_assets_dir = "/var/lib/litellm/assets" if is_non_root else current_dir
+    assets_dir = os.getenv("LITELLM_ASSETS_PATH", default_assets_dir)
 
     favicon_url = os.getenv("LITELLM_FAVICON_URL", "")
 
@@ -12364,7 +12370,7 @@ async def get_favicon():
         # ``/get_favicon`` is unauthenticated. Validate any admin-configured
         # local path against an allowlist of asset roots — see ``/get_image``
         # for the LFI threat-model rationale.
-        allowed_local_roots = [favicon_assets_dir, current_dir]
+        allowed_local_roots = [assets_dir, favicon_default_dir, current_dir]
         safe_favicon = resolve_local_asset_path(favicon_url, allowed_local_roots)
         if safe_favicon is not None:
             return FileResponse(safe_favicon, media_type="image/x-icon")
