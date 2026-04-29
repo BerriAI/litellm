@@ -1783,6 +1783,10 @@ if TYPE_CHECKING:
     from .llms.sambanova.embedding.transformation import (
         SambaNovaEmbeddingConfig as SambaNovaEmbeddingConfig,
     )
+    from .llms.iointelligence.chat import IOIntelligenceConfig as IOIntelligenceConfig
+    from .llms.iointelligence.embedding.transformation import (
+        IOIntelligenceEmbeddingConfig as IOIntelligenceEmbeddingConfig,
+    )
     from .llms.fireworks_ai.chat.transformation import (
         FireworksAIConfig as FireworksAIConfig,
     )

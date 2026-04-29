@@ -8137,6 +8137,7 @@ class ProviderConfigManager:
                 False,
             ),
             LlmProviders.SAMBANOVA: (lambda: litellm.SambanovaConfig(), False),
+            LlmProviders.IO_INTELLIGENCE: (lambda: litellm.IOIntelligenceConfig(), False),
             LlmProviders.MARITALK: (lambda: litellm.MaritalkConfig(), False),
             LlmProviders.VLLM: (lambda: litellm.VLLMConfig(), False),
             LlmProviders.OLLAMA: (lambda: litellm.OllamaConfig(), False),
@@ -8305,6 +8306,8 @@ class ProviderConfigManager:
             return litellm.InfinityEmbeddingConfig()
         elif litellm.LlmProviders.SAMBANOVA == provider:
             return litellm.SambaNovaEmbeddingConfig()
+        elif litellm.LlmProviders.IO_INTELLIGENCE == provider:
+            return litellm.IOIntelligenceEmbeddingConfig()
         elif (
             litellm.LlmProviders.COHERE == provider
             or litellm.LlmProviders.COHERE_CHAT == provider
