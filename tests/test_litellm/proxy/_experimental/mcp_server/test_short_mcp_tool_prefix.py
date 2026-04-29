@@ -57,6 +57,20 @@ class TestShortPrefixHelpers:
         assert len(prefix) == SHORT_MCP_TOOL_PREFIX_LENGTH
         assert prefix.isalnum() and prefix.isascii()
 
+    def test_short_prefix_first_char_is_alphabetic(self):
+        """The first char must be [A-Za-z] so the prefix is a valid identifier
+        on every model API (some providers historically required the first
+        character of a function name to be alphabetic)."""
+        # Sweep many server_ids and rehash attempts to give us coverage of
+        # every position the high-order bits can land on.
+        for i in range(200):
+            for attempt in range(4):
+                prefix = compute_short_server_prefix(f"server-{i}", attempt=attempt)
+                assert prefix[0].isalpha(), (
+                    f"prefix {prefix!r} for server-{i} (attempt={attempt}) "
+                    f"starts with a non-alphabetic character"
+                )
+
     def test_short_prefix_is_deterministic(self):
         assert compute_short_server_prefix("abc") == compute_short_server_prefix("abc")
         assert compute_short_server_prefix("abc") != compute_short_server_prefix("abd")

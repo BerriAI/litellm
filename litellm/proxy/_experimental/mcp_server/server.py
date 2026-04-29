@@ -714,11 +714,6 @@ if MCP_AVAILABLE:
                         match_list = [
                             s.lower() for s in iter_known_server_prefixes(server) if s
                         ]
-                        # Always accept server_id even if it isn't part of the
-                        # current prefix form (iter_known_server_prefixes only
-                        # yields it when no other identifier exists).
-                        if server.server_id:
-                            match_list.append(server.server_id.lower())
 
                         if server_or_group.lower() in match_list:
                             filtered_server[server.server_id] = server
