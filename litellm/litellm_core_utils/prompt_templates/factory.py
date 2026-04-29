@@ -3977,6 +3977,15 @@ def _convert_to_bedrock_tool_call_result(
                     tool_result_content_blocks.append(
                         BedrockToolResultContentBlock(image=_block["image"])
                     )
+                elif "document" in _block:
+                    tool_result_content_blocks.append(
+                        BedrockToolResultContentBlock(document=_block["document"])
+                    )
+                else:
+                    verbose_logger.warning(
+                        f"Unsupported block type in tool result: {list(_block.keys())}. "
+                        "Only 'image' and 'document' blocks are supported in tool results."
+                    )
 
     message.get("name", "")
     id = str(message.get("tool_call_id", str(uuid.uuid4())))
