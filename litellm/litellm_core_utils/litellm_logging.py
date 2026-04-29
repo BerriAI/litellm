@@ -1467,6 +1467,8 @@ class Logging(LiteLLMLoggingBaseClass):
             LiteLLMRealtimeStreamLoggingObject,
             OpenAIModerationResponse,
             "SearchResponse",
+            dict,
+            list,
         ],
         cache_hit: Optional[bool] = None,
         litellm_model_name: Optional[str] = None,
@@ -1744,6 +1746,7 @@ class Logging(LiteLLMLoggingBaseClass):
         start_time,
         end_time,
     ):
+        """Resolve hidden params, compute response cost, and emit the standard logging payload."""
         hidden_params = getattr(logging_result, "_hidden_params", {})
         if hidden_params:
             if self.model_call_details.get("litellm_params") is not None:
@@ -1877,24 +1880,12 @@ class Logging(LiteLLMLoggingBaseClass):
             ):
                 if self._is_recognized_call_type_for_logging(
                     logging_result=logging_result
-                ):
+                ) or isinstance(logging_result, (dict, list)):
                     self._process_hidden_params_and_response_cost(
                         logging_result=logging_result,
                         start_time=start_time,
                         end_time=end_time,
                     )
-                elif isinstance(result, dict) or isinstance(result, list):
-                    self.model_call_details["standard_logging_object"] = (
-                        self._build_standard_logging_payload(
-                            result, start_time, end_time
-                        )
-                    )
-                    if (
-                        standard_logging_payload := self.model_call_details.get(
-                            "standard_logging_object"
-                        )
-                    ) is not None:
-                        emit_standard_logging_payload(standard_logging_payload)
             elif standard_logging_object is not None:
                 self.model_call_details["standard_logging_object"] = (
                     standard_logging_object
