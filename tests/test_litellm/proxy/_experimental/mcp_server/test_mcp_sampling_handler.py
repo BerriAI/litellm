@@ -78,7 +78,9 @@ def _make_params(
     return params
 
 
-def _make_completion_response(content="Hello!", model="gpt-4o-mini", finish_reason="stop", tool_calls=None):
+def _make_completion_response(
+    content="Hello!", model="gpt-4o-mini", finish_reason="stop", tool_calls=None
+):
     """Create a mock litellm completion response."""
     response = MagicMock()
     choice = MagicMock()
@@ -155,7 +157,9 @@ class TestConvertMCPMessagesToOpenAI:
         )
 
         user_msg = _make_sampling_message("user", _make_text_content("Hi"))
-        assistant_msg = _make_sampling_message("assistant", _make_text_content("Hello!"))
+        assistant_msg = _make_sampling_message(
+            "assistant", _make_text_content("Hello!")
+        )
         result = _convert_mcp_messages_to_openai([user_msg, assistant_msg])
         assert len(result) == 2
         assert result[0]["role"] == "user"
@@ -173,7 +177,9 @@ class TestResolveModel:
             _resolve_model_from_preferences,
         )
 
-        result = _resolve_model_from_preferences(None, default_model="claude-3.5-sonnet")
+        result = _resolve_model_from_preferences(
+            None, default_model="claude-3.5-sonnet"
+        )
         assert result == "claude-3.5-sonnet"
 
     @patch("litellm.proxy.proxy_server.llm_router", None)
@@ -309,7 +315,9 @@ class TestConvertOpenAIResponseToMCPResult:
             _convert_openai_response_to_mcp_result,
         )
 
-        response = _make_completion_response(content="Partial...", finish_reason="length")
+        response = _make_completion_response(
+            content="Partial...", finish_reason="length"
+        )
         result = _convert_openai_response_to_mcp_result(response, "gpt-4o")
         assert result.stopReason == "maxTokens"
 
@@ -322,7 +330,9 @@ class TestConvertOpenAIResponseToMCPResult:
         tc.id = "call_123"
         tc.function.name = "get_weather"
         tc.function.arguments = '{"city": "NYC"}'
-        response = _make_completion_response(content=None, finish_reason="tool_calls", tool_calls=[tc])
+        response = _make_completion_response(
+            content=None, finish_reason="tool_calls", tool_calls=[tc]
+        )
         result = _convert_openai_response_to_mcp_result(response, "gpt-4o")
         assert result.stopReason == "toolUse"
         assert isinstance(result.content, list)

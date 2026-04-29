@@ -28,19 +28,25 @@ async def main():
 
         return ElicitResult(action="accept", content=user_response)
 
-    async with sse_client("http://localhost:4000/mcp/sse", headers={"Authorization": "Bearer sk-1234"}) as (
+    async with sse_client(
+        "http://localhost:4000/mcp/sse", headers={"Authorization": "Bearer sk-1234"}
+    ) as (
         read_stream,
         write_stream,
     ):
         logger.info("SSE connection established.")
-        async with ClientSession(read_stream, write_stream, elicitation_callback=my_elicitation_callback) as session:
+        async with ClientSession(
+            read_stream, write_stream, elicitation_callback=my_elicitation_callback
+        ) as session:
             await session.initialize()
             logger.info("Initialized!")
 
             logger.info("\n--- Testing Complex Pipeline (Elicitation + Sampling) ---")
             logger.info("Calling 'test_server-test_complex_pipeline'...")
             try:
-                result = await session.call_tool("test_server-test_complex_pipeline", arguments={})
+                result = await session.call_tool(
+                    "test_server-test_complex_pipeline", arguments={}
+                )
                 logger.info("\nFINAL TOOL RESULT:")
                 logger.info("==================")
                 logger.info(result.content[0].text)

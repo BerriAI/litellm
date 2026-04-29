@@ -31,7 +31,11 @@ async def test_auth_context_persistence():
 @pytest.mark.asyncio
 async def test_get_or_extract_auth_context_fallback():
     """Test get_or_extract_auth_context fallback to server object."""
-    from litellm.proxy._experimental.mcp_server.server import server, MCPAuthenticatedUser, auth_context_var
+    from litellm.proxy._experimental.mcp_server.server import (
+        server,
+        MCPAuthenticatedUser,
+        auth_context_var,
+    )
 
     auth_data = UserAPIKeyAuth(api_key="fallback-key")
     auth_user = MCPAuthenticatedUser(user_api_key_auth=auth_data)
@@ -61,7 +65,9 @@ async def test_extract_mcp_auth_context_with_key():
 
     mock_user_auth = UserAPIKeyAuth(api_key="sk-123")
 
-    with patch("litellm.proxy.auth.auth_checks.common_checks", new_callable=AsyncMock) as mock_auth:
+    with patch(
+        "litellm.proxy.auth.auth_checks.common_checks", new_callable=AsyncMock
+    ) as mock_auth:
         mock_auth.return_value = mock_user_auth
 
         result = await extract_mcp_auth_context(mock_scope, "/mcp/sse")

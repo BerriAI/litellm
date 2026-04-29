@@ -155,7 +155,11 @@ def _convert_single_content(content: Any) -> Dict[str, Any]:
         # ToolResultContent → represents tool results
         tool_content = getattr(content, "content", [])
         if isinstance(tool_content, list) and tool_content:
-            texts = [getattr(c, "text", str(c)) for c in tool_content if getattr(c, "type", None) == "text"]
+            texts = [
+                getattr(c, "text", str(c))
+                for c in tool_content
+                if getattr(c, "type", None) == "text"
+            ]
             return {"type": "text", "text": "\n".join(texts) if texts else ""}
         return {"type": "text", "text": str(tool_content)}
     # Fallback: treat as text
@@ -242,7 +246,9 @@ def _extract_tool_calls(content: Any) -> List[Dict[str, Any]]:
                     "type": "function",
                     "function": {
                         "name": getattr(item, "name", ""),
-                        "arguments": json.dumps(getattr(item, "input", {}), default=str),
+                        "arguments": json.dumps(
+                            getattr(item, "input", {}), default=str
+                        ),
                     },
                 }
             )
@@ -269,7 +275,11 @@ def _extract_tool_results(content: Any) -> List[Dict[str, Any]]:
             # Extract text from nested content
             nested_content = getattr(item, "content", [])
             if isinstance(nested_content, list):
-                text_parts = [getattr(c, "text", str(c)) for c in nested_content if getattr(c, "type", None) == "text"]
+                text_parts = [
+                    getattr(c, "text", str(c))
+                    for c in nested_content
+                    if getattr(c, "type", None) == "text"
+                ]
                 result_text = "\n".join(text_parts) if text_parts else ""
             else:
                 result_text = str(nested_content)

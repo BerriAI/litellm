@@ -22,7 +22,10 @@ def test_convert_image_content():
     mock_image.mimeType = "image/jpeg"
 
     result = _convert_single_content(mock_image)
-    assert result == {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,base64data"}}
+    assert result == {
+        "type": "image_url",
+        "image_url": {"url": "data:image/jpeg;base64,base64data"},
+    }
 
 
 def test_convert_audio_content():
@@ -32,7 +35,10 @@ def test_convert_audio_content():
     mock_audio.mimeType = "audio/mp3"
 
     result = _convert_single_content(mock_audio)
-    assert result == {"type": "input_audio", "input_audio": {"data": "audiobase64", "format": "mp3"}}
+    assert result == {
+        "type": "input_audio",
+        "input_audio": {"data": "audiobase64", "format": "mp3"},
+    }
 
 
 def test_convert_list_content():
@@ -64,7 +70,10 @@ def test_resolve_model_from_hints():
     original_router = proxy_server.llm_router
     try:
         proxy_server.llm_router = MagicMock()
-        proxy_server.llm_router.get_model_names.return_value = ["gpt-4", "claude-3-5-sonnet"]
+        proxy_server.llm_router.get_model_names.return_value = [
+            "gpt-4",
+            "claude-3-5-sonnet",
+        ]
         result = _resolve_model_from_preferences(mock_prefs)
         assert result == "claude-3-5-sonnet"
     finally:
