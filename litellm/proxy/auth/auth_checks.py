@@ -2981,28 +2981,28 @@ def _can_object_call_search_tool(
 ) -> Literal[True]:
     """
     Check if an object (key/team/project) can access a specific search tool.
-    
+
     Similar to _can_object_call_model but for search tools.
-    
+
     Args:
         search_tool_name: The search tool being requested
         allowed_search_tools: List of allowed search tool names for this object
         object_type: Type of object for error messaging
-        
+
     Returns:
         True if access is allowed
-        
+
     Raises:
         ProxyException if access is denied
     """
     # Empty list means all search tools are allowed
     if not allowed_search_tools:
         return True
-        
+
     # Check if the search tool is in the allowlist
     if search_tool_name in allowed_search_tools:
         return True
-        
+
     # Access denied
     raise ProxyException(
         message=f"{object_type.capitalize()} not allowed to access search tool: {search_tool_name}. "
@@ -3019,16 +3019,16 @@ async def can_key_call_search_tool(
 ) -> Literal[True]:
     """
     Check if a key can access a specific search tool.
-    
+
     Similar to can_key_call_model but for search tools.
-    
+
     Args:
         search_tool_name: The search tool being requested
         valid_token: The authenticated key
-        
+
     Returns:
         True if access is allowed
-        
+
     Raises:
         ProxyException if access is denied
     """
@@ -3047,22 +3047,22 @@ async def can_team_call_search_tool(
 ) -> Literal[True]:
     """
     Check if a team can access a specific search tool.
-    
+
     Similar to can_team_access_model but for search tools.
-    
+
     Args:
         search_tool_name: The search tool being requested
         team_object: The team object
-        
+
     Returns:
         True if access is allowed
-        
+
     Raises:
         ProxyException if access is denied
     """
     if team_object is None:
         return True
-        
+
     return _can_object_call_search_tool(
         search_tool_name=search_tool_name,
         allowed_search_tools=_search_tool_names_from_object_permission(
