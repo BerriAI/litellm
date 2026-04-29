@@ -143,6 +143,61 @@ async def test_handle_authentication_error_budget_exceeded():
 
 
 @pytest.mark.asyncio
+async def test_proxy_exception_message_logged_correctly():
+    """
+    Regression test for #25361 — ProxyException.message must appear in the log,
+    not an empty string from str(ProxyException(...)).
+    """
+    handler = UserAPIKeyAuthExceptionHandler()
+
+    proxy_exc = ProxyException(
+        message="Model not allowed for this key",
+        type=ProxyErrorTypes.auth_error,
+        param=None,
+        code=401,
+    )
+
+    # Confirm the root cause: str() on ProxyException is empty
+    assert str(proxy_exc) == ""
+    # And that .message holds the real text
+    assert proxy_exc.message == "Model not allowed for this key"
+
+    mock_request = MagicMock()
+    mock_request_data = {"model": "gpt-4o"}
+    mock_route = "/v1/chat/completions"
+    mock_span = None
+    mock_api_key = "sk-test"
+
+    with patch(
+        "litellm.proxy.proxy_server.general_settings",
+        {"allow_requests_on_db_unavailable": False},
+    ), patch(
+        "litellm.proxy.proxy_server.proxy_logging_obj.post_call_failure_hook",
+        new_callable=AsyncMock,
+        return_value=None,
+    ), patch.object(
+        verbose_proxy_logger, "exception"
+    ) as mock_log:
+        with pytest.raises(ProxyException):
+            await handler._handle_authentication_error(
+                proxy_exc,
+                mock_request,
+                mock_request_data,
+                mock_route,
+                mock_span,
+                mock_api_key,
+            )
+
+        assert mock_log.called
+        log_message = mock_log.call_args[0][0]
+        assert "Model not allowed for this key" in log_message, (
+            f"Expected exception message in log, got: {log_message!r}"
+        )
+        assert "/v1/chat/completions" in log_message
+        assert "gpt-4o" in log_message
+
+
+@pytest.mark.asyncio
 async def test_route_passed_to_post_call_failure_hook():
     """
     This route is used by proxy track_cost_callback's async_post_call_failure_hook to check if the route is an LLM route

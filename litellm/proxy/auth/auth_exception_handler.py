@@ -93,11 +93,17 @@ class UserAPIKeyAuthExceptionHandler:
                 use_x_forwarded_for=general_settings.get("use_x_forwarded_for", False),
             )
             verbose_proxy_logger.exception(
-                "litellm.proxy.proxy_server.user_api_key_auth(): Exception occured - {}\nRequester IP Address:{}".format(
-                    str(e),
+                "litellm.proxy.proxy_server.user_api_key_auth(): Exception occured - {}\nRequester IP Address:{}\nRoute: {}\nModel: {}".format(
+                    getattr(e, "message", str(e)),
                     requester_ip,
+                    route,
+                    request_data.get("model", "unknown"),
                 ),
-                extra={"requester_ip": requester_ip},
+                extra={
+                    "requester_ip": requester_ip,
+                    "route": route,
+                    "model": request_data.get("model"),
+                },
             )
 
             # Log this exception to OTEL, Datadog etc
@@ -127,7 +133,7 @@ class UserAPIKeyAuthExceptionHandler:
                 )
             if isinstance(e, HTTPException):
                 raise ProxyException(
-                    message=getattr(e, "detail", f"Authentication Error({str(e)})"),
+                    message=getattr(e, "detail", f"Authentication Error({getattr(e, 'message', str(e))})"),
                     type=ProxyErrorTypes.auth_error,
                     param=getattr(e, "param", "None"),
                     code=getattr(e, "status_code", status.HTTP_401_UNAUTHORIZED),
@@ -135,7 +141,7 @@ class UserAPIKeyAuthExceptionHandler:
             elif isinstance(e, ProxyException):
                 raise e
             raise ProxyException(
-                message="Authentication Error, " + str(e),
+                message="Authentication Error, " + getattr(e, "message", str(e)),
                 type=ProxyErrorTypes.auth_error,
                 param=getattr(e, "param", "None"),
                 code=status.HTTP_401_UNAUTHORIZED,
