@@ -275,9 +275,14 @@ if current then
     current_count = tonumber(current)
 end
 
--- Always decrement (even if counter is 0 or negative)
+-- Only decrement if counter is positive (avoid negative values)
+-- Negative counters don't make sense for "parallel requests"
 local previous_count = current_count
-current_count = redis.call('DECR', counter_key)
+if current_count > 0 then
+    current_count = redis.call('DECR', counter_key)
+else
+    current_count = 0
+end
 
 -- Note: We intentionally do NOT refresh TTL here.
 -- Refreshing TTL on decrement causes counter drift - each completed request
