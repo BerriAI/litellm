@@ -108,18 +108,16 @@ async def test_add_team_callbacks_rejects_unauthorized_caller(
 async def test_disable_team_logging_rejects_unauthorized_caller(
     patched_prisma, unauthorized_caller
 ):
-    # The endpoint catches HTTPException and re-wraps it as ProxyException
-    # with the original status code preserved.
-    from litellm.proxy._types import ProxyException
-
-    with pytest.raises((HTTPException, ProxyException)) as exc:
+    # The HTTPException from the access guard now propagates directly
+    # — the catch-all that previously re-wrapped (and logged at error
+    # level) was narrowed so legitimate 4xx don't pollute alerting.
+    with pytest.raises(HTTPException) as exc:
         await disable_team_logging(
             http_request=Mock(spec=Request),
             team_id="team-victim",
             user_api_key_dict=unauthorized_caller,
         )
-    code = getattr(exc.value, "status_code", None) or getattr(exc.value, "code", None)
-    assert int(code) == 403
+    assert exc.value.status_code == 403
     patched_prisma.db.litellm_teamtable.update.assert_not_called()
 
 
@@ -127,20 +125,13 @@ async def test_disable_team_logging_rejects_unauthorized_caller(
 async def test_get_team_callbacks_rejects_unauthorized_caller(
     patched_prisma, unauthorized_caller
 ):
-    # The endpoint catches generic Exception and re-wraps as ProxyException;
-    # an HTTPException raised by the access guard surfaces as a 403
-    # ProxyException — both shapes are acceptable failure modes, what
-    # matters is that the caller does NOT receive the team's callback data.
-    from litellm.proxy._types import ProxyException
-
-    with pytest.raises((HTTPException, ProxyException)) as exc:
+    with pytest.raises(HTTPException) as exc:
         await get_team_callbacks(
             http_request=Mock(spec=Request),
             team_id="team-victim",
             user_api_key_dict=unauthorized_caller,
         )
-    code = getattr(exc.value, "status_code", None) or getattr(exc.value, "code", None)
-    assert int(code) == 403
+    assert exc.value.status_code == 403
 
 
 @pytest.mark.asyncio

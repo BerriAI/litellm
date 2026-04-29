@@ -251,20 +251,18 @@ async def disable_team_logging(
             },
         }
 
+    except HTTPException:
+        # Legitimate 4xx (e.g. 403 from the access guard, 404 for an
+        # unknown team). Re-raise without the error-level log noise that
+        # the catch-all branch below would produce.
+        raise
+    except ProxyException:
+        raise
     except Exception as e:
         verbose_proxy_logger.error(
             f"litellm.proxy.proxy_server.disable_team_logging(): Exception occurred - {str(e)}"
         )
         verbose_proxy_logger.debug(traceback.format_exc())
-        if isinstance(e, HTTPException):
-            raise ProxyException(
-                message=getattr(e, "detail", f"Internal Server Error({str(e)})"),
-                type=ProxyErrorTypes.internal_server_error.value,
-                param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR),
-            )
-        elif isinstance(e, ProxyException):
-            raise e
         raise ProxyException(
             message="Internal Server Error, " + str(e),
             type=ProxyErrorTypes.internal_server_error.value,
@@ -349,6 +347,13 @@ async def get_team_callbacks(
             },
         }
 
+    except HTTPException:
+        # Legitimate 4xx (e.g. 403 from the access guard) — re-raise
+        # without the error-level log noise that the catch-all below
+        # would produce.
+        raise
+    except ProxyException:
+        raise
     except Exception as e:
         verbose_proxy_logger.error(
             "litellm.proxy.proxy_server.get_team_callbacks(): Exception occurred - {}".format(
