@@ -1,16 +1,6 @@
 import React, { useState, useEffect } from "react";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeaderCell,
-  TableRow,
-  Card,
-  Button,
-  Text,
-  Badge,
-} from "@tremor/react";
+import { Table, TableBody, TableCell, TableHead, TableHeaderCell, TableRow } from "@tremor/react";
+import { Button, Card, Tag } from "antd";
 import { availableTeamListCall, teamMemberAddCall } from "../networking";
 import NotificationsManager from "../molecules/notifications_manager";
 
@@ -79,32 +69,24 @@ const AvailableTeamsPanel: React.FC<AvailableTeamsProps> = ({ accessToken, userI
         <TableBody>
           {availableTeams.map((team) => (
             <TableRow key={team.team_id}>
+              <TableCell>{team.team_alias}</TableCell>
+              <TableCell>{team.description || "No description available"}</TableCell>
+              <TableCell>{team.members_with_roles.length} members</TableCell>
               <TableCell>
-                <Text>{team.team_alias}</Text>
-              </TableCell>
-              <TableCell>
-                <Text>{team.description || "No description available"}</Text>
-              </TableCell>
-              <TableCell>
-                <Text>{team.members_with_roles.length} members</Text>
-              </TableCell>
-              <TableCell>
-                <div className="flex flex-col">
+                <div className="flex flex-col items-start">
                   {!team.models || team.models.length === 0 ? (
-                    <Badge size="xs" color="red">
-                      <Text>All Proxy Models</Text>
-                    </Badge>
+                    <Tag color="red">All Proxy Models</Tag>
                   ) : (
                     team.models.map((model, index) => (
-                      <Badge key={index} size="xs" className="mb-1" color="blue">
-                        <Text>{model.length > 30 ? `${model.slice(0, 30)}...` : model}</Text>
-                      </Badge>
+                      <Tag key={index} color="blue" className="mb-1">
+                        {model.length > 30 ? `${model.slice(0, 30)}...` : model}
+                      </Tag>
                     ))
                   )}
                 </div>
               </TableCell>
               <TableCell>
-                <Button size="xs" variant="secondary" onClick={() => handleJoinTeam(team.team_id)}>
+                <Button size="small" type="primary" ghost onClick={() => handleJoinTeam(team.team_id)}>
                   Join Team
                 </Button>
               </TableCell>
@@ -113,16 +95,16 @@ const AvailableTeamsPanel: React.FC<AvailableTeamsProps> = ({ accessToken, userI
           {availableTeams.length === 0 && (
             <TableRow>
               <TableCell colSpan={5} className="text-center">
-                <Text>No available teams to join. See how to set available teams{" "}
-                  <a
-                    href="https://docs.litellm.ai/docs/proxy/self_serve#all-settings-for-self-serve--sso-flow"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-blue-500 hover:text-blue-700 underline"
-                  >
-                    here
-                  </a>.
-                </Text>
+                No available teams to join. See how to set available teams{" "}
+                <a
+                  href="https://docs.litellm.ai/docs/proxy/self_serve#all-settings-for-self-serve--sso-flow"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-blue-500 hover:text-blue-700 underline"
+                >
+                  here
+                </a>
+                .
               </TableCell>
             </TableRow>
           )}
