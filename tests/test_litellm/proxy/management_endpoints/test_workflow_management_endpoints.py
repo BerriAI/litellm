@@ -9,12 +9,16 @@ from datetime import datetime, timezone
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 sys.path.insert(0, os.path.abspath("../../.."))
 
-from litellm.proxy.management_endpoints.workflow_management_endpoints import router
+from litellm.proxy.management_endpoints.workflow_management_endpoints import (
+    _create_with_sequence,
+    router,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -115,9 +119,7 @@ class TestCreateWorkflowRun:
     @patch("litellm.proxy.proxy_server.prisma_client")
     def test_create_returns_run(self, mock_pc):
         mock_pc.db = self._prisma.db
-        self._prisma.db.litellm_workflowrun.create = AsyncMock(
-            return_value=_make_run()
-        )
+        self._prisma.db.litellm_workflowrun.create = AsyncMock(return_value=_make_run())
 
         resp = self.client.post(
             "/v1/workflows/runs",
@@ -270,9 +272,7 @@ class TestAppendWorkflowEvent:
         self._prisma.db.litellm_workflowevent.create = AsyncMock(
             return_value=_make_event(event_type="custom.event")
         )
-        self._prisma.db.litellm_workflowrun.update = AsyncMock(
-            return_value=_make_run()
-        )
+        self._prisma.db.litellm_workflowrun.update = AsyncMock(return_value=_make_run())
 
         resp = self.client.post(
             "/v1/workflows/runs/run-1/events",
@@ -292,9 +292,7 @@ class TestAppendWorkflowEvent:
         self._prisma.db.litellm_workflowevent.create = AsyncMock(
             return_value=_make_event(sequence_number=5)
         )
-        self._prisma.db.litellm_workflowrun.update = AsyncMock(
-            return_value=_make_run()
-        )
+        self._prisma.db.litellm_workflowrun.update = AsyncMock(return_value=_make_run())
 
         self.client.post(
             "/v1/workflows/runs/run-1/events",
@@ -331,7 +329,10 @@ class TestWorkflowMessages:
     def test_list_messages_ordered(self, mock_pc):
         mock_pc.db = self._prisma.db
         self._prisma.db.litellm_workflowmessage.find_many = AsyncMock(
-            return_value=[_make_message(sequence_number=0), _make_message(sequence_number=1, role="assistant")]
+            return_value=[
+                _make_message(sequence_number=0),
+                _make_message(sequence_number=1, role="assistant"),
+            ]
         )
 
         resp = self.client.get("/v1/workflows/runs/run-1/messages")
@@ -341,3 +342,46 @@ class TestWorkflowMessages:
         # verify find_many was called with ascending order
         call_kwargs = self._prisma.db.litellm_workflowmessage.find_many.call_args[1]
         assert call_kwargs["order"] == {"sequence_number": "asc"}
+
+
+# ---------------------------------------------------------------------------
+# Concurrency: _create_with_sequence retry on unique-constraint collision
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_create_with_sequence_retries_on_unique_constraint():
+    """_create_with_sequence must retry when a concurrent writer grabs the same sequence number."""
+    mock_pc = MagicMock()
+    created_event = _make_event(sequence_number=1)
+
+    call_count = 0
+
+    async def _find_many_side_effect(**kwargs):
+        return [_make_event(sequence_number=0)]
+
+    async def _create_side_effect(*, data):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            # First attempt: simulate unique constraint violation (concurrent writer won)
+            raise Exception(
+                "Unique constraint failed on fields: (`run_id`,`sequence_number`)"
+            )
+        # Second attempt: succeeds
+        return created_event
+
+    mock_pc.db.litellm_workflowevent.find_many = AsyncMock(
+        side_effect=_find_many_side_effect
+    )
+    mock_pc.db.litellm_workflowevent.create = AsyncMock(side_effect=_create_side_effect)
+
+    result = await _create_with_sequence(
+        mock_pc,
+        "events",
+        "run-1",
+        {"run_id": "run-1", "event_type": "step.started", "step_name": "test"},
+    )
+
+    assert result is created_event
+    assert call_count == 2  # first attempt failed, second succeeded
