@@ -439,11 +439,12 @@ async def validate_key_search_tools_against_team(
 
     disallowed = set(requested) - set(team_tools)
     if disallowed:
+        team_id = team_obj.team_id if team_obj is not None else "unknown"
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail={
                 "error": (
-                    f"Key requests search tools not allowed by team '{team_obj.team_id}': "
+                    f"Key requests search tools not allowed by team '{team_id}': "
                     f"{sorted(disallowed)}. Team allows: {sorted(team_tools)}."
                 )
             },
