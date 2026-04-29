@@ -280,7 +280,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ accessToken, token, userRole, use
         const year = new Date().getFullYear();
         const monthIndex = new Date(`${month} 01 2024`).getMonth();
         const fullDate = new Date(year, monthIndex, parseInt(day));
-        return fullDate.toISOString().split("T")[0];
+        return formatDate(fullDate);
       }
     };
 
@@ -300,7 +300,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ accessToken, token, userRole, use
 
     // Iterate through each date in the range
     while (currentDate <= endDate) {
-      const dateStr = currentDate.toISOString().split("T")[0];
+      const dateStr = formatDate(currentDate);
 
       if (existingDates.has(dateStr)) {
         // Use existing data if we have it
