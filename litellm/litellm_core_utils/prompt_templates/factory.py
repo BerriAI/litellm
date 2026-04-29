@@ -899,6 +899,26 @@ def convert_to_anthropic_image_obj(
         else:
             media_type = media_type.replace("\\/", "/")
 
+        # Anthropic rejects requests where the declared media_type mismatches the actual
+        # image bytes. Auto-detect from magic bytes and override the declared type when needed.
+        try:
+            from litellm.litellm_core_utils.token_counter import get_image_type
+
+            image_bytes = base64.b64decode(base64_data[:128])
+            detected = get_image_type(image_bytes)
+            if detected is not None:
+                detected_mime = "image/{}".format(detected)
+                if detected_mime != media_type:
+                    verbose_logger.debug(
+                        "convert_to_anthropic_image_obj: declared media_type=%s does not match "
+                        "detected type=%s; using detected type.",
+                        media_type,
+                        detected_mime,
+                    )
+                    media_type = detected_mime
+        except Exception:
+            pass
+
         return GenericImageParsingChunk(
             type="base64",
             media_type=media_type,

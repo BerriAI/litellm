@@ -291,6 +291,68 @@ async def anthropic_messages(
     return response
 
 
+def _fix_image_media_types_in_messages(messages: List[Dict]) -> List[Dict]:
+    """
+    Walk Anthropic-native messages and correct any image source whose declared
+    media_type does not match the actual image bytes.
+
+    Anthropic rejects requests where declared media_type mismatches the bytes
+    (e.g. 'image/png' header on a JPEG payload).  This can happen when the
+    calling client mislabels images.  We detect the real format from magic
+    bytes and silently correct it.
+    """
+    import base64
+
+    from litellm import verbose_logger
+    from litellm.litellm_core_utils.token_counter import get_image_type
+
+    _MIME_MAP = {"jpeg": "image/jpeg", "png": "image/png", "gif": "image/gif", "webp": "image/webp"}
+
+    def _fix_source(source: dict) -> None:
+        if source.get("type") != "base64":
+            return
+        data = source.get("data", "")
+        if not data:
+            return
+        try:
+            raw = base64.b64decode(data[:128])
+            detected = get_image_type(raw)
+            if detected is None:
+                return
+            detected_mime = _MIME_MAP.get(detected, "image/" + detected)
+            declared = source.get("media_type", "")
+            if detected_mime != declared:
+                verbose_logger.debug(
+                    "_fix_image_media_types_in_messages: declared=%s detected=%s; correcting.",
+                    declared,
+                    detected_mime,
+                )
+                source["media_type"] = detected_mime
+        except Exception:
+            pass
+
+    for message in messages:
+        content = message.get("content")
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if not isinstance(block, dict):
+                continue
+            if block.get("type") == "image":
+                source = block.get("source")
+                if isinstance(source, dict):
+                    _fix_source(source)
+            elif block.get("type") == "tool_result":
+                inner = block.get("content")
+                if isinstance(inner, list):
+                    for inner_block in inner:
+                        if isinstance(inner_block, dict) and inner_block.get("type") == "image":
+                            source = inner_block.get("source")
+                            if isinstance(source, dict):
+                                _fix_source(source)
+    return messages
+
+
 def validate_anthropic_api_metadata(metadata: Optional[Dict] = None) -> Optional[Dict]:
     """
     Validate Anthropic API metadata - This is done to ensure only allowed `metadata` fields are passed to Anthropic API
@@ -336,6 +398,7 @@ def anthropic_messages_handler(
     """
     from litellm.types.utils import LlmProviders
 
+    messages = _fix_image_media_types_in_messages(messages)
     metadata = validate_anthropic_api_metadata(metadata)
 
     local_vars = locals()
