@@ -4717,7 +4717,7 @@ async def send_email(
     # Attach the body to the email
     email_message.attach(MIMEText(html, "html"))
 
-    smtp_use_ssl = os.getenv("SMTP_USE_SSL", "False") == "True"
+    smtp_use_ssl = os.getenv("SMTP_USE_SSL", "False").lower() == "true"
     use_ssl = smtp_use_ssl or smtp_port == 465
 
     try:

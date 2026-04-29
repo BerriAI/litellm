@@ -81,6 +81,31 @@ async def test_send_email_smtp_use_ssl_env_forces_ssl(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_send_email_smtp_use_ssl_env_lowercase(monkeypatch):
+    """SMTP_USE_SSL=true (lowercase) must also trigger SMTP_SSL."""
+    monkeypatch.setenv("SMTP_HOST", "smtp.example.com")
+    monkeypatch.setenv("SMTP_PORT", "2525")
+    monkeypatch.setenv("SMTP_USE_SSL", "true")
+    monkeypatch.setenv("SMTP_SENDER_EMAIL", "noreply@example.com")
+
+    mock_server = MagicMock()
+    mock_server.__enter__ = lambda s: s
+    mock_server.__exit__ = MagicMock(return_value=False)
+
+    with (
+        patch("smtplib.SMTP_SSL", return_value=mock_server) as mock_ssl,
+        patch("smtplib.SMTP") as mock_plain,
+    ):
+        await send_email(
+            receiver_email="user@example.com",
+            subject="Test",
+            html="<p>Hi</p>",
+        )
+        mock_ssl.assert_called_once_with(host="smtp.example.com", port=2525)
+        mock_plain.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_send_email_port_587_uses_starttls(monkeypatch):
     """Port 587 (default) must use SMTP + starttls — backwards compat regression guard."""
     monkeypatch.setenv("SMTP_HOST", "smtp.example.com")
