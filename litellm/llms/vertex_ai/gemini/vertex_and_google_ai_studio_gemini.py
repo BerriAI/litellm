@@ -1030,7 +1030,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 message=(
                     "`parallel_tool_calls=False` is not supported by Gemini when multiple tools are "
                     "provided. Specify a single tool, or set "
-                    "`parallel_tool_calls=True`. If you want to drop this param, set `litellm.drop_params = True` or pass in `(.., drop_params=True)` in the requst - https://docs.litellm.ai/docs/completion/drop_params"
+                    "`parallel_tool_calls=True`. If you want to drop this param, set `litellm.drop_params = True` or pass in `(.., drop_params=True)` in the request - https://docs.litellm.ai/docs/completion/drop_params"
                 ),
                 status_code=400,
             )
