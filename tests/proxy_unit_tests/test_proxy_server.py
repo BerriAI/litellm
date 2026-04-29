@@ -2818,6 +2818,74 @@ async def test_update_config_success_callback_normalization():
     assert "langfuse" in callbacks
 
 
+@pytest.mark.asyncio
+async def test_update_config_merges_existing_router_settings():
+    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy._types import ConfigYAML, LitellmUserRoles, UserAPIKeyAuth
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.jsonify_object = lambda value: value
+
+    existing_router_settings = {
+        "fallbacks": [{"gpt-4": ["gpt-4o-mini"]}],
+        "routing_strategy": "simple-shuffle",
+    }
+    mock_db_record = MagicMock()
+    mock_db_record.param_value = existing_router_settings
+
+    mock_prisma_client.db.litellm_config.find_first = AsyncMock(
+        return_value=mock_db_record
+    )
+    mock_prisma_client.db.litellm_config.upsert = AsyncMock()
+
+    class MockProxyConfig:
+        def __init__(self):
+            self.saved_config = None
+
+        async def get_config(self):
+            return {}
+
+        async def save_config(self, new_config: dict):
+            self.saved_config = new_config
+
+        async def add_deployment(self, prisma_client=None, proxy_logging_obj=None):
+            return None
+
+    admin_user = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-test"
+    )
+    config_update = ConfigYAML(
+        router_settings={"routing_strategy": "latency-based-routing"}
+    )
+
+    with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client), patch(
+        "litellm.proxy.proxy_server.proxy_config", MockProxyConfig()
+    ), patch("litellm.proxy.proxy_server.store_model_in_db", True):
+        await proxy_server.update_config(config_update, user_api_key_dict=admin_user)
+
+    mock_prisma_client.db.litellm_config.find_first.assert_awaited_once_with(
+        where={"param_name": "router_settings"}
+    )
+    mock_prisma_client.db.litellm_config.upsert.assert_awaited_once_with(
+        where={"param_name": "router_settings"},
+        data={
+            "create": {
+                "param_name": "router_settings",
+                "param_value": {
+                    "fallbacks": [{"gpt-4": ["gpt-4o-mini"]}],
+                    "routing_strategy": "latency-based-routing",
+                },
+            },
+            "update": {
+                "param_value": {
+                    "fallbacks": [{"gpt-4": ["gpt-4o-mini"]}],
+                    "routing_strategy": "latency-based-routing",
+                }
+            },
+        },
+    )
+
+
 @pytest.mark.parametrize(
     "data",
     [

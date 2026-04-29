@@ -12685,11 +12685,24 @@ async def update_config(  # noqa: PLR0915
         updated_settings = prisma_client.jsonify_object(updated_settings)
         for k, v in updated_settings.items():
             if k == "router_settings":
+                # Merge with existing DB value instead of full replacement,
+                # so that keys not included in the update (e.g. fallbacks)
+                # are preserved.
+                existing_record = (
+                    await prisma_client.db.litellm_config.find_first(
+                        where={"param_name": k}
+                    )
+                )
+                merged_value = v
+                if existing_record is not None and isinstance(
+                    existing_record.param_value, dict
+                ):
+                    merged_value = {**existing_record.param_value, **v}
                 await prisma_client.db.litellm_config.upsert(
                     where={"param_name": k},
                     data={
-                        "create": {"param_name": k, "param_value": v},
-                        "update": {"param_value": v},
+                        "create": {"param_name": k, "param_value": merged_value},
+                        "update": {"param_value": merged_value},
                     },
                 )
                 await invalidate_config_param(k)
