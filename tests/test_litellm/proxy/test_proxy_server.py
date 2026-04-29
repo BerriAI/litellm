@@ -4047,9 +4047,12 @@ async def test_get_image_custom_local_logo_bypasses_cache(monkeypatch):
 
     from litellm.proxy.proxy_server import get_image
 
+    # Use a path inside the allowlisted ``LITELLM_ASSETS_PATH`` — the
+    # path-containment guard added for GHSA-3pcp-536p-ghjc rejects any
+    # local UI_LOGO_PATH outside the allowed asset roots.
+    monkeypatch.setenv("LITELLM_ASSETS_PATH", "/app")
     monkeypatch.setenv("UI_LOGO_PATH", "/app/custom_logo.jpg")
     monkeypatch.delenv("LITELLM_NON_ROOT", raising=False)
-    monkeypatch.delenv("LITELLM_ASSETS_PATH", raising=False)
 
     calls_to_file_response = []
 
@@ -4062,6 +4065,16 @@ async def test_get_image_custom_local_logo_bypasses_cache(monkeypatch):
         patch("litellm.proxy.proxy_server.os.access", return_value=True),
         patch(
             "litellm.proxy.proxy_server.FileResponse", side_effect=fake_file_response
+        ),
+        # The path-containment helper calls ``os.path.realpath`` and
+        # ``os.path.isfile`` — make them play along for the test path.
+        patch(
+            "litellm.proxy.common_utils.static_asset_utils.os.path.realpath",
+            side_effect=lambda p: p,
+        ),
+        patch(
+            "litellm.proxy.common_utils.static_asset_utils.os.path.isfile",
+            return_value=True,
         ),
     ):
         await get_image()
