@@ -41,7 +41,6 @@ from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.passthrough import BasePassthroughUtils
 from litellm.proxy._types import (
-    CommonProxyErrors,
     ConfigFieldInfo,
     ConfigFieldUpdate,
     LiteLLMRoutes,
