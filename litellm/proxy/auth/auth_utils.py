@@ -307,13 +307,20 @@ def get_request_route(request: Request) -> str:
     remove base url from path if set e.g. `/genai/chat/completions` -> `/chat/completions
     """
     try:
-        if hasattr(request, "base_url") and request.url.path.startswith(
-            request.base_url.path
-        ):
-            # remove base_url from path
-            return request.url.path[len(request.base_url.path) - 1 :]
-        else:
-            return request.url.path
+        request_path = request.url.path or "/"
+        base_path = request.base_url.path if hasattr(request, "base_url") else ""
+
+        # If a base path prefix exists (e.g. "/genai"), strip it so route checks
+        # can match canonical proxy routes like "/chat/completions" and "/".
+        if base_path and base_path != "/" and request_path.startswith(base_path):
+            stripped_path = request_path[len(base_path) :]
+            if stripped_path == "":
+                return "/"
+            if not stripped_path.startswith("/"):
+                return f"/{stripped_path}"
+            return stripped_path
+
+        return request_path
     except Exception as e:
         verbose_proxy_logger.debug(
             f"error on get_request_route: {str(e)}, defaulting to request.url.path={request.url.path}"

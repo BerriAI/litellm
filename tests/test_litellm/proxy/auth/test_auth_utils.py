@@ -10,6 +10,7 @@ from litellm.proxy.auth.auth_utils import (
     _get_customer_id_from_standard_headers,
     check_complete_credentials,
     get_end_user_id_from_request_body,
+    get_request_route,
     get_model_from_request,
     get_key_model_rpm_limit,
     get_key_model_tpm_limit,
@@ -253,6 +254,22 @@ def test_get_model_from_request_supports_google_model_names_with_slashes():
 def test_get_model_from_request_vertex_passthrough_still_works():
     route = "/vertex_ai/v1/projects/p/locations/l/publishers/google/models/gemini-1.5-pro:generateContent"
     assert get_model_from_request(request_data={}, route=route) == "gemini-1.5-pro"
+
+
+def test_get_request_route_strips_base_path_prefix():
+    request = MagicMock()
+    request.url.path = "/genai/chat/completions"
+    request.base_url.path = "/genai"
+
+    assert get_request_route(request) == "/chat/completions"
+
+
+def test_get_request_route_returns_root_for_exact_base_path():
+    request = MagicMock()
+    request.url.path = "/genai"
+    request.base_url.path = "/genai"
+
+    assert get_request_route(request) == "/"
 
 
 def test_get_customer_user_header_returns_none_when_no_customer_role():
