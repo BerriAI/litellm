@@ -127,10 +127,10 @@ class MilvusVectorStoreConfig(BaseVectorStoreConfig):
         vector_store_id: str,
         query: Union[str, List[str]],
         vector_store_search_optional_params: VectorStoreSearchOptionalRequestParams,
-        extra_body: Optional[Dict[str, Any]],
         api_base: str,
         litellm_logging_obj: LiteLLMLoggingObj,
         litellm_params: dict,
+        extra_body: Optional[Dict[str, Any]] = None,
     ) -> Tuple[str, Dict[str, Any]]:
         """
         Transform search request for Azure AI Search API
