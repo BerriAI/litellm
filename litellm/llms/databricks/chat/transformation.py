@@ -176,6 +176,8 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
             custom_endpoint=False,
             headers=headers,
             custom_user_agent=custom_user_agent,
+            client_id=litellm_params.get("client_id"),
+            client_secret=litellm_params.get("client_secret"),
         )
         # Ensure Content-Type header is set
         headers["Content-Type"] = "application/json"
