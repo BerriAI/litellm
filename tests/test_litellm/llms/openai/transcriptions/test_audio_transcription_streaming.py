@@ -221,8 +221,8 @@ class TestProxyStreamCoercion:
         ],
     )
     def test_stream_coercion_logic(self, raw, expected):
-        # Mirror the inline coercion in proxy_server.audio_transcriptions
+        from litellm.proxy.proxy_server import _coerce_stream_form_field
+
         data = {"stream": raw}
-        if "stream" in data and isinstance(data["stream"], str):
-            data["stream"] = data["stream"].strip().lower() == "true"
+        _coerce_stream_form_field(data)
         assert data["stream"] is expected
