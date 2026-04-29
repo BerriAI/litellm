@@ -769,6 +769,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "uses_embed_content": {"type": "boolean"},
                 "supports_reasoning": {"type": "boolean"},
                 "supports_minimal_reasoning_effort": {"type": "boolean"},
+                "supports_low_reasoning_effort": {"type": "boolean"},
                 "supports_none_reasoning_effort": {"type": "boolean"},
                 "supports_xhigh_reasoning_effort": {"type": "boolean"},
                 "supports_max_reasoning_effort": {"type": "boolean"},
@@ -812,6 +813,10 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                         "search_context_size_high": {"type": "number"},
                     },
                     "additionalProperties": False,
+                },
+                "web_search_billing_unit": {
+                    "type": "string",
+                    "enum": ["per_prompt", "per_query"],
                 },
                 "citation_cost_per_token": {"type": "number"},
                 "supported_modalities": {
@@ -1174,7 +1179,7 @@ def test_get_model_info_shows_supports_computer_use():
     "model, custom_llm_provider",
     [
         ("gpt-3.5-turbo", "openai"),
-        ("anthropic.claude-3-7-sonnet-20250219-v1:0", "bedrock"),
+        ("anthropic.claude-sonnet-4-5-20250929-v1:0", "bedrock"),
         ("gemini-2.5-pro", "vertex_ai"),
     ],
 )
@@ -1320,7 +1325,7 @@ class TestProxyFunctionCalling:
             ),
             (
                 "litellm_proxy/bedrock-claude-3-opus",
-                "bedrock/anthropic.claude-3-7-sonnet-20250219-v1:0",
+                "bedrock/anthropic.claude-sonnet-4-5-20250929-v1:0",
                 False,
             ),
             (
@@ -1618,7 +1623,7 @@ class TestProxyFunctionCalling:
             ),
             (
                 "litellm_proxy/bedrock-claude-3-opus",
-                "bedrock/converse/anthropic.claude-3-7-sonnet-20250219-v1:0",
+                "bedrock/converse/anthropic.claude-sonnet-4-5-20250929-v1:0",
                 False,
                 "Bedrock Claude 3 Opus via Converse API",
             ),
@@ -1705,7 +1710,7 @@ class TestProxyFunctionCalling:
             ),
             (
                 "litellm_proxy/staging-claude-opus",
-                "bedrock/converse/anthropic.claude-3-7-sonnet-20250219-v1:0",
+                "bedrock/converse/anthropic.claude-sonnet-4-5-20250929-v1:0",
                 False,
                 "Staging Claude Opus",
             ),
@@ -1717,7 +1722,7 @@ class TestProxyFunctionCalling:
             ),
             (
                 "litellm_proxy/high-performance-claude",
-                "bedrock/converse/anthropic.claude-3-7-sonnet-20250219-v1:0",
+                "bedrock/converse/anthropic.claude-sonnet-4-5-20250929-v1:0",
                 False,
                 "High-performance Claude deployment",
             ),
@@ -1855,7 +1860,7 @@ class TestProxyFunctionCalling:
         bedrock_models = [
             "bedrock/converse/anthropic.claude-3-haiku-20240307-v1:0",
             "bedrock/converse/anthropic.claude-3-sonnet-20240229-v1:0",
-            "bedrock/converse/anthropic.claude-3-7-sonnet-20250219-v1:0",
+            "bedrock/converse/anthropic.claude-sonnet-4-5-20250929-v1:0",
         ]
 
         for model in bedrock_models:
@@ -1887,7 +1892,7 @@ class TestProxyFunctionCalling:
             ),
             (
                 "litellm_proxy/bedrock-claude-3-opus",
-                "bedrock/converse/anthropic.claude-3-7-sonnet-20250219-v1:0",
+                "bedrock/converse/anthropic.claude-sonnet-4-5-20250929-v1:0",
                 False,
                 "Bedrock Claude 3 Opus via Converse API",
             ),
@@ -1974,7 +1979,7 @@ class TestProxyFunctionCalling:
             ),
             (
                 "litellm_proxy/staging-claude-opus",
-                "bedrock/converse/anthropic.claude-3-7-sonnet-20250219-v1:0",
+                "bedrock/converse/anthropic.claude-sonnet-4-5-20250929-v1:0",
                 False,
                 "Staging Claude Opus",
             ),
@@ -1986,7 +1991,7 @@ class TestProxyFunctionCalling:
             ),
             (
                 "litellm_proxy/high-performance-claude",
-                "bedrock/converse/anthropic.claude-3-7-sonnet-20250219-v1:0",
+                "bedrock/converse/anthropic.claude-sonnet-4-5-20250929-v1:0",
                 False,
                 "High-performance Claude deployment",
             ),
@@ -2124,7 +2129,7 @@ class TestProxyFunctionCalling:
         bedrock_models = [
             "bedrock/converse/anthropic.claude-3-haiku-20240307-v1:0",
             "bedrock/converse/anthropic.claude-3-sonnet-20240229-v1:0",
-            "bedrock/converse/anthropic.claude-3-7-sonnet-20250219-v1:0",
+            "bedrock/converse/anthropic.claude-sonnet-4-5-20250929-v1:0",
         ]
 
         for model in bedrock_models:
@@ -2156,7 +2161,7 @@ class TestProxyFunctionCalling:
             ),
             (
                 "litellm_proxy/bedrock-claude-3-opus",
-                "bedrock/converse/anthropic.claude-3-7-sonnet-20250219-v1:0",
+                "bedrock/converse/anthropic.claude-sonnet-4-5-20250929-v1:0",
                 False,
                 "Bedrock Claude 3 Opus via Converse API",
             ),
@@ -2243,7 +2248,7 @@ class TestProxyFunctionCalling:
             ),
             (
                 "litellm_proxy/staging-claude-opus",
-                "bedrock/converse/anthropic.claude-3-7-sonnet-20250219-v1:0",
+                "bedrock/converse/anthropic.claude-sonnet-4-5-20250929-v1:0",
                 False,
                 "Staging Claude Opus",
             ),
@@ -2255,7 +2260,7 @@ class TestProxyFunctionCalling:
             ),
             (
                 "litellm_proxy/high-performance-claude",
-                "bedrock/converse/anthropic.claude-3-7-sonnet-20250219-v1:0",
+                "bedrock/converse/anthropic.claude-sonnet-4-5-20250929-v1:0",
                 False,
                 "High-performance Claude deployment",
             ),
@@ -2393,7 +2398,7 @@ class TestProxyFunctionCalling:
         bedrock_models = [
             "bedrock/converse/anthropic.claude-3-haiku-20240307-v1:0",
             "bedrock/converse/anthropic.claude-3-sonnet-20240229-v1:0",
-            "bedrock/converse/anthropic.claude-3-7-sonnet-20250219-v1:0",
+            "bedrock/converse/anthropic.claude-sonnet-4-5-20250929-v1:0",
         ]
 
         for model in bedrock_models:
@@ -2792,6 +2797,37 @@ def test_model_info_for_openrouter_kimi_k2_5():
     assert model_info["supports_tool_choice"] is True
 
     print("openrouter kimi-k2.5 model info", model_info)
+
+
+def test_gemini_embedding_2_ga_in_cost_map():
+    """GA gemini-embedding-2 entries align with preview multimodal unit pricing."""
+    import json
+    from pathlib import Path
+
+    json_path = Path(__file__).parents[2] / "model_prices_and_context_window.json"
+    with open(json_path) as f:
+        model_cost = json.load(f)
+
+    for key, provider in (
+        ("gemini/gemini-embedding-2", "gemini"),
+        ("vertex_ai/gemini-embedding-2", "vertex_ai"),
+        ("gemini-embedding-2", "vertex_ai-embedding-models"),
+    ):
+        info = model_cost.get(key)
+        assert (
+            info is not None
+        ), f"{key} missing from model_prices_and_context_window.json"
+        assert info["litellm_provider"] == provider
+        assert info.get("mode") == "embedding"
+        assert info.get("supports_multimodal") is True
+        assert info.get("input_cost_per_token") == 2e-07
+        assert info.get("input_cost_per_image") == 0.00012
+        assert info.get("input_cost_per_audio_per_second") == 0.00016
+        assert info.get("input_cost_per_video_per_second") == 0.00079
+        if provider in ("vertex_ai-embedding-models", "vertex_ai"):
+            assert info.get("uses_embed_content") is True, (
+                f"{key} must have uses_embed_content=true for correct Vertex AI routing"
+            )
 
 
 def test_gemini_lyria_3_preview_models_in_cost_map():

@@ -134,7 +134,7 @@ class TestBedrockAnthropicPromptCachingRegression:
         if "converse" in model_prefix:
             config = AmazonConverseConfig()
             result = config.transform_request(
-                model="us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+                model="us.anthropic.claude-sonnet-4-5-20250929-v1:0",
                 messages=messages,
                 optional_params={},
                 litellm_params={},
@@ -162,7 +162,7 @@ class TestBedrockAnthropicPromptCachingRegression:
         else:
             config = AmazonAnthropicClaudeConfig()
             result = config.transform_request(
-                model="us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+                model="us.anthropic.claude-sonnet-4-5-20250929-v1:0",
                 messages=messages,
                 optional_params={},
                 litellm_params={},
@@ -227,7 +227,7 @@ class TestBedrockAnthropicPromptCachingRegression:
         if "converse" in model_prefix:
             config = AmazonConverseConfig()
             result = config._transform_request_helper(
-                model="us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+                model="us.anthropic.claude-sonnet-4-5-20250929-v1:0",
                 system_content_blocks=[],
                 optional_params={},
                 messages=messages,
@@ -236,7 +236,7 @@ class TestBedrockAnthropicPromptCachingRegression:
         else:
             config = AmazonAnthropicClaudeConfig()
             result = config.transform_request(
-                model="us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+                model="us.anthropic.claude-sonnet-4-5-20250929-v1:0",
                 messages=messages,
                 optional_params={},
                 litellm_params={},
@@ -498,7 +498,7 @@ class TestBedrockAnthropicCombinedRegressions:
         if "converse" in model_prefix:
             config = AmazonConverseConfig()
             result = config._transform_request_helper(
-                model="us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+                model="us.anthropic.claude-sonnet-4-5-20250929-v1:0",
                 system_content_blocks=[],
                 optional_params={},
                 messages=messages,
@@ -518,7 +518,7 @@ class TestBedrockAnthropicCombinedRegressions:
         else:
             config = AmazonAnthropicClaudeConfig()
             result = config.transform_request(
-                model="us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+                model="us.anthropic.claude-sonnet-4-5-20250929-v1:0",
                 messages=messages,
                 optional_params={},
                 litellm_params={},

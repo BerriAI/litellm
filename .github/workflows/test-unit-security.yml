@@ -1,6 +1,8 @@
 name: "Unit Tests: Security"
 
-# Uses DATABASE_URL secret — only runs on trusted branches, not PRs.
+# Kept push-only (was previously required by DATABASE_URL secret scoping;
+# now the postgres credentials are ephemeral localhost values but the
+# push-trigger stays to match the proxy-db workflow cadence).
 on:
   push:
     branches: [main, "litellm_**"]
@@ -24,7 +26,3 @@ jobs:
       timeout-minutes: 20
       enable-postgres: true
       artifact-name: security
-    secrets:
-      DATABASE_URL: ${{ secrets.DATABASE_URL }}
-      POSTGRES_USER: ${{ secrets.POSTGRES_USER }}
-      POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}

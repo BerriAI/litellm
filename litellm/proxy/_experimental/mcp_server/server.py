@@ -1952,7 +1952,18 @@ if MCP_AVAILABLE:
         from litellm.proxy.proxy_server import prisma_client
 
         if prisma_client is None:
-            return
+            # Fail closed on DB unavailability: returning here previously
+            # bypassed the ownership check and let any proxy-authenticated
+            # caller invoke BYOK tools during outage windows.
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "error": "byok_auth_unavailable",
+                    "server_id": mcp_server.server_id,
+                    "server_name": mcp_server.server_name or mcp_server.name,
+                    "message": "BYOK credential check requires a database connection.",
+                },
+            )
 
         credential = await get_user_credential(
             prisma_client=prisma_client,

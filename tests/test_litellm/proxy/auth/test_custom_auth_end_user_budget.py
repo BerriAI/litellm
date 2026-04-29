@@ -10,10 +10,13 @@ from litellm.proxy._types import UserAPIKeyAuth
 
 @pytest.mark.asyncio
 async def test_custom_auth_run_post_custom_auth_checks_without_end_user_id():
-    # Test backwards compatibility — common_checks only runs when opt-in flag is set
+    # common_checks now runs in the user_api_key_auth wrapper via
+    # _run_centralized_common_checks, gated by
+    # custom_auth_run_common_checks for custom-auth deployments. The
+    # helper itself no longer calls common_checks.
     valid_token = UserAPIKeyAuth(token="test_token")
 
-    # Default: common_checks should NOT be called
+    # Default: common_checks should NOT be called inside the helper
     with patch(
         "litellm.proxy.auth.user_api_key_auth.common_checks", new_callable=AsyncMock
     ) as mock_common:
@@ -29,7 +32,8 @@ async def test_custom_auth_run_post_custom_auth_checks_without_end_user_id():
         assert getattr(result, "end_user_id", None) is None
         mock_common.assert_not_awaited()
 
-    # With opt-in flag: common_checks SHOULD be called
+    # With opt-in flag: still not from the helper — the centralized gate
+    # in the wrapper handles it.
     with (
         patch(
             "litellm.proxy.auth.user_api_key_auth.common_checks", new_callable=AsyncMock
@@ -48,7 +52,7 @@ async def test_custom_auth_run_post_custom_auth_checks_without_end_user_id():
             parent_otel_span=None,
         )
         assert result.token == "test_token"
-        mock_common.assert_awaited_once()
+        mock_common.assert_not_awaited()
 
 
 @pytest.mark.asyncio

@@ -650,7 +650,10 @@ class Cache:
             verbose_logger.exception(f"LiteLLM Cache: Excepton add_cache: {str(e)}")
 
     def _convert_to_cached_embedding(
-        self, embedding_response: Any, model: Optional[str]
+        self,
+        embedding_response: Any,
+        model: Optional[str],
+        prompt_tokens_details: Optional[dict] = None,
     ) -> CachedEmbedding:
         """
         Convert any embedding response into the standardized CachedEmbedding TypedDict format.
@@ -662,6 +665,7 @@ class Cache:
                     "index": embedding_response.get("index"),
                     "object": embedding_response.get("object"),
                     "model": model,
+                    "prompt_tokens_details": prompt_tokens_details,
                 }
             elif hasattr(embedding_response, "model_dump"):
                 data = embedding_response.model_dump()
@@ -670,6 +674,7 @@ class Cache:
                     "index": data.get("index"),
                     "object": data.get("object"),
                     "model": model,
+                    "prompt_tokens_details": prompt_tokens_details,
                 }
             else:
                 data = vars(embedding_response)
@@ -678,9 +683,53 @@ class Cache:
                     "index": data.get("index"),
                     "object": data.get("object"),
                     "model": model,
+                    "prompt_tokens_details": prompt_tokens_details,
                 }
         except KeyError as e:
             raise ValueError(f"Missing expected key in embedding response: {e}")
+
+    def _get_per_item_prompt_tokens_details(
+        self,
+        result: EmbeddingResponse,
+        idx_in_result_data: int,
+    ) -> Optional[dict]:
+        """
+        Extract per-item prompt_tokens_details from a response for caching.
+
+        For single-item responses (common for multimodal providers like Bedrock Titan,
+        Nova, Vertex AI), returns the full prompt_tokens_details.
+        For multi-item responses, distributes integer fields evenly across items
+        so that summing all per-item details reconstructs the original totals.
+        """
+        if result.usage is None or result.usage.prompt_tokens_details is None:
+            return None
+
+        details = result.usage.prompt_tokens_details
+        if hasattr(details, "model_dump"):
+            details_dict = details.model_dump(exclude_none=True)
+        elif isinstance(details, dict):
+            details_dict = {k: v for k, v in details.items() if v is not None}
+        else:
+            return None
+
+        if not details_dict:
+            return None
+
+        num_items = len(result.data)
+        if num_items <= 1:
+            return details_dict
+
+        # Distribute integer/float fields evenly across items
+        per_item: dict = {}
+        for key, value in details_dict.items():
+            if isinstance(value, int):
+                quotient, remainder = divmod(value, num_items)
+                per_item[key] = quotient + (1 if idx_in_result_data < remainder else 0)
+            elif isinstance(value, float):
+                per_item[key] = value / num_items
+            else:
+                per_item[key] = value
+        return per_item if per_item else None
 
     def add_embedding_response_to_cache(
         self,
@@ -693,10 +742,18 @@ class Cache:
         kwargs["cache_key"] = preset_cache_key
         embedding_response = result.data[idx_in_result_data]
 
+        # Extract per-item prompt_tokens_details from response usage
+        prompt_tokens_details = self._get_per_item_prompt_tokens_details(
+            result=result,
+            idx_in_result_data=idx_in_result_data,
+        )
+
         # Always convert to properly typed CachedEmbedding
         model_name = result.model
         embedding_dict: CachedEmbedding = self._convert_to_cached_embedding(
-            embedding_response, model_name
+            embedding_response,
+            model_name,
+            prompt_tokens_details=prompt_tokens_details,
         )
 
         cache_key, cached_data, kwargs = self._add_cache_logic(

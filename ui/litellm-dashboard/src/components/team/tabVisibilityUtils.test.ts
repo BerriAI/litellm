@@ -11,6 +11,7 @@ describe("team_info_tabs", () => {
   describe("TEAM_INFO_TAB_LABELS", () => {
     it("should have label for every tab key", () => {
       expect(TEAM_INFO_TAB_LABELS[TEAM_INFO_TAB_KEYS.OVERVIEW]).toBe("Overview");
+      expect(TEAM_INFO_TAB_LABELS[TEAM_INFO_TAB_KEYS.MY_USER]).toBe("My User");
       expect(TEAM_INFO_TAB_LABELS[TEAM_INFO_TAB_KEYS.VIRTUAL_KEYS]).toBe("Virtual Keys");
       expect(TEAM_INFO_TAB_LABELS[TEAM_INFO_TAB_KEYS.MEMBERS]).toBe("Members");
       expect(TEAM_INFO_TAB_LABELS[TEAM_INFO_TAB_KEYS.MEMBER_PERMISSIONS]).toBe("Member Permissions");
@@ -19,15 +20,20 @@ describe("team_info_tabs", () => {
   });
 
   describe("getTeamInfoVisibleTabs", () => {
-    it("returns overview and virtual keys when user cannot edit team", () => {
+    it("returns overview, my user, and virtual keys when user cannot edit team", () => {
       const tabs = getTeamInfoVisibleTabs(false);
-      expect(tabs).toEqual([TEAM_INFO_TAB_KEYS.OVERVIEW, TEAM_INFO_TAB_KEYS.VIRTUAL_KEYS]);
+      expect(tabs).toEqual([
+        TEAM_INFO_TAB_KEYS.OVERVIEW,
+        TEAM_INFO_TAB_KEYS.MY_USER,
+        TEAM_INFO_TAB_KEYS.VIRTUAL_KEYS,
+      ]);
     });
 
     it("returns all tabs when user can edit team", () => {
       const tabs = getTeamInfoVisibleTabs(true);
       expect(tabs).toEqual([
         TEAM_INFO_TAB_KEYS.OVERVIEW,
+        TEAM_INFO_TAB_KEYS.MY_USER,
         TEAM_INFO_TAB_KEYS.VIRTUAL_KEYS,
         TEAM_INFO_TAB_KEYS.MEMBERS,
         TEAM_INFO_TAB_KEYS.MEMBER_PERMISSIONS,
@@ -60,6 +66,11 @@ describe("team_info_tabs", () => {
     it("always returns true for virtual keys tab regardless of edit permission", () => {
       expect(isTeamInfoTabVisible(TEAM_INFO_TAB_KEYS.VIRTUAL_KEYS, false)).toBe(true);
       expect(isTeamInfoTabVisible(TEAM_INFO_TAB_KEYS.VIRTUAL_KEYS, true)).toBe(true);
+    });
+
+    it("always returns true for my user tab regardless of edit permission", () => {
+      expect(isTeamInfoTabVisible(TEAM_INFO_TAB_KEYS.MY_USER, false)).toBe(true);
+      expect(isTeamInfoTabVisible(TEAM_INFO_TAB_KEYS.MY_USER, true)).toBe(true);
     });
 
     it("returns false for member permissions tab when user cannot edit", () => {

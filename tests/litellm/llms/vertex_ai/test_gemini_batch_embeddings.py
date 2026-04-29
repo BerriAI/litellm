@@ -19,6 +19,7 @@ import pytest
 import litellm
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.llms.vertex_ai.gemini_embeddings.batch_embed_content_transformation import (
+    _filter_embed_params,
     _is_multimodal_input,
     _parse_data_url,
     process_embed_content_response,
@@ -571,6 +572,53 @@ def test_vertex_ai_text_only_embedding_uses_embed_content():
         assert len(data["content"]["parts"]) == 1
         assert data["content"]["parts"][0]["text"] == "Hello, world!"
         assert len(response.data) == 1
+
+
+# ---------------------------------------------------------------------------
+# Unsupported params filtering tests (#24293)
+# ---------------------------------------------------------------------------
+
+
+def test_filter_embed_params_drops_unsupported():
+    """Unsupported params like max_tokens should be filtered out."""
+    result = _filter_embed_params({"dimensions": 768, "max_tokens": 256, "temperature": 0.5})
+    assert result == {"outputDimensionality": 768}
+
+
+def test_filter_embed_params_keeps_supported():
+    """All supported Gemini embedding params should pass through."""
+    result = _filter_embed_params({
+        "dimensions": 768,
+        "task_type": "RETRIEVAL_DOCUMENT",
+        "title": "My doc",
+    })
+    assert result == {
+        "outputDimensionality": 768,
+        "taskType": "RETRIEVAL_DOCUMENT",
+        "title": "My doc",
+    }
+
+
+def test_batch_embed_content_drops_max_tokens():
+    """max_tokens in optional_params should not appear in the batch request."""
+    result = transform_openai_input_gemini_content(
+        input="test text",
+        model="text-embedding-004",
+        optional_params={"max_tokens": 256},
+    )
+    for request in result["requests"]:
+        assert "max_tokens" not in request
+
+
+def test_embed_content_drops_max_tokens():
+    """max_tokens in optional_params should not appear in the embedContent request."""
+    result = transform_openai_input_gemini_embed_content(
+        input=["test text"],
+        model="gemini-embedding-001",
+        optional_params={"max_tokens": 256},
+        resolved_files=None,
+    )
+    assert "max_tokens" not in result
 
 
 def test_batch_embeddings_response_has_correct_indices_and_order():

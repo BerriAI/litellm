@@ -23,9 +23,10 @@ LiteLLM is a unified interface for 100+ LLMs that:
 
 ### Key Directories
 - `tests/` - Comprehensive test suites
-- `docs/my-website/` - Documentation website
 - `ui/litellm-dashboard/` - Admin dashboard UI
 - `enterprise/` - Enterprise-specific features
+
+Documentation lives in the separate [BerriAI/litellm-docs](https://github.com/BerriAI/litellm-docs) repository and is served at [docs.litellm.ai](https://docs.litellm.ai).
 
 ## DEVELOPMENT GUIDELINES
 
@@ -218,8 +219,8 @@ When opening issues or pull requests, follow these templates:
 
 ## HELPFUL RESOURCES
 
-- Main documentation: https://docs.litellm.ai/
-- Provider-specific docs in `docs/my-website/docs/providers/`
+- Main documentation: https://docs.litellm.ai/ (source: [BerriAI/litellm-docs](https://github.com/BerriAI/litellm-docs))
+- Provider-specific docs: https://docs.litellm.ai/docs/providers/
 - Admin UI for testing proxy features
 
 ## WHEN IN DOUBT

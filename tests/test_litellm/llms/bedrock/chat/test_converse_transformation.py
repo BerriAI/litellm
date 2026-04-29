@@ -279,7 +279,7 @@ def test_reasoning_with_forced_tool_choice_switches_to_auto():
     }
 
     optional_params = config.map_openai_params(
-        model="bedrock/us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+        model="bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
         non_default_params=non_default_params,
         optional_params={},
         drop_params=False,
@@ -2797,7 +2797,7 @@ def test_thinking_with_max_completion_tokens():
     result = config.map_openai_params(
         non_default_params=non_default_params_with_max_completion,
         optional_params=optional_params,
-        model="us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+        model="us.anthropic.claude-sonnet-4-5-20250929-v1:0",
         drop_params=False,
     )
 
@@ -2819,7 +2819,7 @@ def test_thinking_with_max_completion_tokens():
     result = config.map_openai_params(
         non_default_params=non_default_params_with_max_tokens,
         optional_params=optional_params,
-        model="us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+        model="us.anthropic.claude-sonnet-4-5-20250929-v1:0",
         drop_params=False,
     )
 
@@ -2842,7 +2842,7 @@ def test_thinking_with_max_completion_tokens():
     result = config.map_openai_params(
         non_default_params=non_default_params_without_max,
         optional_params=optional_params,
-        model="us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+        model="us.anthropic.claude-sonnet-4-5-20250929-v1:0",
         drop_params=False,
     )
 
@@ -3617,7 +3617,7 @@ class TestBedrockMinThinkingBudgetTokens:
     """Test that thinking.budget_tokens is clamped to the Bedrock minimum (1024)."""
 
     def _map_params(
-        self, thinking_value, model="anthropic.claude-3-7-sonnet-20250219-v1:0"
+        self, thinking_value, model="anthropic.claude-sonnet-4-5-20250929-v1:0"
     ):
         """Helper to call map_openai_params with the given thinking value."""
         config = AmazonConverseConfig()
@@ -3651,7 +3651,7 @@ class TestBedrockMinThinkingBudgetTokens:
         result = config.map_openai_params(
             non_default_params={},
             optional_params={},
-            model="anthropic.claude-3-7-sonnet-20250219-v1:0",
+            model="anthropic.claude-sonnet-4-5-20250929-v1:0",
             drop_params=False,
         )
         assert "thinking" not in result or result.get("thinking") is None

@@ -130,10 +130,15 @@ class ProxyInitializationHelpers:
         port: int,
         log_config: Optional[str] = None,
         keepalive_timeout: Optional[int] = None,
+        timeout_worker_healthcheck: Optional[int] = None,
     ) -> dict:
         """
         Get the arguments for `uvicorn` worker
         """
+        import inspect
+
+        import uvicorn
+
         import litellm
         from litellm._logging import _get_uvicorn_json_log_config
 
@@ -150,6 +155,18 @@ class ProxyInitializationHelpers:
             uvicorn_args["log_config"] = _get_uvicorn_json_log_config()
         if keepalive_timeout is not None:
             uvicorn_args["timeout_keep_alive"] = keepalive_timeout
+        if timeout_worker_healthcheck is not None:
+            if (
+                "timeout_worker_healthcheck"
+                in inspect.signature(uvicorn.Config.__init__).parameters
+            ):
+                uvicorn_args["timeout_worker_healthcheck"] = timeout_worker_healthcheck
+            else:
+                print(  # noqa
+                    f"\033[1;33mLiteLLM Proxy: --timeout_worker_healthcheck "
+                    f"requires uvicorn>=0.37.0, but installed uvicorn=={uvicorn.__version__}. "
+                    f"Ignoring the flag.\033[0m"
+                )
         return uvicorn_args
 
     @staticmethod
@@ -564,6 +581,17 @@ class ProxyInitializationHelpers:
     envvar="KEEPALIVE_TIMEOUT",
 )
 @click.option(
+    "--timeout_worker_healthcheck",
+    default=None,
+    type=int,
+    help=(
+        "Set the uvicorn worker health-check timeout in seconds (uvicorn timeout_worker_healthcheck parameter). "
+        "Requires uvicorn>=0.37.0. Only applies when running uvicorn directly with --num_workers>1; "
+        "ignored under --run_gunicorn / --run_hypercorn."
+    ),
+    envvar="TIMEOUT_WORKER_HEALTHCHECK",
+)
+@click.option(
     "--max_requests_before_restart",
     default=None,
     type=int,
@@ -632,6 +660,7 @@ def run_server(  # noqa: PLR0915
     use_prisma_db_push: bool,
     skip_server_startup,
     keepalive_timeout,
+    timeout_worker_healthcheck,
     max_requests_before_restart,
     enforce_prisma_migration_check: bool,
     use_v2_migration_resolver: bool,
@@ -973,11 +1002,15 @@ def run_server(  # noqa: PLR0915
             )
             return
 
+        running_uvicorn = run_gunicorn is False and run_hypercorn is False
         uvicorn_args = ProxyInitializationHelpers._get_default_unvicorn_init_args(
             host=host,
             port=port,
             log_config=log_config,
             keepalive_timeout=keepalive_timeout,
+            timeout_worker_healthcheck=(
+                timeout_worker_healthcheck if running_uvicorn else None
+            ),
         )
         # Optional: recycle uvicorn workers after N requests
         if max_requests_before_restart is not None:

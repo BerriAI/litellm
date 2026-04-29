@@ -90,6 +90,9 @@ _FINISH_REASON_MAP: dict[str, OpenAIChatCompletionFinishReason] = {
     "IMAGE_PROHIBITED_CONTENT": "content_filter",
     "TOO_MANY_TOOL_CALLS": "stop",
     "MALFORMED_RESPONSE": "stop",
+    # Zhipu GLM
+    "network_error": "stop",
+    "sensitive": "content_filter",
     # Bedrock
     "guardrail_intervened": "content_filter",
     # OpenAI passthrough

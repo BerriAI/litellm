@@ -2765,6 +2765,72 @@ class MCPServerManager:
                 servers.append(server)
         return servers
 
+    def expand_permission_list(self, identifiers: List[str]) -> List[str]:
+        """
+        Expand a permission list of server_ids/names/aliases into concrete
+        server_ids against the current region's config + DB registry union.
+
+        Entries that match a server_id pass through unchanged. Entries that
+        match an alias/server_name/name are replaced with every matching
+        server_id (duplicate names grant access to all matches). Entries
+        that resolve to nothing pass through as-is and a debug log is
+        emitted so admins can diagnose stale/typo permission entries — the
+        downstream access-check denies them when compared against the
+        concrete request server_id.
+        """
+        if not identifiers:
+            return []
+        registry = self.get_registry()
+        expanded: Set[str] = set()
+        for identifier in identifiers:
+            if identifier in registry:
+                expanded.add(identifier)
+                continue
+            matches: List[str] = [
+                server_id
+                for server_id, server in registry.items()
+                if server.alias == identifier
+                or server.server_name == identifier
+                or server.name == identifier
+            ]
+            if matches:
+                expanded.update(matches)
+            else:
+                # %r quotes and escapes control chars so an admin-controlled
+                # identifier with newlines cannot forge log lines.
+                verbose_logger.debug(
+                    "MCP permission entry %r does not resolve to any known "
+                    "server (config + DB union). Passing through — the "
+                    "downstream access check will deny it if it's stale.",
+                    identifier,
+                )
+                expanded.add(identifier)
+        return list(expanded)
+
+    def expand_tool_permissions(
+        self,
+        tool_permissions: Optional[Dict[str, List[str]]],
+    ) -> Dict[str, List[str]]:
+        """
+        Rewrite an ``mcp_tool_permissions`` dict keyed by id/name/alias so
+        every key is a concrete server_id where possible. Tool lists from
+        keys that point at the same server are unioned, matching the
+        "duplicate names grant access to all matches" semantics of
+        ``expand_permission_list``.
+
+        Required so name-based keys don't silently drop their tool
+        restrictions when the lookup uses the resolved server_id. Unresolved
+        keys pass through via ``expand_permission_list`` so stale id-keyed
+        restrictions still apply when the same string is used for lookup.
+        """
+        if not tool_permissions:
+            return {}
+        result: Dict[str, List[str]] = {}
+        for key, tools in tool_permissions.items():
+            for server_id in self.expand_permission_list([key]):
+                result.setdefault(server_id, []).extend(tools or [])
+        return result
+
     def get_mcp_server_by_name(
         self, server_name: str, client_ip: Optional[str] = None
     ) -> Optional[MCPServer]:

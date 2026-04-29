@@ -314,11 +314,11 @@ def test_update_litellm_params_for_health_check():
     # Issue #15807: Fixes health checks sending "region/model" as model ID to AWS
     model_info = {}
     litellm_params = {
-        "model": "bedrock/us-gov-west-1/anthropic.claude-3-7-sonnet-20250219-v1:0",
+        "model": "bedrock/us-gov-west-1/anthropic.claude-sonnet-4-5-20250929-v1:0",
         "api_key": "fake_key",
     }
     updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)
-    assert updated_params["model"] == "anthropic.claude-3-7-sonnet-20250219-v1:0"
+    assert updated_params["model"] == "anthropic.claude-sonnet-4-5-20250929-v1:0"
 
     # Test with Bedrock cross-region inference profile - should preserve the inference profile prefix
     # AWS requires inference profile IDs like "us.anthropic.claude..." for cross-region routing

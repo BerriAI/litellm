@@ -21,6 +21,7 @@ class SensitiveDataMasker:
             "auth",
             "authorization",
             "credential",
+            "credentials",
             "access",
             "private",
             "certificate",

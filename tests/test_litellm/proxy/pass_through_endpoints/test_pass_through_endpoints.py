@@ -2575,3 +2575,46 @@ async def test_multipart_passthrough_preserves_boundary():
     # Verify the response
     assert response.status_code == 200
     async_client.request.assert_called_once()
+
+
+def test_get_response_headers_strips_server_and_date():
+    """Regression: forwarding the upstream's Server/Date headers causes
+    uvicorn to add its own and strict HTTP parsers (aiohttp) reject the
+    response with 'Duplicate Server header found'. The helper must strip
+    headers that the ASGI server writes itself."""
+    upstream_headers = httpx.Headers(
+        {
+            "server": "cloudflare",
+            "date": "Fri, 24 Apr 2026 23:26:19 GMT",
+            "content-type": "application/json",
+            "content-length": "123",
+            "transfer-encoding": "chunked",
+            "content-encoding": "gzip",
+            "connection": "keep-alive",
+            "keep-alive": "timeout=5",
+            "x-request-id": "req_abc",
+            "anthropic-ratelimit-requests-remaining": "100",
+        }
+    )
+
+    result = HttpPassThroughEndpointHelpers.get_response_headers(upstream_headers)
+
+    lowered_keys = {k.lower() for k in result}
+    for stripped in (
+        "server",
+        "date",
+        "content-length",
+        "transfer-encoding",
+        "content-encoding",
+        "connection",
+        "keep-alive",
+    ):
+        assert (
+            stripped not in lowered_keys
+        ), f"{stripped!r} must not be forwarded by passthrough"
+
+    # Application/business headers must still pass through.
+    lowered = {k.lower(): v for k, v in result.items()}
+    assert lowered["content-type"] == "application/json"
+    assert lowered["x-request-id"] == "req_abc"
+    assert lowered["anthropic-ratelimit-requests-remaining"] == "100"

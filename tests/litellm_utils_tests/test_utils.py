@@ -2309,11 +2309,11 @@ def test_get_provider_audio_transcription_config():
 @pytest.mark.parametrize(
     "model, expected_bool",
     [
-        ("anthropic.claude-3-7-sonnet-20250219-v1:0", True),
-        ("us.anthropic.claude-3-7-sonnet-20250219-v1:0", True),
+        ("anthropic.claude-sonnet-4-5-20250929-v1:0", True),
+        ("us.anthropic.claude-sonnet-4-5-20250929-v1:0", True),
     ],
 )
-def test_claude_3_7_sonnet_supports_pdf_input(model, expected_bool):
+def test_claude_sonnet_4_5_supports_pdf_input(model, expected_bool):
     from litellm.utils import supports_pdf_input
 
     assert supports_pdf_input(model) == expected_bool

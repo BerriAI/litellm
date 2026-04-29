@@ -20,6 +20,11 @@ from litellm.a2a_protocol.litellm_completion_bridge.transformation import (
 )
 from litellm.a2a_protocol.providers.config_manager import A2AProviderConfigManager
 
+# Agent metadata fields stored in litellm_params that are not valid litellm.acompletion() kwargs
+_AGENT_ONLY_PARAMS = frozenset(
+    {"is_public", "agent_name", "agent_id", "agent_card_params"}
+)
+
 
 class A2ACompletionBridgeHandler:
     """
@@ -99,7 +104,7 @@ class A2ACompletionBridgeHandler:
         litellm_params_to_add = {
             k: v
             for k, v in litellm_params.items()
-            if k not in ("model", "custom_llm_provider")
+            if k not in ("model", "custom_llm_provider") and k not in _AGENT_ONLY_PARAMS
         }
         completion_params.update(litellm_params_to_add)
 
@@ -206,7 +211,7 @@ class A2ACompletionBridgeHandler:
         litellm_params_to_add = {
             k: v
             for k, v in litellm_params.items()
-            if k not in ("model", "custom_llm_provider")
+            if k not in ("model", "custom_llm_provider") and k not in _AGENT_ONLY_PARAMS
         }
         completion_params.update(litellm_params_to_add)
 

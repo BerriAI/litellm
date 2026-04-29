@@ -140,6 +140,12 @@ const menuGroups: MenuGroup[] = [
         roles: all_admin_roles,
       },
       {
+        key: "memory",
+        page: "memory",
+        label: "Memory",
+        icon: <BookOutlined />,
+      },
+      {
         key: "guardrails",
         page: "guardrails",
         label: "Guardrails",

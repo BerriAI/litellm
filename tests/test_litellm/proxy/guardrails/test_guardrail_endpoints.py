@@ -140,7 +140,8 @@ async def test_list_guardrails_v2_with_db_and_config(
         mock_in_memory_handler,
     )
 
-    response = await list_guardrails_v2()
+    admin_auth = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
+    response = await list_guardrails_v2(user_api_key_dict=admin_auth)
 
     assert len(response.guardrails) == 2
 
@@ -194,7 +195,8 @@ async def test_list_guardrails_v2_masks_sensitive_data_in_db_guardrails(mocker):
         mock_in_memory_handler,
     )
 
-    response = await list_guardrails_v2()
+    admin_auth = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
+    response = await list_guardrails_v2(user_api_key_dict=admin_auth)
 
     assert len(response.guardrails) == 1
     guardrail = response.guardrails[0]
@@ -248,7 +250,8 @@ async def test_list_guardrails_v2_masks_sensitive_data_in_config_guardrails(mock
         mock_in_memory_handler,
     )
 
-    response = await list_guardrails_v2()
+    admin_auth = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
+    response = await list_guardrails_v2(user_api_key_dict=admin_auth)
 
     assert len(response.guardrails) == 1
     guardrail = response.guardrails[0]

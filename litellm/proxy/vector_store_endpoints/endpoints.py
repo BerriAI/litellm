@@ -10,6 +10,7 @@ from litellm.proxy._types import CommonProxyErrors, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.utils import jsonify_object
+from litellm.proxy.vector_store_endpoints.utils import can_user_access_vector_store
 from litellm.types.vector_stores import IndexCreateRequest
 
 router = APIRouter()
@@ -18,40 +19,25 @@ router = APIRouter()
 ########################################################
 
 
-def _check_vector_store_access(
+async def _check_vector_store_access(
     vector_store: LiteLLM_ManagedVectorStore,
     user_api_key_dict: UserAPIKeyAuth,
 ) -> bool:
     """
-    Check if the user has access to the vector store based on team membership.
+    Check if the user has access to the vector store.
 
-    Args:
-        vector_store: The vector store to check access for
-        user_api_key_dict: User API key authentication info
-
-    Returns:
-        True if user has access, False otherwise
-
-    Access rules:
-    - If vector store has no team_id, it's accessible to all (legacy behavior)
-    - If user's team_id matches the vector store's team_id, access is granted
-    - Otherwise, access is denied
+    Delegates to :func:`can_user_access_vector_store`, which honors:
+    - PROXY_ADMIN bypass
+    - legacy vector stores with no team_id
+    - key-level and team-level ``object_permission.vector_stores`` allowlists
+    - team_id match between key and store
     """
-    vector_store_team_id = vector_store.get("team_id")
-
-    # If vector store has no team_id, it's accessible to all (legacy behavior)
-    if vector_store_team_id is None:
-        return True
-
-    # Check if user's team matches the vector store's team
-    user_team_id = user_api_key_dict.team_id
-    if user_team_id == vector_store_team_id:
-        return True
-
-    return False
+    return await can_user_access_vector_store(
+        vector_store=vector_store, user_api_key_dict=user_api_key_dict
+    )
 
 
-def _update_request_data_with_litellm_managed_vector_store_registry(
+async def _update_request_data_with_litellm_managed_vector_store_registry(
     data: Dict,
     vector_store_id: str,
     user_api_key_dict: Optional[UserAPIKeyAuth] = None,
@@ -74,9 +60,8 @@ def _update_request_data_with_litellm_managed_vector_store_registry(
             )
         )
         if vector_store_to_run is not None:
-            # Check access control if user_api_key_dict is provided
             if user_api_key_dict is not None:
-                if not _check_vector_store_access(
+                if not await _check_vector_store_access(
                     vector_store_to_run, user_api_key_dict
                 ):
                     raise HTTPException(
@@ -140,7 +125,7 @@ async def vector_store_search(
         data["vector_store_id"] = vector_store_id
 
     # Check for legacy vector store registry (non-managed vector stores)
-    data = _update_request_data_with_litellm_managed_vector_store_registry(
+    data = await _update_request_data_with_litellm_managed_vector_store_registry(
         data=data, vector_store_id=vector_store_id, user_api_key_dict=user_api_key_dict
     )
 
@@ -322,7 +307,7 @@ async def vector_store_retrieve(
 
     data = {"vector_store_id": vector_store_id}
 
-    data = _update_request_data_with_litellm_managed_vector_store_registry(
+    data = await _update_request_data_with_litellm_managed_vector_store_registry(
         data=data, vector_store_id=vector_store_id, user_api_key_dict=user_api_key_dict
     )
 
@@ -462,7 +447,7 @@ async def vector_store_update(
     if "vector_store_id" not in data:
         data["vector_store_id"] = vector_store_id
 
-    data = _update_request_data_with_litellm_managed_vector_store_registry(
+    data = await _update_request_data_with_litellm_managed_vector_store_registry(
         data=data, vector_store_id=vector_store_id, user_api_key_dict=user_api_key_dict
     )
 
@@ -529,7 +514,7 @@ async def vector_store_delete(
 
     data = {"vector_store_id": vector_store_id}
 
-    data = _update_request_data_with_litellm_managed_vector_store_registry(
+    data = await _update_request_data_with_litellm_managed_vector_store_registry(
         data=data, vector_store_id=vector_store_id, user_api_key_dict=user_api_key_dict
     )
 

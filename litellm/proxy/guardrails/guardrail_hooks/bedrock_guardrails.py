@@ -1098,58 +1098,21 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         #########################################################
         ########## 1. Make Bedrock API requests ##########
         #########################################################
-        # Import asyncio for parallel execution
-        import asyncio
-
-        # Determine if INPUT validation is needed in post_call
-        # Skip INPUT validation if pre_call or during_call is already enabled
-        # (to avoid redundant validation - those hooks would have already validated INPUT)
-        should_validate_input = not (
-            self._event_hook_is_event_type(GuardrailEventHooks.pre_call)
-            or self._event_hook_is_event_type(GuardrailEventHooks.during_call)
-        )
-
+        # post_call is the response-validation hook by definition — only scan
+        # OUTPUT. Input scanning belongs to pre_call / during_call hooks, which
+        # users should configure if they want input validation. Running an
+        # extra INPUT scan here produced a duplicate post-call entry in the
+        # trace and made no semantic sense for a "post-call" event.
         output_content_bedrock: Optional[Union[BedrockGuardrailResponse, str]] = None
-
-        if should_validate_input:
-            # Prepare input messages (with optional filtering for latest role message)
-            input_filter = self._prepare_guardrail_messages_for_role(
-                messages=new_messages
-            )
-            input_messages = input_filter.payload_messages or new_messages
-
-            # Create tasks for parallel execution of both INPUT and OUTPUT validation
-            input_task = self.make_bedrock_api_request(
-                source="INPUT",
-                messages=input_messages,
-                request_data=data,
-                logging_event_type=GuardrailEventHooks.post_call,
-            )
-            output_task = self.make_bedrock_api_request(
+        try:
+            output_content_bedrock = await self.make_bedrock_api_request(
                 source="OUTPUT",
                 response=response,
                 request_data=data,
                 logging_event_type=GuardrailEventHooks.post_call,
             )
-
-            # Execute both requests in parallel
-            try:
-                _, output_content_bedrock = await asyncio.gather(
-                    input_task, output_task
-                )
-            except GuardrailInterventionNormalStringError as e:
-                output_content_bedrock = e.message
-        else:
-            # Only run OUTPUT validation (INPUT was already validated in pre_call or during_call)
-            try:
-                output_content_bedrock = await self.make_bedrock_api_request(
-                    source="OUTPUT",
-                    response=response,
-                    request_data=data,
-                    logging_event_type=GuardrailEventHooks.post_call,
-                )
-            except GuardrailInterventionNormalStringError as e:
-                output_content_bedrock = e.message
+        except GuardrailInterventionNormalStringError as e:
+            output_content_bedrock = e.message
 
         #########################################################
         ########## 2. Apply masking to response with output guardrail response ##########
@@ -1224,11 +1187,10 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         """
         Process streaming response chunks.
 
-        Collect content from the stream and make parallel bedrock api requests to get the guardrail responses.
+        Collect content from the stream and run the bedrock OUTPUT scan
+        (post_call only validates the response).
         """
         # Import here to avoid circular imports
-        import asyncio
-
         from litellm.llms.base_llm.base_model_iterator import MockResponseIterator
         from litellm.main import stream_chunk_builder
         from litellm.types.utils import TextCompletionResponse
@@ -1245,61 +1207,24 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         )
         if isinstance(assembled_model_response, ModelResponse):
             ####################################################################
-            ########## 1. Make Bedrock Apply Guardrail API requests ##########
-
-            # Bedrock will raise an exception if this violates the guardrail policy
+            ########## 1. Make Bedrock Apply Guardrail API request ##########
+            #
+            # post_call only scans OUTPUT — input scanning belongs to
+            # pre_call / during_call. Bedrock will raise if the response
+            # violates the guardrail policy.
             ###################################################################
-            # Determine if INPUT validation is needed in post_call
-            # Skip INPUT validation if pre_call or during_call is already enabled
-            # (to avoid redundant validation - those hooks would have already validated INPUT)
-            should_validate_input = not (
-                self._event_hook_is_event_type(GuardrailEventHooks.pre_call)
-                or self._event_hook_is_event_type(GuardrailEventHooks.during_call)
-            )
-
             output_guardrail_response: Optional[
                 Union[BedrockGuardrailResponse, str]
             ] = None
-
-            if should_validate_input:
-                # Create tasks for parallel execution
-                input_filter = self._prepare_guardrail_messages_for_role(
-                    messages=request_data.get("messages")
-                )
-                input_messages = input_filter.payload_messages or request_data.get(
-                    "messages"
-                )
-                input_task = self.make_bedrock_api_request(
-                    source="INPUT",
-                    messages=input_messages,
-                    request_data=request_data,
-                    logging_event_type=GuardrailEventHooks.post_call,
-                )  # Only input messages
-                output_task = self.make_bedrock_api_request(
+            try:
+                output_guardrail_response = await self.make_bedrock_api_request(
                     source="OUTPUT",
                     response=assembled_model_response,
                     request_data=request_data,
                     logging_event_type=GuardrailEventHooks.post_call,
-                )  # Only response
-
-                # Execute both requests in parallel
-                try:
-                    _, output_guardrail_response = await asyncio.gather(
-                        input_task, output_task
-                    )
-                except GuardrailInterventionNormalStringError as e:
-                    output_guardrail_response = e.message
-            else:
-                # Only run OUTPUT validation (INPUT was already validated in pre_call or during_call)
-                try:
-                    output_guardrail_response = await self.make_bedrock_api_request(
-                        source="OUTPUT",
-                        response=assembled_model_response,
-                        request_data=request_data,
-                        logging_event_type=GuardrailEventHooks.post_call,
-                    )
-                except GuardrailInterventionNormalStringError as e:
-                    output_guardrail_response = e.message
+                )
+            except GuardrailInterventionNormalStringError as e:
+                output_guardrail_response = e.message
 
             #########################################################################
             ########## 2. Apply masking to response with output guardrail response ##########

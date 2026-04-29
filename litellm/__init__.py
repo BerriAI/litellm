@@ -221,6 +221,9 @@ modify_params = bool(os.getenv("LITELLM_MODIFY_PARAMS", False))
 use_chat_completions_url_for_anthropic_messages: bool = bool(
     os.getenv("LITELLM_USE_CHAT_COMPLETIONS_URL_FOR_ANTHROPIC_MESSAGES", False)
 )  # When True, routes OpenAI /v1/messages requests to chat/completions instead of the Responses API
+route_all_chat_openai_to_responses: bool = (
+    os.getenv("LITELLM_ROUTE_ALL_CHAT_OPENAI_TO_RESPONSES", "false").lower() == "true"
+)  # When True, routes all OpenAI /chat/completions requests through the Responses API bridge
 retry = True
 ### AUTH ###
 api_key: Optional[str] = None

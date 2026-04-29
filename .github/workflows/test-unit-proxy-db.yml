@@ -12,8 +12,74 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# Semantic matrix: each shard groups tests by concern (auth, server, logging, …)
+# rather than alphabetical letter ranges. Adding a new test file means adding it
+# to whichever group it belongs to, not reshuffling slices.
+#
+# Design targets:
+#   * Every shard runs in <= 7 minutes of wall-clock on the default runner.
+#     Most of a shard's time is pytest plugin load + xdist worker imports +
+#     pytest-cov instrumentation, not the tests themselves. Keeping per-shard
+#     work low and matching worker count to runner cores is what controls it.
+#   * workers: 4 matches the 4-core ubuntu-latest runner. -n 8 on 4 cores
+#     oversubscribes 2x and workers fight for CPU during their cold-start
+#     imports (measured ~441% CPU for -n 8 locally, i.e. ~55% effective).
+#   * test_key_generate_prisma.py stays serial (workers=0) — it has event-loop
+#     conflicts with the logging worker when run in parallel.
+#   * test_proxy_utils.py runs as a single shard with --dist=worksteal so
+#     xdist balances its 188 parametrized cases across workers instead of
+#     pinning the whole file to one worker (the default --dist=loadscope
+#     behavior for single-file targets).
+#   * test_db_schema_migration.py is isolated because one test in it
+#     (test_aaaasschema_migration_check) takes ~170s — by itself it
+#     determines the shard's wall-clock floor.
 jobs:
+  # Fast guard — fails the workflow if a test_*.py file under
+  # tests/proxy_unit_tests/ is not referenced by any matrix entry below.
+  # The semantic-shard design (no catch-all "remaining" bucket) relies on
+  # every test file being explicitly assigned; this guard prevents a new
+  # file from silently dropping out of CI.
+  assert-shard-coverage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          persist-credentials: false
+      - name: Assert every test_*.py is in a matrix shard
+        run: |
+          python3 - <<'PY'
+          import pathlib, sys, yaml
+          wf = yaml.safe_load(open(".github/workflows/test-unit-proxy-db.yml"))
+          matrix = wf["jobs"]["proxy-db"]["strategy"]["matrix"]["include"]
+          referenced = set()
+          for entry in matrix:
+              for token in entry["test-path"].split():
+                  if token.startswith("tests/proxy_unit_tests/"):
+                      referenced.add(pathlib.PurePosixPath(token).name)
+          actual = {p.name for p in pathlib.Path("tests/proxy_unit_tests").iterdir()
+                    if p.name.startswith("test_") and (p.suffix == ".py" or p.is_dir())
+                    and p.name != "test_configs"}
+          orphans = sorted(actual - referenced)
+          if orphans:
+              print("ERROR: the following files/dirs under tests/proxy_unit_tests/")
+              print("       are not assigned to any shard in test-unit-proxy-db.yml:")
+              for o in orphans:
+                  print(f"  - {o}")
+              print()
+              print("Add each to whichever semantic shard it belongs to.")
+              sys.exit(1)
+          print(f"OK: all {len(actual)} files assigned to a shard.")
+          PY
+
   proxy-db:
+    needs: assert-shard-coverage
+    # Display only the semantic shard name in the checks UI instead of GHA's
+    # default "proxy-db (key-generation, tests/proxy_unit_tests/…, 0, loadscope, 20)"
+    # which includes every matrix field and gets truncated past the test-path.
+    name: ${{ matrix.test-group }}
     permissions:
       contents: read
       id-token: write
@@ -22,26 +88,145 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Key generation tests must NOT run in parallel (event loop conflicts with logging worker)
+          # Must run serially — event-loop conflict with the logging worker.
           - test-group: key-generation
             test-path: "tests/proxy_unit_tests/test_key_generate_prisma.py"
             workers: 0
-            timeout: 30
-          - test-group: auth-checks
-            test-path: "tests/proxy_unit_tests/test_auth_checks.py tests/proxy_unit_tests/test_user_api_key_auth.py"
-            workers: 8
+            dist: loadscope
             timeout: 20
-          # test_proxy_utils.py is large (168+ parametrized tests) — run it on its
-          # own matrix so --dist=loadscope doesn't pin all of it to a single xdist
-          # worker and push the "remaining" group past the job timeout.
+
+          # ---- auth: split into 2 shards ----
+          - test-group: auth-checks
+            test-path: >-
+              tests/proxy_unit_tests/test_auth_checks.py
+              tests/proxy_unit_tests/test_user_api_key_auth.py
+            workers: 4
+            dist: loadscope
+            timeout: 15
+          - test-group: jwt-and-keys
+            test-path: >-
+              tests/proxy_unit_tests/test_jwt.py
+              tests/proxy_unit_tests/test_jwt_key_mapping.py
+              tests/proxy_unit_tests/test_proxy_custom_auth.py
+              tests/proxy_unit_tests/test_key_generate_dynamodb.py
+              tests/proxy_unit_tests/test_deployed_proxy_keygen.py
+            workers: 4
+            dist: loadscope
+            timeout: 15
+
+          # ---- test_proxy_utils.py, single shard, worksteal distribution ----
           - test-group: proxy-utils
             test-path: "tests/proxy_unit_tests/test_proxy_utils.py"
-            workers: 8
-            timeout: 20
-          - test-group: remaining
-            test-path: "tests/proxy_unit_tests --ignore=tests/proxy_unit_tests/test_key_generate_prisma.py --ignore=tests/proxy_unit_tests/test_auth_checks.py --ignore=tests/proxy_unit_tests/test_user_api_key_auth.py --ignore=tests/proxy_unit_tests/test_proxy_utils.py"
-            workers: 8
-            timeout: 30
+            workers: 4
+            dist: worksteal
+            timeout: 15
+
+          # ---- proxy server: split into 2 shards ----
+          - test-group: proxy-server-core
+            test-path: >-
+              tests/proxy_unit_tests/test_proxy_server.py
+              tests/proxy_unit_tests/test_proxy_server_keys.py
+              tests/proxy_unit_tests/test_proxy_server_caching.py
+              tests/proxy_unit_tests/test_proxy_server_langfuse.py
+              tests/proxy_unit_tests/test_proxy_server_spend.py
+              tests/proxy_unit_tests/test_aproxy_startup.py
+            workers: 4
+            dist: loadscope
+            timeout: 15
+          - test-group: proxy-runtime
+            test-path: >-
+              tests/proxy_unit_tests/test_proxy_config_unit_test.py
+              tests/proxy_unit_tests/test_proxy_routes.py
+              tests/proxy_unit_tests/test_proxy_gunicorn.py
+              tests/proxy_unit_tests/test_server_root_path.py
+              tests/proxy_unit_tests/test_proxy_pass_user_config.py
+              tests/proxy_unit_tests/test_proxy_token_counter.py
+            workers: 4
+            dist: loadscope
+            timeout: 15
+
+          # ---- logging: split into 2 shards ----
+          - test-group: custom-logging
+            test-path: >-
+              tests/proxy_unit_tests/test_custom_callback_input.py
+              tests/proxy_unit_tests/test_custom_logger_s3_gcs.py
+              tests/proxy_unit_tests/test_proxy_custom_logger.py
+            workers: 4
+            dist: loadscope
+            timeout: 15
+          - test-group: logging-misc
+            test-path: >-
+              tests/proxy_unit_tests/test_proxy_reject_logging.py
+              tests/proxy_unit_tests/test_audit_logs_proxy.py
+              tests/proxy_unit_tests/test_search_api_logging.py
+            workers: 4
+            dist: loadscope
+            timeout: 15
+
+          # ---- db-and-spend: isolate the 170s schema-migration test ----
+          # test_db_schema_migration.py has exactly one test, and that test
+          # is mostly waiting on `prisma migrate deploy` / `prisma migrate
+          # diff` subprocesses (~170s). It does no CPU-bound Python work
+          # inside the test. Running with workers=0 (serial, no xdist)
+          # skips the 4-worker cold-start cost we'd otherwise pay for a
+          # single test, saving ~4 minutes of wall-clock.
+          - test-group: schema-migration
+            test-path: "tests/proxy_unit_tests/test_db_schema_migration.py"
+            workers: 0
+            dist: loadscope
+            timeout: 15
+          - test-group: db-and-spend
+            test-path: >-
+              tests/proxy_unit_tests/test_prisma_client_backoff_retry.py
+              tests/proxy_unit_tests/test_db_schema_changes.py
+              tests/proxy_unit_tests/test_e2e_pod_lock_manager.py
+              tests/proxy_unit_tests/test_skills_db.py
+              tests/proxy_unit_tests/test_update_daily_tag_spend.py
+              tests/proxy_unit_tests/test_update_spend.py
+              tests/proxy_unit_tests/test_proxy_encrypt_decrypt.py
+            workers: 4
+            dist: loadscope
+            timeout: 15
+
+          # ---- guardrails + budget + hooks: split into 2 ----
+          - test-group: guardrails-hooks
+            test-path: >-
+              tests/proxy_unit_tests/test_proxy_setting_guardrails.py
+              tests/proxy_unit_tests/test_banned_keyword_list.py
+              tests/proxy_unit_tests/test_unit_test_proxy_hooks.py
+            workers: 4
+            dist: loadscope
+            timeout: 15
+          - test-group: budgets
+            test-path: >-
+              tests/proxy_unit_tests/test_default_end_user_budget_simple.py
+              tests/proxy_unit_tests/test_unit_test_max_model_budget_limiter.py
+              tests/proxy_unit_tests/test_zero_cost_model_budget_bypass.py
+            workers: 4
+            dist: loadscope
+            timeout: 15
+
+          - test-group: endpoints-and-responses
+            test-path: >-
+              tests/proxy_unit_tests/test_blog_posts_endpoint.py
+              tests/proxy_unit_tests/test_models_fallback_endpoint.py
+              tests/proxy_unit_tests/test_google_endpoint_routing.py
+              tests/proxy_unit_tests/test_google_gemini_proxy_request.py
+              tests/proxy_unit_tests/test_get_favicon.py
+              tests/proxy_unit_tests/test_get_image.py
+              tests/proxy_unit_tests/test_ui_path_detection.py
+              tests/proxy_unit_tests/test_prompt_test_endpoint.py
+              tests/proxy_unit_tests/test_check_batch_cost.py
+              tests/proxy_unit_tests/test_check_responses_cost.py
+              tests/proxy_unit_tests/test_response_polling_handler.py
+              tests/proxy_unit_tests/test_response_polling_pre_call_checks.py
+              tests/proxy_unit_tests/test_realtime_cache.py
+              tests/proxy_unit_tests/test_proxy_exception_mapping.py
+              tests/proxy_unit_tests/test_custom_tokenizer_bug.py
+              tests/proxy_unit_tests/test_model_response_typing
+            workers: 4
+            dist: loadscope
+            timeout: 15
     uses: ./.github/workflows/_test-unit-services-base.yml
     with:
       test-path: ${{ matrix.test-path }}
@@ -49,8 +234,5 @@ jobs:
       reruns: 2
       timeout-minutes: ${{ matrix.timeout }}
       enable-postgres: true
+      dist: ${{ matrix.dist }}
       artifact-name: proxy-db-${{ matrix.test-group }}
-    secrets:
-      DATABASE_URL: ${{ secrets.DATABASE_URL }}
-      POSTGRES_USER: ${{ secrets.POSTGRES_USER }}
-      POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}

@@ -113,10 +113,10 @@ def test_decode_realtime_token_payload_ephemeral_key_not_string():
 
 
 @pytest.fixture
-def proxy_app():
+def proxy_app(monkeypatch):
     from litellm.proxy import proxy_server
 
-    proxy_server.master_key = "sk-test-master-key"
+    monkeypatch.setattr(proxy_server, "master_key", "sk-test-master-key")
     return proxy_server.app
 
 
@@ -276,10 +276,6 @@ async def test_realtime_calls_success_with_valid_encrypted_token(
     mock_pre_call_hook,
 ):
     """POST /v1/realtime/calls returns 201 with valid encrypted token from client_secrets."""
-    from litellm.proxy import proxy_server
-
-    proxy_server.master_key = "sk-test-master-key"
-
     # Build a valid encrypted token (same format as client_secrets returns)
     future_expires_at = int(time.time()) + 3600
     token_payload = _encode_realtime_token_payload(

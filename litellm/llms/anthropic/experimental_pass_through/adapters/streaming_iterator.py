@@ -338,8 +338,6 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                                 "index": max(self.current_content_block_index - 1, 0),
                             }
                         )
-
-                        # 2. Start new content block
                         self.chunk_queue.append(
                             {
                                 "type": "content_block_start",
@@ -361,8 +359,6 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
 
                         # Reset state for new block
                         self.sent_content_block_finish = False
-
-                        # Return the first queued item
                         return self.chunk_queue.popleft()
 
                     if (

@@ -15,6 +15,8 @@ export const LOGS_SORT_FIELD_MAP = {
   spend: "spend",
   total_tokens: "total_tokens",
   request_duration_ms: "request_duration_ms",
+  model: "model",
+  ttft_ms: "ttft_ms",
 } as const;
 
 export type LogsSortField = keyof typeof LOGS_SORT_FIELD_MAP;
@@ -272,7 +274,17 @@ export const createColumns = (sortProps?: LogsSortProps): ColumnDef<LogEntry>[] 
     },
   },
   {
-    header: "TTFT (s)",
+    header: sortProps
+      ? () => (
+          <SortableHeader
+            label="TTFT (s)"
+            field="ttft_ms"
+            sortBy={sortProps.sortBy}
+            sortOrder={sortProps.sortOrder}
+            onSortChange={sortProps.onSortChange}
+          />
+        )
+      : "TTFT (s)",
     accessorKey: "completionStartTime",
     cell: (info: any) => {
       const row = info.row.original;
@@ -328,7 +340,17 @@ export const createColumns = (sortProps?: LogsSortProps): ColumnDef<LogEntry>[] 
     ),
   },
   {
-    header: "Model",
+    header: sortProps
+      ? () => (
+          <SortableHeader
+            label="Model"
+            field="model"
+            sortBy={sortProps.sortBy}
+            sortOrder={sortProps.sortOrder}
+            onSortChange={sortProps.onSortChange}
+          />
+        )
+      : "Model",
     accessorKey: "model",
     cell: (info: any) => {
       const row = info.row.original;

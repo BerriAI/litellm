@@ -9,7 +9,7 @@
 
 ## LiteLLM versions of the OpenAI Exception Types
 
-from typing import Optional
+from typing import Any, Dict, Optional
 
 import httpx
 import openai
@@ -1015,6 +1015,35 @@ class MidStreamFallbackError(ServiceUnavailableError):  # type: ignore
 
     def __repr__(self):
         return self.__str__()
+
+
+class ModifyResponseException(Exception):
+    """
+    Exception raised when a guardrail wants to modify the response.
+
+    This exception carries the synthetic response that should be returned
+    to the user instead of calling the LLM or instead of the LLM's response.
+    It should be caught by the proxy and returned with a 200 status code.
+
+    This is a base exception that all guardrails can use to replace responses,
+    allowing violation messages to be returned as successful responses
+    rather than errors.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        model: str,
+        request_data: Dict[str, Any],
+        guardrail_name: Optional[str] = None,
+        detection_info: Optional[Dict[str, Any]] = None,
+    ):
+        self.message = message
+        self.model = model
+        self.request_data = request_data
+        self.guardrail_name = guardrail_name
+        self.detection_info = detection_info or {}
+        super().__init__(message)
 
 
 class GuardrailInterventionNormalStringError(

@@ -115,7 +115,8 @@ def test_router_vector_store_file_delete_passes_correct_args():
         assert call_kwargs["custom_llm_provider"] == "openai"
 
 
-def test_update_request_data_with_litellm_managed_vector_store_registry():
+@pytest.mark.asyncio
+async def test_update_request_data_with_litellm_managed_vector_store_registry():
     """
     Test that _update_request_data_with_litellm_managed_vector_store_registry
     correctly updates request data with vector store registry information.
@@ -139,7 +140,7 @@ def test_update_request_data_with_litellm_managed_vector_store_registry():
 
     # Test with vector store registry
     with patch.object(litellm, "vector_store_registry", mock_registry):
-        result = _update_request_data_with_litellm_managed_vector_store_registry(
+        result = await _update_request_data_with_litellm_managed_vector_store_registry(
             data=data, vector_store_id=vector_store_id
         )
 
@@ -158,7 +159,7 @@ def test_update_request_data_with_litellm_managed_vector_store_registry():
     # Test with no vector store registry
     with patch.object(litellm, "vector_store_registry", None):
         original_data = {"existing_key": "existing_value"}
-        result = _update_request_data_with_litellm_managed_vector_store_registry(
+        result = await _update_request_data_with_litellm_managed_vector_store_registry(
             data=original_data, vector_store_id=vector_store_id
         )
 
@@ -1686,10 +1687,26 @@ async def test_new_vector_store_auto_resolves_from_router():
     )
 
 
+def _stub_user_api_key(
+    *,
+    team_id=None,
+    user_role=None,
+    object_permission=None,
+    object_permission_id=None,
+    team_object_permission_id=None,
+):
+    user = UserAPIKeyAuth(team_id=team_id, user_role=user_role)
+    user.object_permission = object_permission
+    user.object_permission_id = object_permission_id
+    user.team_object_permission_id = team_object_permission_id
+    return user
+
+
 class TestCheckVectorStoreAccess:
     """Test suite for _check_vector_store_access function."""
 
-    def test_access_granted_when_no_team_id(self):
+    @pytest.mark.asyncio
+    async def test_access_granted_when_no_team_id(self):
         """Test that access is granted when vector store has no team_id (legacy behavior)."""
         vector_store: LiteLLM_ManagedVectorStore = {
             "vector_store_id": "test-store",
@@ -1697,13 +1714,12 @@ class TestCheckVectorStoreAccess:
             # No team_id field
         }
 
-        mock_user_api_key = MagicMock(spec=UserAPIKeyAuth)
-        mock_user_api_key.team_id = "team-123"
-
-        result = _check_vector_store_access(vector_store, mock_user_api_key)
+        user = _stub_user_api_key(team_id="team-123")
+        result = await _check_vector_store_access(vector_store, user)
         assert result is True
 
-    def test_access_granted_when_team_ids_match(self):
+    @pytest.mark.asyncio
+    async def test_access_granted_when_team_ids_match(self):
         """Test that access is granted when user's team_id matches vector store's team_id."""
         vector_store: LiteLLM_ManagedVectorStore = {
             "vector_store_id": "test-store",
@@ -1711,13 +1727,12 @@ class TestCheckVectorStoreAccess:
             "team_id": "team-123",
         }
 
-        mock_user_api_key = MagicMock(spec=UserAPIKeyAuth)
-        mock_user_api_key.team_id = "team-123"
-
-        result = _check_vector_store_access(vector_store, mock_user_api_key)
+        user = _stub_user_api_key(team_id="team-123")
+        result = await _check_vector_store_access(vector_store, user)
         assert result is True
 
-    def test_access_denied_when_team_ids_dont_match(self):
+    @pytest.mark.asyncio
+    async def test_access_denied_when_team_ids_dont_match(self):
         """Test that access is denied when user's team_id doesn't match vector store's team_id."""
         vector_store: LiteLLM_ManagedVectorStore = {
             "vector_store_id": "test-store",
@@ -1725,13 +1740,12 @@ class TestCheckVectorStoreAccess:
             "team_id": "team-123",
         }
 
-        mock_user_api_key = MagicMock(spec=UserAPIKeyAuth)
-        mock_user_api_key.team_id = "team-456"
-
-        result = _check_vector_store_access(vector_store, mock_user_api_key)
+        user = _stub_user_api_key(team_id="team-456")
+        result = await _check_vector_store_access(vector_store, user)
         assert result is False
 
-    def test_access_denied_when_vector_store_has_team_id_but_user_doesnt(self):
+    @pytest.mark.asyncio
+    async def test_access_denied_when_vector_store_has_team_id_but_user_doesnt(self):
         """Test that access is denied when vector store has team_id but user doesn't."""
         vector_store: LiteLLM_ManagedVectorStore = {
             "vector_store_id": "test-store",
@@ -1739,10 +1753,8 @@ class TestCheckVectorStoreAccess:
             "team_id": "team-123",
         }
 
-        mock_user_api_key = MagicMock(spec=UserAPIKeyAuth)
-        mock_user_api_key.team_id = None
-
-        result = _check_vector_store_access(vector_store, mock_user_api_key)
+        user = _stub_user_api_key(team_id=None)
+        result = await _check_vector_store_access(vector_store, user)
         assert result is False
 
 

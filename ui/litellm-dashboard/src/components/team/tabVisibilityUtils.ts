@@ -5,6 +5,7 @@
 
 export const TEAM_INFO_TAB_KEYS = {
   OVERVIEW: "overview",
+  MY_USER: "my-user",
   VIRTUAL_KEYS: "virtual-keys",
   MEMBERS: "members",
   MEMBER_PERMISSIONS: "member-permissions",
@@ -13,6 +14,7 @@ export const TEAM_INFO_TAB_KEYS = {
 
 export const TEAM_INFO_TAB_LABELS: Record<string, string> = {
   [TEAM_INFO_TAB_KEYS.OVERVIEW]: "Overview",
+  [TEAM_INFO_TAB_KEYS.MY_USER]: "My User",
   [TEAM_INFO_TAB_KEYS.VIRTUAL_KEYS]: "Virtual Keys",
   [TEAM_INFO_TAB_KEYS.MEMBERS]: "Members",
   [TEAM_INFO_TAB_KEYS.MEMBER_PERMISSIONS]: "Member Permissions",
@@ -21,11 +23,15 @@ export const TEAM_INFO_TAB_LABELS: Record<string, string> = {
 
 /**
  * Returns the list of tab keys that should be visible based on permissions.
- * - Overview, Virtual Keys: always visible
+ * - Overview, My User, Virtual Keys: always visible
  * - Members, Member Permissions, Settings: only when canEditTeam is true
  */
 export function getTeamInfoVisibleTabs(canEditTeam: boolean): readonly string[] {
-  const baseTabs = [TEAM_INFO_TAB_KEYS.OVERVIEW, TEAM_INFO_TAB_KEYS.VIRTUAL_KEYS];
+  const baseTabs = [
+    TEAM_INFO_TAB_KEYS.OVERVIEW,
+    TEAM_INFO_TAB_KEYS.MY_USER,
+    TEAM_INFO_TAB_KEYS.VIRTUAL_KEYS,
+  ];
   if (canEditTeam) {
     return [
       ...baseTabs,

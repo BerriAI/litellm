@@ -1,9 +1,9 @@
 # Base image for building
-ARG LITELLM_BUILD_IMAGE=cgr.dev/chainguard/wolfi-base@sha256:a5a619c1793039dcf92f02178f37c94bb3d6001403716da59d6092dfe8d9b502
+ARG LITELLM_BUILD_IMAGE=cgr.dev/chainguard/wolfi-base@sha256:f26d42a15d09d9a643b231df929fa3cf609bedc58a728eb445be89a9d8d1da9f
 
 # Runtime image
-ARG LITELLM_RUNTIME_IMAGE=cgr.dev/chainguard/wolfi-base@sha256:a5a619c1793039dcf92f02178f37c94bb3d6001403716da59d6092dfe8d9b502
-ARG UV_IMAGE=ghcr.io/astral-sh/uv:0.10.9@sha256:10902f58a1606787602f303954cea099626a4adb02acbac4c69920fe9d278f82
+ARG LITELLM_RUNTIME_IMAGE=cgr.dev/chainguard/wolfi-base@sha256:f26d42a15d09d9a643b231df929fa3cf609bedc58a728eb445be89a9d8d1da9f
+ARG UV_IMAGE=ghcr.io/astral-sh/uv:0.11.7@sha256:733b4042187702f832f7fdecb3aff14a61b288c4ca37af188bb5715c1caebaf8
 
 FROM $UV_IMAGE AS uvbin
 
@@ -69,25 +69,14 @@ FROM $LITELLM_RUNTIME_IMAGE AS runtime
 USER root
 
 RUN apk add --no-cache bash openssl tzdata nodejs npm python3 libsndfile supervisor && \
-    npm install -g npm@11.12.1 tar@7.5.11 glob@11.1.0 @isaacs/brace-expansion@5.0.1 minimatch@10.2.4 diff@8.0.3 && \
+    npm install -g npm@11.12.1 tar@7.5.11 glob@13.0.6 @isaacs/brace-expansion@5.0.1 brace-expansion@5.0.5 minimatch@10.2.4 diff@8.0.3 picomatch@4.0.4 && \
     GLOBAL="$(npm root -g)" && \
-    find "$GLOBAL/npm" -type d -name "tar" -path "*/node_modules/tar" | while read d; do \
-        rm -rf "$d" && cp -rL "$GLOBAL/tar" "$d"; \
+    for pkg in tar glob @isaacs/brace-expansion brace-expansion minimatch diff picomatch; do \
+        name="${pkg##*/}"; \
+        find "$GLOBAL/npm" -type d -name "$name" -path "*/node_modules/$pkg" | while read d; do \
+            rm -rf "$d" && cp -rL "$GLOBAL/$pkg" "$d"; \
+        done; \
     done && \
-    find "$GLOBAL/npm" -type d -name "glob" -path "*/node_modules/glob" | while read d; do \
-        rm -rf "$d" && cp -rL "$GLOBAL/glob" "$d"; \
-    done && \
-    find "$GLOBAL/npm" -type d -name "brace-expansion" -path "*/node_modules/@isaacs/brace-expansion" | while read d; do \
-        rm -rf "$d" && cp -rL "$GLOBAL/@isaacs/brace-expansion" "$d"; \
-    done && \
-    find "$GLOBAL/npm" -type d -name "minimatch" -path "*/node_modules/minimatch" | while read d; do \
-        rm -rf "$d" && cp -rL "$GLOBAL/minimatch" "$d"; \
-    done && \
-    find "$GLOBAL/npm" -type d -name "diff" -path "*/node_modules/diff" | while read d; do \
-        rm -rf "$d" && cp -rL "$GLOBAL/diff" "$d"; \
-    done && \
-    find /usr/local/lib /usr/lib -path "*/node_modules/npm/package.json" -exec \
-        sed -i 's/"tar": "\^7\.5\.[0-9]*"/"tar": "^7.5.10"/g; s/"minimatch": "\^10\.[0-9.]*"/"minimatch": "^10.2.4"/g' {} + 2>/dev/null && \
     npm cache clean --force && \
     { apk del --no-cache npm 2>/dev/null || true; }
 

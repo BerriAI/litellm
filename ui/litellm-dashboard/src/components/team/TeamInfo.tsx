@@ -46,6 +46,7 @@ import EditLoggingSettings from "./EditLoggingSettings";
 import RouterSettingsAccordion, { RouterSettingsAccordionRef } from "../common_components/RouterSettingsAccordion";
 import MemberModal from "./EditMembership";
 import MemberPermissions from "./member_permissions";
+import MyUserTab from "./MyUserTab";
 import {
   getTeamInfoDefaultTab,
   getTeamInfoVisibleTabs,
@@ -60,6 +61,7 @@ export interface TeamMembership {
   team_id: string;
   budget_id: string;
   spend: number;
+  total_spend: number | null;
   litellm_budget_table: {
     budget_id: string;
     soft_budget: number | null;
@@ -69,6 +71,7 @@ export interface TeamMembership {
     rpm_limit: number | null;
     model_max_budget: Record<string, number> | null;
     budget_duration: string | null;
+    budget_reset_at: string | null;
     allowed_models?: string[] | null;
   };
 }
@@ -850,6 +853,11 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                 />
               </Grid>
             ),
+          },
+          {
+            key: TEAM_INFO_TAB_KEYS.MY_USER,
+            label: TEAM_INFO_TAB_LABELS[TEAM_INFO_TAB_KEYS.MY_USER],
+            children: <MyUserTab teamId={teamId} />,
           },
           {
             key: TEAM_INFO_TAB_KEYS.VIRTUAL_KEYS,

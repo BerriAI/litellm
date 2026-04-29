@@ -262,7 +262,7 @@ class TestOpenTelemetryProviderInitialization(unittest.TestCase):
 class TestOpenTelemetry(unittest.TestCase):
     POLL_INTERVAL = 0.05
     POLL_TIMEOUT = 2.0
-    MODEL = "arn:aws:bedrock:us-west-2:1234567890123:inference-profile/us.anthropic.claude-3-7-sonnet-20250219-v1:0"
+    MODEL = "arn:aws:bedrock:us-west-2:1234567890123:inference-profile/us.anthropic.claude-sonnet-4-5-20250929-v1:0"
     HERE = os.path.dirname(__file__)
 
     @patch.dict(os.environ, {}, clear=True)

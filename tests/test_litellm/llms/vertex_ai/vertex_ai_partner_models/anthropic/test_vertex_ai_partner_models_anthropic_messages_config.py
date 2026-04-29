@@ -311,3 +311,29 @@ def test_transform_anthropic_messages_request_removes_scope_from_cache_control()
     # scope removed from message content
     assert "scope" not in result["messages"][0]["content"][0]["cache_control"]
     assert result["messages"][0]["content"][0]["cache_control"]["type"] == "ephemeral"
+
+
+def test_provider_config_manager_reuses_vertex_anthropic_messages_config_instance():
+    """
+    Regression test: repeated provider config lookups for the same Vertex Claude model
+    should return the same config instance (which preserves auth cache state).
+    """
+    import litellm
+    from litellm.utils import ProviderConfigManager
+
+    ProviderConfigManager._get_provider_anthropic_messages_config_cached.cache_clear()
+    try:
+        first_config = ProviderConfigManager.get_provider_anthropic_messages_config(
+            model="claude-opus-4-6",
+            provider=litellm.LlmProviders.VERTEX_AI,
+        )
+        second_config = ProviderConfigManager.get_provider_anthropic_messages_config(
+            model="claude-opus-4-6",
+            provider=litellm.LlmProviders.VERTEX_AI,
+        )
+
+        assert isinstance(first_config, VertexAIPartnerModelsAnthropicMessagesConfig)
+        assert isinstance(second_config, VertexAIPartnerModelsAnthropicMessagesConfig)
+        assert first_config is second_config
+    finally:
+        ProviderConfigManager._get_provider_anthropic_messages_config_cached.cache_clear()
