@@ -256,3 +256,55 @@ class TestDynamicProjectNameOnSpan:
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# --- Security: SSRF via prompt_version_id path traversal ---
+
+
+def test_arize_phoenix_client_sanitize_id_rejects_traversal():
+    from litellm.integrations.arize.arize_phoenix_client import _sanitize_id
+
+    # dotdot without slashes
+    with pytest.raises(ValueError, match="path traversal"):
+        _sanitize_id("..something")
+    # full traversal (slash caught first)
+    with pytest.raises(ValueError, match="disallowed characters"):
+        _sanitize_id("../../projects")
+
+
+def test_arize_phoenix_client_sanitize_id_rejects_slash():
+    from litellm.integrations.arize.arize_phoenix_client import _sanitize_id
+
+    with pytest.raises(ValueError, match="disallowed characters"):
+        _sanitize_id("valid/extra")
+
+
+def test_arize_phoenix_client_sanitize_id_rejects_fragment():
+    from litellm.integrations.arize.arize_phoenix_client import _sanitize_id
+
+    with pytest.raises(ValueError, match="disallowed characters"):
+        _sanitize_id("abc#suffix")
+
+
+def test_arize_phoenix_client_sanitize_id_rejects_query():
+    from litellm.integrations.arize.arize_phoenix_client import _sanitize_id
+
+    with pytest.raises(ValueError, match="disallowed characters"):
+        _sanitize_id("abc?x=1")
+
+
+def test_arize_phoenix_client_sanitize_id_allows_uuid():
+    from litellm.integrations.arize.arize_phoenix_client import _sanitize_id
+
+    uid = "550e8400-e29b-41d4-a716-446655440000"
+    assert _sanitize_id(uid) == uid
+
+
+def test_arize_phoenix_client_get_prompt_version_rejects_traversal():
+    from litellm.integrations.arize.arize_phoenix_client import ArizePhoenixClient
+
+    client = ArizePhoenixClient(
+        api_key="test-key", api_base="https://app.phoenix.arize.com"
+    )
+    with pytest.raises(ValueError, match="disallowed characters"):
+        client.get_prompt_version("../../projects")
