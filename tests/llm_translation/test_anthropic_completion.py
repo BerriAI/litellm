@@ -1888,12 +1888,6 @@ def test_metadata_filter_applies_to_azure_anthropic():
 
 
 def test_anthropic_basic_completion_replay():
-    """Smoke-test that a vanilla Anthropic completion replays from a cassette.
-
-    Exercises the full LiteLLM transformation pipeline (request shaping +
-    response parsing) against a real-shape Anthropic payload. The cassette
-    is loaded from the Redis-backed VCR cache configured in conftest.py.
-    """
     response = litellm.completion(
         model="anthropic/claude-sonnet-4-5-20250929",
         messages=[{"role": "user", "content": "Hello!"}],
@@ -1903,17 +1897,10 @@ def test_anthropic_basic_completion_replay():
     assert response.choices[0].message.content == ("Hello! How can I help you today?")
     assert response.usage.prompt_tokens == 12
     assert response.usage.completion_tokens == 11
-    # Anthropic sets stop_reason="end_turn" → litellm normalises to "stop"
     assert response.choices[0].finish_reason == "stop"
 
 
 def test_anthropic_streaming_completion_replay():
-    """Replay a streaming Anthropic completion from the VCR cache.
-
-    Exercises the SSE chunk parser and the public streaming surface — any
-    regression in the streaming transformation surfaces here because the
-    cassette captures every ``content_block_delta`` event Anthropic emits.
-    """
     stream = litellm.completion(
         model="anthropic/claude-sonnet-4-5-20250929",
         messages=[{"role": "user", "content": "Hello!"}],

@@ -1,10 +1,4 @@
 # conftest.py
-#
-# Auto-applies ``@pytest.mark.vcr`` to every collected test (see
-# ``pytest_collection_modifyitems``) so live provider calls land in the
-# Redis-backed VCR cache. The persister, header scrubbing and 2xx-only
-# filtering live in ``tests/_vcr_redis_persister.py``; the cache key and
-# 24h TTL match the llm_translation conftest.
 
 import asyncio
 import importlib
@@ -25,7 +19,6 @@ from tests._vcr_redis_persister import (  # noqa: E402
 )
 
 
-# Headers that must never be persisted to a cassette.
 _FILTERED_REQUEST_HEADERS = (
     "authorization",
     "x-api-key",
@@ -44,7 +37,6 @@ _FILTERED_REQUEST_HEADERS = (
     "x-goog-user-project",
 )
 
-# Per-request response headers we strip so cassettes diff cleanly.
 _FILTERED_RESPONSE_HEADERS = (
     "set-cookie",
     "x-request-id",
@@ -70,8 +62,7 @@ def _scrub_response(response):
 
 
 def _before_record_response(response):
-    response = _scrub_response(response)
-    return filter_non_2xx_response(response)
+    return filter_non_2xx_response(_scrub_response(response))
 
 
 @pytest.fixture(scope="module")
@@ -152,17 +143,12 @@ def setup_and_teardown():
 
 
 def pytest_collection_modifyitems(config, items):
-    # Auto-apply ``@pytest.mark.vcr`` so any provider call lands in the
-    # Redis cache. No respx files exist in this directory today; if any are
-    # added later, exclude them by filename here. Skip entirely when VCR
-    # is disabled (no REDIS_HOST or LITELLM_VCR_DISABLE=1).
     if not _vcr_disabled():
         for item in items:
             if item.get_closest_marker("vcr") is not None:
                 continue
             item.add_marker(pytest.mark.vcr)
 
-    # Preserve historical custom_logger ordering.
     custom_logger_tests = [
         item for item in items if "custom_logger" in item.parent.name
     ]
