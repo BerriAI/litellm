@@ -77,7 +77,7 @@ async def test_anthropic_bedrock_thinking_blocks_with_none_content():
     # test _bedrock_converse_messages_pt_async
     result = await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
         messages=messages,
-        model="us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+        model="us.anthropic.claude-sonnet-4-5-20250929-v1:0",
         llm_provider="bedrock",
     )
 
