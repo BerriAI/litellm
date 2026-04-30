@@ -162,6 +162,9 @@ class OpenrouterConfig(OpenAIGPTConfig):
         if self._supports_cache_control_in_content(model):
             messages = self._move_cache_control_to_content(messages)
 
+        # Strip "openrouter/" prefix before sending to OpenRouter API
+        model = model.replace("openrouter/", "") if model.startswith("openrouter/") else model
+
         extra_body = optional_params.pop("extra_body", {})
         response = super().transform_request(
             model, messages, optional_params, litellm_params, headers
