@@ -4,10 +4,14 @@ New Relic AI Monitoring Integration for LiteLLM
 This module provides integration with New Relic's AI Monitoring feature to track
 LLM requests, responses, and usage metrics.
 
-Environment Variables:
+Environment Variables (consumed by the New Relic agent at process bootstrap -
+set via container env, or before invoking `newrelic-admin run-program`):
     NEW_RELIC_LICENSE_KEY: Your New Relic license key (required)
     NEW_RELIC_APP_NAME: Your application name (required)
-    NEW_RELIC_AI_MONITORING_RECORD_CONTENT_ENABLED: Whether to record message content (optional, default: true)
+
+UI- and runtime-toggleable:
+    NEW_RELIC_AI_MONITORING_RECORD_CONTENT_ENABLED: Whether to record message
+        content (optional, default: true)
 
 Configuration:
     Message logging can be controlled via (both must agree to record):
@@ -100,10 +104,11 @@ class NewRelicLogger(CustomLogger):
             self.enabled = False
         elif _newrelic_agent is None:
             verbose_logger.error(
-                "New Relic Python agent not installed. "
-                "Use the litellm/litellm-newrelic Docker image, which includes the agent: "
-                "docker pull litellm/litellm-newrelic:latest. "
-                "Alternatively, install the agent manually with: pip install newrelic. "
+                "New Relic Python agent not installed. Use the "
+                "`litellm/litellm-newrelic` Docker image, which bundles the agent "
+                "and wraps startup with `newrelic-admin run-program`. To run from "
+                "source, install the agent (`pip install newrelic`) and start the "
+                "proxy with `newrelic-admin run-program litellm --config config.yaml`. "
                 "Integration will be disabled."
             )
             self.enabled = False
@@ -243,23 +248,32 @@ class NewRelicLogger(CustomLogger):
         self,
         kwargs: Dict,
         standard_logging_object: Optional[StandardLoggingPayload] = None,
-    ) -> Tuple[Optional[str], Optional[str]]:
+    ) -> str:
         """
-        Get current New Relic trace ID and span ID.
+        Get the New Relic trace ID for AI monitoring events.
 
-        Resolution order for trace_id:
-        1. W3C traceparent header (litellm_params.metadata.headers.traceparent)
-        2. StandardLoggingPayload.trace_id (LiteLLM's internal trace for retry/fallback grouping)
-        3. Generated UUID for event grouping
+        This integration runs in LiteLLM's async logging worker, outside the
+        New Relic agent's current transaction. Because we can't call
+        `newrelic.agent.current_trace_id()` to let the agent populate the
+        trace_id on AIM custom events, we manually simulate what the agent
+        would do. An AIM event without a trace_id is malformed per the NR
+        schema, so this method always returns a valid string.
 
-        This integration runs asynchronously from the actual request (via logging worker),
-        so we cannot use the New Relic agent to pull the current traceId and spanId.
+        Resolution order:
+        1. W3C traceparent header (litellm_params.metadata.headers.traceparent) -
+           what the agent would link to if we were in-transaction.
+        2. StandardLoggingPayload.trace_id - LiteLLM's internal trace for
+           retry/fallback grouping.
+        3. Generated UUID - synthetic grouping key when upstream context is
+           absent or parsing it fails.
+
+        Span IDs are intentionally not emitted: any span ID recoverable from
+        the inbound traceparent is the caller's parent span, not ours.
 
         Returns:
-            Tuple of (trace_id, span_id):
-            - trace_id: str or None (str if found/generated, None only on error)
-            - span_id: always None (no LiteLLM span IDs available)
+            trace_id: always a non-empty string.
         """
+        trace_id: Optional[str] = None
         try:
             litellm_params = kwargs.get("litellm_params") or {}
             metadata = litellm_params.get("metadata") or {}
@@ -268,9 +282,6 @@ class NewRelicLogger(CustomLogger):
             traceparent = next(
                 (v for k, v in headers.items() if k.lower() == "traceparent"), None
             )
-
-            trace_id = None
-            span_id = None
 
             if traceparent:
                 # Extract trace_id from traceparent header if available
@@ -284,20 +295,20 @@ class NewRelicLogger(CustomLogger):
                 if slo_trace_id:
                     trace_id = slo_trace_id
 
-            if not trace_id:
-                # Generate a random trace_id for grouping AI monitoring events
-                trace_id = uuid.uuid4().hex
-                verbose_logger.debug(
-                    f"New Relic trace_id not available from distributed tracing headers or "
-                    f"StandardLoggingPayload. Generated trace_id={trace_id} for AI monitoring "
-                    f"event grouping."
-                )
-
-            return trace_id, span_id
-
         except Exception as e:
-            verbose_logger.warning(f"Unable to get New Relic trace context: {e}")
-            return None, None
+            verbose_logger.warning(
+                f"Unable to parse New Relic trace context from upstream sources: {e}"
+            )
+
+        if not trace_id:
+            trace_id = uuid.uuid4().hex
+            verbose_logger.debug(
+                f"New Relic trace_id not available from distributed tracing headers or "
+                f"StandardLoggingPayload. Generated trace_id={trace_id} for AI monitoring "
+                f"event grouping."
+            )
+
+        return trace_id
 
     def _extract_completion_id(self, kwargs: Dict, response_obj: ModelResponse) -> str:
         """
@@ -582,7 +593,6 @@ class NewRelicLogger(CustomLogger):
         self,
         request_id: str,
         trace_id: Optional[str],
-        span_id: Optional[str],
         request_model: str,
         response_model: str,
         vendor: str,
@@ -611,8 +621,6 @@ class NewRelicLogger(CustomLogger):
             # Add optional attributes if present
             if trace_id:
                 event_data["trace_id"] = trace_id
-            if span_id:
-                event_data["span_id"] = span_id
 
             if duration is not None:
                 event_data["duration"] = duration
@@ -642,7 +650,6 @@ class NewRelicLogger(CustomLogger):
         request_id: str,
         llm_response_id: str,
         trace_id: Optional[str],
-        span_id: Optional[str],
         messages: List[Dict[str, Any]],
     ):
         """Record LlmChatCompletionMessage events to New Relic.
@@ -651,7 +658,6 @@ class NewRelicLogger(CustomLogger):
             request_id: Agent-generated UUID that links to Summary event's id
             llm_response_id: LLM's response ID (e.g., "chatcmpl-...") for message id format
             trace_id: Trace ID for distributed tracing (None if not available)
-            span_id: Span ID for distributed tracing (None if not available)
             messages: List of message dicts to record
         """
         try:
@@ -680,8 +686,6 @@ class NewRelicLogger(CustomLogger):
                 # Add trace context if available
                 if trace_id:
                     event_data["trace_id"] = trace_id
-                if span_id:
-                    event_data["span_id"] = span_id
 
                 # Add content only if it was included in the message data
                 if "content" in message:
@@ -743,12 +747,7 @@ class NewRelicLogger(CustomLogger):
         )
 
         # Get trace context
-        trace_id, span_id = self._get_trace_context(kwargs, standard_logging_object)
-        if not trace_id:
-            verbose_logger.warning(
-                "Failed to get trace context; skipping New Relic event recording."
-            )
-            return
+        trace_id = self._get_trace_context(kwargs, standard_logging_object)
 
         # Generate unique request ID for this request (used as Summary event id)
         request_id = str(uuid.uuid4())
@@ -777,7 +776,6 @@ class NewRelicLogger(CustomLogger):
         self._record_summary_event(
             request_id=request_id,
             trace_id=trace_id,
-            span_id=span_id,
             request_model=request_model,
             response_model=response_model,
             vendor=vendor,
@@ -793,7 +791,6 @@ class NewRelicLogger(CustomLogger):
             request_id=request_id,
             llm_response_id=llm_response_id,
             trace_id=trace_id,
-            span_id=span_id,
             messages=messages,
         )
 
@@ -820,8 +817,14 @@ class NewRelicLogger(CustomLogger):
                 )
             return IntegrationHealthCheckStatus(
                 status="unhealthy",
-                error_message="New Relic agent application is not enabled. "
-                "Ensure the process was started with the New Relic agent initialized.",
+                error_message=(
+                    "New Relic agent application is not enabled. The process "
+                    "must be started under `newrelic-admin run-program` so the "
+                    "agent initializes before litellm imports. Use the "
+                    "`litellm/litellm-newrelic` Docker image (preferred) or, "
+                    "from source, run "
+                    "`newrelic-admin run-program litellm --config config.yaml`."
+                ),
             )
         except Exception as e:
             return IntegrationHealthCheckStatus(

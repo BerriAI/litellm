@@ -3332,8 +3332,6 @@ class AllCallbacks(LiteLLMPydanticObjectBase):
         litellm_callback_name="newrelic",
         ui_callback_name="New Relic",
         litellm_callback_params=[
-            "NEW_RELIC_APP_NAME",
-            "NEW_RELIC_LICENSE_KEY",
             "NEW_RELIC_AI_MONITORING_RECORD_CONTENT_ENABLED",
         ],
     )

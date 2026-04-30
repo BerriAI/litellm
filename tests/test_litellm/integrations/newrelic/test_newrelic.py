@@ -95,6 +95,26 @@ def make_response(
     }
 
 
+def make_slo(**overrides):
+    """Build a StandardLoggingPayload-like dict with sentinel values distinct from
+    make_kwargs/make_response defaults, so tests can prove the SLO branch won."""
+    base = {
+        "trace_id": "slo-trace-abc",
+        "custom_llm_provider": "slo-provider",
+        "model": "slo-model",
+        "prompt_tokens": 100,
+        "completion_tokens": 200,
+        "total_tokens": 300,
+        "response_time": 1.5,  # seconds; converted to ms by _get_duration
+        "model_parameters": {"temperature": 0.7, "max_tokens": 500},
+        "startTime": 2_000_000.0,
+        "endTime": 2_000_001.5,
+        "messages": [{"role": "user", "content": "from-slo"}],
+    }
+    base.update(overrides)
+    return base
+
+
 # ---------------------------------------------------------------------------
 # Init / configuration
 # ---------------------------------------------------------------------------
@@ -133,6 +153,12 @@ class TestNewRelicLoggerInit:
             "register_application",
             side_effect=RuntimeError("agent startup failed"),
         ):
+            with patch.dict(os.environ, NR_ENV):
+                logger = NewRelicLogger()
+        assert logger.enabled is False
+
+    def test_disabled_when_agent_package_missing(self):
+        with patch.object(nr_module, "_newrelic_agent", None):
             with patch.dict(os.environ, NR_ENV):
                 logger = NewRelicLogger()
         assert logger.enabled is False
@@ -178,6 +204,18 @@ class TestNewRelicLoggerInit:
                     logger = NewRelicLogger(turn_off_message_logging=True)
         assert logger.record_content is False
 
+    def test_newrelic_params_plain_dict_branch(self):
+        """litellm.newrelic_params can be a plain dict; it should be validated
+        through NewRelicInitParams and its values applied to the logger."""
+        with patch("newrelic.agent.register_application"):
+            with patch.dict(os.environ, NR_ENV):
+                with patch(
+                    "litellm.newrelic_params",
+                    {"turn_off_message_logging": True},
+                ):
+                    logger = NewRelicLogger()
+        assert logger.turn_off_message_logging is True
+
 
 # ---------------------------------------------------------------------------
 # _parse_bool_env
@@ -219,12 +257,12 @@ class TestGetTraceContext:
         kwargs = make_kwargs(
             traceparent="00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-00"
         )
-        trace_id, span_id = self.logger._get_trace_context(kwargs)
+        trace_id = self.logger._get_trace_context(kwargs)
         assert trace_id == "4bf92f3577b34da6a3ce929d0e0e4736"
 
     def test_generates_uuid_when_no_headers(self):
         kwargs = make_kwargs()
-        trace_id, span_id = self.logger._get_trace_context(kwargs)
+        trace_id = self.logger._get_trace_context(kwargs)
         assert trace_id is not None
         assert (
             len(trace_id) == 32
@@ -232,7 +270,7 @@ class TestGetTraceContext:
 
     def test_generates_uuid_when_traceparent_malformed(self):
         kwargs = make_kwargs(traceparent="not-valid")
-        trace_id, span_id = self.logger._get_trace_context(kwargs)
+        trace_id = self.logger._get_trace_context(kwargs)
         # Falls back to a 32-char lowercase hex, matching W3C traceparent format
         assert trace_id is not None
         assert len(trace_id) == 32
@@ -244,17 +282,19 @@ class TestGetTraceContext:
         kwargs["litellm_params"]["metadata"]["headers"] = {
             "Traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-00"
         }
-        trace_id, span_id = self.logger._get_trace_context(kwargs)
+        trace_id = self.logger._get_trace_context(kwargs)
         assert trace_id == "4bf92f3577b34da6a3ce929d0e0e4736"
 
-    def test_exception_returns_none_none(self):
-        import litellm.integrations.newrelic.newrelic as nr_module
-
-        with patch.object(nr_module, "uuid") as mock_uuid:
-            mock_uuid.uuid4.side_effect = RuntimeError("uuid failure")
-            trace_id, span_id = self.logger._get_trace_context({})
-        assert trace_id is None
-        assert span_id is None
+    def test_parse_failure_falls_through_to_synthetic_uuid(self):
+        """When parsing upstream sources raises, emit a synthetic UUID rather
+        than dropping the event. NR schema requires every AIM event carry a
+        trace_id; this method's contract is to always return a valid string.
+        """
+        # Non-dict headers value forces .items() to raise inside the try
+        kwargs = {"litellm_params": {"metadata": {"headers": "not-a-dict"}}}
+        trace_id = self.logger._get_trace_context(kwargs)
+        assert trace_id is not None
+        assert len(trace_id) == 32  # 32-char lowercase hex fallback
 
 
 # ---------------------------------------------------------------------------
@@ -294,6 +334,11 @@ class TestExtractMessageContent:
         result = self.logger._extract_message_content(msg)
         assert "describe this" in result
         assert "image_url" in result
+
+    def test_non_string_content_coerced_to_str(self):
+        """Numeric/bool content passes the None and list guards; final branch coerces to str."""
+        assert self.logger._extract_message_content({"content": 123}) == "123"
+        assert self.logger._extract_message_content({"content": True}) == "True"
 
 
 # ---------------------------------------------------------------------------
@@ -497,19 +542,19 @@ class TestExplicitNoneValues:
     def test_trace_context_litellm_params_none(self):
         kwargs = make_kwargs()
         kwargs["litellm_params"] = None
-        trace_id, _ = self.logger._get_trace_context(kwargs)
+        trace_id = self.logger._get_trace_context(kwargs)
         assert trace_id is not None  # falls back to UUID
 
     def test_trace_context_metadata_none(self):
         kwargs = make_kwargs()
         kwargs["litellm_params"] = {"metadata": None}
-        trace_id, _ = self.logger._get_trace_context(kwargs)
+        trace_id = self.logger._get_trace_context(kwargs)
         assert trace_id is not None
 
     def test_trace_context_headers_none(self):
         kwargs = make_kwargs()
         kwargs["litellm_params"] = {"metadata": {"headers": None}}
-        trace_id, _ = self.logger._get_trace_context(kwargs)
+        trace_id = self.logger._get_trace_context(kwargs)
         assert trace_id is not None
 
     # _get_request_params
@@ -710,17 +755,6 @@ class TestProcessSuccess:
 
         mock_app.assert_not_called()
 
-    def test_skips_recording_when_trace_id_is_none(self):
-        logger = make_logger()
-        mock_app = MagicMock()
-        mock_app.enabled = True
-
-        with patch.object(logger, "_get_trace_context", return_value=(None, None)):
-            with patch("newrelic.agent.application", return_value=mock_app):
-                logger._process_success(make_kwargs(), make_response())
-
-        mock_app.record_custom_event.assert_not_called()
-
 
 # ---------------------------------------------------------------------------
 # _record_error_metric
@@ -914,7 +948,6 @@ class TestRecordSummaryEvent:
         self.logger._record_summary_event(
             request_id="req-1",
             trace_id="trace-abc",
-            span_id=None,
             request_model="gpt-4",
             response_model="gpt-4",
             vendor="openai",
@@ -956,7 +989,6 @@ class TestRecordMessageEvents:
             request_id="req-1",
             llm_response_id="resp-1",
             trace_id="trace-abc",
-            span_id=None,
             messages=_MESSAGES,
         )
 
@@ -1082,3 +1114,111 @@ class TestAsyncHealthCheck:
             result = await logger.async_health_check()
         assert result["status"] == "unhealthy"
         assert "agent down" in result["error_message"]
+
+
+# ---------------------------------------------------------------------------
+# _extract_completion_id fallback chain
+# ---------------------------------------------------------------------------
+
+
+class TestExtractCompletionId:
+    def setup_method(self):
+        self.logger = make_logger()
+
+    def test_uses_litellm_call_id_when_response_has_no_id(self):
+        result = self.logger._extract_completion_id(
+            kwargs={"litellm_call_id": "call-abc-123"},
+            response_obj={},
+        )
+        assert result == "call-abc-123"
+
+    def test_generates_uuid_when_neither_id_present(self):
+        result = self.logger._extract_completion_id(kwargs={}, response_obj={})
+        # UUID4 hex-with-dashes is 36 chars; just confirm shape and uniqueness
+        assert isinstance(result, str)
+        assert len(result) == 36
+        second = self.logger._extract_completion_id(kwargs={}, response_obj={})
+        assert result != second
+
+
+# ---------------------------------------------------------------------------
+# StandardLoggingPayload preference across extractors
+# ---------------------------------------------------------------------------
+
+
+class TestStandardLoggingPayloadPreference:
+    """Each extractor that accepts a StandardLoggingPayload must prefer its
+    values over the raw kwargs/response fallbacks."""
+
+    def setup_method(self):
+        self.logger = make_logger()
+
+    def test_trace_context_uses_slo_trace_id_when_no_traceparent(self):
+        kwargs = {"litellm_params": {"metadata": {"headers": {}}}}
+        trace_id = self.logger._get_trace_context(
+            kwargs, standard_logging_object=make_slo()
+        )
+        assert trace_id == "slo-trace-abc"
+
+    def test_vendor_from_slo(self):
+        # kwargs carries a different provider; SLO must win.
+        kwargs = {"litellm_params": {"custom_llm_provider": "kwargs-provider"}}
+        assert (
+            self.logger._get_vendor(kwargs, standard_logging_object=make_slo())
+            == "slo-provider"
+        )
+
+    def test_model_names_uses_slo_model(self):
+        request_model, _ = self.logger._get_model_names(
+            {"model": "kwargs-model"},
+            make_response(model="response-model"),
+            standard_logging_object=make_slo(),
+        )
+        assert request_model == "slo-model"
+
+    def test_usage_from_slo_when_any_token_field_present(self):
+        # make_response defaults to 10/20/30 tokens; SLO sentinels are 100/200/300.
+        usage = self.logger._extract_usage(
+            make_response(), standard_logging_object=make_slo()
+        )
+        assert usage == {
+            "prompt_tokens": 100,
+            "completion_tokens": 200,
+            "total_tokens": 300,
+        }
+
+    def test_duration_from_slo_response_time_converted_to_ms(self):
+        # SLO response_time is 1.5 seconds; expected 1500.0 ms.
+        # Pass start/end that would compute a different value to prove SLO won.
+        duration = self.logger._get_duration(
+            kwargs={"llm_api_duration_ms": 9999.0},
+            start_time=1.0,
+            end_time=2.0,
+            standard_logging_object=make_slo(),
+        )
+        assert duration == 1500.0
+
+    def test_request_params_from_slo_model_parameters(self):
+        params = self.logger._get_request_params(
+            {"optional_params": {"temperature": 0.1}},
+            standard_logging_object=make_slo(),
+        )
+        assert params == {"temperature": 0.7, "max_tokens": 500}
+
+    def test_extract_all_messages_sources_timestamps_and_messages_from_slo(self):
+        """Covers three SLO branches at once: startTime, endTime, and messages list."""
+        kwargs = make_kwargs(messages=[{"role": "user", "content": "from-kwargs"}])
+        messages = self.logger._extract_all_messages(
+            kwargs,
+            make_response(),
+            response_model="gpt-4",
+            vendor="openai",
+            standard_logging_object=make_slo(),
+        )
+
+        request = next(m for m in messages if not m.get("is_response"))
+        assert request["content"] == "from-slo"  # SLO messages list wins
+        assert request["timestamp"] == int(2_000_000.0 * 1000.0)  # SLO startTime
+
+        response = next(m for m in messages if m.get("is_response"))
+        assert response["timestamp"] == int(2_000_001.5 * 1000.0)  # SLO endTime
