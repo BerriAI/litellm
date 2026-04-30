@@ -892,8 +892,16 @@ async def test_health_endpoint_filters_background_cache_by_user_access():
 
     cached_results = {
         "healthy_endpoints": [
-            {"model": "openai/gpt-4o", "api_base": "https://example-a.test"},
-            {"model": "openai/gpt-4o", "api_base": "https://example-b.test"},
+            {
+                "model": "openai/gpt-4o",
+                "model_id": "id-a",
+                "api_base": "https://example-a.test",
+            },
+            {
+                "model": "openai/gpt-4o",
+                "model_id": "id-b",
+                "api_base": "https://example-b.test",
+            },
         ],
         "unhealthy_endpoints": [],
         "healthy_count": 2,
@@ -917,14 +925,17 @@ async def test_health_endpoint_filters_background_cache_by_user_access():
     ):
         result = await health_endpoint(user_api_key_dict=user_api_key_dict)
 
+    returned_ids = {ep.get("model_id") for ep in result.get("healthy_endpoints", [])}
     returned_bases = {
         ep.get("api_base")
         for ep in result.get("healthy_endpoints", [])
         if ep.get("api_base")
     }
-    assert (
-        "https://example-b.test" not in returned_bases
-    ), "background health-check cache returned an out-of-scope deployment to the caller"
+    assert returned_ids == {
+        "id-a"
+    }, f"caller saw deployments outside their model scope: {returned_ids}"
+    assert result["healthy_count"] == 1
+    assert "https://example-b.test" not in returned_bases
 
 
 def test_clean_endpoint_data_drops_routing_fields():

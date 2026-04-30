@@ -900,6 +900,19 @@ async def health_endpoint(
                     for m in _llm_model_list
                     if (m.get("model_info") or {}).get("id")
                 }
+                if not allowed_model_ids:
+                    # Caller has accessible model_names but none of the matching
+                    # deployments expose a model_info.id, so the cache filter
+                    # (which keys on model_id) cannot resolve any of them and
+                    # returns an empty result. Log so operators can spot
+                    # deployments missing model_info.id.
+                    verbose_proxy_logger.debug(
+                        "health_endpoint: scoped key %s has accessible models %s "
+                        "but none of the matching deployments carry a model_info.id; "
+                        "background health-check cache will return an empty result.",
+                        user_api_key_dict.user_id,
+                        list(user_api_key_dict.models),
+                    )
                 return _filter_health_check_results_by_model_ids(
                     health_check_results, allowed_model_ids
                 )
