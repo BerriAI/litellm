@@ -2078,6 +2078,33 @@ class TestGuardrailModificationCheck:
                 )
             assert exc.value.status_code == 403
 
+    @pytest.mark.parametrize(
+        "key",
+        [
+            "guardrails",
+            "disable_global_guardrails",
+            "disable_global_guardrail",
+            "opted_out_global_guardrails",
+        ],
+    )
+    @pytest.mark.parametrize("empty_value", [{}, [], "", 0, False])
+    def test_rejects_empty_value_modification(self, key, empty_value):
+        """Regression: an explicitly-supplied empty/falsy value still expresses
+        intent to modify and must trigger the permission check. Truthiness-based
+        gating let callers bypass the check by sending e.g.
+        ``metadata={"guardrails": {}}``, which downstream evaluation interpreted
+        as "disable all guardrails" while the auth layer treated it as no-op.
+        """
+        from fastapi import HTTPException
+
+        with patch(
+            "litellm.proxy.guardrails.guardrail_helpers.can_modify_guardrails",
+            return_value=False,
+        ):
+            with pytest.raises(HTTPException) as exc:
+                self._call({"metadata": {key: empty_value}})
+            assert exc.value.status_code == 403
+
     def test_rejects_injection_via_litellm_metadata_key(self):
         """Caller can populate the OTHER metadata key; that must also 403."""
         from fastapi import HTTPException
