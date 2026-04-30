@@ -158,6 +158,9 @@ class WonderFenceGuardrail(CustomGuardrail):
             supported_event_hooks=supported_event_hooks,
             **kwargs,
         )
+        # Narrow attribute type: base class declares Optional[str], but our
+        # __init__ requires a non-empty string and the factory rejects empty.
+        self.guardrail_name: str = guardrail_name
 
         key_suffix = f"***{self.api_key[-4:]}" if self.api_key else "<unset>"
         logger.debug(
