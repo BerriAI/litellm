@@ -1011,6 +1011,48 @@ class TestContentTypeTransformation:
         assert result[1]["text"] == "uncached text"
         assert "cache_control" not in result[1]
 
+    def test_cache_control_propagated_to_input_file_block(self):
+        """
+        Test that cache_control on an input_file item is propagated onto the
+        resulting file content block.
+        """
+        cache_control = {"type": "ephemeral"}
+        content = [
+            {
+                "type": "input_file",
+                "file_id": "file-abc123",
+                "cache_control": cache_control,
+            },
+            {"type": "input_file", "file_id": "file-xyz789"},
+        ]
+        result = LiteLLMCompletionResponsesConfig._transform_responses_api_content_to_chat_completion_content(
+            content
+        )
+        assert len(result) == 2
+        assert result[0]["cache_control"] == cache_control
+        assert "cache_control" not in result[1]
+
+    def test_cache_control_propagated_to_input_image_block(self):
+        """
+        Test that cache_control on an input_image item is propagated onto the
+        resulting image content block.
+        """
+        cache_control = {"type": "ephemeral"}
+        content = [
+            {
+                "type": "input_image",
+                "image_url": "https://example.com/img.png",
+                "cache_control": cache_control,
+            },
+            {"type": "input_image", "image_url": "https://example.com/other.png"},
+        ]
+        result = LiteLLMCompletionResponsesConfig._transform_responses_api_content_to_chat_completion_content(
+            content
+        )
+        assert len(result) == 2
+        assert result[0]["cache_control"] == cache_control
+        assert "cache_control" not in result[1]
+
     def test_cache_control_propagated_to_message(self):
         """
         Test that a cache_control field on a Responses API input item is

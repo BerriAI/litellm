@@ -1278,19 +1278,23 @@ class LiteLLMCompletionResponsesConfig:
                     content_list.append(item)
                 elif isinstance(item, dict):
                     if item.get("type") == "input_file":
-                        content_list.append(
-                            LiteLLMCompletionResponsesConfig._transform_input_file_item_to_file_item(
+                        block = LiteLLMCompletionResponsesConfig._transform_input_file_item_to_file_item(
+                            item
+                        )
+                        cache_control = item.get("cache_control")
+                        if cache_control is not None:
+                            block["cache_control"] = cache_control  # type: ignore[typeddict-unknown-key]
+                        content_list.append(block)
+                    elif item.get("type") == "input_image":
+                        block = dict(
+                            LiteLLMCompletionResponsesConfig._transform_input_image_item_to_image_item(
                                 item
                             )
                         )
-                    elif item.get("type") == "input_image":
-                        content_list.append(
-                            dict(
-                                LiteLLMCompletionResponsesConfig._transform_input_image_item_to_image_item(
-                                    item
-                                )
-                            )
-                        )
+                        cache_control = item.get("cache_control")
+                        if cache_control is not None:
+                            block["cache_control"] = cache_control
+                        content_list.append(block)
                     else:
                         # Skip text blocks with None text to avoid downstream errors
                         text_value = item.get("text")
