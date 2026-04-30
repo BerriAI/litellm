@@ -9,16 +9,29 @@ from litellm.llms.base_llm.chat.transformation import BaseLLMException
 HF_HUB_URL = "https://huggingface.co"
 
 
+def is_url_model_destination(model: str) -> bool:
+    return model.startswith(("http://", "https://"))
+
+
+def _should_reject_url_model_destinations() -> bool:
+    import litellm
+
+    return getattr(litellm, "reject_url_model_destinations", True) is True
+
+
 def validate_huggingface_model_identifier(model: str) -> None:
     """Reject URL-valued model identifiers before provider credentials are added."""
     if "://" not in model:
+        return
+    if is_url_model_destination(model) and not _should_reject_url_model_destinations():
         return
     raise HuggingFaceError(
         status_code=400,
         message=(
             "Invalid Hugging Face model identifier. Configure custom endpoints with "
             "api_base or HF_API_BASE/HUGGINGFACE_API_BASE instead of passing a URL "
-            "as the model."
+            "as the model. To keep legacy URL-valued models for trusted inputs, set "
+            "litellm.reject_url_model_destinations=False."
         ),
     )
 

@@ -19,6 +19,7 @@ from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 from ..common_utils import (
     HuggingFaceError,
     _fetch_inference_provider_mapping,
+    is_url_model_destination,
     validate_huggingface_model_identifier,
 )
 
@@ -81,7 +82,9 @@ class HuggingFaceChatConfig(OpenAIGPTConfig):
         Do not add the chat/embedding/rerank extension here. Let the handler do this.
         """
         validate_huggingface_model_identifier(model)
-        if base_url is None:
+        if is_url_model_destination(model):
+            base_url = model
+        elif base_url is None:
             base_url = os.getenv("HF_API_BASE") or os.getenv("HUGGINGFACE_API_BASE", "")
         return base_url
 
@@ -107,6 +110,9 @@ class HuggingFaceChatConfig(OpenAIGPTConfig):
             complete_url = str(os.getenv("HF_API_BASE")) or str(
                 os.getenv("HUGGINGFACE_API_BASE")
             )
+        elif is_url_model_destination(model):
+            complete_url = model
+            complete_url = _build_chat_completion_url(complete_url)
         # Default construction with provider
         else:
             # Parse provider and model

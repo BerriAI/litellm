@@ -6,7 +6,7 @@ For vertex ai, check out the vertex_ai/files/handler.py file.
 
 import time
 from typing import Any, List, Literal, Optional
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
 
 import httpx
 from openai.types.file_deleted import FileDeleted
@@ -276,12 +276,20 @@ class GoogleAIStudioFilesHandler(GeminiModelInfo, BaseFilesConfig):
     @staticmethod
     def _validate_gemini_file_name(file_name: str) -> None:
         parts = file_name.split("/")
+        decoded_file_id = ""
+        if len(parts) == 2:
+            decoded_file_id = parts[1]
+            for _ in range(3):
+                next_decoded_file_id = unquote(decoded_file_id)
+                if next_decoded_file_id == decoded_file_id:
+                    break
+                decoded_file_id = next_decoded_file_id
         if (
             len(parts) != 2
             or parts[0] != "files"
             or not parts[1]
-            or parts[1] in {".", ".."}
-            or any(char in parts[1] for char in ("\\", "?", "#"))
+            or decoded_file_id in {".", ".."}
+            or any(char in decoded_file_id for char in ("/", "\\", "?", "#"))
         ):
             raise ValueError("Invalid Gemini file name")
 
