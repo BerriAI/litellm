@@ -452,6 +452,55 @@ async def test_update_database_and_spend_counters_invalidates_reservation_when_c
 
 
 @pytest.mark.asyncio
+async def test_update_database_and_spend_counters_preserves_counter_exception_when_invalidation_fails():
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj.db_spend_update_writer.update_database = AsyncMock()
+    counter_exception = RuntimeError("counter unavailable")
+    increment_spend_counters = AsyncMock(side_effect=counter_exception)
+    budget_reservation = {
+        "reserved_cost": 0.5,
+        "entries": [{"counter_key": "spend:key:test_api_key"}],
+    }
+
+    with (
+        patch(
+            "litellm.proxy.spend_tracking.budget_reservation.invalidate_budget_reservation_counters",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("invalidate unavailable"),
+        ) as mock_invalidate_budget_reservation_counters,
+        patch(
+            "litellm.proxy.hooks.proxy_track_cost_callback.verbose_proxy_logger.exception",
+        ) as mock_log_exception,
+    ):
+        with pytest.raises(RuntimeError) as exc_info:
+            await _update_database_and_spend_counters(
+                proxy_logging_obj=proxy_logging_obj,
+                increment_spend_counters=increment_spend_counters,
+                user_api_key="test_api_key",
+                user_id="test_user_id",
+                end_user_id=None,
+                team_id="test_team_id",
+                org_id="test_org_id",
+                kwargs={},
+                completion_response=None,
+                start_time=datetime.now(),
+                end_time=datetime.now(),
+                response_cost=0.2,
+                budget_reservation=budget_reservation,
+            )
+
+        assert exc_info.value is counter_exception
+        mock_invalidate_budget_reservation_counters.assert_awaited_once_with(
+            budget_reservation=budget_reservation,
+        )
+        mock_log_exception.assert_called_once_with(
+            "Failed to invalidate budget reservation counters after spend counter update failed"
+        )
+
+    proxy_logging_obj.db_spend_update_writer.update_database.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_track_cost_callback_skips_when_no_standard_logging_object():
     """
     Reproduces the bug where _PROXY_track_cost_callback raises
