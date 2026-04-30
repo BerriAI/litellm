@@ -1,6 +1,7 @@
 export interface AlertingObject {
   name: string;
   variables: AlertingVariables;
+  type?: "success" | "failure" | "success_and_failure" | string;
 }
 
 export interface AlertingVariables {
