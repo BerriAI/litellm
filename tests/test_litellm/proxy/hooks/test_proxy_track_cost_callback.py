@@ -338,6 +338,11 @@ async def test_update_database_and_spend_counters_preserves_db_exception_when_re
         patch(
             "litellm.proxy.hooks.proxy_track_cost_callback.verbose_proxy_logger.exception",
         ) as mock_log_exception,
+        patch(
+            "litellm.proxy.hooks.proxy_track_cost_callback._invalidate_budget_reservation_counters",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("invalidate unavailable"),
+        ) as mock_invalidate_budget_reservation_counters,
     ):
         with pytest.raises(RuntimeError) as exc_info:
             await _update_database_and_spend_counters(
@@ -360,8 +365,15 @@ async def test_update_database_and_spend_counters_preserves_db_exception_when_re
         mock_release_budget_reservation.assert_awaited_once_with(
             budget_reservation=budget_reservation,
         )
-        mock_log_exception.assert_called_once_with(
+        mock_invalidate_budget_reservation_counters.assert_awaited_once_with(
+            budget_reservation=budget_reservation,
+        )
+        assert mock_log_exception.call_count == 2
+        mock_log_exception.assert_any_call(
             "Failed to release budget reservation after database update failed"
+        )
+        mock_log_exception.assert_any_call(
+            "Failed to invalidate budget reservation counters after release failed"
         )
 
     increment_spend_counters.assert_not_awaited()
