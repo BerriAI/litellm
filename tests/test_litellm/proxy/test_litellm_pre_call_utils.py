@@ -1843,7 +1843,10 @@ async def test_add_litellm_metadata_from_request_headers():
 
         # Create mock user API key dict
         mock_user_api_key_dict = UserAPIKeyAuth(
-            api_key="test-key", user_id="test-user", org_id="test-org"
+            api_key="test-key",
+            user_id="test-user",
+            org_id="test-org",
+            metadata={"allow_client_mock_response": True},
         )
 
         # Create mock proxy logging object
@@ -1956,7 +1959,9 @@ async def test_anthropic_messages_standard_logging_object_matches_fixture():
 
         mock_fastapi_response = MagicMock(spec=Response)
         mock_user_api_key_dict = UserAPIKeyAuth(
-            api_key="test-key", user_id="default_user_id"
+            api_key="test-key",
+            user_id="default_user_id",
+            metadata={"allow_client_mock_response": True},
         )
 
         mock_proxy_logging_obj = MagicMock(spec=ProxyLogging)
