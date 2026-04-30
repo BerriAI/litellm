@@ -1,4 +1,4 @@
-from unittest.mock import patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -129,16 +129,12 @@ async def test_should_prevent_second_end_user_reservation_over_budget(
     valid_token = UserAPIKeyAuth(
         token="key-budget-end-user",
         end_user_id="end-user-budget-race",
-        end_user_max_budget=1.0,
     )
-    await key_cache.async_set_cache(
-        key="end_user_id:end-user-budget-race",
-        value=LiteLLM_EndUserTable(
-            user_id="end-user-budget-race",
-            blocked=False,
-            spend=0.0,
-            litellm_budget_table=LiteLLM_BudgetTable(max_budget=1.0),
-        ).model_dump(),
+    end_user_object = LiteLLM_EndUserTable(
+        user_id="end-user-budget-race",
+        blocked=False,
+        spend=0.0,
+        litellm_budget_table=LiteLLM_BudgetTable(max_budget=1.0),
     )
 
     with patch(
@@ -155,6 +151,7 @@ async def test_should_prevent_second_end_user_reservation_over_budget(
             prisma_client=None,
             user_api_key_cache=key_cache,
             proxy_logging_obj=proxy_logging_obj,
+            end_user_object=end_user_object,
         )
         assert reservation is not None
         assert counter_cache.in_memory_cache.get_cache(
@@ -172,6 +169,7 @@ async def test_should_prevent_second_end_user_reservation_over_budget(
                 prisma_client=None,
                 user_api_key_cache=key_cache,
                 proxy_logging_obj=proxy_logging_obj,
+                end_user_object=end_user_object,
             )
 
     assert counter_cache.in_memory_cache.get_cache(
@@ -220,6 +218,8 @@ async def test_should_prevent_second_tag_reservation_over_budget(
             spend=0.0,
         ).model_dump(),
     )
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_tagtable.find_many = AsyncMock(return_value=[])
 
     with patch(
         "litellm.proxy.spend_tracking.budget_reservation.estimate_request_max_cost",
@@ -232,7 +232,7 @@ async def test_should_prevent_second_tag_reservation_over_budget(
             valid_token=valid_token,
             team_object=None,
             user_object=None,
-            prisma_client=None,
+            prisma_client=prisma_client,
             user_api_key_cache=key_cache,
             proxy_logging_obj=proxy_logging_obj,
         )
@@ -261,7 +261,7 @@ async def test_should_prevent_second_tag_reservation_over_budget(
                 valid_token=valid_token,
                 team_object=None,
                 user_object=None,
-                prisma_client=None,
+                prisma_client=prisma_client,
                 user_api_key_cache=key_cache,
                 proxy_logging_obj=proxy_logging_obj,
             )
