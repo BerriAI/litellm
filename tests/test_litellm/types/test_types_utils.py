@@ -83,11 +83,15 @@ def test_usage_converts_server_tool_use_dict():
 
     assert isinstance(usage.server_tool_use, ServerToolUse)
     assert usage.server_tool_use.web_search_requests == 4
+    assert usage.server_tool_use["web_search_requests"] == 4
     assert usage.server_tool_use.tool_search_requests == 1
+    with pytest.raises(KeyError):
+        usage.server_tool_use["unknown_metric"]
 
     round_trip = Usage(**usage.model_dump())
     assert isinstance(round_trip.server_tool_use, ServerToolUse)
     assert round_trip.server_tool_use.web_search_requests == 4
+    assert round_trip.server_tool_use["web_search_requests"] == 4
     assert round_trip.server_tool_use.tool_search_requests == 1
 
 

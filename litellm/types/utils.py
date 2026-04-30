@@ -1522,6 +1522,11 @@ class ServerToolUse(BaseModel):
     web_search_requests: Optional[int] = None
     tool_search_requests: Optional[int] = None
 
+    def __getitem__(self, key: str) -> Optional[int]:
+        if key not in self.__class__.model_fields:
+            raise KeyError(key)
+        return getattr(self, key)
+
 
 class Usage(SafeAttributeModel, CompletionUsage):
     _cache_creation_input_tokens: int = PrivateAttr(
