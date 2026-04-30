@@ -215,14 +215,16 @@ async def test_disable_team_logging_redacts_existing_callback_secrets(monkeypatc
     # must apply to the BEFORE snapshot too.
     mock_prisma = _patch_prisma(
         {
-            "callback_settings": {
-                "success_callback": ["langfuse"],
-                "failure_callback": [],
-                "callback_vars": {
-                    "langfuse_public_key": "pk-real",
-                    "langfuse_secret_key": "sk-real-secret",
-                },
-            }
+            "logging": [
+                {
+                    "callback_name": "langfuse",
+                    "callback_type": "success",
+                    "callback_vars": {
+                        "langfuse_public_key": "pk-real",
+                        "langfuse_secret_key": "sk-real-secret",
+                    },
+                }
+            ]
         }
     )
 
