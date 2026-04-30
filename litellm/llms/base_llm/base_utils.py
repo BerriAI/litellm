@@ -5,7 +5,7 @@ Utility functions for base LLM classes.
 import copy
 import json
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Optional, Type, Union
+from typing import Any, Dict, List, Optional, Type, Union, cast
 
 from openai.lib import _parsing, _pydantic
 from pydantic import BaseModel
@@ -215,13 +215,55 @@ def map_developer_role_to_system_role(
     """
     Translate `developer` role to `system` role for non-OpenAI providers.
     """
-    new_messages: List[AllMessageValues] = []
+    if not any(m["role"] == "developer" for m in messages):
+        return messages
+
+    system_message: Optional[Dict[str, Any]] = None
+    system_contents: List[Any] = []
+    non_system_messages: List[AllMessageValues] = []
     for m in messages:
+        if m["role"] in {"developer", "system"}:
+            if system_message is None:
+                system_message = dict(m)
+                system_message["role"] = "system"
+            system_contents.append(m["content"])
+        else:
+            non_system_messages.append(m)
+
         if m["role"] == "developer":
             verbose_logger.debug(
                 "Translating developer role to system role for non-OpenAI providers."
             )  # ensure user knows what's happening with their input.
-            new_messages.append({"role": "system", "content": m["content"]})
-        else:
-            new_messages.append(m)
-    return new_messages
+
+    if system_message is None:
+        return non_system_messages
+
+    system_message["content"] = _merge_system_message_contents(system_contents)
+    return [cast(AllMessageValues, system_message), *non_system_messages]
+
+
+def _merge_system_message_contents(contents: List[Any]) -> Union[str, List[Any]]:
+    """
+    Merge system-equivalent content into one leading system message.
+    """
+    if all(isinstance(content, str) or content is None for content in contents):
+        return "\n\n".join(content for content in contents if content)
+
+    merged_blocks: List[Any] = []
+    for content in contents:
+        content_blocks = _system_message_content_to_blocks(content)
+        if not content_blocks:
+            continue
+
+        if merged_blocks:
+            merged_blocks.append({"type": "text", "text": "\n\n"})
+        merged_blocks.extend(content_blocks)
+    return merged_blocks
+
+
+def _system_message_content_to_blocks(content: Any) -> List[Any]:
+    if content is None or content == "":
+        return []
+    if isinstance(content, list):
+        return list(content)
+    return [{"type": "text", "text": str(content)}]
