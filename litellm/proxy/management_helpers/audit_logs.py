@@ -21,6 +21,17 @@ from litellm.proxy._types import (
 from litellm.types.utils import StandardAuditLogPayload
 
 _audit_log_callback_cache: Dict[str, CustomLogger] = {}
+ALLOW_LITELLM_CHANGED_BY_HEADER_METADATA_KEY = "allow_litellm_changed_by_header"
+
+
+def _allows_litellm_changed_by_header(user_api_key_dict: UserAPIKeyAuth) -> bool:
+    for admin_metadata in (user_api_key_dict.metadata, user_api_key_dict.team_metadata):
+        if (
+            isinstance(admin_metadata, dict)
+            and admin_metadata.get(ALLOW_LITELLM_CHANGED_BY_HEADER_METADATA_KEY) is True
+        ):
+            return True
+    return False
 
 
 def get_audit_log_changed_by(
@@ -29,6 +40,8 @@ def get_audit_log_changed_by(
     user_api_key_dict: UserAPIKeyAuth,
     litellm_proxy_admin_name: Optional[str],
 ) -> Optional[str]:
+    if litellm_changed_by and _allows_litellm_changed_by_header(user_api_key_dict):
+        return litellm_changed_by
     return user_api_key_dict.user_id or litellm_changed_by or litellm_proxy_admin_name
 
 
