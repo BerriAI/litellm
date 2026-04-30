@@ -3,12 +3,14 @@ Regression tests for the OAuth2-proxy header-forgery fix
 (GHSA-5c3m-qffq-4r9m).
 
 The hook reads HTTP request headers per ``oauth2_config_mappings`` and
-constructs a ``UserAPIKeyAuth`` from them. Without the
-identity-only allowlist any field could be mapped — including
-``user_role``, which Pydantic coerces from the string
-``"proxy_admin"`` into ``LitellmUserRoles.PROXY_ADMIN``. An attacker
-who reaches the proxy directly (or via a misconfigured reverse
-proxy) sets the mapped header and gains full admin privileges.
+constructs a ``UserAPIKeyAuth`` from them. The fix has two parts:
+
+1. Only requests from configured trusted proxy CIDR ranges may provide
+   identity headers.
+2. Only identity fields may be mapped from those headers. Without the
+   identity-only allowlist any field could be mapped — including
+   ``user_role``, which Pydantic coerces from the string
+   ``"proxy_admin"`` into ``LitellmUserRoles.PROXY_ADMIN``.
 """
 
 import os
@@ -27,9 +29,10 @@ from litellm.proxy.auth.oauth2_proxy_hook import (
 )
 
 
-def _request_with_headers(headers: dict) -> Request:
+def _request_with_headers(headers: dict, *, client_host: str = "127.0.0.1") -> Request:
     scope = {
         "type": "http",
+        "client": (client_host, 12345),
         "headers": [(k.lower().encode(), v.encode()) for k, v in headers.items()],
     }
     request = Request(scope=scope)
@@ -40,19 +43,24 @@ def _request_with_headers(headers: dict) -> Request:
 @pytest.fixture
 def configure_proxy(monkeypatch):
     """
-    Yields a callable that sets ``oauth2_config_mappings`` on the
-    proxy_server module for the duration of one test. Default mapping
-    is a single ``user_id -> x-user-id`` (identity-only).
+    Yields a callable that sets ``oauth2_config_mappings`` and
+    ``trusted_proxy_ranges`` on the proxy_server module for the duration
+    of one test. Defaults to a single identity mapping and localhost as
+    a trusted proxy.
     """
     import litellm.proxy.proxy_server as proxy_server
 
-    def _configure(*, mappings=None):
+    def _configure(*, mappings=None, trusted_proxy_ranges=("127.0.0.1/32",)):
         if mappings is None:
             mappings = {"user_id": "x-user-id"}
+        settings = {
+            "oauth2_config_mappings": mappings,
+            "trusted_proxy_ranges": trusted_proxy_ranges,
+        }
         monkeypatch.setattr(
             proxy_server,
             "general_settings",
-            {"oauth2_config_mappings": mappings},
+            settings,
             raising=False,
         )
 
@@ -68,6 +76,24 @@ async def test_returns_auth_for_simple_user_id_mapping(configure_proxy):
 
     assert auth.user_id == "alice"
     assert auth.user_role is None
+
+
+@pytest.mark.asyncio
+async def test_rejects_identity_headers_without_trusted_proxy_ranges(configure_proxy):
+    configure_proxy(trusted_proxy_ranges=None)
+    request = _request_with_headers({"x-user-id": "alice"})
+
+    with pytest.raises(ValueError, match="trusted_proxy_ranges"):
+        await handle_oauth2_proxy_request(request)
+
+
+@pytest.mark.asyncio
+async def test_rejects_identity_headers_from_untrusted_direct_client(configure_proxy):
+    configure_proxy(trusted_proxy_ranges=["10.0.0.0/24"])
+    request = _request_with_headers({"x-user-id": "alice"}, client_host="203.0.113.10")
+
+    with pytest.raises(ValueError, match="not trusted"):
+        await handle_oauth2_proxy_request(request)
 
 
 @pytest.mark.parametrize(
