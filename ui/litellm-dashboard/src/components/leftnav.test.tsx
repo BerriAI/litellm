@@ -70,7 +70,7 @@ describe("Sidebar (leftnav)", () => {
       "Virtual Keys",
       "Playground",
       "Models + Endpoints",
-      "Agents",
+      "Agentic",
       "MCP Servers",
       "Guardrails",
       "Policies",
@@ -163,10 +163,17 @@ describe("Sidebar (leftnav)", () => {
       expect(screen.getByText("Models + Endpoints")).toBeInTheDocument();
     });
 
-    it("shows Agents to Admin Viewer (read-only)", () => {
+    it("shows Agents (under Agentic) to Admin Viewer (read-only)", async () => {
       mockUseAuthorized.mockReturnValueOnce(adminViewerAuth);
       renderWithProviders(<Sidebar {...defaultProps} />);
-      expect(screen.getByText("Agents")).toBeInTheDocument();
+      // Agents is now nested under the "Agentic" submenu — expand parent
+      // first to render the children, then assert Agents is visible.
+      act(() => {
+        fireEvent.click(screen.getByText("Agentic"));
+      });
+      await waitFor(() => {
+        expect(screen.getByText("Agents")).toBeInTheDocument();
+      });
     });
 
     it("shows Logs to Admin Viewer", () => {
