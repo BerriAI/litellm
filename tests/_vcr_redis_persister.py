@@ -14,16 +14,33 @@ def redis_key_for(cassette_path: str) -> str:
     return f"{REDIS_KEY_PREFIX}{os.path.relpath(str(cassette_path))}"
 
 
+def _redis_url_from_env() -> Optional[str]:
+    for var in ("REDIS_URL", "REDIS_SSL_URL"):
+        url = os.environ.get(var)
+        if url:
+            return url
+    host = os.environ.get("REDIS_HOST")
+    if not host:
+        return None
+    scheme = "rediss" if os.environ.get("REDIS_SSL", "").lower() == "true" else "redis"
+    auth = ""
+    if os.environ.get("REDIS_PASSWORD"):
+        user = os.environ.get("REDIS_USERNAME", "")
+        auth = f"{user}:{os.environ['REDIS_PASSWORD']}@"
+    port = os.environ.get("REDIS_PORT", "6379")
+    return f"{scheme}://{auth}{host}:{port}"
+
+
 def _build_default_client():
     import redis
 
-    host = os.environ.get("REDIS_HOST")
-    if not host:
-        raise RuntimeError("REDIS_HOST is not set")
-    return redis.Redis(
-        host=host,
-        port=int(os.environ.get("REDIS_PORT", 6379)),
-        password=os.environ.get("REDIS_PASSWORD") or None,
+    url = _redis_url_from_env()
+    if not url:
+        raise RuntimeError(
+            "Set REDIS_URL, REDIS_SSL_URL, or REDIS_HOST to enable the VCR persister"
+        )
+    return redis.Redis.from_url(
+        url,
         socket_timeout=5,
         socket_connect_timeout=5,
         decode_responses=False,

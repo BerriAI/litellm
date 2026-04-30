@@ -88,7 +88,9 @@ def vcr_config():
 def _vcr_disabled() -> bool:
     if os.environ.get("LITELLM_VCR_DISABLE") == "1":
         return True
-    return not os.environ.get("REDIS_HOST")
+    return not any(
+        os.environ.get(var) for var in ("REDIS_URL", "REDIS_SSL_URL", "REDIS_HOST")
+    )
 
 
 def pytest_recording_configure(config, vcr):

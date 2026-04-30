@@ -5,18 +5,20 @@ import sys
 
 import redis
 
+from tests._vcr_redis_persister import _redis_url_from_env
+
 PREFIX = "litellm:vcr:cassette:"
 SCAN_BATCH = 500
 
 
 def _client() -> redis.Redis:
-    host = os.environ.get("REDIS_HOST")
-    if not host:
-        sys.exit("REDIS_HOST is not set; cannot flush VCR cache")
-    return redis.Redis(
-        host=host,
-        port=int(os.environ.get("REDIS_PORT", 6379)),
-        password=os.environ.get("REDIS_PASSWORD") or None,
+    url = _redis_url_from_env()
+    if not url:
+        sys.exit(
+            "Set REDIS_URL, REDIS_SSL_URL, or REDIS_HOST to flush the VCR cache"
+        )
+    return redis.Redis.from_url(
+        url,
         socket_timeout=5,
         socket_connect_timeout=5,
         decode_responses=False,
