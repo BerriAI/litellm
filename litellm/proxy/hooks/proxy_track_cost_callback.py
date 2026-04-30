@@ -443,6 +443,14 @@ async def _update_database_and_spend_counters(
                 verbose_proxy_logger.exception(
                     "Failed to release budget reservation after database update failed"
                 )
+                try:
+                    await _invalidate_budget_reservation_counters(
+                        budget_reservation=budget_reservation
+                    )
+                except Exception:
+                    verbose_proxy_logger.exception(
+                        "Failed to invalidate budget reservation counters after release failed"
+                    )
         raise
 
     try:
