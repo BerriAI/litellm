@@ -112,6 +112,48 @@ def test_fingerprint_agentic_tools_is_deterministic():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "litellm_params,stream,expected_timeout",
+    [
+        (GenericLiteLLMParams(timeout=1.25), False, 1.25),
+        (GenericLiteLLMParams(timeout=30, stream_timeout=0.75), True, 0.75),
+        (GenericLiteLLMParams(request_timeout=2.5), False, 2.5),
+    ],
+)
+async def test_anthropic_messages_post_forwards_request_timeout(
+    litellm_params, stream, expected_timeout
+):
+    """Anthropic /v1/messages must honor per-request timeout settings."""
+
+    handler = BaseLLMHTTPHandler()
+    mock_client = AsyncMock()
+    mock_response = Mock()
+    mock_response.raise_for_status = Mock()
+    mock_client.post = AsyncMock(return_value=mock_response)
+
+    mock_config = Mock()
+    mock_config.max_retry_on_anthropic_messages_http_error = 1
+
+    response = await handler._async_post_anthropic_messages_with_http_error_retry(
+        async_httpx_client=mock_client,
+        request_url="https://api.anthropic.com/v1/messages",
+        headers={"x-api-key": "test-key"},
+        signed_json_body=None,
+        request_body={"model": "claude-3-5-sonnet", "messages": []},
+        stream=stream,
+        logging_obj=Mock(),
+        provider_config=mock_config,
+        litellm_params=litellm_params,
+        api_key="test-key",
+        model="claude-3-5-sonnet",
+    )
+
+    assert response == mock_response
+    mock_client.post.assert_awaited_once()
+    assert mock_client.post.call_args.kwargs["timeout"] == expected_timeout
+
+
+@pytest.mark.asyncio
 async def test_async_anthropic_messages_handler_extra_headers():
     """
     Test that async_anthropic_messages_handler correctly extracts and merges
