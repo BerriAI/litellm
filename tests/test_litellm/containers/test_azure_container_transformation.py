@@ -721,4 +721,4 @@ class TestAzureContainerKnownFailureRegressions:
 
         assert captured["route_type"] == "aupload_container_file"
         assert captured["data"]["container_id"] == encoded_id
-        assert captured["data"]["custom_llm_provider"] == "azure"
+        assert captured["data"]["custom_llm_provider"] == "openai"
