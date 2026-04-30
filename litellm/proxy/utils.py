@@ -5107,7 +5107,7 @@ async def update_daily_tag_spend(
                 proxy_logging_obj=proxy_logging_obj,
             )
     except Exception as e:
-        spend_log_error("Error updating daily tag spend: %s", str(e), exc=e)
+        verbose_proxy_logger.error(f"Error updating daily tag spend: {e}")
 
 
 async def update_spend_logs_job(
