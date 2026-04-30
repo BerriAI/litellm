@@ -1373,6 +1373,117 @@ def test_proxy_admin_viewer_can_access_settings_read_endpoints(route):
         )
 
 
+# ── Admin Viewer parity: default-allow GET semantics ─────────────────────────
+#
+# The route-check layer is structured to default-allow safe HTTP methods
+# (GET / HEAD / OPTIONS) for PROXY_ADMIN_VIEW_ONLY. This eliminates the
+# whack-a-mole where every newly-added GET endpoint silently 403'd until
+# someone remembered to add it to admin_viewer_routes.
+#
+# These tests pin the new contract:
+#   - Any GET endpoint not on the LLM/inference path is readable.
+#   - Any unsafe method (POST/PUT/PATCH/DELETE) outside the explicit allow
+#     sets is still 403.
+
+# Routes the user reported as broken in production — they're in disparate
+# corners of the codebase and represent the long tail of GETs we'd otherwise
+# need to enumerate manually. Default-allow makes them all work.
+ADMIN_VIEWER_REPORTED_GET_ROUTES = [
+    "/in_product_nudges",
+    "/health/latest",
+    "/credentials",
+    "/v1/mcp/network/client-ip",
+    "/claude-code/plugins",
+    "/policy/templates",
+    # Routes we already had to enumerate manually (regression coverage).
+    "/spend/logs/ui",
+    "/customer/list",
+    "/guardrails/list",
+    "/policies/attachments/list",
+    # Hypothetical future GETs — must not require an allowlist entry.
+    "/some/future/read/endpoint",
+    "/another/admin-tool/status",
+]
+
+
+@pytest.mark.parametrize("route", ADMIN_VIEWER_REPORTED_GET_ROUTES)
+def test_proxy_admin_viewer_default_allows_any_get(route):
+    """
+    PROXY_ADMIN_VIEW_ONLY must be able to GET any non-inference endpoint.
+
+    This is a structural guarantee: the route-check defaults to allow for
+    safe HTTP methods so we don't have to maintain an explicit allowlist.
+    """
+    user_obj = LiteLLM_UserTable(
+        user_id="viewer_user",
+        user_email="viewer@example.com",
+        user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
+    )
+    valid_token = UserAPIKeyAuth(
+        user_id="viewer_user",
+        user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
+    )
+    request = MagicMock(spec=Request)
+    request.method = "GET"
+    request.query_params = {}
+    request.url = MagicMock()
+    request.url.path = route
+
+    try:
+        RouteChecks.non_proxy_admin_allowed_routes_check(
+            user_obj=user_obj,
+            _user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
+            route=route,
+            request=request,
+            valid_token=valid_token,
+            request_data={},
+        )
+    except Exception as e:
+        pytest.fail(f"proxy_admin_viewer GET should default-allow {route!r}. Got: {e}")
+
+
+@pytest.mark.parametrize(
+    "route",
+    [
+        # Random path that isn't in any allowlist — POST must still 403.
+        "/some/future/write/endpoint",
+        # Hard-blocked write routes.
+        "/user/new",
+        "/team/new",
+        "/key/generate",
+        "/model/new",
+    ],
+)
+def test_proxy_admin_viewer_post_blocked_outside_allowlists(route):
+    """
+    Default-allow only applies to safe HTTP methods. POST/PUT/PATCH/DELETE
+    on a route not in any allow set must still 403.
+    """
+    user_obj = LiteLLM_UserTable(
+        user_id="viewer_user",
+        user_email="viewer@example.com",
+        user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
+    )
+    valid_token = UserAPIKeyAuth(
+        user_id="viewer_user",
+        user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
+    )
+    request = MagicMock(spec=Request)
+    request.method = "POST"
+    request.query_params = {}
+
+    with pytest.raises(HTTPException) as exc_info:
+        RouteChecks.non_proxy_admin_allowed_routes_check(
+            user_obj=user_obj,
+            _user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
+            route=route,
+            request=request,
+            valid_token=valid_token,
+            request_data={},
+        )
+    assert exc_info.value.status_code == 403
+
+
 class TestModelsRouteExemptFromDisableLLMEndpoints:
     """
     Test that /models and /v1/models are exempt from DISABLE_LLM_API_ENDPOINTS.
