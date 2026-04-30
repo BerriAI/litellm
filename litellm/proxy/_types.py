@@ -1871,11 +1871,9 @@ class AddTeamCallback(LiteLLMPydanticObjectBase):
                 raise ValueError(
                     f"Invalid callback variable: {key}. Must be one of {valid_keys}"
                 )
-            if not isinstance(value, str):
-                callback_vars[key] = str(value)
-                value = callback_vars[key]
+            callback_vars[key] = str(value)
             validate_no_callback_env_reference(
-                key, value, source="key/team callback metadata"
+                key, callback_vars[key], source="key/team callback metadata"
             )
         return values
 
