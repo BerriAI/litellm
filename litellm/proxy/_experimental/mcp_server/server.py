@@ -2544,7 +2544,7 @@ if MCP_AVAILABLE:
             return False
         try:
             data = json.loads(body)
-            return data.get("method") == "initialize"
+            return isinstance(data, dict) and data.get("method") == "initialize"
         except (json.JSONDecodeError, TypeError):
             return False
 
@@ -2848,7 +2848,7 @@ if MCP_AVAILABLE:
                 mcp_servers,
                 _client_ip,
             ):
-                await session_manager.handle_request(scope, receive, send)
+                await target_manager.handle_request(scope, receive, send)
         except HTTPException:
             # Re-raise HTTP exceptions to preserve status codes and details
             raise

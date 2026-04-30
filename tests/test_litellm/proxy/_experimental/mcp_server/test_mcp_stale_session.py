@@ -384,12 +384,12 @@ async def test_valid_mcp_session_id_is_preserved():
             True,
         ),
         patch.object(
-            session_manager,
+            session_manager_stateful,
             "handle_request",
             side_effect=mock_handle_request,
         ),
         patch.object(
-            session_manager,
+            session_manager_stateful,
             "_server_instances",
             mock_instances,
         ),
