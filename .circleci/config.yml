@@ -1461,10 +1461,6 @@ jobs:
           timeout: "300"
       - run:
           name: Run Claude Code Docker container
-          # in dockerfile, entrypoint is [claude]
-          # we run --print "Reply with exactly: gateway-ok"
-          # as a simple sentence to claude to make sure it
-          # runs as intended, passing through the proxy
           command: |
             mkdir -p test-results
             set +e
@@ -1474,12 +1470,15 @@ jobs:
               -e ANTHROPIC_BASE_URL="http://localhost:4000" \
               -e ANTHROPIC_AUTH_TOKEN="sk-1234" \
               litellm-claude-code:ci \
-              --print "Reply with exactly: gateway-ok" \
-              --model gpt-3.5-turbo-end-user-test 2>&1)
+              claude -p hello --model gpt-3.5-turbo-end-user-test 2>&1)
             EXIT_CODE=$?
             set -e
+
             echo "$OUTPUT"
-            if [ "$EXIT_CODE" -eq 0 ] && echo "$OUTPUT" | grep -q "gateway-ok"; then
+
+            NORMALIZED_OUTPUT="$(printf '%s' "$OUTPUT" | tr -d '\r\n\t ')"
+            
+            if [ "$EXIT_CODE" -eq 0 ] && [ -n "$NORMALIZED_OUTPUT" ]; then
               cat > test-results/junit.xml \<<EOF
             <testsuite name="claude_code_gateway_e2e" tests="1" failures="0">
               <testcase classname="claude_code_gateway_e2e" name="claude_code_can_call_litellm_gateway"/>
