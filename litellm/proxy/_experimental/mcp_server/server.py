@@ -2527,9 +2527,15 @@ if MCP_AVAILABLE:
         Returns None if not present.
         """
         for header_name, header_value in scope.get("headers", []):
-            name = header_name if isinstance(header_name, bytes) else header_name.encode()
+            name = (
+                header_name if isinstance(header_name, bytes) else header_name.encode()
+            )
             if name.lower() == b"mcp-session-id":
-                return header_value.decode() if isinstance(header_value, bytes) else str(header_value)
+                return (
+                    header_value.decode()
+                    if isinstance(header_value, bytes)
+                    else str(header_value)
+                )
         return None
 
     def _is_initialize_request(body: bytes) -> bool:

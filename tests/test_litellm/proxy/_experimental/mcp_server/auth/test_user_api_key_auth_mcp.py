@@ -1520,7 +1520,11 @@ def test_mcp_path_based_server_segregation(monkeypatch):
         )
 
     monkeypatch.setattr(
-        "litellm.proxy._experimental.mcp_server.server.session_manager",
+        "litellm.proxy._experimental.mcp_server.server.session_manager_stateless",
+        MagicMock(handle_request=dummy_handle_request),
+    )
+    monkeypatch.setattr(
+        "litellm.proxy._experimental.mcp_server.server.session_manager_stateful",
         MagicMock(handle_request=dummy_handle_request),
     )
     monkeypatch.setattr(

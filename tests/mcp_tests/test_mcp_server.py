@@ -395,11 +395,11 @@ async def test_mcp_http_transport_tool_not_found():
 @pytest.mark.asyncio
 async def test_streamable_http_mcp_handler_mock():
     """Test the streamable HTTP MCP handler functionality"""
-    from litellm.proxy._types import UserAPIKeyAuth
-
-    # Mock the session manager and its methods
-    mock_session_manager = AsyncMock()
-    mock_session_manager.handle_request = AsyncMock()
+    # Mock streamable HTTP session managers and their methods
+    mock_session_manager_stateless = AsyncMock()
+    mock_session_manager_stateless.handle_request = AsyncMock()
+    mock_session_manager_stateful = AsyncMock()
+    mock_session_manager_stateful.handle_request = AsyncMock()
 
     # Mock scope, receive, send with proper ASGI scope format
     mock_scope = {
@@ -411,7 +411,7 @@ async def test_streamable_http_mcp_handler_mock():
         "server": ("localhost", 8000),
         "scheme": "http",
     }
-    mock_receive = AsyncMock()
+    mock_receive = AsyncMock(return_value={"body": b"{}", "more_body": False})
     mock_send = AsyncMock()
 
     # Mock extract_mcp_auth_context to bypass auth checks in the handler
@@ -423,8 +423,12 @@ async def test_streamable_http_mcp_handler_mock():
             True,
         ),
         patch(
-            "litellm.proxy._experimental.mcp_server.server.session_manager",
-            mock_session_manager,
+            "litellm.proxy._experimental.mcp_server.server.session_manager_stateless",
+            mock_session_manager_stateless,
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.session_manager_stateful",
+            mock_session_manager_stateful,
         ),
         patch(
             "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
@@ -441,8 +445,9 @@ async def test_streamable_http_mcp_handler_mock():
         # Call the handler
         await handle_streamable_http_mcp(mock_scope, mock_receive, mock_send)
 
-        # Verify session manager handle_request was called
-        mock_session_manager.handle_request.assert_called_once()
+        # Verify stateless session manager handle_request was called
+        mock_session_manager_stateless.handle_request.assert_called_once()
+        mock_session_manager_stateful.handle_request.assert_not_called()
 
 
 @pytest.mark.asyncio
