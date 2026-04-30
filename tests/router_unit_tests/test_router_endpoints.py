@@ -1203,3 +1203,36 @@ async def test_init_containers_api_endpoints_managed_id_without_model_id_unwraps
     assert call_kw["container_id"] == "cfile_upstream_abc"
     assert call_kw["file_id"] == "cfile_xyz"
     assert call_kw["custom_llm_provider"] == "openai"
+
+
+@pytest.mark.asyncio
+async def test_init_containers_api_endpoints_managed_id_without_model_id_applies_decoded_provider():
+    """
+    A managed ``cntr_`` ID can encode a non-OpenAI provider (e.g. ``azure``) with
+    an empty ``model_id`` (streaming events without router ``model_info.id``).
+    The router must still apply the decoded provider so the request routes to
+    the correct upstream — not stay on the default ``openai``.
+    """
+    from litellm.responses.utils import ResponsesAPIRequestUtils
+
+    router = Router(model_list=[])
+    mock_original_function = AsyncMock(return_value={"ok": True})
+
+    managed_id = ResponsesAPIRequestUtils._build_container_id(
+        custom_llm_provider="azure",
+        model_id=None,
+        container_id="cfile_upstream_abc",
+    )
+
+    await router._init_containers_api_endpoints(
+        original_function=mock_original_function,
+        custom_llm_provider="openai",
+        container_id=managed_id,
+        file_id="cfile_xyz",
+    )
+
+    mock_original_function.assert_called_once()
+    call_kw = mock_original_function.call_args.kwargs
+    assert call_kw["container_id"] == "cfile_upstream_abc"
+    assert call_kw["file_id"] == "cfile_xyz"
+    assert call_kw["custom_llm_provider"] == "azure"
