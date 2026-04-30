@@ -5,7 +5,7 @@ import os
 import socket
 import subprocess
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
 from unittest.mock import AsyncMock, MagicMock, mock_open, patch
@@ -5099,6 +5099,78 @@ async def test_reseed_spend_from_db_skips_window_variant_keys():
     )
     fake_prisma.db.litellm_verificationtoken.find_unique.assert_not_awaited()
     fake_prisma.db.litellm_teamtable.find_unique.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_window_spend_counter_reseeds_from_spend_logs_on_counter_miss():
+    from litellm.caching.dual_cache import DualCache
+    from litellm.proxy.proxy_server import _init_and_increment_window_spend_counter
+
+    counter_cache = DualCache()
+    window_start = datetime.now(timezone.utc) - timedelta(hours=1)
+    fake_prisma = MagicMock()
+    fake_prisma.db.litellm_spendlogs.group_by = AsyncMock(
+        return_value=[{"api_key": "key-window", "_sum": {"spend": 2.25}}]
+    )
+
+    import litellm.proxy.proxy_server as ps
+
+    orig_counter, orig_prisma = ps.spend_counter_cache, ps.prisma_client
+    ps.spend_counter_cache = counter_cache
+    ps.prisma_client = fake_prisma
+    try:
+        await _init_and_increment_window_spend_counter(
+            counter_key="spend:key:key-window:window:1h",
+            entity_type="Key",
+            entity_id="key-window",
+            window_start=window_start,
+            increment=0.5,
+        )
+
+        fake_prisma.db.litellm_spendlogs.group_by.assert_awaited_once_with(
+            by=["api_key"],
+            where={"api_key": "key-window", "startTime": {"gte": window_start}},
+            sum={"spend": True},
+        )
+        assert counter_cache.in_memory_cache.get_cache(
+            key="spend:key:key-window:window:1h"
+        ) == pytest.approx(2.75)
+    finally:
+        ps.spend_counter_cache = orig_counter
+        ps.prisma_client = orig_prisma
+
+
+@pytest.mark.asyncio
+async def test_increment_spend_counter_invalidates_stale_cache_on_redis_failure():
+    from litellm.caching.dual_cache import DualCache
+    from litellm.proxy.proxy_server import _increment_spend_counter_cache
+
+    counter_cache = DualCache()
+    counter_cache.in_memory_cache.set_cache(key="spend:team:redis-fail", value=4.0)
+    fake_redis = AsyncMock()
+    fake_redis.async_increment = AsyncMock(side_effect=RuntimeError("redis down"))
+    fake_redis.async_delete_cache = AsyncMock()
+    counter_cache.redis_cache = fake_redis
+
+    import litellm.proxy.proxy_server as ps
+
+    orig_counter = ps.spend_counter_cache
+    ps.spend_counter_cache = counter_cache
+    try:
+        with pytest.raises(RuntimeError):
+            await _increment_spend_counter_cache(
+                counter_key="spend:team:redis-fail",
+                increment=0.5,
+            )
+
+        assert (
+            counter_cache.in_memory_cache.get_cache(key="spend:team:redis-fail") is None
+        )
+        fake_redis.async_delete_cache.assert_awaited_once_with(
+            key="spend:team:redis-fail"
+        )
+    finally:
+        ps.spend_counter_cache = orig_counter
 
 
 @pytest.mark.asyncio

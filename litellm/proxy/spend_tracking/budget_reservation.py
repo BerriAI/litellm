@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Sequence, cast
 
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching import DualCache
+from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.proxy._types import (
     LiteLLM_TeamMembership,
     LiteLLM_TeamTable,
@@ -27,6 +29,8 @@ class _BudgetCounter:
     entity_type: str
     entity_id: str
     source_cache_key: Optional[str] = None
+    spend_log_entity_id: Optional[str] = None
+    window_start: Optional[datetime] = None
 
 
 def get_reserved_counter_keys(budget_reservation: Optional[dict]) -> set:
@@ -349,8 +353,7 @@ def _get_budget_limit_counters(
         max_budget = window_dict.get("max_budget")
         if not budget_duration or max_budget is None or max_budget <= 0:
             continue
-        # Window counters intentionally have no source_cache_key: the DB stores
-        # window definitions/reset times, but not accumulated per-window spend.
+        window_start = get_budget_window_start(window_dict)
         counters.append(
             _BudgetCounter(
                 counter_key=f"{entity_prefix}:window:{budget_duration}",
@@ -358,6 +361,8 @@ def _get_budget_limit_counters(
                 fallback_spend=0.0,
                 entity_type=entity_type,
                 entity_id=f"{entity_id}:{budget_duration}",
+                spend_log_entity_id=entity_id,
+                window_start=window_start,
             )
         )
     return counters
@@ -409,7 +414,8 @@ async def _reserve_counter(
 ) -> Optional[float]:
     from litellm.proxy.proxy_server import (
         _ensure_spend_counter_initialized,
-        spend_counter_cache,
+        _ensure_window_spend_counter_initialized,
+        _increment_spend_counter_cache,
     )
 
     if counter.source_cache_key is not None:
@@ -417,10 +423,17 @@ async def _reserve_counter(
             counter_key=counter.counter_key,
             source_cache_key=counter.source_cache_key,
         )
+    elif counter.spend_log_entity_id is not None and counter.window_start is not None:
+        await _ensure_window_spend_counter_initialized(
+            counter_key=counter.counter_key,
+            entity_type=counter.entity_type,
+            entity_id=counter.spend_log_entity_id,
+            window_start=counter.window_start,
+        )
 
-    reserved_value = await spend_counter_cache.async_increment_cache(
-        key=counter.counter_key,
-        value=reservation_cost,
+    reserved_value = await _increment_spend_counter_cache(
+        counter_key=counter.counter_key,
+        increment=reservation_cost,
     )
     return float(reserved_value) if reserved_value is not None else None
 
@@ -438,7 +451,7 @@ async def _set_reserved_entries_adjustment(
     entries: List[dict],
     target_adjustment: float,
 ) -> None:
-    from litellm.proxy.proxy_server import spend_counter_cache
+    from litellm.proxy.proxy_server import _increment_spend_counter_cache
 
     for entry in entries:
         counter_key = entry.get("counter_key")
@@ -448,9 +461,9 @@ async def _set_reserved_entries_adjustment(
         adjustment = target_adjustment - applied_adjustment
         if adjustment == 0:
             continue
-        await spend_counter_cache.async_increment_cache(
-            key=counter_key,
-            value=adjustment,
+        await _increment_spend_counter_cache(
+            counter_key=counter_key,
+            increment=adjustment,
         )
         entry["applied_adjustment"] = target_adjustment
 
@@ -462,6 +475,37 @@ def _counter_to_reservation_entry(counter: _BudgetCounter) -> Dict[str, Any]:
         "entity_id": counter.entity_id,
         "applied_adjustment": 0.0,
     }
+
+
+def get_budget_window_start(window: Any) -> Optional[datetime]:
+    window_dict = _coerce_window(window)
+    budget_duration = window_dict.get("budget_duration")
+    if budget_duration is None:
+        return None
+    try:
+        duration_seconds = duration_in_seconds(str(budget_duration))
+    except Exception:
+        return None
+
+    reset_at = _coerce_datetime(window_dict.get("reset_at"))
+    if reset_at is None:
+        reset_at = datetime.now(timezone.utc) + timedelta(seconds=duration_seconds)
+    if reset_at.tzinfo is None:
+        reset_at = reset_at.replace(tzinfo=timezone.utc)
+    return reset_at - timedelta(seconds=duration_seconds)
+
+
+def _coerce_datetime(value: Any) -> Optional[datetime]:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, str):
+        try:
+            return datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    return None
 
 
 def estimate_request_max_cost(
