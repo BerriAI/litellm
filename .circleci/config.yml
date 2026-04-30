@@ -1455,7 +1455,7 @@ jobs:
           command: |
             docker build \
               -t litellm-claude-code:ci \
-              -f docker/Dockerfile.claude_code .
+              -f .circleci/Dockerfile.claude_code .
       - wait_for_service:
           url: http://localhost:4000
           timeout: "300"
