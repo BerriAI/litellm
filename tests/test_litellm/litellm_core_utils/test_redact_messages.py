@@ -258,6 +258,47 @@ class TestPerformRedaction:
         assert delta["thinking_blocks"] is None
         assert delta["audio"] is None
 
+    def test_redacts_standard_logging_model_response_dict_choices(self):
+        details = {
+            "standard_logging_object": {
+                "response": {
+                    "choices": [
+                        {
+                            "message": {
+                                "content": "message content",
+                                "reasoning_content": "message reasoning",
+                                "thinking_blocks": ["thinking"],
+                                "audio": {"data": "audio"},
+                            }
+                        },
+                        {
+                            "delta": {
+                                "content": "delta content",
+                                "reasoning_content": "delta reasoning",
+                                "thinking_blocks": ["delta thinking"],
+                                "audio": {"data": "audio"},
+                            }
+                        },
+                    ]
+                }
+            }
+        }
+
+        perform_redaction(details, None)
+
+        choices = details["standard_logging_object"]["response"]["choices"]
+        message = choices[0]["message"]
+        assert message["content"] == "redacted-by-litellm"
+        assert message["reasoning_content"] == "redacted-by-litellm"
+        assert message["thinking_blocks"] is None
+        assert message["audio"] is None
+
+        delta = choices[1]["delta"]
+        assert delta["content"] == "redacted-by-litellm"
+        assert delta["reasoning_content"] == "redacted-by-litellm"
+        assert delta["thinking_blocks"] is None
+        assert delta["audio"] is None
+
     def test_redacts_object_choices_inside_model_response_dict(self):
         result = {
             "choices": [

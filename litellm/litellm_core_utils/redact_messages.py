@@ -122,16 +122,7 @@ def _redact_standard_logging_object(model_call_details: dict):
         elif isinstance(response, dict) and "choices" in response:
             # ModelResponse dict format - redact content in choices
             if isinstance(response.get("choices"), list):
-                for choice in response["choices"]:
-                    if isinstance(choice, dict):
-                        if "message" in choice and isinstance(choice["message"], dict):
-                            choice["message"]["content"] = redacted_str
-                            if "audio" in choice["message"]:
-                                choice["message"]["audio"] = None
-                        elif "delta" in choice and isinstance(choice["delta"], dict):
-                            choice["delta"]["content"] = redacted_str
-                            if "audio" in choice["delta"]:
-                                choice["delta"]["audio"] = None
+                _redact_model_response_dict_choices(response["choices"], redacted_str)
         elif isinstance(response, str):
             standard_logging_object["response"] = redacted_str
         else:
