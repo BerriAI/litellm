@@ -46,6 +46,8 @@ def _parse_deprecation_date(raw_value: Any) -> Optional[date]:
     """
     if raw_value is None:
         return None
+    if isinstance(raw_value, datetime):
+        return raw_value.date()
     if isinstance(raw_value, date):
         return raw_value
     if not isinstance(raw_value, str):
