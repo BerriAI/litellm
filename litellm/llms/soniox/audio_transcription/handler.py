@@ -84,7 +84,14 @@ class SonioxAudioTranscriptionHandler:
         headers: Optional[Dict[str, Any]] = None,
         provider_config: Optional[SonioxAudioTranscriptionConfig] = None,
     ) -> Union[TranscriptionResponse, Coroutine[Any, Any, TranscriptionResponse]]:
-        """Sync/async dispatch for Soniox transcription requests."""
+        """Sync/async dispatch for Soniox transcription requests.
+
+        Note: ``max_retries`` is accepted for signature compatibility with
+        ``litellm.transcription`` but is **not yet implemented** for the Soniox
+        async pipeline. Transient HTTP failures during upload, create, poll,
+        or fetch will surface immediately. Wrap calls with the standard
+        ``litellm.Router`` / ``num_retries`` mechanism for retry behaviour.
+        """
         config = provider_config or SonioxAudioTranscriptionConfig()
 
         if atranscription is True:
@@ -133,7 +140,7 @@ class SonioxAudioTranscriptionHandler:
         headers: Dict[str, Any],
     ) -> Tuple[
         Dict[str, str],  # auth headers
-        str,             # api_base (no trailing slash)
+        str,  # api_base (no trailing slash)
         Dict[str, Any],  # body for POST /v1/transcriptions (without file_id/audio_url)
         Dict[str, Any],  # handler-only options (poll interval, cleanup, ...)
     ]:
@@ -150,41 +157,41 @@ class SonioxAudioTranscriptionHandler:
 
         base_url = get_soniox_api_base(api_base)
 
-        # Pull handler-only kwargs out of optional_params so they aren't sent
+        # Operate on a local copy so we don't mutate the caller's dict
+        # (the caller may reuse `optional_params` for retries or logging).
+        params = dict(optional_params)
+
+        # Pull handler-only kwargs out of params so they aren't sent
         # to Soniox.
         poll_interval = float(
-            optional_params.pop(
-                "soniox_polling_interval", SONIOX_DEFAULT_POLL_INTERVAL
-            )
+            params.pop("soniox_polling_interval", SONIOX_DEFAULT_POLL_INTERVAL)
         )
         max_attempts = int(
-            optional_params.pop(
-                "soniox_max_polling_attempts", SONIOX_DEFAULT_MAX_POLL_ATTEMPTS
-            )
+            params.pop("soniox_max_polling_attempts", SONIOX_DEFAULT_MAX_POLL_ATTEMPTS)
         )
-        cleanup_raw = optional_params.pop("soniox_cleanup", SONIOX_DEFAULT_CLEANUP)
+        cleanup_raw = params.pop("soniox_cleanup", SONIOX_DEFAULT_CLEANUP)
         if cleanup_raw is None:
             cleanup: List[str] = []
         elif isinstance(cleanup_raw, str):
             cleanup = [cleanup_raw]
         else:
             cleanup = list(cleanup_raw)
-        filename_override = optional_params.pop("filename", None)
+        filename_override = params.pop("filename", None)
 
         handler_opts: Dict[str, Any] = {
             "poll_interval": max(poll_interval, 0.0),
             "max_attempts": max(max_attempts, 1),
             "cleanup": cleanup,
             "filename_override": filename_override,
-            "audio_url": optional_params.pop("audio_url", None),
-            "file_id": optional_params.pop("file_id", None),
+            "audio_url": params.pop("audio_url", None),
+            "file_id": params.pop("file_id", None),
         }
 
         # Soniox does not accept `language` directly; map_openai_params should
         # already have translated it, but drop any leftover to be safe.
-        optional_params.pop("language", None)
+        params.pop("language", None)
 
-        return auth_headers, base_url, dict(optional_params), handler_opts
+        return auth_headers, base_url, params, handler_opts
 
     def _build_create_body(
         self,
@@ -225,6 +232,8 @@ class SonioxAudioTranscriptionHandler:
                 },
             )
         except Exception:
+            # Logging hooks are best-effort: a misbehaving callback or third-party
+            # observability integration must never break a real Soniox call.
             pass
 
     @staticmethod
@@ -243,6 +252,8 @@ class SonioxAudioTranscriptionHandler:
                 original_response=original_response,
             )
         except Exception:
+            # Logging hooks are best-effort: a misbehaving callback or third-party
+            # observability integration must never break a real Soniox call.
             pass
 
     @staticmethod
@@ -254,7 +265,11 @@ class SonioxAudioTranscriptionHandler:
         if response.status_code >= 400:
             try:
                 payload = response.json()
-                message = payload.get("error_message") or payload.get("error") or response.text
+                message = (
+                    payload.get("error_message")
+                    or payload.get("error")
+                    or response.text
+                )
             except Exception:
                 message = response.text
             raise provider_config.get_error_class(
@@ -329,7 +344,9 @@ class SonioxAudioTranscriptionHandler:
                 json=body,
                 timeout=timeout,
             )
-            self._raise_for_response(create_resp, provider_config, "create transcription")
+            self._raise_for_response(
+                create_resp, provider_config, "create transcription"
+            )
             transcription_id = create_resp.json()["id"]
 
             transcription_meta = self._sync_poll_until_completed(
@@ -348,15 +365,15 @@ class SonioxAudioTranscriptionHandler:
                 headers=auth_headers,
                 timeout=timeout,
             )
-            self._raise_for_response(transcript_resp, provider_config, "fetch transcript")
+            self._raise_for_response(
+                transcript_resp, provider_config, "fetch transcript"
+            )
             transcript = transcript_resp.json()
 
             payload = {"transcription": transcription_meta, "transcript": transcript}
             response = provider_config._build_response_from_payload(payload)
 
-            self._safe_log_post_call(
-                logging_obj, audio_file, api_key, body, payload
-            )
+            self._safe_log_post_call(logging_obj, audio_file, api_key, body, payload)
 
             # Carry through hidden_params hints expected by the rest of litellm.
             response._hidden_params.update(
@@ -461,7 +478,10 @@ class SonioxAudioTranscriptionHandler:
                     timeout=timeout,
                 )
             except Exception:
-                pass  # cleanup is best-effort
+                # Cleanup is best-effort: a failed delete leaves stale data on
+                # Soniox but must not mask the original transcription result
+                # (or, on the error path, the original error).
+                pass
         if "file" in cleanup and file_id_to_cleanup:
             try:
                 http_client.delete(
@@ -470,6 +490,7 @@ class SonioxAudioTranscriptionHandler:
                     timeout=timeout,
                 )
             except Exception:
+                # Cleanup is best-effort; see comment above.
                 pass
 
     # ------------------------------------------------------------------
@@ -503,10 +524,14 @@ class SonioxAudioTranscriptionHandler:
             headers=headers,
         )
 
-        http_client = client if isinstance(client, AsyncHTTPHandler) else (
-            get_async_httpx_client(
-                llm_provider=litellm.LlmProviders.SONIOX,
-                params={"ssl_verify": litellm_params.get("ssl_verify", None)},
+        http_client = (
+            client
+            if isinstance(client, AsyncHTTPHandler)
+            else (
+                get_async_httpx_client(
+                    llm_provider=litellm.LlmProviders.SONIOX,
+                    params={"ssl_verify": litellm_params.get("ssl_verify", None)},
+                )
             )
         )
 
@@ -545,7 +570,9 @@ class SonioxAudioTranscriptionHandler:
                 json=body,
                 timeout=timeout,
             )
-            self._raise_for_response(create_resp, provider_config, "create transcription")
+            self._raise_for_response(
+                create_resp, provider_config, "create transcription"
+            )
             transcription_id = create_resp.json()["id"]
 
             transcription_meta = await self._async_poll_until_completed(
@@ -564,15 +591,15 @@ class SonioxAudioTranscriptionHandler:
                 headers=auth_headers,
                 timeout=timeout,
             )
-            self._raise_for_response(transcript_resp, provider_config, "fetch transcript")
+            self._raise_for_response(
+                transcript_resp, provider_config, "fetch transcript"
+            )
             transcript = transcript_resp.json()
 
             payload = {"transcription": transcription_meta, "transcript": transcript}
             response = provider_config._build_response_from_payload(payload)
 
-            self._safe_log_post_call(
-                logging_obj, audio_file, api_key, body, payload
-            )
+            self._safe_log_post_call(logging_obj, audio_file, api_key, body, payload)
 
             response._hidden_params.update(
                 {"model": model, "custom_llm_provider": "soniox"}
@@ -675,6 +702,9 @@ class SonioxAudioTranscriptionHandler:
                     timeout=timeout,
                 )
             except Exception:
+                # Cleanup is best-effort: a failed delete leaves stale data on
+                # Soniox but must not mask the original transcription result
+                # (or, on the error path, the original error).
                 pass
         if "file" in cleanup and file_id_to_cleanup:
             try:
@@ -684,4 +714,5 @@ class SonioxAudioTranscriptionHandler:
                     timeout=timeout,
                 )
             except Exception:
+                # Cleanup is best-effort; see comment above.
                 pass

@@ -1,4 +1,5 @@
 """Tests verifying Soniox is correctly registered as a litellm provider."""
+
 import pytest
 
 import litellm

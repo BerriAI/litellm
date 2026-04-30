@@ -1,4 +1,5 @@
 """Tests for SonioxAudioTranscriptionConfig."""
+
 import json
 from typing import Any, Dict, Optional
 from unittest.mock import patch
@@ -268,12 +269,44 @@ class TestTransformAudioTranscriptionResponse:
         with pytest.raises(SonioxException):
             cfg.transform_audio_transcription_response(bad)
 
+    def test_should_concat_token_texts_when_no_text_field_or_tags(self):
+        cfg = SonioxAudioTranscriptionConfig()
+        payload = {
+            "transcript": {
+                "tokens": [
+                    {"text": "hello"},
+                    {"text": " world"},
+                ],
+            }
+        }
+        resp = cfg._build_response_from_payload(payload)
+        assert resp.text == "hello world"
+
+    def test_should_return_empty_text_for_empty_payload(self):
+        cfg = SonioxAudioTranscriptionConfig()
+        resp = cfg._build_response_from_payload({})
+        assert resp.text == ""
+
+    def test_should_skip_duration_when_audio_duration_ms_is_invalid(self):
+        cfg = SonioxAudioTranscriptionConfig()
+        payload = {
+            "transcription": {"audio_duration_ms": "not-a-number"},
+            "transcript": {"text": "hi", "tokens": []},
+        }
+        resp = cfg._build_response_from_payload(payload)
+        assert "duration" not in resp.model_dump()
+
+
+class TestRenderSonioxTokens:
+    def test_should_return_empty_string_for_no_tokens(self):
+        from litellm.llms.soniox.common_utils import render_soniox_tokens
+
+        assert render_soniox_tokens([]) == ""
+
 
 class TestGetErrorClass:
     def test_should_return_soniox_exception(self):
         cfg = SonioxAudioTranscriptionConfig()
-        err = cfg.get_error_class(
-            error_message="boom", status_code=500, headers={}
-        )
+        err = cfg.get_error_class(error_message="boom", status_code=500, headers={})
         assert isinstance(err, SonioxException)
         assert err.status_code == 500

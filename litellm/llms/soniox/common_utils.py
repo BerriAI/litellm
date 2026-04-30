@@ -5,7 +5,6 @@ Shared utilities for the Soniox provider (https://soniox.com).
 from typing import Any, Dict, List, Optional
 
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
-from litellm.secret_managers.main import get_secret_str
 
 # Soniox API base URL.
 SONIOX_API_BASE: str = "https://api.soniox.com"
@@ -30,11 +29,17 @@ class SonioxException(BaseLLMException):
 
 def get_soniox_api_key(api_key: Optional[str] = None) -> Optional[str]:
     """Resolve the Soniox API key from arg or env var."""
+    # Local import to avoid a circular import: litellm.secret_managers.main
+    # imports from litellm at top-level.
+    from litellm.secret_managers.main import get_secret_str
+
     return api_key or get_secret_str("SONIOX_API_KEY")
 
 
 def get_soniox_api_base(api_base: Optional[str] = None) -> str:
     """Resolve the Soniox API base URL (defaults to public API)."""
+    from litellm.secret_managers.main import get_secret_str
+
     base = api_base or get_secret_str("SONIOX_API_BASE") or SONIOX_API_BASE
     return base.rstrip("/")
 
