@@ -60,15 +60,15 @@ def _patch_prisma(existing_metadata: dict):
 async def test_disable_team_logging_emits_audit_log_when_enabled(monkeypatch):
     monkeypatch.setattr(litellm, "store_audit_logs", True)
     mock_prisma = _patch_prisma(
-            {
-                "logging": [
-                    {
-                        "callback_name": "langfuse",
-                        "callback_type": "success",
-                        "callback_vars": {},
-                    }
-                ]
-            }
+        {
+            "logging": [
+                {
+                    "callback_name": "langfuse",
+                    "callback_type": "success",
+                    "callback_vars": {},
+                }
+            ]
+        }
     )
 
     audit_calls = []
@@ -109,6 +109,7 @@ async def test_disable_team_logging_emits_audit_log_when_enabled(monkeypatch):
     assert len(before["metadata"]["logging"]) == 1
     assert before["metadata"]["logging"][0]["callback_name"] == "langfuse"
     assert after["metadata"]["logging"] == []
+
 
 @pytest.mark.asyncio
 async def test_disable_team_logging_no_audit_when_disabled(monkeypatch):
@@ -292,6 +293,7 @@ async def test_add_team_callbacks_no_audit_when_disabled(monkeypatch):
         )
 
     assert audit_calls == []
+
 
 @pytest.mark.asyncio
 async def test_get_team_callbacks_reads_from_logging_field():

@@ -319,7 +319,7 @@ async def disable_team_logging(
         # Update team metadata to disable logging
         team_metadata = _existing_team.metadata
         before_metadata = copy.deepcopy(team_metadata)
-        
+
         # Reset callbacks by clearing the logging list
         team_metadata["logging"] = []
         team_metadata_json = json.dumps(team_metadata)
