@@ -1,5 +1,12 @@
 # conftest.py
+#
+# Auto-applies ``@pytest.mark.vcr`` to every collected test (see
+# ``pytest_collection_modifyitems``) so live provider calls land in the
+# Redis-backed VCR cache. The persister, header scrubbing and 2xx-only
+# filtering live in ``tests/_vcr_redis_persister.py``; the cache key and
+# 24h TTL match the llm_translation conftest.
 
+import asyncio
 import importlib
 import os
 import sys
@@ -9,9 +16,93 @@ import pytest
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
-import litellm
 
-import asyncio
+import litellm  # noqa: E402
+
+from tests._vcr_redis_persister import (  # noqa: E402
+    filter_non_2xx_response,
+    make_redis_persister,
+)
+
+
+# Headers that must never be persisted to a cassette.
+_FILTERED_REQUEST_HEADERS = (
+    "authorization",
+    "x-api-key",
+    "anthropic-api-key",
+    "anthropic-version",
+    "openai-api-key",
+    "azure-api-key",
+    "api-key",
+    "cookie",
+    "x-amz-security-token",
+    "x-amz-date",
+    "x-amz-content-sha256",
+    "amz-sdk-invocation-id",
+    "amz-sdk-request",
+    "x-goog-api-key",
+    "x-goog-user-project",
+)
+
+# Per-request response headers we strip so cassettes diff cleanly.
+_FILTERED_RESPONSE_HEADERS = (
+    "set-cookie",
+    "x-request-id",
+    "request-id",
+    "cf-ray",
+    "anthropic-organization-id",
+    "openai-organization",
+    "x-amzn-requestid",
+    "x-amzn-trace-id",
+    "date",
+)
+
+
+def _scrub_response(response):
+    if not isinstance(response, dict):
+        return response
+    headers = response.get("headers") or {}
+    if isinstance(headers, dict):
+        for header in list(headers):
+            if header.lower() in _FILTERED_RESPONSE_HEADERS:
+                headers.pop(header, None)
+    return response
+
+
+def _before_record_response(response):
+    response = _scrub_response(response)
+    return filter_non_2xx_response(response)
+
+
+@pytest.fixture(scope="module")
+def vcr_config():
+    return {
+        "filter_headers": list(_FILTERED_REQUEST_HEADERS),
+        "decode_compressed_response": True,
+        "record_mode": "once",
+        "match_on": (
+            "method",
+            "scheme",
+            "host",
+            "port",
+            "path",
+            "query",
+            "body",
+        ),
+        "before_record_response": _before_record_response,
+    }
+
+
+def _vcr_disabled() -> bool:
+    if os.environ.get("LITELLM_VCR_DISABLE") == "1":
+        return True
+    return not os.environ.get("REDIS_HOST")
+
+
+def pytest_recording_configure(config, vcr):
+    if _vcr_disabled():
+        return
+    vcr.register_persister(make_redis_persister())
 
 
 @pytest.fixture(scope="session")
@@ -61,15 +152,23 @@ def setup_and_teardown():
 
 
 def pytest_collection_modifyitems(config, items):
-    # Separate tests in 'test_amazing_proxy_custom_logger.py' and other tests
+    # Auto-apply ``@pytest.mark.vcr`` so any provider call lands in the
+    # Redis cache. No respx files exist in this directory today; if any are
+    # added later, exclude them by filename here. Skip entirely when VCR
+    # is disabled (no REDIS_HOST or LITELLM_VCR_DISABLE=1).
+    if not _vcr_disabled():
+        for item in items:
+            if item.get_closest_marker("vcr") is not None:
+                continue
+            item.add_marker(pytest.mark.vcr)
+
+    # Preserve historical custom_logger ordering.
     custom_logger_tests = [
         item for item in items if "custom_logger" in item.parent.name
     ]
     other_tests = [item for item in items if "custom_logger" not in item.parent.name]
 
-    # Sort tests based on their names
     custom_logger_tests.sort(key=lambda x: x.name)
     other_tests.sort(key=lambda x: x.name)
 
-    # Reorder the items list
     items[:] = custom_logger_tests + other_tests
