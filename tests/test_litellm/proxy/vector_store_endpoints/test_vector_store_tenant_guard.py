@@ -99,7 +99,8 @@ async def test_vector_store_file_create_forces_path_id_over_body_id():
 
     assert response == {"ok": True}
     assert captured_data["vector_store_id"] == "vs_path_allowed"
-    mock_registry.get_litellm_managed_vector_store_from_registry.assert_any_call(
+    assert captured_data["custom_llm_provider"] == "openai"
+    mock_registry.get_litellm_managed_vector_store_from_registry.assert_called_once_with(
         vector_store_id="vs_path_allowed"
     )
 
@@ -227,6 +228,25 @@ async def test_rag_ingest_denies_nested_other_team_vector_store():
     mock_aingest.assert_not_called()
 
 
+def test_rag_payload_scan_rejects_excessive_nesting():
+    from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
+    from litellm.proxy.rag_endpoints.endpoints import (
+        _collect_vector_store_ids_from_payload,
+    )
+
+    payload = {}
+    current = payload
+    for _ in range(DEFAULT_MAX_RECURSE_DEPTH + 1):
+        current["nested"] = {}
+        current = current["nested"]
+    current["vector_store_id"] = "vs_too_deep"
+
+    with pytest.raises(HTTPException) as exc_info:
+        _collect_vector_store_ids_from_payload(payload)
+
+    assert exc_info.value.status_code == 400
+
+
 @pytest.mark.asyncio
 async def test_responses_file_search_denies_other_team_vector_store():
     from litellm.proxy.common_request_processing import (
@@ -331,6 +351,24 @@ async def test_get_managed_vector_store_uses_shared_cache_helper_for_db_fallback
     assert vector_store["vector_store_id"] == "vs_cached"
     assert vector_store["team_id"] == "team-a"
     cache_helper.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_get_managed_vector_store_fails_closed_on_lookup_error():
+    from litellm.proxy.vector_store_endpoints.utils import (
+        get_litellm_managed_vector_store,
+    )
+
+    mock_registry = MagicMock()
+    mock_registry.get_litellm_managed_vector_store_from_registry.side_effect = (
+        RuntimeError("registry unavailable")
+    )
+
+    with patch.object(litellm, "vector_store_registry", mock_registry):
+        with pytest.raises(HTTPException) as exc_info:
+            await get_litellm_managed_vector_store(vector_store_id="vs_registry_only")
+
+    assert exc_info.value.status_code == 500
 
 
 @pytest.mark.asyncio

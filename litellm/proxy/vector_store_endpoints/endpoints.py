@@ -20,29 +20,6 @@ router = APIRouter()
 ########################################################
 
 
-async def _check_vector_store_access(
-    vector_store: LiteLLM_ManagedVectorStore,
-    user_api_key_dict: UserAPIKeyAuth,
-) -> bool:
-    """
-    Check if the user has access to the vector store.
-
-    Delegates to :func:`can_user_access_vector_store`, which honors:
-    - PROXY_ADMIN bypass
-    - legacy vector stores with no team_id
-    - key-level and team-level ``object_permission.vector_stores`` allowlists
-    - team_id match between key and store
-    """
-    try:
-        await assert_user_can_access_vector_store(
-            vector_store=vector_store,
-            user_api_key_dict=user_api_key_dict,
-        )
-        return True
-    except HTTPException:
-        return False
-
-
 async def _update_request_data_with_litellm_managed_vector_store_registry(
     data: Dict,
     vector_store_id: str,
