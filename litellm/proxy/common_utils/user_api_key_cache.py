@@ -31,11 +31,11 @@ class UserApiKeyCache(DualCache):
 
     ``async_set_cache_pipeline`` applies the same untyped Codec pass as omitting
     ``model_type`` on ``async_set_cache`` (so ``BaseModel`` rows are dumped before Redis).
+
+    ``get_cache`` / ``async_get_cache`` overloads and implementations must be contiguous
+    (no other methods in between) so mypy resolves ``@overload`` + implementation correctly.
     """
 
-    # Overloads: `model_type` must be a real parameter (not only via **kwargs) so
-    # the untyped branch cannot match calls that pass `model_type=...`.
-
     @overload
     def get_cache(
         self,
@@ -49,55 +49,6 @@ class UserApiKeyCache(DualCache):
 
     @overload
     def get_cache(
-        self,
-        key: Any,
-        parent_otel_span: Any = None,
-        local_only: bool = False,
-        **kwargs: Any,
-    ) -> Any: ...
-
-    def set_cache(self, key, value, local_only: bool = False, **kwargs):  # type: ignore[override]
-        model_type = cast(Optional[Type[BaseModel]], kwargs.pop("model_type", None))
-        payload = CacheCodec.serialize(value, model_type=model_type)
-        return super().set_cache(
-            key=key, value=payload, local_only=local_only, **kwargs
-        )
-
-    async def async_set_cache(self, key, value, local_only: bool = False, **kwargs):  # type: ignore[override]
-        model_type = cast(Optional[Type[BaseModel]], kwargs.pop("model_type", None))
-        payload = CacheCodec.serialize(value, model_type=model_type)
-        return await super().async_set_cache(
-            key=key, value=payload, local_only=local_only, **kwargs
-        )
-
-    async def async_set_cache_pipeline(  # type: ignore[override]
-        self, cache_list: list, local_only: bool = False, **kwargs
-    ) -> None:
-        """
-        Batch writes with the same Codec boundary as ``async_set_cache`` without
-        ``model_type``: ``BaseModel`` values become JSON-safe dicts; dicts/scalars unchanged.
-        """
-        normalized = [
-            (key, CacheCodec.serialize(value, model_type=None))
-            for key, value in cache_list
-        ]
-        return await super().async_set_cache_pipeline(
-            cache_list=normalized, local_only=local_only, **kwargs
-        )
-
-    @overload
-    async def async_get_cache(
-        self,
-        key: Any,
-        parent_otel_span: Any = None,
-        local_only: bool = False,
-        *,
-        model_type: Type[T],
-        **kwargs: Any,
-    ) -> Optional[T]: ...
-
-    @overload
-    async def async_get_cache(
         self,
         key: Any,
         parent_otel_span: Any = None,
@@ -133,6 +84,26 @@ class UserApiKeyCache(DualCache):
             return None
         return decoded
 
+    @overload
+    async def async_get_cache(
+        self,
+        key: Any,
+        parent_otel_span: Any = None,
+        local_only: bool = False,
+        *,
+        model_type: Type[T],
+        **kwargs: Any,
+    ) -> Optional[T]: ...
+
+    @overload
+    async def async_get_cache(
+        self,
+        key: Any,
+        parent_otel_span: Any = None,
+        local_only: bool = False,
+        **kwargs: Any,
+    ) -> Any: ...
+
     async def async_get_cache(  # type: ignore[override]
         self,
         key,
@@ -160,3 +131,32 @@ class UserApiKeyCache(DualCache):
             )
             return None
         return decoded
+
+    def set_cache(self, key, value, local_only: bool = False, **kwargs):  # type: ignore[override]
+        model_type = cast(Optional[Type[BaseModel]], kwargs.pop("model_type", None))
+        payload = CacheCodec.serialize(value, model_type=model_type)
+        return super().set_cache(
+            key=key, value=payload, local_only=local_only, **kwargs
+        )
+
+    async def async_set_cache(self, key, value, local_only: bool = False, **kwargs):  # type: ignore[override]
+        model_type = cast(Optional[Type[BaseModel]], kwargs.pop("model_type", None))
+        payload = CacheCodec.serialize(value, model_type=model_type)
+        return await super().async_set_cache(
+            key=key, value=payload, local_only=local_only, **kwargs
+        )
+
+    async def async_set_cache_pipeline(  # type: ignore[override]
+        self, cache_list: list, local_only: bool = False, **kwargs
+    ) -> None:
+        """
+        Batch writes with the same Codec boundary as ``async_set_cache`` without
+        ``model_type``: ``BaseModel`` values become JSON-safe dicts; dicts/scalars unchanged.
+        """
+        normalized = [
+            (key, CacheCodec.serialize(value, model_type=None))
+            for key, value in cache_list
+        ]
+        return await super().async_set_cache_pipeline(
+            cache_list=normalized, local_only=local_only, **kwargs
+        )
