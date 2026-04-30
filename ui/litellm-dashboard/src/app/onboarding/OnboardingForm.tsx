@@ -31,10 +31,9 @@ export function OnboardingForm({ variant }: OnboardingFormProps) {
   const userEmail: string = decoded?.user_email ?? "";
   const userId: string | null = decoded?.user_id ?? null;
   const accessToken: string | null = decoded?.key ?? null;
-  const jwtToken: string | null = credentialsData?.token ?? null;
 
   const handleSubmit = (formValues: { password: string }) => {
-    if (!accessToken || !jwtToken || !userId || !inviteId) return;
+    if (!accessToken || !userId || !inviteId) return;
 
     setClaimError(null);
 
@@ -42,8 +41,11 @@ export function OnboardingForm({ variant }: OnboardingFormProps) {
       { accessToken, inviteId, userId, password: formValues.password },
       {
         onSuccess: (data: { token?: string }) => {
-          const finalToken = data?.token ?? jwtToken;
-          document.cookie = `token=${finalToken}; path=/; SameSite=Lax`;
+          if (!data?.token) {
+            setClaimError("Failed to start session. Please try again.");
+            return;
+          }
+          document.cookie = `token=${data.token}; path=/; SameSite=Lax`;
           const proxyBaseUrl = getProxyBaseUrl();
           window.location.href = proxyBaseUrl
             ? `${proxyBaseUrl}/ui/?login=success`
