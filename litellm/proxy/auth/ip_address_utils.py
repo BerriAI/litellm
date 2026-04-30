@@ -13,6 +13,10 @@ from fastapi import Request
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy.auth.auth_utils import _get_request_ip_address
 
+# One-shot warning so operators upgrading from the prior "always trust X-Forwarded-*"
+# behaviour see an actionable message in their logs the first time it triggers.
+_warned_xff_without_trusted_ranges = False
+
 
 class IPAddressUtils:
     """Static utilities for IP-based MCP access control."""
@@ -144,6 +148,17 @@ class IPAddressUtils:
 
         trusted_ranges = general_settings.get("mcp_trusted_proxy_ranges")
         if not trusted_ranges:
+            global _warned_xff_without_trusted_ranges
+            if not _warned_xff_without_trusted_ranges:
+                verbose_proxy_logger.warning(
+                    "use_x_forwarded_for is enabled but mcp_trusted_proxy_ranges "
+                    "is not configured. X-Forwarded-* headers will NOT be "
+                    "trusted, so MCP OAuth discovery URLs will use the proxy's "
+                    "literal base URL. Set mcp_trusted_proxy_ranges in "
+                    "general_settings to your reverse-proxy CIDR(s) to allow "
+                    "X-Forwarded-* through."
+                )
+                _warned_xff_without_trusted_ranges = True
             return False
 
         direct_ip = request.client.host if request.client else None
