@@ -2003,21 +2003,34 @@ def team_member_add_duplication_check(
 async def _validate_team_member_add_permissions(
     user_api_key_dict: UserAPIKeyAuth,
     complete_team_data: LiteLLM_TeamTable,
+    data: TeamMemberAddRequest,
 ) -> None:
-    """Validate if user has permission to add members to the team."""
+    """Validate if user has permission to add members to the team.
+
+    Standard users can self-join an *available team*, but the bypass
+    must not be allowed to escalate them to ``role=admin`` or to add
+    other users into the team.  When access is granted via the
+    available-team bypass we therefore enforce that every member in
+    the request matches the caller's own ``user_id`` and is being
+    added with ``role="user"``.
+    """
     if (
-        hasattr(user_api_key_dict, "user_role")
-        and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value
-        and not _is_user_team_admin(
-            user_api_key_dict=user_api_key_dict, team_obj=complete_team_data
-        )
-        and not await _is_user_org_admin_for_team(
-            user_api_key_dict=user_api_key_dict, team_obj=complete_team_data
-        )
-        and not _is_available_team(
-            team_id=complete_team_data.team_id,
-            user_api_key_dict=user_api_key_dict,
-        )
+        getattr(user_api_key_dict, "user_role", None)
+        == LitellmUserRoles.PROXY_ADMIN.value
+    ):
+        return
+    if _is_user_team_admin(
+        user_api_key_dict=user_api_key_dict, team_obj=complete_team_data
+    ):
+        return
+    if await _is_user_org_admin_for_team(
+        user_api_key_dict=user_api_key_dict, team_obj=complete_team_data
+    ):
+        return
+
+    if not _is_available_team(
+        team_id=complete_team_data.team_id,
+        user_api_key_dict=user_api_key_dict,
     ):
         raise HTTPException(
             status_code=403,
@@ -2028,6 +2041,34 @@ async def _validate_team_member_add_permissions(
                 )
             },
         )
+
+    # Available-team self-join: caller may add only themselves, only as a
+    # standard user.  Enforce that here so the bypass cannot be used as a
+    # privilege-escalation or cross-user-injection primitive.
+    members = data.member if isinstance(data.member, list) else [data.member]
+    caller_user_id = getattr(user_api_key_dict, "user_id", None)
+    for member in members:
+        if getattr(member, "role", "user") != "user":
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "error": (
+                        "Available-team self-join cannot assign 'admin' role. "
+                        "Only proxy/team/org admins can add admins to a team."
+                    )
+                },
+            )
+        member_user_id = getattr(member, "user_id", None)
+        if not caller_user_id or not member_user_id or member_user_id != caller_user_id:
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "error": (
+                        "Available-team self-join can only add the caller "
+                        "(user_id must match the authenticated user's user_id)."
+                    )
+                },
+            )
 
 
 async def _process_team_members(
@@ -2384,6 +2425,7 @@ async def team_member_add(
     await _validate_team_member_add_permissions(
         user_api_key_dict=user_api_key_dict,
         complete_team_data=complete_team_data,
+        data=data,
     )
 
     # Validate and populate user_email/user_id for members before processing
@@ -4697,6 +4739,8 @@ async def update_team_member_permissions(
 
     complete_team_data = LiteLLM_TeamTable(**existing_team_row.model_dump())
 
+    # Available-team self-join must NOT grant write access to team-wide
+    # permission policies; only proxy/team/org admins can update them.
     if (
         hasattr(user_api_key_dict, "user_role")
         and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value
@@ -4706,16 +4750,12 @@ async def update_team_member_permissions(
         and not await _is_user_org_admin_for_team(
             user_api_key_dict=user_api_key_dict, team_obj=complete_team_data
         )
-        and not _is_available_team(
-            team_id=complete_team_data.team_id,
-            user_api_key_dict=user_api_key_dict,
-        )
     ):
         raise HTTPException(
             status_code=403,
             detail={
                 "error": "Call not allowed. User not proxy admin OR team admin. route={}, team_id={}".format(
-                    "/team/member_add",
+                    "/team/permissions_update",
                     complete_team_data.team_id,
                 )
             },
