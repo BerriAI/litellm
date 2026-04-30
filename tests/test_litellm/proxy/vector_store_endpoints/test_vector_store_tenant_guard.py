@@ -38,6 +38,7 @@ async def test_vector_store_search_forces_path_id_over_body_id():
             ),
         ),
         patch.object(litellm, "vector_store_registry", None),
+        patch("litellm.proxy.proxy_server.prisma_client", None),
         patch(
             "litellm.proxy.vector_store_endpoints.endpoints.ProxyBaseLLMRequestProcessing.base_process_llm_request",
             new=fake_base_process,
