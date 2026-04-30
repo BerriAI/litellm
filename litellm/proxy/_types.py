@@ -716,13 +716,18 @@ class LiteLLMRoutes(enum.Enum):
         "/organization/member_delete",
     ]
 
-    # Routes accessible by Admin Viewer (read-only admin access)
+    # Routes accessible by Admin Viewer (read-only admin access).
     #
     # Admin Viewer follows a read-parity-with-Proxy-Admin rule: anything Proxy
     # Admin can read/list/get, Admin Viewer can too (no writes, no cost-incurring
-    # actions). When extending this list, the only valid exclusions are write
-    # endpoints and cost-incurring endpoints (e.g. /chat/completions, the
-    # Playground). Pure GET/list/info endpoints belong here.
+    # actions).
+    #
+    # NOTE: This list is no longer the primary mechanism for granting access —
+    # `_check_proxy_admin_viewer_access()` in route_checks.py default-allows
+    # any safe HTTP method (GET/HEAD/OPTIONS) on non-inference routes. This
+    # list now matters only for non-GET routes that are semantically reads
+    # (e.g. POST /spend/calculate). Adding a new GET endpoint does not require
+    # updating this list — the default-allow behavior covers it automatically.
     admin_viewer_routes = (
         [
             "/user/list",
