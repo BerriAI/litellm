@@ -313,6 +313,9 @@ migrationJob:
   # Only used when migrationJob.hooks.helm.enabled=true and serviceAccount.create=true.
   # In that case, pre-install/pre-upgrade hooks run before normal resources, so this defaults to "default".
   serviceAccountName: ""
+  # extra annotations for the Job
+  jobAnnotations: {}
+  # extra annotations for pods created from the Job
   annotations: {}
   ttlSecondsAfterFinished: 120
   resources: {}
@@ -326,8 +329,14 @@ migrationJob:
   hooks:
     argocd:
       enabled: true
+      # Optional hook controls (defaults shown)
+      # hook: PreSync
+      # hookDeletePolicy: BeforeHookCreation
     helm:
       enabled: false
+      # Optional hook controls (defaults shown)
+      # hook: pre-install,pre-upgrade
+      # hookDeletePolicy: before-hook-creation
 
 # Additional environment variables to be added to the deployment as a map of key-value pairs
 envVars: {}
