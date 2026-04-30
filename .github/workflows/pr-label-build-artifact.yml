@@ -16,13 +16,32 @@ jobs:
     runs-on: ubuntu-latest
     if: >
       github.event.action == 'labeled' &&
-      github.event.label.name == 'build-ecr-artifact'
+      github.event.label.name == 'build-ecr-artifact' &&
+      github.event.pull_request.head.repo.full_name == github.repository
     env:
       AWS_REGION: ${{ vars.AWS_REGION }}
       AWS_ROLE_TO_ASSUME: ${{ vars.AWS_ROLE_TO_ASSUME }}
       ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
 
     steps:
+      - name: Verify label actor has write access
+        env:
+          GH_TOKEN: ${{ github.token }}
+          LABEL_ACTOR: ${{ github.event.sender.login }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          permission="$(gh api "/repos/${REPOSITORY}/collaborators/${LABEL_ACTOR}/permission" --jq '.permission')"
+          echo "Label actor ${LABEL_ACTOR} has repository permission: ${permission}"
+
+          case "${permission}" in
+            admin|maintain|write)
+              ;;
+            *)
+              echo "User ${LABEL_ACTOR} must have write, maintain, or admin access to trigger this workflow."
+              exit 1
+              ;;
+          esac
+
       - name: Validate required configuration
         run: |
           test -n "${AWS_REGION}" || { echo "Missing repository variable: AWS_REGION"; exit 1; }
