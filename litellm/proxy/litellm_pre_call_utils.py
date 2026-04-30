@@ -104,6 +104,59 @@ LITELLM_METADATA_ROUTES = (
     "files",
 )
 
+_UNTRUSTED_ROOT_CONTROL_FIELDS = (
+    "proxy_server_request",
+    "standard_logging_object",
+    "secret_fields",
+    "mock_response",
+    "mock_tool_calls",
+    "disable_global_guardrails",
+    "disable_global_guardrail",
+    "opted_out_global_guardrails",
+    "applied_guardrails",
+    "applied_policies",
+    "policy_sources",
+    "pillar_response_headers",
+    "_guardrail_pipelines",
+    "_pipeline_managed_guardrails",
+)
+
+_UNTRUSTED_METADATA_CONTROL_FIELDS = (
+    "disable_global_guardrails",
+    "disable_global_guardrail",
+    "opted_out_global_guardrails",
+    "pillar_response_headers",
+    "_pillar_response_headers_trusted",
+    "pillar_flagged",
+    "pillar_scanners",
+    "pillar_evidence",
+    "pillar_evidence_truncated",
+    "pillar_session_id_response",
+    "applied_guardrails",
+    "applied_policies",
+    "policy_sources",
+    "standard_logging_object",
+    "proxy_server_request",
+    "secret_fields",
+    "_guardrail_pipelines",
+    "_pipeline_managed_guardrails",
+)
+
+_CLIENT_MOCK_CONTROL_FIELDS = frozenset({"mock_response", "mock_tool_calls"})
+_ALLOW_CLIENT_MOCK_RESPONSE_METADATA_KEY = "allow_client_mock_response"
+
+
+def _key_or_team_allows_client_mock_response(
+    user_api_key_dict: UserAPIKeyAuth,
+) -> bool:
+    for admin_metadata in (user_api_key_dict.metadata, user_api_key_dict.team_metadata):
+        if (
+            isinstance(admin_metadata, dict)
+            and admin_metadata.get(_ALLOW_CLIENT_MOCK_RESPONSE_METADATA_KEY) is True
+        ):
+            return True
+    return False
+
 
 def _get_metadata_variable_name(request: Request) -> str:
     """
@@ -962,11 +1015,12 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
     # Strip internal-only keys from user input before the proxy sets its own.
     # These keys are injected by the proxy itself below — user-supplied values
     # must not be trusted.
-    for _internal_key in (
-        "proxy_server_request",
-        "standard_logging_object",
-        "secret_fields",
-    ):
+    _allow_client_mock_response = _key_or_team_allows_client_mock_response(
+        user_api_key_dict
+    )
+    for _internal_key in _UNTRUSTED_ROOT_CONTROL_FIELDS:
+        if _allow_client_mock_response and _internal_key in _CLIENT_MOCK_CONTROL_FIELDS:
+            continue
         data.pop(_internal_key, None)
     # Strip spoofable auth metadata from user-supplied metadata dict
     _user_metadata = data.get("metadata")
@@ -1144,8 +1198,12 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
     for _meta_key in ("metadata", "litellm_metadata"):
         _user_meta = data.get(_meta_key)
         if isinstance(_user_meta, dict):
-            _user_meta.pop("_pipeline_managed_guardrails", None)
-            for _k in [k for k in _user_meta if k.startswith("user_api_key_")]:
+            for _k in [
+                k
+                for k in _user_meta
+                if k.startswith("user_api_key_")
+                or k in _UNTRUSTED_METADATA_CONTROL_FIELDS
+            ]:
                 _user_meta.pop(_k, None)
 
     # Strip caller-supplied routing/budget tags unless the admin has opted

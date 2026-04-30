@@ -2230,7 +2230,7 @@ if MCP_AVAILABLE:
                 detail={"error": "Only proxy admins can create MCP toolsets."},
             )
         touched_by = (
-            litellm_changed_by or user_api_key_dict.user_id or LITELLM_PROXY_ADMIN_NAME
+            user_api_key_dict.user_id or litellm_changed_by or LITELLM_PROXY_ADMIN_NAME
         )
         try:
             result = await create_mcp_toolset(prisma_client, payload, touched_by)
@@ -2321,7 +2321,7 @@ if MCP_AVAILABLE:
                 detail={"error": "Only proxy admins can update MCP toolsets."},
             )
         touched_by = (
-            litellm_changed_by or user_api_key_dict.user_id or LITELLM_PROXY_ADMIN_NAME
+            user_api_key_dict.user_id or litellm_changed_by or LITELLM_PROXY_ADMIN_NAME
         )
         try:
             result = await update_mcp_toolset(prisma_client, payload, touched_by)

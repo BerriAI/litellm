@@ -45,13 +45,45 @@ verbose_proxy_logger.setLevel(level=logging.DEBUG)
 
 from starlette.datastructures import URL
 
-from litellm.proxy.management_helpers.audit_logs import create_audit_log_for_update
-from litellm.proxy._types import LiteLLM_AuditLogs, LitellmTableNames
+from litellm.proxy.management_helpers.audit_logs import (
+    create_audit_log_for_update,
+    get_audit_log_changed_by,
+)
+from litellm.proxy._types import LiteLLM_AuditLogs, LitellmTableNames, UserAPIKeyAuth
 from litellm.caching.caching import DualCache
 from unittest.mock import patch, AsyncMock
 
 proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
 import json
+
+
+def test_get_audit_log_changed_by_prefers_authenticated_user():
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test-key",
+        user_id="authenticated-user",
+    )
+
+    assert (
+        get_audit_log_changed_by(
+            litellm_changed_by="spoofed-user",
+            user_api_key_dict=user_api_key_dict,
+            litellm_proxy_admin_name="proxy-admin",
+        )
+        == "authenticated-user"
+    )
+
+
+def test_get_audit_log_changed_by_falls_back_to_header_when_user_id_missing():
+    user_api_key_dict = UserAPIKeyAuth(api_key="test-key")
+
+    assert (
+        get_audit_log_changed_by(
+            litellm_changed_by="delegated-user",
+            user_api_key_dict=user_api_key_dict,
+            litellm_proxy_admin_name="proxy-admin",
+        )
+        == "delegated-user"
+    )
 
 
 @pytest.mark.asyncio

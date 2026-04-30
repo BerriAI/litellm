@@ -5297,8 +5297,8 @@ async def block_key(
                 request_data=LiteLLM_AuditLogs(
                     id=str(uuid.uuid4()),
                     updated_at=datetime.now(timezone.utc),
-                    changed_by=litellm_changed_by
-                    or user_api_key_dict.user_id
+                    changed_by=user_api_key_dict.user_id
+                    or litellm_changed_by
                     or litellm_proxy_admin_name,
                     changed_by_api_key=user_api_key_dict.api_key,
                     table_name=LitellmTableNames.KEY_TABLE_NAME,
@@ -5406,8 +5406,8 @@ async def unblock_key(
                 request_data=LiteLLM_AuditLogs(
                     id=str(uuid.uuid4()),
                     updated_at=datetime.now(timezone.utc),
-                    changed_by=litellm_changed_by
-                    or user_api_key_dict.user_id
+                    changed_by=user_api_key_dict.user_id
+                    or litellm_changed_by
                     or litellm_proxy_admin_name,
                     changed_by_api_key=user_api_key_dict.api_key,
                     table_name=LitellmTableNames.KEY_TABLE_NAME,
@@ -5589,7 +5589,6 @@ async def test_key_logging(
                     "content": "Hello, this is a test from litellm /key/health. No LLM API call was made for this",
                 }
             ],
-            "mock_response": "test response",
         }
         data = await add_litellm_data_to_request(
             data=data,
@@ -5598,6 +5597,7 @@ async def test_key_logging(
             general_settings=general_settings,
             request=request,
         )
+        data["mock_response"] = "test response"
         await litellm.acompletion(
             **data
         )  # make mock completion call to trigger key based callbacks

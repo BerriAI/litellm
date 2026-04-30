@@ -68,9 +68,16 @@ class TestShouldRedactMessageLogging:
         assert should_redact_message_logging(details) is True
 
     def test_disable_redaction_via_header_proxy_flow(self):
-        """litellm-disable-message-redaction should suppress redaction
-        even when global setting is on, and litellm_metadata is None."""
+        """Global redaction should override litellm-disable-message-redaction."""
         litellm.turn_off_message_logging = True
+        details = _make_model_call_details(
+            metadata_headers={"litellm-disable-message-redaction": "true"},
+            litellm_metadata=None,
+        )
+        assert should_redact_message_logging(details) is True
+
+    def test_disable_redaction_via_header_when_global_off(self):
+        """litellm-disable-message-redaction is still honored when global redaction is off."""
         details = _make_model_call_details(
             metadata_headers={"litellm-disable-message-redaction": "true"},
             litellm_metadata=None,
@@ -126,6 +133,16 @@ class TestShouldRedactMessageLogging:
             standard_callback_dynamic_params={"turn_off_message_logging": False},
         )
         assert should_redact_message_logging(details) is False
+
+    def test_global_redaction_overrides_dynamic_param_false(self):
+        """Global redaction cannot be disabled by a dynamic parameter."""
+        litellm.turn_off_message_logging = True
+        details = _make_model_call_details(
+            metadata_headers={},
+            litellm_metadata=None,
+            standard_callback_dynamic_params={"turn_off_message_logging": False},
+        )
+        assert should_redact_message_logging(details) is True
 
     # ---- non-dict metadata safety ----
 
