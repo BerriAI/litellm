@@ -1,3 +1,4 @@
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -16,6 +17,7 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.spend_tracking.budget_reservation import (
     estimate_request_max_cost,
+    get_budget_window_start,
     invalidate_budget_reservation_counters,
     release_budget_reservation,
     reserve_budget_for_request,
@@ -476,6 +478,75 @@ async def test_should_reserve_remaining_budget_when_output_cap_missing(
     ) == pytest.approx(1.0)
 
     await release_budget_reservation(reservation)
+
+
+@pytest.mark.asyncio
+async def test_should_shrink_uncapped_reservation_when_counter_advances(
+    spend_counter_state,
+    monkeypatch,
+):
+    counter_cache, key_cache = spend_counter_state
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=key_cache)
+    valid_token = UserAPIKeyAuth(
+        token="key-budget-uncapped-race",
+        spend=0.2,
+        max_budget=1.0,
+    )
+    request_body = _request_body()
+    request_body.pop("max_tokens")
+
+    from litellm.proxy.spend_tracking import budget_reservation
+
+    async def stale_counter_read(counter):
+        await counter_cache.async_increment_cache(
+            key=counter.counter_key,
+            value=0.3,
+        )
+        return 0.2
+
+    monkeypatch.setattr(
+        budget_reservation,
+        "_get_current_counter_value",
+        stale_counter_read,
+    )
+
+    with patch(
+        "litellm.proxy.spend_tracking.budget_reservation.estimate_request_max_cost",
+        return_value=None,
+    ):
+        reservation = await reserve_budget_for_request(
+            request_body=request_body,
+            route="/chat/completions",
+            llm_router=None,
+            valid_token=valid_token,
+            team_object=None,
+            user_object=None,
+            prisma_client=None,
+            user_api_key_cache=key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+    assert reservation is not None
+    assert reservation["reserved_cost"] == pytest.approx(0.7)
+    assert counter_cache.in_memory_cache.get_cache(
+        key="spend:key:key-budget-uncapped-race"
+    ) == pytest.approx(1.0)
+
+    await release_budget_reservation(reservation)
+
+    assert counter_cache.in_memory_cache.get_cache(
+        key="spend:key:key-budget-uncapped-race"
+    ) == pytest.approx(0.3)
+
+
+def test_should_start_window_without_reset_at_at_duration_boundary():
+    before = datetime.now(timezone.utc) - timedelta(hours=1)
+
+    window_start = get_budget_window_start({"budget_duration": "1h"})
+
+    after = datetime.now(timezone.utc) - timedelta(hours=1)
+    assert window_start is not None
+    assert before <= window_start <= after
 
 
 @pytest.mark.asyncio

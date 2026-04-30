@@ -85,6 +85,7 @@ async def reserve_budget_for_request(
         route=route,
         llm_router=llm_router,
     )
+    using_remaining_budget_fallback = reservation_cost is None
     if reservation_cost is None:
         reservation_cost = await _get_smallest_remaining_budget(
             counters=counters,
@@ -111,6 +112,18 @@ async def reserve_budget_for_request(
                     cached_spend = await _get_current_counter_value(counter=counter)
                 current_spend = cached_spend + reservation_cost
             if current_spend > counter.max_budget:
+                if using_remaining_budget_fallback:
+                    remaining_before_reservation = counter.max_budget - (
+                        current_spend - reservation_cost
+                    )
+                    if remaining_before_reservation > 0:
+                        await _resize_applied_reservation(
+                            entries=applied_entries,
+                            current_reserved_cost=reservation_cost,
+                            new_reserved_cost=remaining_before_reservation,
+                        )
+                        reservation_cost = remaining_before_reservation
+                        continue
                 raise litellm.BudgetExceededError(
                     current_cost=current_spend,
                     max_budget=counter.max_budget,
@@ -632,6 +645,19 @@ async def _set_reserved_entries_adjustment(
         entry["applied_adjustment"] = target_adjustment
 
 
+async def _resize_applied_reservation(
+    entries: List[dict],
+    current_reserved_cost: float,
+    new_reserved_cost: float,
+) -> None:
+    await _set_reserved_entries_adjustment(
+        entries=entries,
+        target_adjustment=new_reserved_cost - current_reserved_cost,
+    )
+    for entry in entries:
+        entry["applied_adjustment"] = 0.0
+
+
 def _counter_to_reservation_entry(counter: _BudgetCounter) -> Dict[str, Any]:
     return {
         "counter_key": counter.counter_key,
@@ -653,7 +679,7 @@ def get_budget_window_start(window: Any) -> Optional[datetime]:
 
     reset_at = _coerce_datetime(window_dict.get("reset_at"))
     if reset_at is None:
-        reset_at = datetime.now(timezone.utc) + timedelta(seconds=duration_seconds)
+        return datetime.now(timezone.utc) - timedelta(seconds=duration_seconds)
     if reset_at.tzinfo is None:
         reset_at = reset_at.replace(tzinfo=timezone.utc)
     return reset_at - timedelta(seconds=duration_seconds)
