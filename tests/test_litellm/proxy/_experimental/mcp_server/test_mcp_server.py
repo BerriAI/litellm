@@ -865,8 +865,11 @@ async def test_concurrent_initialize_session_managers():
         # Mock the session managers to avoid actual MCP initialization
         with (
             patch(
-                "litellm.proxy._experimental.mcp_server.server.session_manager"
-            ) as mock_session_manager,
+                "litellm.proxy._experimental.mcp_server.server.session_manager_stateless"
+            ) as mock_session_manager_stateless,
+            patch(
+                "litellm.proxy._experimental.mcp_server.server.session_manager_stateful"
+            ) as mock_session_manager_stateful,
             patch(
                 "litellm.proxy._experimental.mcp_server.server.sse_session_manager"
             ) as mock_sse_session_manager,
