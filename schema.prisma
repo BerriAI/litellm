@@ -17,8 +17,9 @@ model LiteLLM_BudgetTable {
   tpm_limit     BigInt?
   rpm_limit     BigInt?
   model_max_budget Json?
-  budget_duration String? 
+  budget_duration String?
   budget_reset_at DateTime?
+  allowed_models String[] @default([]) // per-member model scope; empty = inherit team models
   created_at    DateTime               @default(now()) @map("created_at")
   created_by String
   updated_at    DateTime               @default(now()) @updatedAt @map("updated_at")
@@ -140,12 +141,18 @@ model LiteLLM_TeamTable {
     team_member_permissions String[] @default([])
     access_group_ids String[] @default([])
     policies         String[] @default([])
+    default_team_member_models String[] @default([]) // default allowed_models for newly added team members; empty = no per-member restriction
+    budget_limits Json? // per-model budget limits for the team
     model_id Int? @unique // id for LiteLLM_ModelTable -> stores team-level model aliases
     allow_team_guardrail_config Boolean @default(false) // if true, team admin can configure guardrails for this team
     litellm_organization_table LiteLLM_OrganizationTable?   @relation(fields: [organization_id], references: [organization_id])
     litellm_model_table LiteLLM_ModelTable? @relation(fields: [model_id], references: [id])
     object_permission LiteLLM_ObjectPermissionTable?   @relation(fields: [object_permission_id], references: [object_permission_id])
     projects LiteLLM_ProjectTable[]
+
+    @@index([organization_id])
+    @@index([team_alias])
+    @@index([created_at])
 }
 
 // Projects sit between teams and keys for use-case management
@@ -269,6 +276,7 @@ model LiteLLM_ObjectPermissionTable {
   agent_access_groups   String[]       @default([])
   models                String[]       @default([])
   blocked_tools         String[]       @default([]) // Tool names blocked for any key/team/user with this permission
+  mcp_toolsets          String[]       @default([]) // Toolset IDs granted to this key/team/user
   teams                 LiteLLM_TeamTable[]
   projects              LiteLLM_ProjectTable[]
   verification_tokens   LiteLLM_VerificationToken[]
@@ -284,6 +292,7 @@ model LiteLLM_MCPServerTable {
   server_name  String?
   alias        String?
   description  String?
+  instructions String?
   url          String?
   spec_path    String?
   transport    String         @default("sse")
@@ -316,6 +325,27 @@ model LiteLLM_MCPServerTable {
   is_byok               Boolean  @default(false)
   byok_description      String[] @default([])
   byok_api_key_help_url String?
+  source_url            String?
+  // BYOM submission lifecycle
+  approval_status  String?   @default("active")
+  submitted_by     String?
+  submitted_at     DateTime?
+  reviewed_at      DateTime?
+  review_notes     String?
+
+  @@index([approval_status])
+}
+
+// Named collection of {server_id, tool_name} pairs that can be granted to keys/teams
+model LiteLLM_MCPToolsetTable {
+  toolset_id   String   @id @default(uuid())
+  toolset_name String   @unique
+  description  String?
+  tools        Json     @default("[]") // [{server_id: string, tool_name: string}]
+  created_at   DateTime @default(now())
+  created_by   String?
+  updated_at   DateTime @default(now()) @updatedAt
+  updated_by   String?
 }
 
 // Per-user BYOK credentials for MCP servers
@@ -374,6 +404,7 @@ model LiteLLM_VerificationToken {
     rotation_interval String?   // How often to rotate (e.g., "30d", "90d")
     last_rotation_at DateTime?  // When this key was last rotated
     key_rotation_at  DateTime?  // When this key should next be rotated
+    budget_limits Json? // per-model budget limits for the key
     litellm_budget_table LiteLLM_BudgetTable?   @relation(fields: [budget_id], references: [budget_id])
     litellm_organization_table LiteLLM_OrganizationTable?   @relation(fields: [organization_id], references: [organization_id])
     litellm_project_table LiteLLM_ProjectTable?   @relation(fields: [project_id], references: [project_id])
@@ -989,12 +1020,15 @@ model LiteLLM_PromptTable {
   id String @id @default(uuid())
   prompt_id String
   version Int @default(1)
+  environment String @default("development")
+  created_by String?
   litellm_params Json
   prompt_info Json?
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt
 
-  @@unique([prompt_id, version])
+  @@unique([prompt_id, version, environment])
+  @@index([prompt_id, environment])
   @@index([prompt_id])
 }
 
@@ -1016,6 +1050,7 @@ model LiteLLM_HealthCheckTable {
   @@index([model_name])
   @@index([checked_at])
   @@index([status])
+  @@index([model_id, model_name, checked_at(sort: Desc)], map: "LiteLLM_HealthCheckTable_model_id_model_name_checked_at_idx")
 }
 
 // Search Tools table for storing search tool configurations

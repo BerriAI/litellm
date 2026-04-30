@@ -121,7 +121,7 @@ response = completion(
 See all litellm.completion supported params [here](../completion/input.md#translated-openai-params)
 
 ```python
-# !pip install litellm
+# !uv add litellm
 from litellm import completion
 import os
 ## set ENV variables

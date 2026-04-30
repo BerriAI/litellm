@@ -3,10 +3,7 @@ slug: model-cost-map-incident
 title: "Incident Report: Invalid model cost map on main"
 date: 2026-02-10T10:00:00
 authors:
-  - name: Ishaan Jaffer
-    title: "CTO, LiteLLM"
-    url: https://www.linkedin.com/in/ishaanjaffer/
-    image_url: https://pbs.twimg.com/profile_images/1613813310264340481/lz54oEiB_400x400.jpg
+  - ishaan
 tags: [incident-report, stability]
 hide_table_of_contents: false
 ---

@@ -5,7 +5,7 @@ Register custom pricing for sagemaker completion model.
 For cost per second pricing, you **just** need to register `input_cost_per_second`. 
 
 ```python
-# !pip install boto3 
+# !uv add boto3 
 from litellm import completion, completion_cost 
 
 os.environ["AWS_ACCESS_KEY_ID"] = ""
@@ -35,7 +35,7 @@ def test_completion_sagemaker():
 
 
 ```python
-# !pip install boto3 
+# !uv add boto3 
 from litellm import completion, completion_cost 
 
 ## set ENV variables

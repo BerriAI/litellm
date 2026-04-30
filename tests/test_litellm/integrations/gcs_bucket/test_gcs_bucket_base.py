@@ -17,11 +17,14 @@ class TestGCSBucketBase:
             mock_auth_header = "mock-auth-header"
             mock_token = "mock-token"
 
-            with patch(
-                "litellm.vertex_chat_completion._ensure_access_token"
-            ) as mock_ensure_token, patch(
-                "litellm.vertex_chat_completion._get_token_and_url"
-            ) as mock_get_token:
+            with (
+                patch(
+                    "litellm.vertex_chat_completion._ensure_access_token"
+                ) as mock_ensure_token,
+                patch(
+                    "litellm.vertex_chat_completion._get_token_and_url"
+                ) as mock_get_token,
+            ):
                 mock_ensure_token.return_value = (mock_auth_header, test_project_id)
                 mock_get_token.return_value = (mock_token, "mock-url")
 
@@ -57,11 +60,14 @@ class TestGCSBucketBase:
         mock_auth_header = "mock-auth-header"
         mock_token = "mock-token"
 
-        with patch(
-            "litellm.vertex_chat_completion._ensure_access_token"
-        ) as mock_ensure_token, patch(
-            "litellm.vertex_chat_completion._get_token_and_url"
-        ) as mock_get_token:
+        with (
+            patch(
+                "litellm.vertex_chat_completion._ensure_access_token"
+            ) as mock_ensure_token,
+            patch(
+                "litellm.vertex_chat_completion._get_token_and_url"
+            ) as mock_get_token,
+        ):
             mock_ensure_token.return_value = (mock_auth_header, None)
             mock_get_token.return_value = (mock_token, "mock-url")
 

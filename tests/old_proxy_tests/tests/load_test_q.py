@@ -26,7 +26,7 @@ config = {
             "model_name": "gpt-3.5-turbo",
             "litellm_params": {
                 "model": "azure/gpt-4.1-mini",
-                "api_key": os.environ["AZURE_API_KEY"],
+                "api_key": os.environ["AZURE_AI_API_KEY"],
                 "api_base": "https://openai-gpt-4-test-v-1.openai.azure.com/",
                 "api_version": "2023-07-01-preview",
             },
@@ -34,7 +34,7 @@ config = {
     ]
 }
 print("STARTING LOAD TEST Q")
-print(os.environ["AZURE_API_KEY"])
+print(os.environ["AZURE_AI_API_KEY"])
 
 response = requests.post(
     url=f"{base_url}/key/generate",

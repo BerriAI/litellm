@@ -178,9 +178,9 @@ class ArizePhoenixLogger(OpenTelemetry):  # type: ignore
             start_time_val = kwargs.get("start_time", kwargs.get("api_call_start_time"))
             parent_span = self.tracer.start_span(
                 name="litellm_proxy_request",
-                start_time=self._to_ns(start_time_val)
-                if start_time_val is not None
-                else None,
+                start_time=(
+                    self._to_ns(start_time_val) if start_time_val is not None else None
+                ),
                 context=traceparent_ctx,
                 kind=self.span_kind.SERVER,
             )

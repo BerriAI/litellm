@@ -42,6 +42,9 @@ from litellm.proxy.management_endpoints.team_endpoints import (
     team_model_add,
     team_model_delete,
 )
+from litellm.proxy.management_endpoints.team_endpoints import (
+    update_team as _legacy_update_team,
+)
 from litellm.proxy.management_helpers.audit_logs import create_object_audit_log
 from litellm.proxy.utils import PrismaClient
 from litellm.types.proxy.management_endpoints.model_management_endpoints import (
@@ -56,6 +59,14 @@ from litellm.types.router import (
 from litellm.utils import get_utc_datetime
 
 router = APIRouter()
+
+
+async def update_team(*args, **kwargs):
+    """
+    Backward-compatible shim for tests/legacy call sites that patch this symbol.
+    Team model management now uses team_model_add/team_model_delete directly.
+    """
+    return await _legacy_update_team(*args, **kwargs)
 
 
 class UpdatePublicModelGroupsRequest(BaseModel):
@@ -329,12 +340,19 @@ async def _add_team_model_to_db(
     _team_id = model_params.model_info.team_id
     if _team_id is None:
         return None
+
+    # Capture the original public name FIRST, before any mutations
     original_model_name = model_params.model_name
+
+    # Set team_public_model_name in model_info using the captured original_model_name
+    # This must happen BEFORE mutating model_params.model_name so _add_model_to_db
+    # serializes the correct team_public_model_name (not the internal UUID name)
     if original_model_name:
         model_params.model_info.team_public_model_name = original_model_name
 
+    # Generate and assign unique internal model_name LAST
+    # (after team_public_model_name is safely stored)
     unique_model_name = f"model_name_{_team_id}_{uuid.uuid4()}"
-
     model_params.model_name = unique_model_name
 
     ## CREATE MODEL IN DB ##
@@ -458,6 +476,42 @@ async def _setup_new_team_model_assignment(
     )
 
 
+async def _get_team_deployments(
+    team_id: str, prisma_client: PrismaClient
+) -> List[LiteLLM_ProxyModelTable]:
+    """
+    Fetch all deployments for a given team_id from the database.
+
+    Centralizes team deployment queries to ensure consistent filtering and error handling.
+    This is the established helper pattern for team deployment DB access in this module.
+
+    Note: prisma-client-py 0.11.0 does not support JSON path filtering, so we filter
+    by the model_name prefix (team models use "model_name_{team_id}_*") and confirm
+    team_id in model_info with Python-side filtering.
+    """
+    prefix = f"model_name_{team_id}_"
+    response = await prisma_client.db.litellm_proxymodeltable.find_many(
+        where={
+            "model_name": {"startswith": prefix},
+        }
+    )
+    if not response:
+        return []
+
+    # Confirm team_id in model_info (defensive check)
+    result = []
+    for row in response:
+        model_info = row.model_info
+        if isinstance(model_info, str):
+            try:
+                model_info = json.loads(model_info)
+            except (TypeError, ValueError):
+                continue
+        if isinstance(model_info, dict) and model_info.get("team_id") == team_id:
+            result.append(row)
+    return result
+
+
 async def _update_existing_team_model_assignment(
     team_id: str,
     public_model_name: str,
@@ -504,23 +558,14 @@ async def _update_existing_team_model_assignment(
             )
             return
 
-        response = await prisma_client.db.litellm_proxymodeltable.find_many(
-            where={
-                "model_info": {
-                    "path": ["team_id"],
-                    "equals": team_id,
-                }
-            }
-        )
-        if not response:
-            other_deployments_with_old_name = []
-        else:
-            other_deployments_with_old_name = [
-                d
-                for d in response
-                if d.model_name != db_model.model_name
-                and _get_team_public_model_name(d.model_info) == old_public_name
-            ]
+        # Query DB for all team deployments to check for sibling deployments
+        team_deployments = await _get_team_deployments(team_id, prisma_client)
+        other_deployments_with_old_name = [
+            d
+            for d in team_deployments
+            if d.model_name != db_model.model_name
+            and _get_team_public_model_name(d.model_info) == old_public_name
+        ]
 
         # Add new name first, then delete old name to prevent access loss on partial failure
         await team_model_add(
@@ -552,7 +597,11 @@ async def _update_existing_team_model_assignment(
             http_request=Request(scope={"type": "http"}),
             user_api_key_dict=user_api_key_dict,
         )
+    # else: old_public_name == public_model_name (no rename needed)
+    # No team_model_add/delete calls required; public name is already registered
 
+    # Always clear patch_data.model_name to prevent caller from overwriting
+    # the internal UUID-based model_name in the DB with the user-supplied public name
     patch_data.model_name = None
 
 

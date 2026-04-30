@@ -1,29 +1,30 @@
-from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple, Union
 import base64
+from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple, Union
 
 import httpx
 from httpx._types import RequestFiles
 
-from litellm.types.videos.main import VideoCreateOptionalRequestParams, VideoObject
-from litellm.types.router import GenericLiteLLMParams
-from litellm.secret_managers.main import get_secret_str
-from litellm.types.videos.utils import (
-    encode_video_id_with_provider,
-    extract_original_video_id,
-)
-from litellm.images.utils import ImageEditRequestUtils
 import litellm
+from litellm.constants import DEFAULT_GOOGLE_VIDEO_DURATION_SECONDS
+from litellm.images.utils import ImageEditRequestUtils
+from litellm.llms.base_llm.videos.transformation import BaseVideoConfig
+from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.gemini import (
     GeminiLongRunningOperationResponse,
     GeminiVideoGenerationInstance,
     GeminiVideoGenerationParameters,
     GeminiVideoGenerationRequest,
 )
-from litellm.constants import DEFAULT_GOOGLE_VIDEO_DURATION_SECONDS
-from litellm.llms.base_llm.videos.transformation import BaseVideoConfig
+from litellm.types.router import GenericLiteLLMParams
+from litellm.types.videos.main import VideoCreateOptionalRequestParams, VideoObject
+from litellm.types.videos.utils import (
+    encode_video_id_with_provider,
+    extract_original_video_id,
+)
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+
     from ...base_llm.chat.transformation import BaseLLMException as _BaseLLMException
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
@@ -53,6 +54,16 @@ def _convert_image_to_gemini_format(image_file) -> Dict[str, str]:
     return {"bytesBase64Encoded": base64_encoded, "mimeType": mime_type}
 
 
+def _usage_video_resolution_from_parameters(
+    parameters: Dict[str, Any]
+) -> Optional[str]:
+    """Normalize Veo ``parameters.resolution`` for usage and cost tracking."""
+    res = parameters.get("resolution")
+    if res is None or res == "":
+        return None
+    return str(res).strip().lower()
+
+
 class GeminiVideoConfig(BaseVideoConfig):
     """
     Configuration class for Gemini (Veo) video generation.
@@ -63,6 +74,13 @@ class GeminiVideoConfig(BaseVideoConfig):
     3. Extract video URI from response
     4. Download video using file API
     """
+
+    _OPENAI_VIDEO_SIZE_TO_ASPECT_RATIO: Dict[str, str] = {
+        "1280x720": "16:9",
+        "1920x1080": "16:9",
+        "720x1280": "9:16",
+        "1080x1920": "9:16",
+    }
 
     def __init__(self):
         super().__init__()
@@ -87,6 +105,8 @@ class GeminiVideoConfig(BaseVideoConfig):
         - prompt → prompt
         - input_reference → image
         - size → aspectRatio (e.g., "1280x720" → "16:9")
+        - size → resolution when inferable ("1280x720"/"720x1280" → "720p",
+          "1920x1080"/"1080x1920" → "1080p"); skipped if ``resolution`` is already set
         - seconds → durationSeconds (defaults to 4 seconds if not provided)
 
         All other params are passed through as-is to support Gemini-specific parameters.
@@ -112,6 +132,10 @@ class GeminiVideoConfig(BaseVideoConfig):
                 aspect_ratio = self._convert_size_to_aspect_ratio(size)
                 if aspect_ratio:
                     mapped_params["aspectRatio"] = aspect_ratio
+                if not video_create_optional_params.get("resolution"):
+                    inferred_resolution = self._convert_size_to_resolution(size)
+                    if inferred_resolution is not None:
+                        mapped_params["resolution"] = inferred_resolution
 
         # Map seconds to durationSeconds, default to 4 seconds (matching OpenAI)
         if "seconds" in video_create_optional_params:
@@ -142,14 +166,27 @@ class GeminiVideoConfig(BaseVideoConfig):
         if not size:
             return None
 
-        aspect_ratio_map = {
-            "1280x720": "16:9",
-            "1920x1080": "16:9",
-            "720x1280": "9:16",
-            "1080x1920": "9:16",
-        }
+        return self._OPENAI_VIDEO_SIZE_TO_ASPECT_RATIO.get(size, "16:9")
 
-        return aspect_ratio_map.get(size, "16:9")
+    def _convert_size_to_resolution(self, size: str) -> Optional[str]:
+        """
+        Map OpenAI ``size`` (WxH) to Veo ``resolution`` for presets in
+        ``_OPENAI_VIDEO_SIZE_TO_ASPECT_RATIO`` (720p / 1080p from the smaller edge).
+
+        Unknown sizes return None so the API default applies (no forced resolution).
+        """
+        if not size or size not in self._OPENAI_VIDEO_SIZE_TO_ASPECT_RATIO:
+            return None
+        try:
+            w_str, h_str = size.split("x", 1)
+            smaller = min(int(w_str), int(h_str))
+        except (ValueError, TypeError):
+            return None
+        if smaller == 720:
+            return "720p"
+        if smaller == 1080:
+            return "1080p"
+        return None
 
     def validate_environment(
         self,
@@ -278,7 +315,7 @@ class GeminiVideoConfig(BaseVideoConfig):
         We return this as a VideoObject with:
         - id: operation name (used for polling)
         - status: "processing"
-        - usage: includes duration_seconds for cost calculation
+        - usage: includes duration_seconds and optional video_resolution for cost calculation
         """
         response_data = raw_response.json()
 
@@ -306,7 +343,7 @@ class GeminiVideoConfig(BaseVideoConfig):
             model=model,
         )
 
-        usage_data = {}
+        usage_data: Dict[str, Any] = {}
         if request_data:
             parameters = request_data.get("parameters", {})
             duration = (
@@ -318,6 +355,9 @@ class GeminiVideoConfig(BaseVideoConfig):
                     usage_data["duration_seconds"] = float(duration)
                 except (ValueError, TypeError):
                     pass
+            video_resolution = _usage_video_resolution_from_parameters(parameters)
+            if video_resolution is not None:
+                usage_data["video_resolution"] = video_resolution
 
         video_obj.usage = usage_data
         return video_obj
@@ -523,6 +563,49 @@ class GeminiVideoConfig(BaseVideoConfig):
     ) -> VideoObject:
         """Video delete is not supported."""
         raise NotImplementedError("Video delete is not supported by Google Veo.")
+
+    def transform_video_create_character_request(
+        self, name, video, api_base, litellm_params, headers
+    ):
+        raise NotImplementedError("video create character is not supported for Gemini")
+
+    def transform_video_create_character_response(self, raw_response, logging_obj):
+        raise NotImplementedError("video create character is not supported for Gemini")
+
+    def transform_video_get_character_request(
+        self, character_id, api_base, litellm_params, headers
+    ):
+        raise NotImplementedError("video get character is not supported for Gemini")
+
+    def transform_video_get_character_response(self, raw_response, logging_obj):
+        raise NotImplementedError("video get character is not supported for Gemini")
+
+    def transform_video_edit_request(
+        self, prompt, video_id, api_base, litellm_params, headers, extra_body=None
+    ):
+        raise NotImplementedError("video edit is not supported for Gemini")
+
+    def transform_video_edit_response(
+        self, raw_response, logging_obj, custom_llm_provider=None
+    ):
+        raise NotImplementedError("video edit is not supported for Gemini")
+
+    def transform_video_extension_request(
+        self,
+        prompt,
+        video_id,
+        seconds,
+        api_base,
+        litellm_params,
+        headers,
+        extra_body=None,
+    ):
+        raise NotImplementedError("video extension is not supported for Gemini")
+
+    def transform_video_extension_response(
+        self, raw_response, logging_obj, custom_llm_provider=None
+    ):
+        raise NotImplementedError("video extension is not supported for Gemini")
 
     def get_error_class(
         self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]

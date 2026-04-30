@@ -16,6 +16,52 @@ from litellm.secret_managers.secret_manager_handler import get_secret_from_manag
 
 oidc_cache = DualCache()
 
+_DEFAULT_OIDC_ALLOWED_CREDENTIAL_DIRS = ("/var/run/secrets", "/run/secrets")
+
+
+def _get_oidc_allowed_credential_dirs() -> list[str]:
+    """
+    Return the absolute, normalized list of directories from which
+    ``oidc/file/`` is permitted to read token files.
+
+    Defaults to standard container credential mount points. Operators can
+    override via the ``LITELLM_OIDC_ALLOWED_CREDENTIAL_DIRS`` environment
+    variable (comma-separated list of absolute paths).
+    """
+    override = os.getenv("LITELLM_OIDC_ALLOWED_CREDENTIAL_DIRS")
+    raw_dirs = (
+        [d.strip() for d in override.split(",") if d.strip()]
+        if override
+        else list(_DEFAULT_OIDC_ALLOWED_CREDENTIAL_DIRS)
+    )
+    return [os.path.realpath(d) for d in raw_dirs]
+
+
+def _resolve_oidc_file_path(requested_path: str) -> str:
+    """
+    Resolve ``requested_path`` and verify it falls within one of the allowed
+    credential directories. Raises ``ValueError`` otherwise.
+    """
+    if not os.path.isabs(requested_path):
+        raise ValueError(
+            "oidc/file path must be absolute. Use the format "
+            "'oidc/file//var/run/secrets/<name>' (note the leading slash "
+            "after 'oidc/file/')."
+        )
+    resolved = os.path.realpath(requested_path)
+    for allowed in _get_oidc_allowed_credential_dirs():
+        try:
+            if os.path.commonpath([resolved, allowed]) == allowed:
+                return resolved
+        except ValueError:
+            # commonpath raises when paths are on different drives (Windows);
+            # treat as not-matching and continue.
+            continue
+    raise ValueError(
+        "oidc/file path is outside the allowed credential directories. "
+        "Set LITELLM_OIDC_ALLOWED_CREDENTIAL_DIRS to extend the allowlist."
+    )
+
 
 def _get_oidc_http_handler(timeout: Optional[httpx.Timeout] = None) -> HTTPHandler:
     """
@@ -196,8 +242,9 @@ def get_secret(  # noqa: PLR0915
                 oidc_token = f.read()
                 return oidc_token
         elif oidc_provider == "file":
-            # Load token from a file
-            with open(oidc_aud, "r") as f:
+            # Load token from a file within an allowed credential directory.
+            safe_path = _resolve_oidc_file_path(oidc_aud)
+            with open(safe_path, "r") as f:
                 oidc_token = f.read()
                 return oidc_token
         elif oidc_provider == "env":

@@ -2,6 +2,7 @@
 Tests for DeepInfra rerank transformation functionality.
 Based on the test patterns from other rerank providers and the current DeepInfra implementation.
 """
+
 import json
 from unittest.mock import MagicMock
 
@@ -41,7 +42,6 @@ class TestDeepinfraRerankTransform:
         # Test error when api_base is None
         with pytest.raises(ValueError, match="Deepinfra API Base is required"):
             self.config.get_complete_url(None, model)
-
 
     def test_map_cohere_rerank_params_basic(self):
         """Test basic parameter mapping for DeepInfra rerank."""

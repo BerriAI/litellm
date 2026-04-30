@@ -11,7 +11,7 @@ import Image from '@theme/IdealImage';
 Ensure you have the `literalai` package installed:
 
 ```shell
-pip install literalai litellm
+uv add literalai litellm
 ```
 
 ## Quick Start

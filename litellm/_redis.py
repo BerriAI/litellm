@@ -18,6 +18,10 @@ import redis  # type: ignore
 import redis.asyncio as async_redis  # type: ignore
 
 from litellm import get_secret, get_secret_str
+from litellm._redis_credential_provider import (
+    GCPIAMCredentialProvider,
+    _generate_gcp_iam_access_token,
+)
 from litellm.constants import REDIS_CONNECTION_POOL_TIMEOUT, REDIS_SOCKET_TIMEOUT
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
 
@@ -105,33 +109,6 @@ def _redis_kwargs_from_environment():
         if value is not None:
             return_dict[v] = value
     return return_dict
-
-
-def _generate_gcp_iam_access_token(service_account: str) -> str:
-    """
-    Generate GCP IAM access token for Redis authentication.
-
-    Args:
-        service_account: GCP service account in format 'projects/-/serviceAccounts/name@project.iam.gserviceaccount.com'
-
-    Returns:
-        Access token string for GCP IAM authentication
-    """
-    try:
-        from google.cloud import iam_credentials_v1
-    except ImportError:
-        raise ImportError(
-            "google-cloud-iam is required for GCP IAM Redis authentication. "
-            "Install it with: pip install google-cloud-iam"
-        )
-
-    client = iam_credentials_v1.IAMCredentialsClient()
-    request = iam_credentials_v1.GenerateAccessTokenRequest(
-        name=service_account,
-        scope=["https://www.googleapis.com/auth/cloud-platform"],
-    )
-    response = client.generate_access_token(request=request)
-    return str(response.access_token)
 
 
 def create_gcp_iam_redis_connect_func(
@@ -222,8 +199,12 @@ def _get_redis_client_logic(**env_overrides):
         "REDIS_CLUSTER_NODES"
     )
 
+    # If startup_nodes resolved to None (not set by kwarg or env), remove the key
+    # entirely so callers can rely on key presence as a reliable cluster-mode signal.
     if _startup_nodes is not None and isinstance(_startup_nodes, str):
         redis_kwargs["startup_nodes"] = json.loads(_startup_nodes)
+    elif _startup_nodes is None:
+        redis_kwargs.pop("startup_nodes", None)
 
     _sentinel_nodes: Optional[Union[str, list]] = redis_kwargs.get("sentinel_nodes", None) or get_secret(  # type: ignore
         "REDIS_SENTINEL_NODES"
@@ -262,7 +243,7 @@ def _get_redis_client_logic(**env_overrides):
             service_account=_gcp_service_account, ssl_ca_certs=_gcp_ssl_ca_certs
         )
         # Store GCP service account in redis_connect_func for async cluster access
-        redis_kwargs["redis_connect_func"]._gcp_service_account = _gcp_service_account
+        redis_kwargs["redis_connect_func"]._gcp_service_account = _gcp_service_account  # type: ignore[attr-defined]
 
         # Remove GCP-specific kwargs that shouldn't be passed to Redis client
         redis_kwargs.pop("gcp_service_account", None)
@@ -273,10 +254,14 @@ def _get_redis_client_logic(**env_overrides):
             redis_kwargs["ssl_ca_certs"] = _gcp_ssl_ca_certs
 
     if "url" in redis_kwargs and redis_kwargs["url"] is not None:
-        redis_kwargs.pop("host", None)
-        redis_kwargs.pop("port", None)
-        redis_kwargs.pop("db", None)
-        redis_kwargs.pop("password", None)
+        # Only strip host/port/db/password when not routing to a cluster.
+        # When startup_nodes is also present the cluster path takes priority and
+        # needs the password for authentication.
+        if not redis_kwargs.get("startup_nodes"):
+            redis_kwargs.pop("host", None)
+            redis_kwargs.pop("port", None)
+            redis_kwargs.pop("db", None)
+            redis_kwargs.pop("password", None)
     elif "startup_nodes" in redis_kwargs and redis_kwargs["startup_nodes"] is not None:
         pass
     elif (
@@ -368,6 +353,10 @@ def _init_async_redis_sentinel(redis_kwargs) -> async_redis.Redis:
 
 def get_redis_client(**env_overrides):
     redis_kwargs = _get_redis_client_logic(**env_overrides)
+
+    if "startup_nodes" in redis_kwargs:
+        return init_redis_cluster(redis_kwargs)
+
     if "url" in redis_kwargs and redis_kwargs["url"] is not None:
         args = _get_redis_url_kwargs()
         url_kwargs = {}
@@ -376,9 +365,6 @@ def get_redis_client(**env_overrides):
                 url_kwargs[arg] = redis_kwargs[arg]
 
         return redis.Redis.from_url(**url_kwargs)
-
-    if "startup_nodes" in redis_kwargs or get_secret("REDIS_CLUSTER_NODES") is not None:  # type: ignore
-        return init_redis_cluster(redis_kwargs)
 
     # Check for Redis Sentinel
     if "sentinel_nodes" in redis_kwargs and "service_name" in redis_kwargs:
@@ -392,6 +378,40 @@ def get_redis_async_client(
     **env_overrides,
 ) -> Union[async_redis.Redis, async_redis.RedisCluster]:
     redis_kwargs = _get_redis_client_logic(**env_overrides)
+
+    if "startup_nodes" in redis_kwargs:
+        from redis.cluster import ClusterNode
+
+        args = _get_redis_cluster_kwargs()
+        cluster_kwargs = {}
+        for arg in redis_kwargs:
+            if arg in args:
+                cluster_kwargs[arg] = redis_kwargs[arg]
+
+        # Handle GCP IAM authentication for async clusters
+        redis_connect_func = cluster_kwargs.pop("redis_connect_func", None)
+
+        # Use a CredentialProvider so the IAM token is regenerated on every new
+        # connection — mirrors the sync path where redis_connect_func is invoked
+        # per connection.  Without this, the token would expire after ~1 hour.
+        if redis_connect_func and hasattr(redis_connect_func, "_gcp_service_account"):
+            cluster_kwargs["credential_provider"] = GCPIAMCredentialProvider(
+                redis_connect_func._gcp_service_account
+            )
+
+        new_startup_nodes: List[ClusterNode] = []
+
+        for item in redis_kwargs["startup_nodes"]:
+            new_startup_nodes.append(ClusterNode(**item))
+        cluster_kwargs.pop("startup_nodes", None)
+
+        # Create async RedisCluster with IAM token as password if available
+        cluster_client = async_redis.RedisCluster(
+            startup_nodes=new_startup_nodes, **cluster_kwargs  # type: ignore
+        )
+
+        return cluster_client
+
     if "url" in redis_kwargs and redis_kwargs["url"] is not None:
         if connection_pool is not None:
             return async_redis.Redis(connection_pool=connection_pool)
@@ -408,67 +428,6 @@ def get_redis_async_client(
                 )
         return async_redis.Redis.from_url(**url_kwargs)
 
-    if "startup_nodes" in redis_kwargs:
-        from redis.cluster import ClusterNode
-
-        args = _get_redis_cluster_kwargs()
-        cluster_kwargs = {}
-        for arg in redis_kwargs:
-            if arg in args:
-                cluster_kwargs[arg] = redis_kwargs[arg]
-
-        # Handle GCP IAM authentication for async clusters
-        redis_connect_func = cluster_kwargs.pop("redis_connect_func", None)
-        from litellm import get_secret_str
-
-        # Get GCP service account - first try from redis_connect_func, then from environment
-        gcp_service_account = None
-        if redis_connect_func and hasattr(redis_connect_func, "_gcp_service_account"):
-            gcp_service_account = redis_connect_func._gcp_service_account
-        else:
-            gcp_service_account = redis_kwargs.get(
-                "gcp_service_account"
-            ) or get_secret_str("REDIS_GCP_SERVICE_ACCOUNT")
-
-        verbose_logger.debug(
-            f"DEBUG: Redis cluster kwargs: redis_connect_func={redis_connect_func is not None}, gcp_service_account_provided={gcp_service_account is not None}"
-        )
-
-        # If GCP IAM is configured (indicated by redis_connect_func), generate access token and use as password
-        if redis_connect_func and gcp_service_account:
-            verbose_logger.debug(
-                "DEBUG: Generating IAM token for service account (value not logged for security reasons)"
-            )
-            try:
-                # Generate IAM access token using the helper function
-                access_token = _generate_gcp_iam_access_token(gcp_service_account)
-                cluster_kwargs["password"] = access_token
-                verbose_logger.debug(
-                    "DEBUG: Successfully generated GCP IAM access token for async Redis cluster"
-                )
-            except Exception as e:
-                verbose_logger.error(f"Failed to generate GCP IAM access token: {e}")
-                from redis.exceptions import AuthenticationError
-
-                raise AuthenticationError("Failed to generate GCP IAM access token")
-        else:
-            verbose_logger.debug(
-                f"DEBUG: Not using GCP IAM auth - redis_connect_func={redis_connect_func is not None}, gcp_service_account_provided={gcp_service_account is not None}"
-            )
-
-        new_startup_nodes: List[ClusterNode] = []
-
-        for item in redis_kwargs["startup_nodes"]:
-            new_startup_nodes.append(ClusterNode(**item))
-        cluster_kwargs.pop("startup_nodes", None)
-
-        # Create async RedisCluster with IAM token as password if available
-        cluster_client = async_redis.RedisCluster(
-            startup_nodes=new_startup_nodes, **cluster_kwargs  # type: ignore
-        )
-
-        return cluster_client
-
     # Check for Redis Sentinel
     if "sentinel_nodes" in redis_kwargs and "service_name" in redis_kwargs:
         return _init_async_redis_sentinel(redis_kwargs)
@@ -482,9 +441,15 @@ def get_redis_async_client(
     )
 
 
-def get_redis_connection_pool(**env_overrides):
+def get_redis_connection_pool(
+    **env_overrides,
+) -> Optional[async_redis.BlockingConnectionPool]:
     redis_kwargs = _get_redis_client_logic(**env_overrides)
     verbose_logger.debug("get_redis_connection_pool: redis_kwargs", redis_kwargs)
+
+    if "startup_nodes" in redis_kwargs:
+        return None
+
     if "url" in redis_kwargs and redis_kwargs["url"] is not None:
         pool_kwargs = {
             "timeout": REDIS_CONNECTION_POOL_TIMEOUT,
@@ -504,7 +469,6 @@ def get_redis_connection_pool(**env_overrides):
         connection_class = async_redis.SSLConnection
         redis_kwargs.pop("ssl", None)
         redis_kwargs["connection_class"] = connection_class
-    redis_kwargs.pop("startup_nodes", None)
     return async_redis.BlockingConnectionPool(
         timeout=REDIS_CONNECTION_POOL_TIMEOUT, **redis_kwargs
     )

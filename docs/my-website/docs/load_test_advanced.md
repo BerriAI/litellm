@@ -11,7 +11,7 @@ Tutorial on how to get to 1K+ RPS with LiteLLM Proxy on locust
     - [Github releases](https://github.com/BerriAI/litellm/releases)
     - [litellm docker containers](https://github.com/BerriAI/litellm/pkgs/container/litellm)
     - [litellm database docker container](https://github.com/BerriAI/litellm/pkgs/container/litellm-database)
-- [ ] Ensure you're following **ALL** [best practices for production](./proxy/production_setup.md)
+- [ ] Ensure you're following **ALL** [best practices for production](./proxy/prod.md)
 - [ ] Locust - Ensure you're Locust instance can create 1K+ requests per second
     - 👉 You can use our **[maintained locust instance here](https://locust-load-tester-production.up.railway.app/)**
     - If you're self hosting locust
@@ -70,7 +70,7 @@ litellm_settings:
   callbacks: ["prometheus"] # Enterprise LiteLLM Only - use prometheus to get metrics on your load test
 ```
 
-2. `pip install locust`
+2. `uv add locust`
 
 3. Create a file called `locustfile.py` on your local machine. Copy the contents from the litellm load test located [here](https://github.com/BerriAI/litellm/blob/main/.github/workflows/locustfile.py)
 
@@ -138,7 +138,7 @@ litellm_settings:
   callbacks: ["prometheus"] # Enterprise LiteLLM Only - use prometheus to get metrics on your load test
 ```
 
-2. `pip install locust`
+2. `uv add locust`
 
 3. Create a file called `locustfile.py` on your local machine. Copy the contents from the litellm load test located [here](https://github.com/BerriAI/litellm/blob/main/.github/workflows/locustfile.py)
 

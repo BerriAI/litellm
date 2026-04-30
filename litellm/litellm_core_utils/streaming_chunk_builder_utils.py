@@ -123,10 +123,13 @@ class ChunkProcessor:
         finish_reason = "stop"
         for chunk in chunks:
             if "choices" in chunk and len(chunk["choices"]) > 0:
+                chunk_finish_reason = None
                 if hasattr(chunk["choices"][0], "finish_reason"):
-                    finish_reason = chunk["choices"][0].finish_reason
+                    chunk_finish_reason = chunk["choices"][0].finish_reason
                 elif "finish_reason" in chunk["choices"][0]:
-                    finish_reason = chunk["choices"][0]["finish_reason"]
+                    chunk_finish_reason = chunk["choices"][0]["finish_reason"]
+                if chunk_finish_reason is not None:
+                    finish_reason = chunk_finish_reason
 
         # Initialize the response dictionary
         response = ModelResponse(
@@ -160,9 +163,9 @@ class ChunkProcessor:
         self, tool_call_chunks: List[Dict[str, Any]]
     ) -> List[ChatCompletionMessageToolCall]:
         tool_calls_list: List[ChatCompletionMessageToolCall] = []
-        tool_call_map: Dict[
-            int, Dict[str, Any]
-        ] = {}  # Map to store tool calls by index
+        tool_call_map: Dict[int, Dict[str, Any]] = (
+            {}
+        )  # Map to store tool calls by index
 
         for chunk in tool_call_chunks:
             choices = chunk["choices"]
@@ -643,12 +646,12 @@ class ChunkProcessor:
         web_search_requests: Optional[int] = calculated_usage_per_chunk[
             "web_search_requests"
         ]
-        completion_tokens_details: Optional[
-            CompletionTokensDetails
-        ] = calculated_usage_per_chunk["completion_tokens_details"]
-        prompt_tokens_details: Optional[
-            PromptTokensDetailsWrapper
-        ] = calculated_usage_per_chunk["prompt_tokens_details"]
+        completion_tokens_details: Optional[CompletionTokensDetails] = (
+            calculated_usage_per_chunk["completion_tokens_details"]
+        )
+        prompt_tokens_details: Optional[PromptTokensDetailsWrapper] = (
+            calculated_usage_per_chunk["prompt_tokens_details"]
+        )
 
         try:
             returned_usage.prompt_tokens = prompt_tokens or token_counter(

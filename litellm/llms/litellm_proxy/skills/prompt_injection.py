@@ -5,6 +5,7 @@ Handles extraction of skill content (SKILL.md) from stored ZIP files
 and injection into the system prompt for non-Anthropic models.
 """
 
+import posixpath
 import zipfile
 from io import BytesIO
 from typing import Any, Dict, List, Optional
@@ -103,8 +104,18 @@ class SkillPromptInjectionHandler:
                     else:
                         clean_path = name
 
-                    if clean_path:
-                        files[clean_path] = zf.read(name)
+                    if not clean_path:
+                        continue
+
+                    # Ensure the path stays within the intended directory
+                    normalized = posixpath.normpath(clean_path)
+                    if normalized.startswith("..") or posixpath.isabs(normalized):
+                        verbose_logger.warning(
+                            f"SkillPromptInjectionHandler: Skipping entry with invalid path in skill {skill.skill_id}: {name}"
+                        )
+                        continue
+
+                    files[normalized] = zf.read(name)
         except Exception as e:
             verbose_logger.warning(
                 f"SkillPromptInjectionHandler: Error extracting files from skill {skill.skill_id}: {e}"

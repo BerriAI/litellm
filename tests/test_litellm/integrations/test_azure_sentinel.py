@@ -44,13 +44,15 @@ async def test_azure_sentinel_oauth_and_send_batch():
 
     # Mock OAuth token response
     from unittest.mock import MagicMock
-    
+
     mock_token_response = MagicMock()
     mock_token_response.status_code = 200
-    mock_token_response.json = MagicMock(return_value={
-        "access_token": "test-bearer-token",
-        "expires_in": 3600,
-    })
+    mock_token_response.json = MagicMock(
+        return_value={
+            "access_token": "test-bearer-token",
+            "expires_in": 3600,
+        }
+    )
     mock_token_response.text = "Success"
 
     # Mock API response
@@ -89,4 +91,3 @@ async def test_azure_sentinel_oauth_and_send_batch():
 
     # Verify queue is cleared
     assert len(logger.log_queue) == 0
-

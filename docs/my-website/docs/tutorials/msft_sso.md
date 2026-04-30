@@ -123,10 +123,12 @@ Navigate to your litellm config file and set the following params
 
 ```yaml showLineNumbers title="litellm config with default_team_params"
 litellm_settings:
-  default_team_params:             # Default Params to apply when litellm auto creates a team from SSO IDP provider
-    max_budget: 100                # Optional[float], optional): $100 budget for the team
-    budget_duration: 30d           # Optional[str], optional): 30 days budget_duration for the team
-    models: ["gpt-3.5-turbo"]      # Optional[List[str]], optional): models to be used by the team
+  default_team_params:             # Applied to all /team/new calls (including SSO auto-created teams) when the field is not explicitly set
+    max_budget: 100                # Optional[float]: $100 budget for the team
+    budget_duration: 30d           # Optional[str]: 30 days budget_duration for the team
+    models: ["gpt-3.5-turbo"]      # Optional[List[str]]: models for the team (only applied to SSO auto-created teams)
+    team_member_permissions:       # Optional[List[str]]: permissions granted to non-admin team members
+      - "/team/daily/activity"     # Allow members to view team usage
 ```
 
 ### 3.2 Auto-create a new team on LiteLLM

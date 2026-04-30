@@ -30,11 +30,11 @@ def litellm_proxy_config():
     """Configure connection to LiteLLM proxy"""
     proxy_url = os.getenv("LITELLM_PROXY_URL", "http://localhost:4000")
     api_key = os.getenv("LITELLM_API_KEY", "sk-1234")
-    
+
     # Set environment variables for Claude Agent SDK
-    os.environ["ANTHROPIC_BASE_URL"] = proxy_url.rstrip('/')
+    os.environ["ANTHROPIC_BASE_URL"] = proxy_url.rstrip("/")
     os.environ["ANTHROPIC_API_KEY"] = api_key
-    
+
     return {
         "proxy_url": proxy_url,
         "api_key": api_key,
@@ -71,22 +71,24 @@ async def _run_streaming_test(model_name: str) -> tuple[list[str], str]:
         await client.query(test_query)
 
         async for msg in client.receive_response():
-            if hasattr(msg, 'type'):
-                if msg.type == 'content_block_delta':
-                    if hasattr(msg, 'delta') and hasattr(msg.delta, 'text'):
+            if hasattr(msg, "type"):
+                if msg.type == "content_block_delta":
+                    if hasattr(msg, "delta") and hasattr(msg.delta, "text"):
                         chunk_text = msg.delta.text
                         received_chunks.append(chunk_text)
                         full_response += chunk_text
-                elif msg.type == 'content_block_start':
-                    if hasattr(msg, 'content_block') and hasattr(msg.content_block, 'text'):
+                elif msg.type == "content_block_start":
+                    if hasattr(msg, "content_block") and hasattr(
+                        msg.content_block, "text"
+                    ):
                         chunk_text = msg.content_block.text
                         received_chunks.append(chunk_text)
                         full_response += chunk_text
 
             # Fallback to content handling
-            if hasattr(msg, 'content'):
+            if hasattr(msg, "content"):
                 for content_block in msg.content:
-                    if hasattr(content_block, 'text'):
+                    if hasattr(content_block, "text"):
                         chunk_text = content_block.text
                         received_chunks.append(chunk_text)
                         full_response += chunk_text
@@ -96,7 +98,9 @@ async def _run_streaming_test(model_name: str) -> tuple[list[str], str]:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("model_name,model_description", TEST_MODELS)
-async def test_claude_agent_sdk_streaming(litellm_proxy_config, model_name, model_description):
+async def test_claude_agent_sdk_streaming(
+    litellm_proxy_config, model_name, model_description
+):
     """
     Test streaming messages with Claude Agent SDK through LiteLLM proxy.
 
@@ -127,9 +131,9 @@ async def test_claude_agent_sdk_streaming(litellm_proxy_config, model_name, mode
             assert len(received_chunks) > 0, f"No chunks received from {model_name}"
 
             # Verify response contains expected content (case insensitive)
-            assert "hello" in full_response.lower(), (
-                f"Response doesn't contain expected greeting: {full_response}"
-            )
+            assert (
+                "hello" in full_response.lower()
+            ), f"Response doesn't contain expected greeting: {full_response}"
 
             print(f"✅ Test passed for {model_name} (attempt {attempt})")
             return  # Success
@@ -158,24 +162,26 @@ async def test_claude_agent_sdk_streaming(litellm_proxy_config, model_name, mode
             # Collect streaming response
             async for msg in client.receive_response():
                 # Handle different message types
-                if hasattr(msg, 'type'):
-                    if msg.type == 'content_block_delta':
+                if hasattr(msg, "type"):
+                    if msg.type == "content_block_delta":
                         # Streaming text delta
-                        if hasattr(msg, 'delta') and hasattr(msg.delta, 'text'):
+                        if hasattr(msg, "delta") and hasattr(msg.delta, "text"):
                             chunk_text = msg.delta.text
                             received_chunks.append(chunk_text)
                             full_response += chunk_text
-                    elif msg.type == 'content_block_start':
+                    elif msg.type == "content_block_start":
                         # Start of content block
-                        if hasattr(msg, 'content_block') and hasattr(msg.content_block, 'text'):
+                        if hasattr(msg, "content_block") and hasattr(
+                            msg.content_block, "text"
+                        ):
                             chunk_text = msg.content_block.text
                             received_chunks.append(chunk_text)
                             full_response += chunk_text
 
                 # Fallback to content handling
-                if hasattr(msg, 'content'):
+                if hasattr(msg, "content"):
                     for content_block in msg.content:
-                        if hasattr(content_block, 'text'):
+                        if hasattr(content_block, "text"):
                             chunk_text = content_block.text
                             received_chunks.append(chunk_text)
                             full_response += chunk_text
@@ -192,7 +198,9 @@ async def test_claude_agent_sdk_streaming(litellm_proxy_config, model_name, mode
         assert len(received_chunks) > 0, f"No chunks received from {model_name}"
 
         # Verify response is non-empty (don't assert on specific LLM content — it's non-deterministic)
-        assert len(full_response.strip()) > 0, f"Empty response received from {model_name}"
+        assert (
+            len(full_response.strip()) > 0
+        ), f"Empty response received from {model_name}"
 
         print(f"✅ Test passed for {model_name}")
 

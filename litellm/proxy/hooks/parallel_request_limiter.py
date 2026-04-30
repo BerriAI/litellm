@@ -202,9 +202,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
         if rpm_limit is None:
             rpm_limit = sys.maxsize
 
-        values_to_update_in_cache: List[
-            Tuple[Any, Any]
-        ] = (
+        values_to_update_in_cache: List[Tuple[Any, Any]] = (
             []
         )  # values that need to get updated in cache, will run a batch_set_cache after this function
 
@@ -295,16 +293,17 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             )
 
         # Check if request under RPM/TPM per model for a given API Key
-        if (
-            get_key_model_tpm_limit(user_api_key_dict) is not None
-            or get_key_model_rpm_limit(user_api_key_dict) is not None
-        ):
-            _model = data.get("model", None)
+        _model = data.get("model", None)
+        _tpm_limit_for_key_model = get_key_model_tpm_limit(
+            user_api_key_dict, model_name=_model
+        )
+        _rpm_limit_for_key_model = get_key_model_rpm_limit(
+            user_api_key_dict, model_name=_model
+        )
+        if _tpm_limit_for_key_model is not None or _rpm_limit_for_key_model is not None:
             request_count_api_key = (
                 f"{api_key}::{_model}::{precise_minute}::request_count"
             )
-            _tpm_limit_for_key_model = get_key_model_tpm_limit(user_api_key_dict)
-            _rpm_limit_for_key_model = get_key_model_rpm_limit(user_api_key_dict)
             tpm_limit_for_model = None
             rpm_limit_for_model = None
 
@@ -477,6 +476,15 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                 kwargs["litellm_params"]["metadata"].get("user_api_key_metadata", {})
                 or {}
             )
+            user_api_key_team_metadata = kwargs["litellm_params"]["metadata"].get(
+                "user_api_key_team_metadata", None
+            )
+            user_api_key_dict = UserAPIKeyAuth(
+                api_key=user_api_key,
+                metadata=user_api_key_metadata,
+                model_max_budget=user_api_key_model_max_budget,
+                team_metadata=user_api_key_team_metadata,
+            )
 
             # ------------
             # Setup values
@@ -538,6 +546,16 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             # Update usage - model group + API Key
             # ------------
             model_group = get_model_group_from_litellm_kwargs(kwargs)
+            _success_tpm_limit = (
+                get_key_model_tpm_limit(user_api_key_dict, model_name=model_group)
+                if model_group is not None
+                else None
+            )
+            _success_rpm_limit = (
+                get_key_model_rpm_limit(user_api_key_dict, model_name=model_group)
+                if model_group is not None
+                else None
+            )
             if (
                 user_api_key is not None
                 and model_group is not None
@@ -545,6 +563,8 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                     "model_rpm_limit" in user_api_key_metadata
                     or "model_tpm_limit" in user_api_key_metadata
                     or user_api_key_model_max_budget is not None
+                    or _success_tpm_limit is not None
+                    or _success_rpm_limit is not None
                 )
             ):
                 request_count_api_key = (
@@ -681,15 +701,15 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
         try:
             self.print_verbose("Inside Max Parallel Request Failure Hook")
-            litellm_parent_otel_span: Union[
-                Span, None
-            ] = _get_parent_otel_span_from_kwargs(kwargs=kwargs)
+            litellm_parent_otel_span: Union[Span, None] = (
+                _get_parent_otel_span_from_kwargs(kwargs=kwargs)
+            )
             _metadata = kwargs["litellm_params"].get("metadata", {}) or {}
             global_max_parallel_requests = _metadata.get(
                 "global_max_parallel_requests", None
             )
             user_api_key = _metadata.get("user_api_key", None)
-            self.print_verbose(f"user_api_key: {user_api_key}")
+            self.print_verbose(f"user_api_key: [set={user_api_key is not None}]")
             if user_api_key is None:
                 return
 
@@ -810,11 +830,11 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
         current_minute = datetime.now().strftime("%M")
         precise_minute = f"{current_date}-{current_hour}-{current_minute}"
         request_count_api_key = f"{api_key}::{precise_minute}::request_count"
-        current: Optional[
-            CurrentItemRateLimit
-        ] = await self.internal_usage_cache.async_get_cache(
-            key=request_count_api_key,
-            litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
+        current: Optional[CurrentItemRateLimit] = (
+            await self.internal_usage_cache.async_get_cache(
+                key=request_count_api_key,
+                litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
+            )
         )
 
         key_remaining_rpm_limit: Optional[int] = None
@@ -846,15 +866,15 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             _additional_headers = _hidden_params.get("additional_headers", {}) or {}
 
             if key_remaining_rpm_limit is not None:
-                _additional_headers[
-                    "x-ratelimit-remaining-requests"
-                ] = key_remaining_rpm_limit
+                _additional_headers["x-ratelimit-remaining-requests"] = (
+                    key_remaining_rpm_limit
+                )
             if key_rpm_limit is not None:
                 _additional_headers["x-ratelimit-limit-requests"] = key_rpm_limit
             if key_remaining_tpm_limit is not None:
-                _additional_headers[
-                    "x-ratelimit-remaining-tokens"
-                ] = key_remaining_tpm_limit
+                _additional_headers["x-ratelimit-remaining-tokens"] = (
+                    key_remaining_tpm_limit
+                )
             if key_tpm_limit is not None:
                 _additional_headers["x-ratelimit-limit-tokens"] = key_tpm_limit
 

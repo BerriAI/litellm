@@ -16,7 +16,7 @@ Letta allows you to build LLM agents that can:
 ## Prerequisites
 
 ```bash
-pip install letta litellm
+uv add letta litellm
 ```
 
 ## Quick Start
@@ -910,7 +910,7 @@ for model in models:
 ```
 
 ### Common SDK Issues
-- **Import errors**: Ensure `pip install litellm letta` is run
+- **Import errors**: Ensure `uv add litellm letta` is run
 - **Model format**: Use `provider/model` format (e.g., `openai/gpt-4`)
 - **API key format**: Different providers have different key formats
 - **Rate limits**: Implement exponential backoff for retries
@@ -920,9 +920,9 @@ for model in models:
 
 ## Resources
 
-- [Letta Documentation](https://docs.letta.ai/)
-- [LiteLLM Proxy Documentation](../proxy/quick_start.md)
-- [LiteLLM SDK Documentation](../completion/input.md)
-- [Function Calling Guide](../completion/function_call.md)
-- [Observability Setup](../observability/langfuse_integration.md)
-- [Router Configuration](../routing.md)
+- [Letta Documentation](https://docs.letta.com/)
+- [LiteLLM Proxy Documentation](/docs/simple_proxy)
+- [LiteLLM SDK Documentation](/docs/#litellm-python-sdk)
+- [Function Calling Guide](/docs/completion/function_call)
+- [Observability Setup](/docs/integrations/observability_integrations)
+- [Router Configuration](/docs/routing)

@@ -1,6 +1,7 @@
 """
 Search Tool Registry for managing search tool configurations.
 """
+
 from datetime import datetime, timezone
 from typing import List, Optional
 

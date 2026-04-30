@@ -12,6 +12,7 @@ import click
 import httpx
 from dotenv import load_dotenv
 
+import litellm
 from litellm.constants import DEFAULT_NUM_WORKERS_LITELLM_PROXY
 from litellm.secret_managers.main import get_secret_bool
 
@@ -387,7 +388,7 @@ class ProxyInitializationHelpers:
 @click.option("--api_base", default=None, help="API base URL.")
 @click.option(
     "--api_version",
-    default="2024-07-01-preview",
+    default=litellm.AZURE_DEFAULT_API_VERSION,
     help="For azure - pass in the api version.",
 )
 @click.option(
@@ -467,6 +468,12 @@ class ProxyInitializationHelpers:
     default=None,
     type=str,
     help="Path to the logging configuration file",
+)
+@click.option(
+    "--setup",
+    is_flag=True,
+    default=False,
+    help="Run the interactive setup wizard to configure providers and generate a config file",
 )
 @click.option(
     "--version",
@@ -598,6 +605,7 @@ def run_server(  # noqa: PLR0915
     num_requests,
     use_queue,
     health,
+    setup,
     version,
     run_gunicorn,
     run_hypercorn,
@@ -611,6 +619,12 @@ def run_server(  # noqa: PLR0915
     max_requests_before_restart,
     enforce_prisma_migration_check: bool,
 ):
+    if setup:
+        from litellm.setup_wizard import run_setup_wizard
+
+        run_setup_wizard()
+        return
+
     args = locals()
     if local:
         from proxy_server import (
@@ -904,7 +918,7 @@ def run_server(  # noqa: PLR0915
         # Auto-create PROMETHEUS_MULTIPROC_DIR for multi-worker setups
         ProxyInitializationHelpers._maybe_setup_prometheus_multiproc_dir(
             num_workers=num_workers,
-            litellm_settings=litellm_settings if config else None,
+            litellm_settings=litellm_settings if config else None,  # type: ignore[possibly-unbound]
         )
 
         # --- SEPARATE HEALTH APP LOGIC ---

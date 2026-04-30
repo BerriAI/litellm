@@ -15,6 +15,9 @@ from pydantic import BaseModel
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
+from litellm.llms.bedrock.image_edit.amazon_nova_canvas_image_edit_transformation import (
+    BedrockAmazonNovaCanvasImageEditConfig,
+)
 from litellm.llms.bedrock.image_edit.stability_transformation import (
     BedrockStabilityImageEditConfig,
 )
@@ -55,8 +58,15 @@ class BedrockImageEdit(BaseAWSLLM):
     def get_config_class(cls, model: str | None):
         if BedrockStabilityImageEditConfig._is_stability_edit_model(model):
             return BedrockStabilityImageEditConfig
-        else:
-            raise ValueError(f"Unsupported model for bedrock image edit: {model}")
+        if BedrockAmazonNovaCanvasImageEditConfig._is_nova_canvas_image_edit_model(
+            model
+        ):
+            return BedrockAmazonNovaCanvasImageEditConfig
+        raise ValueError(
+            f"Unsupported Bedrock image-edit model: {model!r}. "
+            "Use a stability.* image-edit model id or add supports_nova_canvas_image_edit "
+            "in model_prices for this id."
+        )
 
     def image_edit(
         self,

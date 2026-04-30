@@ -64,8 +64,15 @@ class BedrockCountTokensHandler(BedrockCountTokensConfig):
             verbose_logger.debug(f"Transformed request: {bedrock_request}")
 
             # Get endpoint URL using simplified function
+            api_base = litellm_params.get("api_base", None)
+            aws_bedrock_runtime_endpoint = litellm_params.get(
+                "aws_bedrock_runtime_endpoint", None
+            )
             endpoint_url = self.get_bedrock_count_tokens_endpoint(
-                resolved_model, aws_region_name
+                model=resolved_model,
+                aws_region_name=aws_region_name,
+                api_base=api_base,
+                aws_bedrock_runtime_endpoint=aws_bedrock_runtime_endpoint,
             )
 
             verbose_logger.debug(f"Making request to: {endpoint_url}")

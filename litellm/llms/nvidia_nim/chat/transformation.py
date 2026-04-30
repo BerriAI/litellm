@@ -7,6 +7,7 @@ This file only contains param mapping logic
 
 API calling is done using the OpenAI SDK with an api_base
 """
+
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 
 

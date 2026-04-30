@@ -90,10 +90,10 @@ def mock_router_with_paid_model():
 def mock_proxy_logging():
     """Create a mock ProxyLogging instance."""
     proxy_logging = ProxyLogging(user_api_key_cache=None)
-    
+
     async def mock_budget_alerts(*args, **kwargs):
         pass
-    
+
     proxy_logging.budget_alerts = mock_budget_alerts
     return proxy_logging
 

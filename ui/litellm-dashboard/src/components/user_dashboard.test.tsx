@@ -45,6 +45,7 @@ vi.mock("jwt-decode", () => ({
 // Mock cookie utility
 vi.mock("@/utils/cookieUtils", () => ({
   clearTokenCookies: vi.fn(),
+  getCookie: vi.fn().mockReturnValue("fake-jwt-token"),
 }));
 
 // Mock fetchTeams

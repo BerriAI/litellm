@@ -39,7 +39,8 @@ class VantageExportRequest(BaseModel):
     """Request model for Vantage export operations (actual export, no default limit)"""
 
     limit: Optional[int] = Field(
-        None, description="Optional limit on number of records to export (default: no limit)"
+        None,
+        description="Optional limit on number of records to export (default: no limit)",
     )
     start_time_utc: Optional[datetime] = Field(
         None, description="Start time for data export in UTC"

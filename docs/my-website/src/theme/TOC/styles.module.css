@@ -1,0 +1,74 @@
+.tableOfContents {
+  max-height: calc(100vh - (var(--ifm-navbar-height) + 2rem));
+  position: sticky;
+  top: calc(var(--ifm-navbar-height) + 1rem);
+  display: flex;
+  flex-direction: column;
+}
+
+.tocItemsContainer {
+  overflow-y: auto;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+@media (max-width: 996px) {
+  .tableOfContents {
+    display: none;
+  }
+}
+
+/* =========================================
+   Enterprise Promo Card
+   ========================================= */
+.promoCard {
+  flex-shrink: 0;
+  margin-top: 1.5rem;
+  padding: 0.875rem 1rem;
+  border-radius: 6px;
+  border: 1px solid rgba(46, 133, 85, 0.2);
+  background-color: rgba(46, 133, 85, 0.05);
+}
+
+[data-theme='dark'] .promoCard {
+  border-color: rgba(37, 194, 160, 0.2);
+  background-color: rgba(37, 194, 160, 0.05);
+}
+
+.promoEmoji {
+  font-size: 18px;
+  margin-bottom: 0.4rem;
+  line-height: 1;
+}
+
+.promoHeading {
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 0.35rem;
+  color: var(--ifm-heading-color);
+}
+
+.promoDescription {
+  font-size: 11.5px;
+  line-height: 1.55;
+  margin-bottom: 0.75rem;
+  color: var(--ifm-color-emphasis-700);
+}
+
+.promoButton {
+  display: inline-block;
+  background-color: var(--ifm-color-primary);
+  color: #fff !important;
+  padding: 0.28rem 0.65rem;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 500;
+  text-decoration: none !important;
+  transition: background-color 0.15s ease;
+}
+
+.promoButton:hover {
+  background-color: var(--ifm-color-primary-dark);
+  color: #fff !important;
+  text-decoration: none !important;
+}

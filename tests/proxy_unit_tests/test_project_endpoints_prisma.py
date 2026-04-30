@@ -839,9 +839,7 @@ async def test_list_projects_returns_timestamps():
         return_value=[fake_project]
     )
 
-    with patch(
-        "litellm.proxy.proxy_server.prisma_client", mock_prisma
-    ):
+    with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma):
         response = await list_projects(
             user_api_key_dict=UserAPIKeyAuth(
                 user_role=LitellmUserRoles.PROXY_ADMIN,

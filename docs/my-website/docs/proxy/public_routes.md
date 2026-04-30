@@ -5,7 +5,7 @@ import TabItem from '@theme/TabItem';
 
 :::info
 
-Requires a LiteLLM Enterprise License. [Get a free trial](https://calendly.com/d/cx9p-5yf-2nm/litellm-introductions).
+Requires a LiteLLM Enterprise License. [Get a free trial](https://enterprise.litellm.ai/demo).
 
 :::
 

@@ -24,6 +24,8 @@ export interface PipelineStep {
   guardrail: string;
   on_fail: "block" | "allow" | "next" | "modify_response";
   on_pass: "allow" | "block" | "next" | "modify_response";
+  /** If unset, API/technical errors use on_fail (backward compatible). */
+  on_error?: "block" | "allow" | "next" | "modify_response" | null;
   pass_data?: boolean;
   modify_response_message?: string | null;
 }

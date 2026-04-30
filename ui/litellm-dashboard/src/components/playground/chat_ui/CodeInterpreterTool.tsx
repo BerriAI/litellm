@@ -1,5 +1,6 @@
 import React from "react";
-import { Switch, Tooltip, message } from "antd";
+import { Switch, Tooltip } from "antd";
+import MessageManager from "@/components/molecules/message_manager";
 import { CodeOutlined, InfoCircleOutlined, ExclamationCircleOutlined } from "@ant-design/icons";
 import { Text } from "@tremor/react";
 
@@ -38,7 +39,7 @@ const CodeInterpreterTool: React.FC<CodeInterpreterToolProps> = ({
 
   const handleToggle = (checked: boolean) => {
     if (checked && !isOpenAI) {
-      message.warning("Code Interpreter is only available for OpenAI models");
+      MessageManager.warning("Code Interpreter is only available for OpenAI models");
       return;
     }
     onEnabledChange(checked);

@@ -311,7 +311,7 @@ litellm_settings:
 1. **At Startup**: When the proxy starts, it reads the `prompts` field from `config.yaml`
 2. **Initialization**: Each prompt is initialized based on its `prompt_integration` type
 3. **In-Memory Storage**: Prompts are stored in the `IN_MEMORY_PROMPT_REGISTRY`
-4. **Access**: Use these prompts via the `/v1/chat/completions` endpoint with `prompt_id` in the request
+4. **Access**: Use these prompts via `/v1/chat/completions` or `/v1/responses` with `prompt_id` in the request
 
 ### Using Config-Loaded Prompts
 
@@ -328,6 +328,23 @@ curl -L -X POST 'http://0.0.0.0:4000/v1/chat/completions' \
         "language": "python",
         "task": "create a web scraper"
     }
+}'
+```
+
+You can also use the same `prompt_id` with the Responses API:
+
+```bash
+curl -L -X POST 'http://0.0.0.0:4000/v1/responses' \
+-H 'Content-Type: application/json' \
+-H 'Authorization: Bearer sk-1234' \
+-d '{
+    "model": "gpt-4o",
+    "prompt_id": "coding_assistant",
+    "prompt_variables": {
+        "language": "python",
+        "task": "create a web scraper"
+    },
+    "input": []
 }'
 ```
 

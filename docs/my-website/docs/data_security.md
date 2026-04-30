@@ -128,8 +128,6 @@ We'll review all reports promptly. Note that we don't currently offer a bug boun
 
 Legal Entity Name: Berrie AI Incorporated
 
-Company Phone Number: 7708783106 
-
 Point of contact email address for security incidents: krrish@berri.ai
 
 Point of contact email address for general security-related questions: krrish@berri.ai 

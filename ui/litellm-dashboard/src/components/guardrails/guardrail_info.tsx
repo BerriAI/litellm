@@ -25,7 +25,12 @@ import React, { useCallback, useEffect, useState } from "react";
 import NotificationsManager from "../molecules/notifications_manager";
 import ContentFilterManager, { formatContentFilterDataForAPI } from "./content_filter/ContentFilterManager";
 import CustomCodeModal, { EditGuardrailData } from "./custom_code/CustomCodeModal";
-import { getGuardrailLogoAndName, guardrail_provider_map } from "./guardrail_info_helpers";
+import {
+  getGuardrailLogoAndName,
+  guardrail_provider_map,
+  skipSystemMessageToChoice,
+  type SkipSystemMessageChoice,
+} from "./guardrail_info_helpers";
 import GuardrailOptionalParams from "./guardrail_optional_params";
 import GuardrailProviderFields from "./guardrail_provider_fields";
 import PiiConfiguration from "./pii_configuration";
@@ -207,9 +212,14 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
   // Reset form when guardrail data or provider params change
   useEffect(() => {
     if (guardrailData && form) {
+      const lp = { ...(guardrailData.litellm_params || {}) };
+      delete lp.skip_system_message_in_guardrail;
       form.setFieldsValue({
         guardrail_name: guardrailData.guardrail_name,
-        ...guardrailData.litellm_params,
+        ...lp,
+        skip_system_message_choice: skipSystemMessageToChoice(
+          guardrailData.litellm_params?.skip_system_message_in_guardrail,
+        ),
         guardrail_info: guardrailData.guardrail_info ? JSON.stringify(guardrailData.guardrail_info, null, 2) : "",
         // Include any optional_params if they exist
         ...(guardrailData.litellm_params?.optional_params && {
@@ -276,6 +286,20 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
       // Only include default_on if it has changed
       if (values.default_on !== guardrailData.litellm_params?.default_on) {
         updateData.litellm_params.default_on = values.default_on;
+      }
+
+      const prevSkipChoice = skipSystemMessageToChoice(
+        guardrailData.litellm_params?.skip_system_message_in_guardrail,
+      );
+      const nextSkipChoice = values.skip_system_message_choice as SkipSystemMessageChoice | undefined;
+      if (nextSkipChoice !== undefined && nextSkipChoice !== prevSkipChoice) {
+        if (nextSkipChoice === "inherit") {
+          updateData.litellm_params.skip_system_message_in_guardrail = null;
+        } else if (nextSkipChoice === "yes") {
+          updateData.litellm_params.skip_system_message_in_guardrail = true;
+        } else {
+          updateData.litellm_params.skip_system_message_in_guardrail = false;
+        }
       }
 
       // Only include guardrail_info if it has changed
@@ -647,7 +671,14 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
                     onFinish={handleGuardrailUpdate}
                     initialValues={{
                       guardrail_name: guardrailData.guardrail_name,
-                      ...guardrailData.litellm_params,
+                      ...(() => {
+                        const lp = { ...(guardrailData.litellm_params || {}) };
+                        delete lp.skip_system_message_in_guardrail;
+                        return lp;
+                      })(),
+                      skip_system_message_choice: skipSystemMessageToChoice(
+                        guardrailData.litellm_params?.skip_system_message_in_guardrail,
+                      ),
                       guardrail_info: guardrailData.guardrail_info
                         ? JSON.stringify(guardrailData.guardrail_info, null, 2)
                         : "",
@@ -670,6 +701,18 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
                       <Select>
                         <Select.Option value={true}>Yes</Select.Option>
                         <Select.Option value={false}>No</Select.Option>
+                      </Select>
+                    </Form.Item>
+
+                    <Form.Item
+                      label="Skip system messages in guardrail"
+                      name="skip_system_message_choice"
+                      tooltip="Unified guardrails: omit role: system from guardrail input (LLM still gets full messages). Use global default follows litellm_settings.skip_system_message_in_guardrail."
+                    >
+                      <Select>
+                        <Select.Option value="inherit">Use global default</Select.Option>
+                        <Select.Option value="yes">Yes — exclude from guardrail scan</Select.Option>
+                        <Select.Option value="no">No — always include in scan</Select.Option>
                       </Select>
                     </Form.Item>
 

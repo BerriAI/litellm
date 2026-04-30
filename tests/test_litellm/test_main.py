@@ -18,6 +18,10 @@ import litellm
 from litellm import main as litellm_main
 
 
+async def _async_fake_bedrock_image_details(image_url):
+    return "ZmFrZS1pbWFnZQ==", "image/png"
+
+
 @pytest.fixture(autouse=True)
 def clear_client_cache():
     """
@@ -39,6 +43,12 @@ def add_api_keys_to_env(monkeypatch):
     monkeypatch.setenv("AWS_ACCESS_KEY_ID", "my-fake-aws-access-key-id")
     monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "my-fake-aws-secret-access-key")
     monkeypatch.setenv("AWS_REGION", "us-east-1")
+    # Keep these transformation tests on the simple access-key path. A leaked
+    # session token or role/web-identity env var pushes Bedrock auth down a
+    # different branch and fails before the mocked HTTP client is exercised.
+    monkeypatch.delenv("AWS_SESSION_TOKEN", raising=False)
+    monkeypatch.delenv("AWS_ROLE_ARN", raising=False)
+    monkeypatch.delenv("AWS_WEB_IDENTITY_TOKEN_FILE", raising=False)
 
 
 @pytest.fixture
@@ -150,8 +160,8 @@ def test_completion_missing_role(openai_api_response):
     "model",
     [
         "gemini/gemini-1.5-flash",
-        "bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
-        "bedrock/invoke/anthropic.claude-3-5-sonnet-20240620-v1:0",
+        "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        "bedrock/invoke/anthropic.claude-haiku-4-5-20251001-v1:0",
         "anthropic/claude-3-5-sonnet",
     ],
 )
@@ -160,11 +170,30 @@ def test_completion_missing_role(openai_api_response):
 async def test_url_with_format_param(model, sync_mode, monkeypatch):
     from litellm import acompletion, completion
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+    from litellm.litellm_core_utils.prompt_templates import factory as prompt_factory
 
     if sync_mode:
         client = HTTPHandler()
     else:
         client = AsyncHTTPHandler()
+
+    # This test is about request shaping, not live image downloads. Stub the
+    # URL->image conversion helpers so suite-level network/client state from
+    # earlier tests cannot prevent the mocked provider client from being hit.
+    fake_base64_image = "data:image/png;base64,ZmFrZS1pbWFnZQ=="
+    monkeypatch.setattr(
+        prompt_factory, "convert_url_to_base64", lambda url: fake_base64_image
+    )
+    monkeypatch.setattr(
+        prompt_factory.BedrockImageProcessor,
+        "get_image_details",
+        staticmethod(lambda image_url: ("ZmFrZS1pbWFnZQ==", "image/png")),
+    )
+    monkeypatch.setattr(
+        prompt_factory.BedrockImageProcessor,
+        "get_image_details_async",
+        staticmethod(_async_fake_bedrock_image_details),
+    )
 
     args = {
         "model": model,
@@ -184,6 +213,8 @@ async def test_url_with_format_param(model, sync_mode, monkeypatch):
             }
         ],
     }
+    if model.startswith("gemini/"):
+        args["api_key"] = "test-api-key"
     with patch.object(client, "post", new=MagicMock()) as mock_client:
         try:
             if sync_mode:
@@ -207,7 +238,7 @@ async def test_url_with_format_param(model, sync_mode, monkeypatch):
             json_str = json_str.decode("utf-8")
 
         print(f"type of json_str: {type(json_str)}")
-        
+
         # Bedrock models convert URLs to base64, while direct Anthropic models support URLs
         # bedrock/invoke models use Anthropic messages API which supports URLs
         if model.startswith("bedrock/invoke/"):
@@ -295,7 +326,7 @@ def test_bedrock_latency_optimized_inference():
     with patch.object(client, "post") as mock_post:
         try:
             response = litellm.completion(
-                model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+                model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
                 messages=[{"role": "user", "content": "Hello, how are you?"}],
                 performanceConfig={"latency": "optimized"},
                 client=client,
@@ -433,7 +464,7 @@ async def test_extra_body_with_fallback(
         monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
         # Flush cache to ensure no stale aiohttp clients are used
         litellm.in_memory_llm_clients_cache.flush_cache()
-        
+
         # Set up test parameters
         model = "openrouter/deepseek/deepseek-chat"
         messages = [{"role": "user", "content": "Hello, world!"}]
@@ -466,8 +497,12 @@ async def test_extra_body_with_fallback(
                         "finish_reason": "stop",
                     }
                 ],
-                "usage": {"prompt_tokens": 9, "completion_tokens": 12, "total_tokens": 21},
-            }
+                "usage": {
+                    "prompt_tokens": 9,
+                    "completion_tokens": 12,
+                    "total_tokens": 21,
+                },
+            },
         )
 
         response = await litellm.acompletion(
@@ -480,8 +515,10 @@ async def test_extra_body_with_fallback(
 
         # Verify the response
         assert response is not None
-        assert len(respx_mock.calls) > 0, "Mock was not called - check if aiohttp transport is properly disabled"
-        
+        assert (
+            len(respx_mock.calls) > 0
+        ), "Mock was not called - check if aiohttp transport is properly disabled"
+
         # Get the request from the mock
         request: httpx.Request = respx_mock.calls[0].request
         request_body = request.read()
@@ -523,35 +560,43 @@ async def test_openai_env_base(
     # Configure respx mock to intercept the request
     mock_route = respx_mock.post(
         url__regex=r"http://localhost:12345/v1/chat/completions.*"
-    ).mock(return_value=httpx.Response(
-        status_code=200,
-        json={
-            "id": "chatcmpl-123",
-            "object": "chat.completion",
-            "created": 1677652288,
-            "model": model,
-            "choices": [
-                {
-                    "index": 0,
-                    "message": {
-                        "role": "assistant",
-                        "content": "Hello from mocked response!",
-                    },
-                    "finish_reason": "stop",
-                }
-            ],
-            "usage": {"prompt_tokens": 9, "completion_tokens": 12, "total_tokens": 21},
-        }
-    ))
+    ).mock(
+        return_value=httpx.Response(
+            status_code=200,
+            json={
+                "id": "chatcmpl-123",
+                "object": "chat.completion",
+                "created": 1677652288,
+                "model": model,
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {
+                            "role": "assistant",
+                            "content": "Hello from mocked response!",
+                        },
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {
+                    "prompt_tokens": 9,
+                    "completion_tokens": 12,
+                    "total_tokens": 21,
+                },
+            },
+        )
+    )
 
     try:
         response = await litellm.acompletion(model=model, messages=messages)
-        
+
         # verify we had a response
         assert response.choices[0].message.content == "Hello from mocked response!"
-        
+
         # Verify the mock was called
-        assert mock_route.called, "Mock route was not called - request may have bypassed respx"
+        assert (
+            mock_route.called
+        ), "Mock route was not called - request may have bypassed respx"
     finally:
         # Clean up to avoid affecting other tests
         litellm.disable_aiohttp_transport = False
@@ -622,9 +667,9 @@ def test_responses_api_bridge_check_gpt_5_4_pro():
             model=model_name,
             custom_llm_provider="openai",
         )
-        assert model_info.get("mode") == "responses", (
-            f"{model_name} should have mode='responses', got '{model_info.get('mode')}'"
-        )
+        assert (
+            model_info.get("mode") == "responses"
+        ), f"{model_name} should have mode='responses', got '{model_info.get('mode')}'"
 
 
 def test_responses_api_bridge_check_gpt_5_4_tools_plus_reasoning_routes_to_responses():
@@ -659,6 +704,40 @@ def test_responses_api_bridge_check_gpt_5_5_tools_plus_reasoning_routes_to_respo
 
     assert model == "gpt-5.5-pro"
     assert model_info.get("mode") == "responses"
+
+
+def test_responses_api_bridge_check_azure_gpt_5_4_tools_plus_reasoning_routes_to_responses():
+    """Azure gpt-5.4 with both tools and reasoning_effort should route to Responses API."""
+    from litellm.main import responses_api_bridge_check
+
+    with patch("litellm.main._get_model_info_helper") as mock_get_model_info:
+        mock_get_model_info.return_value = {"max_tokens": 128000}
+        model_info, model = responses_api_bridge_check(
+            model="gpt-5.4",
+            custom_llm_provider="azure",
+            tools=[{"type": "function", "function": {"name": "get_capital"}}],
+            reasoning_effort="high",
+        )
+
+    assert model == "gpt-5.4"
+    assert model_info.get("mode") == "responses"
+
+
+def test_responses_api_bridge_check_azure_gpt_5_4_tools_without_reasoning_stays_chat():
+    """Azure gpt-5.4 with tools only should not be force-routed to Responses API."""
+    from litellm.main import responses_api_bridge_check
+
+    with patch("litellm.main._get_model_info_helper") as mock_get_model_info:
+        mock_get_model_info.return_value = {"max_tokens": 128000}
+        model_info, model = responses_api_bridge_check(
+            model="gpt-5.4",
+            custom_llm_provider="azure",
+            tools=[{"type": "function", "function": {"name": "get_capital"}}],
+            reasoning_effort=None,
+        )
+
+    assert model == "gpt-5.4"
+    assert model_info.get("mode") != "responses"
 
 
 def test_responses_api_bridge_check_gpt_5_4_tools_without_reasoning_stays_chat():
@@ -1453,7 +1532,7 @@ def test_anthropic_text_disable_url_suffix_env_var():
 
 def test_image_edit_merges_headers_and_extra_headers():
     from litellm.images.main import base_llm_http_handler
-    
+
     combined_headers = {
         "x-test-header-one": "value-1",
         "x-test-header-two": "value-2",

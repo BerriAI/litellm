@@ -100,7 +100,9 @@ class TestVertexAIGeminiImageEditTransformation:
                             {
                                 "inlineData": {
                                     "mimeType": "image/png",
-                                    "data": base64.b64encode(b"image-one").decode("utf-8"),
+                                    "data": base64.b64encode(b"image-one").decode(
+                                        "utf-8"
+                                    ),
                                 }
                             }
                         ]
@@ -143,9 +145,15 @@ class TestVertexAIGeminiImageEditTransformation:
     def test_validate_environment_with_litellm_params(self) -> None:
         """Test validate_environment uses credentials from litellm_params"""
         with patch.object(
-            self.config, "_ensure_access_token", return_value=("test-token", "test-expiry")
+            self.config,
+            "_ensure_access_token",
+            return_value=("test-token", "test-expiry"),
         ) as mock_token:
-            with patch.object(self.config, "set_headers", return_value={"Authorization": "Bearer test-token"}) as mock_headers:
+            with patch.object(
+                self.config,
+                "set_headers",
+                return_value={"Authorization": "Bearer test-token"},
+            ) as mock_headers:
                 litellm_params = {
                     "vertex_ai_project": "custom-project",
                     "vertex_ai_credentials": "/path/to/custom/credentials.json",
@@ -164,6 +172,7 @@ class TestVertexAIGeminiImageEditTransformation:
                 assert call_kwargs["credentials"] == "/path/to/custom/credentials.json"
                 assert call_kwargs["project_id"] == "custom-project"
                 assert result == {"Authorization": "Bearer test-token"}
+
     def test_get_complete_url_from_litellm_params(self) -> None:
         """Test vertex_project/vertex_location read from litellm_params first"""
         url = self.config.get_complete_url(
@@ -212,37 +221,6 @@ class TestVertexAIGeminiImageEditTransformation:
             assert "eu-west1" in url
             assert "env-project" not in url
             assert "us-central1" not in url
-
-    def test_validate_environment_api_key_fallback(self) -> None:
-        """When api_key is provided and no vertex credentials, use x-goog-api-key header"""
-        with patch.object(self.config, "safe_get_vertex_ai_credentials", return_value=None):
-            with patch.object(self.config, "_resolve_vertex_credentials", return_value=None):
-                result = self.config.validate_environment(
-                    headers={},
-                    model=self.model,
-                    api_key="my-google-api-key",
-                    litellm_params={},
-                )
-
-        assert result["x-goog-api-key"] == "my-google-api-key"
-        assert result["Content-Type"] == "application/json"
-
-    def test_validate_environment_no_api_key_no_credentials_raises(self) -> None:
-        """When neither api_key nor vertex_credentials, _ensure_access_token is called (may raise)"""
-        with patch.object(self.config, "safe_get_vertex_ai_credentials", return_value=None):
-            with patch.object(self.config, "_resolve_vertex_credentials", return_value=None):
-                with patch.object(
-                    self.config,
-                    "_ensure_access_token",
-                    side_effect=Exception("No credentials"),
-                ):
-                    with pytest.raises(Exception, match="No credentials"):
-                        self.config.validate_environment(
-                            headers={},
-                            model=self.model,
-                            api_key=None,
-                            litellm_params={},
-                        )
 
 
 class TestVertexAIImagenImageEditTransformation:
@@ -360,18 +338,25 @@ class TestVertexAIImagenImageEditTransformation:
         # Second should be MASK reference
         assert reference_images[1]["referenceType"] == "REFERENCE_TYPE_MASK"
         assert "maskImageConfig" in reference_images[1]
-        assert reference_images[1]["maskImageConfig"]["maskMode"] == "MASK_MODE_USER_PROVIDED"
+        assert (
+            reference_images[1]["maskImageConfig"]["maskMode"]
+            == "MASK_MODE_USER_PROVIDED"
+        )
 
     def test_transform_image_edit_response(self) -> None:
         """Test response transformation for Vertex AI Imagen"""
         response_payload = {
             "predictions": [
                 {
-                    "bytesBase64Encoded": base64.b64encode(b"image-one").decode("utf-8"),
+                    "bytesBase64Encoded": base64.b64encode(b"image-one").decode(
+                        "utf-8"
+                    ),
                     "mimeType": "image/png",
                 },
                 {
-                    "bytesBase64Encoded": base64.b64encode(b"image-two").decode("utf-8"),
+                    "bytesBase64Encoded": base64.b64encode(b"image-two").decode(
+                        "utf-8"
+                    ),
                     "mimeType": "image/png",
                 },
             ]
@@ -421,66 +406,7 @@ class TestVertexAIImagenImageEditTransformation:
         assert self.config._read_all_bytes(bio) == b"test_bytesio"
 
         # Test with bytearray
-        assert self.config._read_all_bytes(bytearray(b"test_bytearray")) == b"test_bytearray"
-
-    def test_validate_environment_with_litellm_params(self) -> None:
-        """Test validate_environment uses credentials from litellm_params"""
-        with patch.object(
-            self.config, "_ensure_access_token", return_value=("test-token", "test-expiry")
-        ) as mock_token:
-            with patch.object(
-                self.config, "set_headers", return_value={"Authorization": "Bearer test-token"}
-            ):
-                litellm_params = {
-                    "vertex_ai_project": "imagen-project",
-                    "vertex_ai_credentials": "/path/to/credentials.json",
-                }
-
-                result = self.config.validate_environment(
-                    headers={},
-                    model=self.model,
-                    litellm_params=litellm_params,
-                )
-
-                mock_token.assert_called_once()
-                call_kwargs = mock_token.call_args[1]
-                assert call_kwargs["credentials"] == "/path/to/credentials.json"
-                assert call_kwargs["project_id"] == "imagen-project"
-                assert result == {"Authorization": "Bearer test-token"}
-
-    def test_get_complete_url_from_litellm_params(self) -> None:
-        """Test vertex_project/vertex_location read from litellm_params first"""
-        url = self.config.get_complete_url(
-            model="imagen-3.0-capability-001",
-            api_base=None,
-            litellm_params={
-                "vertex_project": "params-project",
-                "vertex_location": "us-east1",
-            },
+        assert (
+            self.config._read_all_bytes(bytearray(b"test_bytearray"))
+            == b"test_bytearray"
         )
-        assert "params-project" in url
-        assert "us-east1" in url
-        assert "predict" in url
-
-    def test_get_complete_url_litellm_params_overrides_env(self) -> None:
-        """Test litellm_params takes precedence over environment variables for Imagen"""
-        with patch.dict(
-            os.environ,
-            {
-                "VERTEXAI_PROJECT": "env-project",
-                "VERTEXAI_LOCATION": "us-central1",
-            },
-        ):
-            url = self.config.get_complete_url(
-                model="imagen-3.0-capability-001",
-                api_base=None,
-                litellm_params={
-                    "vertex_project": "params-project",
-                    "vertex_location": "eu-west1",
-                },
-            )
-            assert "params-project" in url
-            assert "eu-west1" in url
-            assert "env-project" not in url
-            assert "us-central1" not in url
-

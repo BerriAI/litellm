@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, fireEvent } from "@testing-library/react";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import GuardrailsPanel from "./guardrails";
 import { getGuardrailsList } from "./networking";
@@ -38,6 +38,10 @@ vi.mock("./guardrails/guardrail_info", () => ({
 vi.mock("./guardrails/GuardrailTestPlayground", () => ({
   __esModule: true,
   default: () => <div>Mock Guardrail Test Playground</div>,
+}));
+
+vi.mock("./guardrails/TeamGuardrailsTab", () => ({
+  TeamGuardrailsTab: () => <div>Mock Team Guardrails Tab</div>,
 }));
 
 vi.mock("@/utils/roles", () => ({
@@ -99,6 +103,8 @@ describe("GuardrailsPanel", () => {
   it("should render the component", async () => {
     render(<GuardrailsPanel {...defaultProps} />);
     expect(screen.getByText("Guardrails")).toBeInTheDocument();
+    // Activate the Guardrails tab so its content (including the Add button) is rendered
+    fireEvent.click(screen.getByText("Guardrails"));
     expect(screen.getByText("+ Add New Guardrail")).toBeInTheDocument();
   });
 });

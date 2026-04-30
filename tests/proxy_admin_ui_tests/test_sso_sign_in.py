@@ -82,7 +82,9 @@ async def test_auth_callback_new_user(mock_google_sso, mock_env_vars, prisma_cli
         mock_sso_result.email = unique_user_email
         mock_sso_result.id = unique_user_id
         mock_sso_result.provider = "google"
-        mock_sso_result.user_role = None  # Explicitly set to None so it doesn't return a MagicMock
+        mock_sso_result.user_role = (
+            None  # Explicitly set to None so it doesn't return a MagicMock
+        )
         mock_google_sso.return_value.verify_and_process = AsyncMock(
             return_value=mock_sso_result
         )
@@ -105,7 +107,9 @@ async def test_auth_callback_new_user(mock_google_sso, mock_env_vars, prisma_cli
 
         # Assert the response
         assert response.status_code == 303
-        assert response.headers["location"].startswith(f"http://testserver/ui/?login=success")
+        assert response.headers["location"].startswith(
+            f"http://testserver/ui/?login=success"
+        )
 
         # Verify that the user was added to the database
         user = await prisma_client.db.litellm_usertable.find_first(
@@ -178,7 +182,9 @@ async def test_auth_callback_new_user_with_sso_default(
 
         # Assert the response
         assert response.status_code == 303
-        assert response.headers["location"].startswith(f"http://testserver/ui/?login=success")
+        assert response.headers["location"].startswith(
+            f"http://testserver/ui/?login=success"
+        )
 
         # Verify that the user was added to the database
         user = await prisma_client.db.litellm_usertable.find_first(

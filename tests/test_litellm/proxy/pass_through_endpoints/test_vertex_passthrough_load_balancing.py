@@ -1,4 +1,3 @@
-
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -27,24 +26,51 @@ async def test_vertex_passthrough_load_balancing():
             "model": "vertex_ai/gemini-pro",
             "vertex_project": "test-project-lb",
             "vertex_location": "us-central1-lb",
-            "use_in_pass_through": True
+            "use_in_pass_through": True,
         }
     }
     mock_router.get_available_deployment_for_pass_through.return_value = mock_deployment
 
     # Mock get_vertex_model_id_from_url to return a model ID
-    with patch("litellm.llms.vertex_ai.common_utils.get_vertex_model_id_from_url", return_value="gemini-pro"), \
-         patch("litellm.proxy.proxy_server.llm_router", mock_router), \
-         patch("litellm.llms.vertex_ai.common_utils.get_vertex_project_id_from_url", return_value=None), \
-         patch("litellm.llms.vertex_ai.common_utils.get_vertex_location_from_url", return_value=None), \
-         patch("litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.passthrough_endpoint_router") as mock_pt_router, \
-         patch("litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints._prepare_vertex_auth_headers", new_callable=AsyncMock) as mock_prep_headers, \
-         patch("litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route") as mock_create_route, \
-         patch("litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.user_api_key_auth", new_callable=AsyncMock) as mock_auth:
+    with (
+        patch(
+            "litellm.llms.vertex_ai.common_utils.get_vertex_model_id_from_url",
+            return_value="gemini-pro",
+        ),
+        patch("litellm.proxy.proxy_server.llm_router", mock_router),
+        patch(
+            "litellm.llms.vertex_ai.common_utils.get_vertex_project_id_from_url",
+            return_value=None,
+        ),
+        patch(
+            "litellm.llms.vertex_ai.common_utils.get_vertex_location_from_url",
+            return_value=None,
+        ),
+        patch(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.passthrough_endpoint_router"
+        ) as mock_pt_router,
+        patch(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints._prepare_vertex_auth_headers",
+            new_callable=AsyncMock,
+        ) as mock_prep_headers,
+        patch(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route"
+        ) as mock_create_route,
+        patch(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.user_api_key_auth",
+            new_callable=AsyncMock,
+        ) as mock_auth,
+    ):
 
         # Setup additional mocks to avoid side effects
         mock_pt_router.get_vertex_credentials.return_value = MagicMock()
-        mock_prep_headers.return_value = ({}, "https://test.url", False, "test-project-lb", "us-central1-lb")
+        mock_prep_headers.return_value = (
+            {},
+            "https://test.url",
+            False,
+            "test-project-lb",
+            "us-central1-lb",
+        )
 
         mock_endpoint_func = AsyncMock()
         mock_create_route.return_value = mock_endpoint_func
@@ -55,12 +81,14 @@ async def test_vertex_passthrough_load_balancing():
             endpoint="https://us-central1-aiplatform.googleapis.com/v1/projects/my-project/locations/us-central1/publishers/google/models/gemini-pro:streamGenerateContent",
             request=mock_request,
             fastapi_response=mock_response,
-            get_vertex_pass_through_handler=mock_handler
+            get_vertex_pass_through_handler=mock_handler,
         )
 
         # Verify
         # 1. Check that get_available_deployment_for_pass_through was called with the correct model ID
-        mock_router.get_available_deployment_for_pass_through.assert_called_once_with(model="gemini-pro")
+        mock_router.get_available_deployment_for_pass_through.assert_called_once_with(
+            model="gemini-pro"
+        )
 
         # 2. Check that get_model_list was NOT called (this ensures we aren't doing the old logic)
         mock_router.get_model_list.assert_not_called()
@@ -69,8 +97,8 @@ async def test_vertex_passthrough_load_balancing():
         # The args are: request, vertex_credentials, router_credentials, vertex_project, vertex_location, ...
         # We check the 4th and 5th args (index 3 and 4)
         call_args = mock_prep_headers.call_args
-        assert call_args[1]['vertex_project'] == "test-project-lb"
-        assert call_args[1]['vertex_location'] == "us-central1-lb"
+        assert call_args[1]["vertex_project"] == "test-project-lb"
+        assert call_args[1]["vertex_location"] == "us-central1-lb"
 
 
 def test_get_available_deployment_for_pass_through_filters_correctly():
@@ -88,7 +116,7 @@ def test_get_available_deployment_for_pass_through_filters_correctly():
                 "vertex_project": "project-1",
                 "vertex_location": "us-central1",
                 "use_in_pass_through": True,  # Supports pass-through
-            }
+            },
         },
         {
             "model_name": "gemini-pro",
@@ -97,7 +125,7 @@ def test_get_available_deployment_for_pass_through_filters_correctly():
                 "vertex_project": "project-2",
                 "vertex_location": "us-west1",
                 "use_in_pass_through": False,  # Does not support pass-through
-            }
+            },
         },
         {
             "model_name": "gemini-pro",
@@ -106,7 +134,7 @@ def test_get_available_deployment_for_pass_through_filters_correctly():
                 "vertex_project": "project-3",
                 "vertex_location": "us-east1",
                 # use_in_pass_through not set (defaults to False)
-            }
+            },
         },
     ]
 
@@ -135,7 +163,7 @@ def test_get_available_deployment_for_pass_through_no_deployments():
                 "vertex_project": "project-1",
                 "vertex_location": "us-central1",
                 "use_in_pass_through": False,  # Does not support pass-through
-            }
+            },
         }
     ]
 
@@ -163,7 +191,7 @@ def test_get_available_deployment_for_pass_through_load_balancing():
                 "vertex_location": "us-central1",
                 "use_in_pass_through": True,
                 "rpm": 100,
-            }
+            },
         },
         {
             "model_name": "gemini-pro",
@@ -173,19 +201,18 @@ def test_get_available_deployment_for_pass_through_load_balancing():
                 "vertex_location": "us-west1",
                 "use_in_pass_through": True,
                 "rpm": 200,  # Higher RPM should be selected more frequently
-            }
+            },
         },
     ]
 
-    router = Router(
-        model_list=model_list,
-        routing_strategy="simple-shuffle"
-    )
+    router = Router(model_list=model_list, routing_strategy="simple-shuffle")
 
     # Call multiple times and track selected deployments
     selections = {"project-1": 0, "project-2": 0}
     for _ in range(100):
-        deployment = router.get_available_deployment_for_pass_through(model="gemini-pro")
+        deployment = router.get_available_deployment_for_pass_through(
+            model="gemini-pro"
+        )
         project = deployment["litellm_params"]["vertex_project"]
         selections[project] += 1
 
@@ -208,18 +235,14 @@ async def test_async_get_available_deployment_for_pass_through():
                 "vertex_project": "project-1",
                 "vertex_location": "us-central1",
                 "use_in_pass_through": True,
-            }
+            },
         }
     ]
 
-    router = Router(
-        model_list=model_list,
-        routing_strategy="simple-shuffle"
-    )
+    router = Router(model_list=model_list, routing_strategy="simple-shuffle")
 
     deployment = await router.async_get_available_deployment_for_pass_through(
-        model="gemini-pro",
-        request_kwargs={}
+        model="gemini-pro", request_kwargs={}
     )
 
     assert deployment is not None
@@ -245,14 +268,16 @@ async def test_vertex_passthrough_forwards_anthropic_beta_header():
 
     # Create a mock request with anthropic-beta header
     mock_request = MagicMock()
-    mock_request.headers = Headers({
-        "authorization": "Bearer old-token",
-        "anthropic-beta": "context-1m-2025-08-07",
-        "content-type": "application/json",
-        "user-agent": "test-client",
-        "content-length": "1234",  # Should be removed
-        "host": "localhost:4000",  # Should be removed
-    })
+    mock_request.headers = Headers(
+        {
+            "authorization": "Bearer old-token",
+            "anthropic-beta": "context-1m-2025-08-07",
+            "content-type": "application/json",
+            "user-agent": "test-client",
+            "content-length": "1234",  # Should be removed
+            "host": "localhost:4000",  # Should be removed
+        }
+    )
     # Prevent MagicMock from auto-creating a truthy _cached_headers attribute,
     # which would short-circuit _safe_get_request_headers before reading .headers
     mock_request.state._cached_headers = None
@@ -269,16 +294,19 @@ async def test_vertex_passthrough_forwards_anthropic_beta_header():
         "https://us-central1-aiplatform.googleapis.com"
     )
 
-    with patch.object(
-        VertexBase,
-        "_ensure_access_token_async",
-        new_callable=AsyncMock,
-        return_value=("test-auth-header", "test-project"),
-    ) as mock_ensure_token, patch.object(
-        VertexBase,
-        "_get_token_and_url",
-        return_value=("new-access-token", None),
-    ) as mock_get_token:
+    with (
+        patch.object(
+            VertexBase,
+            "_ensure_access_token_async",
+            new_callable=AsyncMock,
+            return_value=("test-auth-header", "test-project"),
+        ) as mock_ensure_token,
+        patch.object(
+            VertexBase,
+            "_get_token_and_url",
+            return_value=("new-access-token", None),
+        ) as mock_get_token,
+    ):
 
         # Call the function
         (
@@ -310,9 +338,9 @@ async def test_vertex_passthrough_forwards_anthropic_beta_header():
         # Verify that non-allowlisted headers are NOT forwarded (security)
         # Only anthropic-beta, content-type, and Authorization should be present
         assert "authorization" not in headers  # lowercase auth token not forwarded
-        assert "user-agent" not in headers     # not in allowlist
+        assert "user-agent" not in headers  # not in allowlist
         assert "content-length" not in headers  # not in allowlist
-        assert "host" not in headers            # not in allowlist
+        assert "host" not in headers  # not in allowlist
 
         # Verify that headers_passed_through is False (since we have credentials)
         assert headers_passed_through is False
@@ -342,10 +370,12 @@ async def test_vertex_passthrough_does_not_forward_litellm_auth_token():
 
     # Create a mock request with ONLY the litellm auth token (no other headers)
     mock_request = MagicMock()
-    mock_request.headers = Headers({
-        "authorization": "Bearer sk-litellm-secret-key",  # LiteLLM token - should NOT be forwarded
-        "Authorization": "Bearer sk-litellm-secret-key-uppercase",  # Also try uppercase
-    })
+    mock_request.headers = Headers(
+        {
+            "authorization": "Bearer sk-litellm-secret-key",  # LiteLLM token - should NOT be forwarded
+            "Authorization": "Bearer sk-litellm-secret-key-uppercase",  # Also try uppercase
+        }
+    )
 
     # Create mock vertex credentials
     mock_vertex_credentials = MagicMock()
@@ -359,15 +389,18 @@ async def test_vertex_passthrough_does_not_forward_litellm_auth_token():
         "https://us-central1-aiplatform.googleapis.com"
     )
 
-    with patch.object(
-        VertexBase,
-        "_ensure_access_token_async",
-        new_callable=AsyncMock,
-        return_value=("test-auth-header", "test-project"),
-    ), patch.object(
-        VertexBase,
-        "_get_token_and_url",
-        return_value=("vertex-access-token", None),
+    with (
+        patch.object(
+            VertexBase,
+            "_ensure_access_token_async",
+            new_callable=AsyncMock,
+            return_value=("test-auth-header", "test-project"),
+        ),
+        patch.object(
+            VertexBase,
+            "_get_token_and_url",
+            return_value=("vertex-access-token", None),
+        ),
     ):
 
         (
@@ -451,6 +484,60 @@ def test_forward_headers_from_request_x_pass_prefix():
     assert "x-pass-custom-header" not in result
 
 
+def test_forward_headers_from_request_protected_headers_not_overwritten():
+    """
+    Test that x-pass- headers whose stripped names resolve to credential or
+    protocol-level header names are silently dropped and do not overwrite
+    values already present in the outbound headers dict.
+    """
+    from litellm.passthrough.utils import BasePassthroughUtils
+
+    proxy_headers = {
+        "authorization": "Bearer proxy-upstream-key",
+        "api-key": "proxy-azure-key",
+        "x-api-key": "proxy-anthropic-key",
+        "x-goog-api-key": "proxy-google-key",
+    }
+
+    request_headers = {
+        "x-pass-authorization": "Bearer attacker-key",
+        "x-pass-api-key": "attacker-azure-key",
+        "x-pass-x-api-key": "attacker-anthropic-key",
+        "x-pass-x-goog-api-key": "attacker-google-key",
+        "x-pass-host": "evil.example.com",
+        "x-pass-content-length": "0",
+        "x-pass-x-amz-security-token": "attacker-aws-token",
+        # Legitimate x-pass- header that should still be forwarded
+        "x-pass-anthropic-beta": "context-1m-2025-08-07",
+        "content-type": "application/json",
+    }
+
+    result = BasePassthroughUtils.forward_headers_from_request(
+        request_headers=request_headers,
+        headers=proxy_headers.copy(),
+        forward_headers=False,
+    )
+
+    # Protected headers must retain the proxy-configured values
+    assert result["authorization"] == "Bearer proxy-upstream-key"
+    assert result["api-key"] == "proxy-azure-key"
+    assert result["x-api-key"] == "proxy-anthropic-key"
+    assert result["x-goog-api-key"] == "proxy-google-key"
+
+    # Protocol headers must not be injected
+    assert "host" not in result
+    assert "content-length" not in result
+
+    # AWS SigV4 headers must not be injected
+    assert "x-amz-security-token" not in result
+
+    # Legitimate non-protected x-pass- header still forwarded
+    assert result["anthropic-beta"] == "context-1m-2025-08-07"
+
+    # Header name must be normalized to lowercase in output
+    assert "Anthropic-Beta" not in result
+
+
 @pytest.mark.asyncio
 async def test_vertex_passthrough_custom_model_name_replaced_in_url():
     """
@@ -487,19 +574,39 @@ async def test_vertex_passthrough_custom_model_name_replaced_in_url():
     # The URL contains project/location AND a custom model name with slashes
     test_endpoint = "v1/projects/nv-gcpllmgwit-20250411173346/locations/global/publishers/google/models/gcp/google/gemini-3-pro:generateContent"
 
-    with patch("litellm.proxy.proxy_server.llm_router", mock_router), \
-         patch("litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.passthrough_endpoint_router") as mock_pt_router, \
-         patch("litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints._prepare_vertex_auth_headers", new_callable=AsyncMock) as mock_prep_headers, \
-         patch("litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route") as mock_create_route, \
-         patch("litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.user_api_key_auth", new_callable=AsyncMock) as mock_auth:
+    with (
+        patch("litellm.proxy.proxy_server.llm_router", mock_router),
+        patch(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.passthrough_endpoint_router"
+        ) as mock_pt_router,
+        patch(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints._prepare_vertex_auth_headers",
+            new_callable=AsyncMock,
+        ) as mock_prep_headers,
+        patch(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route"
+        ) as mock_create_route,
+        patch(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.user_api_key_auth",
+            new_callable=AsyncMock,
+        ) as mock_auth,
+    ):
 
         mock_pt_router.get_vertex_credentials.return_value = MagicMock()
-        mock_prep_headers.return_value = ({}, "https://global-aiplatform.googleapis.com", False, "nv-gcpllmgwit-20250411173346", "global")
+        mock_prep_headers.return_value = (
+            {},
+            "https://global-aiplatform.googleapis.com",
+            False,
+            "nv-gcpllmgwit-20250411173346",
+            "global",
+        )
         mock_endpoint_func = AsyncMock()
         mock_create_route.return_value = mock_endpoint_func
         mock_auth.return_value = {}
 
-        mock_handler.get_default_base_target_url.return_value = "https://global-aiplatform.googleapis.com"
+        mock_handler.get_default_base_target_url.return_value = (
+            "https://global-aiplatform.googleapis.com"
+        )
 
         await _base_vertex_proxy_route(
             endpoint=test_endpoint,
@@ -517,8 +624,9 @@ async def test_vertex_passthrough_custom_model_name_replaced_in_url():
         # the REAL Vertex AI model name, not the custom one
         create_route_call = mock_create_route.call_args
         target_url = create_route_call.kwargs.get("target", "")
-        assert "gcp/google/gemini-3-pro" not in target_url, \
-            f"Custom model name should have been replaced in target URL. Got: {target_url}"
-        assert "gemini-3-pro" in target_url, \
-            f"Actual Vertex AI model name should be in target URL. Got: {target_url}"
-
+        assert (
+            "gcp/google/gemini-3-pro" not in target_url
+        ), f"Custom model name should have been replaced in target URL. Got: {target_url}"
+        assert (
+            "gemini-3-pro" in target_url
+        ), f"Actual Vertex AI model name should be in target URL. Got: {target_url}"

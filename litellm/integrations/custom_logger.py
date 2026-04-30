@@ -27,6 +27,7 @@ from litellm.types.utils import (
     LLMResponseTypes,
     ModelResponse,
     ModelResponseStream,
+    StandardAuditLogPayload,
     StandardCallbackDynamicParams,
     StandardLoggingPayload,
 )
@@ -175,6 +176,10 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         pass
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+        pass
+
+    async def async_log_audit_log_event(self, audit_log: "StandardAuditLogPayload"):
+        """Called when an audit log is created. Override in subclasses to handle."""
         pass
 
     #### PROMPT MANAGEMENT HOOKS ####
@@ -869,9 +874,9 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
                     model_response_dict = model_response.model_dump()
                     standard_logging_object_copy["response"] = model_response_dict
 
-        model_call_details_copy[
-            "standard_logging_object"
-        ] = standard_logging_object_copy
+        model_call_details_copy["standard_logging_object"] = (
+            standard_logging_object_copy
+        )
         return model_call_details_copy
 
     async def get_proxy_server_request_from_cold_storage_with_object_key(

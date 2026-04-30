@@ -22,7 +22,7 @@ litellm.callbacks = ["lago"] # logs cost + usage of successful calls to lago
 <TabItem value="sdk" label="SDK">
 
 ```python
-# pip install lago 
+# uv add lago 
 import litellm
 import os
 

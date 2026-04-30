@@ -102,13 +102,11 @@ def _match_deployment(
             return {"matched_via": "tags", "matched_value": matched_value}
 
     # 2. Regex match against request headers.
-    # When match_any=False and the deployment has both plain tags and tag_regex,
-    # the strict tag check has already failed (step 1 returned None).  Allow
-    # the regex to fire only when the deployment has NO plain tags, so we never
-    # use regex as a backdoor around the operator's strict-tag policy.
-    strict_tag_check_failed = (
-        not match_any and bool(deployment_tags) and bool(request_tags)
-    )
+    # When match_any=False and the deployment has plain tags, the strict tag
+    # check either didn't run (no request tags) or failed (step 1 returned
+    # None).  Block the regex path so it cannot circumvent the operator's
+    # strict-tag policy.
+    strict_tag_check_failed = not match_any and bool(deployment_tags)
     if deployment_tag_regex and header_strings and not strict_tag_check_failed:
         regex_match = _is_valid_deployment_tag_regex(
             deployment_tag_regex, header_strings
@@ -144,6 +142,13 @@ async def get_deployments_for_tag(
     if healthy_deployments is None:
         verbose_logger.debug(
             "get_deployments_for_tag: healthy_deployments is None returning healthy_deployments"
+        )
+        return healthy_deployments
+
+    # Tag filtering applies only when there is at least one deployment to evaluate.
+    if isinstance(healthy_deployments, list) and len(healthy_deployments) == 0:
+        verbose_logger.debug(
+            "get_deployments_for_tag: empty candidate set; skipping tag filter"
         )
         return healthy_deployments
 

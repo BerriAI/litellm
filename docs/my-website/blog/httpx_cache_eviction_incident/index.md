@@ -3,17 +3,9 @@ slug: httpx-cache-eviction-incident
 title: "Incident Report: Cache Eviction Closes In-Use httpx Clients"
 date: 2026-02-27T10:00:00
 authors:
-  - name: Ryan Crabbe
-    title: Performance Engineer, LiteLLM
-    url: https://www.linkedin.com/in/ryan-crabbe-0b9687214
-  - name: Ishaan Jaff
-    title: "CTO, LiteLLM"
-    url: https://www.linkedin.com/in/reffajnaahsi/
-    image_url: https://pbs.twimg.com/profile_images/1613813310264340481/lz54oEiB_400x400.jpg
-  - name: Krrish Dholakia
-    title: "CEO, LiteLLM"
-    url: https://www.linkedin.com/in/krish-d/
-    image_url: https://pbs.twimg.com/profile_images/1298587542745358340/DZv3Oj-h_400x400.jpg
+  - ryan
+  - ishaan-alt
+  - krrish
 tags: [incident-report, caching, stability]
 hide_table_of_contents: false
 ---
@@ -30,6 +22,8 @@ hide_table_of_contents: false
 A change to improve Redis connection pool cleanup introduced a regression that closed **httpx clients** that were still actively being used by the proxy. The `LLMClientCache` (an in-memory TTL cache) stores both Redis clients *and* httpx clients under the same eviction policy. When a cache entry expired or was evicted, the new cleanup code called `aclose()`/`close()` on the evicted value which worked correctly for Redis clients, but destroyed httpx clients that other parts of the system still held references to and were actively using for LLM API calls.
 
 **Impact:** Any proxy instance that hit the cache TTL (default 10 minutes) or capacity limit (200 entries) would have its httpx clients closed out from under it, causing requests to LLM providers to fail with connection errors.
+
+{/* truncate */}
 
 ---
 

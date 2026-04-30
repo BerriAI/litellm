@@ -364,10 +364,10 @@ class KeyManagementEventHooks:
                         if key.key_alias is not None:
                             team_id = getattr(key, "team_id", None)
                             if team_id not in team_settings_cache:
-                                team_settings_cache[
-                                    team_id
-                                ] = await KeyManagementEventHooks._get_secret_manager_optional_params(
-                                    team_id
+                                team_settings_cache[team_id] = (
+                                    await KeyManagementEventHooks._get_secret_manager_optional_params(
+                                        team_id
+                                    )
                                 )
                             optional_params = team_settings_cache[team_id]
                             await litellm.secret_manager_client.async_delete_secret(

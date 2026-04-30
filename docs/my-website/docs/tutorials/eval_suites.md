@@ -9,10 +9,10 @@ MLflow provides an API `mlflow.evaluate()` to help evaluate your LLMs https://ml
 
 ### Pre Requisites
 ```shell
-pip install litellm
+uv add litellm
 ```
 ```shell
-pip install mlflow
+uv add mlflow
 ```
 
 
@@ -226,10 +226,10 @@ https://github.com/braintrustdata/autoevals
 
 ### Pre Requisites
 ```shell
-pip install litellm
+uv add litellm
 ```
 ```shell
-pip install autoevals
+uv add autoevals
 ```
 
 ### Quick Start

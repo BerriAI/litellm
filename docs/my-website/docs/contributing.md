@@ -29,7 +29,7 @@ general_settings:
 Start the proxy on port 4000:
 
 ```bash
-poetry run litellm --config config.yaml --port 4000
+uv run litellm --config config.yaml --port 4000
 ```
 
 The UI comes pre-built in the repo. Access it at `http://localhost:4000/ui`

@@ -111,6 +111,29 @@ curl -L -X POST 'http://0.0.0.0:4000/v1/images/generations' \
 </TabItem>
 </Tabs>
 
+## Amazon Nova Canvas - Image Edit
+
+Use OpenAI-compatible `image_edit()` with Bedrock Nova Canvas (`amazon.nova-canvas-v1:0`). Requests use the same `InvokeModel` API as generation; LiteLLM maps inputs to [Nova Canvas task types](https://docs.aws.amazon.com/nova/latest/userguide/image-gen-access.html):
+
+| Scenario | `taskType` sent to Bedrock |
+|----------|----------------------------|
+| Image + prompt (no mask) | `IMAGE_VARIATION` |
+| Image + prompt + mask | `INPAINTING` (`inPaintingParams.image`, `maskImage` or `maskPrompt`) |
+| `taskType: OUTPAINTING` + `mask` or `maskPrompt` | `OUTPAINTING` (Bedrock requires one; LiteLLM raises a clear error if both are missing) |
+| `taskType: BACKGROUND_REMOVAL` | `BACKGROUND_REMOVAL` |
+
+```python
+from litellm import image_edit
+
+response = image_edit(
+    image=open("photo.png", "rb"),
+    prompt="Add soft sunset lighting",
+    model="bedrock/amazon.nova-canvas-v1:0",
+)
+```
+
+For **`BACKGROUND_REMOVAL`**, the AWS request must not include `imageGenerationConfig`; LiteLLM omits it for that task even if you pass `size`, `n`, `seed`, etc. Additional Nova Canvas inference IDs for image edit should set **`supports_nova_canvas_image_edit`: true** in `model_prices_and_context_window.json` (see `amazon.nova-canvas-v1:0`).
+
 ## Using Inference Profiles with Image Generation
 
 For AWS Bedrock Application Inference Profiles with image generation, use the `model_id` parameter to specify the inference profile ARN:
@@ -147,4 +170,3 @@ model_list:
 ## Authentication
 
 All standard Bedrock authentication methods are supported for image generation. See [Bedrock Authentication](./bedrock#boto3---authentication) for details.
-

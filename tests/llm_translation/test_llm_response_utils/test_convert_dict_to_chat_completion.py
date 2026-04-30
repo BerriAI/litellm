@@ -962,7 +962,9 @@ def test_convert_to_model_response_object_with_empty_error_object():
     assert isinstance(result, ModelResponse)
     assert result.model == "minimax-m2.1"
     assert len(result.choices) == 1
-    assert result.choices[0].message.content == "Hey! I'm doing well, thanks for asking!"
+    assert (
+        result.choices[0].message.content == "Hey! I'm doing well, thanks for asking!"
+    )
 
 
 def test_convert_to_model_response_object_with_real_error():
@@ -1114,12 +1116,18 @@ def test_convert_to_model_response_object_preserves_provider_specific_fields_fro
     assert result.id == "chatcmpl-proxy-123"
 
     choice = result.choices[0]
-    assert choice.message.content == "Based on current reviews, the Sony WH-1000XM5 remains one of the best headphones."
+    assert (
+        choice.message.content
+        == "Based on current reviews, the Sony WH-1000XM5 remains one of the best headphones."
+    )
     assert choice.message.provider_specific_fields is not None
     assert "citations" in choice.message.provider_specific_fields
     assert choice.message.provider_specific_fields["citations"] == citations
     assert "web_search_results" in choice.message.provider_specific_fields
-    assert choice.message.provider_specific_fields["web_search_results"] == web_search_results
+    assert (
+        choice.message.provider_specific_fields["web_search_results"]
+        == web_search_results
+    )
 
 
 def test_convert_to_model_response_object_provider_specific_fields_merges_extra_keys():

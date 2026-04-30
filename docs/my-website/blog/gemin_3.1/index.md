@@ -3,18 +3,9 @@ slug: gemini_3_1_pro
 title: "DAY 0 Support: Gemini 3.1 Pro on LiteLLM"
 date: 2026-02-19T10:00:00
 authors:
-  - name: Sameer Kankute
-    title: SWE @ LiteLLM (LLM Translation)
-    url: https://www.linkedin.com/in/sameer-kankute/
-    image_url: https://pbs.twimg.com/profile_images/2001352686994907136/ONgNuSk5_400x400.jpg
-  - name: Krrish Dholakia
-    title: "CEO, LiteLLM"
-    url: https://www.linkedin.com/in/krish-d/
-    image_url: https://pbs.twimg.com/profile_images/1298587542745358340/DZv3Oj-h_400x400.jpg
-  - name: Ishaan Jaff
-    title: "CTO, LiteLLM"
-    url: https://www.linkedin.com/in/reffajnaahsi/
-    image_url: https://pbs.twimg.com/profile_images/1613813310264340481/lz54oEiB_400x400.jpg
+  - sameer
+  - krrish
+  - ishaan-alt
 description: "Guide to using Gemini 3.1 Pro on LiteLLM Proxy and SDK with day 0 support."
 tags: [gemini, day 0 support, llms]
 hide_table_of_contents: false
@@ -27,6 +18,8 @@ import TabItem from '@theme/TabItem';
 # Gemini 3.1 Pro Day 0 Support 
 
 LiteLLM now supports `gemini-3.1-pro-preview` and all the new API changes along with it.
+
+{/* truncate */}
 
 ## Deploy this version
 
@@ -67,7 +60,7 @@ LiteLLM provides **full end-to-end support** for Gemini 3.1 Pro on:
 - ✅ `/v1/chat/completions` - OpenAI-compatible chat completions endpoint
 - ✅ `/v1/responses` - OpenAI Responses API endpoint (streaming and non-streaming)
 - ✅ [`/v1/messages`](../../docs/anthropic_unified) - Anthropic-compatible messages endpoint
-- ✅ `/v1/generateContent` – [Google Gemini API](../../docs/generateContent.md) compatible endpoint 
+- ✅ `/v1/generateContent` – [Google Gemini API](../../docs/generateContent) compatible endpoint 
 
 All endpoints support:
 - Streaming and non-streaming responses
@@ -147,4 +140,3 @@ curl -X POST http://localhost:4000/v1/chat/completions \
 | `high` | `high` |
 | `disable` | `minimal` |
 | `none` | `minimal` |
-

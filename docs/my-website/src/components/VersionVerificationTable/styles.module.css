@@ -1,0 +1,106 @@
+.wrapper {
+  overflow-x: auto;
+  margin: 1rem 0;
+}
+
+.table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 0.9rem;
+  border: 1px solid var(--ifm-color-emphasis-300);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.table th,
+.table td {
+  padding: 0.6rem 0.75rem;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.table thead th {
+  background: var(--ifm-color-emphasis-200);
+  font-weight: 600;
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--ifm-color-emphasis-700);
+  border-bottom: 2px solid var(--ifm-color-emphasis-300);
+}
+
+.table tbody tr:nth-child(even) {
+  background: var(--ifm-color-emphasis-100);
+}
+
+.table tbody tr:hover {
+  background: var(--ifm-color-emphasis-200);
+}
+
+.table tbody td {
+  border-bottom: 1px solid var(--ifm-color-emphasis-200);
+}
+
+.table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 12px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.badgeClean {
+  composes: badge;
+  background: #d4edda;
+  color: #155724;
+}
+
+.badgeYes {
+  composes: badge;
+  background: #cce5ff;
+  color: #004085;
+}
+
+.sha {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-family: var(--ifm-font-family-monospace);
+  font-size: 0.8rem;
+}
+
+.copyBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: 1px solid var(--ifm-color-emphasis-300);
+  border-radius: 4px;
+  cursor: pointer;
+  padding: 2px 4px;
+  font-size: 0.7rem;
+  color: var(--ifm-color-emphasis-600);
+  transition: background 0.15s, color 0.15s;
+}
+
+.copyBtn:hover {
+  background: var(--ifm-color-emphasis-200);
+  color: var(--ifm-color-emphasis-800);
+}
+
+.commitLink {
+  font-family: var(--ifm-font-family-monospace);
+  font-size: 0.8rem;
+}
+
+.version {
+  font-weight: 600;
+}

@@ -3,15 +3,11 @@ import { render, screen, act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import CreatedKeyDisplay from "./CreatedKeyDisplay";
 
-vi.mock("antd", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("antd")>();
-  return {
-    ...actual,
-    message: { success: vi.fn() },
-  };
-});
+vi.mock("@/components/molecules/message_manager", () => ({
+  default: { success: vi.fn(), error: vi.fn(), warning: vi.fn(), info: vi.fn(), loading: vi.fn(), destroy: vi.fn() },
+}));
 
-import { message } from "antd";
+import MessageManager from "@/components/molecules/message_manager";
 
 describe("CreatedKeyDisplay", () => {
   beforeEach(() => {
@@ -52,7 +48,7 @@ describe("CreatedKeyDisplay", () => {
 
     await user.click(screen.getByRole("button", { name: /copy virtual key/i }));
 
-    expect(message.success).toHaveBeenCalledWith("Key copied to clipboard");
+    expect(MessageManager.success).toHaveBeenCalledWith("Key copied to clipboard");
   });
 
   it("should revert button text back after 2 seconds", async () => {

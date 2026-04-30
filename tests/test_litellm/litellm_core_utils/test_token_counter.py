@@ -57,10 +57,10 @@ def test_token_counter_basic():
 def test_token_counter_with_prefix():
     messages = [
         {"role": "user", "content": "Who won the world cup in 2022?"},
-        {"role": "assistant", "content": "Argentina", "prefix": True}
+        {"role": "assistant", "content": "Argentina", "prefix": True},
     ]
     tokens = token_counter(model="gpt-3.5-turbo", messages=messages)
-    assert tokens == 22 , f"Expected 22 tokens, got {tokens}"
+    assert tokens == 22, f"Expected 22 tokens, got {tokens}"
 
 
 def test_token_counter_normal_plus_function_calling():
@@ -214,10 +214,10 @@ def test_tokenizers():
         # model hub is unreachable (e.g. in CI).  In that case the count will
         # equal the openai count and the differentiation assertion is skipped.
         if openai_tokens == llama2_tokens:
-            pytest.skip("llama2 fell back to tiktoken (HF hub unreachable); skipping differentiation assertion")
-        assert (
-            llama2_tokens != llama3_tokens_1
-        ), "Token values are not different."
+            pytest.skip(
+                "llama2 fell back to tiktoken (HF hub unreachable); skipping differentiation assertion"
+            )
+        assert llama2_tokens != llama3_tokens_1, "Token values are not different."
 
         assert (
             llama3_tokens_1 == llama3_tokens_2
@@ -255,9 +255,7 @@ def test_encoding_and_decoding():
 
         # llama2 encoding + decoding
         llama2_tokens = encode(model="meta-llama/Llama-2-7b-chat", text=sample_text)
-        llama2_text = decode(
-            model="meta-llama/Llama-2-7b-chat", tokens=llama2_tokens
-        )
+        llama2_text = decode(model="meta-llama/Llama-2-7b-chat", tokens=llama2_tokens)
 
         assert llama2_text == sample_text
     except Exception as e:
@@ -655,57 +653,50 @@ def test_bad_input_token_counter(model, messages):
 def test_token_counter_with_anthropic_tool_use():
     """
     Test that _count_anthropic_content() correctly handles tool_use blocks.
-    
+
     Validates that:
     - 'name' field is counted (string)
     - 'input' field is counted (dict serialized to string)
     - Metadata fields ('type', 'id') are skipped
     """
     messages = [
-        {
-            "role": "user",
-            "content": "What's the weather in San Francisco?"
-        },
+        {"role": "user", "content": "What's the weather in San Francisco?"},
         {
             "role": "assistant",
             "content": [
-                {
-                    "type": "text",
-                    "text": "I'll check the weather for you."
-                },
+                {"type": "text", "text": "I'll check the weather for you."},
                 {
                     "type": "tool_use",
                     "id": "toolu_01234567890",  # Should be skipped
                     "name": "get_weather",  # Should be counted
                     "input": {  # Should be counted (serialized)
                         "location": "San Francisco, CA",
-                        "unit": "fahrenheit"
-                    }
-                }
-            ]
-        }
+                        "unit": "fahrenheit",
+                    },
+                },
+            ],
+        },
     ]
-    
+
     tokens = token_counter(model="gpt-3.5-turbo", messages=messages)
     assert tokens > 0, f"Expected positive token count, got {tokens}"
     # Should count: user message + "I'll check" text + "get_weather" name + input dict
-    assert tokens > 15, f"Expected reasonable token count for message with tool_use, got {tokens}"
+    assert (
+        tokens > 15
+    ), f"Expected reasonable token count for message with tool_use, got {tokens}"
 
 
 def test_token_counter_with_anthropic_tool_result():
     """
     Test that _count_anthropic_content() correctly handles tool_result blocks.
-    
+
     Validates that:
     - 'content' field (when string) is counted
     - Metadata fields ('type', 'tool_use_id') are skipped
     - Full conversation with tool_use → tool_result flow works
     """
     messages = [
-        {
-            "role": "user",
-            "content": "What's the weather in San Francisco?"
-        },
+        {"role": "user", "content": "What's the weather in San Francisco?"},
         {
             "role": "assistant",
             "content": [
@@ -713,11 +704,9 @@ def test_token_counter_with_anthropic_tool_result():
                     "type": "tool_use",
                     "id": "toolu_01234567890",
                     "name": "get_weather",
-                    "input": {
-                        "location": "San Francisco, CA"
-                    }
+                    "input": {"location": "San Francisco, CA"},
                 }
-            ]
+            ],
         },
         {
             "role": "user",
@@ -725,21 +714,23 @@ def test_token_counter_with_anthropic_tool_result():
                 {
                     "type": "tool_result",
                     "tool_use_id": "toolu_01234567890",  # Should be skipped
-                    "content": "The weather in San Francisco is 65°F and sunny."  # Should be counted
+                    "content": "The weather in San Francisco is 65°F and sunny.",  # Should be counted
                 }
-            ]
-        }
+            ],
+        },
     ]
-    
+
     tokens = token_counter(model="gpt-3.5-turbo", messages=messages)
     assert tokens > 0, f"Expected positive token count, got {tokens}"
-    assert tokens > 25, f"Expected reasonable token count for conversation with tool_result, got {tokens}"
+    assert (
+        tokens > 25
+    ), f"Expected reasonable token count for conversation with tool_result, got {tokens}"
 
 
 def test_token_counter_with_nested_tool_result():
     """
     Test that _count_anthropic_content() recursively handles nested content lists.
-    
+
     Validates that:
     - tool_result with 'content' as a list (not string) is handled
     - Nested content blocks are recursively counted via _count_content_list()
@@ -755,28 +746,27 @@ def test_token_counter_with_nested_tool_result():
                     "content": [  # Nested list - should recursively count
                         {
                             "type": "text",
-                            "text": "The weather in San Francisco is 65°F and sunny."
+                            "text": "The weather in San Francisco is 65°F and sunny.",
                         },
-                        {
-                            "type": "text",
-                            "text": "UV index is moderate."
-                        }
-                    ]
+                        {"type": "text", "text": "UV index is moderate."},
+                    ],
                 }
-            ]
+            ],
         }
     ]
-    
+
     tokens = token_counter(model="gpt-3.5-turbo", messages=messages)
     assert tokens > 0, f"Expected positive token count, got {tokens}"
     # Should count both nested text blocks
-    assert tokens > 15, f"Expected reasonable token count for nested tool_result, got {tokens}"
+    assert (
+        tokens > 15
+    ), f"Expected reasonable token count for nested tool_result, got {tokens}"
 
 
 def test_token_counter_tool_use_and_result_combined():
     """
     Test dynamic field inference with multiple tool_use and tool_result blocks.
-    
+
     Validates that:
     - Multiple tool_use blocks in same message are handled
     - Multiple tool_result blocks in same message are handled
@@ -786,28 +776,28 @@ def test_token_counter_tool_use_and_result_combined():
     messages = [
         {
             "role": "user",
-            "content": "What's the weather in San Francisco and New York?"
+            "content": "What's the weather in San Francisco and New York?",
         },
         {
             "role": "assistant",
             "content": [
                 {
                     "type": "text",
-                    "text": "I'll check the weather in both cities for you."
+                    "text": "I'll check the weather in both cities for you.",
                 },
                 {
                     "type": "tool_use",
                     "id": "toolu_01A",
                     "name": "get_weather",
-                    "input": {"location": "San Francisco, CA"}
+                    "input": {"location": "San Francisco, CA"},
                 },
                 {
                     "type": "tool_use",
                     "id": "toolu_01B",
                     "name": "get_weather",
-                    "input": {"location": "New York, NY"}
-                }
-            ]
+                    "input": {"location": "New York, NY"},
+                },
+            ],
         },
         {
             "role": "user",
@@ -815,31 +805,33 @@ def test_token_counter_tool_use_and_result_combined():
                 {
                     "type": "tool_result",
                     "tool_use_id": "toolu_01A",
-                    "content": "San Francisco: 65°F, sunny"
+                    "content": "San Francisco: 65°F, sunny",
                 },
                 {
                     "type": "tool_result",
                     "tool_use_id": "toolu_01B",
-                    "content": "New York: 45°F, cloudy"
-                }
-            ]
+                    "content": "New York: 45°F, cloudy",
+                },
+            ],
         },
         {
             "role": "assistant",
-            "content": "The weather in San Francisco is 65°F and sunny, while New York is cooler at 45°F and cloudy."
-        }
+            "content": "The weather in San Francisco is 65°F and sunny, while New York is cooler at 45°F and cloudy.",
+        },
     ]
-    
+
     tokens = token_counter(model="gpt-3.5-turbo", messages=messages)
     assert tokens > 0, f"Expected positive token count, got {tokens}"
     # Should count all text, tool names, inputs, and results
-    assert tokens > 60, f"Expected substantial token count for full tool conversation, got {tokens}"
+    assert (
+        tokens > 60
+    ), f"Expected substantial token count for full tool conversation, got {tokens}"
 
 
 def test_token_counter_with_image_url():
     """
     Test that _count_image_tokens() correctly handles image_url content blocks.
-    
+
     Validates that:
     - image_url as dict with 'url' and 'detail' is handled
     - image_url as string is handled
@@ -851,29 +843,26 @@ def test_token_counter_with_image_url():
         {
             "role": "user",
             "content": [
-                {
-                    "type": "text",
-                    "text": "What's in this image?"
-                },
+                {"type": "text", "text": "What's in this image?"},
                 {
                     "type": "image_url",
                     "image_url": {
                         "url": "https://example.com/image.jpg",
-                        "detail": "low"  # Should use low token count (85 base tokens)
-                    }
-                }
-            ]
+                        "detail": "low",  # Should use low token count (85 base tokens)
+                    },
+                },
+            ],
         }
     ]
-    
+
     tokens_dict = token_counter(
         model="gpt-3.5-turbo",
         messages=messages_dict,
-        use_default_image_token_count=True  # Avoid actual HTTP request
+        use_default_image_token_count=True,  # Avoid actual HTTP request
     )
     assert tokens_dict > 0, f"Expected positive token count, got {tokens_dict}"
     assert tokens_dict > 85, f"Expected at least base image tokens, got {tokens_dict}"
-    
+
     # Test with string format (defaults to auto/low)
     messages_str = [
         {
@@ -881,19 +870,19 @@ def test_token_counter_with_image_url():
             "content": [
                 {
                     "type": "image_url",
-                    "image_url": "https://example.com/image.jpg"  # String format
+                    "image_url": "https://example.com/image.jpg",  # String format
                 }
-            ]
+            ],
         }
     ]
-    
+
     tokens_str = token_counter(
-        model="gpt-3.5-turbo",
-        messages=messages_str,
-        use_default_image_token_count=True
+        model="gpt-3.5-turbo", messages=messages_str, use_default_image_token_count=True
     )
-    assert tokens_str > 0, f"Expected positive token count for string image_url, got {tokens_str}"
-    
+    assert (
+        tokens_str > 0
+    ), f"Expected positive token count for string image_url, got {tokens_str}"
+
     # Test invalid detail value raises error
     messages_invalid = [
         {
@@ -903,24 +892,26 @@ def test_token_counter_with_image_url():
                     "type": "image_url",
                     "image_url": {
                         "url": "https://example.com/image.jpg",
-                        "detail": "invalid"  # Should raise ValueError
-                    }
+                        "detail": "invalid",  # Should raise ValueError
+                    },
                 }
-            ]
+            ],
         }
     ]
-    
+
     try:
         token_counter(model="gpt-3.5-turbo", messages=messages_invalid)
         assert False, "Expected ValueError for invalid detail value"
     except ValueError as e:
-        assert "Invalid detail value" in str(e), f"Expected detail validation error, got: {e}"
+        assert "Invalid detail value" in str(
+            e
+        ), f"Expected detail validation error, got: {e}"
 
 
 def test_token_counter_with_thinking_content():
     """
     Test that _count_content_list() correctly handles Claude's extended thinking content blocks.
-    
+
     Validates that:
     - 'thinking' content type is recognized and counted
     - 'thinking' text field is counted
@@ -933,9 +924,9 @@ def test_token_counter_with_thinking_content():
             "content": [
                 {
                     "type": "text",
-                    "text": "Analyze this complex problem: who came first, chicken or egg"
+                    "text": "Analyze this complex problem: who came first, chicken or egg",
                 }
-            ]
+            ],
         },
         {
             "role": "assistant",
@@ -943,31 +934,27 @@ def test_token_counter_with_thinking_content():
                 {
                     "type": "thinking",
                     "thinking": "This is actually a fascinating question that touches on philosophy, biology, and semantics. Let me break this down: The egg came first from an evolutionary biology perspective.",
-                    "signature": "EqcLCkYICxgCKkCrqu6lP..."  # Should be skipped
+                    "signature": "EqcLCkYICxgCKkCrqu6lP...",  # Should be skipped
                 },
                 {
                     "type": "text",
-                    "text": "# The Chicken-or-Egg Question: A Multi-Layered Answer\n\n## **The Short Answer: The Egg Came First**"
-                }
-            ]
+                    "text": "# The Chicken-or-Egg Question: A Multi-Layered Answer\n\n## **The Short Answer: The Egg Came First**",
+                },
+            ],
         },
-        {
-            "role": "user",
-            "content": [
-                {
-                    "type": "text",
-                    "text": "Thanks"
-                }
-            ]
-        }
+        {"role": "user", "content": [{"type": "text", "text": "Thanks"}]},
     ]
-    
-    tokens = token_counter(model="anthropic/claude-sonnet-4-5-20250929", messages=messages)
+
+    tokens = token_counter(
+        model="anthropic/claude-sonnet-4-5-20250929", messages=messages
+    )
     assert tokens > 0, f"Expected positive token count, got {tokens}"
     # Should count: user message + thinking text + response text + "Thanks"
     # The thinking text alone is ~30 tokens, plus other content should be > 50 total
-    assert tokens > 50, f"Expected substantial token count for message with thinking, got {tokens}"
-    
+    assert (
+        tokens > 50
+    ), f"Expected substantial token count for message with thinking, got {tokens}"
+
     # Test that thinking block without 'thinking' field doesn't crash (edge case)
     messages_no_thinking = [
         {
@@ -976,18 +963,20 @@ def test_token_counter_with_thinking_content():
                 {
                     "type": "thinking",
                     # No 'thinking' field - should count as 0 tokens
-                    "signature": "EqcLCkYICxgCKkCrqu6lP..."
+                    "signature": "EqcLCkYICxgCKkCrqu6lP...",
                 },
-                {
-                    "type": "text",
-                    "text": "Response"
-                }
-            ]
+                {"type": "text", "text": "Response"},
+            ],
         }
     ]
-    
-    tokens_no_thinking = token_counter(model="anthropic/claude-sonnet-4-5-20250929", messages=messages_no_thinking)
-    assert tokens_no_thinking > 0, f"Expected positive token count even with empty thinking, got {tokens_no_thinking}"
-    # Should only count "Response" and message overhead
-    assert tokens_no_thinking < 15, f"Expected minimal token count for empty thinking block, got {tokens_no_thinking}"
 
+    tokens_no_thinking = token_counter(
+        model="anthropic/claude-sonnet-4-5-20250929", messages=messages_no_thinking
+    )
+    assert (
+        tokens_no_thinking > 0
+    ), f"Expected positive token count even with empty thinking, got {tokens_no_thinking}"
+    # Should only count "Response" and message overhead
+    assert (
+        tokens_no_thinking < 15
+    ), f"Expected minimal token count for empty thinking block, got {tokens_no_thinking}"

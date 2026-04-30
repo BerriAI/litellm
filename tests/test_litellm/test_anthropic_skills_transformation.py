@@ -5,6 +5,7 @@ These tests validate URL construction, header generation, request payload
 building, and response parsing without requiring a live Anthropic API key
 or beta access to the Skills API.
 """
+
 from unittest.mock import MagicMock, patch
 
 import httpx

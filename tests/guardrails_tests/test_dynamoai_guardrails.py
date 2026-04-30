@@ -1,6 +1,7 @@
 """
 Test DynamoAI Guardrails integration
 """
+
 import sys
 import os
 import pytest
@@ -42,18 +43,18 @@ async def test_dynamoai_blocks_content_with_block_action():
                 },
                 "outputs": {
                     "action": "BLOCK",
-                    "message": "Content contains toxic language"
-                }
+                    "message": "Content contains toxic language",
+                },
             }
-        ]
+        ],
     }
     mock_response.raise_for_status = MagicMock()
-    with patch.object(guardrail.async_handler, "post", AsyncMock(return_value=mock_response)):
+    with patch.object(
+        guardrail.async_handler, "post", AsyncMock(return_value=mock_response)
+    ):
         request_data = {
             "model": "gpt-4",
-            "messages": [
-                {"role": "user", "content": "This is harmful content"}
-            ],
+            "messages": [{"role": "user", "content": "This is harmful content"}],
         }
 
         # Mock should_run_guardrail to return True
@@ -67,7 +68,7 @@ async def test_dynamoai_blocks_content_with_block_action():
                 call_type="completion",
                 cache=MagicMock(spec=DualCache),
             )
-    
+
     # Verify the error message contains policy information
     error_message = str(exc_info.value)
     assert "Guardrail failed" in error_message
@@ -94,15 +95,15 @@ async def test_dynamoai_allows_content_with_none_action():
         "text": "Hello, how are you?",
         "textType": "MODEL_INPUT",
         "finalAction": "NONE",
-        "appliedPolicies": []
+        "appliedPolicies": [],
     }
     mock_response.raise_for_status = MagicMock()
-    with patch.object(guardrail.async_handler, "post", AsyncMock(return_value=mock_response)):
+    with patch.object(
+        guardrail.async_handler, "post", AsyncMock(return_value=mock_response)
+    ):
         request_data = {
             "model": "gpt-4",
-            "messages": [
-                {"role": "user", "content": "Hello, how are you?"}
-            ],
+            "messages": [{"role": "user", "content": "Hello, how are you?"}],
         }
 
         # Mock should_run_guardrail to return True
@@ -115,10 +116,6 @@ async def test_dynamoai_allows_content_with_none_action():
             call_type="completion",
             cache=MagicMock(spec=DualCache),
         )
-    
+
     # Should return the request data unchanged
     assert result == request_data
-
-
-
-

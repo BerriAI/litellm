@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from "react";
-import { Modal, Form, message, Select, Input, Steps, Radio, Tag, Divider, Switch, InputNumber, Collapse } from "antd";
+import { Modal, Form, Select, Input, Steps, Radio, Tag, Divider, Switch, InputNumber, Collapse } from "antd";
+import MessageManager from "@/components/molecules/message_manager";
 import { Button } from "@tremor/react";
 import { CheckCircleFilled, KeyOutlined, RobotOutlined, AppstoreOutlined, InfoCircleOutlined } from "@ant-design/icons";
 import CreatedKeyDisplay from "../shared/CreatedKeyDisplay";
@@ -216,7 +217,7 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({
 
   const handleCreateAgent = async () => {
     if (!accessToken) {
-      message.error("No access token available");
+      MessageManager.error("No access token available");
       return;
     }
 
@@ -226,7 +227,7 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({
       const values = { ...form.getFieldsValue(true) };
       const agentData = buildAgentData(values);
       if (!agentData) {
-        message.error("Failed to build agent data");
+        MessageManager.error("Failed to build agent data");
         setIsSubmitting(false);
         return;
       }
@@ -301,7 +302,7 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({
         setCreatedKeyValue(keyResponse.key || null);
       } else if (keyAssignOption === "existing_key") {
         if (!selectedExistingKey) {
-          message.error("Please select an existing key to assign");
+          MessageManager.error("Please select an existing key to assign");
           setIsSubmitting(false);
           return;
         }
@@ -318,7 +319,7 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({
     } catch (error) {
       console.error("Error creating agent:", error);
       const errorMessage = error instanceof Error ? error.message : String(error);
-      message.error(errorMessage ? `Failed to create agent: ${errorMessage}` : "Failed to create agent");
+      MessageManager.error(errorMessage ? `Failed to create agent: ${errorMessage}` : "Failed to create agent");
     } finally {
       setIsSubmitting(false);
     }
@@ -722,10 +723,7 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({
           name="team_id"
           tooltip="Optionally assign this agent to a team. The agent and its key will belong to the selected team."
         >
-          <TeamDropdown
-            teams={teams}
-            loading={!teams}
-          />
+          <TeamDropdown />
         </Form.Item>
 
         <Divider className="my-4" />

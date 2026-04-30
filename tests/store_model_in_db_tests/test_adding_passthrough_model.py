@@ -1,17 +1,16 @@
 """
 Test adding a pass through assemblyai model + api key + api base to the db
-wait 20 seconds 
-make request 
+wait 20 seconds
+make request
 
-Cases to cover 
-1. user points api base to <proxy-base>/assemblyai 
+Cases to cover
+1. user points api base to <proxy-base>/assemblyai
 2. user points api base to <proxy-base>/asssemblyai/us
-3. user points api base to <proxy-base>/assemblyai/eu 
+3. user points api base to <proxy-base>/assemblyai/eu
 4. Bad API Key / credential - 401
 """
 
 import time
-import assemblyai as aai
 import pytest
 import httpx
 import os
@@ -21,7 +20,7 @@ TEST_MASTER_KEY = "sk-1234"
 PROXY_BASE_URL = "http://0.0.0.0:4000"
 US_BASE_URL = f"{PROXY_BASE_URL}/assemblyai"
 EU_BASE_URL = f"{PROXY_BASE_URL}/eu.assemblyai"
-ASSEMBLYAI_API_KEY_ENV_VAR = "TEST_SPECIAL_ASSEMBLYAI_API_KEY"
+ASSEMBLYAI_API_KEY_ENV_VAR = "ASSEMBLYAI_API_KEY"
 
 
 def _delete_all_assemblyai_models_from_db():
@@ -175,28 +174,56 @@ def make_assemblyai_basic_transcribe_request(
     virtual_key: str, assemblyai_base_url: str
 ):
     print("making basic transcribe request to assemblyai passthrough")
+    file_url = "https://assembly.ai/wildfires.mp3"
+    headers = {
+        "Authorization": f"Bearer {virtual_key}",
+        "Content-Type": "application/json",
+    }
+    create_payload = {
+        "audio_url": file_url,
+        "speech_models": ["universal-2"],
+    }
 
-    # Replace with your API key
-    aai.settings.api_key = f"Bearer {virtual_key}"
-    aai.settings.base_url = assemblyai_base_url
+    create_response = httpx.post(
+        url=f"{assemblyai_base_url}/v2/transcript",
+        headers=headers,
+        json=create_payload,
+        timeout=60.0,
+    )
+    if create_response.status_code != 200:
+        pytest.fail(
+            "Failed to create transcript request: "
+            f"status={create_response.status_code}, body={create_response.text}"
+        )
 
-    # URL of the file to transcribe
-    FILE_URL = "https://assembly.ai/wildfires.mp3"
-
-    # You can also transcribe a local file by passing in a file path
-    # FILE_URL = './path/to/file.mp3'
-
-    transcriber = aai.Transcriber()
-    transcript = transcriber.transcribe(FILE_URL)
-    print(transcript)
-    print(transcript.id)
-    if transcript.id:
-        transcript.delete_by_id(transcript.id)
-    else:
+    transcript = create_response.json()
+    transcript_id = transcript.get("id")
+    if not transcript_id:
         pytest.fail("Failed to get transcript id")
 
-    if transcript.status == aai.TranscriptStatus.error:
-        print(transcript.error)
-        pytest.fail(f"Failed to transcribe file error: {transcript.error}")
-    else:
-        print(transcript.text)
+    for _ in range(60):
+        poll_response = httpx.get(
+            url=f"{assemblyai_base_url}/v2/transcript/{transcript_id}",
+            headers=headers,
+            timeout=30.0,
+        )
+        if poll_response.status_code != 200:
+            pytest.fail(
+                "Failed to poll transcript status: "
+                f"status={poll_response.status_code}, body={poll_response.text}"
+            )
+        transcript = poll_response.json()
+        if transcript.get("status") in ("completed", "error"):
+            break
+        time.sleep(1)
+
+    httpx.delete(
+        url=f"{assemblyai_base_url}/v2/transcript/{transcript_id}",
+        headers=headers,
+        timeout=30.0,
+    )
+
+    if transcript.get("status") == "error":
+        pytest.fail(f"Failed to transcribe file error: {transcript.get('error')}")
+
+    print(transcript.get("text"))

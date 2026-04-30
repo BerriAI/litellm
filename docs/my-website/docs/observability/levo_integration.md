@@ -36,7 +36,7 @@ Send all your LLM requests and responses to Levo for monitoring and analysis usi
 **1. Install OpenTelemetry dependencies:**
 
 ```bash
-pip install opentelemetry-api opentelemetry-sdk opentelemetry-exporter-otlp-proto-http opentelemetry-exporter-otlp-proto-grpc
+uv add opentelemetry-api opentelemetry-sdk opentelemetry-exporter-otlp-proto-http opentelemetry-exporter-otlp-proto-grpc
 ```
 
 **2. Enable Levo callback in your LiteLLM config:**
@@ -133,7 +133,7 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
    ```
 
 4. **Check for initialization errors**: Look for errors in LiteLLM startup logs. Common issues:
-   - Missing OpenTelemetry packages: Install with `pip install opentelemetry-api opentelemetry-sdk opentelemetry-exporter-otlp-proto-http opentelemetry-exporter-otlp-proto-grpc`
+   - Missing OpenTelemetry packages: Install with `uv add opentelemetry-api opentelemetry-sdk opentelemetry-exporter-otlp-proto-http opentelemetry-exporter-otlp-proto-grpc`
    - Missing required environment variables: All four required variables must be set
    - Invalid collector URL: Ensure the URL is correct and reachable
 
@@ -150,7 +150,7 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 - Solution: Set the `LEVOAI_COLLECTOR_URL` environment variable with your collector endpoint URL from Levo support.
 
 **Error: "No module named 'opentelemetry'"**
-- Solution: Install OpenTelemetry packages: `pip install opentelemetry-api opentelemetry-sdk opentelemetry-exporter-otlp-proto-http opentelemetry-exporter-otlp-proto-grpc`
+- Solution: Install OpenTelemetry packages: `uv add opentelemetry-api opentelemetry-sdk opentelemetry-exporter-otlp-proto-http opentelemetry-exporter-otlp-proto-grpc`
 
 ## Additional Resources
 

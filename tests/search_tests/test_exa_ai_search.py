@@ -9,10 +9,9 @@ class TestExaAISearch(BaseSearchTest):
     """
     Tests for Exa AI Search functionality.
     """
-    
+
     def get_search_provider(self) -> str:
         """
         Return search_provider for Exa AI Search.
         """
         return "exa_ai"
-

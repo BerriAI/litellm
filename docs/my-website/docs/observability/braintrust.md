@@ -9,7 +9,7 @@ import TabItem from '@theme/TabItem';
 ## Quick Start
 
 ```python
-# pip install braintrust
+# uv add braintrust
 import litellm
 import os
 

@@ -9,9 +9,7 @@ import os
 import sys
 from unittest.mock import patch
 
-sys.path.insert(
-    0, os.path.abspath("../../../../..")
-)
+sys.path.insert(0, os.path.abspath("../../../../.."))
 
 import pytest
 
@@ -61,13 +59,13 @@ class TestPublicAIConfig:
         config behaviour, not registry lookups.
         """
         supported_params = config.get_supported_openai_params(model="swiss-ai-apertus")
-        
+
         assert "tools" in supported_params
         assert "tool_choice" in supported_params
         assert "temperature" in supported_params
         assert "max_tokens" in supported_params
         assert "stream" in supported_params
-        
+
         # Note: JSON-based configs inherit from OpenAIGPTConfig which includes functions
         # This is expected behavior for JSON-based providers
 
@@ -81,16 +79,16 @@ class TestPublicAIConfig:
         non_default_params = {
             "functions": [{"name": "test_function", "description": "Test function"}],
             "temperature": 0.7,
-            "max_tokens": 1000
+            "max_tokens": 1000,
         }
-        
+
         result = config.map_openai_params(
             non_default_params=non_default_params,
             optional_params={},
             model="swiss-ai-apertus",
-            drop_params=False
+            drop_params=False,
         )
-        
+
         # JSON-based configs inherit from OpenAIGPTConfig which includes functions
         assert "functions" in result
         assert result.get("temperature") == 0.7
@@ -100,18 +98,15 @@ class TestPublicAIConfig:
         """
         Test that max_completion_tokens is mapped to max_tokens
         """
-        non_default_params = {
-            "max_completion_tokens": 1000,
-            "temperature": 0.7
-        }
-        
+        non_default_params = {"max_completion_tokens": 1000, "temperature": 0.7}
+
         result = config.map_openai_params(
             non_default_params=non_default_params,
             optional_params={},
             model="swiss-ai-apertus",
-            drop_params=False
+            drop_params=False,
         )
-        
+
         assert result.get("max_tokens") == 1000
         assert "max_completion_tokens" not in result
         assert result.get("temperature") == 0.7
@@ -126,9 +121,9 @@ class TestPublicAIConfig:
             model="swiss-ai-apertus",
             optional_params={},
             litellm_params={},
-            stream=False
+            stream=False,
         )
-        
+
         assert url == "https://api.publicai.co/v1/chat/completions"
 
     def test_get_complete_url_with_custom_base(self, config):
@@ -141,8 +136,7 @@ class TestPublicAIConfig:
             model="swiss-ai-apertus",
             optional_params={},
             litellm_params={},
-            stream=False
+            stream=False,
         )
-        
-        assert url == "https://custom.publicai.co/v1/chat/completions"
 
+        assert url == "https://custom.publicai.co/v1/chat/completions"

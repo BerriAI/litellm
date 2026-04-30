@@ -24,7 +24,7 @@ Let's make sure our keys are working. Run this script in any environment of your
 🚨 Don't forget to replace the placeholder key values with your keys!
 
 ```python 
-pip install litellm
+uv add litellm
 ```
 
 ```python
@@ -169,10 +169,10 @@ Now let's run our app:
 cd litellm_playground_fe_template && streamlit run app.py
 ```
 
-If you're missing Streamlit - just pip install it (or check out their [installation guidelines](https://docs.streamlit.io/library/get-started/installation#install-streamlit-on-macoslinux))
+If you're missing Streamlit - just uv add it (or check out their [installation guidelines](https://docs.streamlit.io/library/get-started/installation#install-streamlit-on-macoslinux))
 
 ```zsh
-pip install streamlit
+uv add streamlit
 ```
 
 This is what you should see: 

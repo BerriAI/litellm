@@ -63,7 +63,10 @@ class TestSagemakerNovaConfig:
             litellm_params={},
             stream=False,
         )
-        assert url == "https://runtime.sagemaker.us-east-1.amazonaws.com/endpoints/my-nova-endpoint/invocations"
+        assert (
+            url
+            == "https://runtime.sagemaker.us-east-1.amazonaws.com/endpoints/my-nova-endpoint/invocations"
+        )
 
     def test_should_generate_correct_url_streaming(self):
         """Streaming URL should use /invocations-response-stream."""
@@ -75,7 +78,10 @@ class TestSagemakerNovaConfig:
             litellm_params={},
             stream=True,
         )
-        assert url == "https://runtime.sagemaker.us-east-1.amazonaws.com/endpoints/my-nova-endpoint/invocations-response-stream"
+        assert (
+            url
+            == "https://runtime.sagemaker.us-east-1.amazonaws.com/endpoints/my-nova-endpoint/invocations-response-stream"
+        )
 
     def test_should_have_custom_stream_wrapper(self):
         """Nova should use custom stream wrapper (AWS EventStream)."""
@@ -229,6 +235,7 @@ class TestSagemakerChatBackwardsCompatibility:
 
     def setup_method(self):
         from litellm.llms.sagemaker.chat.transformation import SagemakerChatConfig
+
         self.config = SagemakerChatConfig()
 
     def test_should_not_support_stream_param_in_request_body(self):
@@ -245,7 +252,10 @@ class TestSagemakerChatBackwardsCompatibility:
             litellm_params={},
             stream=False,
         )
-        assert url == "https://runtime.sagemaker.us-west-2.amazonaws.com/endpoints/my-hf-endpoint/invocations"
+        assert (
+            url
+            == "https://runtime.sagemaker.us-west-2.amazonaws.com/endpoints/my-hf-endpoint/invocations"
+        )
 
         stream_url = self.config.get_complete_url(
             api_base=None,
@@ -255,7 +265,10 @@ class TestSagemakerChatBackwardsCompatibility:
             litellm_params={},
             stream=True,
         )
-        assert stream_url == "https://runtime.sagemaker.us-west-2.amazonaws.com/endpoints/my-hf-endpoint/invocations-response-stream"
+        assert (
+            stream_url
+            == "https://runtime.sagemaker.us-west-2.amazonaws.com/endpoints/my-hf-endpoint/invocations-response-stream"
+        )
 
     def test_should_still_have_custom_stream_wrapper(self):
         """sagemaker_chat should still use custom stream wrapper."""
@@ -291,7 +304,9 @@ class TestSagemakerChatBackwardsCompatibility:
         mock_response.iter_bytes.return_value = iter([])
         mock_client.post.return_value = mock_response
 
-        with patch("litellm.llms.sagemaker.chat.transformation.CustomStreamWrapper") as mock_csw:
+        with patch(
+            "litellm.llms.sagemaker.chat.transformation.CustomStreamWrapper"
+        ) as mock_csw:
             mock_csw.return_value = MagicMock()
             self.config.get_sync_custom_stream_wrapper(
                 model="my-hf-endpoint",
@@ -327,7 +342,9 @@ class TestSagemakerChatBackwardsCompatibility:
         mock_response.aiter_bytes.return_value = empty_aiter()
         mock_client.post.return_value = mock_response
 
-        with patch("litellm.llms.sagemaker.chat.transformation.CustomStreamWrapper") as mock_csw:
+        with patch(
+            "litellm.llms.sagemaker.chat.transformation.CustomStreamWrapper"
+        ) as mock_csw:
             mock_csw.return_value = MagicMock()
             asyncio.run(
                 self.config.get_async_custom_stream_wrapper(
@@ -351,6 +368,7 @@ class TestSagemakerChatBackwardsCompatibility:
         "sagemaker_chat" and doesn't fall through to the ValueError fallback.
         """
         from litellm.types.utils import LlmProviders
+
         provider = LlmProviders("sagemaker_chat")
         assert provider == LlmProviders.SAGEMAKER_CHAT
 

@@ -71,9 +71,7 @@ def test_router_init_with_neither_api_key_nor_azure_service_principal_with_secre
 
 @patch("azure.identity.get_bearer_token_provider")
 @patch("azure.identity.ClientSecretCredential")
-@patch("litellm.secret_managers.get_azure_ad_token_provider.os")
 def test_router_init_azure_service_principal_with_secret_with_environment_variables(
-    mocked_os_lib: MagicMock,
     mocked_credential: MagicMock,
     mocked_get_bearer_token_provider: MagicMock,
     monkeypatch,
@@ -85,22 +83,19 @@ def test_router_init_azure_service_principal_with_secret_with_environment_variab
     To allow for local testing without real credentials, first must mock Azure SDK authentication functions
     and environment variables.
     """
+    monkeypatch.delenv("AZURE_AI_API_KEY", raising=False)
+    monkeypatch.delenv("AZURE_OPENAI_API_KEY", raising=False)
     monkeypatch.delenv("AZURE_API_KEY", raising=False)
     litellm.enable_azure_ad_token_refresh = True
     # mock the token provider function
     mocked_func_generating_token = MagicMock(return_value="test_token")
     mocked_get_bearer_token_provider.return_value = mocked_func_generating_token
 
-    # mock the environment variables with mocked credentials
-    environment_variables_expected_to_use = {
-        "AZURE_CLIENT_ID": "test_client_id",
-        "AZURE_CLIENT_SECRET": "test_client_secret",
-        "AZURE_TENANT_ID": "test_tenant_id",
-    }
-    mocked_environ = PropertyMock(return_value=environment_variables_expected_to_use)
-    # Because of the way mock attributes are stored you can’t directly attach a PropertyMock to a mock object.
-    # https://docs.python.org/3.11/library/unittest.mock.html#unittest.mock.PropertyMock
-    type(mocked_os_lib).environ = mocked_environ
+    # set environment variables with mocked credentials using monkeypatch
+    # so both common_utils._resolve_env_var and get_azure_ad_token_provider see them
+    monkeypatch.setenv("AZURE_CLIENT_ID", "test_client_id")
+    monkeypatch.setenv("AZURE_CLIENT_SECRET", "test_client_secret")
+    monkeypatch.setenv("AZURE_TENANT_ID", "test_tenant_id")
 
     # define the model list
     model_list = [
@@ -174,9 +169,9 @@ async def test_audio_speech_router():
         {
             "model_name": "tts",
             "litellm_params": {
-                "model": "azure/azure-tts",
-                "api_base": os.getenv("AZURE_SWEDEN_API_BASE"),
-                "api_key": os.getenv("AZURE_SWEDEN_API_KEY"),
+                "model": "azure/tts",
+                "api_base": os.getenv("AZURE_TTS_API_BASE"),
+                "api_key": os.getenv("AZURE_TTS_API_KEY"),
             },
         },
     ]

@@ -5,7 +5,7 @@ Pydantic AI agents follow A2A protocol but don't support streaming natively.
 This handler provides fake streaming by converting non-streaming responses into streaming chunks.
 """
 
-from typing import Any, AsyncIterator, Dict
+from typing import Any, AsyncIterator, Dict, Optional
 
 from litellm._logging import verbose_logger
 from litellm.a2a_protocol.providers.pydantic_ai_agents.transformation import (
@@ -26,7 +26,7 @@ class PydanticAIHandler:
     async def handle_non_streaming(
         request_id: str,
         params: Dict[str, Any],
-        api_base: str,
+        api_base: Optional[str] = None,
         timeout: float = 60.0,
     ) -> Dict[str, Any]:
         """
@@ -41,6 +41,8 @@ class PydanticAIHandler:
         Returns:
             A2A SendMessageResponse dict
         """
+        if api_base is None:
+            raise ValueError("api_base is required for Pydantic AI agents")
         verbose_logger.info(f"Pydantic AI: Routing to Pydantic AI agent at {api_base}")
 
         # Send request directly to Pydantic AI agent
@@ -57,7 +59,7 @@ class PydanticAIHandler:
     async def handle_streaming(
         request_id: str,
         params: Dict[str, Any],
-        api_base: str,
+        api_base: Optional[str] = None,
         timeout: float = 60.0,
         chunk_size: int = 50,
         delay_ms: int = 10,
@@ -80,6 +82,8 @@ class PydanticAIHandler:
         Yields:
             A2A streaming response events
         """
+        if api_base is None:
+            raise ValueError("api_base is required for Pydantic AI agents")
         verbose_logger.info(
             f"Pydantic AI: Faking streaming for Pydantic AI agent at {api_base}"
         )

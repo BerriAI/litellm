@@ -290,6 +290,82 @@ curl --location 'http://localhost:4000/v1/videos' \
 --header 'custom-llm-provider: azure'
 ```
 
+### Character, Edit, and Extension Endpoints
+
+LiteLLM proxy also supports these OpenAI-compatible video routes:
+
+- `POST /v1/videos/characters`
+- `GET /v1/videos/characters/{character_id}`
+- `POST /v1/videos/edits`
+- `POST /v1/videos/extensions`
+
+#### Routing Behavior (`target_model_names`, encoded IDs, and provider overrides)
+
+- `POST /v1/videos/characters` supports `target_model_names` like `POST /v1/videos`.
+- When `target_model_names` is provided on character creation, LiteLLM encodes the returned `character_id` with routing metadata.
+- `GET /v1/videos/characters/{character_id}` accepts encoded character IDs directly. LiteLLM decodes the ID internally and routes with the correct model/provider metadata.
+- `POST /v1/videos/edits` and `POST /v1/videos/extensions` support both:
+  - plain `video.id`
+  - encoded `video.id` values returned by LiteLLM
+- `custom_llm_provider` can be supplied using the same patterns as other proxy endpoints:
+  - header: `custom-llm-provider`
+  - query: `?custom_llm_provider=...`
+  - body: `custom_llm_provider` (or `extra_body.custom_llm_provider` where applicable)
+
+#### Character create with `target_model_names`
+
+```bash
+curl --location 'http://localhost:4000/v1/videos/characters' \
+--header 'Authorization: Bearer sk-1234' \
+-F 'name=hero' \
+-F 'target_model_names=gpt-4' \
+-F 'video=@/path/to/character.mp4'
+```
+
+Example response (encoded `id`):
+
+```json
+{
+  "id": "character_...",
+  "object": "character",
+  "created_at": 1712697600,
+  "name": "hero"
+}
+```
+
+#### Get character using encoded `character_id`
+
+```bash
+curl --location 'http://localhost:4000/v1/videos/characters/character_...' \
+--header 'Authorization: Bearer sk-1234'
+```
+
+#### Video edit with encoded `video.id`
+
+```bash
+curl --location 'http://localhost:4000/v1/videos/edits' \
+--header 'Authorization: Bearer sk-1234' \
+--header 'Content-Type: application/json' \
+--data '{
+  "prompt": "Make this brighter",
+  "video": { "id": "video_..." }
+}'
+```
+
+#### Video extension with provider override from `extra_body`
+
+```bash
+curl --location 'http://localhost:4000/v1/videos/extensions' \
+--header 'Authorization: Bearer sk-1234' \
+--header 'Content-Type: application/json' \
+--data '{
+  "prompt": "Continue this scene",
+  "seconds": "4",
+  "video": { "id": "video_..." },
+  "extra_body": { "custom_llm_provider": "openai" }
+}'
+```
+
 Test Azure video generation request
 
 ```bash

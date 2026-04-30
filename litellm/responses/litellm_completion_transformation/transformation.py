@@ -42,6 +42,7 @@ from litellm.types.llms.openai import (
 from litellm.types.responses.main import (
     GenericResponseOutputItem,
     GenericResponseOutputItemContentAnnotation,
+    OutputCodeInterpreterCall,
     OutputFunctionToolCall,
     OutputImageGenerationCall,
     OutputText,
@@ -1202,21 +1203,31 @@ class LiteLLMCompletionResponsesConfig:
         return [chat_completion_response_message]
 
     @staticmethod
+    def _resolve_file_id(item: Dict[str, Any]) -> Optional[str]:
+        """
+        Return the effective file_id for a Responses API input_file item.
+        Explicit file_id takes precedence; file_url is used as fallback so
+        downstream providers (Anthropic, Gemini) can handle the URL natively.
+        """
+        return item.get("file_id") or item.get("file_url") or None
+
+    @staticmethod
     def _transform_input_file_item_to_file_item(item: Dict[str, Any]) -> Dict[str, Any]:
         """
         Transform a Responses API input_file item to a Chat Completion file item
 
         Args:
-            item: Dictionary containing input_file type with file_id and/or file_data
+            item: Dictionary containing input_file type with file_id, file_data, and/or file_url
 
         Returns:
             Dictionary with transformed file structure for Chat Completion
         """
         file_dict: Dict[str, Any] = {}
-        keys = ["file_id", "file_data"]
-        for key in keys:
-            if item.get(key):
-                file_dict[key] = item.get(key)
+        file_id = LiteLLMCompletionResponsesConfig._resolve_file_id(item)
+        if file_id:
+            file_dict["file_id"] = file_id
+        if item.get("file_data"):
+            file_dict["file_data"] = item["file_data"]
 
         new_item: Dict[str, Any] = {"type": "file", "file": file_dict}
         return new_item
@@ -1508,7 +1519,7 @@ class LiteLLMCompletionResponsesConfig:
         """
         Map chat completion finish_reason to responses API status.
 
-        Chat completion finish_reason values include: "stop", "length", "tool_calls", "content_filter", "function_call"
+        Chat completion finish_reason values include: "stop", "length", "tool_calls", "content_filter", "function_call", "refusal"
         Responses API status values are: "completed", "failed", "in_progress", "cancelled", "queued", "incomplete"
 
         Args:
@@ -1523,7 +1534,7 @@ class LiteLLMCompletionResponsesConfig:
         # Map finish reasons to status
         if finish_reason in ["stop", "tool_calls", "function_call"]:
             return "completed"
-        elif finish_reason in ["length", "content_filter"]:
+        elif finish_reason in ["length", "content_filter", "refusal"]:
             return "incomplete"
         else:
             # Default to completed for unknown finish reasons
@@ -1696,6 +1707,7 @@ class LiteLLMCompletionResponsesConfig:
     ) -> List[
         Union[
             GenericResponseOutputItem,
+            OutputCodeInterpreterCall,
             OutputFunctionToolCall,
             OutputImageGenerationCall,
             ResponseFunctionToolCall,
@@ -1704,6 +1716,7 @@ class LiteLLMCompletionResponsesConfig:
         responses_output: List[
             Union[
                 GenericResponseOutputItem,
+                OutputCodeInterpreterCall,
                 OutputFunctionToolCall,
                 OutputImageGenerationCall,
                 ResponseFunctionToolCall,
@@ -1725,7 +1738,62 @@ class LiteLLMCompletionResponsesConfig:
                 chat_completion_response=chat_completion_response
             )
         )
+
+        # Convert server-side tool results (e.g. Anthropic code execution)
+        # into code_interpreter_call output items, replacing the corresponding
+        # function_call items so the output matches OpenAI's native shape.
+        tool_result_items = (
+            LiteLLMCompletionResponsesConfig._extract_tool_result_output_items(
+                chat_completion_response
+            )
+        )
+        if tool_result_items:
+            result_by_id = {item.id: item for item in tool_result_items}
+            replaced_ids = set(result_by_id.keys())
+            responses_output = [
+                (
+                    result_by_id[getattr(item, "call_id", None)]
+                    if (
+                        getattr(item, "type", None) == "function_call"
+                        and getattr(item, "call_id", None) in replaced_ids
+                    )
+                    else item
+                )
+                for item in responses_output
+            ]
+
         return responses_output
+
+    @staticmethod
+    def _extract_tool_result_output_items(
+        chat_completion_response: ModelResponse,
+    ) -> list:
+        """Extract pre-built code_interpreter_call output items from provider_specific_fields.
+
+        Provider transformers (e.g. Anthropic) convert their native tool results
+        into OutputCodeInterpreterCall objects and store them in
+        provider_specific_fields["code_interpreter_results"]. This method
+        simply retrieves them — no provider-specific parsing here.
+        """
+        output_items: list = []
+        for choice in chat_completion_response.choices or []:
+            message = getattr(choice, "message", None)
+            if not message:
+                continue
+            psf = getattr(message, "provider_specific_fields", None)
+            if not psf or not isinstance(psf, dict):
+                continue
+            results = psf.get("code_interpreter_results")
+            if results and isinstance(results, list):
+                for item in results:
+                    # In the streaming path, items are plain dicts after
+                    # model_dump() in stream_chunk_builder.  Reconstruct
+                    # Pydantic objects so responses_output has a uniform type.
+                    if isinstance(item, dict):
+                        output_items.append(OutputCodeInterpreterCall(**item))
+                    else:
+                        output_items.append(item)
+        return output_items
 
     @staticmethod
     def _extract_reasoning_output_items(
@@ -2055,9 +2123,9 @@ class LiteLLMCompletionResponsesConfig:
                 hasattr(completion_details, "reasoning_tokens")
                 and completion_details.reasoning_tokens is not None
             ):
-                output_details_dict[
-                    "reasoning_tokens"
-                ] = completion_details.reasoning_tokens
+                output_details_dict["reasoning_tokens"] = (
+                    completion_details.reasoning_tokens
+                )
             else:
                 output_details_dict["reasoning_tokens"] = 0
 

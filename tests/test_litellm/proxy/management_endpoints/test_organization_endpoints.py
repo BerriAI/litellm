@@ -156,7 +156,9 @@ async def test_get_organization_daily_activity_admin_param_passing(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_get_organization_daily_activity_non_admin_defaults_to_admin_orgs(monkeypatch):
+async def test_get_organization_daily_activity_non_admin_defaults_to_admin_orgs(
+    monkeypatch,
+):
     """
     Non-admin with no explicit organization_ids should default to orgs they are ORG_ADMIN of.
     """
@@ -220,7 +222,9 @@ async def test_get_organization_daily_activity_non_admin_defaults_to_admin_orgs(
 
 
 @pytest.mark.asyncio
-async def test_get_organization_daily_activity_non_admin_unauthorized_org_raises(monkeypatch):
+async def test_get_organization_daily_activity_non_admin_unauthorized_org_raises(
+    monkeypatch,
+):
     """
     Non-admin requesting an org they aren't ORG_ADMIN for should raise 403.
     """
@@ -268,6 +272,7 @@ async def test_get_organization_daily_activity_non_admin_unauthorized_org_raises
             user_api_key_dict=auth,
         )
     assert exc.value.status_code == 403
+
 
 @pytest.mark.asyncio
 async def test_organization_update_object_permissions_no_existing_permission(
@@ -416,7 +421,7 @@ async def test_organization_update_object_permissions_missing_permission_record(
 async def test_list_organization_filter_by_org_id(monkeypatch):
     """
     Test filtering organizations by org_id query parameter.
-    
+
     This test verifies that when org_id is provided, only the organization
     with that exact organization_id is returned.
     """
@@ -429,7 +434,7 @@ async def test_list_organization_filter_by_org_id(monkeypatch):
 
     # Mock prisma client
     mock_prisma_client = AsyncMock()
-    
+
     # Mock organization data
     mock_org1 = SimpleNamespace(
         organization_id="org-123",
@@ -439,26 +444,26 @@ async def test_list_organization_filter_by_org_id(monkeypatch):
             "organization_alias": "Test Org 1",
         },
     )
-    
+
     # Mock find_many to return filtered results
     mock_prisma_client.db.litellm_organizationtable.find_many = AsyncMock(
         return_value=[mock_org1]
     )
-    
+
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
 
     # Test as proxy admin
-    auth = UserAPIKeyAuth(
-        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin-user"
+    auth = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin-user")
+
+    result = await list_organization(
+        org_id="org-123", org_alias=None, user_api_key_dict=auth
     )
-    
-    result = await list_organization(org_id="org-123", org_alias=None, user_api_key_dict=auth)
 
     # Verify the correct organization was returned
     assert len(result) == 1
     assert result[0].organization_id == "org-123"
     assert result[0].organization_alias == "Test Org 1"
-    
+
     # Verify find_many was called with correct where conditions
     mock_prisma_client.db.litellm_organizationtable.find_many.assert_called_once()
     call_args = mock_prisma_client.db.litellm_organizationtable.find_many.call_args
@@ -474,7 +479,7 @@ async def test_list_organization_filter_by_org_id(monkeypatch):
 async def test_list_organization_filter_by_org_alias(monkeypatch):
     """
     Test filtering organizations by org_alias query parameter with case-insensitive partial matching.
-    
+
     This test verifies that when org_alias is provided, organizations with matching
     organization_alias (case-insensitive partial match) are returned.
     """
@@ -487,7 +492,7 @@ async def test_list_organization_filter_by_org_alias(monkeypatch):
 
     # Mock prisma client
     mock_prisma_client = AsyncMock()
-    
+
     # Mock organization data
     mock_org1 = SimpleNamespace(
         organization_id="org-123",
@@ -505,25 +510,25 @@ async def test_list_organization_filter_by_org_alias(monkeypatch):
             "organization_alias": "Another Test Org",
         },
     )
-    
+
     # Mock find_many to return filtered results
     mock_prisma_client.db.litellm_organizationtable.find_many = AsyncMock(
         return_value=[mock_org1, mock_org2]
     )
-    
+
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
 
     # Test as proxy admin with org_alias filter
-    auth = UserAPIKeyAuth(
-        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin-user"
+    auth = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin-user")
+
+    result = await list_organization(
+        org_id=None, org_alias="test", user_api_key_dict=auth
     )
-    
-    result = await list_organization(org_id=None, org_alias="test", user_api_key_dict=auth)
 
     # Verify organizations with "test" in alias were returned
     assert len(result) == 2
     assert all("test" in org.organization_alias.lower() for org in result)
-    
+
     # Verify find_many was called with correct where conditions (case-insensitive contains)
     mock_prisma_client.db.litellm_organizationtable.find_many.assert_called_once()
     call_args = mock_prisma_client.db.litellm_organizationtable.find_many.call_args

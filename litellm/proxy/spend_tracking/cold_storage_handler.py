@@ -3,6 +3,7 @@ This module is responsible for handling Getting/Setting the proxy server request
 
 It allows fetching a dict of the proxy server request from s3 or GCS bucket.
 """
+
 from typing import Optional
 
 import litellm
@@ -32,19 +33,19 @@ class ColdStorageHandler:
         """
 
         # select the custom logger to use for cold storage
-        custom_logger_name: Optional[
-            _custom_logger_compatible_callbacks_literal
-        ] = self._select_custom_logger_for_cold_storage()
+        custom_logger_name: Optional[_custom_logger_compatible_callbacks_literal] = (
+            self._select_custom_logger_for_cold_storage()
+        )
 
         # if no custom logger name is configured, return None
         if custom_logger_name is None:
             return None
 
         # get the active/initialized custom logger
-        custom_logger: Optional[
-            CustomLogger
-        ] = litellm.logging_callback_manager.get_active_custom_logger_for_callback_name(
-            custom_logger_name
+        custom_logger: Optional[CustomLogger] = (
+            litellm.logging_callback_manager.get_active_custom_logger_for_callback_name(
+                custom_logger_name
+            )
         )
 
         # if no custom logger is found, return None

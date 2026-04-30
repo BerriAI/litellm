@@ -1,6 +1,7 @@
 """
 Vertex AI DeepSeek OCR transformation implementation.
 """
+
 import json
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
@@ -314,9 +315,11 @@ class VertexAIDeepSeekOCRConfig(BaseOCRConfig):
                     "pages": [
                         {
                             "index": 0,
-                            "markdown": content
-                            if isinstance(content, str)
-                            else json.dumps(content),
+                            "markdown": (
+                                content
+                                if isinstance(content, str)
+                                else json.dumps(content)
+                            ),
                         }
                     ],
                     "model": ocr_data.get("model", model),

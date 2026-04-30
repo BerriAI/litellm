@@ -78,9 +78,9 @@ class TestCountTokensOAuthHeaders:
         headers = config.get_required_headers(FAKE_OAUTH_TOKEN)
 
         beta_value = headers.get("anthropic-beta", "")
-        assert "token-counting" in beta_value, (
-            f"token-counting beta missing from OAuth headers: {beta_value}"
-        )
-        assert "oauth-2025-04-20" in beta_value, (
-            f"oauth beta missing from OAuth headers: {beta_value}"
-        )
+        assert (
+            "token-counting" in beta_value
+        ), f"token-counting beta missing from OAuth headers: {beta_value}"
+        assert (
+            "oauth-2025-04-20" in beta_value
+        ), f"oauth beta missing from OAuth headers: {beta_value}"

@@ -1584,13 +1584,16 @@ async def test_sap_chat(
     import litellm
 
     litellm.disable_aiohttp_transport = True
-    with patch(
-        "litellm.llms.sap.embed.transformation.GenAIHubEmbeddingConfig.deployment_url",
-        new_callable=PropertyMock,
-        return_value=fake_deployment_url,
-    ), patch(
-        "litellm.llms.sap.embed.transformation.get_token_creator",
-        return_value=fake_token_creator,
+    with (
+        patch(
+            "litellm.llms.sap.embed.transformation.GenAIHubEmbeddingConfig.deployment_url",
+            new_callable=PropertyMock,
+            return_value=fake_deployment_url,
+        ),
+        patch(
+            "litellm.llms.sap.embed.transformation.get_token_creator",
+            return_value=fake_token_creator,
+        ),
     ):
         model = "sap/text-embedding-3-small"
         input = "Hi"
@@ -1626,13 +1629,16 @@ async def test_sap_embedding_required_headers(
     }
 
     litellm.disable_aiohttp_transport = True
-    with patch(
-        "litellm.llms.sap.embed.transformation.GenAIHubEmbeddingConfig.deployment_url",
-        new_callable=PropertyMock,
-        return_value=fake_deployment_url,
-    ), patch(
-        "litellm.llms.sap.embed.transformation.get_token_creator",
-        return_value=fake_token_creator,
+    with (
+        patch(
+            "litellm.llms.sap.embed.transformation.GenAIHubEmbeddingConfig.deployment_url",
+            new_callable=PropertyMock,
+            return_value=fake_deployment_url,
+        ),
+        patch(
+            "litellm.llms.sap.embed.transformation.get_token_creator",
+            return_value=fake_token_creator,
+        ),
     ):
         model = "sap/text-embedding-3-small"
         input = "Hi"

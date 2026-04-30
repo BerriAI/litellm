@@ -67,7 +67,9 @@ class TestVertexAIGeminiImageGenerationConfig:
 
     def test_get_supported_openai_params_includes_native_gemini_params(self):
         """Test that native Gemini imageConfig params are supported"""
-        supported = self.config.get_supported_openai_params("gemini-3-pro-image-preview")
+        supported = self.config.get_supported_openai_params(
+            "gemini-3-pro-image-preview"
+        )
         assert "aspectRatio" in supported
         assert "aspect_ratio" in supported
         assert "imageSize" in supported
@@ -188,11 +190,11 @@ class TestVertexAIGeminiImageGenerationConfig:
                     {
                         "modality": "IMAGE",
                         "tokenCount": 39,
-                    }
+                    },
                 ],
                 "candidatesTokenCount": 17,
                 "totalTokenCount": 110,
-            }
+            },
         }
         mock_response.headers = {}
 
@@ -218,7 +220,6 @@ class TestVertexAIGeminiImageGenerationConfig:
         assert result.usage.input_tokens_details.image_tokens == 39
         assert result.usage.output_tokens == 17
         assert result.usage.total_tokens == 110
-
 
     def test_transform_image_generation_response_multiple_images(self):
         """Test response transformation with multiple images"""
@@ -305,7 +306,10 @@ class TestVertexAIGeminiImageGenerationConfig:
 
         assert len(result.data) == 1
         assert result.data[0].b64_json == "base64_encoded_image_data"
-        assert result.data[0].provider_specific_fields["thought_signature"] == "test_signature_abc123"
+        assert (
+            result.data[0].provider_specific_fields["thought_signature"]
+            == "test_signature_abc123"
+        )
 
 
 class TestVertexAIImagenImageGenerationConfig:
@@ -374,9 +378,7 @@ class TestVertexAIImagenImageGenerationConfig:
         mock_response = MagicMock(spec=httpx.Response)
         mock_response.status_code = 200
         mock_response.json.return_value = {
-            "predictions": [
-                {"bytesBase64Encoded": "base64_encoded_image_data"}
-            ]
+            "predictions": [{"bytesBase64Encoded": "base64_encoded_image_data"}]
         }
         mock_response.headers = {}
 
@@ -453,9 +455,7 @@ class TestGetVertexAIImageGenerationConfig:
         config = get_vertex_ai_image_generation_config("imagen-4.0-generate-001")
         assert isinstance(config, VertexAIImagenImageGenerationConfig)
 
-        config = get_vertex_ai_image_generation_config(
-            "vertex_ai/imagegeneration@006"
-        )
+        config = get_vertex_ai_image_generation_config("vertex_ai/imagegeneration@006")
         assert isinstance(config, VertexAIImagenImageGenerationConfig)
 
     def test_get_non_gemini_model_config(self):
@@ -474,12 +474,14 @@ class TestVertexAIImageGenerationIntegration:
     def test_gemini_image_generation_config_validation(self):
         """Test that Gemini config can validate environment"""
         config = VertexAIGeminiImageGenerationConfig()
-        with patch.object(
-            config, "_resolve_vertex_project", return_value="test-project"
-        ), patch.object(
-            config, "_resolve_vertex_location", return_value="us-central1"
-        ), patch.object(
-            config, "_ensure_access_token", return_value=("token", None)
+        with (
+            patch.object(
+                config, "_resolve_vertex_project", return_value="test-project"
+            ),
+            patch.object(
+                config, "_resolve_vertex_location", return_value="us-central1"
+            ),
+            patch.object(config, "_ensure_access_token", return_value=("token", None)),
         ):
             headers = config.validate_environment(
                 headers={},
@@ -497,12 +499,14 @@ class TestVertexAIImageGenerationIntegration:
     def test_imagen_image_generation_config_validation(self):
         """Test that Imagen config can validate environment"""
         config = VertexAIImagenImageGenerationConfig()
-        with patch.object(
-            config, "_resolve_vertex_project", return_value="test-project"
-        ), patch.object(
-            config, "_resolve_vertex_location", return_value="us-central1"
-        ), patch.object(
-            config, "_ensure_access_token", return_value=("token", None)
+        with (
+            patch.object(
+                config, "_resolve_vertex_project", return_value="test-project"
+            ),
+            patch.object(
+                config, "_resolve_vertex_location", return_value="us-central1"
+            ),
+            patch.object(config, "_ensure_access_token", return_value=("token", None)),
         ):
             headers = config.validate_environment(
                 headers={},
@@ -548,4 +552,3 @@ class TestVertexAIImageGenerationIntegration:
         assert "us-central1" in url
         assert "imagegeneration@006" in url
         assert "predict" in url
-

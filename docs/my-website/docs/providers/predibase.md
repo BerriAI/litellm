@@ -186,7 +186,7 @@ model_list:
 See all litellm.completion supported params [here](https://docs.litellm.ai/docs/completion/input)
 
 ```python
-# !pip install litellm
+# !uv add litellm
 from litellm import completion
 import os
 ## set ENV variables
@@ -219,7 +219,7 @@ Send params [not supported by `litellm.completion()`](https://docs.litellm.ai/do
 Example `adapter_id`, `adapter_source` are Predibase specific param - [See List](https://github.com/BerriAI/litellm/blob/8a35354dd6dbf4c2fcefcd6e877b980fcbd68c58/litellm/llms/predibase.py#L54)
 
 ```python
-# !pip install litellm
+# !uv add litellm
 from litellm import completion
 import os
 ## set ENV variables

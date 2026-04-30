@@ -9,8 +9,8 @@ LiteLLM supports Google's Veo video generation models through a unified API inte
 |-------|-------|
 | Description | Google's Veo AI video generation models |
 | Provider Route on LiteLLM | `gemini/` |
-| Supported Models | `veo-3.0-generate-preview`, `veo-3.1-generate-preview` |
-| Cost Tracking | ✅ Duration-based pricing |
+| Supported Models | Veo 3.0 / 3.1 preview and production IDs (see table below), including **Veo 3.1 Lite** |
+| Cost Tracking | ✅ Duration-based pricing; optional **per-resolution** tiers where the catalog lists them (e.g. 720p vs 1080p) |
 | Logging Support | ✅ Full request/response logging |
 | Proxy Server Support | ✅ Full proxy integration with virtual keys |
 | Spend Management | ✅ Budget tracking and rate limiting |
@@ -79,6 +79,11 @@ print("Video downloaded successfully!")
 |------------|-------------|--------------|--------|
 | veo-3.0-generate-preview | Veo 3.0 video generation | 8 seconds | Preview |
 | veo-3.1-generate-preview | Veo 3.1 video generation | 8 seconds | Preview |
+| veo-3.1-lite-generate-preview | Veo 3.1 **Lite** (cost-efficient; [Gemini pricing](https://ai.google.dev/gemini-api/docs/video)) | Per Google docs | Preview |
+| veo-3.1-fast-generate-preview / `…-001` | Faster / prod variants | Per Google docs | Preview / GA |
+| veo-3.1-generate-001 | Veo 3.1 production | Per Google docs | GA |
+
+Use the full LiteLLM model id with the `gemini/` prefix (for example `gemini/veo-3.1-lite-generate-preview`).
 
 ## Video Generation Parameters
 
@@ -87,14 +92,29 @@ LiteLLM automatically maps OpenAI-style parameters to Veo's format:
 | OpenAI Parameter | Veo Parameter | Description | Example |
 |------------------|---------------|-------------|---------|
 | `prompt` | `prompt` | Text description of the video | "A cat playing" |
-| `size` | `aspectRatio` | Video dimensions → aspect ratio | "1280x720" → "16:9" |
+| `size` | `aspectRatio` and, when applicable, **`resolution`** | Standard widths/heights map to landscape/portrait **and** to `720p` or `1080p` for the API | See below |
 | `seconds` | `durationSeconds` | Duration in seconds | "8" → 8 |
 | `input_reference` | `image` | Reference image to animate | File object or path |
 | `model` | `model` | Model to use | "gemini/veo-3.0-generate-preview" |
 
-### Size to Aspect Ratio Mapping
+### `size` and output resolution
 
-LiteLLM automatically converts size dimensions to Veo's aspect ratio format:
+When you pass a **standard `size`** string, LiteLLM sets both:
+
+- **Aspect ratio** (`16:9` or `9:16`) — same as before.
+- **Output resolution** (`720p` or `1080p`) when the height is clear from the preset, so the correct Veo tier is requested without extra fields.
+
+| `size` | Aspect ratio | Resolution sent to Veo |
+|--------|----------------|-------------------------|
+| `1280x720`, `720x1280` | `16:9` / `9:16` | `720p` |
+| `1920x1080`, `1080x1920` | `16:9` / `9:16` | `1080p` |
+
+Other `size` values still map to an aspect ratio (defaulting to `16:9` when unknown); resolution is left to **Google’s default** unless you set it yourself.
+
+You can also pass Veo’s **`resolution`** (for example via `extra_body`) if you need an explicit value that does not match the presets above. If you set `resolution` yourself, it takes precedence over the value inferred from `size`.
+
+### Size to aspect ratio (reference)
+
 - `"1280x720"`, `"1920x1080"` → `"16:9"` (landscape)
 - `"720x1280"`, `"1080x1920"` → `"9:16"` (portrait)
 
@@ -293,7 +313,14 @@ with open("video.mp4", "wb") as f:
 </TabItem>
 </Tabs>
 
-## Cost Tracking
+## Cost tracking and spend
+
+LiteLLM estimates **video spend** from:
+
+1. **How long** the generated clip is billed for (seconds), and  
+2. **The per-second price** for that model in LiteLLM’s model catalog (aligned with [Google’s Gemini API video pricing](https://ai.google.dev/gemini-api/docs/video) where applicable).
+
+Some models charge **different per-second rates** for **720p** vs **1080p**. When you use the standard `size` presets above (or set `resolution` explicitly), LiteLLM uses the matching tier so **proxy spend, logs, and budgets** line up with the resolution you requested.
 
 LiteLLM automatically tracks costs for Veo video generation:
 
@@ -314,8 +341,8 @@ response = litellm.video_generation(
 | Feature | OpenAI (Sora) | Gemini (Veo) |
 |---------|---------------|--------------|
 | Reference Images | ✅ Supported | ❌ Not supported |
-| Size Control | ✅ Supported | ❌ Not supported |
-| Duration Control | ✅ Supported | ❌ Not supported |
+| Size / dimensions | ✅ Supported | ✅ Supported via `size` → aspect ratio + `720p`/`1080p` where preset |
+| Duration (`seconds`) | ✅ Supported | ✅ Supported (maps to `durationSeconds`; limits per Google docs) |
 | Video Remix/Edit | ✅ Supported | ❌ Not supported |
 | Video List | ✅ Supported | ❌ Not supported |
 | Prompt-based Generation | ✅ Supported | ✅ Supported |

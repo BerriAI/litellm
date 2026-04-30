@@ -11,6 +11,8 @@ import {
   serverRootPath,
 } from "@/components/networking";
 import { extractErrorMessage } from "@/utils/errorUtils";
+import { generateCodeChallenge, generateCodeVerifier } from "@/utils/pkce";
+import { getSecureItem, setSecureItem } from "@/utils/secureStorage";
 
 export type McpOAuthStatus = "idle" | "authorizing" | "exchanging" | "success" | "error";
 
@@ -32,25 +34,6 @@ interface UseMcpOAuthFlowResult {
   error: string | null;
   tokenResponse: Record<string, any> | null;
 }
-
-const base64UrlEncode = (buffer: ArrayBuffer) => {
-  const bytes = new Uint8Array(buffer);
-  let binary = "";
-  bytes.forEach((b) => (binary += String.fromCharCode(b)));
-  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-};
-
-const generateCodeVerifier = () => {
-  const array = new Uint8Array(32);
-  window.crypto.getRandomValues(array);
-  return base64UrlEncode(array.buffer);
-};
-
-const generateCodeChallenge = async (verifier: string) => {
-  const data = new TextEncoder().encode(verifier);
-  const digest = await window.crypto.subtle.digest("SHA-256", data);
-  return base64UrlEncode(digest);
-};
 
 export const useMcpOAuthFlow = ({
   accessToken,
@@ -79,21 +62,13 @@ export const useMcpOAuthFlow = ({
 
   const setStorageItem = (key: string, value: string) => {
     if (typeof window === "undefined") return;
-    try {
-      // Use sessionStorage only — the flow state may contain client credentials;
-      // writing them to localStorage would persist across browser sessions and
-      // make them readable by any injected script (XSS).
-      window.sessionStorage.setItem(key, value);
-    } catch (err) {
-      console.warn(`Failed to set storage item ${key}`, err);
-    }
+    setSecureItem(key, value);
   };
 
   const getStorageItem = (key: string): string | null => {
     if (typeof window === "undefined") return null;
     try {
-      // Try sessionStorage first, fall back to localStorage
-      return window.sessionStorage.getItem(key) || window.localStorage.getItem(key);
+      return getSecureItem(key);
     } catch (err) {
       console.warn(`Failed to get storage item ${key}`, err);
       return null;
