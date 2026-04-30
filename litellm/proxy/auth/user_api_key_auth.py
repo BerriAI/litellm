@@ -20,6 +20,8 @@ from fastapi.security.api_key import APIKeyHeader
 import litellm
 from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm._service_logger import ServiceLogging
+from litellm.caching import DualCache
+from litellm.constants import LITELLM_PROXY_MASTER_KEY_ALIAS
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.dot_notation_indexing import get_nested_value
 from litellm.proxy._types import *
@@ -1117,10 +1119,14 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
             )
 
         if is_master_key_valid:
+            # Substitute a stable alias for the raw master key so neither the
+            # master key nor its hash propagates into spend logs, Prometheus
+            # /metrics labels, audit trails, rate-limit buckets, or any other
+            # downstream consumer of UserAPIKeyAuth.api_key.
             _user_api_key_obj = await _return_user_api_key_auth_obj(
                 user_obj=None,
                 user_role=LitellmUserRoles.PROXY_ADMIN,
-                api_key=master_key,
+                api_key=LITELLM_PROXY_MASTER_KEY_ALIAS,
                 parent_otel_span=parent_otel_span,
                 valid_token_dict={
                     **end_user_params,
