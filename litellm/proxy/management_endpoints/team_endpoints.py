@@ -2781,9 +2781,7 @@ async def team_member_update(
     existing_team_row = await _team_member_update_fetch_team_or_raise(
         prisma_client, data.team_id
     )
-    await _team_member_update_require_authorized(
-        user_api_key_dict, existing_team_row
-    )
+    await _team_member_update_require_authorized(user_api_key_dict, existing_team_row)
 
     returned_team_info: TeamInfoResponseObject = await team_info(
         http_request=http_request,
@@ -4355,9 +4353,7 @@ async def list_team(
         except Exception as e:
             team_exception = """Invalid team object for team_id: {}. team_object={}.
             Error: {}
-            """.format(
-                team.team_id, team.model_dump(), str(e)
-            )
+            """.format(team.team_id, team.model_dump(), str(e))
             verbose_proxy_logger.exception(team_exception)
             continue
     # Sort the responses by team_alias

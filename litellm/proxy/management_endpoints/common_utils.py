@@ -363,9 +363,7 @@ def _budget_disconnect_all_unset(
     )
 
 
-async def _disconnect_team_member_budget(
-    tx, *, team_id: str, user_id: str
-) -> None:
+async def _disconnect_team_member_budget(tx, *, team_id: str, user_id: str) -> None:
     await tx.litellm_teammembership.update(
         where={"user_id_team_id": {"user_id": user_id, "team_id": team_id}},
         data={"litellm_budget_table": {"disconnect": True}},
