@@ -391,14 +391,7 @@ async def test_hashicorp_vault_connection(
             detail=f"Vault authentication failed: {e}",
         )
 
-    # Step 2: Verify the token is valid via token/lookup-self.
-    # ``vault_addr`` is admin-set; wrapping in ``async_safe_get`` prevents
-    # a misconfigured (or attacker-influenced) value from pivoting the
-    # request to cloud metadata or another internal IP. Admins running
-    # against an internal Vault should add the host to
-    # ``litellm.user_url_allowed_hosts``.
-    from litellm.litellm_core_utils.url_utils import async_safe_get
-
+    # Step 2: Verify the token is valid via token/lookup-self
     try:
         async_client = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.SecretManager
@@ -406,7 +399,7 @@ async def test_hashicorp_vault_connection(
         lookup_url = f"{client.vault_addr}/v1/auth/token/lookup-self"
         if client.vault_namespace:
             headers["X-Vault-Namespace"] = client.vault_namespace
-        response = await async_safe_get(async_client, lookup_url, headers=headers)
+        response = await async_client.get(lookup_url, headers=headers)
         response.raise_for_status()
     except Exception as e:
         raise HTTPException(
