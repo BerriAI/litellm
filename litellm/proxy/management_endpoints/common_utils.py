@@ -388,25 +388,28 @@ def _non_none_budget_limit_fields(
     return out
 
 
-def _apply_budget_duration_to_update_dict(
+def _apply_explicit_budget_duration_to_update_dict(
     update_data: Dict[str, Any],
     budget_duration: Optional[str],
-    budget_duration_explicit: bool,
 ) -> None:
-    if budget_duration_explicit:
-        if budget_duration is not None:
-            update_data["budget_duration"] = budget_duration
-            update_data["budget_reset_at"] = get_budget_reset_time(
-                budget_duration=budget_duration
-            )
-        else:
-            update_data["budget_duration"] = None
-            update_data["budget_reset_at"] = None
-    elif budget_duration is not None:
+    """
+    Persist ``budget_duration`` / ``budget_reset_at`` only when the caller
+    explicitly included ``budget_duration`` in the request (see
+    ``budget_duration_explicit`` at the /team/member_update layer).
+
+    When duration is omitted, inherited team defaults are still passed into
+    ``_upsert_budget_and_membership`` for *create* / clone paths, but in-place
+    updates must not rewrite ``budget_reset_at`` or the member's cycle is reset
+    mid-period (Greptile / PR #26779).
+    """
+    if budget_duration is not None:
         update_data["budget_duration"] = budget_duration
         update_data["budget_reset_at"] = get_budget_reset_time(
             budget_duration=budget_duration
         )
+    else:
+        update_data["budget_duration"] = None
+        update_data["budget_reset_at"] = None
 
 
 async def _update_existing_member_budget_in_place(
@@ -427,9 +430,8 @@ async def _update_existing_member_budget_in_place(
             max_budget, tpm_limit, rpm_limit, allowed_models
         ),
     }
-    _apply_budget_duration_to_update_dict(
-        update_data, budget_duration, budget_duration_explicit
-    )
+    if budget_duration_explicit:
+        _apply_explicit_budget_duration_to_update_dict(update_data, budget_duration)
     await tx.litellm_budgettable.update(
         where={"budget_id": existing_budget_id},
         data=update_data,

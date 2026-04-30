@@ -95,6 +95,37 @@ async def test_upsert_with_existing_budget_id_creates_new(mock_tx, fake_user):
     mock_tx.litellm_teammembership.update.assert_not_called()
 
 
+@pytest.mark.asyncio
+async def test_upsert_in_place_omitted_duration_does_not_touch_duration_fields(
+    mock_tx,
+    fake_user,
+):
+    """
+    When budget_duration was omitted from the API (explicit=False), an in-place
+    update must not write budget_duration / budget_reset_at even if the caller
+    passes a resolved team-default duration string (Greptile P1, PR #26779).
+    """
+    await _upsert_budget_and_membership(
+        mock_tx,
+        team_id="team-no-dur-touch",
+        user_id="user-no-dur-touch",
+        max_budget=10.0,
+        existing_budget_id="priv-budget-1",
+        user_api_key_dict=fake_user,
+        team_default_budget_id="team-default-xyz",
+        budget_duration="30d",
+        budget_duration_explicit=False,
+    )
+
+    mock_tx.litellm_budgettable.update.assert_awaited_once_with(
+        where={"budget_id": "priv-budget-1"},
+        data={
+            "max_budget": 10.0,
+            "updated_by": fake_user.user_id,
+        },
+    )
+
+
 # TEST: create new budget and link membership
 @pytest.mark.asyncio
 async def test_upsert_create_and_link(mock_tx, fake_user):
