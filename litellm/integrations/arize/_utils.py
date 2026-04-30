@@ -104,6 +104,8 @@ def _set_response_attributes(span: "Span", response_obj):
 
 
 def _set_choice_outputs(span: "Span", response_obj, msg_attrs, span_attrs):
+    # Collect finish_reasons from all choices
+    finish_reasons = []
     for idx, choice in enumerate(response_obj.get("choices", [])):
         response_message = choice.get("message", {})
         safe_set_attribute(
@@ -122,6 +124,14 @@ def _set_choice_outputs(span: "Span", response_obj, msg_attrs, span_attrs):
             f"{prefix}.{msg_attrs.MESSAGE_CONTENT}",
             response_message.get("content", ""),
         )
+        # Extract finish_reason from each choice
+        finish_reason = choice.get("finish_reason")
+        if finish_reason:
+            finish_reasons.append(finish_reason)
+
+    # Set finish_reasons as a span attribute (matches OTEL semantic conventions)
+    if finish_reasons:
+        safe_set_attribute(span, "gen_ai.response.finish_reasons", safe_dumps(finish_reasons))
 
 
 def _set_image_outputs(span: "Span", response_obj, image_attrs, span_attrs):
