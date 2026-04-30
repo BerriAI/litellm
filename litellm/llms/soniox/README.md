@@ -139,4 +139,4 @@ Then call the proxy's `/audio/transcriptions` endpoint as you would any OpenAI-c
 
 - v1 covers async transcription only. Real-time WebSocket transcription is not yet supported.
 - There is no provider-specific pass-through route (e.g. `/soniox/...`); use `audio_url` / `file_id` to access files you've already uploaded out-of-band.
-- Pricing is registered as `0.0` placeholder; consult [Soniox pricing](https://soniox.com/pricing) for the real per-second cost.
+- Pricing is intentionally not registered (no `input_cost_per_second`); LiteLLM cost tracking will treat Soniox calls as unknown cost. Consult [Soniox pricing](https://soniox.com/pricing) for the per-second rate and override locally if needed.

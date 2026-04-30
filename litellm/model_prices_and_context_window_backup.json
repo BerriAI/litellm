@@ -28995,7 +28995,6 @@
         "mode": "chat"
     },
     "soniox/stt-async-v4": {
-        "input_cost_per_second": 0.0,
         "litellm_provider": "soniox",
         "mode": "audio_transcription",
         "source": "https://soniox.com/pricing",
