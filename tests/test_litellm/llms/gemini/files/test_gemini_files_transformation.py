@@ -398,3 +398,16 @@ class TestGoogleAIStudioFilesTransformation:
                 optional_params={},
                 litellm_params=litellm_params,
             )
+
+    def test_transform_delete_file_request_rejects_deeply_encoded_traversal_url(self):
+        litellm_params = {
+            "api_key": "test-api-key",
+            "api_base": "https://generativelanguage.googleapis.com",
+        }
+
+        with pytest.raises(ValueError, match="Invalid Gemini file name"):
+            self.handler.transform_delete_file_request(
+                file_id="https://generativelanguage.googleapis.com/v1beta/files/..%2525252Fsecrets",
+                optional_params={},
+                litellm_params=litellm_params,
+            )
