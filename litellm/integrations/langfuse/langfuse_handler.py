@@ -115,7 +115,8 @@ class LangFuseHandler:
 
         langfuse_logger = LangFuseLogger(
             langfuse_public_key=credentials.get("langfuse_public_key"),
-            langfuse_secret=credentials.get("langfuse_secret"),
+            langfuse_secret=credentials.get("langfuse_secret")
+            or credentials.get("langfuse_secret_key"),
             langfuse_host=credentials.get("langfuse_host"),
             allow_env_credentials=credentials.get("langfuse_host") is None,
         )
