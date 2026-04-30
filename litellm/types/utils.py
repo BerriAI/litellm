@@ -2659,7 +2659,7 @@ class StandardLoggingHiddenParams(TypedDict):
     ]  # id of the model in the router, separates multiple models with the same name but different credentials
     cache_key: Optional[str]
     api_base: Optional[str]
-    response_cost: Optional[str]
+    response_cost: Optional[Union[str, float]]
     litellm_overhead_time_ms: Optional[float]
     additional_headers: Optional[StandardLoggingAdditionalHeaders]
     batch_models: Optional[List[str]]
