@@ -351,15 +351,25 @@ async def _set_user_keys_blocked(user_id: str, blocked: bool) -> int:
     prisma_client = await _get_prisma_client_or_raise_exception()
 
     # Only flip keys whose current state differs — avoids touching keys that
-    # were already (un)blocked manually by an admin.
+    # were already (un)blocked manually by an admin. `blocked` is a nullable
+    # column with no default, so existing keys typically have `blocked=NULL`;
+    # we must treat NULL as "not blocked" so SQL equality on NULL doesn't
+    # silently skip them.
+    if blocked:
+        state_filter: Dict[str, Any] = {"OR": [{"blocked": False}, {"blocked": None}]}
+    else:
+        state_filter = {"blocked": True}
+
+    where_clause: Dict[str, Any] = {"user_id": user_id, **state_filter}
+
     affected_keys = await prisma_client.db.litellm_verificationtoken.find_many(
-        where={"user_id": user_id, "blocked": not blocked},
+        where=where_clause,
     )
     if not affected_keys:
         return 0
 
     await prisma_client.db.litellm_verificationtoken.update_many(
-        where={"user_id": user_id, "blocked": not blocked},
+        where=where_clause,
         data={"blocked": blocked},
     )
 

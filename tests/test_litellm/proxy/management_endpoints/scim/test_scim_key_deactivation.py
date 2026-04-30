@@ -75,7 +75,10 @@ async def test_set_user_keys_blocked_flips_state_and_invalidates_cache():
 
     assert flipped == 2
     mock_db.litellm_verificationtoken.update_many.assert_awaited_once_with(
-        where={"user_id": "user-x", "blocked": False},
+        where={
+            "user_id": "user-x",
+            "OR": [{"blocked": False}, {"blocked": None}],
+        },
         data={"blocked": True},
     )
     assert sorted(cache_deletions) == ["hash-1", "hash-2"]
@@ -129,7 +132,10 @@ async def test_scim_delete_user_blocks_keys_before_deleting_user():
 
     assert response.status_code == 204
     mock_db.litellm_verificationtoken.update_many.assert_awaited_once_with(
-        where={"user_id": user_id, "blocked": False},
+        where={
+            "user_id": user_id,
+            "OR": [{"blocked": False}, {"blocked": None}],
+        },
         data={"blocked": True},
     )
     mock_db.litellm_usertable.delete.assert_awaited_once_with(
@@ -187,7 +193,10 @@ async def test_scim_patch_user_active_false_blocks_keys():
         await patch_user(user_id=user_id, patch_ops=patch_ops)
 
     mock_db.litellm_verificationtoken.update_many.assert_awaited_once_with(
-        where={"user_id": user_id, "blocked": False},
+        where={
+            "user_id": user_id,
+            "OR": [{"blocked": False}, {"blocked": None}],
+        },
         data={"blocked": True},
     )
 
