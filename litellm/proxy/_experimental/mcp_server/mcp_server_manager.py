@@ -2038,6 +2038,7 @@ class MCPServerManager:
         tool_name: str,
         arguments: Dict[str, Any],
         raw_headers: Optional[Dict[str, str]] = None,
+        hook_extra_headers: Optional[Dict[str, str]] = None,
     ) -> CallToolResult:
         """
         Call an OpenAPI tool handler directly.
@@ -2052,6 +2053,8 @@ class MCPServerManager:
             arguments: Tool arguments to pass to the handler
             raw_headers: Optional raw headers from the inbound request, used to
                 extract headers listed in ``server.extra_headers``.
+            hook_extra_headers: Optional headers injected by ``pre_mcp_call``
+                guardrail hooks (e.g. ``MCPJWTSigner``).
 
         Returns:
             CallToolResult with the response from the API
@@ -2092,6 +2095,13 @@ class MCPServerManager:
                 val = normalized.get(header.lower())
                 if val is not None:
                     extra_headers_dict[header] = val
+
+        # Merge hook-injected headers (e.g. from pre_mcp_call guardrails
+        # like MCPJWTSigner) so they also reach the upstream API.
+        if hook_extra_headers:
+            if extra_headers_dict is None:
+                extra_headers_dict = {}
+            extra_headers_dict.update(hook_extra_headers)
 
         _extra_token = _request_extra_headers.set(extra_headers_dict)
         try:
@@ -2533,7 +2543,11 @@ class MCPServerManager:
             tasks.append(
                 asyncio.create_task(
                     self._call_openapi_tool_handler(
-                        mcp_server, name, arguments, raw_headers=raw_headers
+                        mcp_server,
+                        name,
+                        arguments,
+                        raw_headers=raw_headers,
+                        hook_extra_headers=hook_result.get("extra_headers"),
                     )
                 )
             )
