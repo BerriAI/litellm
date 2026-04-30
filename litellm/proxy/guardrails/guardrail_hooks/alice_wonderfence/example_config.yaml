@@ -1,0 +1,98 @@
+# Example LiteLLM Proxy configuration with Alice WonderFence guardrail
+#
+# Start the proxy with:
+#   litellm --config example_config.yaml
+#
+# Environment variables:
+#   ALICE_API_KEY                  - Default WonderFence API key (overridable per request)
+#   ALICE_MAX_CACHED_CLIENTS       - Optional: max cached V2 SDK clients (default 10)
+#   ALICE_CONNECTION_POOL_LIMIT    - Optional: HTTP pool size per client
+#   OPENAI_API_KEY                 - API key for OpenAI
+#
+# Per-request / per-key / per-team metadata keys:
+#   alice_wonderfence_api_key  - overrides default API key (optional)
+#   alice_wonderfence_app_id   - REQUIRED — must be set on request, key, or team
+
+model_list:
+  - model_name: gpt-4
+    litellm_params:
+      model: gpt-4
+      api_key: os.environ/OPENAI_API_KEY
+
+guardrails:
+  # Pre-call guardrail
+  - guardrail_name: "alice-wonderfence-input-guard"
+    litellm_params:
+      guardrail: alice_wonderfence
+      mode: "pre_call"
+      api_key: os.environ/ALICE_API_KEY
+      api_timeout: 20.0
+      default_on: true
+      fail_open: false
+      block_message: "Content blocked by Alice WonderFence"
+
+  # Post-call guardrail
+  - guardrail_name: "alice-wonderfence-output-guard"
+    litellm_params:
+      guardrail: alice_wonderfence
+      mode: "post_call"
+      api_key: os.environ/ALICE_API_KEY
+      api_timeout: 20.0
+      default_on: true
+      fail_open: false
+
+  # Combined pre + post with advanced knobs
+  - guardrail_name: "alice-wonderfence-full-guard"
+    litellm_params:
+      guardrail: alice_wonderfence
+      mode: ["pre_call", "post_call"]
+      api_key: os.environ/ALICE_API_KEY
+      api_timeout: 20.0
+      platform: "aws"
+      default_on: false
+      debug: false
+      max_cached_clients: 10
+      # connection_pool_limit: 20
+
+# Example usage
+#
+# 1. Request-level app_id override (every request must supply app_id somewhere):
+#
+#    curl -X POST http://localhost:4000/chat/completions \
+#      -H "Authorization: Bearer sk-xxx" \
+#      -H "Content-Type: application/json" \
+#      -d '{
+#        "model": "gpt-4",
+#        "messages": [{"role": "user", "content": "Hello"}],
+#        "metadata": {
+#          "alice_wonderfence_app_id": "my-app-123",
+#          "session_id": "session-1"
+#        }
+#      }'
+#
+# 2. Per-API-key app_id (set at key creation, no per-request metadata needed):
+#
+#    curl -X POST http://localhost:4000/key/generate \
+#      -H "Authorization: Bearer sk-admin" \
+#      -H "Content-Type: application/json" \
+#      -d '{
+#        "metadata": {
+#          "alice_wonderfence_app_id": "tenant-A-app",
+#          "alice_wonderfence_api_key": "wf-key-for-tenant-A"
+#        }
+#      }'
+#
+# 3. Per-team app_id (set at team creation):
+#
+#    curl -X POST http://localhost:4000/team/new \
+#      -H "Authorization: Bearer sk-admin" \
+#      -H "Content-Type: application/json" \
+#      -d '{
+#        "team_alias": "team-billing",
+#        "metadata": {
+#          "alice_wonderfence_app_id": "team-billing-app"
+#        }
+#      }'
+#
+# Resolution priority (highest first): request metadata > key metadata > team metadata > config default.
+# api_key falls back to config / ALICE_API_KEY env. app_id has NO default.
