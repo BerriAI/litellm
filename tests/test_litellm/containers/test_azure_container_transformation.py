@@ -547,7 +547,9 @@ class TestAzureContainerKnownFailureRegressions:
             captured["route_type"] = route_type
             return {"id": "cfile_abc"}
 
-        from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+        from litellm.proxy.common_request_processing import (
+            ProxyBaseLLMRequestProcessing,
+        )
 
         monkeypatch.setattr(
             ProxyBaseLLMRequestProcessing,
@@ -584,6 +586,7 @@ class TestAzureContainerKnownFailureRegressions:
     async def test_regression_binary_file_request_routes_through_proxy_processor(
         self, monkeypatch
     ):
+        from fastapi import Response
         from starlette.requests import Request
 
         from litellm.proxy.container_endpoints import handler_factory
@@ -605,9 +608,12 @@ class TestAzureContainerKnownFailureRegressions:
         ):
             captured["data"] = self.data
             captured["route_type"] = route_type
+            fastapi_response.headers["x-litellm-call-id"] = "call-123"
             return b"csv-bytes"
 
-        from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+        from litellm.proxy.common_request_processing import (
+            ProxyBaseLLMRequestProcessing,
+        )
 
         monkeypatch.setattr(
             ProxyBaseLLMRequestProcessing,
@@ -624,7 +630,7 @@ class TestAzureContainerKnownFailureRegressions:
                 "query_string": b"",
             }
         )
-        fastapi_response = MagicMock()
+        fastapi_response = Response()
 
         response = await handler_factory._process_binary_request(
             request=request,
@@ -640,3 +646,79 @@ class TestAzureContainerKnownFailureRegressions:
         assert captured["data"]["custom_llm_provider"] == "openai"
         assert response.status_code == 200
         assert response.body == b"csv-bytes"
+        assert response.headers["x-litellm-call-id"] == "call-123"
+
+    @pytest.mark.asyncio
+    async def test_regression_multipart_upload_request_uses_provider_from_managed_id(
+        self, monkeypatch
+    ):
+        from starlette.requests import Request
+
+        from litellm.proxy.common_request_processing import (
+            ProxyBaseLLMRequestProcessing,
+        )
+        from litellm.proxy.common_utils import http_parsing_utils
+        from litellm.proxy.container_endpoints import handler_factory
+
+        encoded_id = ResponsesAPIRequestUtils._build_container_id(
+            custom_llm_provider="azure",
+            model_id="model_abc123",
+            container_id="cntr_123",
+        )
+        captured = {}
+
+        async def _mock_get_form_data(request):
+            return {"file": "ignored"}
+
+        async def _mock_convert_upload_files_to_file_data(form_data):
+            return {"file": [("data.csv", b"csv-bytes", "text/csv")]}
+
+        async def _mock_base_process_llm_request(
+            self,
+            request,
+            fastapi_response,
+            user_api_key_dict,
+            route_type,
+            **kwargs,
+        ):
+            captured["data"] = self.data
+            captured["route_type"] = route_type
+            return {"id": "cfile_abc"}
+
+        monkeypatch.setattr(
+            http_parsing_utils,
+            "get_form_data",
+            _mock_get_form_data,
+        )
+        monkeypatch.setattr(
+            http_parsing_utils,
+            "convert_upload_files_to_file_data",
+            _mock_convert_upload_files_to_file_data,
+        )
+        monkeypatch.setattr(
+            ProxyBaseLLMRequestProcessing,
+            "base_process_llm_request",
+            _mock_base_process_llm_request,
+        )
+
+        request = Request(
+            {
+                "type": "http",
+                "method": "POST",
+                "path": "/v1/containers/id/files",
+                "headers": [],
+                "query_string": b"",
+            }
+        )
+
+        await handler_factory._process_multipart_upload_request(
+            request=request,
+            fastapi_response=MagicMock(),
+            user_api_key_dict=MagicMock(),
+            route_type="aupload_container_file",
+            container_id=encoded_id,
+        )
+
+        assert captured["route_type"] == "aupload_container_file"
+        assert captured["data"]["container_id"] == encoded_id
+        assert captured["data"]["custom_llm_provider"] == "azure"
