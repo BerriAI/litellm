@@ -450,6 +450,7 @@ async def test_update_database_and_spend_counters_invalidates_reservation_when_c
         mock_invalidate_budget_reservation_counters.assert_awaited_once_with(
             budget_reservation=budget_reservation,
         )
+        assert budget_reservation["finalized"] is True
 
     proxy_logging_obj.db_spend_update_writer.update_database.assert_awaited_once()
 
