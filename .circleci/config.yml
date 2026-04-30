@@ -2006,6 +2006,98 @@ jobs:
       - store_test_results:
           path: test-results
 
+  claude_code_compat_pr_gate:
+    # Pre-merge gate for the Claude Code Compatibility Matrix.
+    #
+    # Boots the LiteLLM proxy from the PR's code, installs the `claude`
+    # CLI at a version selected at run time from npm (newest version
+    # whose publish timestamp is >= 3 days old; the 3-day window is a
+    # security review buffer), and runs every test under
+    # `tests/claude_code/`. A red status on this job blocks merge —
+    # see issue #26479 / PRD #26476 for the design.
+    machine:
+      image: ubuntu-2204:2024.04.1
+    resource_class: large
+    working_directory: ~/project
+    steps:
+      - checkout
+      - setup_google_dns
+      - install_uv
+      - run:
+          name: Install Dependencies
+          command: |
+            uv sync --frozen --all-groups --all-extras --python 3.12
+      - start_postgres
+      - attach_workspace:
+          at: ~/project
+      - run:
+          name: Load Docker Database Image
+          command: |
+            zstd -d litellm-docker-database.tar.zst --stdout | docker load
+            docker images | grep litellm-docker-database
+      - run:
+          name: Resolve Claude Code CLI version (newest published >= 3 days ago)
+          command: |
+            # Run the resolver from the PR's code; capture the version
+            # to BASH_ENV so subsequent steps see CLAUDE_CODE_VERSION.
+            CLAUDE_CODE_VERSION=$(uv run --no-sync python -m tests.claude_code.pr_gate_version_resolver)
+            echo "Selected @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"
+            echo "export CLAUDE_CODE_VERSION=${CLAUDE_CODE_VERSION}" >> "$BASH_ENV"
+      - run:
+          name: Install Node.js 20 + Claude Code CLI
+          command: |
+            # The machine image ships with nvm preinstalled; use it to
+            # pin Node 20 (Claude Code's officially supported runtime).
+            export NVM_DIR="$HOME/.nvm"
+            # shellcheck source=/dev/null
+            [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
+            nvm install 20
+            nvm use 20
+            NODE_BIN_DIR="$(dirname "$(command -v node)")"
+            echo "export PATH=\"${NODE_BIN_DIR}:\$PATH\"" >> "$BASH_ENV"
+            npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"
+            claude --version
+      - run:
+          name: Run LiteLLM proxy from PR's code
+          command: |
+            docker run -d \
+              -p 4000:4000 \
+              -e DATABASE_URL=postgresql://postgres:postgres@host.docker.internal:5432/circle_test \
+              -e LITELLM_MASTER_KEY="sk-1234" \
+              -e ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY \
+              -e AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID \
+              -e AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY \
+              -e AWS_REGION_NAME="us-east-1" \
+              -e LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS="True" \
+              --add-host host.docker.internal:host-gateway \
+              --name compat-proxy \
+              -v $(pwd)/tests/claude_code/test_config.yaml:/app/config.yaml \
+              litellm-docker-database:ci \
+              --config /app/config.yaml \
+              --port 4000 \
+              --detailed_debug
+      - run:
+          name: Stream proxy logs
+          command: docker logs -f compat-proxy
+          background: true
+      - wait_for_service:
+          url: http://localhost:4000
+          timeout: "300"
+      - run:
+          name: Run Claude Code compatibility test suite
+          command: |
+            export LITELLM_PROXY_BASE_URL="http://localhost:4000"
+            export LITELLM_PROXY_API_KEY="sk-1234"
+            mkdir -p test-results
+            uv run --no-sync python -m pytest -vv tests/claude_code/ \
+              --junitxml=test-results/junit.xml \
+              --durations=10
+          no_output_timeout: 30m
+
+      # Store test results
+      - store_test_results:
+          path: test-results
+
   upload-coverage:
     docker:
       - *python312_image
@@ -2353,6 +2445,10 @@ workflows:
             - build_docker_database_image
           filters: *main_branches
       - proxy_e2e_anthropic_messages_tests:
+          requires:
+            - build_docker_database_image
+          filters: *main_branches
+      - claude_code_compat_pr_gate:
           requires:
             - build_docker_database_image
           filters: *main_branches

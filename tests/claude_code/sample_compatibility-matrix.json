@@ -1,0 +1,141 @@
+{
+  "schema_version": "1",
+  "generated_at": "2026-04-25T00:00:00Z",
+  "litellm_version": "v1.83.0-stable",
+  "claude_code_version": "2.1.120",
+  "providers": [
+    "anthropic",
+    "bedrock_invoke",
+    "bedrock_converse",
+    "vertex_ai",
+    "azure"
+  ],
+  "features": [
+    {
+      "id": "basic_messaging_non_streaming",
+      "name": "Basic messaging (non-streaming)",
+      "providers": {
+        "anthropic": {
+          "status": "pass"
+        },
+        "bedrock_invoke": {
+          "status": "pass"
+        },
+        "bedrock_converse": {
+          "status": "pass"
+        },
+        "vertex_ai": {
+          "status": "pass"
+        },
+        "azure": {
+          "status": "pass"
+        }
+      }
+    },
+    {
+      "id": "basic_messaging_streaming",
+      "name": "Basic messaging (streaming)",
+      "providers": {
+        "anthropic": {
+          "status": "pass"
+        },
+        "bedrock_invoke": {
+          "status": "pass"
+        },
+        "bedrock_converse": {
+          "status": "pass"
+        },
+        "vertex_ai": {
+          "status": "pass"
+        },
+        "azure": {
+          "status": "pass"
+        }
+      }
+    },
+    {
+      "id": "tool_use",
+      "name": "Tool use",
+      "providers": {
+        "anthropic": {
+          "status": "pass"
+        },
+        "bedrock_invoke": {
+          "status": "pass"
+        },
+        "bedrock_converse": {
+          "status": "pass"
+        },
+        "vertex_ai": {
+          "status": "pass"
+        },
+        "azure": {
+          "status": "pass"
+        }
+      }
+    },
+    {
+      "id": "prompt_caching_5m",
+      "name": "Prompt caching (5m TTL)",
+      "providers": {
+        "anthropic": {
+          "status": "pass"
+        },
+        "bedrock_invoke": {
+          "status": "pass"
+        },
+        "bedrock_converse": {
+          "status": "pass"
+        },
+        "vertex_ai": {
+          "status": "pass"
+        },
+        "azure": {
+          "status": "pass"
+        }
+      }
+    },
+    {
+      "id": "vision",
+      "name": "Vision",
+      "providers": {
+        "anthropic": {
+          "status": "pass"
+        },
+        "bedrock_invoke": {
+          "status": "pass"
+        },
+        "bedrock_converse": {
+          "status": "pass"
+        },
+        "vertex_ai": {
+          "status": "pass"
+        },
+        "azure": {
+          "status": "pass"
+        }
+      }
+    },
+    {
+      "id": "extended_thinking",
+      "name": "Extended thinking",
+      "providers": {
+        "anthropic": {
+          "status": "pass"
+        },
+        "bedrock_invoke": {
+          "status": "pass"
+        },
+        "bedrock_converse": {
+          "status": "pass"
+        },
+        "vertex_ai": {
+          "status": "pass"
+        },
+        "azure": {
+          "status": "pass"
+        }
+      }
+    }
+  ]
+}

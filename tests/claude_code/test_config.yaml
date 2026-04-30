@@ -1,0 +1,103 @@
+# Proxy routing config for the Claude Code Compatibility Matrix PR gate.
+#
+# The tests under `tests/claude_code/` only know **alias** names (e.g.
+# `claude-haiku-4-5-bedrock-invoke`). The proxy is the layer that maps
+# each alias to a real upstream model id, region, and credentials.
+#
+# Adding a new (feature, provider) cell is a three-step change in the
+# test repo (manifest + test file + alias here); changing which upstream
+# model a cell exercises is a one-step change here, with no test edits.
+#
+# Aliases:
+#   - claude-{tier}                         → Anthropic API
+#   - claude-{tier}-bedrock-invoke          → Bedrock InvokeModel API
+#   - claude-{tier}-bedrock-converse        → Bedrock Converse API
+#   - claude-{tier}-vertex                  → GCP Vertex AI
+#   - claude-{tier}-azure                   → Microsoft Foundry (Anthropic deployments)
+
+model_list:
+  # ---- Anthropic ----
+  - model_name: claude-haiku-4-5
+    litellm_params:
+      model: anthropic/claude-haiku-4-5
+      api_key: os.environ/ANTHROPIC_API_KEY
+  - model_name: claude-sonnet-4-6
+    litellm_params:
+      model: anthropic/claude-sonnet-4-6
+      api_key: os.environ/ANTHROPIC_API_KEY
+  - model_name: claude-opus-4-7
+    litellm_params:
+      model: anthropic/claude-opus-4-7
+      api_key: os.environ/ANTHROPIC_API_KEY
+
+  # ---- Bedrock (InvokeModel) ----
+  - model_name: claude-haiku-4-5-bedrock-invoke
+    litellm_params:
+      model: bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0
+      aws_region_name: us-east-1
+  - model_name: claude-sonnet-4-6-bedrock-invoke
+    litellm_params:
+      model: bedrock/us.anthropic.claude-sonnet-4-6
+      aws_region_name: us-east-1
+  - model_name: claude-opus-4-7-bedrock-invoke
+    litellm_params:
+      model: bedrock/us.anthropic.claude-opus-4-7
+      aws_region_name: us-east-1
+
+  # ---- Bedrock (Converse) ----
+  - model_name: claude-haiku-4-5-bedrock-converse
+    litellm_params:
+      model: bedrock/converse/us.anthropic.claude-haiku-4-5-20251001-v1:0
+      aws_region_name: us-east-1
+  - model_name: claude-sonnet-4-6-bedrock-converse
+    litellm_params:
+      model: bedrock/converse/us.anthropic.claude-sonnet-4-6
+      aws_region_name: us-east-1
+  - model_name: claude-opus-4-7-bedrock-converse
+    litellm_params:
+      model: bedrock/converse/us.anthropic.claude-opus-4-7
+      aws_region_name: us-east-1
+
+  # ---- Vertex AI ----
+  - model_name: claude-haiku-4-5-vertex
+    litellm_params:
+      model: vertex_ai/claude-haiku-4-5
+      vertex_ai_project: pathrise-convert-1606954137718
+      vertex_ai_location: us-east5
+  - model_name: claude-sonnet-4-6-vertex
+    litellm_params:
+      model: vertex_ai/claude-sonnet-4-6
+      vertex_ai_project: pathrise-convert-1606954137718
+      vertex_ai_location: us-east5
+  - model_name: claude-opus-4-7-vertex
+    litellm_params:
+      model: vertex_ai/claude-opus-4-7
+      vertex_ai_project: pathrise-convert-1606954137718
+      vertex_ai_location: us-east5
+
+  # ---- Microsoft Foundry (Anthropic deployments on Azure) ----
+  - model_name: claude-haiku-4-5-azure
+    litellm_params:
+      model: azure_ai/claude-haiku-4-5
+      api_base: os.environ/AZURE_FOUNDRY_API_BASE
+      api_key: os.environ/AZURE_FOUNDRY_API_KEY
+  - model_name: claude-sonnet-4-6-azure
+    litellm_params:
+      model: azure_ai/claude-sonnet-4-6
+      api_base: os.environ/AZURE_FOUNDRY_API_BASE
+      api_key: os.environ/AZURE_FOUNDRY_API_KEY
+  - model_name: claude-opus-4-7-azure
+    litellm_params:
+      model: azure_ai/claude-opus-4-7
+      api_base: os.environ/AZURE_FOUNDRY_API_BASE
+      api_key: os.environ/AZURE_FOUNDRY_API_KEY
+
+general_settings:
+  # Claude Code sends provider-specific headers (e.g. anthropic-beta) we
+  # want to forward verbatim to the upstream so the wire-shape under
+  # test matches what real customers send.
+  forward_client_headers_to_llm_api: true
+
+litellm_settings:
+  drop_params: true
+  modify_params: true
