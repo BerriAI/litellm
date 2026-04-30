@@ -14,7 +14,7 @@ from litellm.llms.custom_httpx.http_handler import (
 from litellm.types.utils import EmbeddingResponse
 
 from ...base import BaseLLM
-from ..common_utils import HuggingFaceError
+from ..common_utils import HuggingFaceError, validate_huggingface_model_identifier
 from .transformation import HuggingFaceEmbeddingConfig
 
 config = HuggingFaceEmbeddingConfig()
@@ -154,6 +154,7 @@ class HuggingFaceEmbedding(BaseLLM):
         embed_url: str,
     ) -> dict:
         data: Dict = {}
+        validate_huggingface_model_identifier(model)
 
         ## TRANSFORMATION ##
         if "sentence-transformers" in model:
@@ -334,6 +335,7 @@ class HuggingFaceEmbedding(BaseLLM):
         headers={},
     ) -> EmbeddingResponse:
         super().embedding()
+        validate_huggingface_model_identifier(model)
         headers = config.validate_environment(
             api_key=api_key,
             headers=headers,
@@ -348,9 +350,7 @@ class HuggingFaceEmbedding(BaseLLM):
         )
         # print_verbose(f"{model}, {task}")
         embed_url = ""
-        if "https" in model:
-            embed_url = model
-        elif api_base:
+        if api_base:
             embed_url = api_base
         elif "HF_API_BASE" in os.environ:
             embed_url = os.getenv("HF_API_BASE", "")

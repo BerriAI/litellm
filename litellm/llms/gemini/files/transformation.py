@@ -29,6 +29,8 @@ from litellm.types.utils import LlmProviders
 
 from ..common_utils import GeminiModelInfo
 
+_GEMINI_FILES_HOST = "generativelanguage.googleapis.com"
+
 
 class GoogleAIStudioFilesHandler(GeminiModelInfo, BaseFilesConfig):
     def __init__(self):
@@ -248,6 +250,13 @@ class GoogleAIStudioFilesHandler(GeminiModelInfo, BaseFilesConfig):
         """
         if file_id.startswith(("http://", "https://")):
             parsed = urlparse(file_id)
+            if (
+                parsed.scheme != "https"
+                or parsed.hostname != _GEMINI_FILES_HOST
+                or parsed.username is not None
+                or parsed.password is not None
+            ):
+                raise ValueError("Invalid Gemini file URL")
             path = parsed.path.lstrip("/")
             files_index = path.find("files/")
             if files_index != -1:
@@ -260,8 +269,21 @@ class GoogleAIStudioFilesHandler(GeminiModelInfo, BaseFilesConfig):
         normalized_file_id = normalized_file_id.strip("/")
         if not normalized_file_id.startswith("files/"):
             normalized_file_id = f"files/{normalized_file_id}"
+        self._validate_gemini_file_name(normalized_file_id)
 
         return normalized_file_id
+
+    @staticmethod
+    def _validate_gemini_file_name(file_name: str) -> None:
+        parts = file_name.split("/")
+        if (
+            len(parts) != 2
+            or parts[0] != "files"
+            or not parts[1]
+            or parts[1] in {".", ".."}
+            or any(char in parts[1] for char in ("\\", "?", "#"))
+        ):
+            raise ValueError("Invalid Gemini file name")
 
     def transform_retrieve_file_response(
         self,
@@ -337,13 +359,7 @@ class GoogleAIStudioFilesHandler(GeminiModelInfo, BaseFilesConfig):
         if not api_key:
             raise ValueError("api_key is required")
 
-        # Extract file name from URI if full URI is provided
-        # file_id could be "files/abc123" or "https://generativelanguage.googleapis.com/v1beta/files/abc123"
-        if file_id.startswith("http"):
-            # Extract the file path from full URI
-            file_name = file_id.split("/v1beta/")[-1]
-        else:
-            file_name = file_id if file_id.startswith("files/") else f"files/{file_id}"
+        file_name = self._normalize_gemini_file_id(file_id)
 
         # Construct the delete URL
         url = f"{api_base}/v1beta/{file_name}"

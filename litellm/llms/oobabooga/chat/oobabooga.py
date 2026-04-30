@@ -5,7 +5,7 @@ import litellm
 from litellm.llms.custom_httpx.http_handler import _get_httpx_client
 from litellm.utils import EmbeddingResponse, ModelResponse, Usage
 
-from ..common_utils import OobaboogaError
+from ..common_utils import OobaboogaError, validate_oobabooga_model_identifier
 from .transformation import OobaboogaConfig
 
 oobabooga_config = OobaboogaConfig()
@@ -26,6 +26,7 @@ def completion(
     logger_fn=None,
     default_max_tokens_to_sample=None,
 ):
+    validate_oobabooga_model_identifier(model)
     headers = oobabooga_config.validate_environment(
         api_key=api_key,
         headers={},
@@ -34,9 +35,7 @@ def completion(
         optional_params=optional_params,
         litellm_params=litellm_params,
     )
-    if "https" in model:
-        completion_url = model
-    elif api_base:
+    if api_base:
         completion_url = api_base
     else:
         raise OobaboogaError(
@@ -96,9 +95,8 @@ def embedding(
     encoding=None,
 ):
     # Create completion URL
-    if "https" in model:
-        embeddings_url = model
-    elif api_base:
+    validate_oobabooga_model_identifier(model)
+    if api_base:
         embeddings_url = f"{api_base}/v1/embeddings"
     else:
         raise OobaboogaError(
