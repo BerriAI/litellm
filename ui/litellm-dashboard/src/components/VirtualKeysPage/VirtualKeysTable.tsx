@@ -81,6 +81,32 @@ export function VirtualKeysTable({ teams, organizations, onSortChange, currentSo
   const sortBy = sorting.length > 0 ? sorting[0].id : null;
   const sortOrder = sorting.length > 0 ? (sorting[0].desc ? "desc" : "asc") : null;
 
+  // Use the filter logic hook
+  const { filters, allTeams, allOrganizations, handleFilterChange, handleFilterReset } =
+    useFilterLogic({
+      teams,
+      organizations,
+    });
+
+  // Debounce filter values before feeding them into useKeys so that each
+  // keystroke in a text filter (e.g. Key Alias) doesn't fire a request.
+  const [debouncedFilters, setDebouncedFilters] = useState(filters);
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedFilters(filters), 300);
+    return () => clearTimeout(timer);
+  }, [filters]);
+
+  // When active filters change, jump back to the first page — otherwise we
+  // may land on an out-of-range page of the filtered result set.
+  useEffect(() => {
+    setTablePagination((prev) => (prev.pageIndex === 0 ? prev : { ...prev, pageIndex: 0 }));
+  }, [
+    debouncedFilters["Team ID"],
+    debouncedFilters["Organization ID"],
+    debouncedFilters["Key Alias"],
+    debouncedFilters["User ID"],
+  ]);
+
   const {
     data: keys,
     isPending: isLoading,
@@ -91,17 +117,12 @@ export function VirtualKeysTable({ teams, organizations, onSortChange, currentSo
     sortBy: sortBy || undefined,
     sortOrder: sortOrder || undefined,
     expand: "user",
+    teamID: debouncedFilters["Team ID"] || undefined,
+    organizationID: debouncedFilters["Organization ID"] || undefined,
+    selectedKeyAlias: debouncedFilters["Key Alias"] || undefined,
+    userID: debouncedFilters["User ID"] || undefined,
   });
   const [expandedAccordions, setExpandedAccordions] = useState<Record<string, boolean>>({});
-
-  // Use the filter logic hook
-
-  const { filters, filteredKeys, filteredTotalCount, allTeams, allOrganizations, handleFilterChange, handleFilterReset } =
-    useFilterLogic({
-      keys: keys?.keys || [],
-      teams,
-      organizations,
-    });
 
   // Defer the transition so the button stays in loading state until the table
   // has rendered with the new data (mirrors the spend-logs pattern)
@@ -112,7 +133,7 @@ export function VirtualKeysTable({ teams, organizations, onSortChange, currentSo
     refetch();
   };
 
-  const totalCount = filteredTotalCount ?? keys?.total_count ?? 0;
+  const totalCount = keys?.total_count ?? 0;
 
   // Add a useEffect to call refresh when a key is created
   useEffect(() => {
@@ -618,7 +639,7 @@ export function VirtualKeysTable({ teams, organizations, onSortChange, currentSo
   ];
 
   const table = useReactTable({
-    data: filteredKeys,
+    data: keys?.keys ?? [],
     columns: columns.filter((col) => col.id !== "expander"),
     columnResizeMode: "onChange",
     columnResizeDirection: "ltr",
@@ -633,16 +654,6 @@ export function VirtualKeysTable({ teams, organizations, onSortChange, currentSo
         const sortState = newSorting[0];
         const sortBy = sortState.id;
         const sortOrder = sortState.desc ? "desc" : "asc";
-        // Update filters state without triggering debouncedSearch
-        // The useKeys hook will automatically refetch with the new sort parameters
-        handleFilterChange(
-          {
-            ...filters,
-            "Sort By": sortBy,
-            "Sort Order": sortOrder,
-          },
-          true, // skipDebounce - let useKeys handle the API call with correct page size
-        );
         onSortChange?.(sortBy, sortOrder);
       }
     },
@@ -833,7 +844,7 @@ export function VirtualKeysTable({ teams, organizations, onSortChange, currentSo
                           </div>
                         </TableCell>
                       </TableRow>
-                    ) : filteredKeys.length > 0 ? (
+                    ) : (keys?.keys?.length ?? 0) > 0 ? (
                       table.getRowModel().rows.map((row) => (
                         <TableRow key={row.id} className="h-8">
                           {row.getVisibleCells().map((cell) => (
