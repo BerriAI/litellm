@@ -41,6 +41,72 @@ class VectorStorePreCallHook(CustomLogger):
     def __init__(self):
         super().__init__()
 
+    def get_chat_completion_prompt(
+        self,
+        model: str,
+        messages: List[AllMessageValues],
+        non_default_params: dict,
+        prompt_id: Optional[str],
+        prompt_variables: Optional[dict],
+        dynamic_callback_params: StandardCallbackDynamicParams,
+        prompt_spec: Optional[PromptSpec] = None,
+        prompt_label: Optional[str] = None,
+        prompt_version: Optional[int] = None,
+        ignore_prompt_manager_model: Optional[bool] = False,
+        ignore_prompt_manager_optional_params: Optional[bool] = False,
+        tools: Optional[List[Dict]] = None,
+    ) -> Tuple[str, List[AllMessageValues], dict]:
+        """
+        Perform vector store search and append results as context to messages (sync).
+        Used when completion() is called so file_search tools are handled before the request.
+        """
+        try:
+            if litellm.vector_store_registry is None:
+                return model, messages, non_default_params
+
+            vector_stores_to_run: List[LiteLLM_ManagedVectorStore] = (
+                litellm.vector_store_registry.pop_vector_stores_to_run(
+                    non_default_params=non_default_params,
+                    tools=tools,
+                )
+            )
+
+            if not vector_stores_to_run:
+                return model, messages, non_default_params
+
+            query = self._extract_query_from_messages(messages)
+            if not query:
+                verbose_logger.debug(
+                    "No query found in messages for vector store search"
+                )
+                return model, messages, non_default_params
+
+            modified_messages: List[AllMessageValues] = messages.copy()
+
+            for vector_store_to_run in vector_stores_to_run:
+                vector_store_id = vector_store_to_run.get("vector_store_id", "")
+                custom_llm_provider = vector_store_to_run.get("custom_llm_provider")
+                litellm_params_for_vector_store = (
+                    vector_store_to_run.get("litellm_params", {}) or {}
+                )
+                search_response = litellm.vector_stores.search(
+                    **{
+                        "vector_store_id": vector_store_id,
+                        "query": query,
+                        "custom_llm_provider": custom_llm_provider,
+                        **litellm_params_for_vector_store,
+                    },
+                )
+                modified_messages = self._append_search_results_to_messages(
+                    messages=modified_messages, search_response=search_response
+                )
+
+            return model, modified_messages, non_default_params
+
+        except Exception as e:
+            verbose_logger.exception(f"Error in VectorStorePreCallHook: {str(e)}")
+            return model, messages, non_default_params
+
     async def async_get_chat_completion_prompt(
         self,
         model: str,
