@@ -2337,6 +2337,104 @@ def test_merge_hidden_params_from_response_into_metadata_populates_metadata():
     assert meta["hidden_params"]["model_id"] == "mid-test"
 
 
+def test_merge_hidden_params_from_response_into_metadata_backfills_response_cost():
+    """Streaming metadata should include the already-calculated response cost."""
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+
+    logging_obj = LiteLLMLoggingObj(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        call_type="acompletion",
+        start_time=time.time(),
+        litellm_call_id="merge-hp-cost-test",
+        function_id="merge-hp-cost-fn",
+    )
+    logging_obj.model_call_details = {
+        "litellm_params": {"metadata": {}},
+        "response_cost": 0.002,
+    }
+
+    class _Resp:
+        _hidden_params = {"response_cost": None, "model_id": "mid-test"}
+
+    response = _Resp()
+    logging_obj._merge_hidden_params_from_response_into_metadata(response)
+    meta = logging_obj.model_call_details["litellm_params"]["metadata"]
+    assert meta["hidden_params"]["response_cost"] == 0.002
+    assert meta["hidden_params"]["model_id"] == "mid-test"
+    assert response._hidden_params["response_cost"] is None
+
+
+def test_standard_logging_hidden_params_backfills_response_cost_without_mutating_response():
+    """Streaming standard logging payload should expose the calculated response cost."""
+    from datetime import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.types.utils import Usage
+
+    logging_obj = LiteLLMLoggingObj(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        call_type="acompletion",
+        start_time=time.time(),
+        litellm_call_id="standard-hp-cost-test",
+        function_id="standard-hp-cost-fn",
+    )
+    logging_obj.model_call_details = {
+        "litellm_params": {"metadata": {}, "proxy_server_request": {}},
+        "litellm_call_id": "standard-hp-cost-test",
+        "call_type": "acompletion",
+        "stream": True,
+        "model": "gpt-4o-mini",
+        "custom_llm_provider": "openai",
+        "optional_params": {"stream": True},
+        "response_cost": 0.002,
+    }
+    response = ModelResponse(
+        id="standard-hp-cost-response",
+        model="gpt-4o-mini",
+        usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15),
+    )
+    response._hidden_params = {"response_cost": None, "model_id": "mid-test"}
+
+    payload = logging_obj._build_standard_logging_payload(
+        response, datetime.now(), datetime.now()
+    )
+
+    assert payload is not None
+    assert payload["hidden_params"]["response_cost"] == 0.002
+    assert response._hidden_params["response_cost"] is None
+
+
+def test_merge_hidden_params_from_response_into_metadata_preserves_response_cost():
+    """Do not overwrite provider-supplied response cost when it already exists."""
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+
+    logging_obj = LiteLLMLoggingObj(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        call_type="acompletion",
+        start_time=time.time(),
+        litellm_call_id="merge-hp-preserve-cost-test",
+        function_id="merge-hp-preserve-cost-fn",
+    )
+    logging_obj.model_call_details = {
+        "litellm_params": {"metadata": {}},
+        "response_cost": 0.002,
+    }
+
+    class _Resp:
+        _hidden_params = {"response_cost": 0.001, "model_id": "mid-test"}
+
+    logging_obj._merge_hidden_params_from_response_into_metadata(_Resp())
+    meta = logging_obj.model_call_details["litellm_params"]["metadata"]
+    assert meta["hidden_params"]["response_cost"] == 0.001
+    assert meta["hidden_params"]["model_id"] == "mid-test"
+
+
 def test_merge_hidden_params_from_response_into_metadata_no_op_when_empty():
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
