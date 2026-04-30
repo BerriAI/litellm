@@ -41,6 +41,7 @@ from litellm.constants import (
     MCP_TOOL_LISTING_TIMEOUT,
 )
 from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
+from litellm.litellm_core_utils.url_utils import SSRFError, async_safe_get
 from litellm.experimental_mcp_client.client import MCPClient, MCPSigV4Auth
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
@@ -1499,6 +1500,47 @@ class MCPServerManager:
         )
         return await client.get_prompt(get_prompt_request_params)
 
+    @staticmethod
+    def _is_same_authority_metadata_url(url: str, server_url: str) -> bool:
+        """
+        Whether ``url`` shares scheme, host, and port with ``server_url``.
+
+        Same-authority metadata URLs are produced by our well-known discovery
+        construction and by resource servers that publish protected-resource
+        metadata on the resource origin. These must keep working for
+        administrator-configured internal MCP servers, so they are fetched
+        directly. Cross-origin URLs are fetched through ``async_safe_get``.
+        """
+        try:
+            target = urlparse(url)
+            base = urlparse(server_url)
+        except Exception:
+            return False
+
+        if target.scheme not in ("http", "https") or not target.hostname:
+            return False
+
+        target_port = target.port or (443 if target.scheme == "https" else 80)
+        base_port = base.port or (443 if base.scheme == "https" else 80)
+        return (
+            base.scheme == target.scheme
+            and (base.hostname or "").lower() == target.hostname.lower()
+            and base_port == target_port
+        )
+
+    async def _fetch_oauth_discovery_url(self, url: str, server_url: str) -> Any:
+        client = get_async_httpx_client(
+            llm_provider=httpxSpecialProvider.MCP,
+            params={"timeout": MCP_METADATA_TIMEOUT},
+        )
+        if self._is_same_authority_metadata_url(url, server_url):
+            # Same-authority URLs may point at administrator-configured
+            # internal MCP servers. Do not run them through user URL
+            # validation, but also do not follow redirects because the
+            # redirect target would not inherit the same-authority guarantee.
+            return await client.get(url, follow_redirects=False)
+        return await async_safe_get(client, url)
+
     async def _descovery_metadata(
         self,
         server_url: str,
@@ -1514,7 +1556,7 @@ class MCPServerManager:
                 resource_scopes,
             ) = await self._attempt_well_known_discovery(server_url)
             metadata = await self._fetch_authorization_server_metadata(
-                authorization_servers
+                authorization_servers, server_url
             )
             if (
                 metadata is None
@@ -1555,7 +1597,7 @@ class MCPServerManager:
                     authorization_servers,
                     resource_scopes,
                 ) = await self._fetch_oauth_metadata_from_resource(
-                    resource_metadata_url
+                    resource_metadata_url, server_url
                 )
             else:
                 (
@@ -1576,7 +1618,7 @@ class MCPServerManager:
 
             if authorization_servers:
                 metadata = await self._fetch_authorization_server_metadata(
-                    authorization_servers
+                    authorization_servers, server_url
                 )
 
             preferred_scopes = scopes or resource_scopes
@@ -1616,19 +1658,26 @@ class MCPServerManager:
         return resource_metadata_url, scopes
 
     async def _fetch_oauth_metadata_from_resource(
-        self, resource_metadata_url: str
+        self, resource_metadata_url: str, server_url: str
     ) -> Tuple[List[str], Optional[List[str]]]:
         if not resource_metadata_url:
             return [], None
 
         try:
-            client = get_async_httpx_client(
-                llm_provider=httpxSpecialProvider.MCP,
-                params={"timeout": MCP_METADATA_TIMEOUT},
+            response = await self._fetch_oauth_discovery_url(
+                resource_metadata_url, server_url
             )
-            response = await client.get(resource_metadata_url)
             response.raise_for_status()
             data = response.json()
+        except SSRFError as exc:
+            verbose_logger.warning(
+                "MCP OAuth discovery: refusing to fetch resource metadata from %s "
+                "(rejected by SSRF guard for server %s): %s",
+                resource_metadata_url,
+                server_url,
+                exc,
+            )
+            return [], None
         except Exception as exc:  # pragma: no cover - network issues
             verbose_logger.debug(
                 "Failed to fetch MCP OAuth metadata from %s: %s",
@@ -1677,23 +1726,25 @@ class MCPServerManager:
             (
                 authorization_servers,
                 scopes,
-            ) = await self._fetch_oauth_metadata_from_resource(url)
+            ) = await self._fetch_oauth_metadata_from_resource(url, server_url)
             if authorization_servers:
                 return authorization_servers, scopes
 
         return [], None
 
     async def _fetch_authorization_server_metadata(
-        self, authorization_servers: List[str]
+        self, authorization_servers: List[str], server_url: str
     ) -> Optional[MCPOAuthMetadata]:
         for issuer in authorization_servers:
-            metadata = await self._fetch_single_authorization_server_metadata(issuer)
+            metadata = await self._fetch_single_authorization_server_metadata(
+                issuer, server_url
+            )
             if metadata is not None:
                 return metadata
         return None
 
     async def _fetch_single_authorization_server_metadata(
-        self, issuer_url: str
+        self, issuer_url: str, server_url: str
     ) -> Optional[MCPOAuthMetadata]:
         try:
             parsed = urlparse(issuer_url)
@@ -1721,13 +1772,18 @@ class MCPServerManager:
 
         for url in candidate_urls:
             try:
-                client = get_async_httpx_client(
-                    llm_provider=httpxSpecialProvider.MCP,
-                    params={"timeout": MCP_METADATA_TIMEOUT},
-                )
-                response = await client.get(url)
+                response = await self._fetch_oauth_discovery_url(url, server_url)
                 response.raise_for_status()
                 data = response.json()
+            except SSRFError as exc:
+                verbose_logger.warning(
+                    "MCP OAuth discovery: refusing to fetch authorization-server "
+                    "metadata from %s (rejected by SSRF guard for server %s): %s",
+                    url,
+                    server_url,
+                    exc,
+                )
+                continue
             except Exception as exc:  # pragma: no cover - network issues
                 verbose_logger.debug(
                     "Failed to fetch authorization metadata from %s: %s",

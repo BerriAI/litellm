@@ -1553,6 +1553,7 @@ async def test_add_callback_via_key(prisma_client):
                 fastapi_response=Response(),
                 user_api_key_dict=UserAPIKeyAuth(
                     metadata={
+                        "allow_client_mock_response": True,
                         "logging": [
                             {
                                 "callback_name": "langfuse",  # 'otel', 'langfuse', 'lunary'
@@ -1563,7 +1564,7 @@ async def test_add_callback_via_key(prisma_client):
                                     "langfuse_host": "https://us.cloud.langfuse.com",
                                 },
                             }
-                        ]
+                        ],
                     }
                 ),
             )
@@ -1657,6 +1658,7 @@ async def test_add_callback_via_key_litellm_pre_call_utils(
             team_id=None,
             max_parallel_requests=None,
             metadata={
+                "allow_client_mock_response": True,
                 "logging": [
                     {
                         "callback_name": "langfuse",
@@ -1667,7 +1669,7 @@ async def test_add_callback_via_key_litellm_pre_call_utils(
                             "langfuse_host": "https://us.cloud.langfuse.com",
                         },
                     }
-                ]
+                ],
             },
             tpm_limit=None,
             rpm_limit=None,
@@ -1813,6 +1815,7 @@ async def test_add_callback_via_key_litellm_pre_call_utils_gcs_bucket(
             team_id=None,
             max_parallel_requests=None,
             metadata={
+                "allow_client_mock_response": True,
                 "logging": [
                     {
                         "callback_name": "gcs_bucket",
@@ -1822,7 +1825,7 @@ async def test_add_callback_via_key_litellm_pre_call_utils_gcs_bucket(
                             "gcs_path_service_account": "pathrise-convert-1606954137718-a956eef1a2a8.json",
                         },
                     }
-                ]
+                ],
             },
             tpm_limit=None,
             rpm_limit=None,
@@ -1946,6 +1949,7 @@ async def test_add_callback_via_key_litellm_pre_call_utils_langsmith(
             team_id=None,
             max_parallel_requests=None,
             metadata={
+                "allow_client_mock_response": True,
                 "logging": [
                     {
                         "callback_name": "langsmith",
@@ -1956,7 +1960,7 @@ async def test_add_callback_via_key_litellm_pre_call_utils_langsmith(
                             "langsmith_base_url": "https://api.smith.langchain.com",
                         },
                     }
-                ]
+                ],
             },
             tpm_limit=None,
             rpm_limit=None,
