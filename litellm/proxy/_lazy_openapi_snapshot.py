@@ -13,6 +13,16 @@ from pathlib import Path
 from typing import Dict, Optional
 
 SNAPSHOT_FILE = Path(__file__).parent / "_lazy_openapi_snapshot.json"
+HTTP_METHOD_SUFFIXES = {
+    "delete",
+    "get",
+    "head",
+    "options",
+    "patch",
+    "post",
+    "put",
+    "trace",
+}
 
 
 def load_snapshot() -> Optional[Dict[str, Dict]]:
@@ -54,8 +64,16 @@ def generate_snapshot() -> Dict[str, Dict]:
         full = get_openapi(title=app.title, version=app.version, routes=feat_routes)
         # Group all of a feature's routes under one tag.
         for path_ops in full.get("paths", {}).values():
-            for op in path_ops.values():
+            for method, op in path_ops.items():
                 if isinstance(op, dict):
+                    operation_id = op.get("operationId")
+                    if isinstance(operation_id, str):
+                        for suffix in HTTP_METHOD_SUFFIXES:
+                            if operation_id.endswith(f"_{suffix}"):
+                                op["operationId"] = (
+                                    operation_id[: -len(suffix)] + method
+                                )
+                                break
                     op["tags"] = [feat.name]
         fragments[feat.name] = {
             "paths": full.get("paths", {}),
