@@ -26,7 +26,6 @@ if TYPE_CHECKING:
         async def recv(self, **kwargs: Any) -> Any: ...
         async def close(self) -> None: ...
 
-
     CLIENT_CONNECTION_CLASS = ClientConnection
 else:
     CLIENT_CONNECTION_CLASS = Any
@@ -46,7 +45,7 @@ class RealTimeStreaming:
     def __init__(
         self,
         websocket: Any,
-        backend_ws: CLIENT_CONNECTION_CLASS,
+        backend_ws: "WSProtocol",
         logging_obj: LiteLLMLogging,
         provider_config: Optional[BaseRealtimeConfig] = None,
         model: str = "",
@@ -232,9 +231,9 @@ class RealTimeStreaming:
                 message, self.model, self.session_configuration_request
             )
             for msg in transformed:
-                await self.backend_ws.send(msg)  # type: ignore[union-attr, attr-defined]
+                await self.backend_ws.send(msg)
         else:
-            await self.backend_ws.send(message)  # type: ignore[union-attr, attr-defined]
+            await self.backend_ws.send(message)
 
     def _has_realtime_guardrails(self) -> bool:
         """Return True if any callback is registered for realtime guardrail event types."""
@@ -391,7 +390,7 @@ class RealTimeStreaming:
                         "[realtime guardrail] ending session after violation %d",
                         self._violation_count,
                     )
-                    await self.backend_ws.close()  # type: ignore[union-attr, attr-defined]
+                    await self.backend_ws.close()
 
                 verbose_logger.warning(
                     "[realtime guardrail] BLOCKED transcript (violation %d): %r",
@@ -530,11 +529,11 @@ class RealTimeStreaming:
         try:
             while True:
                 try:
-                    raw_response = await self.backend_ws.recv(  # type: ignore[union-attr]
+                    raw_response = await self.backend_ws.recv(
                         decode=False
                     )  # improves performance
                 except TypeError:
-                    raw_response = await self.backend_ws.recv()  # type: ignore[union-attr, assignment]
+                    raw_response = await self.backend_ws.recv()
 
                 if self.provider_config:
                     try:
@@ -614,9 +613,9 @@ class RealTimeStreaming:
                     )
 
                     for msg in message:
-                        await self.backend_ws.send(msg)  # type: ignore[union-attr]
+                        await self.backend_ws.send(msg)
                 else:
-                    await self.backend_ws.send(message)  # type: ignore[union-attr]
+                    await self.backend_ws.send(message)
 
         except Exception as e:
             verbose_logger.debug(f"Error in client ack messages: {e}")
@@ -635,4 +634,3 @@ class RealTimeStreaming:
                     await forward_task
                 except asyncio.CancelledError:
                     pass
-
