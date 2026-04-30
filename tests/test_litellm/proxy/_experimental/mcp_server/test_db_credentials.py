@@ -10,15 +10,11 @@ keeps a plain-base64 fallback on read so existing rows continue to work.
 
 import base64
 import json
-import os
-import sys
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../../.."))
-
-from litellm.proxy._experimental.mcp_server.db import (  # noqa: E402
+from litellm.proxy._experimental.mcp_server.db import (
     _decode_user_credential,
     get_user_credential,
     get_user_oauth_credential,
@@ -201,7 +197,7 @@ async def test_oauth_get_returns_none_for_byok_row():
 @pytest.mark.asyncio
 async def test_byok_guard_rejects_overwriting_legacy_byok():
     prisma = _make_prisma_with_existing(row=_legacy_row("plain-byok-key"))
-    with pytest.raises(ValueError, match="non-OAuth2 credential"):
+    with pytest.raises(ValueError, match="could not be verified as an OAuth2"):
         await store_user_oauth_credential(prisma, "alice", "srv-1", "tok")
 
 
@@ -218,7 +214,7 @@ async def test_byok_guard_rejects_overwriting_encrypted_byok():
         return_value=encrypted_row
     )
 
-    with pytest.raises(ValueError, match="non-OAuth2 credential"):
+    with pytest.raises(ValueError, match="could not be verified as an OAuth2"):
         await store_user_oauth_credential(prisma, "alice", "srv-1", "tok")
 
 
@@ -285,6 +281,11 @@ async def test_list_oauth_credentials_filters_byok_and_returns_payloads():
 def test_decode_user_credential_handles_garbage():
     # Malformed input must return None, not raise.
     assert _decode_user_credential("not-base64-and-not-encrypted!!!") is None
+
+
+def test_decode_user_credential_handles_none():
+    # Defensive: a null DB value must return None, not propagate TypeError.
+    assert _decode_user_credential(None) is None
 
 
 def test_decode_user_credential_legacy_path():

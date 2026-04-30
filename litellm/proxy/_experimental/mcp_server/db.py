@@ -517,7 +517,7 @@ def _decode_user_credential(stored: str) -> Optional[str]:
         return decrypted
     try:
         return base64.urlsafe_b64decode(stored).decode()
-    except (binascii.Error, UnicodeDecodeError, ValueError):
+    except (binascii.Error, UnicodeDecodeError, ValueError, TypeError):
         return None
 
 
@@ -649,9 +649,14 @@ async def store_user_oauth_credential(
             existing is not None
             and _decode_oauth_payload(existing.credential_b64) is None
         ):
+            # Existing row is either a BYOK secret or an OAuth2 row that no
+            # longer decrypts (e.g. after a salt-key rotation).  In either
+            # case, refuse to overwrite — the caller would clobber data
+            # that may still be recoverable.
             raise ValueError(
-                f"A non-OAuth2 credential already exists for user {user_id} "
-                f"and server {server_id}. Refusing to overwrite."
+                f"Existing credential for user {user_id} and server "
+                f"{server_id} could not be verified as an OAuth2 token. "
+                f"Refusing to overwrite."
             )
 
     encoded = encrypt_value_helper(json.dumps(payload))
