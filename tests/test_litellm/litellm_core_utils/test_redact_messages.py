@@ -5,10 +5,13 @@ Covers the proxy flow where headers arrive in litellm_params["metadata"]["header
 but litellm_params["litellm_metadata"] is None.
 """
 
+from types import SimpleNamespace
+
 import pytest
 
 import litellm
 from litellm.litellm_core_utils.redact_messages import (
+    _redact_responses_api_output,
     perform_redaction,
     should_redact_message_logging,
 )
@@ -254,6 +257,49 @@ class TestPerformRedaction:
         assert delta["reasoning_content"] == "redacted-by-litellm"
         assert delta["thinking_blocks"] is None
         assert delta["audio"] is None
+
+    def test_redacts_object_choices_inside_model_response_dict(self):
+        result = {
+            "choices": [
+                litellm.Choices(
+                    message=litellm.Message(
+                        content="message content",
+                        role="assistant",
+                        reasoning_content="message reasoning",
+                    )
+                )
+            ]
+        }
+
+        redacted = perform_redaction({}, result)
+
+        choice = redacted["choices"][0]
+        assert choice.message.content == "redacted-by-litellm"
+        assert choice.message.reasoning_content == "redacted-by-litellm"
+
+    def test_redacts_response_output_objects_with_top_level_text(self):
+        output_items = [
+            SimpleNamespace(text="top-level output"),
+            "non-dict output item",
+        ]
+
+        _redact_responses_api_output(output_items)
+
+        assert output_items[0].text == "redacted-by-litellm"
+        assert output_items[1] == "non-dict output item"
+
+    def test_skips_non_dict_response_output_items(self):
+        result = {
+            "output": [
+                "non-dict output item",
+                {"content": [{"text": "nested result"}]},
+            ]
+        }
+
+        redacted = perform_redaction({}, result)
+
+        assert redacted["output"][0] == "non-dict output item"
+        assert redacted["output"][1]["content"][0]["text"] == "redacted-by-litellm"
 
     def test_redacts_responses_api_response_object(self):
         response = mock_responses_api_response("sensitive output")
