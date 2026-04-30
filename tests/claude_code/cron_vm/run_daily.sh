@@ -136,12 +136,31 @@ fi
 log "updating worktree to ${LITELLM_VERSION}"
 git -C "${WORKTREE}" fetch --tags --force
 git -C "${WORKTREE}" reset --hard
-# Keep the venv and the .uv-bin cache around — uv sync will reconcile
-# the venv and we don't want to re-download the pinned uv binary on
-# every run. Drop everything else (compat-results.json, __pycache__,
-# etc.) so each run starts clean.
-git -C "${WORKTREE}" clean -fdx -e .venv -e .uv-bin
+# Keep the venv, the .uv-bin cache, and any tests/claude_code/ we may
+# have shimmed in (see below) around — uv sync will reconcile the
+# venv, we don't want to re-download the pinned uv binary every run,
+# and the test files may not exist on the resolved tag yet. Drop
+# everything else so each run starts clean.
+git -C "${WORKTREE}" clean -fdx -e .venv -e .uv-bin -e tests/claude_code
 git -C "${WORKTREE}" checkout --force "${LITELLM_VERSION}"
+
+# Bridge for the pre-stable window: until the compat matrix work hits a
+# v*-stable tag, the resolver will pick a tag whose tree predates
+# tests/claude_code/ entirely. In that case we shim in the dev
+# checkout's copy of the test tree so the proxy config + tests are
+# discoverable. Once the matrix work is in the resolved tag, this
+# block is a no-op (the if-branch falls through). The shimmed files
+# are untracked, so the next run's `git clean -e tests/claude_code`
+# preserves them across runs.
+if [[ ! -f "${WORKTREE}/tests/claude_code/test_config.yaml" ]]; then
+  if [[ -d "${LITELLM_REPO}/tests/claude_code" ]]; then
+    log "tests/claude_code missing on ${LITELLM_VERSION}; shimming from ${LITELLM_REPO}"
+    mkdir -p "${WORKTREE}/tests"
+    cp -r "${LITELLM_REPO}/tests/claude_code" "${WORKTREE}/tests/"
+  else
+    die "tests/claude_code missing on ${LITELLM_VERSION} and no shim source at ${LITELLM_REPO}/tests/claude_code"
+  fi
+fi
 
 # litellm pins an exact uv version in pyproject.toml's [tool.uv]
 # `required-version` field, so a system uv that's newer or older
