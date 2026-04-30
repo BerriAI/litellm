@@ -141,3 +141,41 @@ async def test_user_budget_settings_from_config_yaml_env_var(tmp_path, key, attr
             os.environ.pop(env_name, None)
         else:
             os.environ[env_name] = original_env
+
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        ("10", 10.0),
+        ("  10  ", 10.0),
+        ("1.5", 1.5),
+        ("", None),
+        ("   ", None),
+        (None, None),
+        (5, 5.0),
+        (5.5, 5.5),
+    ],
+)
+def test_coerce_budget_setting_valid(raw, expected):
+    """The helper accepts numeric strings (with surrounding whitespace),
+    floats/ints, and None or empty strings (treated as unset).
+    """
+    from litellm.proxy.proxy_server import _coerce_budget_setting
+
+    assert _coerce_budget_setting(raw) == expected
+
+
+def test_coerce_budget_setting_default_for_max_budget():
+    """`max_budget` callers pass default=0.0 to preserve the legacy default."""
+    from litellm.proxy.proxy_server import _coerce_budget_setting
+
+    assert _coerce_budget_setting(None, default=0.0) == 0.0
+    assert _coerce_budget_setting("", default=0.0) == 0.0
+
+
+def test_coerce_budget_setting_invalid_raises_clear_error():
+    """Non-numeric strings raise ValueError pointing at the bad input."""
+    from litellm.proxy.proxy_server import _coerce_budget_setting
+
+    with pytest.raises(ValueError, match="unlimited"):
+        _coerce_budget_setting("unlimited")
