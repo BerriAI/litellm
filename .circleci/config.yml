@@ -1461,6 +1461,10 @@ jobs:
           timeout: "300"
       - run:
           name: Run Claude Code Docker container
+          # in dockerfile, entrypoint is [claude]
+          # we run --print "Reply with exactly: gateway-ok"
+          # as a simple sentence to claude to make sure it
+          # runs as intended, passing through the proxy
           command: |
             mkdir -p test-results
             set +e
