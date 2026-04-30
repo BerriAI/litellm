@@ -40,6 +40,7 @@ from litellm.types.proxy.guardrails.guardrail_hooks.hiddenlayer import (
 )
 from litellm.types.proxy.guardrails.guardrail_hooks.alice_wonderfence import (
     WonderFenceGuardrailConfigModel,
+)
 
 """
 Pydantic object defining how to set guardrails on litellm proxy
@@ -99,6 +100,7 @@ class SupportedGuardrailIntegrations(Enum):
     MCP_JWT_SIGNER = "mcp_jwt_signer"
     LLM_AS_A_JUDGE = "llm_as_a_judge"
     ALICE_WONDERFENCE = "alice_wonderfence"
+
 
 class Role(Enum):
     SYSTEM = "system"
