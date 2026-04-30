@@ -280,9 +280,7 @@ ssl_security_level: Optional[str] = None
 ssl_certificate: Optional[str] = None
 user_url_validation: bool = True
 user_url_allowed_hosts: List[str] = []
-reject_url_model_destinations: bool = os.getenv(
-    "LITELLM_REJECT_URL_MODEL_DESTINATIONS", "true"
-).lower() not in ("false", "0")
+reject_url_model_destinations: bool = True
 ssl_ecdh_curve: Optional[str] = (
     None  # Set to 'X25519' to disable PQC and improve performance
 )
