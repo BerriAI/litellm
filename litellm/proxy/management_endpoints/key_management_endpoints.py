@@ -37,6 +37,7 @@ from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._experimental.mcp_server.db import (
     rotate_mcp_server_credentials_master_key,
+    rotate_mcp_user_credentials_master_key,
 )
 from litellm.proxy._types import *
 from litellm.proxy._types import LiteLLM_VerificationToken
@@ -3716,6 +3717,17 @@ async def _rotate_master_key(  # noqa: PLR0915
     except Exception as e:
         verbose_proxy_logger.warning(
             "Failed to rotate MCP server credentials: %s", str(e)
+        )
+
+    # 4b. process MCP user-scoped credentials table (BYOK + OAuth2 tokens)
+    try:
+        await rotate_mcp_user_credentials_master_key(
+            prisma_client=prisma_client,
+            new_master_key=new_master_key,
+        )
+    except Exception as e:
+        verbose_proxy_logger.warning(
+            "Failed to rotate MCP user credentials: %s", str(e)
         )
 
     # 5. process credentials table
