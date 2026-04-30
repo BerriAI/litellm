@@ -279,7 +279,7 @@ class GoogleAIStudioFilesHandler(GeminiModelInfo, BaseFilesConfig):
         decoded_file_id = ""
         if len(parts) == 2:
             decoded_file_id = parts[1]
-            for _ in range(3):
+            while True:
                 next_decoded_file_id = unquote(decoded_file_id)
                 if next_decoded_file_id == decoded_file_id:
                     break
