@@ -1613,7 +1613,7 @@ prisma_client: Optional[PrismaClient] = None
 shared_aiohttp_session: Optional["ClientSession"] = (
     None  # Global shared session for connection reuse
 )
-user_api_key_cache = UserApiKeyCache(
+user_api_key_cache: UserApiKeyCache = UserApiKeyCache(
     default_in_memory_ttl=UserAPIKeyCacheTTLEnum.in_memory_cache_ttl.value
 )
 spend_counter_cache = DualCache(
@@ -6318,7 +6318,7 @@ class ProxyStartupEvent:
         cls,
         general_settings: dict,
         prisma_client: Optional[PrismaClient],
-        user_api_key_cache: DualCache,
+        user_api_key_cache: UserApiKeyCache,
     ):
         """Initialize JWT auth on startup"""
         if general_settings.get("litellm_jwtauth", None) is not None:
@@ -6367,7 +6367,7 @@ class ProxyStartupEvent:
     async def _warm_global_spend_cache(
         cls,
         litellm_proxy_admin_name: str,
-        user_api_key_cache: DualCache,
+        user_api_key_cache: UserApiKeyCache,
         prisma_client: PrismaClient,
     ) -> None:
         """Warm global spend cache once at startup to reduce impact of first wave of requests."""
@@ -7007,7 +7007,7 @@ class ProxyStartupEvent:
         cls,
         database_url: Optional[str],
         proxy_logging_obj: ProxyLogging,
-        user_api_key_cache: DualCache,
+        user_api_key_cache: UserApiKeyCache,
     ) -> Optional[PrismaClient]:
         """
         - Sets up prisma client
