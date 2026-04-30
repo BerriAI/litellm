@@ -282,7 +282,81 @@ class LiteLLMCompletionResponsesConfig:
             )
         )
 
-        return messages
+        return LiteLLMCompletionResponsesConfig._merge_responses_system_messages(
+            messages=messages
+        )
+
+    @staticmethod
+    def _get_text_from_message_content(content: Any) -> str:
+        if content is None:
+            return ""
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            text_parts: List[str] = []
+            for content_part in content:
+                if isinstance(content_part, str):
+                    text_parts.append(content_part)
+                elif isinstance(content_part, dict):
+                    content_type = content_part.get("type")
+                    text = content_part.get("text")
+                    if content_type in {"text", "input_text"} and isinstance(text, str):
+                        text_parts.append(text)
+            return "\n\n".join(text_parts)
+        return str(content)
+
+    @staticmethod
+    def _merge_responses_system_messages(
+        messages: List[
+            Union[
+                AllMessageValues,
+                GenericChatCompletionMessage,
+                ChatCompletionMessageToolCall,
+                ChatCompletionResponseMessage,
+                Message,
+            ]
+        ],
+    ) -> List[
+        Union[
+            AllMessageValues,
+            GenericChatCompletionMessage,
+            ChatCompletionMessageToolCall,
+            ChatCompletionResponseMessage,
+            Message,
+        ]
+    ]:
+        system_parts: List[str] = []
+        non_system_messages: List[
+            Union[
+                AllMessageValues,
+                GenericChatCompletionMessage,
+                ChatCompletionMessageToolCall,
+                ChatCompletionResponseMessage,
+                Message,
+            ]
+        ] = []
+
+        for message in messages:
+            role = message.get("role") if isinstance(message, dict) else None
+            if role in {"system", "developer"}:
+                content = message.get("content") if isinstance(message, dict) else None
+                text_content = (
+                    LiteLLMCompletionResponsesConfig._get_text_from_message_content(
+                        content=content
+                    )
+                )
+                if text_content:
+                    system_parts.append(text_content)
+                continue
+            non_system_messages.append(message)
+
+        if not system_parts:
+            return messages
+
+        system_message = ChatCompletionSystemMessage(
+            role="system", content="\n\n".join(system_parts)
+        )
+        return [system_message, *non_system_messages]
 
     @staticmethod
     async def async_responses_api_session_handler(
