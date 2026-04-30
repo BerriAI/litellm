@@ -2699,7 +2699,7 @@ if MCP_AVAILABLE:
             )
         return user_api_key_auth.model_copy(update={"object_permission": updated_op})
 
-    async def handle_streamable_http_mcp(
+    async def handle_streamable_http_mcp(  # noqa: PLR0915
         scope: Scope, receive: Receive, send: Send
     ) -> None:
         """Handle MCP requests through StreamableHTTP."""
