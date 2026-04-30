@@ -177,7 +177,7 @@ def rerank(  # noqa: PLR0915
             model=model,
             user=user,
             optional_params=dict(optional_rerank_params),
-            litellm_params=rerank_litellm_params,
+            litellm_params=dict(rerank_litellm_params),
             custom_llm_provider=_custom_llm_provider,
         )
 
