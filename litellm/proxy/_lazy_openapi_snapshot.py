@@ -10,10 +10,12 @@ any drift as a neutral check.
 import json
 import re
 import sys
+from copy import copy
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
 from fastapi.routing import APIRoute
+from starlette.routing import BaseRoute
 
 SNAPSHOT_FILE = Path(__file__).parent / "_lazy_openapi_snapshot.json"
 
@@ -28,11 +30,36 @@ def load_snapshot() -> Optional[Dict[str, Dict]]:
         return None
 
 
-def _stable_unique_id(route: APIRoute) -> str:
+def _stable_unique_id(route: APIRoute, method: str) -> str:
     operation_id = f"{route.name}{route.path_format}"
     operation_id = re.sub(r"\W", "_", operation_id)
-    method = sorted(route.methods or [""])[0].lower()
-    return f"{operation_id}_{method}"
+    return f"{operation_id}_{method.lower()}"
+
+
+def _routes_with_stable_unique_ids(routes: List[BaseRoute]) -> List[BaseRoute]:
+    stable_routes: List[BaseRoute] = []
+    for route in routes:
+        if not isinstance(route, APIRoute) or not route.methods:
+            stable_routes.append(route)
+            continue
+
+        methods = sorted(route.methods)
+        has_multiple_methods = len(methods) > 1
+        for method in methods:
+            method_route = copy(route)
+            method_route.methods = {method}
+            if route.operation_id is not None:
+                method_route.operation_id = (
+                    f"{route.operation_id}_{method.lower()}"
+                    if has_multiple_methods
+                    else route.operation_id
+                )
+                method_route.unique_id = method_route.operation_id
+            else:
+                method_route.unique_id = _stable_unique_id(route, method)
+            stable_routes.append(method_route)
+
+    return stable_routes
 
 
 def generate_snapshot() -> Dict[str, Dict]:
@@ -61,10 +88,11 @@ def generate_snapshot() -> Dict[str, Dict]:
         ]
         if not feat_routes:
             continue
-        for route in feat_routes:
-            if isinstance(route, APIRoute):
-                route.unique_id = _stable_unique_id(route)
-        full = get_openapi(title=app.title, version=app.version, routes=feat_routes)
+        full = get_openapi(
+            title=app.title,
+            version=app.version,
+            routes=_routes_with_stable_unique_ids(feat_routes),
+        )
         # Group all of a feature's routes under one tag.
         for path_ops in full.get("paths", {}).values():
             for op in path_ops.values():
