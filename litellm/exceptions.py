@@ -941,6 +941,24 @@ class BlockedPiiEntityError(Exception):
 
 
 class MidStreamFallbackError(ServiceUnavailableError):  # type: ignore
+    @staticmethod
+    def _get_status_code(original_exception: Optional[Exception]) -> int:
+        if original_exception is None:
+            return 503
+
+        for original_status in (
+            getattr(original_exception, "status_code", None),
+            getattr(getattr(original_exception, "response", None), "status_code", None),
+        ):
+            if original_status is None:
+                continue
+            try:
+                return int(original_status)
+            except (TypeError, ValueError):
+                continue
+
+        return 503
+
     def __init__(
         self,
         message: str,
@@ -954,8 +972,8 @@ class MidStreamFallbackError(ServiceUnavailableError):  # type: ignore
         generated_content: str = "",
         is_pre_first_chunk: bool = False,
     ):
-        original_status = getattr(original_exception, "status_code", None)
-        self.status_code = int(original_status) if original_status is not None else 503
+        original_status = self._get_status_code(original_exception)
+        self.status_code = original_status
         self.message = f"litellm.MidStreamFallbackError: {message}"
         self.model = model
         self.llm_provider = llm_provider
@@ -997,7 +1015,7 @@ class MidStreamFallbackError(ServiceUnavailableError):  # type: ignore
         )
 
         # Restore the propagated status and original response/request objects
-        self.status_code = int(original_status) if original_status is not None else 503
+        self.status_code = original_status
         self.response = _saved_response
         self.request = _saved_request
         self.message = _saved_message
