@@ -133,6 +133,16 @@ class TestGoogleAIStudioFilesTransformation:
                 litellm_params=litellm_params,
             )
 
+    def test_transform_retrieve_file_request_rejects_deeply_encoded_separator(self):
+        litellm_params = {"api_key": "test-api-key"}
+
+        with pytest.raises(ValueError, match="Invalid Gemini file name"):
+            self.handler.transform_retrieve_file_request(
+                file_id="files/..%2525252Fsecrets",
+                optional_params={},
+                litellm_params=litellm_params,
+            )
+
     @patch.dict("os.environ", {}, clear=True)
     @patch("litellm.llms.gemini.common_utils.get_secret_str", return_value=None)
     def test_transform_retrieve_file_request_missing_api_key(self, mock_get_secret):
