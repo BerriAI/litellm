@@ -446,7 +446,9 @@ async def _update_database_and_spend_counters(
         )
     except Exception:
         if budget_reservation is not None:
-            await _release_budget_reservation(budget_reservation=budget_reservation)
+            await _invalidate_budget_reservation_counters(
+                budget_reservation=budget_reservation
+            )
         raise
 
 
@@ -459,5 +461,20 @@ async def _release_budget_reservation(budget_reservation: Optional[dict]) -> Non
     )
 
     await release_budget_reservation(
+        budget_reservation=budget_reservation,
+    )
+
+
+async def _invalidate_budget_reservation_counters(
+    budget_reservation: Optional[dict],
+) -> None:
+    if budget_reservation is None:
+        return
+
+    from litellm.proxy.spend_tracking.budget_reservation import (
+        invalidate_budget_reservation_counters,
+    )
+
+    await invalidate_budget_reservation_counters(
         budget_reservation=budget_reservation,
     )

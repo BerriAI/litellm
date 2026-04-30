@@ -312,16 +312,19 @@ async def test_update_database_and_spend_counters_updates_counters_after_db_upda
 
 
 @pytest.mark.asyncio
-async def test_update_database_and_spend_counters_releases_reservation_when_counter_update_fails():
+async def test_update_database_and_spend_counters_invalidates_reservation_when_counter_update_fails():
     proxy_logging_obj = MagicMock()
     proxy_logging_obj.db_spend_update_writer.update_database = AsyncMock()
     increment_spend_counters = AsyncMock(side_effect=Exception("counter unavailable"))
-    budget_reservation = {"reserved_cost": 0.5, "entries": []}
+    budget_reservation = {
+        "reserved_cost": 0.5,
+        "entries": [{"counter_key": "spend:key:test_api_key"}],
+    }
 
     with patch(
-        "litellm.proxy.spend_tracking.budget_reservation.release_budget_reservation",
+        "litellm.proxy.spend_tracking.budget_reservation.invalidate_budget_reservation_counters",
         new_callable=AsyncMock,
-    ) as mock_release_budget_reservation:
+    ) as mock_invalidate_budget_reservation_counters:
         with pytest.raises(Exception, match="counter unavailable"):
             await _update_database_and_spend_counters(
                 proxy_logging_obj=proxy_logging_obj,
@@ -339,7 +342,7 @@ async def test_update_database_and_spend_counters_releases_reservation_when_coun
                 budget_reservation=budget_reservation,
             )
 
-        mock_release_budget_reservation.assert_awaited_once_with(
+        mock_invalidate_budget_reservation_counters.assert_awaited_once_with(
             budget_reservation=budget_reservation,
         )
 
