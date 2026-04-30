@@ -54,6 +54,8 @@ async def reserve_budget_for_request(
     prisma_client: Optional[PrismaClient],
     user_api_key_cache: DualCache,
     proxy_logging_obj: ProxyLogging,
+    end_user_id: Optional[str] = None,
+    end_user_object: Optional[Any] = None,
 ) -> Optional[dict]:
     if valid_token is None or not RouteChecks.is_llm_api_route(route=route):
         return None
@@ -63,12 +65,15 @@ async def reserve_budget_for_request(
         return None
 
     counters = await _get_budget_counters(
+        request_body=request_body,
         valid_token=valid_token,
         team_object=team_object,
         user_object=user_object,
         prisma_client=prisma_client,
         user_api_key_cache=user_api_key_cache,
         proxy_logging_obj=proxy_logging_obj,
+        end_user_id=end_user_id,
+        end_user_object=end_user_object,
     )
     if not counters:
         return None
@@ -166,12 +171,15 @@ async def invalidate_budget_reservation_counters(
 
 
 async def _get_budget_counters(
+    request_body: dict,
     valid_token: UserAPIKeyAuth,
     team_object: Optional[LiteLLM_TeamTable],
     user_object: Optional[LiteLLM_UserTable],
     prisma_client: Optional[PrismaClient],
     user_api_key_cache: DualCache,
     proxy_logging_obj: ProxyLogging,
+    end_user_id: Optional[str] = None,
+    end_user_object: Optional[Any] = None,
 ) -> List[_BudgetCounter]:
     counters: List[_BudgetCounter] = []
 
@@ -236,6 +244,25 @@ async def _get_budget_counters(
             )
         )
 
+    end_user_counter = await _get_end_user_budget_counter(
+        valid_token=valid_token,
+        end_user_id=end_user_id,
+        end_user_object=end_user_object,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+    )
+    if end_user_counter is not None:
+        counters.append(end_user_counter)
+
+    counters.extend(
+        await _get_tag_budget_counters(
+            request_body=request_body,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+    )
+
     team_member_counter = await _get_team_member_budget_counter(
         valid_token=valid_token,
         team_object=team_object,
@@ -254,6 +281,217 @@ async def _get_budget_counters(
         counters.append(org_counter)
 
     return counters
+
+
+async def _get_end_user_budget_counter(
+    valid_token: UserAPIKeyAuth,
+    end_user_id: Optional[str],
+    end_user_object: Optional[Any],
+    prisma_client: Optional[PrismaClient],
+    user_api_key_cache: DualCache,
+) -> Optional[_BudgetCounter]:
+    end_user_id = end_user_id or valid_token.end_user_id
+    if end_user_id is None:
+        return None
+
+    source_cache_key = f"end_user_id:{end_user_id}"
+    end_user_obj = end_user_object or (
+        await _get_end_user_from_cache_or_db(
+            end_user_id=end_user_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+        )
+    )
+
+    max_budget = _to_float(valid_token.end_user_max_budget)
+    fallback_spend = 0.0
+    if end_user_obj is not None:
+        fallback_spend = _to_float(_get_value(end_user_obj, "spend")) or 0.0
+        if max_budget is None:
+            budget_table = _get_value(end_user_obj, "litellm_budget_table")
+            max_budget = _to_float(_get_value(budget_table, "max_budget"))
+
+    if max_budget is None:
+        max_budget = await _get_default_end_user_max_budget(
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+        )
+
+    if max_budget is None or max_budget <= 0:
+        return None
+
+    return _BudgetCounter(
+        counter_key=f"spend:end_user:{end_user_id}",
+        source_cache_key=source_cache_key,
+        max_budget=max_budget,
+        fallback_spend=fallback_spend,
+        entity_type="EndUser",
+        entity_id=end_user_id,
+    )
+
+
+async def _get_end_user_from_cache_or_db(
+    end_user_id: str,
+    prisma_client: Optional[PrismaClient],
+    user_api_key_cache: DualCache,
+) -> Optional[Any]:
+    cache_key = f"end_user_id:{end_user_id}"
+    cached_end_user = await user_api_key_cache.async_get_cache(key=cache_key)
+    if cached_end_user is not None:
+        return cached_end_user
+
+    if prisma_client is None:
+        return None
+
+    try:
+        row = await prisma_client.db.litellm_endusertable.find_unique(
+            where={"user_id": end_user_id},
+            include={"litellm_budget_table": True, "object_permission": True},
+        )
+    except Exception:
+        verbose_proxy_logger.debug(
+            "Unable to fetch end-user budget for reservation", exc_info=True
+        )
+        return None
+
+    if row is None:
+        return None
+
+    row_dict = _object_to_dict(row)
+    if row_dict:
+        await user_api_key_cache.async_set_cache(key=cache_key, value=row_dict)
+        return row_dict
+    return row
+
+
+async def _get_default_end_user_max_budget(
+    prisma_client: Optional[PrismaClient],
+    user_api_key_cache: DualCache,
+) -> Optional[float]:
+    if litellm.max_end_user_budget_id is None or prisma_client is None:
+        return None
+
+    cache_key = f"default_end_user_budget:{litellm.max_end_user_budget_id}"
+    cached_budget = await user_api_key_cache.async_get_cache(key=cache_key)
+    max_budget = _to_float(_get_value(cached_budget, "max_budget"))
+    if max_budget is not None:
+        return max_budget
+
+    try:
+        budget_record = await prisma_client.db.litellm_budgettable.find_unique(
+            where={"budget_id": litellm.max_end_user_budget_id}
+        )
+    except Exception:
+        verbose_proxy_logger.debug(
+            "Unable to fetch default end-user budget for reservation", exc_info=True
+        )
+        return None
+
+    if budget_record is None:
+        return None
+
+    budget_dict = _object_to_dict(budget_record)
+    if budget_dict:
+        await user_api_key_cache.async_set_cache(key=cache_key, value=budget_dict)
+    return _to_float(_get_value(budget_record, "max_budget"))
+
+
+async def _get_tag_budget_counters(
+    request_body: dict,
+    prisma_client: Optional[PrismaClient],
+    user_api_key_cache: DualCache,
+    proxy_logging_obj: ProxyLogging,
+) -> List[_BudgetCounter]:
+    from litellm.proxy.common_utils.http_parsing_utils import get_tags_from_request_body
+
+    tag_names = _dedupe_tags(get_tags_from_request_body(request_body=request_body))
+    if not tag_names:
+        return []
+
+    tag_objects = await _get_tag_objects_for_reservation(
+        tag_names=tag_names,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+
+    counters: List[_BudgetCounter] = []
+    for tag_name in tag_names:
+        tag_object = tag_objects.get(tag_name)
+        if tag_object is None:
+            continue
+        budget_table = _get_value(tag_object, "litellm_budget_table")
+        max_budget = _to_float(_get_value(budget_table, "max_budget"))
+        if max_budget is None or max_budget <= 0:
+            continue
+        counters.append(
+            _BudgetCounter(
+                counter_key=f"spend:tag:{tag_name}",
+                source_cache_key=f"tag:{tag_name}",
+                max_budget=max_budget,
+                fallback_spend=_to_float(_get_value(tag_object, "spend")) or 0.0,
+                entity_type="Tag",
+                entity_id=tag_name,
+            )
+        )
+    return counters
+
+
+async def _get_tag_objects_for_reservation(
+    tag_names: List[str],
+    prisma_client: Optional[PrismaClient],
+    user_api_key_cache: DualCache,
+    proxy_logging_obj: ProxyLogging,
+) -> Dict[str, Any]:
+    tag_objects: Dict[str, Any] = {}
+    uncached_tags: List[str] = []
+
+    for tag_name in tag_names:
+        cached_tag = await user_api_key_cache.async_get_cache(key=f"tag:{tag_name}")
+        if cached_tag is not None:
+            tag_objects[tag_name] = cached_tag
+        else:
+            uncached_tags.append(tag_name)
+
+    if not uncached_tags or prisma_client is None:
+        return tag_objects
+
+    try:
+        db_tags = await prisma_client.db.litellm_tagtable.find_many(
+            where={"tag_name": {"in": uncached_tags}},
+            include={"litellm_budget_table": True},
+        )
+    except Exception:
+        verbose_proxy_logger.debug(
+            "Unable to fetch tag budgets for reservation", exc_info=True
+        )
+        return tag_objects
+
+    for db_tag in db_tags:
+        tag_name = _get_value(db_tag, "tag_name")
+        if not isinstance(tag_name, str):
+            continue
+        row_dict = _object_to_dict(db_tag)
+        if row_dict:
+            await user_api_key_cache.async_set_cache(
+                key=f"tag:{tag_name}", value=row_dict
+            )
+            tag_objects[tag_name] = row_dict
+        else:
+            tag_objects[tag_name] = db_tag
+
+    return tag_objects
+
+
+def _dedupe_tags(tags: List[str]) -> List[str]:
+    seen = set()
+    deduped_tags = []
+    for tag in tags:
+        if tag in seen:
+            continue
+        seen.add(tag)
+        deduped_tags.append(tag)
+    return deduped_tags
 
 
 async def _get_team_member_budget_counter(
@@ -727,3 +965,15 @@ def _get_value(obj: Any, key: str) -> Any:
     if isinstance(obj, dict):
         return obj.get(key)
     return getattr(obj, key, None)
+
+
+def _object_to_dict(obj: Any) -> dict:
+    if isinstance(obj, dict):
+        return obj
+    if hasattr(obj, "model_dump"):
+        value = obj.model_dump()
+        return value if isinstance(value, dict) else {}
+    if hasattr(obj, "dict"):
+        value = obj.dict()
+        return value if isinstance(value, dict) else {}
+    return {}

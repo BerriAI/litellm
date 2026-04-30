@@ -1869,6 +1869,8 @@ async def _run_centralized_common_checks(
         llm_router=llm_router,
         team_object=team_object,
         user_object=user_object,
+        end_user_id=end_user_id,
+        end_user_object=end_user_object,
         prisma_client=prisma_client,
         user_api_key_cache=user_api_key_cache,
         proxy_logging_obj=proxy_logging_obj,
@@ -1893,6 +1895,8 @@ async def _reserve_budget_after_common_checks(
     user_api_key_cache: DualCache,
     proxy_logging_obj: ProxyLogging,
     skip_budget_checks: bool,
+    end_user_id: Optional[str] = None,
+    end_user_object: Optional[LiteLLM_EndUserTable] = None,
 ) -> None:
     user_api_key_auth_obj.budget_reservation = None
     if skip_budget_checks:
@@ -1912,6 +1916,8 @@ async def _reserve_budget_after_common_checks(
         prisma_client=prisma_client,
         user_api_key_cache=user_api_key_cache,
         proxy_logging_obj=proxy_logging_obj,
+        end_user_id=end_user_id,
+        end_user_object=end_user_object,
     )
 
 
