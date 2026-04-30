@@ -195,6 +195,69 @@ async def test_add_team_callbacks_emits_audit_log_when_enabled(monkeypatch):
     assert len(after["metadata"]["logging"]) == 1
     assert after["metadata"]["logging"][0]["callback_name"] == "langfuse"
 
+    # Callback secrets MUST NOT leak into the audit log payload.
+    callback_vars = after["metadata"]["logging"][0]["callback_vars"]
+    assert callback_vars["langfuse_public_key"] != "pk"
+    assert callback_vars["langfuse_secret_key"] != "sk"
+    # Key names are preserved so the auditor can see which fields changed.
+    assert "langfuse_public_key" in callback_vars
+    assert "langfuse_secret_key" in callback_vars
+    # And no plaintext secret should appear anywhere in the serialized row.
+    assert "sk" not in log.updated_values.replace("sk-", "")  # crude leak check
+    assert "pk" not in (log.updated_values.replace("pk-", "").replace("public_key", ""))
+
+
+@pytest.mark.asyncio
+async def test_disable_team_logging_redacts_existing_callback_secrets(monkeypatch):
+    monkeypatch.setattr(litellm, "store_audit_logs", True)
+    # Existing team has populated callback_vars containing secrets — redaction
+    # must apply to the BEFORE snapshot too.
+    mock_prisma = _patch_prisma(
+        {
+            "callback_settings": {
+                "success_callback": ["langfuse"],
+                "failure_callback": [],
+                "callback_vars": {
+                    "langfuse_public_key": "pk-real",
+                    "langfuse_secret_key": "sk-real-secret",
+                },
+            }
+        }
+    )
+
+    audit_calls = []
+
+    async def capture(request_data):
+        audit_calls.append(request_data)
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
+        patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"),
+        patch(
+            "litellm.proxy.management_helpers.audit_logs.create_audit_log_for_update",
+            new=capture,
+        ),
+    ):
+        await disable_team_logging(
+            http_request=MagicMock(spec=Request),
+            team_id="team-1",
+            user_api_key_dict=_admin_auth(),
+            litellm_changed_by=None,
+        )
+        import asyncio
+
+        for _ in range(3):
+            await asyncio.sleep(0)
+
+    assert len(audit_calls) == 1
+    log = audit_calls[0]
+    # The pre-existing secret_key value must NOT appear in the serialized
+    # before_value or updated_values.
+    assert "sk-real-secret" not in log.before_value
+    assert "sk-real-secret" not in log.updated_values
+    assert "pk-real" not in log.before_value
+    assert "pk-real" not in log.updated_values
+
 
 @pytest.mark.asyncio
 async def test_add_team_callbacks_no_audit_when_disabled(monkeypatch):
