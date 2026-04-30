@@ -117,6 +117,7 @@ class LangFuseHandler:
             langfuse_public_key=credentials.get("langfuse_public_key"),
             langfuse_secret=credentials.get("langfuse_secret"),
             langfuse_host=credentials.get("langfuse_host"),
+            allow_env_credentials=credentials.get("langfuse_host") is None,
         )
         in_memory_dynamic_logger_cache.set_cache(
             credentials=credentials,
