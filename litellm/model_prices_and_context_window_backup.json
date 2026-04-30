@@ -5114,7 +5114,9 @@
         "supported_endpoints": [
             "/v1/images/generations",
             "/v1/images/edits"
-        ]
+        ],
+        "supports_vision": true,
+        "supports_pdf_input": true
     },
     "azure/gpt-image-2-2026-04-21": {
         "cache_read_input_image_token_cost": 2e-06,
@@ -5127,7 +5129,9 @@
         "supported_endpoints": [
             "/v1/images/generations",
             "/v1/images/edits"
-        ]
+        ],
+        "supports_vision": true,
+        "supports_pdf_input": true
     },
     "azure/low/1024-x-1024/gpt-image-1-mini": {
         "input_cost_per_pixel": 2.0751953125e-09,
