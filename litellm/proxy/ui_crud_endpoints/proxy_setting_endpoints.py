@@ -183,6 +183,7 @@ ALLOWED_UI_SETTINGS_FIELDS = {
 # Flags that must be synced from the persisted UISettings into
 # general_settings at runtime (on both read and write).
 _RUNTIME_GENERAL_SETTINGS_FLAGS = [
+    "require_auth_for_public_ai_hub",
     "forward_client_headers_to_llm_api",
     "forward_llm_provider_auth_headers",
     "disable_agents_for_internal_users",

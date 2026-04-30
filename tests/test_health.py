@@ -73,7 +73,6 @@ async def test_health_readiness():
             response_json = await response.json()
 
             print(response_json)
-            assert "litellm_version" in response_json
             assert "status" in response_json
 
             if status != 200:

@@ -42,10 +42,29 @@ class PrometheusAuthMiddleware:
         if litellm.require_auth_for_metrics_endpoint is True:
             # Construct Request only when auth is actually needed
             request = Request(scope, receive)
-            api_key = request.headers.get(_AUTHORIZATION_HEADER) or ""
 
             try:
-                await user_api_key_auth(request=request, api_key=api_key)
+                await user_api_key_auth(
+                    request=request,
+                    api_key=request.headers.get(_AUTHORIZATION_HEADER) or "",
+                    azure_api_key_header=request.headers.get(
+                        SpecialHeaders.azure_authorization.value
+                    )
+                    or "",
+                    anthropic_api_key_header=request.headers.get(
+                        SpecialHeaders.anthropic_authorization.value
+                    ),
+                    google_ai_studio_api_key_header=request.headers.get(
+                        SpecialHeaders.google_ai_studio_authorization.value
+                    ),
+                    azure_apim_header=request.headers.get(
+                        SpecialHeaders.azure_apim_authorization.value
+                    )
+                    or "",
+                    custom_litellm_key_header=request.headers.get(
+                        SpecialHeaders.custom_litellm_api_key.value
+                    ),
+                )
             except Exception as e:
                 # Send 401 response directly via ASGI protocol
                 error_message = getattr(e, "message", str(e))

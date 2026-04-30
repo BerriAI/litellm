@@ -11,10 +11,14 @@ sys.path.insert(
 
 import httpx
 import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 from prisma.errors import ClientNotConnectedError, HTTPClientClosedError, PrismaError
 
 import litellm.proxy.health_endpoints._health_endpoints as _health_endpoints_module
 
+from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.health_endpoints._health_endpoints import (
     _db_health_readiness_check,
     get_callback_identifier,
@@ -512,7 +516,7 @@ def proxy_client(monkeypatch):
 
     Redis cache:
     - If REDIS_HOST is set in environment, Redis cache will be automatically configured
-    - Cache configuration is included in /health/readiness endpoint response
+    - Cache diagnostics are included in the authenticated /health/readiness/details response
     """
     client = create_proxy_test_client(monkeypatch)
     with client:
@@ -588,11 +592,7 @@ def test_health_liveness_endpoint(proxy_client):
 def test_health_readiness(proxy_client):
     """
     Test /health/readiness endpoint.
-    Database and Redis are optional - the endpoint should work whether they're available or not.
-
-    If DATABASE_URL is set, the endpoint will check database connectivity.
-    If REDIS_HOST is set, the endpoint will report cache status.
-    If neither is set, the endpoint should still return a valid health status.
+    Database and Redis are optional - the public endpoint should work whether they're available or not.
     """
     # Measure the time taken for the health check call
     start_time = time.perf_counter()
@@ -614,40 +614,33 @@ def test_health_readiness(proxy_client):
         duration_ms < 500
     ), f"Health check took {duration_ms:.2f}ms, expected < 500ms for readiness endpoint"
 
-    # Assert response contains expected fields
+    # Assert response contains only low-detail public probe fields
     response_data = response.json()
-    assert "status" in response_data, "Response should contain 'status' field"
-    assert (
-        "litellm_version" in response_data
-    ), "Response should contain 'litellm_version' field"
-
-    # Display all health endpoint response fields (matches what /health/readiness returns)
-    print("\n" + "-" * 60)
-    print("HEALTH ENDPOINT RESPONSE")
-    print("-" * 60)
-    print(f"Status: {response_data.get('status', 'unknown')}")
-    print(f"Database: {response_data.get('db', 'not reported')}")
-    print(f"LiteLLM Version: {response_data.get('litellm_version', 'unknown')}")
-    print(f"Success Callbacks: {response_data.get('success_callbacks', [])}")
-    print(f"Cache: {response_data.get('cache', 'none')}")
-    print(
-        f"Use AioHTTP Transport: {response_data.get('use_aiohttp_transport', 'unknown')}"
-    )
+    assert response_data == {"status": "healthy"}
     print(f"Response time: {duration_ms:.2f}ms")
 
-    # If database status is reported, verify it's a valid status
-    # Database may be "connected", "disconnected", "unknown", or "Not connected" (when prisma_client is None)
-    if "db" in response_data:
-        db_status = response_data["db"]
-        # Database status can be any of these valid states
-        assert db_status in [
-            "connected",
-            "disconnected",
-            "unknown",
-            "Not connected",
-        ], f"Unexpected db status: {db_status}"
 
-    print("=" * 60 + "\n")
+def test_health_readiness_details_returns_diagnostic_fields(monkeypatch):
+    """
+    Detailed readiness diagnostics stay available behind the auth dependency.
+    """
+    app = FastAPI()
+    app.include_router(_health_endpoints_module.router)
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN
+    )
+    client = TestClient(app)
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+
+    response = client.get("/health/readiness/details")
+
+    assert response.status_code == 200, response.text
+    response_data = response.json()
+    assert response_data["status"] == "healthy"
+    assert "litellm_version" in response_data
+    assert "success_callbacks" in response_data
+    assert "cache" in response_data
 
 
 def test_get_callback_identifier_string_and_object_with_callback_name():
