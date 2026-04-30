@@ -190,6 +190,23 @@ class BaseLLMAIOHTTPHandler:
         async_client_session = self._get_async_client_session(
             dynamic_client_session=async_client_session
         )
+        aiohttp_timeout: aiohttp.ClientTimeout
+        if isinstance(timeout, aiohttp.ClientTimeout):
+            aiohttp_timeout = timeout
+        elif isinstance(timeout, httpx.Timeout):
+            total_timeout = timeout.read
+            if total_timeout is None:
+                total_timeout = timeout.connect
+            if total_timeout is None:
+                total_timeout = DEFAULT_TIMEOUT
+            aiohttp_timeout = aiohttp.ClientTimeout(
+                total=total_timeout,
+                connect=timeout.connect,
+                sock_connect=timeout.connect,
+                sock_read=timeout.read,
+            )
+        else:
+            aiohttp_timeout = aiohttp.ClientTimeout(total=float(timeout))
 
         for i in range(max(max_retry_on_unprocessable_entity_error, 1)):
             try:
@@ -198,6 +215,7 @@ class BaseLLMAIOHTTPHandler:
                     headers=headers,
                     json=data,
                     data=form_data,
+                    timeout=aiohttp_timeout,
                 )
                 if not response.ok:
                     response.raise_for_status()
