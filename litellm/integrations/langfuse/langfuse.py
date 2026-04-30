@@ -798,10 +798,14 @@ class LangFuseLogger:
                     # tokens. Anthropic's `prompt_tokens` includes both cache_read_input_tokens
                     # AND cache_creation_input_tokens, so both must be subtracted to avoid
                     # double-counting the cache portions in the Langfuse cost breakdown.
-                    input_tokens = (
+                    # Floor at 0 to defend against malformed provider data where cache
+                    # counts exceed prompt_tokens (a negative `input` would corrupt
+                    # Langfuse's cost calculation).
+                    input_tokens = max(
+                        0,
                         prompt_tokens
                         - cache_read_input_tokens
-                        - cache_creation_input_tokens
+                        - cache_creation_input_tokens,
                     )
                     usage_details = LangfuseUsageDetails(
                         input=input_tokens,
