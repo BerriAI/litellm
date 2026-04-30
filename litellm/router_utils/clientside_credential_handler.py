@@ -69,7 +69,9 @@ def is_clientside_credential(request_kwargs: dict) -> bool:
     """
     Check if the credential is a clientside credential.
     """
-    return any(request_kwargs.get(key) is not None for key in clientside_credential_keys)
+    return any(
+        request_kwargs.get(key) is not None for key in clientside_credential_keys
+    )
 
 
 def get_dynamic_litellm_params(litellm_params: dict, request_kwargs: dict) -> dict:

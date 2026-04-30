@@ -14,6 +14,31 @@ sys.path.insert(
 import litellm
 
 
+def test_router_drops_none_clientside_credentials_from_kwargs():
+    deployment = {
+        "litellm_params": {
+            "model": "azure/gpt-5.4",
+            "api_base": "https://deployment-resource.cognitiveservices.azure.com",
+            "api_key": "deployment-key",
+        }
+    }
+    kwargs = {
+        "api_base": None,
+        "api_key": None,
+        "base_url": None,
+        "request_timeout": 30,
+    }
+
+    litellm.Router._drop_none_clientside_credentials_from_kwargs(
+        deployment=deployment, kwargs=kwargs
+    )
+
+    assert "api_base" not in kwargs
+    assert "api_key" not in kwargs
+    assert kwargs["base_url"] is None
+    assert kwargs["request_timeout"] == 30
+
+
 def test_update_kwargs_does_not_mutate_defaults_and_merges_metadata():
     # initialize a real Router (env‑vars can be empty)
     router = litellm.Router(
