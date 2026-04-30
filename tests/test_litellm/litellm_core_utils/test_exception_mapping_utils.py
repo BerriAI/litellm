@@ -71,6 +71,34 @@ context_window_test_cases = [
         "CerebrasException - Please reduce the length of the messages or completion. Current length is 50000 while limit is 40000",
         True,
     ),
+    # Mistral context window error (issue #21558)
+    (
+        '{"object":"error","message":"Prompt contains 1487700 tokens and 0 draft tokens, too large for model with 131072 maximum context length","type":"invalid_request_invalid_args","param":null,"code":"3051"}',
+        True,
+    ),
+    # Perplexity context window error (issue #21558)
+    (
+        "The total length of all messages is too long.",
+        True,
+    ),
+    # Bedrock context window errors
+    (
+        "BedrockException: Context Window Error - too many tokens",
+        True,
+    ),
+    (
+        "Too many input tokens. Max input tokens: 200000, request input token count: 250000",
+        True,
+    ),
+    (
+        "Input is too long. Max input length is 100000 tokens.",
+        True,
+    ),
+    # Anthropic/Bedrock prompt too long
+    (
+        "prompt is too long: 150000 tokens > 100000 maximum",
+        True,
+    ),
     # Negative cases (should return False)
     ("A generic API error occurred.", False),
     ("Invalid API Key provided.", False),
