@@ -105,14 +105,28 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
 
             if self.sent_content_block_start is False:
                 self.sent_content_block_start = True
-                self.chunk_queue.append(
-                    {
-                        "type": "content_block_start",
-                        "index": self.current_content_block_index,
-                        "content_block": {"type": "text", "text": ""},
-                    }
-                )
-                return self.chunk_queue.popleft()
+                # Peek at the first real chunk to learn the block type before emitting
+                # content_block_start. Without this, a hardcoded text block is sent even
+                # when the model returns thinking blocks first, causing Claude Code to
+                # reject subsequent thinking deltas with "Content block is not a text block".
+                for first_chunk in self.completion_stream:
+                    if first_chunk == "None" or first_chunk is None:
+                        raise StopIteration(
+                            "AnthropicStreamWrapper: stream yielded None as first chunk"
+                        )
+                    self._should_start_new_content_block(first_chunk)
+                    self.holding_chunk = LiteLLMAnthropicMessagesAdapter().translate_streaming_openai_response_to_anthropic(
+                        response=first_chunk,
+                        current_content_block_index=self.current_content_block_index,
+                    )
+                    self.chunk_queue.append(
+                        {
+                            "type": "content_block_start",
+                            "index": self.current_content_block_index,
+                            "content_block": self.current_content_block_start,
+                        }
+                    )
+                    return self.chunk_queue.popleft()
 
             for chunk in self.completion_stream:
                 if chunk == "None" or chunk is None:
@@ -245,14 +259,26 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
 
             if self.sent_content_block_start is False:
                 self.sent_content_block_start = True
-                self.chunk_queue.append(
-                    {
-                        "type": "content_block_start",
-                        "index": self.current_content_block_index,
-                        "content_block": {"type": "text", "text": ""},
-                    }
-                )
-                return self.chunk_queue.popleft()
+                # Peek at the first real chunk to learn the block type before emitting
+                # content_block_start. See __next__ for the full explanation.
+                async for first_chunk in self.completion_stream:
+                    if first_chunk == "None" or first_chunk is None:
+                        raise StopAsyncIteration(
+                            "AnthropicStreamWrapper: stream yielded None as first chunk"
+                        )
+                    self._should_start_new_content_block(first_chunk)
+                    self.holding_chunk = LiteLLMAnthropicMessagesAdapter().translate_streaming_openai_response_to_anthropic(
+                        response=first_chunk,
+                        current_content_block_index=self.current_content_block_index,
+                    )
+                    self.chunk_queue.append(
+                        {
+                            "type": "content_block_start",
+                            "index": self.current_content_block_index,
+                            "content_block": self.current_content_block_start,
+                        }
+                    )
+                    return self.chunk_queue.popleft()
 
             async for chunk in self.completion_stream:
                 if chunk == "None" or chunk is None:
