@@ -67,7 +67,11 @@ def encode_url_path_segment(value: Any, *, field_name: str = "path parameter") -
 
 
 def encode_url_path_segments(value: Any, *, field_name: str = "path") -> str:
-    """Percent-encode a user-controlled URL path made of multiple segments."""
+    """Percent-encode a user-controlled URL path made of multiple segments.
+
+    Empty segments are rejected, so leading, trailing, or consecutive slashes
+    fail closed instead of being normalized by the HTTP client.
+    """
     if value is None:
         raise ValueError(f"{field_name} is required")
 
