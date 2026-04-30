@@ -19,6 +19,7 @@ from litellm.proxy.common_utils.openai_endpoint_utils import (
     get_custom_llm_provider_from_request_headers,
     get_custom_llm_provider_from_request_query,
 )
+from litellm.responses.utils import ResponsesAPIRequestUtils
 
 
 def _load_endpoints_config() -> Dict:
@@ -230,6 +231,7 @@ async def _process_binary_request(
 
         return Response(
             content=content,
+            headers=dict(fastapi_response.headers),
             media_type=content_type,
         )
 
@@ -287,6 +289,10 @@ async def _process_multipart_upload_request(
         or get_custom_llm_provider_from_request_query(request=request)
         or "openai"
     )
+    decoded_container_id = ResponsesAPIRequestUtils._decode_container_id(container_id)
+    decoded_provider = decoded_container_id.get("custom_llm_provider")
+    if decoded_provider and custom_llm_provider == "openai":
+        custom_llm_provider = decoded_provider
 
     data["container_id"] = container_id
     data["custom_llm_provider"] = custom_llm_provider
