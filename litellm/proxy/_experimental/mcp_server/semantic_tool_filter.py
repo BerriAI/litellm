@@ -62,14 +62,10 @@ class SemanticMCPToolFilter:
             all_tools = []
             for server_id, server in registry.items():
                 try:
-                    tools = await global_mcp_server_manager.get_tools_for_server(
-                        server_id
-                    )
+                    tools = await global_mcp_server_manager.get_tools_for_server(server_id)
                     all_tools.extend(tools)
                 except Exception as e:
-                    verbose_logger.warning(
-                        f"Failed to fetch tools from server {server_id}: {e}"
-                    )
+                    verbose_logger.warning(f"Failed to fetch tools from server {server_id}: {e}")
                     continue
 
             if not all_tools:
@@ -77,9 +73,7 @@ class SemanticMCPToolFilter:
                 self.tool_router = None
                 return
 
-            verbose_logger.info(
-                f"Fetched {len(all_tools)} tools from {len(registry)} MCP servers"
-            )
+            verbose_logger.info(f"Fetched {len(all_tools)} tools from {len(registry)} MCP servers")
             self._build_router(all_tools)
 
         except Exception as e:
@@ -180,9 +174,7 @@ class SemanticMCPToolFilter:
 
         # Router should be built on startup - if not, something went wrong
         if self.tool_router is None:
-            verbose_logger.warning(
-                "Router not initialized - was build_router_from_mcp_registry() called on startup?"
-            )
+            verbose_logger.warning("Router not initialized - was build_router_from_mcp_registry() called on startup?")
             return available_tools
 
         # Run semantic filtering
@@ -221,25 +213,37 @@ class SemanticMCPToolFilter:
         Return True if a client-side tool name refers to the given canonical
         MCP tool name.
 
-        MCP clients (e.g. opencode) commonly wrap the proxy's canonical tool
-        name with an additive namespace prefix of their own
-        (``<client_alias><sep><canonical>``). The prefix can use either a
-        dash or an underscore as separator regardless of what
-        ``MCP_TOOL_PREFIX_SEPARATOR`` is set to on the proxy, because the
-        client doesn't know the proxy's separator.
+        MCP clients commonly wrap the proxy's canonical tool name with an
+        additive namespace marker of their own. Two patterns are observed
+        in the wild:
 
-        The match is anchored: ``canonical`` must form the complete suffix
-        of ``client_name`` and be preceded by a separator character, so
-        ``rain_gear`` does not match canonical ``ear``.
+        - Prefix wrapping (``opencode`` and similar):
+          ``<client_alias><sep><canonical>``
+        - Suffix wrapping (``LibreChat`` and similar):
+          ``<canonical><sep><client_uid>`` -- LibreChat appends a per-tool
+          unique ID after the canonical name to disambiguate identically
+          named tools that come from different MCP servers connected to
+          the same client.
 
-        Suffix matching is additionally gated on ``canonical`` itself
+        In both shapes the wrapper can use either a dash or an underscore
+        as separator regardless of what ``MCP_TOOL_PREFIX_SEPARATOR`` is
+        set to on the proxy, because the client doesn't know the proxy's
+        separator.
+
+        The match is anchored: in both directions, ``canonical`` must form
+        the complete prefix or suffix of ``client_name`` and be adjacent
+        to a separator character, so ``rain_gear`` does not match
+        canonical ``ear`` and ``earthquake_alert`` does not match
+        canonical ``ear``.
+
+        Both directions are additionally gated on ``canonical`` itself
         containing ``MCP_TOOL_PREFIX_SEPARATOR``. Server-registered MCP
         tools are always emitted as
         ``<server_name><MCP_TOOL_PREFIX_SEPARATOR><tool_name>`` (see
         ``add_server_prefix_to_name``), so a canonical without the
         separator is not a namespaced MCP tool and falling back to
-        suffix matching would spuriously collide with unrelated local
-        user functions whose names end in the same characters.
+        prefix/suffix matching would spuriously collide with unrelated
+        local user functions whose names share the same characters.
         """
         if client_name == canonical:
             return True
@@ -247,29 +251,37 @@ class SemanticMCPToolFilter:
             return False
         if len(client_name) <= len(canonical):
             return False
-        if not client_name.endswith(canonical):
-            return False
-        separator = client_name[-len(canonical) - 1]
-        return separator in ("_", "-")
+        # Suffix match: client wraps as ``<alias><sep><canonical>``.
+        if client_name.endswith(canonical):
+            separator = client_name[-len(canonical) - 1]
+            if separator in ("_", "-"):
+                return True
+        # Prefix match: client wraps as ``<canonical><sep><uid>``.
+        if client_name.startswith(canonical):
+            separator = client_name[len(canonical)]
+            if separator in ("_", "-"):
+                return True
+        return False
 
-    def _get_tools_by_names(
-        self, tool_names: List[str], available_tools: List[Any]
-    ) -> List[Any]:
+    def _get_tools_by_names(self, tool_names: List[str], available_tools: List[Any]) -> List[Any]:
         """
         Get tools from available_tools by their names, preserving the
         semantic router's ordering.
 
-        Matching is tolerant of client-side namespace prefixes: if an
-        incoming tool arrived as ``<client_alias>_<canonical>`` while the
-        router returned ``<canonical>`` (see
-        ``_name_matches_canonical``), that tool is still selected. The
-        returned tool object is the original from ``available_tools``, so
-        the client-facing name is preserved for tool-call round-trips.
+        Matching is tolerant of client-side namespace markers in both
+        directions: if an incoming tool arrived as
+        ``<client_alias>_<canonical>`` (opencode-style prefix) or
+        ``<canonical>_<client_uid>`` (LibreChat-style suffix) while the
+        router returned ``<canonical>``, that tool is still selected (see
+        ``_name_matches_canonical``). The returned tool object is the
+        original from ``available_tools``, so the client-facing name is
+        preserved for tool-call round-trips.
         """
         # Build an index of incoming tools by their client-facing name.
-        # Exact matches win over suffix matches when both are present, and
-        # each incoming tool is returned at most once even if two canonical
-        # names happen to be tail-compatible with the same incoming name.
+        # Exact matches win over wrapped matches when both are present,
+        # and each incoming tool is returned at most once even if two
+        # canonical names happen to be wrap-compatible with the same
+        # incoming name.
         available_by_name: Dict[str, Any] = {}
         for tool in available_tools:
             client_name, _ = self._extract_tool_info(tool)
@@ -282,10 +294,10 @@ class SemanticMCPToolFilter:
             tool = available_by_name.get(canonical)
             if tool is None:
                 # Prefer the shortest qualifying name. When several
-                # incoming tools suffix-match the same canonical (e.g.
-                # "my_search" and "my_tag_search" both end in "search"),
-                # the one closest in length to the canonical is the
-                # least-wrapped and most likely the intended target.
+                # incoming tools wrap the same canonical (prefix or
+                # suffix wrapping), the one closest in length to the
+                # canonical is the least-wrapped and most likely the
+                # intended target.
                 best_name: Optional[str] = None
                 for client_name in available_by_name:
                     if not self._name_matches_canonical(client_name, canonical):
