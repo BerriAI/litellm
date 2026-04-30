@@ -11,6 +11,7 @@ sys.path.insert(
 
 import litellm
 from litellm.integrations.bitbucket import BitBucketPromptManager
+from litellm.integrations.bitbucket.bitbucket_client import _sanitize_file_path
 
 
 @patch("litellm.integrations.bitbucket.bitbucket_prompt_manager.BitBucketClient")
@@ -364,3 +365,45 @@ def test_bitbucket_prompt_manager_list_templates(mock_client_class):
     templates = manager.prompt_manager.list_templates()
     assert isinstance(templates, list)
     assert "test_prompt" in templates
+
+
+# --- Security: path traversal / SSRF ---
+
+
+def test_sanitize_file_path_rejects_traversal():
+    with pytest.raises(ValueError, match="path traversal"):
+        _sanitize_file_path("../../etc/passwd")
+
+
+def test_sanitize_file_path_rejects_fragment():
+    with pytest.raises(ValueError, match="URL special characters"):
+        _sanitize_file_path("secret#.prompt")
+
+
+def test_sanitize_file_path_rejects_query():
+    with pytest.raises(ValueError, match="URL special characters"):
+        _sanitize_file_path("secret?.prompt")
+
+
+def test_sanitize_file_path_encodes_special_chars():
+    result = _sanitize_file_path("prompts/my prompt.prompt")
+    assert result == "prompts/my%20prompt.prompt"
+
+
+def test_sanitize_file_path_allows_normal_paths():
+    assert _sanitize_file_path("prompts/my-prompt") == "prompts/my-prompt"
+    assert _sanitize_file_path("simple") == "simple"
+
+
+def test_bitbucket_client_rejects_traversal_in_get_file_content():
+    from litellm.integrations.bitbucket.bitbucket_client import BitBucketClient
+
+    client = BitBucketClient(
+        {
+            "workspace": "ws",
+            "repository": "repo",
+            "access_token": "tok",
+        }
+    )
+    with pytest.raises(ValueError, match="path traversal"):
+        client.get_file_content("../../admin/credentials")
