@@ -1170,3 +1170,36 @@ async def test_init_containers_api_endpoints_managed_id_routes_via_generic_fallb
     assert call_kw["container_id"] == "cfile_upstream_abc"
     assert call_kw["file_id"] == "cfile_xyz"
     assert call_kw["custom_llm_provider"] == "azure"
+
+
+@pytest.mark.asyncio
+async def test_init_containers_api_endpoints_managed_id_without_model_id_unwraps():
+    """
+    Managed ``cntr_`` IDs may be encoded with an empty ``model_id`` (e.g. when a
+    streaming response had no router metadata). The router must still unwrap the
+    managed ID before calling the upstream provider — otherwise the raw
+    ``cntr_...`` token leaks downstream and the provider rejects it.
+    """
+    from litellm.responses.utils import ResponsesAPIRequestUtils
+
+    router = Router(model_list=[])
+    mock_original_function = AsyncMock(return_value={"ok": True})
+
+    managed_id = ResponsesAPIRequestUtils._build_container_id(
+        custom_llm_provider="openai",
+        model_id=None,
+        container_id="cfile_upstream_abc",
+    )
+
+    await router._init_containers_api_endpoints(
+        original_function=mock_original_function,
+        custom_llm_provider="openai",
+        container_id=managed_id,
+        file_id="cfile_xyz",
+    )
+
+    mock_original_function.assert_called_once()
+    call_kw = mock_original_function.call_args.kwargs
+    assert call_kw["container_id"] == "cfile_upstream_abc"
+    assert call_kw["file_id"] == "cfile_xyz"
+    assert call_kw["custom_llm_provider"] == "openai"
