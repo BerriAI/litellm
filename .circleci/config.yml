@@ -1480,14 +1480,14 @@ jobs:
             set -e
             echo "$OUTPUT"
             if [ "$EXIT_CODE" -eq 0 ] && echo "$OUTPUT" | grep -q "gateway-ok"; then
-              cat > test-results/junit.xml << EOF
+              cat > test-results/junit.xml \<<EOF
             <testsuite name="claude_code_gateway_e2e" tests="1" failures="0">
               <testcase classname="claude_code_gateway_e2e" name="claude_code_can_call_litellm_gateway"/>
             </testsuite>
             EOF
             else
               ESCAPED_OUTPUT=$(printf '%s' "$OUTPUT" | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g')
-              cat > test-results/junit.xml << EOF
+              cat > test-results/junit.xml \<<EOF
             <testsuite name="claude_code_gateway_e2e" tests="1" failures="1">
               <testcase classname="claude_code_gateway_e2e" name="claude_code_can_call_litellm_gateway">
                 <failure message="Claude Code gateway smoke test failed">${ESCAPED_OUTPUT}</failure>
