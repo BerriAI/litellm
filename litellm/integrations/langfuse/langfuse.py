@@ -186,9 +186,10 @@ class LangFuseLogger:
                 project_id = None
 
         if os.getenv("UPSTREAM_LANGFUSE_SECRET_KEY") is not None:
+            upstream_langfuse_debug_env = os.getenv("UPSTREAM_LANGFUSE_DEBUG")
             upstream_langfuse_debug = (
-                str_to_bool(self.upstream_langfuse_debug)
-                if self.upstream_langfuse_debug is not None
+                str_to_bool(upstream_langfuse_debug_env)
+                if upstream_langfuse_debug_env is not None
                 else None
             )
             self.upstream_langfuse_secret_key = os.getenv(
@@ -199,7 +200,7 @@ class LangFuseLogger:
             )
             self.upstream_langfuse_host = os.getenv("UPSTREAM_LANGFUSE_HOST")
             self.upstream_langfuse_release = os.getenv("UPSTREAM_LANGFUSE_RELEASE")
-            self.upstream_langfuse_debug = os.getenv("UPSTREAM_LANGFUSE_DEBUG")
+            self.upstream_langfuse_debug = upstream_langfuse_debug_env
             self.upstream_langfuse = Langfuse(
                 public_key=self.upstream_langfuse_public_key,
                 secret_key=self.upstream_langfuse_secret_key,
