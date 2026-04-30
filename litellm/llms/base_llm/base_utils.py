@@ -218,28 +218,44 @@ def map_developer_role_to_system_role(
     if not any(m["role"] == "developer" for m in messages):
         return messages
 
-    system_message: Optional[Dict[str, Any]] = None
-    system_contents: List[Any] = []
-    non_system_messages: List[AllMessageValues] = []
-    for m in messages:
-        if m["role"] in {"developer", "system"}:
-            if system_message is None:
-                system_message = dict(m)
-                system_message["role"] = "system"
-            system_contents.append(m["content"])
-        else:
-            non_system_messages.append(m)
+    new_messages: List[AllMessageValues] = []
+    leading_system_message: Optional[Dict[str, Any]] = None
+    leading_system_contents: List[Any] = []
+    idx = 0
 
+    while idx < len(messages) and messages[idx]["role"] in {"developer", "system"}:
+        m = messages[idx]
+        if leading_system_message is None:
+            leading_system_message = dict(m)
+            leading_system_message["role"] = "system"
+        leading_system_contents.append(m["content"])
         if m["role"] == "developer":
-            verbose_logger.debug(
-                "Translating developer role to system role for non-OpenAI providers."
-            )  # ensure user knows what's happening with their input.
+            _log_developer_role_translation()
+        idx += 1
 
-    if system_message is None:
-        return non_system_messages
+    if leading_system_message is not None:
+        leading_system_message["content"] = _merge_system_message_contents(
+            leading_system_contents
+        )
+        new_messages.append(cast(AllMessageValues, leading_system_message))
 
-    system_message["content"] = _merge_system_message_contents(system_contents)
-    return [cast(AllMessageValues, system_message), *non_system_messages]
+    for m in messages[idx:]:
+        if m["role"] in {"developer", "system"}:
+            if m["role"] == "developer":
+                _log_developer_role_translation()
+                new_messages.append(cast(AllMessageValues, {**m, "role": "system"}))
+            else:
+                new_messages.append(m)
+            continue
+
+        new_messages.append(m)
+    return new_messages
+
+
+def _log_developer_role_translation() -> None:
+    verbose_logger.debug(
+        "Translating developer role to system role for non-OpenAI providers."
+    )  # ensure user knows what's happening with their input.
 
 
 def _merge_system_message_contents(contents: List[Any]) -> Union[str, List[Any]]:

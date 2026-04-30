@@ -13,12 +13,12 @@ def test_map_developer_role_leaves_messages_without_developer_role_unchanged():
     assert map_developer_role_to_system_role(messages=messages) is messages
 
 
-def test_map_developer_role_merges_system_equivalent_messages():
+def test_map_developer_role_merges_leading_system_equivalent_messages():
     messages = [
         {"role": "system", "content": "Follow the product policy."},
         {"role": "developer", "content": "Prefer concise answers."},
-        {"role": "user", "content": "Hello!"},
         {"role": "system", "content": "Use markdown only when helpful."},
+        {"role": "user", "content": "Hello!"},
     ]
 
     result = map_developer_role_to_system_role(messages=messages)
@@ -36,9 +36,11 @@ def test_map_developer_role_merges_system_equivalent_messages():
     ]
 
 
-def test_map_developer_role_preserves_structured_system_content():
+def test_map_developer_role_preserves_structured_leading_system_content():
     messages = [
+        {"role": "developer", "content": ""},
         {"role": "system", "content": [{"type": "text", "text": "System rules."}]},
+        {"role": "developer", "content": None},
         {"role": "developer", "content": "Developer rules."},
         {"role": "user", "content": "Hello!"},
     ]
@@ -55,6 +57,38 @@ def test_map_developer_role_preserves_structured_system_content():
             ],
         },
         {"role": "user", "content": "Hello!"},
+    ]
+
+
+def test_map_developer_role_converts_later_developer_messages_in_place():
+    messages = [
+        {"role": "system", "content": "Follow the product policy."},
+        {"role": "user", "content": "Hello!"},
+        {"role": "developer", "content": "Prefer concise answers."},
+        {"role": "assistant", "content": "Hi."},
+    ]
+
+    result = map_developer_role_to_system_role(messages=messages)
+
+    assert result == [
+        {"role": "system", "content": "Follow the product policy."},
+        {"role": "user", "content": "Hello!"},
+        {"role": "system", "content": "Prefer concise answers."},
+        {"role": "assistant", "content": "Hi."},
+    ]
+
+
+def test_map_developer_role_converts_later_developer_without_leading_system():
+    messages = [
+        {"role": "user", "content": "Hello!"},
+        {"role": "developer", "content": "Prefer concise answers."},
+    ]
+
+    result = map_developer_role_to_system_role(messages=messages)
+
+    assert result == [
+        {"role": "user", "content": "Hello!"},
+        {"role": "system", "content": "Prefer concise answers."},
     ]
 
 
