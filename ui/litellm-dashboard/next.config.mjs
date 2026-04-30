@@ -7,6 +7,7 @@ const __dirname = path.dirname(__filename);
 
 const nextConfig = {
   output: "export",
+  trailingSlash: true,
   // Required with output: "export" — default image optimizer runs only in server mode.
   // See https://nextjs.org/docs/messages/export-image-api
   images: {
