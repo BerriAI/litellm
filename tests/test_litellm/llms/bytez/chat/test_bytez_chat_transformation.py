@@ -2,6 +2,7 @@ import os
 import sys
 import pytest
 import json
+from urllib.parse import quote
 
 # Adds the parent directory to the system path
 sys.path.insert(0, os.path.abspath("../../../../.."))
@@ -69,7 +70,7 @@ class TestBytezChatConfig:
         }
 
         # Mock the HTTP request
-        respx_mock.post(f"{API_BASE}/{TEST_MODEL_NAME}").respond(
+        respx_mock.post(f"{API_BASE}/{quote(TEST_MODEL_NAME, safe='')}").respond(
             json={
                 "error": None,
                 "output": output,
@@ -86,6 +87,19 @@ class TestBytezChatConfig:
         )
 
         assert response.choices[0].message.content == output_content  # type: ignore
+
+    def test_get_complete_url_encodes_model_path_segment(self):
+        config = BytezChatConfig()
+
+        url = config.get_complete_url(
+            api_base=API_BASE,
+            api_key=TEST_API_KEY,
+            model="../../models/other?x=1#frag",
+            optional_params={},
+            litellm_params={},
+        )
+
+        assert url == f"{API_BASE}/..%2F..%2Fmodels%2Fother%3Fx%3D1%23frag"
 
     def test_bytez_messages_adaptation(self):
         cases = [
