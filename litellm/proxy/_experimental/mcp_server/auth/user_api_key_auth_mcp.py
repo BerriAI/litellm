@@ -7,6 +7,8 @@ from starlette.types import Scope
 
 from litellm._logging import verbose_logger
 from litellm.proxy._types import (
+    LiteLLM_ObjectPermissionTable,
+    LiteLLM_OrganizationTable,
     LiteLLM_TeamTable,
     ProxyException,
     SpecialHeaders,
@@ -408,10 +410,11 @@ class MCPRequestHandler:
         Get list of allowed MCP servers for the given user/key based on permissions.
 
         Permission hierarchy (all rules are intersections):
-        1. Get allowed servers from key permissions
-        2. Get allowed servers from team permissions
-        3. Get allowed servers from end_user permissions
-        4. Final result = intersection of key/team AND end_user (if end_user has permissions set)
+        1. Get allowed servers from organization permissions
+        2. Get allowed servers from key permissions
+        3. Get allowed servers from team permissions
+        4. Get allowed servers from end_user permissions
+        5. Final result = intersection of org/key/team AND end_user (if end_user has permissions set)
 
         Returns:
             List[str]: List of allowed MCP servers by server id
@@ -427,6 +430,11 @@ class MCPRequestHandler:
             )
             allowed_mcp_servers_for_team = (
                 await MCPRequestHandler._get_allowed_mcp_servers_for_team(
+                    user_api_key_auth
+                )
+            )
+            allowed_mcp_servers_for_org = (
+                await MCPRequestHandler._get_allowed_mcp_servers_for_org(
                     user_api_key_auth
                 )
             )
@@ -446,6 +454,21 @@ class MCPRequestHandler:
                     allowed_mcp_servers = allowed_mcp_servers_for_team
             else:
                 allowed_mcp_servers = allowed_mcp_servers_for_key
+
+            #########################################################
+            # Apply organization permissions if set
+            #########################################################
+            if len(allowed_mcp_servers_for_org) > 0:
+                if len(allowed_mcp_servers) > 0:
+                    # Key/team have their own MCP permissions - intersect with org
+                    allowed_mcp_servers = [
+                        _mcp_server
+                        for _mcp_server in allowed_mcp_servers
+                        if _mcp_server in allowed_mcp_servers_for_org
+                    ]
+                else:
+                    # Key/team have no MCP permissions - inherit from org
+                    allowed_mcp_servers = allowed_mcp_servers_for_org
 
             #########################################################
             # Check end_user permissions if end_user_id is set
@@ -558,6 +581,73 @@ class MCPRequestHandler:
         return team_obj.object_permission
 
     @staticmethod
+    async def _get_org_id_for_user_auth(
+        user_api_key_auth: Optional[UserAPIKeyAuth] = None,
+    ) -> Optional[str]:
+        """
+        Resolve the organization id for the current request.
+
+        Prefer the key/JWT org_id already carried on UserAPIKeyAuth. If the key
+        has no direct org_id, fall back to the authenticated team membership so
+        teams nested under an organization inherit org-level MCP permissions.
+        """
+        if not user_api_key_auth:
+            return None
+
+        if user_api_key_auth.org_id:
+            return user_api_key_auth.org_id
+
+        if not user_api_key_auth.team_id:
+            return None
+
+        from litellm.proxy.auth.auth_checks import get_team_object
+        from litellm.proxy.proxy_server import (
+            prisma_client,
+            proxy_logging_obj,
+            user_api_key_cache,
+        )
+
+        if prisma_client is None:
+            return None
+
+        team_obj: Optional[LiteLLM_TeamTable] = await get_team_object(
+            team_id=user_api_key_auth.team_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            parent_otel_span=user_api_key_auth.parent_otel_span,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+        if not team_obj:
+            return None
+        return team_obj.organization_id
+
+    @staticmethod
+    async def _get_org_object_permission(
+        user_api_key_auth: Optional[UserAPIKeyAuth] = None,
+    ) -> Optional[LiteLLM_ObjectPermissionTable]:
+        """
+        Get the organization object_permission for the authenticated key/team.
+        """
+        from litellm.proxy.proxy_server import prisma_client
+
+        org_id = await MCPRequestHandler._get_org_id_for_user_auth(user_api_key_auth)
+        verbose_logger.debug(f"MCP org permission lookup: org_id={org_id}")
+
+        if not org_id or prisma_client is None:
+            return None
+
+        org_obj: Optional[LiteLLM_OrganizationTable] = (
+            await prisma_client.db.litellm_organizationtable.find_unique(
+                where={"organization_id": org_id},
+                include={"object_permission": True},
+            )
+        )
+        if not org_obj:
+            return None
+
+        return org_obj.object_permission
+
+    @staticmethod
     async def get_allowed_tools_for_server(
         server_id: str,
         user_api_key_auth: Optional[UserAPIKeyAuth] = None,
@@ -584,6 +674,9 @@ class MCPRequestHandler:
             team_obj_perm = await MCPRequestHandler._get_team_object_permission(
                 user_api_key_auth
             )
+            org_obj_perm = await MCPRequestHandler._get_org_object_permission(
+                user_api_key_auth
+            )
 
             # Extract tool permissions for this server. Dict keys may be
             # server_ids OR names/aliases; normalize to server_id-keyed form
@@ -607,6 +700,13 @@ class MCPRequestHandler:
                 if team_obj_perm
                 else None
             )
+            org_tools = (
+                global_mcp_server_manager.expand_tool_permissions(
+                    org_obj_perm.mcp_tool_permissions
+                ).get(server_id)
+                if org_obj_perm
+                else None
+            )
 
             # Apply same inheritance logic as get_allowed_mcp_servers
             if team_tools:
@@ -619,6 +719,14 @@ class MCPRequestHandler:
             else:
                 # No team restrictions → use key restrictions
                 allowed_tools = cast(List[str], key_tools)
+
+            if org_tools:
+                if allowed_tools is not None:
+                    # Key/team restrictions must stay inside org-level tool permissions
+                    allowed_tools = list(set(allowed_tools) & set(org_tools))
+                else:
+                    # No key/team tool restrictions → inherit org restrictions
+                    allowed_tools = org_tools
 
             # Intersect with agent's tool permissions if agent_id is set
             if user_api_key_auth.agent_id:
@@ -752,6 +860,54 @@ class MCPRequestHandler:
         except Exception as e:
             verbose_logger.warning(
                 f"Failed to get allowed MCP servers for key: {str(e)}"
+            )
+            return []
+
+    @staticmethod
+    async def _get_allowed_mcp_servers_for_org(
+        user_api_key_auth: Optional[UserAPIKeyAuth] = None,
+    ) -> List[str]:
+        """
+        Get allowed MCP servers for an organization.
+
+        Returns the MCP servers from the organization's object_permission.
+        """
+        try:
+            object_permissions = await MCPRequestHandler._get_org_object_permission(
+                user_api_key_auth
+            )
+
+            if object_permissions is None:
+                return []
+
+            # Permission entries may be server_ids OR names/aliases — expand to ids.
+            from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+                global_mcp_server_manager,
+            )
+
+            direct_mcp_servers = global_mcp_server_manager.expand_permission_list(
+                object_permissions.mcp_servers or []
+            )
+
+            # Get MCP servers from access groups
+            access_group_servers = (
+                await MCPRequestHandler._get_mcp_servers_from_access_groups(
+                    object_permissions.mcp_access_groups or []
+                )
+            )
+
+            # Servers referenced in tool permissions should also be accessible
+            tool_perm_servers = list(
+                global_mcp_server_manager.expand_tool_permissions(
+                    object_permissions.mcp_tool_permissions
+                ).keys()
+            )
+
+            all_servers = direct_mcp_servers + access_group_servers + tool_perm_servers
+            return list(set(all_servers))
+        except Exception as e:
+            verbose_logger.warning(
+                f"Failed to get allowed MCP servers for org: {str(e)}"
             )
             return []
 
