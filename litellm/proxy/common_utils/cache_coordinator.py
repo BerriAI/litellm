@@ -52,6 +52,9 @@ class EventDrivenCacheCoordinator:
     - Other requests: wait for the signal, then read from cache.
 
     Create one instance per resource (e.g. one for global spend, one for feature flags).
+
+    Args:
+        log_prefix: Prefix for debug log messages.
     """
 
     def __init__(self, log_prefix: str = "[CACHE]"):
@@ -150,7 +153,7 @@ class EventDrivenCacheCoordinator:
                 elapsed_ms,
                 value,
             )
-
+            
         await cache.async_set_cache(key=cache_key, value=value)
         if self._log_prefix:
             verbose_proxy_logger.debug("%s Result cached", self._log_prefix)
