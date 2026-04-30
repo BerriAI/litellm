@@ -242,7 +242,7 @@ class Authenticator:
             return None
         try:
             return self.get_access_token()
-        except (GetAccessTokenError, GetDeviceCodeError) as e:
+        except GetAccessTokenError as e:
             verbose_logger.warning(
                 f"Failed to re-acquire access token after 401: {str(e)}"
             )

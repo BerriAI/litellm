@@ -534,36 +534,6 @@ class TestGitHubCopilotAuthenticator:
             for call in mock_client.get.call_args_list:
                 assert call[1]["headers"]["authorization"] == "token stale-token"
 
-    def test_refresh_api_key_401_reacquire_device_code_error(self, authenticator):
-        """When get_access_token raises GetDeviceCodeError after token
-        deletion, the file is already gone so token_invalidated is set True
-        — no further invalidation attempts."""
-        http_401 = self._make_http_error(401, "401 Unauthorized")
-        mock_client = MagicMock()
-        mock_client.get.return_value = self._make_failing_response(http_401)
-
-        reacquire_err = GetDeviceCodeError(message="no device code", status_code=400)
-        with (
-            patch.dict(os.environ, {"GITHUB_COPILOT_ENABLE_AUTH_RECOVERY": "true"}),
-            patch.object(
-                authenticator,
-                "get_access_token",
-                side_effect=["stale-token", reacquire_err],
-            ),
-            patch("os.remove") as mock_remove,
-            patch(
-                "litellm.llms.github_copilot.authenticator._get_httpx_client",
-                return_value=mock_client,
-            ),
-        ):
-            with pytest.raises(RefreshAPIKeyError):
-                authenticator._refresh_api_key()
-
-            mock_remove.assert_called_once()
-            assert mock_client.get.call_count == 3
-            for call in mock_client.get.call_args_list:
-                assert call[1]["headers"]["authorization"] == "token stale-token"
-
     def test_refresh_api_key_401_os_remove_fails(self, authenticator):
         """When os.remove raises OSError (e.g. permission denied), the code
         sets token_invalidated=True, skips re-acquire (file still has stale
