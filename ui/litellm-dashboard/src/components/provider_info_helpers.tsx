@@ -86,6 +86,7 @@ export enum Providers {
   SAGEMAKER_LEGACY = "Sagemaker",
   Sambanova = "Sambanova",
   SAP = "SAP Generative AI Hub",
+  Scaleway = "Scaleway",
   Snowflake = "Snowflake",
   TEXT_COMPLETION_CODESTRAL = "Text-Completion-Codestral",
   TogetherAI = "TogetherAI",
@@ -193,6 +194,7 @@ export const provider_map: Record<string, string> = {
   SageMaker: "sagemaker_chat",
   Sambanova: "sambanova",
   SAP: "sap",
+  Scaleway: "scaleway",
   Snowflake: "snowflake",
   TEXT_COMPLETION_CODESTRAL: "text-completion-codestral",
   TogetherAI: "together_ai",
@@ -283,6 +285,7 @@ export const providerLogoMap: Record<string, string> = {
   [Providers.SAGEMAKER_LEGACY]: `${asset_logos_folder}bedrock.svg`,
   [Providers.Sambanova]: `${asset_logos_folder}sambanova.svg`,
   [Providers.SAP]: `${asset_logos_folder}sap.png`,
+  [Providers.Scaleway]: `${asset_logos_folder}scaleway.png`,
   [Providers.Snowflake]: `${asset_logos_folder}snowflake.svg`,
   [Providers.TEXT_COMPLETION_CODESTRAL]: `${asset_logos_folder}mistral.svg`,
   [Providers.TogetherAI]: `${asset_logos_folder}togetherai.svg`,
@@ -364,6 +367,8 @@ export const getPlaceholder = (selectedProvider: string): string => {
     return "runwayml/gen4_turbo";
   } else if (selectedProvider === Providers.WATSONX) {
     return "watsonx/ibm/granite-3-3-8b-instruct";
+  } else if (selectedProvider === Providers.Scaleway) {
+    return "scaleway/qwen3-235b-a22b-instruct-2507";
   } else if (selectedProvider === Providers.Cursor) {
     return "cursor/claude-4-sonnet";
   } else {
