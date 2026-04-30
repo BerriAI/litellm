@@ -366,7 +366,6 @@ async def test_auth_with_allowed_routes(route, should_raise_error):
         ("/global/spend/logs", "proxy_admin", True),
         ("/global/activity/cache_hits", "proxy_admin", True),
         # Internal User - allowed read-only routes
-        ("/global/spend/logs", "internal_user", True),
         ("/spend/logs/ui", "internal_user", True),
         ("/global/activity/cache_hits", "internal_user", True),
         ("/health/services", "internal_user", True),
@@ -375,9 +374,12 @@ async def test_auth_with_allowed_routes(route, should_raise_error):
         ("/config/pass_through_endpoint", "internal_user", False),
         ("/config/field/update", "internal_user", False),
         ("/organization/member_add", "internal_user", False),
+        # Internal User - BLOCKED from proxy-wide spend routes
+        ("/global/spend/logs", "internal_user", False),
         # Internal User Viewer - allowed spend routes only
         ("/spend/logs/ui", "internal_user_viewer", True),
-        ("/global/spend/all_tag_names", "internal_user_viewer", True),
+        # Internal User Viewer - BLOCKED from proxy-wide spend routes
+        ("/global/spend/all_tag_names", "internal_user_viewer", False),
         # Internal User Viewer - blocked from admin routes
         ("/config/update", "internal_user_viewer", False),
         ("/key/generate", "internal_user_viewer", False),
@@ -1116,11 +1118,17 @@ async def test_jwt_non_admin_team_route_access(monkeypatch):
 @pytest.mark.asyncio
 async def test_x_litellm_api_key():
     """
-    Check if auth can pick up x-litellm-api-key header, even if Bearer token is provided
+    Check if auth can pick up x-litellm-api-key header, even if Bearer token is provided.
+
+    On a master-key match, ``UserAPIKeyAuth.api_key`` (and the derived
+    ``token``) are now the stable alias ``LITELLM_PROXY_MASTER_KEY_ALIAS``
+    rather than ``hash_token(master_key)`` — the master key (or its hash)
+    must not propagate into spend logs / metrics / audit trails.
     """
     from fastapi import Request
     from starlette.datastructures import URL
 
+    from litellm.constants import LITELLM_PROXY_MASTER_KEY_ALIAS
     from litellm.proxy._types import (
         LiteLLM_TeamTable,
         LiteLLM_TeamTableCachedObj,
@@ -1146,7 +1154,8 @@ async def test_x_litellm_api_key():
         api_key="Bearer " + ignored_key,
         custom_litellm_key_header=master_key,
     )
-    assert valid_token.token == hash_token(master_key)
+    assert valid_token.token == LITELLM_PROXY_MASTER_KEY_ALIAS
+    assert valid_token.token != hash_token(master_key)
 
 
 @pytest.mark.asyncio

@@ -1448,15 +1448,15 @@ if MCP_AVAILABLE:
         return _redact_mcp_credentials(temp_record)
 
     async def _get_cached_temporary_mcp_server_or_404(
-        server_id: str, request: Optional[Request] = None
+        server_id: str,
+        user_api_key_dict: UserAPIKeyAuth,
+        request: Optional[Request] = None,
     ) -> MCPServer:
         server = await get_cached_temporary_mcp_server(server_id)
+        resolved_from_temp_cache = server is not None
         if server is None:
             # Fall back to real DB/config server (e.g. for the user-side OAuth flow
             # which calls these endpoints with a real server_id, not a temp session id).
-            from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
-                global_mcp_server_manager,
-            )
             from litellm.proxy.auth.ip_address_utils import IPAddressUtils
 
             client_ip = IPAddressUtils.get_mcp_client_ip(request) if request else None
@@ -1470,6 +1470,28 @@ if MCP_AVAILABLE:
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail={"error": f"MCP server {server_id} not found"},
             )
+
+        # Per-server access policy mirrors `fetch_mcp_server`: admin-view
+        # callers are unrestricted; non-admins must have the server in their
+        # allowed-servers set. Temporary cached servers come from the
+        # admin-only `/server/oauth/session` setup flow and are not exposed
+        # to non-admins.
+        if not _user_has_admin_view(user_api_key_dict):
+            if resolved_from_temp_cache:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail={"error": f"Access denied to MCP server {server_id}"},
+                )
+            allowed_server_ids = (
+                await global_mcp_server_manager.get_allowed_mcp_servers(
+                    user_api_key_dict
+                )
+            )
+            if server.server_id not in allowed_server_ids:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail={"error": f"Access denied to MCP server {server_id}"},
+                )
         return server
 
     @router.get(
@@ -1490,7 +1512,7 @@ if MCP_AVAILABLE:
         scope: Optional[str] = None,
     ):
         mcp_server = await _get_cached_temporary_mcp_server_or_404(
-            server_id, request=request
+            server_id, user_api_key_dict, request=request
         )
         # Use the server's stored client_id when the caller doesn't supply one
         resolved_client_id = mcp_server.client_id or client_id or ""
@@ -1536,7 +1558,7 @@ if MCP_AVAILABLE:
         scope: Optional[str] = Form(None),
     ):
         mcp_server = await _get_cached_temporary_mcp_server_or_404(
-            server_id, request=request
+            server_id, user_api_key_dict, request=request
         )
         resolved_client_id = mcp_server.client_id or client_id or ""
         if not resolved_client_id:
@@ -1574,7 +1596,7 @@ if MCP_AVAILABLE:
         user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     ):
         mcp_server = await _get_cached_temporary_mcp_server_or_404(
-            server_id, request=request
+            server_id, user_api_key_dict, request=request
         )
         request_data = await _read_request_body(request=request)
         data: dict = {**request_data}
