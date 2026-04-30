@@ -1460,7 +1460,7 @@ class JWTAuthManager:
         user_object: Optional[LiteLLM_UserTable],
         user_id: Optional[str],
         prisma_client: Optional[PrismaClient],
-        user_api_key_cache: DualCache,
+        user_api_key_cache: UserApiKeyCache,
         parent_otel_span: Optional[Span],
         proxy_logging_obj: ProxyLogging,
         team_id_upsert: Optional[bool],
