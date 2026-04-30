@@ -4,7 +4,7 @@ import pytest
 from fastapi import HTTPException, Request, Response
 
 import litellm
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy._types import LiteLLM_ManagedVectorStoresTable, UserAPIKeyAuth
 
 
 def _mock_request() -> MagicMock:
@@ -288,7 +288,53 @@ async def test_vertex_discovery_denies_other_team_vector_store_credentials():
 
 
 @pytest.mark.asyncio
-async def test_vertex_discovery_denies_unregistered_vector_store_id():
+async def test_get_managed_vector_store_uses_shared_cache_helper_for_db_fallback():
+    from litellm.proxy.vector_store_endpoints.utils import (
+        get_litellm_managed_vector_store,
+    )
+
+    mock_registry = MagicMock()
+    mock_registry.get_litellm_managed_vector_store_from_registry.return_value = None
+    cache_helper = AsyncMock(
+        return_value=[
+            LiteLLM_ManagedVectorStoresTable(
+                vector_store_id="vs_cached",
+                custom_llm_provider="openai",
+                vector_store_name=None,
+                vector_store_description=None,
+                vector_store_metadata=None,
+                created_at=None,
+                updated_at=None,
+                litellm_credential_name=None,
+                litellm_params={"api_base": "https://example.com"},
+                team_id="team-a",
+                user_id=None,
+            )
+        ]
+    )
+
+    with (
+        patch.object(litellm, "vector_store_registry", mock_registry),
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
+        patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()),
+        patch(
+            "litellm.proxy.auth.auth_checks.get_managed_vector_store_rows_by_uuids",
+            new=cache_helper,
+        ),
+    ):
+        vector_store = await get_litellm_managed_vector_store(
+            vector_store_id="vs_cached"
+        )
+
+    assert vector_store is not None
+    assert vector_store["vector_store_id"] == "vs_cached"
+    assert vector_store["team_id"] == "team-a"
+    cache_helper.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_vertex_discovery_allows_unregistered_provider_native_datastore_id():
     from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
         vertex_discovery_proxy_route,
     )
@@ -296,18 +342,25 @@ async def test_vertex_discovery_denies_unregistered_vector_store_id():
     request = _mock_request()
     request.method = "GET"
 
-    with patch(
-        "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.passthrough_endpoint_router.get_vector_store_credentials",
-        return_value=None,
+    with (
+        patch(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.get_litellm_managed_vector_store",
+            new=AsyncMock(return_value=None),
+        ) as mock_lookup,
+        patch(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints._base_vertex_proxy_route",
+            new=AsyncMock(return_value={"ok": True}),
+        ) as mock_base_route,
     ):
-        with pytest.raises(HTTPException) as exc_info:
-            await vertex_discovery_proxy_route(
-                endpoint="projects/p/locations/us-central1/dataStores/vs_unknown",
-                request=request,
-                fastapi_response=Response(),
-            )
+        response = await vertex_discovery_proxy_route(
+            endpoint="projects/p/locations/us-central1/dataStores/vs_unknown",
+            request=request,
+            fastapi_response=Response(),
+        )
 
-    assert exc_info.value.status_code == 403
+    assert response == {"ok": True}
+    mock_lookup.assert_awaited_once_with(vector_store_id="vs_unknown")
+    assert mock_base_route.call_args.kwargs["router_credentials"] is None
 
 
 @pytest.mark.asyncio

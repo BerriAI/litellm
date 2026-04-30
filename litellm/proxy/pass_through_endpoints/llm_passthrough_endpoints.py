@@ -48,6 +48,7 @@ from litellm.types.passthrough_endpoints.pass_through_endpoints import (
 from litellm.proxy.utils import is_known_model
 from litellm.proxy.vector_store_endpoints.utils import (
     assert_user_can_access_vector_store,
+    get_litellm_managed_vector_store,
     is_allowed_to_call_vector_store_endpoint,
 )
 from litellm.secret_managers.main import get_secret_str
@@ -1927,11 +1928,11 @@ async def vertex_discovery_proxy_route(
             "Extracted vector store ID from endpoint: %s", vector_store_id
         )
 
-        # Retrieve vector store credentials from the registry
-        vector_store_credentials = (
-            passthrough_endpoint_router.get_vector_store_credentials(
-                vector_store_id=vector_store_id
-            )
+        # Retrieve LiteLLM-managed vector store credentials if the datastore id
+        # is registered with LiteLLM. Unknown datastore ids keep the existing
+        # direct Vertex pass-through behavior.
+        vector_store_credentials = await get_litellm_managed_vector_store(
+            vector_store_id=vector_store_id
         )
 
         if vector_store_credentials:
@@ -1939,13 +1940,9 @@ async def vertex_discovery_proxy_route(
                 "Found vector store credentials for ID: %s", vector_store_id
             )
         else:
-            verbose_proxy_logger.warning(
+            verbose_proxy_logger.debug(
                 "Vector store ID %s found in endpoint but no credentials found in registry",
                 vector_store_id,
-            )
-            raise HTTPException(
-                status_code=403,
-                detail="Access denied: You do not have permission to access this vector store",
             )
 
     discovery_handler = get_vertex_pass_through_handler(call_type="discovery")

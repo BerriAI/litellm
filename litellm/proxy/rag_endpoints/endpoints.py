@@ -31,21 +31,27 @@ router = APIRouter()
 
 def _collect_vector_store_ids_from_payload(payload: Any) -> set[str]:
     vector_store_ids: set[str] = set()
+    payload_stack = [payload]
 
-    if isinstance(payload, dict):
-        for key, value in payload.items():
-            if key == "vector_store_id":
-                if not isinstance(value, str) or not value:
-                    raise HTTPException(
-                        status_code=400,
-                        detail={"error": "vector_store_id must be a non-empty string"},
-                    )
-                vector_store_ids.add(value)
-                continue
-            vector_store_ids.update(_collect_vector_store_ids_from_payload(value))
-    elif isinstance(payload, list):
-        for item in payload:
-            vector_store_ids.update(_collect_vector_store_ids_from_payload(item))
+    while payload_stack:
+        current_payload = payload_stack.pop()
+
+        if isinstance(current_payload, dict):
+            for key, value in current_payload.items():
+                if key == "vector_store_id":
+                    if not isinstance(value, str) or not value:
+                        raise HTTPException(
+                            status_code=400,
+                            detail={
+                                "error": "vector_store_id must be a non-empty string"
+                            },
+                        )
+                    vector_store_ids.add(value)
+                    continue
+                if isinstance(value, (dict, list)):
+                    payload_stack.append(value)
+        elif isinstance(current_payload, list):
+            payload_stack.extend(current_payload)
 
     return vector_store_ids
 

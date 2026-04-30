@@ -141,7 +141,7 @@ async def get_litellm_managed_vector_store(
     vector_store_id: str,
 ) -> Optional[LiteLLM_ManagedVectorStore]:
     """
-    Resolve a LiteLLM-managed vector store from the registry or database.
+    Resolve a LiteLLM-managed vector store from the registry or shared cache.
 
     Provider-native vector store IDs will not be present in either location and
     return None, preserving direct provider behavior while still protecting
@@ -165,19 +165,31 @@ async def get_litellm_managed_vector_store(
             )
 
     try:
-        from litellm.proxy.proxy_server import prisma_client
+        from litellm.proxy.auth.auth_checks import (
+            get_managed_vector_store_rows_by_uuids,
+        )
+        from litellm.proxy.proxy_server import (
+            prisma_client,
+            proxy_logging_obj,
+            user_api_key_cache,
+        )
 
         if prisma_client is None:
             return None
-        row = await prisma_client.db.litellm_managedvectorstorestable.find_unique(
-            where={"vector_store_id": vector_store_id}
+        rows = await get_managed_vector_store_rows_by_uuids(
+            uuids=[vector_store_id],
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
         )
-        if row is None:
+        if not rows:
             return None
-        return _normalize_litellm_params(LiteLLM_ManagedVectorStore(**row.model_dump()))
+        return _normalize_litellm_params(
+            LiteLLM_ManagedVectorStore(**rows[0].model_dump())
+        )
     except Exception as e:
         verbose_proxy_logger.debug(
-            "Failed to resolve vector store id=%s from database: %s",
+            "Failed to resolve vector store id=%s from shared cache: %s",
             vector_store_id,
             e,
         )
