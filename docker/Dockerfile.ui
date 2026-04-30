@@ -1,0 +1,43 @@
+# UI-only image: serves the LiteLLM admin dashboard as a static site behind nginx.
+#
+# Used by docker-compose.ui-split.yml as an opt-in alternative to the all-in-one
+# image produced by the root Dockerfile. The proxy image continues to bundle the
+# UI for default deployments; this image is for users who want to scale or deploy
+# the dashboard independently of the API.
+#
+# Build:
+#   docker build -f docker/Dockerfile.ui -t litellm-ui .
+#
+# The build copies the Next.js static export from litellm/proxy/_experimental/out/,
+# the same artifact the bundled image ships. It does not run `npm run build` —
+# the export is regenerated as part of the release runbook and checked in.
+
+ARG NGINX_IMAGE=nginxinc/nginx-unprivileged:1.27-alpine
+
+FROM alpine:3.20 AS staging
+
+WORKDIR /work
+COPY litellm/proxy/_experimental/out/ ./out/
+
+# Restructure extensionless routes (foo.html -> foo/index.html) so nginx try_files
+# can resolve /ui/login -> login/index.html the same way proxy_server.py does at
+# runtime. Drop a marker so debugging tools can confirm the layout.
+RUN cd ./out && \
+    for html_file in *.html; do \
+        if [ "$html_file" != "index.html" ] && [ -f "$html_file" ]; then \
+            folder_name="${html_file%.html}"; \
+            mkdir -p "$folder_name"; \
+            mv "$html_file" "$folder_name/index.html"; \
+        fi; \
+    done && \
+    touch .litellm_ui_ready
+
+FROM $NGINX_IMAGE AS runtime
+
+COPY --chown=101:101 --from=staging /work/out/ /usr/share/nginx/html/ui/
+COPY docker/ui/nginx.ui.conf /etc/nginx/conf.d/default.conf
+
+EXPOSE 8080/tcp
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
+  CMD wget -qO- http://127.0.0.1:8080/healthz >/dev/null 2>&1 || exit 1

@@ -1,0 +1,91 @@
+# Opt-in stack that runs the admin dashboard in its own container behind a small
+# nginx edge router. The default docker-compose.yml continues to ship the bundled
+# image (UI baked into the proxy); use this file when you want to scale or deploy
+# the UI independently of the API.
+#
+#   docker compose -f docker-compose.ui-split.yml up -d --build
+#
+# Topology:
+#   browser :4000 -> edge (nginx)
+#                      ├── /ui, /_next, /litellm-asset-prefix -> ui:8080
+#                      └── everything else                     -> litellm:4000
+#
+# Same-origin from the browser's perspective, so existing cookie/SSO flows and
+# `fetch("/sso/...")` calls in the UI keep working without CORS.
+
+services:
+  litellm:
+    build:
+      context: .
+      args:
+        target: runtime
+    image: docker.litellm.ai/berriai/litellm:main-stable
+    expose:
+      - "4000"
+    environment:
+      DATABASE_URL: "postgresql://llmproxy:dbpassword9090@db:5432/litellm"
+      STORE_MODEL_IN_DB: "True"
+    env_file:
+      - .env
+    depends_on:
+      - db
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - python3 -c "import urllib.request; urllib.request.urlopen('http://localhost:4000/health/liveliness')"
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  ui:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.ui
+    image: docker.litellm.ai/berriai/litellm-ui:main-stable
+    expose:
+      - "8080"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/healthz >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+
+  edge:
+    image: nginxinc/nginx-unprivileged:1.27-alpine
+    depends_on:
+      - litellm
+      - ui
+    ports:
+      - "4000:4000"
+    volumes:
+      - ./docker/ui/nginx.edge.conf:/etc/nginx/conf.d/default.conf:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:4000/healthz >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+
+  db:
+    image: postgres:16
+    restart: always
+    container_name: litellm_db_split
+    environment:
+      POSTGRES_DB: litellm
+      POSTGRES_USER: llmproxy
+      POSTGRES_PASSWORD: dbpassword9090
+    expose:
+      - "5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -d litellm -U llmproxy"]
+      interval: 1s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  postgres_data:
+    name: litellm_postgres_data_split

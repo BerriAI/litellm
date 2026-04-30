@@ -86,6 +86,18 @@ docker run --rm --network none --entrypoint prisma ghcr.io/berriai/litellm:main-
 
 This command should succeed (showing engine versions) even with `--network none`, confirming that Prisma binaries are available without network access.
 
+## Split UI Container (opt-in)
+
+By default the dashboard is baked into the proxy image and served from `/ui` by FastAPI. If you want to scale or deploy the dashboard separately from the API, use `docker-compose.ui-split.yml`. It runs three containers — `litellm` (API), `ui` (nginx serving the static export from `docker/Dockerfile.ui`), and `edge` (nginx router) — so the browser still talks to a single origin on port `4000`.
+
+```bash
+docker compose -f docker-compose.ui-split.yml up -d --build
+```
+
+The edge container routes `/ui`, `/_next`, and `/litellm-asset-prefix` to the UI container; everything else goes to the proxy. Same-origin means existing SSO / cookie auth flows keep working without CORS.
+
+The bundled image still ships the UI, so the default `docker-compose.yml` is unchanged. The split topology assumes `server_root_path` is `/`; if you set a custom root path, pre-process the UI assets in a custom `Dockerfile.ui` first.
+
 ## Troubleshooting
 
 -   **`build_admin_ui.sh: not found`**: This error can occur if the Docker build context is not set correctly. Ensure that you are running the `docker-compose` command from the root of the project.
