@@ -1,13 +1,9 @@
-import asyncio
 import os
 import sys
-from typing import Optional
-from unittest.mock import AsyncMock, patch
 
 import pytest
 
 sys.path.insert(0, os.path.abspath("../.."))
-import json
 
 from litellm.types.utils import HiddenParams
 
@@ -73,6 +69,26 @@ def test_usage_dump():
 
     new_usage = Usage(**current_usage.model_dump())
     assert new_usage.prompt_tokens_details.web_search_requests == 1
+
+
+def test_usage_converts_server_tool_use_dict():
+    from litellm.types.utils import ServerToolUse, Usage
+
+    usage = Usage(
+        completion_tokens=2,
+        prompt_tokens=1,
+        total_tokens=3,
+        server_tool_use={"web_search_requests": 4, "tool_search_requests": 1},
+    )
+
+    assert isinstance(usage.server_tool_use, ServerToolUse)
+    assert usage.server_tool_use.web_search_requests == 4
+    assert usage.server_tool_use.tool_search_requests == 1
+
+    round_trip = Usage(**usage.model_dump())
+    assert isinstance(round_trip.server_tool_use, ServerToolUse)
+    assert round_trip.server_tool_use.web_search_requests == 4
+    assert round_trip.server_tool_use.tool_search_requests == 1
 
 
 def test_usage_completion_tokens_details_text_tokens():
