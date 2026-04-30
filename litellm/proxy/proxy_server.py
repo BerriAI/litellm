@@ -426,6 +426,9 @@ from litellm.proxy.management_endpoints.team_endpoints import (
 from litellm.proxy.management_endpoints.tool_management_endpoints import (
     router as tool_management_router,
 )
+from litellm.proxy.management_endpoints.workflow_management_endpoints import (
+    router as workflow_management_router,
+)
 from litellm.proxy.memory.memory_endpoints import router as memory_router
 from litellm.proxy.management_endpoints.ui_sso import (
     get_disabled_non_admin_personal_key_creation,
@@ -745,6 +748,10 @@ async def _initialize_shared_aiohttp_session():
     try:
         from aiohttp import ClientSession, TCPConnector
 
+        from litellm.llms.custom_httpx.http_handler import (
+            _build_aiohttp_keepalive_socket_factory,
+        )
+
         connector_kwargs: Dict[str, Any] = {
             "keepalive_timeout": AIOHTTP_KEEPALIVE_TIMEOUT,
             "ttl_dns_cache": AIOHTTP_TTL_DNS_CACHE,
@@ -755,6 +762,9 @@ async def _initialize_shared_aiohttp_session():
             connector_kwargs["limit"] = AIOHTTP_CONNECTOR_LIMIT
         if AIOHTTP_CONNECTOR_LIMIT_PER_HOST > 0:
             connector_kwargs["limit_per_host"] = AIOHTTP_CONNECTOR_LIMIT_PER_HOST
+        socket_factory = _build_aiohttp_keepalive_socket_factory()
+        if socket_factory is not None:
+            connector_kwargs["socket_factory"] = socket_factory
 
         connector = TCPConnector(**connector_kwargs)
         session = ClientSession(connector=connector)
@@ -14279,6 +14289,7 @@ app.include_router(model_management_router)
 app.include_router(model_access_group_management_router)
 app.include_router(tag_management_router)
 app.include_router(tool_management_router)
+app.include_router(workflow_management_router)
 app.include_router(memory_router)
 app.include_router(scheduled_tasks_router)
 app.include_router(cost_tracking_settings_router)
