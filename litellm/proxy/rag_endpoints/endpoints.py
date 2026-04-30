@@ -30,6 +30,15 @@ from litellm.proxy.vector_store_endpoints.utils import (
 router = APIRouter()
 
 
+def _raise_vector_store_scan_depth_exceeded() -> None:
+    raise HTTPException(
+        status_code=400,
+        detail={
+            "error": f"Max depth of {DEFAULT_MAX_RECURSE_DEPTH} exceeded while scanning vector_store_id values"
+        },
+    )
+
+
 def _collect_vector_store_ids_from_payload(payload: Any) -> set[str]:
     vector_store_ids: set[str] = set()
     payload_stack = [(payload, 0)]
@@ -37,12 +46,7 @@ def _collect_vector_store_ids_from_payload(payload: Any) -> set[str]:
     while payload_stack:
         current_payload, depth = payload_stack.pop()
         if depth > DEFAULT_MAX_RECURSE_DEPTH:
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "error": f"Max depth of {DEFAULT_MAX_RECURSE_DEPTH} exceeded while scanning vector_store_id values"
-                },
-            )
+            _raise_vector_store_scan_depth_exceeded()
 
         if isinstance(current_payload, dict):
             for key, value in current_payload.items():
@@ -57,9 +61,15 @@ def _collect_vector_store_ids_from_payload(payload: Any) -> set[str]:
                     vector_store_ids.add(value)
                     continue
                 if isinstance(value, (dict, list)):
-                    payload_stack.append((value, depth + 1))
+                    next_depth = depth + 1
+                    if next_depth > DEFAULT_MAX_RECURSE_DEPTH:
+                        _raise_vector_store_scan_depth_exceeded()
+                    payload_stack.append((value, next_depth))
         elif isinstance(current_payload, list):
-            payload_stack.extend((item, depth + 1) for item in current_payload)
+            next_depth = depth + 1
+            if current_payload and next_depth > DEFAULT_MAX_RECURSE_DEPTH:
+                _raise_vector_store_scan_depth_exceeded()
+            payload_stack.extend((item, next_depth) for item in current_payload)
 
     return vector_store_ids
 
