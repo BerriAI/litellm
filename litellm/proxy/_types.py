@@ -508,6 +508,7 @@ class LiteLLMRoutes(enum.Enum):
         "/health",
         "/health/services",
         "/key/list",
+        "/key/aliases",
         "/user/filter/ui",
         "/models",
         "/v1/models",
