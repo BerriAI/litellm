@@ -2853,7 +2853,6 @@ if MCP_AVAILABLE:
 
         # The SDK's handler calls `send` directly.
         # Only proceed if auth was successfully extracted
-        await sse.handle_post_message(scope, receive, send)
         # No need to return NoOpResponse for raw ASGI app.
 
     def get_active_mcp_session() -> Optional[_McpServerSession]:
