@@ -107,8 +107,24 @@ def test_get_audit_log_changed_by_honors_header_with_team_opt_in():
     )
 
 
-def test_get_audit_log_changed_by_falls_back_to_header_when_user_id_missing():
+def test_get_audit_log_changed_by_ignores_header_without_opt_in_when_user_id_missing():
     user_api_key_dict = UserAPIKeyAuth(api_key="test-key")
+
+    assert (
+        get_audit_log_changed_by(
+            litellm_changed_by="spoofed-user",
+            user_api_key_dict=user_api_key_dict,
+            litellm_proxy_admin_name="proxy-admin",
+        )
+        == "proxy-admin"
+    )
+
+
+def test_get_audit_log_changed_by_honors_header_with_opt_in_when_user_id_missing():
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test-key",
+        metadata={"allow_litellm_changed_by_header": True},
+    )
 
     assert (
         get_audit_log_changed_by(
