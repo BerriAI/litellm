@@ -71,6 +71,7 @@ def vcr_config():
         "filter_headers": list(_FILTERED_REQUEST_HEADERS),
         "decode_compressed_response": True,
         "record_mode": "once",
+        "allow_playback_repeats": True,
         "match_on": (
             "method",
             "scheme",
