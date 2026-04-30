@@ -1587,17 +1587,6 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         filtered_tools = [t for i, t in enumerate(tool_calls) if i not in json_indices]
         return None, filtered_tools, extra_content
 
-    def _transform_response_for_json_mode(
-        self,
-        json_mode: Optional[bool],
-        tool_calls: List[ChatCompletionToolCallChunk],
-    ) -> Optional[LitellmMessage]:
-        replacement, _, _ = self._resolve_json_mode_non_streaming(
-            json_mode=json_mode,
-            tool_calls=tool_calls,
-        )
-        return replacement
-
     def extract_response_content(self, completion_response: dict) -> Tuple[
         str,
         Optional[List[Any]],
