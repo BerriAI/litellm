@@ -78,7 +78,7 @@ def get_proxy_server_request_headers(litellm_params: Optional[dict]) -> dict:
         return {}
 
     proxy_request_headers = (
-        litellm_params.get("proxy_server_request", {}).get("headers", {}) or {}
+        (litellm_params.get("proxy_server_request") or {}).get("headers") or {}
     )
 
     return proxy_request_headers
