@@ -172,6 +172,8 @@ _MCP_CALL_TYPE = CallTypes.call_mcp_tool.value
 def _cost_per_token_custom_pricing_helper(
     prompt_tokens: float = 0,
     completion_tokens: float = 0,
+    cache_read_input_tokens: Optional[int] = 0,
+    usage_object: Optional[Usage] = None,
     response_time_ms: Optional[float] = 0.0,
     ### CUSTOM PRICING ###
     custom_cost_per_token: Optional[CostPerToken] = None,
@@ -182,7 +184,23 @@ def _cost_per_token_custom_pricing_helper(
         return None
 
     if custom_cost_per_token is not None:
-        input_cost = custom_cost_per_token["input_cost_per_token"] * prompt_tokens
+        cache_read_input_token_cost = cast(
+            Optional[float],
+            custom_cost_per_token.get("cache_read_input_token_cost"),
+        )
+        if cache_read_input_token_cost is not None:
+            if not cache_read_input_tokens and usage_object is not None:
+                cache_read_input_tokens = _parse_prompt_tokens_details(usage_object)[
+                    "cache_hit_tokens"
+                ]
+            cache_read_tokens = max(0, cache_read_input_tokens or 0)
+            uncached_prompt_tokens = max(0, prompt_tokens - cache_read_tokens)
+            input_cost = (
+                custom_cost_per_token["input_cost_per_token"] * uncached_prompt_tokens
+                + cache_read_input_token_cost * cache_read_tokens
+            )
+        else:
+            input_cost = custom_cost_per_token["input_cost_per_token"] * prompt_tokens
         output_cost = custom_cost_per_token["output_cost_per_token"] * completion_tokens
         return input_cost, output_cost
     elif custom_cost_per_second is not None:
@@ -326,6 +344,8 @@ def cost_per_token(  # noqa: PLR0915
     response_cost = _cost_per_token_custom_pricing_helper(
         prompt_tokens=prompt_tokens,
         completion_tokens=completion_tokens,
+        cache_read_input_tokens=cache_read_input_tokens,
+        usage_object=usage_block,
         response_time_ms=response_time_ms,
         custom_cost_per_second=custom_cost_per_second,
         custom_cost_per_token=custom_cost_per_token,
