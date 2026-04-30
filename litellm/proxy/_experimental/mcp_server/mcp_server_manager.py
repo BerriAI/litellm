@@ -1550,6 +1550,9 @@ class MCPServerManager:
         except socket.gaierror:
             return False
 
+        if not infos:
+            return False
+
         # Reuse the proxy-wide outbound block list (private / loopback /
         # link-local / multicast / reserved / cloud-fabric IPs).  Defence
         # in depth only — the resolution here and the one httpx performs at
@@ -1557,7 +1560,10 @@ class MCPServerManager:
         # also controls the resource server is already in scope, so the
         # primary mitigation is the same-authority pin above.
         for info in infos:
-            if _is_blocked_ip(info[4][0]):
+            sockaddr_host = info[4][0]
+            if not isinstance(sockaddr_host, str):
+                return False
+            if _is_blocked_ip(sockaddr_host):
                 return False
         return True
 
@@ -1697,7 +1703,10 @@ class MCPServerManager:
                 llm_provider=httpxSpecialProvider.MCP,
                 params={"timeout": MCP_METADATA_TIMEOUT},
             )
-            response = await client.get(resource_metadata_url)
+            # Redirects bypass the SSRF guard (the new ``Location`` is not
+            # re-checked against ``server_url``), so refuse to follow them.
+            # Spec-compliant OAuth metadata endpoints serve the JSON directly.
+            response = await client.get(resource_metadata_url, follow_redirects=False)
             response.raise_for_status()
             data = response.json()
         except Exception as exc:  # pragma: no cover - network issues
@@ -1806,7 +1815,11 @@ class MCPServerManager:
                     llm_provider=httpxSpecialProvider.MCP,
                     params={"timeout": MCP_METADATA_TIMEOUT},
                 )
-                response = await client.get(url)
+                # Disable redirects: a redirect to a private IP would bypass
+                # the SSRF guard (the ``Location`` target is not re-checked
+                # against ``server_url``).  Spec-compliant OAuth/OIDC
+                # metadata endpoints serve the JSON directly.
+                response = await client.get(url, follow_redirects=False)
                 response.raise_for_status()
                 data = response.json()
             except Exception as exc:  # pragma: no cover - network issues

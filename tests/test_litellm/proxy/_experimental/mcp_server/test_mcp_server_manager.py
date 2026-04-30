@@ -786,7 +786,7 @@ class TestMCPServerManager:
         manager = MCPServerManager()
         issuer = "https://login.microsoftonline.com/test-tenant-id/v2.0"
 
-        def build_response(url: str):
+        def build_response(url: str, **kwargs):
             mock_response = MagicMock()
             if url == f"{issuer}/.well-known/openid-configuration":
                 mock_response.json.return_value = {
@@ -3088,6 +3088,81 @@ class TestOAuthDiscoverySSRFGuard:
         assert servers == []
         assert scopes is None
         mock_client.get.assert_not_called()
+
+    def test_empty_getaddrinfo_result_blocks_url(self, monkeypatch):
+        # POSIX doesn't strictly forbid an empty success-list from getaddrinfo.
+        # The guard must fail closed rather than fall through to ``return True``.
+        monkeypatch.setattr(
+            "litellm.proxy._experimental.mcp_server.mcp_server_manager.socket.getaddrinfo",
+            lambda *a, **k: [],
+        )
+        assert not MCPServerManager._is_safe_metadata_url(
+            "https://no-records.example.com/.well-known/oauth-authorization-server",
+            "https://legit-mcp.example.com/mcp",
+        )
+
+    @pytest.mark.asyncio
+    async def test_fetch_oauth_metadata_does_not_follow_redirects(self):
+        # If the validated origin redirects to a loopback or other unsafe
+        # address, httpx must NOT follow — the new ``Location`` would not
+        # be re-checked against ``server_url``.
+        manager = MCPServerManager()
+
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "authorization_servers": ["https://auth.example.com"],
+        }
+        mock_response.raise_for_status = MagicMock()
+
+        captured_kwargs: Dict[str, Any] = {}
+
+        async def fake_get(url, **kwargs):
+            captured_kwargs.update(kwargs)
+            return mock_response
+
+        mock_client = MagicMock()
+        mock_client.get = AsyncMock(side_effect=fake_get)
+
+        with patch(
+            "litellm.proxy._experimental.mcp_server.mcp_server_manager.get_async_httpx_client",
+            return_value=mock_client,
+        ):
+            await manager._fetch_oauth_metadata_from_resource(
+                "https://protected.example.com/.well-known/oauth",
+                "https://protected.example.com/mcp",
+            )
+        assert captured_kwargs.get("follow_redirects") is False
+
+    @pytest.mark.asyncio
+    async def test_fetch_single_auth_server_does_not_follow_redirects(self):
+        # Same redirect-bypass concern for the authorization-server fetch path.
+        manager = MCPServerManager()
+
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "authorization_endpoint": "https://provider.example.com/authorize",
+            "token_endpoint": "https://provider.example.com/token",
+        }
+        mock_response.raise_for_status = MagicMock()
+
+        captured_kwargs: Dict[str, Any] = {}
+
+        async def fake_get(url, **kwargs):
+            captured_kwargs.update(kwargs)
+            return mock_response
+
+        mock_client = MagicMock()
+        mock_client.get = AsyncMock(side_effect=fake_get)
+
+        with patch(
+            "litellm.proxy._experimental.mcp_server.mcp_server_manager.get_async_httpx_client",
+            return_value=mock_client,
+        ):
+            await manager._fetch_single_authorization_server_metadata(
+                "https://provider.example.com",
+                "https://provider.example.com",
+            )
+        assert captured_kwargs.get("follow_redirects") is False
 
     @pytest.mark.asyncio
     async def test_fetch_authorization_server_refuses_unsafe_issuer(self, monkeypatch):
