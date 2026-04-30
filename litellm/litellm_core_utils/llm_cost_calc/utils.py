@@ -1002,6 +1002,7 @@ class CostCalculatorUtils:
                 n=n,
                 size=size,
                 optional_params=optional_params,
+                image_response=completion_response,
             )
         elif custom_llm_provider == litellm.LlmProviders.AZURE.value:
             # gpt-image models use token-based pricing.
@@ -1024,6 +1025,7 @@ class CostCalculatorUtils:
                 n=n,
                 size=size,
                 optional_params=optional_params,
+                image_response=completion_response,
             )
         else:
             return default_image_cost_calculator(
@@ -1033,5 +1035,6 @@ class CostCalculatorUtils:
                 n=n,
                 size=size,
                 optional_params=optional_params,
+                image_response=completion_response,
             )
         return 0.0

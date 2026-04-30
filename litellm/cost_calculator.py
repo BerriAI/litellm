@@ -1900,6 +1900,41 @@ def transcription_cost(
     )
 
 
+def _image_cost_from_token_usage(
+    cost_info: dict, image_response: ImageResponse
+) -> Optional[float]:
+    """Token-based image cost from ``cost_info`` + ``image_response.usage``.
+
+    Returns ``None`` when no token-cost keys match any non-zero token count.
+    """
+    usage = getattr(image_response, "usage", None)
+    if usage is None:
+        return None
+
+    def _detail(parent: str, key: str) -> int:
+        details = getattr(usage, parent, None)
+        if details is None:
+            return 0
+        if isinstance(details, dict):
+            return int(details.get(key) or 0)
+        return int(getattr(details, key, 0) or 0)
+
+    text_in = _detail("prompt_tokens_details", "text_tokens")
+    cached_in = _detail("prompt_tokens_details", "cached_tokens")
+    image_in = _detail("prompt_tokens_details", "image_tokens")
+    image_out = _detail("completion_tokens_details", "image_tokens")
+    text_in_uncached = max(text_in - cached_in, 0)
+
+    rates: List[Tuple[str, int]] = [
+        ("input_cost_per_token", text_in_uncached),
+        ("cache_read_input_token_cost", cached_in),
+        ("input_cost_per_image_token", image_in),
+        ("output_cost_per_image_token", image_out),
+    ]
+    cost = sum((cost_info.get(key) or 0) * tokens for key, tokens in rates)
+    return cost if cost > 0 else None
+
+
 def default_image_cost_calculator(
     model: str,
     custom_llm_provider: Optional[str] = None,
@@ -1907,13 +1942,15 @@ def default_image_cost_calculator(
     n: Optional[int] = 1,  # Default to 1 image
     size: Optional[str] = "1024-x-1024",  # OpenAI default
     optional_params: Optional[dict] = None,
+    image_response: Optional[ImageResponse] = None,
 ) -> float:
     """
     Default image cost calculator for image generation
 
     Args:
         model (str): Model name
-        image_response (ImageResponse): Response from image generation
+        image_response (Optional[ImageResponse]): When provided, used as a
+            token-based fallback if the (quality, size) lookup misses.
         quality (Optional[str]): Image quality setting
         n (Optional[int]): Number of images generated
         size (Optional[str]): Image size (e.g. "1024x1024" or "1024-x-1024")
@@ -1978,27 +2015,36 @@ def default_image_cost_calculator(
         if _model is not None and _model in litellm.model_cost:
             cost_info = litellm.model_cost[_model]
             break
+
+    # Priority 1: Use per-image pricing if available (for gpt-image-1 and similar models)
+    if cost_info is not None and cost_info.get("input_cost_per_image") is not None:
+        return cost_info["input_cost_per_image"] * n
+    # Priority 2: Fall back to per-pixel pricing for backward compatibility
+    if cost_info is not None and cost_info.get("input_cost_per_pixel") is not None:
+        return cost_info["input_cost_per_pixel"] * height * width * n
+
+    # Priority 3: token-based fallback (e.g. gpt-image-2 with non-standard
+    # sizes where the (quality, size) chain cannot match).
+    if image_response is not None:
+        fallback_entries = [cost_info] if cost_info is not None else []
+        for fallback_key in (model.split("/")[-1] if "/" in model else None, model):
+            if fallback_key is None:
+                continue
+            entry = litellm.model_cost.get(fallback_key)
+            if entry is not None and entry is not cost_info:
+                fallback_entries.append(entry)
+        for entry in fallback_entries:
+            cost = _image_cost_from_token_usage(entry, image_response)
+            if cost is not None:
+                return cost
+
     if cost_info is None:
         raise Exception(
             f"Model not found in cost map. Tried checking {models_to_check}"
         )
-
-    # Priority 1: Use per-image pricing if available (for gpt-image-1 and similar models)
-    if (
-        "input_cost_per_image" in cost_info
-        and cost_info["input_cost_per_image"] is not None
-    ):
-        return cost_info["input_cost_per_image"] * n
-    # Priority 2: Fall back to per-pixel pricing for backward compatibility
-    elif (
-        "input_cost_per_pixel" in cost_info
-        and cost_info["input_cost_per_pixel"] is not None
-    ):
-        return cost_info["input_cost_per_pixel"] * height * width * n
-    else:
-        raise Exception(
-            f"No pricing information found for model {model}. Tried checking {models_to_check}"
-        )
+    raise Exception(
+        f"No pricing information found for model {model}. Tried checking {models_to_check}"
+    )
 
 
 def default_video_cost_calculator(
