@@ -778,3 +778,174 @@ def test_get_callback_identifier_custom_logger_registry_and_fallback():
     result = get_callback_identifier(my_callback_function)
     # Should fall back to callback_name() which returns __name__
     assert result == "my_callback_function"
+
+
+# ---------------------------------------------------------------------------
+# /health response shape: model-access scoping and display-field allowlist
+# ---------------------------------------------------------------------------
+# These tests pin the contract that the /health response (a) only includes
+# deployments the calling key is allowed to see, and (b) does not return
+# provider routing fields like api_base / api_version. They guard against
+# regressions that would widen the response shape.
+
+
+@pytest.mark.asyncio
+async def test_health_endpoint_filters_model_list_by_user_access():
+    """
+    health_endpoint() should restrict _llm_model_list to deployments whose
+    model_name appears in user_api_key_dict.models before running the health
+    check. A key scoped to ["model-a"] should only see model-a in the result,
+    not other deployments configured on the proxy.
+    """
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.health_endpoints._health_endpoints import health_endpoint
+
+    full_model_list = [
+        {
+            "model_name": "model-a",
+            "litellm_params": {
+                "model": "openai/gpt-4o",
+                "api_base": "https://example-a.test",
+            },
+            "model_info": {"id": "id-a"},
+        },
+        {
+            "model_name": "model-b",
+            "litellm_params": {
+                "model": "openai/gpt-4o",
+                "api_base": "https://example-b.test",
+                "api_version": "2024-10-21",
+            },
+            "model_info": {"id": "id-b"},
+        },
+    ]
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="hashed-test-key",
+        models=["model-a"],
+    )
+
+    captured: dict = {}
+
+    async def fake_perform(**kwargs):
+        captured["model_list"] = kwargs["model_list"]
+        return {
+            "healthy_endpoints": [],
+            "unhealthy_endpoints": [],
+            "healthy_count": 0,
+            "unhealthy_count": 0,
+        }
+
+    with (
+        patch("litellm.proxy.proxy_server.llm_model_list", full_model_list),
+        patch("litellm.proxy.proxy_server.llm_router", None),
+        patch("litellm.proxy.proxy_server.prisma_client", None),
+        patch("litellm.proxy.proxy_server.use_background_health_checks", False),
+        patch("litellm.proxy.proxy_server.user_model", None),
+        patch("litellm.proxy.proxy_server.health_check_results", {}),
+        patch("litellm.proxy.proxy_server.health_check_details", True),
+        patch("litellm.proxy.proxy_server.health_check_concurrency", 1),
+        patch(
+            "litellm.proxy.health_endpoints._health_endpoints._perform_health_check_and_save",
+            side_effect=fake_perform,
+        ),
+    ):
+        await health_endpoint(user_api_key_dict=user_api_key_dict)
+
+    assert (
+        "model_list" in captured
+    ), "health_endpoint did not call _perform_health_check_and_save"
+    returned_names = {m["model_name"] for m in captured["model_list"]}
+    assert returned_names == {
+        "model-a"
+    }, f"health_endpoint did not scope model_list to caller access: {returned_names}"
+
+
+@pytest.mark.asyncio
+async def test_health_endpoint_filters_background_cache_by_user_access():
+    """
+    When background_health_checks is enabled, health_endpoint() should also
+    scope the cached result to the caller's allowed models rather than
+    returning the cache verbatim.
+    """
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.health_endpoints._health_endpoints import health_endpoint
+
+    full_model_list = [
+        {
+            "model_name": "model-a",
+            "litellm_params": {
+                "model": "openai/gpt-4o",
+                "api_base": "https://example-a.test",
+            },
+            "model_info": {"id": "id-a"},
+        },
+        {
+            "model_name": "model-b",
+            "litellm_params": {
+                "model": "openai/gpt-4o",
+                "api_base": "https://example-b.test",
+            },
+            "model_info": {"id": "id-b"},
+        },
+    ]
+
+    cached_results = {
+        "healthy_endpoints": [
+            {"model": "openai/gpt-4o", "api_base": "https://example-a.test"},
+            {"model": "openai/gpt-4o", "api_base": "https://example-b.test"},
+        ],
+        "unhealthy_endpoints": [],
+        "healthy_count": 2,
+        "unhealthy_count": 0,
+    }
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="hashed-test-key",
+        models=["model-a"],
+    )
+
+    with (
+        patch("litellm.proxy.proxy_server.llm_model_list", full_model_list),
+        patch("litellm.proxy.proxy_server.llm_router", None),
+        patch("litellm.proxy.proxy_server.prisma_client", None),
+        patch("litellm.proxy.proxy_server.use_background_health_checks", True),
+        patch("litellm.proxy.proxy_server.user_model", None),
+        patch("litellm.proxy.proxy_server.health_check_results", cached_results),
+        patch("litellm.proxy.proxy_server.health_check_details", True),
+        patch("litellm.proxy.proxy_server.health_check_concurrency", 1),
+    ):
+        result = await health_endpoint(user_api_key_dict=user_api_key_dict)
+
+    returned_bases = {
+        ep.get("api_base")
+        for ep in result.get("healthy_endpoints", [])
+        if ep.get("api_base")
+    }
+    assert (
+        "https://example-b.test" not in returned_bases
+    ), "background health-check cache returned an out-of-scope deployment to the caller"
+
+
+def test_clean_endpoint_data_drops_routing_fields():
+    """
+    _clean_endpoint_data() should drop provider routing fields like api_base
+    and api_version from the /health response, alongside the existing
+    credential redactions.
+    """
+    from litellm.proxy.health_check import _clean_endpoint_data
+
+    raw = {
+        "model": "openai/gpt-4o",
+        "api_key": "sk-test",
+        "api_base": "https://example.test/v1",
+        "api_version": "2024-10-21",
+        "aws_access_key_id": "AKIAEXAMPLE",
+    }
+
+    cleaned = _clean_endpoint_data(raw, details=True)
+
+    assert "api_key" not in cleaned
+    assert "aws_access_key_id" not in cleaned
+    assert "api_base" not in cleaned
+    assert "api_version" not in cleaned

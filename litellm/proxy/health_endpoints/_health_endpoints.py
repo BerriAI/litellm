@@ -723,6 +723,35 @@ async def _save_background_health_checks_to_db(
         # Continue execution - don't let database save failure break health checks
 
 
+def _filter_health_check_results_by_model_ids(
+    results: dict, allowed_model_ids: set
+) -> dict:
+    """
+    Restrict a cached background health-check result dict to endpoints whose
+    model_id is in ``allowed_model_ids``.
+
+    Endpoints without a model_id (e.g. CLI-model entries that predate the
+    model_id wiring) are dropped conservatively — we cannot prove they belong
+    to the caller, so they are excluded rather than leaked.
+    """
+    healthy = [
+        ep
+        for ep in (results.get("healthy_endpoints") or [])
+        if ep.get("model_id") in allowed_model_ids
+    ]
+    unhealthy = [
+        ep
+        for ep in (results.get("unhealthy_endpoints") or [])
+        if ep.get("model_id") in allowed_model_ids
+    ]
+    return {
+        "healthy_endpoints": healthy,
+        "unhealthy_endpoints": unhealthy,
+        "healthy_count": len(healthy),
+        "unhealthy_count": len(unhealthy),
+    }
+
+
 async def _perform_health_check_and_save(
     model_list,
     target_model,
@@ -860,10 +889,20 @@ async def health_endpoint(
         _llm_model_list = copy.deepcopy(llm_model_list)
         ### FILTER MODELS FOR ONLY THOSE USER HAS ACCESS TO ###
         if len(user_api_key_dict.models) > 0:
-            pass
-        else:
-            pass  #
+            allowed_models = set(user_api_key_dict.models)
+            _llm_model_list = [
+                m for m in _llm_model_list if m.get("model_name") in allowed_models
+            ]
         if use_background_health_checks:
+            if len(user_api_key_dict.models) > 0:
+                allowed_model_ids = {
+                    (m.get("model_info") or {}).get("id")
+                    for m in _llm_model_list
+                    if (m.get("model_info") or {}).get("id")
+                }
+                return _filter_health_check_results_by_model_ids(
+                    health_check_results, allowed_model_ids
+                )
             return health_check_results
         else:
             return await _perform_health_check_and_save(
