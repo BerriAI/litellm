@@ -2704,34 +2704,36 @@ if MCP_AVAILABLE:
 
                         session_id = _capture_container.get("session_id")
 
-                    # ContextVars are lost when the MCP SDK spawns internal tasks
-                    # (e.g. _receive_loop), so tool handlers can't read auth_context_var reliably.
-                    # Storing it in session-isolated storage ensures it's isolated per SSE session.
-                    # We store it before calling server.run so it's available for the session's lifespan.
-                    auth = MCPAuthenticatedUser(  # type: ignore
-                        user_api_key_auth=user_api_key_auth,
-                        mcp_auth_header=mcp_auth_header,
-                        mcp_servers=mcp_servers,
-                        mcp_server_auth_headers=mcp_server_auth_headers,
-                        oauth2_headers=oauth2_headers,
-                        raw_headers=raw_headers,
-                        client_ip=_sse_client_ip,
-                    )
-                    _session_auth_storage[streams[0]] = auth
-                    if session_id:
-                        _session_id_auth_storage[session_id] = auth
-
-                    try:
-                        # Capture the session for propagation to sampling/elicitation callbacks
-                        # Since server.run doesn't return the session, we use a middleware-like
-                        # wrapper if the SDK allows, or we rely on the fact that for SSE,
-                        # there's usually one active session per request.
-                        await server.run(streams[0], streams[1], options)
-                    except Exception as session_e:
-                        verbose_logger.exception(f"Error in SSE session: {session_e}")
-                    finally:
+                        # ContextVars are lost when the MCP SDK spawns internal tasks
+                        # (e.g. _receive_loop), so tool handlers can't read auth_context_var reliably.
+                        # Storing it in session-isolated storage ensures it's isolated per SSE session.
+                        # We store it before calling server.run so it's available for the session's lifespan.
+                        auth = MCPAuthenticatedUser(  # type: ignore
+                            user_api_key_auth=user_api_key_auth,
+                            mcp_auth_header=mcp_auth_header,
+                            mcp_servers=mcp_servers,
+                            mcp_server_auth_headers=mcp_server_auth_headers,
+                            oauth2_headers=oauth2_headers,
+                            raw_headers=raw_headers,
+                            client_ip=_sse_client_ip,
+                        )
+                        _session_auth_storage[streams[0]] = auth
                         if session_id:
-                            _session_id_auth_storage.pop(session_id, None)
+                            _session_id_auth_storage[session_id] = auth
+
+                        try:
+                            # Capture the session for propagation to sampling/elicitation callbacks
+                            # Since server.run doesn't return the session, we use a middleware-like
+                            # wrapper if the SDK allows, or we rely on the fact that for SSE,
+                            # there's usually one active session per request.
+                            await server.run(streams[0], streams[1], options)
+                        except Exception as session_e:
+                            verbose_logger.exception(
+                                f"Error in SSE session: {session_e}"
+                            )
+                        finally:
+                            if session_id:
+                                _session_id_auth_storage.pop(session_id, None)
                 finally:
                     _captured_session_id_container_var.reset(_capture_token)
 

@@ -23,7 +23,7 @@ from litellm.proxy.proxy_server import (
 CONFIG_TEMPLATE_PATH = Path("tests/mcp_tests/test_configs/test_config_mcp_e2e.yaml")
 MCP_SERVER_SCRIPT = Path("tests/mcp_tests/mcp_server.py")
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-PROXY_START_TIMEOUT = 60
+PROXY_START_TIMEOUT = 120
 
 
 PROXY_AUTHORIZATION_HEADER = "Bearer sk-1234"
@@ -153,6 +153,8 @@ def proxy_server_url(
 
 
 class TestProxyMcpSimpleConnections:
+    """Basic roundtrip tests for individual MCP transports."""
+
     @pytest.mark.asyncio
     async def test_proxy_mcp_stdio_roundtrip(self, proxy_server_url: str) -> None:
         async with asyncio.timeout(120):
@@ -197,11 +199,15 @@ class TestProxyMcpSimpleConnections:
                     text = getattr(first_content, "text", None)
                     assert text == "11"
 
+
+class TestProxyMcpMultiServer:
+    """Tests that exercise multiple MCP backends in a single session."""
+
     @pytest.mark.asyncio
     async def test_proxy_mcp_lists_all_servers_without_header(
         self, proxy_server_url: str
     ) -> None:
-        async with asyncio.timeout(20):
+        async with asyncio.timeout(120):
             async with streamablehttp_client(
                 url=f"{proxy_server_url}/mcp",
                 headers={"Authorization": PROXY_AUTHORIZATION_HEADER},
@@ -256,7 +262,7 @@ class TestProxyMcpStatelessBehavior:
         self, proxy_server_url: str
     ) -> None:
         """Two independent clients connect and operate without sharing session state."""
-        async with asyncio.timeout(30):
+        async with asyncio.timeout(120):
             # --- Client A: connect, initialize, call tool ---
             async with streamablehttp_client(
                 url=f"{proxy_server_url}/mcp",

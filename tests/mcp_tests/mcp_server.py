@@ -53,6 +53,7 @@ def main() -> None:
             raise ValueError("HTTP transport requires a valid --port value")
         mcp.settings.host = args.host
         mcp.settings.port = args.port
+        mcp.settings.stateless_http = True
         mcp.run(transport="streamable-http")
         return
 

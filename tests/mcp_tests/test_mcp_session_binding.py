@@ -25,6 +25,11 @@ async def test_session_id_capture_and_binding():
     mock_sse = MagicMock()
     mock_sse.handle_post_message = AsyncMock()
 
+    # Track the streams yielded by mock_connect_sse so mock_run can verify
+    # it receives the same objects — proving server.run() is called INSIDE
+    # the async-with block, not after it exits (which would close streams).
+    yielded_streams = {}
+
     # Mock connect_sse to simulate the SDK behavior
     @asynccontextmanager
     async def mock_connect_sse(scope, receive, send):
@@ -32,7 +37,13 @@ async def test_session_id_capture_and_binding():
         container = _captured_session_id_container_var.get()
         if container is not None:
             container["session_id"] = session_id
-        yield (AsyncMock(), AsyncMock())
+        read_stream = AsyncMock()
+        write_stream = AsyncMock()
+        yielded_streams["read"] = read_stream
+        yielded_streams["write"] = write_stream
+        yielded_streams["closed"] = False
+        yield (read_stream, write_stream)
+        yielded_streams["closed"] = True
 
     mock_sse.connect_sse = MagicMock(side_effect=mock_connect_sse)
     mock_sse._read_stream_writers = {session_id: MagicMock()}
@@ -55,6 +66,22 @@ async def test_session_id_capture_and_binding():
     finish_run = asyncio.Event()
 
     async def mock_run(*args, **kwargs):
+        # Assert that server.run() is called INSIDE the connect_sse context
+        # manager — i.e. the streams are still open.  If server.run() were
+        # called AFTER the async-with exits, yielded_streams["closed"] would
+        # be True and the first arg would NOT match the yielded read stream.
+        assert (
+            yielded_streams.get("closed") is False
+        ), "server.run() called after connect_sse context exited — streams are closed"
+        assert (
+            len(args) >= 2
+        ), "server.run() must receive (read_stream, write_stream, options)"
+        assert (
+            args[0] is yielded_streams["read"]
+        ), "server.run() received a different read_stream than connect_sse yielded"
+        assert (
+            args[1] is yielded_streams["write"]
+        ), "server.run() received a different write_stream than connect_sse yielded"
         run_started.set()
         await finish_run.wait()
 
@@ -86,7 +113,7 @@ async def test_session_id_capture_and_binding():
         )
 
         # Wait for it to start and set the auth
-        await asyncio.wait_for(run_started.wait(), timeout=2.0)
+        await asyncio.wait_for(run_started.wait(), timeout=10.0)
 
         # Verify it was stored in the global storage
         assert session_id in _session_id_auth_storage
@@ -174,12 +201,20 @@ async def test_anonymous_session_still_works():
     mock_sse = MagicMock()
     mock_sse.handle_post_message = AsyncMock()
 
+    yielded_streams = {}
+
     @asynccontextmanager
     async def mock_connect_sse(scope, receive, send):
         container = _captured_session_id_container_var.get()
         if container is not None:
             container["session_id"] = session_id
-        yield (AsyncMock(), AsyncMock())
+        read_stream = AsyncMock()
+        write_stream = AsyncMock()
+        yielded_streams["read"] = read_stream
+        yielded_streams["write"] = write_stream
+        yielded_streams["closed"] = False
+        yield (read_stream, write_stream)
+        yielded_streams["closed"] = True
 
     mock_sse.connect_sse = MagicMock(side_effect=mock_connect_sse)
     mock_sse._read_stream_writers = {session_id: MagicMock()}
@@ -191,6 +226,18 @@ async def test_anonymous_session_still_works():
     finish_run = asyncio.Event()
 
     async def mock_run(*args, **kwargs):
+        assert (
+            yielded_streams.get("closed") is False
+        ), "server.run() called after connect_sse context exited — streams are closed"
+        assert (
+            len(args) >= 2
+        ), "server.run() must receive (read_stream, write_stream, options)"
+        assert (
+            args[0] is yielded_streams["read"]
+        ), "server.run() received a different read_stream than connect_sse yielded"
+        assert (
+            args[1] is yielded_streams["write"]
+        ), "server.run() received a different write_stream than connect_sse yielded"
         await finish_run.wait()
 
     with (

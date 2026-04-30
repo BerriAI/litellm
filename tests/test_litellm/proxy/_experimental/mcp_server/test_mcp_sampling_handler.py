@@ -183,14 +183,27 @@ class TestResolveModel:
         assert result == "claude-3.5-sonnet"
 
     @patch("litellm.proxy.proxy_server.llm_router", None)
-    def test_should_fallback_to_gpt4o_mini(self):
+    def test_should_raise_error_when_no_model_available(self):
         from litellm.proxy._experimental.mcp_server.sampling_handler import (
             _resolve_model_from_preferences,
         )
 
         with patch("litellm.model_list", []):
-            result = _resolve_model_from_preferences(None)
-            assert result == "gpt-4o-mini"
+            with pytest.raises(ValueError, match="No model could be resolved"):
+                _resolve_model_from_preferences(None)
+
+    @patch("litellm.proxy.proxy_server.llm_router", None)
+    def test_should_fallback_to_configured_default_model(self):
+        from litellm.proxy._experimental.mcp_server.sampling_handler import (
+            _resolve_model_from_preferences,
+        )
+        import litellm
+
+        with patch("litellm.model_list", []):
+            # Simulate configured default model
+            with patch.object(litellm, "default_mcp_sampling_model", "claude-3-haiku", create=True):
+                result = _resolve_model_from_preferences(None)
+                assert result == "claude-3-haiku"
 
     @patch("litellm.model_list", ["gpt-4o", "claude-3.5-sonnet", "gemini-pro"])
     @patch("litellm.proxy.proxy_server.llm_router", None)
