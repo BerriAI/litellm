@@ -7373,74 +7373,6 @@ def stream_chunk_builder_text_completion(
     return TextCompletionResponse(**response)
 
 
-def _merge_server_side_tool_invocations(existing: Optional[Any], incoming: Any) -> Any:
-    if not isinstance(incoming, list):
-        return incoming
-
-    if not isinstance(existing, list):
-        existing = []
-
-    merged_invocations: List[Any] = []
-    invocations_by_id: Dict[str, Dict[str, Any]] = {}
-
-    for invocation in existing:
-        if not isinstance(invocation, dict):
-            merged_invocations.append(invocation)
-            continue
-
-        invocation_copy = dict(invocation)
-        invocation_id = invocation_copy.get("id")
-        if isinstance(invocation_id, str) and invocation_id:
-            invocations_by_id[invocation_id] = invocation_copy
-        merged_invocations.append(invocation_copy)
-
-    for invocation in incoming:
-        if not isinstance(invocation, dict):
-            merged_invocations.append(invocation)
-            continue
-
-        invocation_id = invocation.get("id")
-        if isinstance(invocation_id, str) and invocation_id in invocations_by_id:
-            existing_invocation = invocations_by_id[invocation_id]
-            for key, value in invocation.items():
-                if key not in existing_invocation or existing_invocation[key] is None:
-                    existing_invocation[key] = value
-            continue
-
-        invocation_copy = dict(invocation)
-        if isinstance(invocation_id, str) and invocation_id:
-            invocations_by_id[invocation_id] = invocation_copy
-        merged_invocations.append(invocation_copy)
-
-    return merged_invocations
-
-
-def _merge_streaming_provider_specific_field(
-    combined_provider_fields: Dict[str, Any], key: str, value: Any
-) -> None:
-    if key == "server_side_tool_invocations":
-        combined_provider_fields[key] = _merge_server_side_tool_invocations(
-            combined_provider_fields.get(key), value
-        )
-        return
-
-    if key == "thought_signatures" and isinstance(value, list):
-        existing = combined_provider_fields.get(key)
-        if isinstance(existing, list):
-            existing.extend(value)
-        else:
-            combined_provider_fields[key] = list(value)
-        return
-
-    if key not in combined_provider_fields:
-        combined_provider_fields[key] = value
-    elif isinstance(value, list) and isinstance(combined_provider_fields[key], list):
-        # For lists like web_search_results, take the last (most complete) one
-        combined_provider_fields[key] = value
-    else:
-        combined_provider_fields[key] = value
-
-
 def stream_chunk_builder(  # noqa: PLR0915
     chunks: list,
     messages: Optional[list] = None,
@@ -7680,8 +7612,12 @@ def stream_chunk_builder(  # noqa: PLR0915
             for chunk in provider_specific_chunks:
                 fields = chunk["choices"][0]["delta"]["provider_specific_fields"]
                 if isinstance(fields, dict):
+                    from litellm.litellm_core_utils.streaming_provider_specific_fields import (
+                        merge_streaming_provider_specific_field,
+                    )
+
                     for key, value in fields.items():
-                        _merge_streaming_provider_specific_field(
+                        merge_streaming_provider_specific_field(
                             combined_provider_fields, key, value
                         )
 
