@@ -117,9 +117,13 @@ def test_resolve_app_id_priority_key_over_team(monkeypatch):
 
 
 def test_resolve_app_id_missing_raises(monkeypatch):
+    from litellm.proxy.guardrails.guardrail_hooks.alice_wonderfence.alice_wonderfence import (
+        WonderFenceMissingSecrets,
+    )
+
     guardrail, _ = _make_guardrail(monkeypatch)
     data = _request_data(metadata={})
-    with pytest.raises(ValueError, match="alice_wonderfence_app_id"):
+    with pytest.raises(WonderFenceMissingSecrets, match="alice_wonderfence_app_id"):
         guardrail._resolve_app_id(data)
 
 
@@ -236,36 +240,11 @@ async def test_get_client_lru_evicts_oldest(monkeypatch):
     assert "A" in g._client_cache
     assert "C" in g._client_cache
     assert "B" not in g._client_cache
-    b.close.assert_awaited_once()
+    # Evicted client must NOT be closed — in-flight requests may still hold a
+    # reference. GC handles cleanup.
+    b.close.assert_not_awaited()
     assert a is g._client_cache["A"]
     assert c is g._client_cache["C"]
-
-
-@pytest.mark.asyncio
-async def test_get_client_eviction_swallows_close_error(monkeypatch):
-    from litellm.types.guardrails import GuardrailEventHooks
-
-    def factory(**kwargs):
-        m = Mock(_api_key=kwargs["api_key"])
-        m.close = AsyncMock(side_effect=RuntimeError("nope"))
-        return m
-
-    _install_sdk_stub(monkeypatch, client_factory=factory)
-    from litellm.proxy.guardrails.guardrail_hooks.alice_wonderfence.alice_wonderfence import (
-        WonderFenceGuardrail,
-    )
-
-    g = WonderFenceGuardrail(
-        guardrail_name="t",
-        api_key="default",
-        max_cached_clients=1,
-        event_hook=[GuardrailEventHooks.pre_call],
-    )
-    await g._get_client("A")
-    # Eviction must not propagate the close() exception.
-    await g._get_client("B")
-    assert "B" in g._client_cache
-    assert "A" not in g._client_cache
 
 
 @pytest.mark.asyncio
@@ -469,30 +448,32 @@ async def test_apply_guardrail_missing_api_key_fail_closed_returns_500(monkeypat
 
 
 @pytest.mark.asyncio
-async def test_apply_guardrail_missing_app_id_fail_open_swallows(monkeypatch):
-    """Missing app_id with fail_open=True returns inputs unchanged."""
+async def test_apply_guardrail_missing_app_id_fail_open_returns_500(monkeypatch):
+    """Missing app_id is a config error: never fail-open, even with fail_open=True."""
     guardrail, _ = _make_guardrail(monkeypatch, fail_open=True)
-    inputs = {"texts": ["hi"]}
-    out = await guardrail.apply_guardrail(
-        inputs=inputs,
-        request_data=_request_data(metadata={}),
-        input_type="request",
-    )
-    assert out["texts"] == ["hi"]
+    with pytest.raises(HTTPException) as exc:
+        await guardrail.apply_guardrail(
+            inputs={"texts": ["hi"]},
+            request_data=_request_data(metadata={}),
+            input_type="request",
+        )
+    assert exc.value.status_code == 500
+    assert "alice_wonderfence_app_id" in exc.value.detail["exception"]
 
 
 @pytest.mark.asyncio
-async def test_apply_guardrail_missing_api_key_fail_open_swallows(monkeypatch):
-    """Missing api_key with fail_open=True returns inputs unchanged."""
+async def test_apply_guardrail_missing_api_key_fail_open_returns_500(monkeypatch):
+    """Missing api_key is a config error: never fail-open, even with fail_open=True."""
     monkeypatch.delenv("ALICE_API_KEY", raising=False)
     guardrail, _ = _make_guardrail(monkeypatch, api_key=None, fail_open=True)
-    inputs = {"texts": ["hi"]}
-    out = await guardrail.apply_guardrail(
-        inputs=inputs,
-        request_data=_request_data(),
-        input_type="request",
-    )
-    assert out["texts"] == ["hi"]
+    with pytest.raises(HTTPException) as exc:
+        await guardrail.apply_guardrail(
+            inputs={"texts": ["hi"]},
+            request_data=_request_data(),
+            input_type="request",
+        )
+    assert exc.value.status_code == 500
+    assert "alice_wonderfence_api_key" in exc.value.detail["exception"]
 
 
 @pytest.mark.asyncio

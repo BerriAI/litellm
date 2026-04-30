@@ -194,13 +194,10 @@ class WonderFenceGuardrail(CustomGuardrail):
         self._client_cache[api_key] = client
 
         if len(self._client_cache) > self._client_cache_maxsize:
-            _, evicted = self._client_cache.popitem(last=False)
-            try:
-                await evicted.close()
-            except Exception:
-                logger.warning(
-                    "Failed to close evicted WonderFence client", exc_info=True
-                )
+            # Drop reference only — never close. An evicted client may still be
+            # held by in-flight apply_guardrail coroutines; closing it would
+            # break their pooled HTTP connections. GC handles cleanup.
+            self._client_cache.popitem(last=False)
 
         return client
 
@@ -264,7 +261,7 @@ class WonderFenceGuardrail(CustomGuardrail):
         ):
             return team_metadata["alice_wonderfence_app_id"]
 
-        raise ValueError(
+        raise WonderFenceMissingSecrets(
             "No alice_wonderfence_app_id found in request metadata, API-key "
             "metadata, or team metadata. app_id must be provided per request."
         )
@@ -441,7 +438,7 @@ class WonderFenceGuardrail(CustomGuardrail):
             return self._resolve_api_key(request_data), self._resolve_app_id(
                 request_data
             )
-        except (WonderFenceMissingSecrets, ValueError):
+        except WonderFenceMissingSecrets:
             recovered = self._recover_resolved(logging_obj)
             if recovered is None:
                 raise
@@ -543,6 +540,18 @@ class WonderFenceGuardrail(CustomGuardrail):
 
         except WonderFenceBlockedError as e:
             raise HTTPException(status_code=400, detail=e.detail)
+        except WonderFenceMissingSecrets as e:
+            # Configuration errors (no api_key / app_id resolvable) are never
+            # fail-open: a misconfigured tenant must not silently bypass the
+            # guardrail.
+            raise HTTPException(
+                status_code=500,
+                detail={
+                    "error": "Error in Alice WonderFence Guardrail",
+                    "guardrail_name": self.guardrail_name,
+                    "exception": str(e),
+                },
+            ) from e
         except Exception as e:
             if self.fail_open:
                 logger.critical(

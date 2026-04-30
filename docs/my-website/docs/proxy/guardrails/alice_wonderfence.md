@@ -86,7 +86,7 @@ WonderFence evaluates content and returns one of four actions:
 
 | Action | Description | Behavior |
 |--------|-------------|----------|
-| `ALLOW` | Content is safe | Request/response passes through unchanged |
+| `NO_ACTION` | Content is safe | Request/response passes through unchanged |
 | `DETECT` | Violation detected but not enforced | Logged for monitoring; request continues |
 | `MASK` | Content contains sensitive data | Flagged content is replaced with masked text before reaching the LLM (or before being returned to the user) |
 | `BLOCK` | Content violates policy | Request rejected with HTTP 400 |
