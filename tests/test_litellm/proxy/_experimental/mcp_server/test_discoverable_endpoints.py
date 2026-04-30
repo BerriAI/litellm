@@ -1222,6 +1222,51 @@ def test_get_request_base_url_xff_trust_gate(
         assert result == "http://localhost:4000"
 
 
+def test_xff_misconfig_warning_emitted_once(caplog):
+    """Operators upgrading from the old "always trust X-Forwarded-*" behaviour
+    get a one-shot warning when they have ``use_x_forwarded_for`` enabled
+    but no ``mcp_trusted_proxy_ranges`` configured. The warning must NOT
+    spam every request."""
+    try:
+        from fastapi import Request
+
+        from litellm.proxy import auth as proxy_auth_pkg  # noqa: F401
+        from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+            get_request_base_url,
+        )
+        from litellm.proxy.auth import ip_address_utils
+    except ImportError:
+        pytest.skip("MCP discoverable endpoints not available")
+
+    # Reset the module-level one-shot flag so the test is deterministic.
+    ip_address_utils._warned_xff_without_trusted_ranges = False
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "http://localhost:4000/"
+    mock_request.client = MagicMock()
+    mock_request.client.host = "203.0.113.5"
+    headers = {"X-Forwarded-Host": "attacker.example.com"}
+    mock_request.headers.get = lambda name, default=None: headers.get(name, default)
+
+    misconfig = {"use_x_forwarded_for": True}
+
+    import logging
+
+    with (
+        caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"),
+        patch("litellm.proxy.proxy_server.general_settings", misconfig, create=True),
+    ):
+        for _ in range(3):
+            get_request_base_url(mock_request)
+
+    matching = [
+        rec for rec in caplog.records if "mcp_trusted_proxy_ranges" in rec.getMessage()
+    ]
+    assert (
+        len(matching) == 1
+    ), f"expected exactly one warning, got {len(matching)}: {[r.getMessage() for r in matching]}"
+
+
 # -------------------------------------------------------------------
 # Tests for scopes_supported when mcp_server.scopes is None
 # -------------------------------------------------------------------
