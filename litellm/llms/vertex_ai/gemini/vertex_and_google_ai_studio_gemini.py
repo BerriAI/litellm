@@ -560,9 +560,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         }
         return any(key in tool for key in search_tool_keys)
 
-    def _drop_search_tools_if_mixed_with_functions(
-        self, optional_params: dict
-    ) -> None:
+    def _drop_search_tools_if_mixed_with_functions(self, optional_params: dict) -> None:
         tools = optional_params.get("tools")
         if not isinstance(tools, list) or not self._has_function_declarations_tool(
             tools
@@ -575,9 +573,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         if server_side_tool_invocations:
             return
 
-        filtered_tools = [
-            tool for tool in tools if not self._is_search_tool(tool=tool)
-        ]
+        filtered_tools = [tool for tool in tools if not self._is_search_tool(tool=tool)]
         if len(filtered_tools) == len(tools):
             return
 
@@ -593,9 +589,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         optional_params = super()._add_tools_to_optional_params(
             optional_params=optional_params, tools=tools
         )
-        self._drop_search_tools_if_mixed_with_functions(
-            optional_params=optional_params
-        )
+        self._drop_search_tools_if_mixed_with_functions(optional_params=optional_params)
         return optional_params
 
     def _map_function(  # noqa: PLR0915
