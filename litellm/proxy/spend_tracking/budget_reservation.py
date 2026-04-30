@@ -584,6 +584,7 @@ async def _ensure_malformed_window_counter_initialized(
     if counter.parent_counter_key is None:
         return
 
+    from litellm.proxy.db.spend_counter_reseed import SpendCounterReseed
     from litellm.proxy.proxy_server import (
         _increment_spend_counter_cache,
         get_current_spend,
@@ -594,14 +595,20 @@ async def _ensure_malformed_window_counter_initialized(
     if current is not None:
         return
 
-    parent_spend = await get_current_spend(
-        counter_key=counter.parent_counter_key,
-        fallback_spend=counter.fallback_spend,
-    )
-    await _increment_spend_counter_cache(
-        counter_key=counter.counter_key,
-        increment=parent_spend,
-    )
+    lock = await SpendCounterReseed._get_lock(counter.counter_key)
+    async with lock:
+        current = await spend_counter_cache.async_get_cache(key=counter.counter_key)
+        if current is not None:
+            return
+
+        parent_spend = await get_current_spend(
+            counter_key=counter.parent_counter_key,
+            fallback_spend=counter.fallback_spend,
+        )
+        await _increment_spend_counter_cache(
+            counter_key=counter.counter_key,
+            increment=parent_spend,
+        )
 
 
 async def _set_reserved_entries_adjustment(
