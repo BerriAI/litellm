@@ -30,6 +30,7 @@ class LiteLLMCompletionTransformationHandler:
         _is_async: bool = False,
         stream: Optional[bool] = None,
         extra_headers: Optional[Dict[str, Any]] = None,
+        extra_body: Optional[Dict[str, Any]] = None,
         **kwargs,
     ) -> Union[
         ResponsesAPIResponse,
@@ -46,6 +47,7 @@ class LiteLLMCompletionTransformationHandler:
                 custom_llm_provider=custom_llm_provider,
                 stream=stream,
                 extra_headers=extra_headers,
+                extra_body=extra_body,
                 **kwargs,
             )
         )
