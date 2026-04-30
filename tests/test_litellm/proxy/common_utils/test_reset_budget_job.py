@@ -1093,10 +1093,10 @@ def test_reset_budget_for_team_members_invalidates_redis_counter(monkeypatch):
     asyncio.run(job.reset_budget_for_litellm_team_members([expired_budget]))
 
     counter_cache.in_memory_cache.set_cache.assert_any_call(
-        key="spend:team_member:alice:team-x", value=0.0
+        key="spend:team_member:alice:team-x", value=0.0, ttl=60
     )
     counter_cache.redis_cache.async_set_cache.assert_any_await(
-        key="spend:team_member:alice:team-x", value=0.0
+        key="spend:team_member:alice:team-x", value=0.0, ttl=60
     )
 
 
@@ -1124,7 +1124,7 @@ def test_reset_budget_for_keys_invalidates_redis_counter(
     asyncio.run(reset_budget_job.reset_budget_for_litellm_keys())
 
     counter_cache.in_memory_cache.set_cache.assert_any_call(
-        key="spend:key:sk-abc", value=0.0
+        key="spend:key:sk-abc", value=0.0, ttl=60
     )
 
 
@@ -1152,7 +1152,7 @@ def test_reset_budget_for_users_invalidates_redis_counter(
     asyncio.run(reset_budget_job.reset_budget_for_litellm_users())
 
     counter_cache.in_memory_cache.set_cache.assert_any_call(
-        key="spend:user:alice", value=0.0
+        key="spend:user:alice", value=0.0, ttl=60
     )
 
 
@@ -1180,7 +1180,7 @@ def test_reset_budget_for_teams_invalidates_redis_counter(
     asyncio.run(reset_budget_job.reset_budget_for_litellm_teams())
 
     counter_cache.in_memory_cache.set_cache.assert_any_call(
-        key="spend:team:team-x", value=0.0
+        key="spend:team:team-x", value=0.0, ttl=60
     )
 
 
@@ -1203,5 +1203,5 @@ def test_reset_budget_for_keys_linked_to_budgets_invalidates_redis_counter(monke
     asyncio.run(job.reset_budget_for_keys_linked_to_budgets([expired_budget]))
 
     counter_cache.in_memory_cache.set_cache.assert_any_call(
-        key="spend:key:sk-linked", value=0.0
+        key="spend:key:sk-linked", value=0.0, ttl=60
     )

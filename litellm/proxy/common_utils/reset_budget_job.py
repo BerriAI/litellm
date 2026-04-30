@@ -54,15 +54,22 @@ class ResetBudgetJob:
 
     @staticmethod
     async def _invalidate_spend_counter(counter_key: str) -> None:
-        """Zero a spend counter so a DB-row reset takes effect immediately."""
+        """Zero a spend counter so a DB-row reset takes effect immediately.
+
+        Call AFTER the DB write commits. Clearing Redis before the DB
+        commit opens a window where get_current_spend reads 0 from Redis
+        while the DB still holds the pre-reset value, allowing bypass.
+        """
         try:
             from litellm.proxy.proxy_server import spend_counter_cache
 
-            spend_counter_cache.in_memory_cache.set_cache(key=counter_key, value=0.0)
+            spend_counter_cache.in_memory_cache.set_cache(
+                key=counter_key, value=0.0, ttl=60
+            )
             if spend_counter_cache.redis_cache is not None:
                 try:
                     await spend_counter_cache.redis_cache.async_set_cache(
-                        key=counter_key, value=0.0
+                        key=counter_key, value=0.0, ttl=60
                     )
                 except Exception as redis_err:
                     verbose_proxy_logger.warning(
@@ -92,21 +99,25 @@ class ResetBudgetJob:
             memberships = await self.prisma_client.db.litellm_teammembership.find_many(
                 where={"budget_id": {"in": budget_ids}}
             )
-            for m in memberships:
-                await self._invalidate_spend_counter(
-                    f"spend:team_member:{m.user_id}:{m.team_id}"
-                )
         except Exception as e:
+            memberships = []
             verbose_proxy_logger.warning(
                 "Failed to fetch team memberships for counter invalidation: %s", e
             )
 
-        return await self.prisma_client.db.litellm_teammembership.update_many(
+        update_result = await self.prisma_client.db.litellm_teammembership.update_many(
             where={"budget_id": {"in": budget_ids}},
             data={
                 "spend": 0,
             },
         )
+
+        for m in memberships:
+            await self._invalidate_spend_counter(
+                f"spend:team_member:{m.user_id}:{m.team_id}"
+            )
+
+        return update_result
 
     async def reset_budget_for_keys_linked_to_budgets(
         self, budgets_to_reset: List[LiteLLM_BudgetTableFull]
@@ -140,19 +151,25 @@ class ResetBudgetJob:
             keys = await self.prisma_client.db.litellm_verificationtoken.find_many(
                 where=where_clause
             )
-            for k in keys:
-                await self._invalidate_spend_counter(f"spend:key:{k.token}")
         except Exception as e:
+            keys = []
             verbose_proxy_logger.warning(
                 "Failed to fetch keys for counter invalidation: %s", e
             )
 
-        return await self.prisma_client.db.litellm_verificationtoken.update_many(
-            where=where_clause,
-            data={
-                "spend": 0,
-            },
+        update_result = (
+            await self.prisma_client.db.litellm_verificationtoken.update_many(
+                where=where_clause,
+                data={
+                    "spend": 0,
+                },
+            )
         )
+
+        for k in keys:
+            await self._invalidate_spend_counter(f"spend:key:{k.token}")
+
+        return update_result
 
     async def reset_budget_for_litellm_budget_table(self):
         """
@@ -377,15 +394,15 @@ class ResetBudgetJob:
                 )
 
                 if updated_keys:
-                    for k in updated_keys:
-                        token = getattr(k, "token", None)
-                        if token:
-                            await self._invalidate_spend_counter(f"spend:key:{token}")
                     await self.prisma_client.update_data(
                         query_type="update_many",
                         data_list=updated_keys,
                         table_name="key",
                     )
+                    for k in updated_keys:
+                        token = getattr(k, "token", None)
+                        if token:
+                            await self._invalidate_spend_counter(f"spend:key:{token}")
 
             end_time = time.time()
             if len(failed_keys) > 0:  # If any keys failed to reset
@@ -466,17 +483,17 @@ class ResetBudgetJob:
                     "Updated users %s", json.dumps(updated_users, indent=4, default=str)
                 )
                 if updated_users:
+                    await self.prisma_client.update_data(
+                        query_type="update_many",
+                        data_list=updated_users,
+                        table_name="user",
+                    )
                     for u in updated_users:
                         user_id = getattr(u, "user_id", None)
                         if user_id:
                             await self._invalidate_spend_counter(
                                 f"spend:user:{user_id}"
                             )
-                    await self.prisma_client.update_data(
-                        query_type="update_many",
-                        data_list=updated_users,
-                        table_name="user",
-                    )
 
             end_time = time.time()
             if len(failed_users) > 0:  # If any users failed to reset
@@ -563,17 +580,17 @@ class ResetBudgetJob:
                     "Updated teams %s", json.dumps(updated_teams, indent=4, default=str)
                 )
                 if updated_teams:
+                    await self.prisma_client.update_data(
+                        query_type="update_many",
+                        data_list=updated_teams,
+                        table_name="team",
+                    )
                     for t in updated_teams:
                         team_id = getattr(t, "team_id", None)
                         if team_id:
                             await self._invalidate_spend_counter(
                                 f"spend:team:{team_id}"
                             )
-                    await self.prisma_client.update_data(
-                        query_type="update_many",
-                        data_list=updated_teams,
-                        table_name="team",
-                    )
 
             end_time = time.time()
             if len(failed_teams) > 0:  # If any teams failed to reset
