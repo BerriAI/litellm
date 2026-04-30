@@ -42,7 +42,7 @@ def get_audit_log_changed_by(
 ) -> Optional[str]:
     if litellm_changed_by and _allows_litellm_changed_by_header(user_api_key_dict):
         return litellm_changed_by
-    return user_api_key_dict.user_id or litellm_changed_by or litellm_proxy_admin_name
+    return user_api_key_dict.user_id or litellm_proxy_admin_name
 
 
 def _resolve_audit_log_callback(name: str) -> Optional[CustomLogger]:
