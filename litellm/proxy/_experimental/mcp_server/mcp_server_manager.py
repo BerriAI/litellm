@@ -2529,6 +2529,10 @@ class MCPServerManager:
                     )
             extra_headers.update(hook_extra_headers)
 
+        # Reset to None if no headers were actually added
+        if extra_headers is not None and len(extra_headers) == 0:
+            extra_headers = None
+
         stdio_env = self._build_stdio_env(mcp_server, raw_headers)
 
         client = await self._create_mcp_client(

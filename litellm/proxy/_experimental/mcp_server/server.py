@@ -153,6 +153,7 @@ if MCP_AVAILABLE:
         MCPAuthenticatedUser,
     )
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        MCPServerManager,
         global_mcp_server_manager,
     )
     from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
@@ -900,6 +901,20 @@ if MCP_AVAILABLE:
                 allowed_mcp_server_id
             )
             if mcp_server is not None:
+                # Apply oauth2_flow resolution for legacy DB rows where it may be NULL
+                resolved_flow = MCPServerManager._resolve_oauth2_flow(
+                    auth_type=mcp_server.auth_type,
+                    oauth2_flow=mcp_server.oauth2_flow,
+                    token_url=mcp_server.token_url,
+                    authorization_url=mcp_server.authorization_url,
+                    client_id=mcp_server.client_id,
+                    client_secret=mcp_server.client_secret,
+                )
+                if resolved_flow and resolved_flow != mcp_server.oauth2_flow:
+                    # Create a new instance with the resolved flow for this request
+                    mcp_server = mcp_server.model_copy(
+                        update={"oauth2_flow": resolved_flow}
+                    )
                 allowed_mcp_servers.append(mcp_server)
 
         if mcp_servers is not None:
@@ -1125,6 +1140,10 @@ if MCP_AVAILABLE:
                 if header_value is None:
                     continue
                 extra_headers[header] = header_value
+
+        # Reset to None if no headers were actually added
+        if extra_headers is not None and len(extra_headers) == 0:
+            extra_headers = None
 
         if server_auth_header is None:
             server_auth_header = mcp_auth_header
