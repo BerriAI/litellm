@@ -235,6 +235,54 @@ def test_prepare_mcp_server_headers_m2m_skips_authorization_from_raw_extra_heade
 
 
 @pytest.mark.asyncio
+async def test_call_tool_m2m_skips_authorization_headers():
+    """M2M call_tool must not forward caller Authorization in oauth2/raw headers."""
+    try:
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            MCPServerManager,
+        )
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    manager = MCPServerManager()
+    server = MCPServer(
+        server_id="m2m-call-tool",
+        name="m2m-call-tool",
+        server_name="m2m-call-tool",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        oauth2_flow="client_credentials",
+        token_url="https://auth.example.com/token",
+        client_id="cid",
+        client_secret="csecret",
+        extra_headers=["Authorization", "X-Custom"],
+    )
+
+    mock_client = MagicMock()
+    mock_client.call_tool = AsyncMock(return_value=MagicMock())
+
+    with patch.object(
+        manager, "_create_mcp_client", new=AsyncMock(return_value=mock_client)
+    ) as create_client_mock:
+        await manager._call_regular_mcp_tool(
+            mcp_server=server,
+            original_tool_name="echo",
+            arguments={"message": "hello"},
+            tasks=[],
+            mcp_auth_header=None,
+            mcp_server_auth_headers=None,
+            oauth2_headers={"Authorization": "Bearer sk-1234"},
+            raw_headers={"authorization": "Bearer sk-1234", "x-custom": "trace"},
+            proxy_logging_obj=None,
+        )
+
+    create_kwargs = create_client_mock.await_args.kwargs
+    extra_headers = create_kwargs["extra_headers"] or {}
+    assert "Authorization" not in extra_headers
+    assert extra_headers.get("X-Custom") == "trace"
+
+
+@pytest.mark.asyncio
 async def test_get_prompts_from_mcp_servers_success():
     try:
         from litellm.proxy._experimental.mcp_server.server import (

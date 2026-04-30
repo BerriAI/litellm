@@ -2476,7 +2476,11 @@ class MCPServerManager:
         # oauth2 headers
         extra_headers: Optional[Dict[str, str]] = None
         if mcp_server.auth_type == MCPAuth.oauth2:
-            extra_headers = oauth2_headers
+            if mcp_server.has_client_credentials:
+                # For M2M OAuth servers, Authorization must come from token fetch.
+                extra_headers = None
+            else:
+                extra_headers = oauth2_headers
 
         if mcp_server.extra_headers and raw_headers:
             if extra_headers is None:
@@ -2487,6 +2491,8 @@ class MCPServerManager:
             }
             for header in mcp_server.extra_headers:
                 if not isinstance(header, str):
+                    continue
+                if mcp_server.has_client_credentials and header.lower() == "authorization":
                     continue
                 header_value = normalized_raw_headers.get(header.lower())
                 if header_value is None:
