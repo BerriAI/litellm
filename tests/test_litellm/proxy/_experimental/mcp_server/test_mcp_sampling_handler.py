@@ -345,6 +345,7 @@ class TestConvertOpenAIResponseToMCPResult:
 # ─────────────────────────────────────────────────────────────
 # Tests: Full handler
 # ─────────────────────────────────────────────────────────────
+@patch("litellm.proxy.proxy_server.llm_router", None)
 class TestHandleSamplingCreateMessage:
     """Tests for the main handle_sampling_create_message function."""
 

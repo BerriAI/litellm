@@ -167,3 +167,67 @@ async def test_handle_stale_mcp_session():
     # Header should not be stripped
     headers_valid = dict(scope_valid["headers"])
     assert b"mcp-session-id" in headers_valid
+
+
+@pytest.mark.asyncio
+async def test_handle_sse_post_messages_auth_failure():
+    """Test the POST-auth-discard behavior when extraction fails."""
+    from litellm.proxy._experimental.mcp_server.server import handle_sse_post_messages
+
+    scope = {"type": "http", "path": "/messages"}
+    mock_receive = AsyncMock()
+    mock_send = AsyncMock()
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
+        new_callable=AsyncMock,
+    ) as mock_extract:
+        # Simulate extraction failure
+        mock_extract.side_effect = Exception("Extraction failed")
+
+        await handle_sse_post_messages(scope, mock_receive, mock_send)
+
+        # Verify JSONResponse 500 was sent
+        assert mock_send.call_count >= 1
+        # Extract response from mock_send
+        response_body = b"".join(
+            [
+                call.args[0].get("body", b"")
+                for call in mock_send.mock_calls
+                if call.args[0].get("type") == "http.response.body"
+            ]
+        )
+        assert b"Authentication processing failed" in response_body
+
+
+def test_get_active_auth_context_session_storage_fallback():
+    """Test the _session_auth_storage fallback in get_active_auth_context."""
+    from litellm.proxy._experimental.mcp_server.server import (
+        get_active_auth_context,
+        _session_auth_storage,
+    )
+
+    class MockRequestCtx:
+        def __init__(self, stream):
+            self.session = MagicMock()
+            self.session._read_stream = stream
+
+    mock_stream = MagicMock()
+    mock_auth = MagicMock()
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.server.auth_context_var"
+    ) as mock_var:
+        mock_var.get.return_value = None  # Force fallback
+        with patch("mcp.server.lowlevel.server.request_ctx") as mock_req_ctx:
+            mock_req_ctx.get.return_value = MockRequestCtx(mock_stream)
+
+            # 1. Test when missing from storage
+            assert get_active_auth_context() is None
+
+            # 2. Test when present in storage
+            _session_auth_storage[mock_stream] = mock_auth
+            assert get_active_auth_context() == mock_auth
+
+            # Cleanup
+            del _session_auth_storage[mock_stream]
