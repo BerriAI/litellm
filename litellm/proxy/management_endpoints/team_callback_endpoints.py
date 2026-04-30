@@ -319,15 +319,9 @@ async def disable_team_logging(
         # Update team metadata to disable logging
         team_metadata = _existing_team.metadata
         before_metadata = copy.deepcopy(team_metadata)
-        team_callback_settings = team_metadata.get("callback_settings", {})
-        team_callback_settings_obj = TeamCallbackMetadata(**team_callback_settings)
-
-        # Reset callbacks
-        team_callback_settings_obj.success_callback = []
-        team_callback_settings_obj.failure_callback = []
-
-        # Update metadata
-        team_metadata["callback_settings"] = team_callback_settings_obj.model_dump()
+        
+        # Reset callbacks by clearing the logging list
+        team_metadata["logging"] = []
         team_metadata_json = json.dumps(team_metadata)
 
         # Update team in database
@@ -439,10 +433,25 @@ async def get_team_callbacks(
 
         # Retrieve team callback settings from metadata
         team_metadata = _existing_team.metadata
-        team_callback_settings = team_metadata.get("callback_settings", {})
-
-        # Convert to TeamCallbackMetadata object for consistent structure
-        team_callback_settings_obj = TeamCallbackMetadata(**team_callback_settings)
+        team_callback_settings = team_metadata.get("logging", [])
+        if not isinstance(team_callback_settings, list):
+            team_callback_settings = []
+        team_callback_settings_obj = TeamCallbackMetadata()
+        team_callback_settings_obj.success_callback = []
+        team_callback_settings_obj.failure_callback = []
+        team_callback_settings_obj.callback_vars = {}
+        for callback in team_callback_settings:
+            if not isinstance(callback, dict):
+                continue
+            name = callback.get("callback_name")
+            cb_type = callback.get("callback_type")
+            cb_vars = callback.get("callback_vars", {})
+            if cb_type in ("success", "both") and name:
+                team_callback_settings_obj.success_callback.append(name)
+            if cb_type in ("failure", "both") and name:
+                team_callback_settings_obj.failure_callback.append(name)
+            if cb_vars:
+                team_callback_settings_obj.callback_vars.update(cb_vars)
 
         return {
             "status": "success",
