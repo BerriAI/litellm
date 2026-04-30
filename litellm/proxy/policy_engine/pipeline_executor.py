@@ -74,7 +74,7 @@ class PipelineExecutor:
 
             duration = time.perf_counter() - start_time
 
-            action = step.on_pass if outcome == "pass" else step.on_fail
+            action = _pipeline_action_for_outcome(step, outcome)
 
             step_result = PipelineStepResult(
                 guardrail_name=step.guardrail,
@@ -114,7 +114,8 @@ class PipelineExecutor:
                 return PipelineExecutionResult(
                     terminal_action="modify_response",
                     step_results=step_results,
-                    modify_response_message=step.modify_response_message or error_detail,
+                    modify_response_message=step.modify_response_message
+                    or error_detail,
                 )
 
             # action == "next" → continue to next step
@@ -203,6 +204,23 @@ class PipelineExecutor:
                 if callback.guardrail_name == guardrail_name:
                     return callback
         return None
+
+
+def _pipeline_action_for_outcome(step: PipelineStep, outcome: str) -> str:
+    """
+    Map pipeline step outcome to the configured action.
+
+    - pass -> on_pass
+    - fail -> on_fail (content/policy intervention)
+    - error -> on_error if set, else on_fail (backward compatible)
+    """
+    if outcome == "pass":
+        return step.on_pass
+    if outcome == "fail":
+        return step.on_fail
+    if step.on_error is not None:
+        return step.on_error
+    return step.on_fail
 
 
 def _extract_error_message(e: Exception) -> str:

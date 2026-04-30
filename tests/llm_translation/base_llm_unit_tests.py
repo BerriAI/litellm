@@ -868,8 +868,9 @@ class BaseLLMChatTest(ABC):
         base_completion_call_args = self.get_base_completion_call_args()
         if not supports_vision(base_completion_call_args["model"], None):
             pytest.skip("Model does not support image input")
-        elif "http://" in image_url and "fireworks_ai" in base_completion_call_args.get(
-            "model"
+        elif "http://" in image_url and (
+            "fireworks_ai" in base_completion_call_args.get("model", "")
+            or "mistral" in base_completion_call_args.get("model", "")
         ):
             pytest.skip("Model does not support http:// input")
 
@@ -1062,7 +1063,7 @@ class BaseLLMChatTest(ABC):
         # Use local PDF file instead of external URL to avoid flaky tests
         test_dir = os.path.dirname(__file__)
         pdf_path = os.path.join(test_dir, "fixtures", "dummy.pdf")
-        
+
         with open(pdf_path, "rb") as f:
             file_data = f.read()
 

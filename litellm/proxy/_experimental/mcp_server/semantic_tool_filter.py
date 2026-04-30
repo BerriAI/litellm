@@ -3,9 +3,11 @@ Semantic MCP Tool Filtering using semantic-router
 
 Filters MCP tools semantically for /chat/completions and /responses endpoints.
 """
+
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from litellm._logging import verbose_logger
+from litellm.proxy._experimental.mcp_server.utils import MCP_TOOL_PREFIX_SEPARATOR
 
 if TYPE_CHECKING:
     from semantic_router.routers import SemanticRouter
@@ -60,10 +62,14 @@ class SemanticMCPToolFilter:
             all_tools = []
             for server_id, server in registry.items():
                 try:
-                    tools = await global_mcp_server_manager.get_tools_for_server(server_id)
+                    tools = await global_mcp_server_manager.get_tools_for_server(
+                        server_id
+                    )
                     all_tools.extend(tools)
                 except Exception as e:
-                    verbose_logger.warning(f"Failed to fetch tools from server {server_id}: {e}")
+                    verbose_logger.warning(
+                        f"Failed to fetch tools from server {server_id}: {e}"
+                    )
                     continue
 
             if not all_tools:
@@ -71,7 +77,9 @@ class SemanticMCPToolFilter:
                 self.tool_router = None
                 return
 
-            verbose_logger.info(f"Fetched {len(all_tools)} tools from {len(registry)} MCP servers")
+            verbose_logger.info(
+                f"Fetched {len(all_tools)} tools from {len(registry)} MCP servers"
+            )
             self._build_router(all_tools)
 
         except Exception as e:
@@ -83,7 +91,7 @@ class SemanticMCPToolFilter:
         """Extract name and description from MCP tool or OpenAI function dict."""
         name: str
         description: str
-        
+
         if isinstance(tool, dict):
             # OpenAI function format
             name = tool.get("name", "")
@@ -92,7 +100,7 @@ class SemanticMCPToolFilter:
             # MCPTool object
             name = str(tool.name)
             description = str(tool.description) if tool.description else str(tool.name)
-        
+
         return name, description
 
     def _build_router(self, tools: List) -> None:
@@ -136,9 +144,7 @@ class SemanticMCPToolFilter:
                 auto_sync="local",
             )
 
-            verbose_logger.info(
-                f"Built semantic router with {len(routes)} tools"
-            )
+            verbose_logger.info(f"Built semantic router with {len(routes)} tools")
 
         except Exception as e:
             verbose_logger.error(f"Failed to build semantic router: {e}")
@@ -165,16 +171,18 @@ class SemanticMCPToolFilter:
         # Early returns for cases where we can't/shouldn't filter
         if not self.enabled:
             return available_tools
-            
+
         if not available_tools:
             return available_tools
-            
+
         if not query or not query.strip():
             return available_tools
 
         # Router should be built on startup - if not, something went wrong
         if self.tool_router is None:
-            verbose_logger.warning("Router not initialized - was build_router_from_mcp_registry() called on startup?")
+            verbose_logger.warning(
+                "Router not initialized - was build_router_from_mcp_registry() called on startup?"
+            )
             return available_tools
 
         # Run semantic filtering
@@ -182,10 +190,10 @@ class SemanticMCPToolFilter:
             limit = top_k or self.top_k
             matches = self.tool_router(text=query, limit=limit)
             matched_tool_names = self._extract_tool_names_from_matches(matches)
-            
+
             if not matched_tool_names:
                 return available_tools
-            
+
             return self._get_tools_by_names(matched_tool_names, available_tools)
 
         except Exception as e:
@@ -196,31 +204,100 @@ class SemanticMCPToolFilter:
         """Extract tool names from semantic router match results."""
         if not matches:
             return []
-        
+
         # Handle single match
         if hasattr(matches, "name") and matches.name:
             return [matches.name]
-        
+
         # Handle list of matches
         if isinstance(matches, list):
             return [m.name for m in matches if hasattr(m, "name") and m.name]
-        
+
         return []
+
+    @staticmethod
+    def _name_matches_canonical(client_name: str, canonical: str) -> bool:
+        """
+        Return True if a client-side tool name refers to the given canonical
+        MCP tool name.
+
+        MCP clients (e.g. opencode) commonly wrap the proxy's canonical tool
+        name with an additive namespace prefix of their own
+        (``<client_alias><sep><canonical>``). The prefix can use either a
+        dash or an underscore as separator regardless of what
+        ``MCP_TOOL_PREFIX_SEPARATOR`` is set to on the proxy, because the
+        client doesn't know the proxy's separator.
+
+        The match is anchored: ``canonical`` must form the complete suffix
+        of ``client_name`` and be preceded by a separator character, so
+        ``rain_gear`` does not match canonical ``ear``.
+
+        Suffix matching is additionally gated on ``canonical`` itself
+        containing ``MCP_TOOL_PREFIX_SEPARATOR``. Server-registered MCP
+        tools are always emitted as
+        ``<server_name><MCP_TOOL_PREFIX_SEPARATOR><tool_name>`` (see
+        ``add_server_prefix_to_name``), so a canonical without the
+        separator is not a namespaced MCP tool and falling back to
+        suffix matching would spuriously collide with unrelated local
+        user functions whose names end in the same characters.
+        """
+        if client_name == canonical:
+            return True
+        if MCP_TOOL_PREFIX_SEPARATOR not in canonical:
+            return False
+        if len(client_name) <= len(canonical):
+            return False
+        if not client_name.endswith(canonical):
+            return False
+        separator = client_name[-len(canonical) - 1]
+        return separator in ("_", "-")
 
     def _get_tools_by_names(
         self, tool_names: List[str], available_tools: List[Any]
     ) -> List[Any]:
-        """Get tools from available_tools by their names, preserving order."""
-        # Match tools from available_tools (preserves format - dict or MCPTool)
-        matched_tools = []
+        """
+        Get tools from available_tools by their names, preserving the
+        semantic router's ordering.
+
+        Matching is tolerant of client-side namespace prefixes: if an
+        incoming tool arrived as ``<client_alias>_<canonical>`` while the
+        router returned ``<canonical>`` (see
+        ``_name_matches_canonical``), that tool is still selected. The
+        returned tool object is the original from ``available_tools``, so
+        the client-facing name is preserved for tool-call round-trips.
+        """
+        # Build an index of incoming tools by their client-facing name.
+        # Exact matches win over suffix matches when both are present, and
+        # each incoming tool is returned at most once even if two canonical
+        # names happen to be tail-compatible with the same incoming name.
+        available_by_name: Dict[str, Any] = {}
         for tool in available_tools:
-            tool_name, _ = self._extract_tool_info(tool)
-            if tool_name in tool_names:
-                matched_tools.append(tool)
-        
-        # Reorder to match semantic router's ordering
-        tool_map = {self._extract_tool_info(t)[0]: t for t in matched_tools}
-        return [tool_map[name] for name in tool_names if name in tool_map]
+            client_name, _ = self._extract_tool_info(tool)
+            if client_name and client_name not in available_by_name:
+                available_by_name[client_name] = tool
+
+        matched: List[Any] = []
+        used_ids: set = set()
+        for canonical in tool_names:
+            tool = available_by_name.get(canonical)
+            if tool is None:
+                # Prefer the shortest qualifying name. When several
+                # incoming tools suffix-match the same canonical (e.g.
+                # "my_search" and "my_tag_search" both end in "search"),
+                # the one closest in length to the canonical is the
+                # least-wrapped and most likely the intended target.
+                best_name: Optional[str] = None
+                for client_name in available_by_name:
+                    if not self._name_matches_canonical(client_name, canonical):
+                        continue
+                    if best_name is None or len(client_name) < len(best_name):
+                        best_name = client_name
+                if best_name is not None:
+                    tool = available_by_name[best_name]
+            if tool is not None and id(tool) not in used_ids:
+                matched.append(tool)
+                used_ids.add(id(tool))
+        return matched
 
     def extract_user_query(self, messages: List[Dict[str, Any]]) -> str:
         """

@@ -4,15 +4,16 @@ import { useCallback, useDeferredValue, useEffect, useRef, useState } from "reac
 import GuardrailViewer from "@/components/view_logs/GuardrailViewer/GuardrailViewer";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { truncateString } from "@/utils/textUtils";
-import { SettingOutlined, SyncOutlined } from "@ant-design/icons";
+import { SyncOutlined } from "@ant-design/icons";
 import { Row } from "@tanstack/react-table";
 import { Switch, Tab, TabGroup, TabList, TabPanel, TabPanels } from "@tremor/react";
 import { Button, Tag, Tooltip } from "antd";
 import { internalUserRoles } from "../../utils/roles";
 import DeletedKeysPage from "../DeletedKeysPage/DeletedKeysPage";
 import DeletedTeamsPage from "../DeletedTeamsPage/DeletedTeamsPage";
-import { fetchAllKeyAliases } from "../key_team_helpers/filter_helpers";
-import { KeyResponse, Team } from "../key_team_helpers/key_list";
+import FilterTeamDropdown from "../common_components/FilterTeamDropdown";
+import { KeyResponse } from "../key_team_helpers/key_list";
+import { PaginatedKeyAliasSelect } from "../KeyAliasSelect/PaginatedKeyAliasSelect/PaginatedKeyAliasSelect";
 import { PaginatedModelSelect } from "../ModelSelect/PaginatedModelSelect/PaginatedModelSelect";
 import FilterComponent, { FilterOption } from "../molecules/filter";
 import { allEndUsersCall, keyInfoV1Call, uiSpendLogsCall } from "../networking";
@@ -20,14 +21,13 @@ import KeyInfoView from "../templates/key_info_view";
 import AuditLogs from "./audit_logs";
 import { createColumns, LogEntry, type LogsSortField } from "./columns";
 import { ConfigInfoMessage } from "./ConfigInfoMessage";
-import { ERROR_CODE_OPTIONS, MCP_CALL_TYPES, QUICK_SELECT_OPTIONS } from "./constants";
+import { AGENT_CALL_TYPES, ERROR_CODE_OPTIONS, MCP_CALL_TYPES, QUICK_SELECT_OPTIONS } from "./constants";
 import { CostBreakdownViewer } from "./CostBreakdownViewer";
 import { ErrorViewer } from "./ErrorViewer";
 import { useLogFilterLogic } from "./log_filter_logic";
 import { LogDetailsDrawer } from "./LogDetailsDrawer";
 import { getTimeRangeDisplay } from "./logs_utils";
 import { RequestResponsePanel } from "./RequestResponsePanel";
-import SpendLogsSettingsModal from "./SpendLogsSettingsModal/SpendLogsSettingsModal";
 import { DataTable } from "./table";
 import { VectorStoreViewer } from "./VectorStoreViewer";
 
@@ -36,7 +36,6 @@ interface SpendLogsTableProps {
   token: string | null;
   userRole: string | null;
   userID: string | null;
-  allTeams: Team[];
   premiumUser: boolean;
 }
 
@@ -53,7 +52,6 @@ export default function SpendLogsTable({
   token,
   userRole,
   userID,
-  allTeams,
   premiumUser,
 }: SpendLogsTableProps) {
   const [searchTerm, setSearchTerm] = useState("");
@@ -86,7 +84,6 @@ export default function SpendLogsTable({
   const [selectedLog, setSelectedLog] = useState<LogEntry | null>(null);
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
-  const [isSpendLogsSettingsModalVisible, setIsSpendLogsSettingsModalVisible] = useState(false);
 
   const [sortBy, setSortBy] = useState<LogsSortField>("startTime");
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("desc");
@@ -241,10 +238,10 @@ export default function SpendLogsTable({
     filters,
     filteredLogs,
     hasBackendFilters,
-    allTeams: hookAllTeams,
-    allKeyAliases,
+    allTeams,
     handleFilterChange,
     handleFilterReset: handleFilterResetFromHook,
+    refetchWithFilters,
   } = useLogFilterLogic({
     logs: logsData,
     accessToken,
@@ -310,13 +307,15 @@ export default function SpendLogsTable({
     return matchesSearch;
   });
 
-  const sessionCompositionById = searchedLogs.reduce<Record<string, { llm: number; mcp: number }>>((acc, log) => {
+  const sessionCompositionById = searchedLogs.reduce<Record<string, { llm: number; agent: number; mcp: number }>>((acc, log) => {
     if (!log.session_id) return acc;
     if (!acc[log.session_id]) {
-      acc[log.session_id] = { llm: 0, mcp: 0 };
+      acc[log.session_id] = { llm: 0, agent: 0, mcp: 0 };
     }
     if (MCP_CALL_TYPES.includes(log.call_type)) {
       acc[log.session_id].mcp += 1;
+    } else if (AGENT_CALL_TYPES.includes(log.call_type)) {
+      acc[log.session_id].agent += 1;
     } else {
       acc[log.session_id].llm += 1;
     }
@@ -344,6 +343,7 @@ export default function SpendLogsTable({
           request_duration_ms: log.request_duration_ms,
           session_llm_count: sessionComposition?.llm ?? undefined,
           session_mcp_count: sessionComposition?.mcp ?? undefined,
+          session_agent_count: sessionComposition?.agent ?? undefined,
           onKeyHashClick: (keyHash: string) => setSelectedKeyIdInfoView(keyHash),
           onSessionClick: (sessionId: string) => {
             if (sessionId) {
@@ -362,7 +362,14 @@ export default function SpendLogsTable({
 
   // Add this function to handle manual refresh
   const handleRefresh = () => {
-    logs.refetch();
+    if (hasBackendFilters) {
+      // When backend filters (e.g. Key Alias) are active the main TanStack Query
+      // is disabled and its params do not include filter values like key_alias.
+      // Route through the filter-aware refetch so all active filters are preserved.
+      refetchWithFilters();
+    } else {
+      logs.refetch();
+    }
   };
 
   const handleRowClick = (log: LogEntry) => {
@@ -392,20 +399,7 @@ export default function SpendLogsTable({
     {
       name: "Team ID",
       label: "Team ID",
-      isSearchable: true,
-      searchFn: async (searchText: string) => {
-        if (!allTeams || allTeams.length === 0) return [];
-        const filtered = allTeams.filter((team: Team) => {
-          return (
-            team.team_id.toLowerCase().includes(searchText.toLowerCase()) ||
-            (team.team_alias && team.team_alias.toLowerCase().includes(searchText.toLowerCase()))
-          );
-        });
-        return filtered.map((team: Team) => ({
-          label: `${team.team_alias || team.team_id} (${team.team_id})`,
-          value: team.team_id,
-        }));
-      },
+      customComponent: FilterTeamDropdown,
     },
     {
       name: "Status",
@@ -424,16 +418,7 @@ export default function SpendLogsTable({
     {
       name: "Key Alias",
       label: "Key Alias",
-      isSearchable: true,
-      searchFn: async (searchText: string) => {
-        if (!accessToken) return [];
-        const keyAliases = await fetchAllKeyAliases(accessToken);
-        const filtered = keyAliases.filter((alias) => alias.toLowerCase().includes(searchText.toLowerCase()));
-        return filtered.map((alias) => ({
-          label: alias,
-          value: alias,
-        }));
-      },
+      customComponent: PaginatedKeyAliasSelect,
     },
     {
       name: "End User",
@@ -503,17 +488,12 @@ export default function SpendLogsTable({
           <TabPanel>
             <div className="flex items-center justify-between mb-4">
               <h1 className="text-xl font-semibold">Request Logs</h1>
-              <Button
-                icon={<SettingOutlined />}
-                onClick={() => setIsSpendLogsSettingsModalVisible(true)}
-                title="Spend Logs Settings"
-              />
             </div>
             {selectedKeyInfo && selectedKeyIdInfoView && selectedKeyInfo.api_key === selectedKeyIdInfoView ? (
               <KeyInfoView
                 keyId={selectedKeyIdInfoView}
                 keyData={selectedKeyInfo}
-                teams={allTeams}
+                teams={allTeams ?? []}
                 onClose={() => setSelectedKeyIdInfoView(null)}
                 backButtonText="Back to Logs"
               />
@@ -523,11 +503,6 @@ export default function SpendLogsTable({
                   options={logFilterOptions}
                   onApplyFilters={handleFilterChange}
                   onResetFilters={handleFilterReset}
-                />
-                <SpendLogsSettingsModal
-                  isVisible={isSpendLogsSettingsModalVisible}
-                  onCancel={() => setIsSpendLogsSettingsModalVisible(false)}
-                  onSuccess={() => setIsSpendLogsSettingsModalVisible(false)}
                 />
                 <div className="bg-white rounded-lg shadow w-full max-w-full box-border">
                   <div className="border-b px-6 py-4 w-full max-w-full box-border">
@@ -724,7 +699,6 @@ export default function SpendLogsTable({
               accessToken={accessToken}
               isActive={activeTab === "audit logs"}
               premiumUser={premiumUser}
-              allTeams={allTeams}
             />
           </TabPanel>
           <TabPanel><DeletedKeysPage /></TabPanel>
@@ -739,7 +713,6 @@ export default function SpendLogsTable({
         logEntry={selectedLog}
         sessionId={selectedSessionId}
         accessToken={accessToken}
-        onOpenSettings={() => setIsSpendLogsSettingsModalVisible(true)}
         allLogs={filteredData}
         onSelectLog={handleSelectLog}
         startTime={moment(startTime).utc().format("YYYY-MM-DD HH:mm:ss")}
@@ -748,7 +721,7 @@ export default function SpendLogsTable({
   );
 }
 
-export function RequestViewer({ row, onOpenSettings }: { row: Row<LogEntry>; onOpenSettings?: () => void }) {
+export function RequestViewer({ row }: { row: Row<LogEntry> }) {
   // Helper function to clean metadata by removing specific fields
   const formatData = (input: any) => {
     if (typeof input === "string") {
@@ -975,7 +948,7 @@ export function RequestViewer({ row, onOpenSettings }: { row: Row<LogEntry>; onO
       />
 
       {/* Configuration Info Message - Show when data is missing */}
-      <ConfigInfoMessage show={missingData} onOpenSettings={onOpenSettings} />
+      <ConfigInfoMessage show={missingData} />
 
       {/* Request/Response Panel */}
       <div className="w-full max-w-full overflow-hidden">

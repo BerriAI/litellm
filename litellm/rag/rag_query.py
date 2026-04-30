@@ -56,8 +56,8 @@ class RAGQuery:
                         content_text: Optional[str] = content_item.get("text")
                         if content_text:
                             context_content += content_text + "\n\n"
-                elif "text" in chunk: # Fallback for simple dict with text
-                     context_content += chunk["text"] + "\n\n"
+                elif "text" in chunk:  # Fallback for simple dict with text
+                    context_content += chunk["text"] + "\n\n"
             elif isinstance(chunk, str):
                 context_content += chunk + "\n\n"
 
@@ -107,7 +107,9 @@ class RAGQuery:
         return documents
 
     @staticmethod
-    def get_top_chunks_from_rerank(search_response: Any, rerank_response: Any) -> List[Any]:
+    def get_top_chunks_from_rerank(
+        search_response: Any, rerank_response: Any
+    ) -> List[Any]:
         """Get the original search results corresponding to the top reranked results."""
         top_chunks = []
         original_results = search_response.get("data", [])

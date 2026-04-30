@@ -43,7 +43,13 @@ FOCUS_NORMALIZED_SCHEMA = pl.Schema(
         ("SubAccountId", pl.String),
         ("SubAccountName", pl.String),
         ("SubAccountType", pl.String),
-        ("Tags", pl.Object),
+        # Changed from pl.Object to pl.String to hold JSON metadata
+        # (team_id, user_id, etc.) needed by Vantage Token Allocation.
+        # This schema is only used for creating empty DataFrames (e.g.
+        # when transform() receives no rows).  Parquet files are
+        # self-describing and embed their own schema, so existing S3
+        # exports are unaffected.  Previously Tags was always None.
+        ("Tags", pl.String),
     ]
 )
 

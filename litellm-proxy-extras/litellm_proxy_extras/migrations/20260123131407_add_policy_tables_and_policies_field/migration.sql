@@ -1,20 +1,20 @@
 -- AlterTable
-ALTER TABLE "LiteLLM_DeletedTeamTable" ADD COLUMN     "policies" TEXT[] DEFAULT ARRAY[]::TEXT[];
+ALTER TABLE "LiteLLM_DeletedTeamTable" ADD COLUMN IF NOT EXISTS "policies" TEXT[] DEFAULT ARRAY[]::TEXT[];
 
 -- AlterTable
-ALTER TABLE "LiteLLM_DeletedVerificationToken" ADD COLUMN     "policies" TEXT[] DEFAULT ARRAY[]::TEXT[];
+ALTER TABLE "LiteLLM_DeletedVerificationToken" ADD COLUMN IF NOT EXISTS "policies" TEXT[] DEFAULT ARRAY[]::TEXT[];
 
 -- AlterTable
-ALTER TABLE "LiteLLM_TeamTable" ADD COLUMN     "policies" TEXT[] DEFAULT ARRAY[]::TEXT[];
+ALTER TABLE "LiteLLM_TeamTable" ADD COLUMN IF NOT EXISTS "policies" TEXT[] DEFAULT ARRAY[]::TEXT[];
 
 -- AlterTable
-ALTER TABLE "LiteLLM_UserTable" ADD COLUMN     "policies" TEXT[] DEFAULT ARRAY[]::TEXT[];
+ALTER TABLE "LiteLLM_UserTable" ADD COLUMN IF NOT EXISTS "policies" TEXT[] DEFAULT ARRAY[]::TEXT[];
 
 -- AlterTable
-ALTER TABLE "LiteLLM_VerificationToken" ADD COLUMN     "policies" TEXT[] DEFAULT ARRAY[]::TEXT[];
+ALTER TABLE "LiteLLM_VerificationToken" ADD COLUMN IF NOT EXISTS "policies" TEXT[] DEFAULT ARRAY[]::TEXT[];
 
 -- CreateTable
-CREATE TABLE "LiteLLM_PolicyTable" (
+CREATE TABLE IF NOT EXISTS "LiteLLM_PolicyTable" (
     "policy_id" TEXT NOT NULL,
     "policy_name" TEXT NOT NULL,
     "inherit" TEXT,
@@ -31,7 +31,7 @@ CREATE TABLE "LiteLLM_PolicyTable" (
 );
 
 -- CreateTable
-CREATE TABLE "LiteLLM_PolicyAttachmentTable" (
+CREATE TABLE IF NOT EXISTS "LiteLLM_PolicyAttachmentTable" (
     "attachment_id" TEXT NOT NULL,
     "policy_name" TEXT NOT NULL,
     "scope" TEXT,
@@ -47,5 +47,5 @@ CREATE TABLE "LiteLLM_PolicyAttachmentTable" (
 );
 
 -- CreateIndex
-CREATE UNIQUE INDEX "LiteLLM_PolicyTable_policy_name_key" ON "LiteLLM_PolicyTable"("policy_name");
+CREATE UNIQUE INDEX IF NOT EXISTS "LiteLLM_PolicyTable_policy_name_key" ON "LiteLLM_PolicyTable"("policy_name");
 

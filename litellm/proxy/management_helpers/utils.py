@@ -2,13 +2,14 @@
 ## Helper utils for the management endpoints (keys/users/teams)
 from datetime import datetime
 from functools import wraps
-from typing import Optional, Tuple
+from typing import List, Optional, Tuple
 
 from fastapi import HTTPException, Request
 
 import litellm
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
+from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 from litellm.proxy._types import (  # key request types; user request types; team request types; customer request types
     BudgetNewRequest,
     DeleteCustomerRequest,
@@ -64,19 +65,19 @@ async def handle_budget_for_entity(
 ) -> Optional[str]:
     """
     Common helper to handle budget creation/updates for entities (organizations, tags, etc).
-    
+
     This function:
     1. Creates a new budget if budget_id is None but budget fields are provided
     2. Updates an existing budget if budget fields are provided and budget_id exists
     3. Returns the budget_id to use (existing or newly created)
-    
+
     Args:
         data: The request object (e.g., TagNewRequest, NewOrganizationRequest, etc.) containing budget fields
         existing_budget_id: The existing budget_id if updating an entity, None if creating new
         user_api_key_dict: User authentication info
         prisma_client: Database client
         litellm_proxy_admin_name: Admin name for audit trail
-        
+
     Returns:
         Optional[str]: The budget_id to use, or None if no budget was created/updated
     """
@@ -88,7 +89,9 @@ async def handle_budget_for_entity(
     budget_params = LiteLLM_BudgetTable.model_fields.keys()
 
     # Extract budget fields from data
-    _json_data = data.model_dump(exclude_none=True) if hasattr(data, "model_dump") else data
+    _json_data = (
+        data.model_dump(exclude_none=True) if hasattr(data, "model_dump") else data
+    )
     _budget_data = {k: v for k, v in _json_data.items() if k in budget_params}
 
     # Check if budget_id is explicitly provided in the data
@@ -138,6 +141,69 @@ async def handle_budget_for_entity(
         return existing_budget_id
 
 
+# Fields on LiteLLM_BudgetTable that represent the budget's *configuration*
+# (i.e. the values an admin sets). We copy these when cloning a team's
+# default member-budget into an individual member-budget so that the new
+# row starts with the same limits as the default.
+_CLONABLE_BUDGET_FIELDS: Tuple[str, ...] = (
+    "max_budget",
+    "soft_budget",
+    "max_parallel_requests",
+    "tpm_limit",
+    "rpm_limit",
+    "model_max_budget",
+    "budget_duration",
+    "allowed_models",
+)
+
+
+async def _clone_team_default_budget_for_member(
+    prisma_client: PrismaClient,
+    default_team_budget_id: str,
+    user_api_key_dict: UserAPIKeyAuth,
+    litellm_proxy_admin_name: str,
+) -> Optional[str]:
+    """
+    Create a new budget row that copies the values from the team's default
+    member budget. Returns the new budget_id, or None if the default budget
+    no longer exists in the DB.
+
+    Used when adding a new team member without an explicit per-member budget,
+    so the member starts with the team default's values but gets their own
+    private budget row (which can be edited independently).
+    """
+    default_budget = await prisma_client.db.litellm_budgettable.find_unique(
+        where={"budget_id": default_team_budget_id}
+    )
+    if default_budget is None:
+        return None
+
+    default_budget_dict = default_budget.model_dump()
+    cloned_data: dict = {
+        "created_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
+        "updated_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
+    }
+    for field in _CLONABLE_BUDGET_FIELDS:
+        value = default_budget_dict.get(field)
+        if value is None:
+            continue
+        # Skip empty list defaults (e.g. allowed_models = []) so the cloned
+        # row matches the "no value set" shape rather than carrying a default.
+        if isinstance(value, list) and len(value) == 0:
+            continue
+        cloned_data[field] = value
+
+    # Start the member's budget window at clone time, not the pool's reset
+    # timestamp — otherwise a member joining mid-cycle inherits a stale reset.
+    if cloned_data.get("budget_duration"):
+        cloned_data["budget_reset_at"] = get_budget_reset_time(
+            cloned_data["budget_duration"]
+        )
+
+    new_budget = await prisma_client.db.litellm_budgettable.create(data=cloned_data)
+    return new_budget.budget_id
+
+
 async def add_new_member(
     new_member: Member,
     max_budget_in_team: Optional[float],
@@ -146,6 +212,7 @@ async def add_new_member(
     user_api_key_dict: UserAPIKeyAuth,
     litellm_proxy_admin_name: str,
     default_team_budget_id: Optional[str] = None,
+    allowed_models: Optional[List[str]] = None,
 ) -> Tuple[LiteLLM_UserTable, Optional[LiteLLM_TeamMembership]]:
     """
     Add a new member to a team
@@ -204,21 +271,34 @@ async def add_new_member(
                 },
             )
 
-    # Check if trying to set a budget for team member
-
-    if max_budget_in_team is not None:
+    # Check if trying to set a budget or model scope for team member
+    if max_budget_in_team is not None or allowed_models is not None:
         # create a new budget item for this member
-        response = await prisma_client.db.litellm_budgettable.create(
-            data={
-                "max_budget": max_budget_in_team,
-                "created_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
-                "updated_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
-            }
-        )
+        budget_data: dict = {
+            "created_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
+            "updated_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
+        }
+        if max_budget_in_team is not None:
+            budget_data["max_budget"] = max_budget_in_team
+        if allowed_models is not None:
+            budget_data["allowed_models"] = allowed_models
+        response = await prisma_client.db.litellm_budgettable.create(data=budget_data)
 
         _budget_id = response.budget_id
+    elif default_team_budget_id is not None:
+        # No per-member budget was provided, but the team has a default member
+        # budget. Clone the default budget into a new row for this user so that
+        # later edits to one member's budget do not bleed into other members.
+        # If the default no longer exists in the DB, fall back to no budget.
+        _budget_id = await _clone_team_default_budget_for_member(
+            prisma_client=prisma_client,
+            default_team_budget_id=default_team_budget_id,
+            user_api_key_dict=user_api_key_dict,
+            litellm_proxy_admin_name=litellm_proxy_admin_name,
+        )
     else:
-        _budget_id = default_team_budget_id
+        # No per-member budget and no team default → member gets no budget.
+        _budget_id = None
 
     if _budget_id and returned_user is not None and returned_user.user_id is not None:
         _returned_team_membership = (

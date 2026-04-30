@@ -4,37 +4,27 @@ import userEvent from "@testing-library/user-event";
 import RouterSettingsForm from "./RouterSettingsForm";
 import type { RouterSettingsFormValue } from "./RouterSettingsForm";
 
-// Use the same antd mock as RoutingStrategySelector to keep things consistent
-vi.mock("antd", () => ({
-  Select: Object.assign(
-    ({ value, onChange, children }: any) => (
-      <select
-        data-testid="strategy-select"
-        value={value ?? ""}
-        onChange={(e) => onChange(e.target.value)}
-      >
-        {children}
-      </select>
-    ),
-    {
-      Option: ({ value, children }: any) => (
-        <option value={value}>{children}</option>
-      ),
-    }
-  ),
-}));
-
-vi.mock("@tremor/react", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@tremor/react")>();
+// Override antd Select (complex to drive in JSDOM) while preserving the rest
+// of antd (Switch, Button, etc.) so nested components render normally.
+vi.mock("antd", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("antd")>();
   return {
     ...actual,
-    Switch: ({ checked, onChange }: any) => (
-      <input
-        type="checkbox"
-        role="switch"
-        checked={checked}
-        onChange={(e) => onChange(e.target.checked)}
-      />
+    Select: Object.assign(
+      ({ value, onChange, children }: any) => (
+        <select
+          data-testid="strategy-select"
+          value={value ?? ""}
+          onChange={(e) => onChange(e.target.value)}
+        >
+          {children}
+        </select>
+      ),
+      {
+        Option: ({ value, children }: any) => (
+          <option value={value}>{children}</option>
+        ),
+      }
     ),
   };
 });

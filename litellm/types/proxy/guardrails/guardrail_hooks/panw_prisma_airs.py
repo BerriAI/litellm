@@ -52,6 +52,13 @@ class PanwPrismaAirsGuardrailConfigModel(GuardrailConfigModel):
         description="PANW API call timeout in seconds (1-60).",
     )
 
+    experimental_use_latest_role_message_only: Optional[bool] = Field(
+        default=None,
+        description="Anthropic /v1/messages only. When unset: scans only latest user/developer "
+        "message on request side. Set false to scan all user/system/developer messages. "
+        "Non-Anthropic unaffected.",
+    )
+
     @staticmethod
     def ui_friendly_name() -> str:
         return "PANW Prisma AIRS"

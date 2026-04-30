@@ -386,19 +386,11 @@ async def guardrails_usage_detail(
     _litellm_params = getattr(guardrail, "litellm_params", None) or (
         guardrail.get("litellm_params") if isinstance(guardrail, dict) else None
     )
-    litellm_params = (
-        _litellm_params
-        if isinstance(_litellm_params, dict)
-        else {}
-    )
+    litellm_params = _litellm_params if isinstance(_litellm_params, dict) else {}
     _guardrail_info = getattr(guardrail, "guardrail_info", None) or (
         guardrail.get("guardrail_info") if isinstance(guardrail, dict) else None
     )
-    guardrail_info = (
-        _guardrail_info
-        if isinstance(_guardrail_info, dict)
-        else {}
-    )
+    guardrail_info = _guardrail_info if isinstance(_guardrail_info, dict) else {}
     _guardrail_name = getattr(guardrail, "guardrail_name", None) or (
         guardrail.get("guardrail_name") if isinstance(guardrail, dict) else None
     )

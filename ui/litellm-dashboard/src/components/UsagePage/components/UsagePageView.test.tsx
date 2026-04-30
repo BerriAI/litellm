@@ -249,6 +249,9 @@ vi.mock("@ant-design/icons", async () => {
     CalendarOutlined: Icon,
     InfoCircleOutlined: Icon,
     UserOutlined: Icon,
+    DownOutlined: Icon,
+    RightOutlined: Icon,
+    ExportOutlined: Icon,
     LoadingOutlined,
   };
 });

@@ -104,6 +104,9 @@ export default function MemberTable({
 
   return (
     <Space direction="vertical" style={{ width: "100%" }}>
+      <span className="inline-flex text-sm text-gray-700">
+        {members.length} Member{members.length !== 1 ? "s" : ""}
+      </span>
       <Table
         columns={baseColumns}
         dataSource={members}

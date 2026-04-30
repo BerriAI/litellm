@@ -82,6 +82,7 @@ class VectorStorePreCallHook(CustomLogger):
             prisma_client = None
             try:
                 from litellm.proxy.proxy_server import prisma_client as _prisma_client
+
                 prisma_client = _prisma_client
             except ImportError:
                 pass
@@ -89,9 +90,9 @@ class VectorStorePreCallHook(CustomLogger):
             # Use database fallback to ensure synchronization across instances
             vector_stores_to_run: List[LiteLLM_ManagedVectorStore] = (
                 await litellm.vector_store_registry.pop_vector_stores_to_run_with_db_fallback(
-                    non_default_params=non_default_params, 
+                    non_default_params=non_default_params,
                     tools=tools,
-                    prisma_client=prisma_client
+                    prisma_client=prisma_client,
                 )
             )
 
@@ -111,7 +112,6 @@ class VectorStorePreCallHook(CustomLogger):
             all_search_results: List[VectorStoreSearchResponse] = []
 
             for vector_store_to_run in vector_stores_to_run:
-
                 # Get vector store id from the vector store config
                 vector_store_id = vector_store_to_run.get("vector_store_id", "")
                 custom_llm_provider = vector_store_to_run.get("custom_llm_provider")

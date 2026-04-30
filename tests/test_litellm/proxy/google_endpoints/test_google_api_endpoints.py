@@ -13,7 +13,6 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 
-
 def test_google_generate_content_endpoint():
     """Test that the google_generate_content endpoint correctly routes requests"""
     # Skip this test if we can't import the required modules due to missing dependencies
@@ -117,13 +116,15 @@ def test_google_generate_content_with_cost_tracking_metadata():
     client = TestClient(app)
 
     # Mock all required proxy server dependencies
-    with patch("litellm.proxy.proxy_server.llm_router") as mock_router, patch(
-        "litellm.proxy.proxy_server.general_settings", {}
-    ), patch("litellm.proxy.proxy_server.proxy_config") as mock_proxy_config, patch(
-        "litellm.proxy.proxy_server.version", "1.0.0"
-    ), patch(
-        "litellm.proxy.litellm_pre_call_utils.add_litellm_data_to_request"
-    ) as mock_add_data:
+    with (
+        patch("litellm.proxy.proxy_server.llm_router") as mock_router,
+        patch("litellm.proxy.proxy_server.general_settings", {}),
+        patch("litellm.proxy.proxy_server.proxy_config") as mock_proxy_config,
+        patch("litellm.proxy.proxy_server.version", "1.0.0"),
+        patch(
+            "litellm.proxy.litellm_pre_call_utils.add_litellm_data_to_request"
+        ) as mock_add_data,
+    ):
         mock_router.agenerate_content = AsyncMock(return_value={"test": "response"})
 
         # Mock add_litellm_data_to_request to return data with metadata
@@ -187,13 +188,15 @@ def test_google_stream_generate_content_with_cost_tracking_metadata():
     mock_stream.__anext__.side_effect = StopAsyncIteration
 
     # Mock all required proxy server dependencies
-    with patch("litellm.proxy.proxy_server.llm_router") as mock_router, patch(
-        "litellm.proxy.proxy_server.general_settings", {}
-    ), patch("litellm.proxy.proxy_server.proxy_config") as mock_proxy_config, patch(
-        "litellm.proxy.proxy_server.version", "1.0.0"
-    ), patch(
-        "litellm.proxy.litellm_pre_call_utils.add_litellm_data_to_request"
-    ) as mock_add_data:
+    with (
+        patch("litellm.proxy.proxy_server.llm_router") as mock_router,
+        patch("litellm.proxy.proxy_server.general_settings", {}),
+        patch("litellm.proxy.proxy_server.proxy_config") as mock_proxy_config,
+        patch("litellm.proxy.proxy_server.version", "1.0.0"),
+        patch(
+            "litellm.proxy.litellm_pre_call_utils.add_litellm_data_to_request"
+        ) as mock_add_data,
+    ):
         mock_router.agenerate_content_stream = AsyncMock(return_value=mock_stream)
 
         # Mock add_litellm_data_to_request to return data with metadata
@@ -259,13 +262,15 @@ def test_google_generate_content_with_system_instruction():
     client = TestClient(app)
 
     # Mock all required proxy server dependencies
-    with patch("litellm.proxy.proxy_server.llm_router") as mock_router, patch(
-        "litellm.proxy.proxy_server.general_settings", {}
-    ), patch("litellm.proxy.proxy_server.proxy_config") as mock_proxy_config, patch(
-        "litellm.proxy.proxy_server.version", "1.0.0"
-    ), patch(
-        "litellm.proxy.litellm_pre_call_utils.add_litellm_data_to_request"
-    ) as mock_add_data:
+    with (
+        patch("litellm.proxy.proxy_server.llm_router") as mock_router,
+        patch("litellm.proxy.proxy_server.general_settings", {}),
+        patch("litellm.proxy.proxy_server.proxy_config") as mock_proxy_config,
+        patch("litellm.proxy.proxy_server.version", "1.0.0"),
+        patch(
+            "litellm.proxy.litellm_pre_call_utils.add_litellm_data_to_request"
+        ) as mock_add_data,
+    ):
         mock_router.agenerate_content = AsyncMock(return_value={"test": "response"})
 
         # Mock add_litellm_data_to_request to pass through data unchanged
@@ -336,13 +341,15 @@ def test_google_generate_content_with_image_config():
     client = TestClient(app)
 
     # Mock all required proxy server dependencies
-    with patch("litellm.proxy.proxy_server.llm_router") as mock_router, patch(
-        "litellm.proxy.proxy_server.general_settings", {}
-    ), patch("litellm.proxy.proxy_server.proxy_config") as mock_proxy_config, patch(
-        "litellm.proxy.proxy_server.version", "1.0.0"
-    ), patch(
-        "litellm.proxy.litellm_pre_call_utils.add_litellm_data_to_request"
-    ) as mock_add_data:
+    with (
+        patch("litellm.proxy.proxy_server.llm_router") as mock_router,
+        patch("litellm.proxy.proxy_server.general_settings", {}),
+        patch("litellm.proxy.proxy_server.proxy_config") as mock_proxy_config,
+        patch("litellm.proxy.proxy_server.version", "1.0.0"),
+        patch(
+            "litellm.proxy.litellm_pre_call_utils.add_litellm_data_to_request"
+        ) as mock_add_data,
+    ):
         mock_router.agenerate_content = AsyncMock(return_value={"test": "response"})
 
         # Mock add_litellm_data_to_request to pass through data unchanged
@@ -419,13 +426,15 @@ def test_google_generate_content_metadata_and_trace_id_callbacks():
     client = TestClient(app)
 
     # Mock all required proxy server dependencies
-    with patch("litellm.proxy.proxy_server.llm_router") as mock_router, patch(
-        "litellm.proxy.proxy_server.general_settings", {}
-    ), patch("litellm.proxy.proxy_server.proxy_config") as mock_proxy_config, patch(
-        "litellm.proxy.proxy_server.version", "1.0.0"
-    ), patch(
-        "litellm.proxy.litellm_pre_call_utils.add_litellm_data_to_request"
-    ) as mock_add_data:
+    with (
+        patch("litellm.proxy.proxy_server.llm_router") as mock_router,
+        patch("litellm.proxy.proxy_server.general_settings", {}),
+        patch("litellm.proxy.proxy_server.proxy_config") as mock_proxy_config,
+        patch("litellm.proxy.proxy_server.version", "1.0.0"),
+        patch(
+            "litellm.proxy.litellm_pre_call_utils.add_litellm_data_to_request"
+        ) as mock_add_data,
+    ):
         mock_router.agenerate_content = AsyncMock(return_value={"test": "response"})
 
         # Mock add_litellm_data_to_request to return data with metadata
@@ -481,13 +490,15 @@ def test_google_stream_generate_content_metadata_and_trace_id_callbacks():
     mock_stream.__aiter__ = lambda self: mock_stream
     mock_stream.__anext__.side_effect = StopAsyncIteration
 
-    with patch("litellm.proxy.proxy_server.llm_router") as mock_router, patch(
-        "litellm.proxy.proxy_server.general_settings", {}
-    ), patch("litellm.proxy.proxy_server.proxy_config") as mock_proxy_config, patch(
-        "litellm.proxy.proxy_server.version", "1.0.0"
-    ), patch(
-        "litellm.proxy.litellm_pre_call_utils.add_litellm_data_to_request"
-    ) as mock_add_data:
+    with (
+        patch("litellm.proxy.proxy_server.llm_router") as mock_router,
+        patch("litellm.proxy.proxy_server.general_settings", {}),
+        patch("litellm.proxy.proxy_server.proxy_config") as mock_proxy_config,
+        patch("litellm.proxy.proxy_server.version", "1.0.0"),
+        patch(
+            "litellm.proxy.litellm_pre_call_utils.add_litellm_data_to_request"
+        ) as mock_add_data,
+    ):
         mock_router.agenerate_content_stream = AsyncMock(return_value=mock_stream)
 
         async def mock_add_litellm_data(

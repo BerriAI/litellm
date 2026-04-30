@@ -23,6 +23,11 @@ export interface Agent {
     [key: string]: any;
   };
   object_permission?: AgentObjectPermission;
+  spend?: number;
+  tpm_limit?: number | null;
+  rpm_limit?: number | null;
+  session_tpm_limit?: number | null;
+  session_rpm_limit?: number | null;
   created_at?: string;
   updated_at?: string;
   created_by?: string;

@@ -29,7 +29,24 @@ verbose_logger.setLevel(logging.DEBUG)
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.types.utils import StandardLoggingPayload
 import random
+import socket
+import httpx
 from unittest.mock import patch, MagicMock
+
+
+def _can_resolve_openai():
+    """Check if api.openai.com is reachable (DNS resolves)."""
+    try:
+        socket.getaddrinfo("api.openai.com", 443, socket.AF_UNSPEC, socket.SOCK_STREAM)
+        return True
+    except socket.gaierror:
+        return False
+
+
+skip_if_no_openai_network = pytest.mark.skipif(
+    not _can_resolve_openai(),
+    reason="Cannot resolve api.openai.com - skipping integration test due to DNS issues",
+)
 
 
 def load_vertex_ai_credentials():
@@ -37,7 +54,7 @@ def load_vertex_ai_credentials():
     print("loading vertex ai credentials")
     os.environ["GCS_FLUSH_INTERVAL"] = "1"
     filepath = os.path.dirname(os.path.abspath(__file__))
-    vertex_key_path = filepath + "/pathrise-convert-1606954137718.json"
+    vertex_key_path = filepath + "/vertex_key.json"
 
     # Read the existing content of the file or create an empty dictionary
     try:
@@ -58,8 +75,8 @@ def load_vertex_ai_credentials():
         service_account_key_data = {}
 
     # Update the service_account_key_data with environment variables
-    private_key_id = os.environ.get("GCS_PRIVATE_KEY_ID", "")
-    private_key = os.environ.get("GCS_PRIVATE_KEY", "")
+    private_key_id = os.environ.get("VERTEX_AI_PRIVATE_KEY_ID", "")
+    private_key = os.environ.get("VERTEX_AI_PRIVATE_KEY", "")
     private_key = private_key.replace("\\n", "\n")
     service_account_key_data["private_key_id"] = private_key_id
     service_account_key_data["private_key"] = private_key
@@ -77,6 +94,7 @@ def load_vertex_ai_credentials():
 
 @pytest.mark.parametrize("provider", ["openai"])  # , "azure"
 @pytest.mark.asyncio
+@skip_if_no_openai_network
 async def test_create_batch(provider):
     """
     1. Create File for Batch completion
@@ -216,9 +234,9 @@ def cleanup_azure_ft_models():
         import requests
 
         client = AzureOpenAI(
-            api_key=os.getenv("AZURE_FT_API_KEY"),
-            azure_endpoint=os.getenv("AZURE_FT_API_BASE"),
-            api_version=os.getenv("AZURE_API_VERSION"),
+            api_key=os.getenv("AZURE_AI_API_KEY"),
+            azure_endpoint=os.getenv("AZURE_AI_API_BASE"),
+            api_version=os.getenv("AZURE_AI_API_VERSION"),
         )
 
         _list_ft_jobs = client.fine_tuning.jobs.list()
@@ -251,6 +269,7 @@ def cleanup_azure_ft_models():
 @pytest.mark.parametrize("provider", ["openai"])
 @pytest.mark.asyncio()
 @pytest.mark.flaky(retries=3, delay=1)
+@skip_if_no_openai_network
 async def test_async_create_batch(provider):
     """
     1. Create File for Batch completion
@@ -463,9 +482,24 @@ mock_vertex_list_response = {
 @pytest.mark.asyncio
 async def test_avertex_batch_prediction(monkeypatch):
     monkeypatch.setenv("GCS_BUCKET_NAME", "litellm-local")
+    monkeypatch.setenv("VERTEXAI_PROJECT", "mock-project")
+    monkeypatch.setenv("VERTEXAI_LOCATION", "us-central1")
+
+    # Mock Google auth so the test doesn't need real credentials
+    mock_creds = MagicMock()
+    mock_creds.token = "mock-token"
+    mock_creds.valid = True
+    mock_creds.expiry = None
+    monkeypatch.setattr(
+        "google.auth.default",
+        lambda *args, **kwargs: (mock_creds, "mock-project"),
+    )
+
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 
-    client = AsyncHTTPHandler()
+    # Configure mock response object
+    mock_response = MagicMock()
+    mock_response.raise_for_status.return_value = None
 
     async def mock_side_effect(*args, **kwargs):
         print("args", args, "kwargs", kwargs)
@@ -477,21 +511,10 @@ async def test_avertex_batch_prediction(monkeypatch):
             mock_response.status_code = 200
         return mock_response
 
-    with patch.object(
-        client, "post", side_effect=mock_side_effect
-    ) as mock_post, patch(
-        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post"
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        side_effect=mock_side_effect,
     ) as mock_global_post:
-        # Configure mock responses
-        mock_response = MagicMock()
-        mock_response.raise_for_status.return_value = None
-
-        # Set up different responses for different API calls
-        
-        mock_post.side_effect = mock_side_effect
-        mock_global_post.side_effect = mock_side_effect
-
-        # load_vertex_ai_credentials()
         litellm.set_verbose = True
         litellm._turn_on_debug()
         file_name = "vertex_batch_completions.jsonl"
@@ -503,7 +526,6 @@ async def test_avertex_batch_prediction(monkeypatch):
             file=open(file_path, "rb"),
             purpose="batch",
             custom_llm_provider="vertex_ai",
-            client=client
         )
         print("Response from creating file=", file_obj)
 
@@ -555,7 +577,10 @@ async def test_vertex_list_batches(monkeypatch):
 
     monkeypatch.setattr(
         "litellm.llms.vertex_ai.batches.handler.VertexAIBatchPrediction._ensure_access_token",
-        lambda self, credentials, project_id, custom_llm_provider: ("mock-token", "litellm-test-project"),
+        lambda self, credentials, project_id, custom_llm_provider: (
+            "mock-token",
+            "litellm-test-project",
+        ),
     )
 
     with patch(
@@ -580,10 +605,53 @@ async def test_vertex_list_batches(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_vertex_async_create_batch_logs_error_body_on_http_error():
+    """
+    When Vertex AI returns an HTTP error (e.g. 400), _async_create_batch should
+    re-raise httpx.HTTPStatusError (not swallow it) and log the response body.
+
+    Before the fix the error body was lost because AsyncHTTPHandler.post()
+    calls raise_for_status() internally, raising before the handler's own
+    status-code check could log the body.
+    """
+    from litellm.llms.vertex_ai.batches.handler import VertexAIBatchPrediction
+
+    handler = VertexAIBatchPrediction(gcs_bucket_name="test-bucket")
+
+    error_body = '{"error": {"code": 400, "message": "Do not support publisher model gemini-2.0-flash"}}'
+
+    mock_response = MagicMock(spec=httpx.Response)
+    mock_response.status_code = 400
+    mock_response.text = error_body
+    mock_response.headers = {}
+
+    http_error = httpx.HTTPStatusError(
+        message="Bad Request",
+        request=httpx.Request("POST", "https://fake-vertex-url"),
+        response=mock_response,
+    )
+
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        side_effect=http_error,
+    ):
+        with pytest.raises(httpx.HTTPStatusError) as exc_info:
+            await handler._async_create_batch(
+                vertex_batch_request={},
+                api_base="https://us-central1-aiplatform.googleapis.com/v1/projects/test/locations/us-central1/batchPredictionJobs",
+                headers={"Authorization": "Bearer fake-token"},
+            )
+
+        assert exc_info.value.response.status_code == 400
+        assert "gemini-2.0-flash" in exc_info.value.response.text
+
+
+@pytest.mark.asyncio
+@skip_if_no_openai_network
 async def test_delete_batch_output_file():
     """
     Test that deleting a batch output file works correctly.
-    
+
     This test verifies the fix for:
     - When a batch is retrieved and has an output_file_id, the file object is properly stored
     - The output file can be deleted without validation errors
@@ -591,11 +659,11 @@ async def test_delete_batch_output_file():
     """
     litellm._turn_on_debug()
     print("Testing delete batch output file")
-    
+
     file_name = "openai_batch_completions.jsonl"
     _current_dir = os.path.dirname(os.path.abspath(__file__))
     file_path = os.path.join(_current_dir, file_name)
-    
+
     # Create file for batch
     file_obj = await litellm.acreate_file(
         file=open(file_path, "rb"),
@@ -604,7 +672,7 @@ async def test_delete_batch_output_file():
     )
     print("Response from creating file=", file_obj)
     batch_input_file_id = file_obj.id
-    
+
     # Create batch
     create_batch_response = await litellm.acreate_batch(
         completion_window="24h",
@@ -613,36 +681,37 @@ async def test_delete_batch_output_file():
         custom_llm_provider="openai",
     )
     print("Batch created with ID=", create_batch_response.id)
-    
+
     # Retrieve batch to get output_file_id
     retrieved_batch = await litellm.aretrieve_batch(
-        batch_id=create_batch_response.id, 
-        custom_llm_provider="openai"
+        batch_id=create_batch_response.id, custom_llm_provider="openai"
     )
     print("Retrieved batch=", retrieved_batch)
-    
+
     # If batch has completed and has output file, test deleting it
     if retrieved_batch.output_file_id:
         print(f"Testing deletion of output file: {retrieved_batch.output_file_id}")
-        
+
         # This is the key test - deleting the output file should work
         # without validation errors (file_object should not be None)
         delete_output_file_response = await litellm.afile_delete(
-            file_id=retrieved_batch.output_file_id, 
-            custom_llm_provider="openai"
+            file_id=retrieved_batch.output_file_id, custom_llm_provider="openai"
         )
-        
+
         print("Delete output file response=", delete_output_file_response)
         assert delete_output_file_response.id == retrieved_batch.output_file_id
-        assert delete_output_file_response.deleted is True or hasattr(delete_output_file_response, 'id')
+        assert delete_output_file_response.deleted is True or hasattr(
+            delete_output_file_response, "id"
+        )
         print("✓ Successfully deleted batch output file")
     else:
-        print("⚠ Batch has not completed yet or no output file available, skipping output file deletion test")
-    
+        print(
+            "⚠ Batch has not completed yet or no output file available, skipping output file deletion test"
+        )
+
     # Clean up - delete the input file
     delete_input_file_response = await litellm.afile_delete(
-        file_id=batch_input_file_id, 
-        custom_llm_provider="openai"
+        file_id=batch_input_file_id, custom_llm_provider="openai"
     )
     print("Delete input file response=", delete_input_file_response)
     assert delete_input_file_response.id == batch_input_file_id

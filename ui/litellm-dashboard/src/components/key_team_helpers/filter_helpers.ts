@@ -1,25 +1,114 @@
-import { teamListCall, organizationListCall, keyAliasesCall } from "../networking"
+import { teamListCall, organizationListCall, keyListCall } from "../networking";
 import { Team } from "./key_list";
 import { Organization } from "../networking";
 
-/**
- * Fetches all key aliases via the dedicated /key/aliases endpoint
- * @param accessToken The access token for API authentication
- * @returns Array of all unique key aliases
- */
-export const fetchAllKeyAliases = async (accessToken: string | null): Promise<string[]> => {
-  if (!accessToken) return [];
+export interface TeamFilterOptions {
+  keyAliases: string[];
+  organizationIds: string[];
+  userIds: Array<{ id: string; email: string }>;
+}
 
-  try {
-    const { aliases } = await keyAliasesCall(accessToken as unknown as string);
-    // Defensive dedupe & null-guard
-    return Array.from(new Set((aliases || []).filter(Boolean)));
-  } catch (error) {
-    console.error("Error fetching all key aliases:", error);
-    return [];
+const FILTER_OPTIONS_PAGE_SIZE = 100; // API max per page
+const MAX_PAGES = 10; // Cap at 1000 keys; filter completeness beyond ~500 has diminishing returns
+
+const processKeysIntoOptions = (
+  keys: Array<Record<string, unknown>>,
+  keyAliases: Set<string>,
+  organizationIds: Set<string>,
+  userMap: Map<string, string>,
+) => {
+  for (const key of keys) {
+    const alias = key?.key_alias;
+    if (alias && typeof alias === "string") {
+      keyAliases.add(alias.trim());
+    }
+    const orgId = key?.organization_id ?? key?.org_id;
+    if (orgId && typeof orgId === "string") {
+      organizationIds.add(orgId.trim());
+    }
+    const userId = key?.user_id;
+    if (userId && typeof userId === "string") {
+      const email = (key?.user as { user_email?: string })?.user_email || userId;
+      userMap.set(userId, email);
+    }
   }
 };
 
+/**
+ * Fetches filter options (key aliases, org IDs, user IDs) from team keys.
+ * Fetches page 1 first to get totalPages, then batches remaining pages with
+ * Promise.allSettled (preserves successful pages if some fail). Capped at 10 pages (1000 keys)
+ */
+export const fetchTeamFilterOptions = async (
+  accessToken: string | null,
+  teamId: string,
+): Promise<TeamFilterOptions> => {
+  if (!accessToken || !teamId) {
+    return { keyAliases: [], organizationIds: [], userIds: [] };
+  }
+
+  try {
+    const keyAliases = new Set<string>();
+    const organizationIds = new Set<string>();
+    const userMap = new Map<string, string>();
+
+    // First request: get page 1 and totalPages
+    const firstResponse = await keyListCall(
+      accessToken,
+      null,
+      teamId,
+      null,
+      null,
+      null,
+      1,
+      FILTER_OPTIONS_PAGE_SIZE,
+      null,
+      null,
+      "user",
+      null,
+    );
+
+    const firstKeys = firstResponse?.keys || [];
+    const totalPages = firstResponse?.total_pages ?? 1;
+    processKeysIntoOptions(firstKeys, keyAliases, organizationIds, userMap);
+
+    // Batch fetch remaining pages (2 through min(totalPages, MAX_PAGES)) in parallel
+    const pagesToFetch = Math.min(totalPages, MAX_PAGES) - 1;
+    if (pagesToFetch > 0) {
+      const pagePromises = Array.from({ length: pagesToFetch }, (_, i) =>
+        keyListCall(
+          accessToken,
+          null,
+          teamId,
+          null,
+          null,
+          null,
+          i + 2,
+          FILTER_OPTIONS_PAGE_SIZE,
+          null,
+          null,
+          "user",
+          null,
+        ),
+      );
+      const results = await Promise.allSettled(pagePromises);
+      for (const result of results) {
+        if (result.status === "fulfilled") {
+          processKeysIntoOptions(result.value?.keys || [], keyAliases, organizationIds, userMap);
+        }
+      }
+    }
+
+    return {
+      keyAliases: Array.from(keyAliases).sort(),
+      organizationIds: Array.from(organizationIds).sort(),
+      userIds: Array.from(userMap.entries()).map(([id, email]) => ({ id, email })),
+    };
+  } catch (error) {
+    console.error("Error fetching team filter options:", error);
+    return { keyAliases: [], organizationIds: [], userIds: [] };
+  }
+};
 
 /**
  * Fetches all teams across all pages

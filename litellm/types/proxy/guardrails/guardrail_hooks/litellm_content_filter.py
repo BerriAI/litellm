@@ -4,8 +4,7 @@ from typing import Any, Dict, List, Literal, Optional, TypedDict, Union
 from pydantic import Field
 
 from litellm.types.llms.base import BaseLiteLLMOpenAIResponseObject
-from litellm.types.proxy.guardrails.guardrail_hooks.base import \
-    GuardrailConfigModel
+from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 
 # --- Competitor intent blocker (generic, industry-agnostic) ---
 

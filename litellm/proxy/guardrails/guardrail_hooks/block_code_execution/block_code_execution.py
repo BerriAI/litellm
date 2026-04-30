@@ -483,9 +483,7 @@ class BlockCodeExecutionGuardrail(CustomGuardrail):
             # For responses, always enforce the block action (no intent check needed).
             # For requests with detect_execution_intent, require execution intent.
             effective_block = action_taken == "block" and (
-                is_response
-                or not self.detect_execution_intent
-                or has_execution_intent
+                is_response or not self.detect_execution_intent or has_execution_intent
             )
             if detections is not None:
                 detections.append(

@@ -53,9 +53,9 @@ class SpendUpdateQueue(BaseUpdateQueue):
 
     async def aggregate_queue_updates(self):
         """Concatenate all updates in the queue to reduce the size of in-memory queue"""
-        updates: List[
-            SpendUpdateQueueItem
-        ] = await self.flush_all_updates_from_in_memory_queue()
+        updates: List[SpendUpdateQueueItem] = (
+            await self.flush_all_updates_from_in_memory_queue()
+        )
         aggregated_updates = self._get_aggregated_spend_update_queue_item(updates)
         for update in aggregated_updates:
             await self.update_queue.put(update)
@@ -145,6 +145,7 @@ class SpendUpdateQueue(BaseUpdateQueue):
             team_member_list_transactions={},
             org_list_transactions={},
             tag_list_transactions={},
+            agent_list_transactions={},
         )
 
         # Map entity types to their corresponding transaction dictionary keys
@@ -156,6 +157,7 @@ class SpendUpdateQueue(BaseUpdateQueue):
             Litellm_EntityType.TEAM_MEMBER: "team_member_list_transactions",
             Litellm_EntityType.ORGANIZATION: "org_list_transactions",
             Litellm_EntityType.TAG: "tag_list_transactions",
+            Litellm_EntityType.AGENT: "agent_list_transactions",
         }
 
         for update in updates:
@@ -206,6 +208,10 @@ class SpendUpdateQueue(BaseUpdateQueue):
             elif dict_key == "tag_list_transactions":
                 transactions_dict = db_spend_update_transactions[
                     "tag_list_transactions"
+                ]
+            elif dict_key == "agent_list_transactions":
+                transactions_dict = db_spend_update_transactions[
+                    "agent_list_transactions"
                 ]
             else:
                 continue

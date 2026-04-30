@@ -37,9 +37,13 @@ async def handle_oauth2_proxy_request(request: Request) -> UserAPIKeyAuth:
             else:
                 auth_data[key] = value
     verbose_proxy_logger.debug(
-        f"Auth data before creating UserAPIKeyAuth object: {auth_data}"
+        "Auth data before creating UserAPIKeyAuth object: keys=%s",
+        list(auth_data.keys()),
     )
     user_api_key_auth = UserAPIKeyAuth(**auth_data)
-    verbose_proxy_logger.debug(f"UserAPIKeyAuth object created: {user_api_key_auth}")
+    verbose_proxy_logger.debug(
+        "UserAPIKeyAuth object created with keys: %s",
+        list(user_api_key_auth.__fields_set__),
+    )
     # Create and return UserAPIKeyAuth object
     return user_api_key_auth

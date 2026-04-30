@@ -5,7 +5,7 @@ import os
 import time
 import traceback
 from datetime import datetime, timedelta
-from typing import Any, Dict, Literal, Optional, Union, cast
+from typing import Any, Dict, Iterable, Literal, Optional, Union, cast
 
 import fastapi
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
@@ -33,79 +33,46 @@ from litellm.proxy.health_check import (
     perform_health_check,
     run_with_timeout,
 )
-from litellm.secret_managers.main import get_secret
+from litellm.proxy.middleware.in_flight_requests_middleware import (
+    get_in_flight_requests,
+)
 
 #### Health ENDPOINTS ####
 
 
-def _resolve_os_environ_variables(params: dict) -> dict:
+def _reject_os_environ_references(params: dict) -> None:
     """
-    Resolve ``os.environ/`` environment variables in ``litellm_params``.
-
-    This walks the input dict/list structure iteratively (no Python recursion) to
-    avoid unbounded recursion / stack overflows on deeply nested inputs.
+    Validate that the provided params do not contain any ``os.environ/``
+    references. Values with that prefix are expected to come only from
+    server-side configuration (already resolved before reaching here). If a
+    request-supplied value still carries the prefix, raise ``HTTPException``.
     """
     if not isinstance(params, dict):
-        return params
+        return
 
-    # Use an explicit stack to avoid recursion and handle nested dicts/lists.
-    # We also keep a `seen` set to guard against accidental cycles.
-    resolved_root: dict = {}
-    stack: list[tuple[object, object]] = [(params, resolved_root)]
+    stack: list[object] = [params]
     seen: set[int] = {id(params)}
 
     while stack:
-        src, dst = stack.pop()
+        src = stack.pop()
+        if isinstance(src, dict):
+            values: Iterable[object] = src.values()
+        elif isinstance(src, list):
+            values = src
+        else:
+            continue
 
-        if isinstance(src, dict) and isinstance(dst, dict):
-            for key, value in src.items():
-                # Direct string replacement for os.environ/ references
-                if isinstance(value, str) and value.startswith("os.environ/"):
-                    dst[key] = get_secret(value)
-                elif isinstance(value, dict):
-                    if id(value) in seen:
-                        # Cycle detected – keep a shallow copy reference to prevent infinite loops
-                        dst[key] = {}
-                        continue
-                    seen.add(id(value))
-                    new_dict: dict = {}
-                    dst[key] = new_dict
-                    stack.append((value, new_dict))
-                elif isinstance(value, list):
-                    if id(value) in seen:
-                        dst[key] = []
-                        continue
-                    seen.add(id(value))
-                    new_list: list = []
-                    dst[key] = new_list
-                    stack.append((value, new_list))
-                else:
-                    dst[key] = value
-
-        elif isinstance(src, list) and isinstance(dst, list):
-            for item in src:
-                if isinstance(item, str) and item.startswith("os.environ/"):
-                    dst.append(get_secret(item))
-                elif isinstance(item, dict):
-                    if id(item) in seen:
-                        dst.append({})
-                        continue
-                    seen.add(id(item))
-                    new_dict = {}
-                    dst.append(new_dict)
-                    stack.append((item, new_dict))
-                elif isinstance(item, list):
-                    if id(item) in seen:
-                        dst.append([])
-                        continue
-                    seen.add(id(item))
-                    new_list = []
-                    dst.append(new_list)
-                    stack.append((item, new_list))
-                else:
-                    dst.append(item)
-
-    return resolved_root
+        for value in values:
+            if isinstance(value, str) and value.startswith("os.environ/"):
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": "Environment variable references are not permitted in request parameters."
+                    },
+                )
+            if isinstance(value, (dict, list)) and id(value) not in seen:
+                seen.add(id(value))
+                stack.append(value)
 
 
 def get_callback_identifier(callback):
@@ -227,6 +194,7 @@ async def health_services_endpoint(  # noqa: PLR0915
             "custom_callback_api",
             "langsmith",
             "datadog",
+            "datadog_metrics",
             "datadog_llm_observability",
             "generic_api",
             "arize",
@@ -279,6 +247,31 @@ async def health_services_endpoint(  # noqa: PLR0915
                     response["error_message"]
                     if response["status"] == "unhealthy"
                     else "Datadog is healthy"
+                ),
+            }
+        elif service == "datadog_metrics":
+            from litellm.integrations.datadog.datadog_metrics import (
+                DatadogMetricsLogger,
+            )
+            from litellm.litellm_core_utils.litellm_logging import (
+                get_custom_logger_compatible_class,
+            )
+
+            datadog_metrics_logger = get_custom_logger_compatible_class(
+                "datadog_metrics"
+            )
+            if datadog_metrics_logger is None:
+                datadog_metrics_logger = DatadogMetricsLogger(
+                    start_periodic_flush=False
+                )
+            assert isinstance(datadog_metrics_logger, DatadogMetricsLogger)
+            response = await datadog_metrics_logger.async_health_check()
+            return {
+                "status": response["status"],
+                "message": (
+                    response["error_message"]
+                    if response["status"] == "unhealthy"
+                    else "Datadog Metrics is healthy"
                 ),
             }
         elif service == "arize":
@@ -742,7 +735,7 @@ async def _perform_health_check_and_save(
     max_concurrency=None,
 ):
     """Helper function to perform health check and save results to database"""
-    healthy_endpoints, unhealthy_endpoints = await perform_health_check(
+    healthy_endpoints, unhealthy_endpoints, _ = await perform_health_check(
         model_list=model_list,
         cli_model=cli_model,
         model=target_model,
@@ -1112,11 +1105,11 @@ async def _db_health_readiness_check():
 
     global db_health_cache
 
-    # Note - Intentionally don't try/except this so it raises an exception when it fails
     try:
-        # if timedelta is less than 2 minutes return DB Status
         time_diff = datetime.now() - db_health_cache["last_updated"]
-        if db_health_cache["status"] != "unknown" and time_diff < timedelta(minutes=2):
+        if db_health_cache["status"] == "connected" and time_diff < timedelta(
+            seconds=15
+        ):
             return db_health_cache
 
         if prisma_client is None:
@@ -1127,7 +1120,28 @@ async def _db_health_readiness_check():
         db_health_cache = {"status": "connected", "last_updated": datetime.now()}
         return db_health_cache
     except Exception as e:
-        PrismaDBExceptionHandler.handle_db_exception(e)
+        db_health_cache = {"status": "disconnected", "last_updated": datetime.now()}
+        if PrismaDBExceptionHandler.is_database_transport_error(e):
+            try:
+                verbose_proxy_logger.warning(
+                    "_db_health_readiness_check: health_check failed, attempting reconnect"
+                )
+                await prisma_client.attempt_db_reconnect(
+                    reason="health_readiness_check"
+                )
+                await prisma_client.health_check()
+                verbose_proxy_logger.info(
+                    "_db_health_readiness_check: reconnect succeeded"
+                )
+                db_health_cache = {
+                    "status": "connected",
+                    "last_updated": datetime.now(),
+                }
+                return db_health_cache
+            except Exception:
+                verbose_proxy_logger.error(
+                    "_db_health_readiness_check: reconnect failed"
+                )
         return db_health_cache
 
 
@@ -1273,14 +1287,13 @@ async def health_readiness():
             db_health_status = await _db_health_readiness_check()
             return {
                 "status": "healthy",
-                "db": "connected",
+                "db": db_health_status["status"],
                 "cache": cache_type,
                 "litellm_version": version,
                 "success_callbacks": success_callback_names,
                 "use_aiohttp_transport": AsyncHTTPHandler._should_use_aiohttp_transport(),
                 "log_level": log_level_name,
                 "is_detailed_debug": is_detailed_debug,
-                **db_health_status,
             }
         else:
             return {
@@ -1295,6 +1308,23 @@ async def health_readiness():
             }
     except Exception as e:
         raise HTTPException(status_code=503, detail=f"Service Unhealthy ({str(e)})")
+
+
+@router.get(
+    "/health/backlog",
+    tags=["health"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def health_backlog():
+    """
+    Returns the number of HTTP requests currently in-flight on this uvicorn worker.
+
+    Use this to measure per-pod queue depth. A high value means the worker is
+    processing many concurrent requests — requests arriving now will have to wait
+    for the event loop to get to them, adding latency before LiteLLM even starts
+    its own timer.
+    """
+    return {"in_flight_requests": get_in_flight_requests()}
 
 
 @router.get(
@@ -1444,6 +1474,10 @@ async def test_model_connection(
 
         # Get model name from litellm_params
         request_litellm_params = litellm_params or {}
+        # Reject request-supplied os.environ/ references. Config values are
+        # already resolved before reaching this endpoint; any remaining
+        # reference must have come from the request body.
+        _reject_os_environ_references(request_litellm_params)
         model_name = request_litellm_params.get("model")
 
         # Look up model configuration from router if model name is provided
@@ -1480,11 +1514,7 @@ async def test_model_connection(
 
         # Merge: config params (from proxy config) as base, request params override
         # This allows users to override specific params while using config for credentials
-        merged_litellm_params = {**config_litellm_params, **request_litellm_params}
-
-        # Resolve os.environ/ environment variables in any remaining request params
-        # This handles cases where user explicitly passes os.environ/ values to override config
-        litellm_params = _resolve_os_environ_variables(merged_litellm_params)
+        litellm_params = {**config_litellm_params, **request_litellm_params}
 
         ## Auth check
         await ModelManagementAuthChecks.can_user_make_model_call(

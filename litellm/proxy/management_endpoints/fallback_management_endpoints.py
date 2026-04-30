@@ -7,6 +7,7 @@ POST /fallback - Create or update fallbacks for a specific model
 GET /fallback/{model} - Get fallbacks for a specific model
 DELETE /fallback/{model} - Delete fallbacks for a specific model
 """
+
 # pyright: reportMissingImports=false
 
 import json
@@ -110,9 +111,7 @@ async def create_fallback(
         if data.model in data.fallback_models:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail={
-                    "error": f"Model '{data.model}' cannot be its own fallback"
-                },
+                detail={"error": f"Model '{data.model}' cannot be its own fallback"},
             )
 
         # Check if we need to store in DB
@@ -165,9 +164,7 @@ async def create_fallback(
                     "param_name": "router_settings",
                     "param_value": router_settings_json,
                 },
-                "update": {
-                    "param_value": router_settings_json
-                },
+                "update": {"param_value": router_settings_json},
             },
         )
 
@@ -346,18 +343,14 @@ async def delete_fallback(
                     "param_name": "router_settings",
                     "param_value": router_settings_json,
                 },
-                "update": {
-                    "param_value": router_settings_json
-                },
+                "update": {"param_value": router_settings_json},
             },
         )
 
         # Update the in-memory router configuration
         setattr(llm_router, fallback_key, updated_fallbacks)
 
-        verbose_proxy_logger.info(
-            f"Fallback deleted: {model} (type: {fallback_type})"
-        )
+        verbose_proxy_logger.info(f"Fallback deleted: {model} (type: {fallback_type})")
 
         return FallbackDeleteResponse(
             model=model,

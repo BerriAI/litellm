@@ -1,5 +1,5 @@
 -- CreateTable
-CREATE TABLE "LiteLLM_ManagedFileTable" (
+CREATE TABLE IF NOT EXISTS "LiteLLM_ManagedFileTable" (
     "id" TEXT NOT NULL,
     "unified_file_id" TEXT NOT NULL,
     "file_object" JSONB NOT NULL,
@@ -11,8 +11,8 @@ CREATE TABLE "LiteLLM_ManagedFileTable" (
 );
 
 -- CreateIndex
-CREATE UNIQUE INDEX "LiteLLM_ManagedFileTable_unified_file_id_key" ON "LiteLLM_ManagedFileTable"("unified_file_id");
+CREATE UNIQUE INDEX IF NOT EXISTS "LiteLLM_ManagedFileTable_unified_file_id_key" ON "LiteLLM_ManagedFileTable"("unified_file_id");
 
 -- CreateIndex
-CREATE INDEX "LiteLLM_ManagedFileTable_unified_file_id_idx" ON "LiteLLM_ManagedFileTable"("unified_file_id");
+CREATE INDEX IF NOT EXISTS "LiteLLM_ManagedFileTable_unified_file_id_idx" ON "LiteLLM_ManagedFileTable"("unified_file_id");
 

@@ -35,7 +35,10 @@ class VertexAIRealtimeConfig(GeminiRealtimeConfig):
     # ------------------------------------------------------------------
 
     def get_complete_url(
-        self, api_base: Optional[str], model: str, api_key: Optional[str] = None  # noqa: ARG002
+        self,
+        api_base: Optional[str],
+        model: str,
+        api_key: Optional[str] = None,  # noqa: ARG002
     ) -> str:
         """
         Build the Vertex AI Live WSS endpoint URL.
@@ -124,6 +127,8 @@ class VertexAIRealtimeConfig(GeminiRealtimeConfig):
                     "silenceDurationMs": 800,
                 }
             },
+            # Return input transcript so guardrails can inspect user speech.
+            "inputAudioTranscription": {},
             # Return output transcript so clients can read what the model said.
             "outputAudioTranscription": {},
         }

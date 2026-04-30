@@ -1,5 +1,5 @@
 -- CreateTable
-CREATE TABLE "LiteLLM_SearchToolsTable" (
+CREATE TABLE IF NOT EXISTS "LiteLLM_SearchToolsTable" (
     "search_tool_id" TEXT NOT NULL,
     "search_tool_name" TEXT NOT NULL,
     "litellm_params" JSONB NOT NULL,
@@ -11,5 +11,5 @@ CREATE TABLE "LiteLLM_SearchToolsTable" (
 );
 
 -- CreateIndex
-CREATE UNIQUE INDEX "LiteLLM_SearchToolsTable_search_tool_name_key" ON "LiteLLM_SearchToolsTable"("search_tool_name");
+CREATE UNIQUE INDEX IF NOT EXISTS "LiteLLM_SearchToolsTable_search_tool_name_key" ON "LiteLLM_SearchToolsTable"("search_tool_name");
 

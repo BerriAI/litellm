@@ -74,7 +74,7 @@ class VertexEmbedding(VertexBase):
         )
         # Extract use_psc_endpoint_format from optional_params
         use_psc_endpoint_format = optional_params.get("use_psc_endpoint_format", False)
-        
+
         auth_header, api_base = self._get_token_and_url(
             model=model,
             gemini_api_key=gemini_api_key,
@@ -170,7 +170,7 @@ class VertexEmbedding(VertexBase):
         )
         # Extract use_psc_endpoint_format from optional_params
         use_psc_endpoint_format = optional_params.get("use_psc_endpoint_format", False)
-        
+
         auth_header, api_base = self._get_token_and_url(
             model=model,
             gemini_api_key=gemini_api_key,

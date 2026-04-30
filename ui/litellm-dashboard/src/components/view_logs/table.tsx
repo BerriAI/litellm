@@ -1,5 +1,5 @@
-import { Fragment } from "react";
-import { ColumnDef, flexRender, getCoreRowModel, getExpandedRowModel, Row, useReactTable } from "@tanstack/react-table";
+import { Fragment, useState } from "react";
+import { ColumnDef, flexRender, getCoreRowModel, getExpandedRowModel, Row, useReactTable, getSortedRowModel, SortingState } from "@tanstack/react-table";
 
 import { Table, TableHead, TableHeaderCell, TableBody, TableRow, TableCell } from "@tremor/react";
 
@@ -15,6 +15,8 @@ interface DataTableProps<TData, TValue> {
   isLoading?: boolean;
   loadingMessage?: string;
   noDataMessage?: string;
+  /** Enable client-side column sorting (defaults to false to avoid conflicts with server-side sorting) */
+  enableSorting?: boolean;
 }
 
 export function DataTable<TData, TValue>({
@@ -27,18 +29,28 @@ export function DataTable<TData, TValue>({
   isLoading = false,
   loadingMessage = "🚅 Loading logs...",
   noDataMessage = "No logs found",
+  enableSorting = false,
 }: DataTableProps<TData, TValue>) {
   const supportsExpansion = !!(renderSubComponent || renderChildRows) && !!getRowCanExpand;
+  const [sorting, setSorting] = useState<SortingState>([]);
 
   const table = useReactTable<TData>({
     data,
     columns,
+    ...(enableSorting && {
+      state: {
+        sorting,
+      },
+      onSortingChange: setSorting,
+      enableSortingRemoval: false,
+    }),
     ...(supportsExpansion && { getRowCanExpand }),
     getRowId: (row: TData, index: number) => {
       const _row: any = row as any;
       return _row?.request_id ?? String(index);
     },
     getCoreRowModel: getCoreRowModel(),
+    ...(enableSorting && { getSortedRowModel: getSortedRowModel() }),
     ...(supportsExpansion && { getExpandedRowModel: getExpandedRowModel() }),
   });
 
@@ -49,9 +61,25 @@ export function DataTable<TData, TValue>({
           {table.getHeaderGroups().map((headerGroup) => (
             <TableRow key={headerGroup.id}>
               {headerGroup.headers.map((header) => {
+                const canSort = enableSorting && header.column.getCanSort();
+                const isSorted = header.column.getIsSorted();
+                
                 return (
-                  <TableHeaderCell key={header.id} className="py-1 h-8">
-                    {header.isPlaceholder ? null : flexRender(header.column.columnDef.header, header.getContext())}
+                  <TableHeaderCell 
+                    key={header.id} 
+                    className={`py-1 h-8 ${canSort ? 'cursor-pointer select-none hover:bg-gray-50' : ''}`}
+                    onClick={canSort ? header.column.getToggleSortingHandler() : undefined}
+                  >
+                    {header.isPlaceholder ? null : (
+                      <div className="flex items-center gap-1">
+                        {flexRender(header.column.columnDef.header, header.getContext())}
+                        {canSort && (
+                          <span className="text-gray-400">
+                            {isSorted === 'asc' ? '↑' : isSorted === 'desc' ? '↓' : '⇅'}
+                          </span>
+                        )}
+                      </div>
+                    )}
                   </TableHeaderCell>
                 );
               })}

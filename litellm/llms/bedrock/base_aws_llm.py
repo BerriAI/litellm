@@ -156,24 +156,24 @@ class BaseAWSLLM:
 
         verbose_logger.debug(
             "in get credentials\n"
-            "aws_access_key_id=%s\n"
-            "aws_secret_access_key=%s\n"
-            "aws_session_token=%s\n"
+            "aws_access_key_id=[set=%s]\n"
+            "aws_secret_access_key=[set=%s]\n"
+            "aws_session_token=[set=%s]\n"
             "aws_region_name=%s\n"
             "aws_session_name=%s\n"
             "aws_profile_name=%s\n"
             "aws_role_name=%s\n"
-            "aws_web_identity_token=%s\n"
+            "aws_web_identity_token=[set=%s]\n"
             "aws_sts_endpoint=%s\n"
             "aws_external_id=%s",
-            aws_access_key_id,
-            aws_secret_access_key,
-            aws_session_token,
+            aws_access_key_id is not None,
+            aws_secret_access_key is not None,
+            aws_session_token is not None,
             aws_region_name,
             aws_session_name,
             aws_profile_name,
             aws_role_name,
-            aws_web_identity_token,
+            aws_web_identity_token is not None,
             aws_sts_endpoint,
             aws_external_id,
         )
@@ -700,7 +700,7 @@ class BaseAWSLLM:
             "RoleSessionName": aws_session_name,
             "WebIdentityToken": oidc_token,
             "DurationSeconds": 3600,
-            "Policy": '{"Version":"2012-10-17","Statement":[{"Sid":"BedrockLiteLLM","Effect":"Allow","Action":["bedrock:InvokeModel","bedrock:InvokeModelWithResponseStream"],"Resource":"*","Condition":{"Bool":{"aws:SecureTransport":"true"},"StringLike":{"aws:UserAgent":"litellm/*"}}}]}',
+            "Policy": '{"Version":"2012-10-17","Statement":[{"Sid":"BedrockLiteLLM","Effect":"Allow","Action":["bedrock:InvokeModel","bedrock:InvokeModelWithResponseStream","bedrock:ApplyGuardrail","bedrock:GetGuardrail","bedrock:ListGuardrails"],"Resource":"*","Condition":{"Bool":{"aws:SecureTransport":"true"}}}]}',
         }
 
         # Add ExternalId parameter if provided
@@ -747,7 +747,10 @@ class BaseAWSLLM:
         with open(web_identity_token_file, "r") as f:
             web_identity_token = f.read().strip()
 
-        irsa_sts_kwargs: dict = {"region_name": region, "verify": self._get_ssl_verify(ssl_verify)}
+        irsa_sts_kwargs: dict = {
+            "region_name": region,
+            "verify": self._get_ssl_verify(ssl_verify),
+        }
         if aws_sts_endpoint is not None:
             irsa_sts_kwargs["endpoint_url"] = aws_sts_endpoint
 
@@ -814,7 +817,10 @@ class BaseAWSLLM:
         """Handle same-account role assumption for IRSA."""
         import boto3
 
-        irsa_sts_kwargs: dict = {"region_name": region, "verify": self._get_ssl_verify(ssl_verify)}
+        irsa_sts_kwargs: dict = {
+            "region_name": region,
+            "verify": self._get_ssl_verify(ssl_verify),
+        }
         if aws_sts_endpoint is not None:
             irsa_sts_kwargs["endpoint_url"] = aws_sts_endpoint
 
@@ -889,7 +895,11 @@ class BaseAWSLLM:
         web_identity_token_file = os.getenv("AWS_WEB_IDENTITY_TOKEN_FILE")
         irsa_role_arn = os.getenv("AWS_ROLE_ARN")
 
-        region = aws_region_name or os.getenv("AWS_REGION") or os.getenv("AWS_DEFAULT_REGION")
+        region = (
+            aws_region_name
+            or os.getenv("AWS_REGION")
+            or os.getenv("AWS_DEFAULT_REGION")
+        )
 
         # If we have IRSA environment variables and no explicit credentials,
         # we need to use the web identity token flow
@@ -1258,7 +1268,8 @@ class BaseAWSLLM:
 
             # Add back all original headers (including forwarded ones) after signature calculation
             for header_name, header_value in headers.items():
-                request.headers[header_name] = header_value
+                if header_value is not None:
+                    request.headers[header_name] = header_value
 
             if (
                 extra_headers is not None and "Authorization" in extra_headers
@@ -1288,6 +1299,8 @@ class BaseAWSLLM:
         }
 
         for header_name, header_value in headers.items():
+            if header_value is None:
+                continue
             header_lower = header_name.lower()
             if (
                 header_lower in aws_headers
@@ -1383,7 +1396,8 @@ class BaseAWSLLM:
         # Add back original headers after signing. Only headers in SignedHeaders
         # are integrity-protected; forwarded headers (x-forwarded-*) must remain unsigned.
         for header_name, header_value in headers.items():
-            request_headers_dict[header_name] = header_value
+            if header_value is not None:
+                request_headers_dict[header_name] = header_value
         if (
             headers is not None and "Authorization" in headers
         ):  # prevent sigv4 from overwriting the auth header

@@ -3,6 +3,7 @@ WebSearch Tool Transformation
 
 Transforms between Anthropic/OpenAI tool_use format and LiteLLM search format.
 """
+
 import json
 from typing import Any, Dict, List, Optional, Tuple, Union
 
@@ -81,9 +82,7 @@ class WebSearchTransformation:
             content = response.content or []
 
         if not content:
-            verbose_logger.debug(
-                "WebSearchInterception: Response has empty content"
-            )
+            verbose_logger.debug("WebSearchInterception: Response has empty content")
             return False, []
 
         # Find all WebSearch tool_use blocks
@@ -104,7 +103,9 @@ class WebSearchTransformation:
             # Check for LiteLLM standard or legacy web search tools
             # Handles: litellm_web_search, WebSearch, web_search
             if block_type == "tool_use" and block_name in (
-                LITELLM_WEB_SEARCH_TOOL_NAME, "WebSearch", "web_search"
+                LITELLM_WEB_SEARCH_TOOL_NAME,
+                "WebSearch",
+                "web_search",
             ):
                 # Convert to dict for easier handling
                 tool_call = {
@@ -125,7 +126,7 @@ class WebSearchTransformation:
         response: Any,
     ) -> Tuple[bool, List[Dict]]:
         """Parse OpenAI-style response for WebSearch tool_calls"""
-        
+
         # Handle both dict and ModelResponse objects
         if isinstance(response, dict):
             choices = response.get("choices", [])
@@ -138,9 +139,7 @@ class WebSearchTransformation:
             choices = response.choices or []
 
         if not choices:
-            verbose_logger.debug(
-                "WebSearchInterception: Response has empty choices"
-            )
+            verbose_logger.debug("WebSearchInterception: Response has empty choices")
             return False, []
 
         # Get first choice's message
@@ -149,11 +148,9 @@ class WebSearchTransformation:
             message = first_choice.get("message", {})
         else:
             message = getattr(first_choice, "message", None)
-        
+
         if not message:
-            verbose_logger.debug(
-                "WebSearchInterception: First choice has no message"
-            )
+            verbose_logger.debug("WebSearchInterception: First choice has no message")
             return False, []
 
         # Get tool_calls from message
@@ -163,9 +160,7 @@ class WebSearchTransformation:
             openai_tool_calls = getattr(message, "tool_calls", None) or []
 
         if not openai_tool_calls:
-            verbose_logger.debug(
-                "WebSearchInterception: Message has no tool_calls"
-            )
+            verbose_logger.debug("WebSearchInterception: Message has no tool_calls")
             return False, []
 
         # Find all WebSearch tool calls
@@ -176,18 +171,30 @@ class WebSearchTransformation:
                 tool_id = tool_call.get("id")
                 tool_type = tool_call.get("type")
                 function = tool_call.get("function", {})
-                function_name = function.get("name") if isinstance(function, dict) else getattr(function, "name", None)
-                function_arguments = function.get("arguments") if isinstance(function, dict) else getattr(function, "arguments", None)
+                function_name = (
+                    function.get("name")
+                    if isinstance(function, dict)
+                    else getattr(function, "name", None)
+                )
+                function_arguments = (
+                    function.get("arguments")
+                    if isinstance(function, dict)
+                    else getattr(function, "arguments", None)
+                )
             else:
                 tool_id = getattr(tool_call, "id", None)
                 tool_type = getattr(tool_call, "type", None)
                 function = getattr(tool_call, "function", None)
                 function_name = getattr(function, "name", None) if function else None
-                function_arguments = getattr(function, "arguments", None) if function else None
+                function_arguments = (
+                    getattr(function, "arguments", None) if function else None
+                )
 
             # Check for LiteLLM standard or legacy web search tools
             if tool_type == "function" and function_name in (
-                LITELLM_WEB_SEARCH_TOOL_NAME, "WebSearch", "web_search"
+                LITELLM_WEB_SEARCH_TOOL_NAME,
+                "WebSearch",
+                "web_search",
             ):
                 # Parse arguments (might be JSON string)
                 if isinstance(function_arguments, str):
@@ -320,7 +327,11 @@ class WebSearchTransformation:
                     "type": "function",
                     "function": {
                         "name": tc["name"],
-                        "arguments": json.dumps(tc["input"]) if isinstance(tc["input"], dict) else str(tc["input"]),
+                        "arguments": (
+                            json.dumps(tc["input"])
+                            if isinstance(tc["input"], dict)
+                            else str(tc["input"])
+                        ),
                     },
                 }
                 for tc in tool_calls

@@ -89,15 +89,15 @@ def test_collect_user_input_from_text_conversation_item():
     logging_obj = MagicMock()
     streaming = RealTimeStreaming(websocket, backend_ws, logging_obj)
 
-    msg = json.dumps({
-        "type": "conversation.item.create",
-        "item": {
-            "role": "user",
-            "content": [
-                {"type": "input_text", "text": "Hello, how are you?"}
-            ]
+    msg = json.dumps(
+        {
+            "type": "conversation.item.create",
+            "item": {
+                "role": "user",
+                "content": [{"type": "input_text", "text": "Hello, how are you?"}],
+            },
         }
-    })
+    )
     streaming.store_input(msg)
 
     assert len(streaming.input_messages) == 1
@@ -114,12 +114,12 @@ def test_collect_user_input_from_session_update_instructions():
     logging_obj = MagicMock()
     streaming = RealTimeStreaming(websocket, backend_ws, logging_obj)
 
-    msg = json.dumps({
-        "type": "session.update",
-        "session": {
-            "instructions": "You are a helpful assistant."
+    msg = json.dumps(
+        {
+            "type": "session.update",
+            "session": {"instructions": "You are a helpful assistant."},
         }
-    })
+    )
     streaming.store_input(msg)
 
     assert len(streaming.input_messages) == 1
@@ -224,11 +224,13 @@ async def test_transcription_captured_in_backend_to_client():
     client_ws = MagicMock()
     client_ws.send_text = AsyncMock()
 
-    transcript_event = json.dumps({
-        "type": "conversation.item.input_audio_transcription.completed",
-        "transcript": "What are the opening hours?",
-        "item_id": "item_789",
-    }).encode()
+    transcript_event = json.dumps(
+        {
+            "type": "conversation.item.input_audio_transcription.completed",
+            "transcript": "What are the opening hours?",
+            "item_id": "item_789",
+        }
+    ).encode()
 
     backend_ws = MagicMock()
     backend_ws.recv = AsyncMock(
@@ -261,24 +263,26 @@ def test_collect_session_tools_from_session_update():
     logging_obj = MagicMock()
     streaming = RealTimeStreaming(websocket, backend_ws, logging_obj)
 
-    msg = json.dumps({
-        "type": "session.update",
-        "session": {
-            "tools": [
-                {
-                    "type": "function",
-                    "name": "get_weather",
-                    "description": "Get the current weather",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {"location": {"type": "string"}},
-                        "required": ["location"],
-                    },
-                }
-            ],
-            "instructions": "You are a weather assistant."
+    msg = json.dumps(
+        {
+            "type": "session.update",
+            "session": {
+                "tools": [
+                    {
+                        "type": "function",
+                        "name": "get_weather",
+                        "description": "Get the current weather",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {"location": {"type": "string"}},
+                            "required": ["location"],
+                        },
+                    }
+                ],
+                "instructions": "You are a weather assistant.",
+            },
         }
-    })
+    )
     streaming.store_input(msg)
 
     assert len(streaming.session_tools) == 1
@@ -297,20 +301,22 @@ def test_collect_tool_calls_from_response_done():
     streaming = RealTimeStreaming(websocket, backend_ws, logging_obj)
     streaming.logged_real_time_event_types = "*"
 
-    response_done = json.dumps({
-        "type": "response.done",
-        "event_id": "evt_123",
-        "response": {
-            "output": [
-                {
-                    "type": "function_call",
-                    "call_id": "call_abc123",
-                    "name": "get_weather",
-                    "arguments": '{"location": "Paris"}',
-                }
-            ]
+    response_done = json.dumps(
+        {
+            "type": "response.done",
+            "event_id": "evt_123",
+            "response": {
+                "output": [
+                    {
+                        "type": "function_call",
+                        "call_id": "call_abc123",
+                        "name": "get_weather",
+                        "arguments": '{"location": "Paris"}',
+                    }
+                ]
+            },
         }
-    })
+    )
     streaming.store_message(response_done)
 
     assert len(streaming.tool_calls) == 1
@@ -330,19 +336,21 @@ def test_tool_calls_not_collected_from_non_function_call_output():
     streaming = RealTimeStreaming(websocket, backend_ws, logging_obj)
     streaming.logged_real_time_event_types = "*"
 
-    response_done = json.dumps({
-        "type": "response.done",
-        "event_id": "evt_456",
-        "response": {
-            "output": [
-                {
-                    "type": "message",
-                    "role": "assistant",
-                    "content": [{"type": "text", "text": "Hello!"}]
-                }
-            ]
+    response_done = json.dumps(
+        {
+            "type": "response.done",
+            "event_id": "evt_456",
+            "response": {
+                "output": [
+                    {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [{"type": "text", "text": "Hello!"}],
+                    }
+                ]
+            },
         }
-    })
+    )
     streaming.store_message(response_done)
 
     assert len(streaming.tool_calls) == 0
@@ -365,7 +373,11 @@ async def test_log_messages_includes_tools_in_model_call_details():
         {"type": "function", "name": "get_weather", "description": "Get weather"}
     ]
     streaming.tool_calls = [
-        {"id": "call_1", "type": "function", "function": {"name": "get_weather", "arguments": '{"location": "Paris"}'}}
+        {
+            "id": "call_1",
+            "type": "function",
+            "function": {"name": "get_weather", "arguments": '{"location": "Paris"}'},
+        }
     ]
 
     await streaming.log_messages()
@@ -379,7 +391,8 @@ async def test_realtime_guardrail_blocks_prompt_injection():
     """
     Test that when a transcription event containing prompt injection arrives from the
     backend, a registered guardrail blocks it — sending a warning to the client
-    and NOT sending response.create to the backend.
+    and voicing the guardrail violation message via response.cancel +
+    conversation.item.create + response.create.
     """
     import litellm
     from litellm.integrations.custom_guardrail import CustomGuardrail
@@ -387,7 +400,9 @@ async def test_realtime_guardrail_blocks_prompt_injection():
 
     # Simple guardrail that blocks anything with "system update"
     class PromptInjectionGuardrail(CustomGuardrail):
-        async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+        async def apply_guardrail(
+            self, inputs, request_data, input_type, logging_obj=None
+        ):
             for text in inputs.get("texts", []):
                 if "system update" in text.lower():
                     raise ValueError(
@@ -430,33 +445,46 @@ async def test_realtime_guardrail_blocks_prompt_injection():
     streaming = RealTimeStreaming(client_ws, backend_ws, logging_obj)
     await streaming.backend_to_client_send_messages()
 
-    # ASSERT 1: no response.create was sent to backend (injection blocked).
+    # ASSERT 1: the guardrail blocked the normal auto-response and instead
+    # injected a conversation.item.create + response.create to voice the
+    # violation message.  There should be exactly ONE response.create (the
+    # guardrail-triggered one), preceded by a response.cancel and a
+    # conversation.item.create carrying the violation text.
     sent_to_backend = [
-        json.loads(c.args[0])
-        for c in backend_ws.send.call_args_list
-        if c.args
+        json.loads(c.args[0]) for c in backend_ws.send.call_args_list if c.args
     ]
+    response_cancels = [
+        e for e in sent_to_backend if e.get("type") == "response.cancel"
+    ]
+    assert (
+        len(response_cancels) == 1
+    ), f"Guardrail should send response.cancel, got: {response_cancels}"
+    guardrail_items = [
+        e for e in sent_to_backend if e.get("type") == "conversation.item.create"
+    ]
+    assert len(guardrail_items) == 1, (
+        f"Guardrail should inject a conversation.item.create with violation message, "
+        f"got: {guardrail_items}"
+    )
     response_creates = [
-        e for e in sent_to_backend
-        if e.get("type") == "response.create"
+        e for e in sent_to_backend if e.get("type") == "response.create"
     ]
-    assert len(response_creates) == 0, (
-        f"Guardrail should prevent response.create for injected content, "
-        f"but got: {response_creates}"
+    assert len(response_creates) == 1, (
+        f"Guardrail should send exactly one response.create to voice the violation, "
+        f"got: {response_creates}"
     )
 
     # ASSERT 2: error event was sent directly to the client WebSocket
     sent_to_client = [
-        json.loads(c.args[0]) for c in client_ws.send_text.call_args_list
-        if c.args
+        json.loads(c.args[0]) for c in client_ws.send_text.call_args_list if c.args
     ]
     error_events = [e for e in sent_to_client if e.get("type") == "error"]
-    assert len(error_events) == 1, (
-        f"Expected one error event sent to client, got: {sent_to_client}"
-    )
-    assert error_events[0]["error"]["type"] == "guardrail_violation", (
-        f"Expected guardrail_violation error type, got: {error_events[0]}"
-    )
+    assert (
+        len(error_events) == 1
+    ), f"Expected one error event sent to client, got: {sent_to_client}"
+    assert (
+        error_events[0]["error"]["type"] == "guardrail_violation"
+    ), f"Expected guardrail_violation error type, got: {error_events[0]}"
 
     litellm.callbacks = []  # cleanup
 
@@ -472,7 +500,9 @@ async def test_realtime_guardrail_allows_clean_transcript():
     from litellm.types.guardrails import GuardrailEventHooks
 
     class PromptInjectionGuardrail(CustomGuardrail):
-        async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+        async def apply_guardrail(
+            self, inputs, request_data, input_type, logging_obj=None
+        ):
             for text in inputs.get("texts", []):
                 if "system update" in text.lower():
                     raise ValueError("⚠️ Prompt injection detected.")
@@ -513,16 +543,14 @@ async def test_realtime_guardrail_allows_clean_transcript():
 
     # ASSERT: response.create WAS sent to backend (clean transcript)
     sent_to_backend = [
-        json.loads(c.args[0])
-        for c in backend_ws.send.call_args_list
-        if c.args
+        json.loads(c.args[0]) for c in backend_ws.send.call_args_list if c.args
     ]
     response_creates = [
         e for e in sent_to_backend if e.get("type") == "response.create"
     ]
-    assert len(response_creates) == 1, (
-        f"Clean transcript should trigger response.create, got: {sent_to_backend}"
-    )
+    assert (
+        len(response_creates) == 1
+    ), f"Clean transcript should trigger response.create, got: {sent_to_backend}"
 
     litellm.callbacks = []  # cleanup
 
@@ -541,7 +569,9 @@ async def test_realtime_text_input_guardrail_blocks_and_returns_error():
     from litellm.types.guardrails import GuardrailEventHooks
 
     class BlockingGuardrail(CustomGuardrail):
-        async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+        async def apply_guardrail(
+            self, inputs, request_data, input_type, logging_obj=None
+        ):
             texts = inputs.get("texts", [])
             for text in texts:
                 if "@" in text:
@@ -570,13 +600,17 @@ async def test_realtime_text_input_guardrail_blocks_and_returns_error():
 
     streaming = RealTimeStreaming(client_ws, backend_ws, logging_obj)
 
-    item_create_msg = json.dumps({
-        "type": "conversation.item.create",
-        "item": {
-            "role": "user",
-            "content": [{"type": "input_text", "text": "My email is test@example.com"}],
-        },
-    })
+    item_create_msg = json.dumps(
+        {
+            "type": "conversation.item.create",
+            "item": {
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": "My email is test@example.com"}
+                ],
+            },
+        }
+    )
 
     # Simulate the client sending a conversation.item.create with an email
     client_ws.receive_text = AsyncMock(
@@ -595,15 +629,30 @@ async def test_realtime_text_input_guardrail_blocks_and_returns_error():
     assert len(error_events) == 1, f"Expected one error event, got: {sent_texts}"
     assert error_events[0]["error"]["type"] == "guardrail_violation"
 
-    # ASSERT: blocked item was NOT forwarded to the backend
+    # ASSERT: the original blocked item was NOT forwarded to the backend.
+    # The guardrail handler injects its own conversation.item.create with
+    # the violation message — only that one should be present, not the
+    # original user message.
     sent_to_backend = [c.args[0] for c in backend_ws.send.call_args_list if c.args]
     forwarded_items = [
-        json.loads(m) for m in sent_to_backend
-        if isinstance(m, str) and json.loads(m).get("type") == "conversation.item.create"
+        json.loads(m)
+        for m in sent_to_backend
+        if isinstance(m, str)
+        and json.loads(m).get("type") == "conversation.item.create"
     ]
-    assert len(forwarded_items) == 0, (
-        f"Blocked item should not be forwarded to backend, got: {forwarded_items}"
-    )
+    # Filter out guardrail-injected items (contain "Say exactly the following message")
+    original_items = [
+        item
+        for item in forwarded_items
+        if not any(
+            "Say exactly the following message" in c.get("text", "")
+            for c in item.get("item", {}).get("content", [])
+            if isinstance(c, dict)
+        )
+    ]
+    assert (
+        len(original_items) == 0
+    ), f"Blocked item should not be forwarded to backend, got: {original_items}"
 
     litellm.callbacks = []  # cleanup
 
@@ -619,7 +668,9 @@ async def test_realtime_text_input_guardrail_uses_pre_call_mode():
     from litellm.types.guardrails import GuardrailEventHooks
 
     class DummyGuardrail(CustomGuardrail):
-        async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+        async def apply_guardrail(
+            self, inputs, request_data, input_type, logging_obj=None
+        ):
             return inputs
 
     guardrail = DummyGuardrail(
@@ -634,13 +685,14 @@ async def test_realtime_text_input_guardrail_uses_pre_call_mode():
     logging_obj = MagicMock()
     streaming = RealTimeStreaming(client_ws, backend_ws, logging_obj)
 
-    assert streaming._has_realtime_guardrails() is True, (
-        "pre_call guardrail should be recognized as a realtime guardrail"
-    )
-    # pre_call guardrail should NOT trigger the audio/VAD session.update injection
-    assert streaming._has_audio_transcription_guardrails() is False, (
-        "pre_call guardrail should not trigger audio transcription guardrail path"
-    )
+    assert (
+        streaming._has_realtime_guardrails() is True
+    ), "pre_call guardrail should be recognized as a realtime guardrail"
+    # pre_call guardrail SHOULD trigger the audio/VAD session.update injection so
+    # that the LLM does not auto-respond before the guardrail can check the transcript.
+    assert (
+        streaming._has_audio_transcription_guardrails() is True
+    ), "pre_call guardrail should trigger audio transcription guardrail path"
 
     litellm.callbacks = []  # cleanup
 
@@ -658,7 +710,9 @@ async def test_realtime_session_created_injects_session_update_for_audio_guardra
     from litellm.types.guardrails import GuardrailEventHooks
 
     class AudioGuardrail(CustomGuardrail):
-        async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+        async def apply_guardrail(
+            self, inputs, request_data, input_type, logging_obj=None
+        ):
             return inputs
 
     guardrail = AudioGuardrail(
@@ -692,36 +746,41 @@ async def test_realtime_session_created_injects_session_update_for_audio_guardra
     sent_to_client = [
         json.loads(c.args[0]) for c in client_ws.send_text.call_args_list if c.args
     ]
-    session_created_events = [e for e in sent_to_client if e.get("type") == "session.created"]
-    assert len(session_created_events) == 1, (
-        f"session.created should be forwarded to client, got: {sent_to_client}"
-    )
+    session_created_events = [
+        e for e in sent_to_client if e.get("type") == "session.created"
+    ]
+    assert (
+        len(session_created_events) == 1
+    ), f"session.created should be forwarded to client, got: {sent_to_client}"
 
     # session.update must be sent to the backend AFTER session.created was forwarded
     sent_to_backend = [
         json.loads(c.args[0]) for c in backend_ws.send.call_args_list if c.args
     ]
     session_updates = [e for e in sent_to_backend if e.get("type") == "session.update"]
-    assert len(session_updates) == 1, (
-        f"Expected one session.update injected to backend, got: {sent_to_backend}"
-    )
+    assert (
+        len(session_updates) == 1
+    ), f"Expected one session.update injected to backend, got: {sent_to_backend}"
     assert session_updates[0]["session"]["turn_detection"]["create_response"] is False
 
     litellm.callbacks = []  # cleanup
 
 
 @pytest.mark.asyncio
-async def test_realtime_session_created_no_injection_for_pre_call_only():
+async def test_realtime_session_created_injects_session_update_for_pre_call_guardrail():
     """
-    Test that when only a pre_call guardrail is configured (no audio transcription),
-    session.created does NOT trigger the session.update injection.
+    Test that when a pre_call guardrail is configured, session.created triggers the
+    session.update injection (create_response: false) so the LLM does not auto-respond
+    before the guardrail can check the voice transcript.
     """
     import litellm
     from litellm.integrations.custom_guardrail import CustomGuardrail
     from litellm.types.guardrails import GuardrailEventHooks
 
     class PreCallGuardrail(CustomGuardrail):
-        async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+        async def apply_guardrail(
+            self, inputs, request_data, input_type, logging_obj=None
+        ):
             return inputs
 
     guardrail = PreCallGuardrail(
@@ -751,14 +810,15 @@ async def test_realtime_session_created_no_injection_for_pre_call_only():
     streaming = RealTimeStreaming(client_ws, backend_ws, logging_obj)
     await streaming.backend_to_client_send_messages()
 
-    # No session.update should be injected
+    # session.update SHOULD be injected so the LLM waits for guardrail approval
     sent_to_backend = [
         json.loads(c.args[0]) for c in backend_ws.send.call_args_list if c.args
     ]
     session_updates = [e for e in sent_to_backend if e.get("type") == "session.update"]
-    assert len(session_updates) == 0, (
-        f"pre_call guardrail should NOT inject session.update, got: {sent_to_backend}"
-    )
+    assert (
+        len(session_updates) == 1
+    ), f"pre_call guardrail should inject session.update to gate audio responses, got: {sent_to_backend}"
+    assert session_updates[0]["session"]["turn_detection"]["create_response"] is False
 
     litellm.callbacks = []  # cleanup
 
@@ -771,7 +831,9 @@ async def test_end_session_after_n_fails_closes_connection():
     """
 
     class BadWordGuardrail(CustomGuardrail):
-        async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+        async def apply_guardrail(
+            self, inputs, request_data, input_type, logging_obj=None
+        ):
             for text in inputs.get("texts", []):
                 if "blocked" in text.lower():
                     raise ValueError("Content blocked by guardrail.")
@@ -791,8 +853,8 @@ async def test_end_session_after_n_fails_closes_connection():
     backend_ws = MagicMock()
     backend_ws.recv = AsyncMock(
         side_effect=[
-            _make_transcript_event("this is blocked"),    # violation 1 — warn
-            _make_transcript_event("also blocked again"), # violation 2 — end session
+            _make_transcript_event("this is blocked"),  # violation 1 — warn
+            _make_transcript_event("also blocked again"),  # violation 2 — end session
             ConnectionClosed(None, None),
         ]
     )
@@ -805,7 +867,9 @@ async def test_end_session_after_n_fails_closes_connection():
     streaming = RealTimeStreaming(client_ws, backend_ws, logging_obj)
     await streaming.backend_to_client_send_messages()
 
-    assert backend_ws.close.called, "Expected backend_ws.close() to be called after 2 violations"
+    assert (
+        backend_ws.close.called
+    ), "Expected backend_ws.close() to be called after 2 violations"
     assert streaming._violation_count == 2
 
     litellm.callbacks = []  # cleanup
@@ -819,7 +883,9 @@ async def test_on_violation_end_session_closes_on_first_fail():
     """
 
     class TopicGuardrail(CustomGuardrail):
-        async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+        async def apply_guardrail(
+            self, inputs, request_data, input_type, logging_obj=None
+        ):
             for text in inputs.get("texts", []):
                 if "stock" in text.lower():
                     raise ValueError("Topic not allowed: financial advice.")
@@ -852,7 +918,9 @@ async def test_on_violation_end_session_closes_on_first_fail():
     streaming = RealTimeStreaming(client_ws, backend_ws, logging_obj)
     await streaming.backend_to_client_send_messages()
 
-    assert backend_ws.close.called, "Expected session to close immediately with on_violation=end_session"
+    assert (
+        backend_ws.close.called
+    ), "Expected session to close immediately with on_violation=end_session"
     assert streaming._violation_count == 1
 
     litellm.callbacks = []  # cleanup

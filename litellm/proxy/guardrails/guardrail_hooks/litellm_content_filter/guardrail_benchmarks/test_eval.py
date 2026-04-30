@@ -18,6 +18,7 @@ Run a specific eval:
 
 import json
 import os
+import re
 import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List
@@ -105,7 +106,25 @@ def _print_confusion_report(label: str, metrics: dict, wrong: list) -> None:
 def _save_confusion_results(label: str, metrics: dict, wrong: list, rows: list) -> dict:
     """Save confusion matrix results to a JSON file and return the result dict."""
     os.makedirs(RESULTS_DIR, exist_ok=True)
-    safe_label = label.lower().replace(" ", "_").replace("—", "-")
+    # Build a short, filesystem-safe filename from the label.
+    # Full label is preserved inside the JSON; filename just needs to be
+    # unique and recognisable.  Format: {topic}_{method_abbrev}.json
+    parts = label.split("\u2014")
+    topic = parts[0].strip().lower().replace("block ", "").replace(" ", "_")
+    method_full = parts[1].strip() if len(parts) > 1 else ""
+    method_name = re.sub(r"\s*\(.*?\)", "", method_full).strip().lower()
+    qualifier_match = re.search(r"\(([^)]+)\)", method_full)
+    qualifier = qualifier_match.group(1) if qualifier_match else ""
+    qualifier = re.sub(r"\.[a-z]+$", "", qualifier)  # drop .yaml etc.
+    if method_name == "contentfilter":
+        safe_label = f"{topic}_cf"
+    elif qualifier:
+        safe_label = f"{topic}_{method_name}_{qualifier}"
+    else:
+        safe_label = f"{topic}_{method_name}"
+    safe_label = safe_label.replace(" ", "_")
+    safe_label = re.sub(r"[^a-z0-9_.\-]", "", safe_label)
+    safe_label = re.sub(r"_+", "_", safe_label).strip("_")
     result = {
         "label": label,
         "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -180,9 +199,7 @@ def _confusion_matrix(checker, cases: List[dict], label: str):
     precision = tp / (tp + fp) if (tp + fp) > 0 else 0
     recall = tp / (tp + fn) if (tp + fn) > 0 else 0
     f1 = (
-        2 * precision * recall / (precision + recall)
-        if (precision + recall) > 0
-        else 0
+        2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0
     )
     accuracy = (tp + tn) / total if total > 0 else 0
 
@@ -193,9 +210,18 @@ def _confusion_matrix(checker, cases: List[dict], label: str):
     avg_lat = sum(latencies) / len(latencies) if latencies else 0
 
     metrics = {
-        "total": total, "tp": tp, "tn": tn, "fp": fp, "fn": fn,
-        "precision": precision, "recall": recall, "f1": f1, "accuracy": accuracy,
-        "p50": p50, "p95": p95, "avg_lat": avg_lat,
+        "total": total,
+        "tp": tp,
+        "tn": tn,
+        "fp": fp,
+        "fn": fn,
+        "precision": precision,
+        "recall": recall,
+        "f1": f1,
+        "accuracy": accuracy,
+        "p50": p50,
+        "p95": p95,
+        "avg_lat": avg_lat,
     }
     _print_confusion_report(label, metrics, wrong)
     result = _save_confusion_results(label, metrics, wrong, rows)
@@ -567,4 +593,6 @@ class TestInvestmentLlmJudgeClaude:
         return _load_jsonl("block_investment.jsonl")
 
     def test_confusion_matrix(self, blocker, cases):
-        _confusion_matrix(blocker, cases, "Block Investment — LLM Judge (claude-haiku-4.5)")
+        _confusion_matrix(
+            blocker, cases, "Block Investment — LLM Judge (claude-haiku-4.5)"
+        )

@@ -6,7 +6,7 @@ model_list:
 
   - model_name: bedrock-claude-sonnet-3.5
     litellm_params:
-      model: "bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0"
+      model: "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0"
       aws_region_name: "us-east-1"
 
   - model_name: bedrock-claude-sonnet-4
@@ -24,9 +24,9 @@ model_list:
       model: "bedrock/us.anthropic.claude-opus-4-5-20251101-v1:0"
       aws_region_name: "us-east-1"
 
-  - model_name: bedrock-nova-premier
+  - model_name: bedrock-nova-pro
     litellm_params:
-      model: "bedrock/us.amazon.nova-premier-v1:0"
+      model: "bedrock/us.amazon.nova-pro-v1:0"
       aws_region_name: "us-east-1"
 
   # Converse API models
@@ -54,3 +54,4 @@ general_settings:
 
 litellm_settings:
   drop_params: true
+  modify_params: true

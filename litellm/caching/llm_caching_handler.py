@@ -8,24 +8,16 @@ from .in_memory_cache import InMemoryCache
 
 
 class LLMClientCache(InMemoryCache):
-    def _remove_key(self, key: str) -> None:
-        """Close async clients before evicting them to prevent connection pool leaks."""
-        value = self.cache_dict.get(key)
-        super()._remove_key(key)
-        if value is not None:
-            close_fn = getattr(value, "aclose", None) or getattr(
-                value, "close", None
-            )
-            if close_fn and asyncio.iscoroutinefunction(close_fn):
-                try:
-                    asyncio.get_running_loop().create_task(close_fn())
-                except RuntimeError:
-                    pass
-            elif close_fn and callable(close_fn):
-                try:
-                    close_fn()
-                except Exception:
-                    pass
+    """Cache for LLM HTTP clients (OpenAI, Azure, httpx, etc.).
+
+    IMPORTANT: This cache intentionally does NOT close clients on eviction.
+    Evicted clients may still be in use by in-flight requests. Closing them
+    eagerly causes ``RuntimeError: Cannot send a request, as the client has
+    been closed.`` errors in production after the TTL (1 hour) expires.
+
+    Clients that are no longer referenced will be garbage-collected normally.
+    For explicit shutdown cleanup, use ``close_litellm_async_clients()``.
+    """
 
     def update_cache_key_with_event_loop(self, key):
         """

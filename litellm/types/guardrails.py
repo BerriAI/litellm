@@ -17,14 +17,26 @@ from litellm.types.proxy.guardrails.guardrail_hooks.grayswan import (
 from litellm.types.proxy.guardrails.guardrail_hooks.ibm import (
     IBMGuardrailsBaseConfigModel,
 )
+from litellm.types.proxy.guardrails.guardrail_hooks.akto import (
+    AktoConfigModel,
+)
 from litellm.types.proxy.guardrails.guardrail_hooks.litellm_content_filter import (
     ContentFilterCategoryConfig,
+)
+from litellm.types.proxy.guardrails.guardrail_hooks.promptguard import (
+    PromptGuardConfigModel,
+)
+from litellm.types.proxy.guardrails.guardrail_hooks.xecguard import (
+    XecGuardConfigModel,
 )
 from litellm.types.proxy.guardrails.guardrail_hooks.qualifire import (
     QualifireGuardrailConfigModel,
 )
 from litellm.types.proxy.guardrails.guardrail_hooks.tool_permission import (
     ToolPermissionGuardrailConfigModel,
+)
+from litellm.types.proxy.guardrails.guardrail_hooks.hiddenlayer import (
+    HiddenlayerGuardrailConfigModel,
 )
 
 """
@@ -33,7 +45,7 @@ Pydantic object defining how to set guardrails on litellm proxy
 guardrails:
   - guardrail_name: "bedrock-pre-guard"
     litellm_params:
-      guardrail: bedrock  # supported values: "aporia", "bedrock", "lakera", "zscaler_ai_guard"
+      guardrail: bedrock  # supported values: "akto", "aporia", "bedrock", "lakera", "zscaler_ai_guard"
       mode: "during_call"
       guardrailIdentifier: ff6ujrregl1q
       guardrailVersion: "DRAFT"
@@ -44,6 +56,7 @@ guardrails:
 class SupportedGuardrailIntegrations(Enum):
     APORIA = "aporia"
     BEDROCK = "bedrock"
+    DYNAMOAI = "dynamoai"
     GUARDRAILS_AI = "guardrails_ai"
     LAKERA = "lakera"
     LAKERA_V2 = "lakera_v2"
@@ -52,6 +65,7 @@ class SupportedGuardrailIntegrations(Enum):
     HIDDENLAYER = "hiddenlayer"
     AIM = "aim"
     PANGEA = "pangea"
+    CROWDSTRIKE_AIDR = "crowdstrike_aidr"
     LASSO = "lasso"
     PILLAR = "pillar"
     GRAYSWAN = "grayswan"
@@ -70,6 +84,8 @@ class SupportedGuardrailIntegrations(Enum):
     LITELLM_CONTENT_FILTER = "litellm_content_filter"
     MCP_SECURITY = "mcp_security"
     ONYX = "onyx"
+    PROMPTGUARD = "promptguard"
+    XECGUARD = "xecguard"
     PROMPT_SECURITY = "prompt_security"
     GENERIC_GUARDRAIL_API = "generic_guardrail_api"
     QUALIFIRE = "qualifire"
@@ -77,6 +93,9 @@ class SupportedGuardrailIntegrations(Enum):
     SEMANTIC_GUARD = "semantic_guard"
     MCP_END_USER_PERMISSION = "mcp_end_user_permission"
     BLOCK_CODE_EXECUTION = "block_code_execution"
+    AKTO = "akto"
+    MCP_JWT_SIGNER = "mcp_jwt_signer"
+    LLM_AS_A_JUDGE = "llm_as_a_judge"
 
 
 class Role(Enum):
@@ -600,6 +619,16 @@ class BaseLitellmParams(
         description="When True, guardrails only receive the latest message for the relevant role (e.g., newest user input pre-call, newest assistant output post-call)",
     )
 
+    skip_system_message_in_guardrail: Optional[bool] = Field(
+        default=None,
+        description=(
+            "When True, unified guardrails skip system-role messages when building "
+            "evaluation inputs (texts and structured_messages). When False, system "
+            "messages are included even if litellm_settings sets a global skip. When "
+            "None, use the global litellm.skip_system_message_in_guardrail setting."
+        ),
+    )
+
     # Lakera specific params
     category_thresholds: Optional[LakeraCategoryThresholds] = Field(
         default=None,
@@ -697,6 +726,15 @@ class BaseLitellmParams(
         ),
     )
 
+    extra_headers: Optional[List[str]] = Field(
+        default=None,
+        description=(
+            "Header names to forward from the client request to the guardrail (e.g. x-request-id). "
+            "Only these headers' values are sent; others may be omitted or sent as [present]. "
+            "Used by generic_guardrail_api (similar to MCP extra_headers)."
+        ),
+    )
+
     # Custom code guardrail params
     custom_code: Optional[str] = Field(
         default=None,
@@ -707,8 +745,10 @@ class BaseLitellmParams(
 
 
 class Mode(BaseModel):
-    tags: Dict[str, str] = Field(description="Tags for the guardrail mode")
-    default: Optional[str] = Field(
+    tags: Dict[str, Union[str, List[str]]] = Field(
+        description="Tags for the guardrail mode"
+    )
+    default: Optional[Union[str, List[str]]] = Field(
         default=None, description="Default mode when no tags match"
     )
 
@@ -721,14 +761,18 @@ class LitellmParams(
     PillarGuardrailConfigModel,
     GraySwanGuardrailConfigModel,
     NomaGuardrailConfigModel,
+    PromptGuardConfigModel,
+    XecGuardConfigModel,
     ToolPermissionGuardrailConfigModel,
     ZscalerAIGuardConfigModel,
+    AktoConfigModel,
     JavelinGuardrailConfigModel,
     BaseLitellmParams,
     EnkryptAIGuardrailConfigs,
     IBMGuardrailsBaseConfigModel,
     QualifireGuardrailConfigModel,
     BlockCodeExecutionGuardrailConfigModel,
+    HiddenlayerGuardrailConfigModel,
 ):
     guardrail: str = Field(description="The type of guardrail integration to use")
     mode: Union[str, List[str], Mode] = Field(
@@ -848,6 +892,8 @@ class ApplyGuardrailRequest(BaseModel):
     text: str
     language: Optional[str] = None
     entities: Optional[List[PiiEntityType]] = None
+    input_type: str = "request"
+    messages: Optional[List[Dict[str, Any]]] = None
 
 
 class ApplyGuardrailResponse(BaseModel):

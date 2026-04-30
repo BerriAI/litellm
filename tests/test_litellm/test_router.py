@@ -5,7 +5,6 @@ import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from fastapi.testclient import TestClient
 
 sys.path.insert(
     0, os.path.abspath("../../..")
@@ -13,7 +12,6 @@ sys.path.insert(
 
 
 import litellm
-from litellm.router_utils.fallback_event_handlers import run_async_fallback
 
 
 def test_update_kwargs_does_not_mutate_defaults_and_merges_metadata():
@@ -24,9 +22,9 @@ def test_update_kwargs_does_not_mutate_defaults_and_merges_metadata():
                 "model_name": "gpt-3.5-turbo",
                 "litellm_params": {
                     "model": "azure/gpt-4.1-mini",
-                    "api_key": os.getenv("AZURE_API_KEY"),
+                    "api_key": os.getenv("AZURE_AI_API_KEY"),
                     "api_version": os.getenv("AZURE_API_VERSION"),
-                    "api_base": os.getenv("AZURE_API_BASE"),
+                    "api_base": os.getenv("AZURE_AI_API_BASE"),
                 },
             }
         ],
@@ -127,7 +125,7 @@ async def test_async_router_acreate_file():
     """
     Write to all deployments of a model
     """
-    from unittest.mock import MagicMock, call, patch
+    from unittest.mock import MagicMock, patch
 
     router = litellm.Router(
         model_list=[
@@ -237,6 +235,81 @@ async def test_async_router_acreate_file_with_jsonl():
 
         # Verify the non-JSONL content was not modified
         assert first_call_content == non_jsonl_content
+
+
+@pytest.mark.asyncio
+async def test_async_router_acreate_file_uses_deployment_custom_llm_provider():
+    """
+    Ensure file routing preserves deployment custom_llm_provider instead of
+    inferring provider from model string alone.
+    """
+    from unittest.mock import MagicMock, patch
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "team-azure-batch",
+                "litellm_params": {
+                    "model": "gpt-4.1-mini",
+                    "custom_llm_provider": "azure",
+                    "api_base": "https://example-resource.openai.azure.com",
+                },
+            },
+        ],
+    )
+
+    with patch("litellm.acreate_file", return_value=MagicMock()) as mock_acreate_file:
+        await router.acreate_file(
+            model="team-azure-batch",
+            purpose="batch",
+            file=MagicMock(),
+        )
+
+        assert mock_acreate_file.call_count == 1
+        assert mock_acreate_file.call_args.kwargs["custom_llm_provider"] == "azure"
+
+
+@pytest.mark.asyncio
+async def test_async_router_afile_content_uses_deployment_custom_llm_provider():
+    """
+    Regression test: Ensure afile_content preserves deployment custom_llm_provider
+    when model name lacks provider prefix (e.g., "gpt-4.1-mini" instead of "azure/gpt-4.1-mini").
+
+    This prevents "None is not a valid LlmProviders" errors when calling file content operations.
+    """
+    from unittest.mock import AsyncMock, MagicMock, patch
+    from litellm.types.llms.openai import HttpxBinaryResponseContent
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "team-azure-batch",
+                "litellm_params": {
+                    "model": "gpt-4.1-mini",  # No provider prefix
+                    "custom_llm_provider": "azure",
+                    "api_base": "https://example-resource.openai.azure.com",
+                    "api_key": "test-key",
+                },
+            },
+        ],
+    )
+
+    # Mock the Azure file handler's afile_content method
+    mock_response = MagicMock(spec=HttpxBinaryResponseContent)
+    mock_response.response = MagicMock()
+
+    with patch(
+        "litellm.llms.azure.files.handler.AzureOpenAIFilesAPI.afile_content",
+        return_value=mock_response,
+    ) as mock_afile_content:
+        result = await router.afile_content(
+            model="team-azure-batch",
+            file_id="file-123",
+        )
+
+        # Verify the call was made (proves custom_llm_provider was correctly passed)
+        assert mock_afile_content.call_count == 1
+        assert result == mock_response
 
 
 @pytest.mark.asyncio
@@ -643,7 +716,20 @@ def test_arouter_responses_api_bridge():
     ## CONFIRM MODEL NAME IS STRIPPED
     client = HTTPHandler()
 
-    with patch.object(client, "post", return_value=MagicMock()) as mock_post:
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.headers = {"content-type": "application/json"}
+    mock_response.json.return_value = {
+        "id": "resp_test",
+        "object": "response",
+        "status": "completed",
+        "output": [],
+    }
+    mock_response.text = (
+        '{"id": "resp_test", "object": "response", "status": "completed", "output": []}'
+    )
+
+    with patch.object(client, "post", return_value=mock_response) as mock_post:
         try:
             result = router.completion(
                 model="[IP-approved] o3-pro",
@@ -679,7 +765,7 @@ async def test_router_v1_messages_fallbacks():
             {
                 "model_name": "bedrock-claude",
                 "litellm_params": {
-                    "model": "anthropic.claude-3-5-sonnet-20240620-v1:0",
+                    "model": "anthropic.claude-haiku-4-5-20251001-v1:0",
                     "mock_response": "Hello, world I am a fallback!",
                 },
             },
@@ -734,7 +820,7 @@ async def test_router_ageneric_api_call_with_fallbacks_helper():
     """
     Test the _ageneric_api_call_with_fallbacks_helper method with various scenarios
     """
-    from unittest.mock import AsyncMock, MagicMock, patch
+    from unittest.mock import patch
 
     router = litellm.Router(
         model_list=[
@@ -992,6 +1078,69 @@ def test_cached_get_model_group_info():
     assert result5 is result6
 
 
+def test_model_group_info_cost_from_db_model_info():
+    """
+    When get_deployment_model_info fails (model_info is None fallback),
+    input_cost_per_token and output_cost_per_token should be read from db model_info.
+    """
+    from unittest.mock import patch
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "my-custom-model",
+                "litellm_params": {
+                    "model": "openai/my-custom-model",
+                    "api_key": "fake",
+                    "api_base": "https://my-custom-endpoint.com",
+                },
+                "model_info": {
+                    "input_cost_per_token": 0.0001,
+                    "output_cost_per_token": 0.0002,
+                },
+            },
+        ]
+    )
+
+    with patch.object(
+        router, "get_deployment_model_info", side_effect=Exception("not found")
+    ):
+        result = router._cached_get_model_group_info("my-custom-model")
+        assert result is not None
+        assert result.input_cost_per_token == 0.0001
+        assert result.output_cost_per_token == 0.0002
+
+
+def test_model_group_info_cost_none_when_db_model_info_has_no_cost():
+    """
+    When get_deployment_model_info fails and db model_info has no cost fields,
+    input/output_cost_per_token should be None.
+    """
+    from unittest.mock import patch
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "my-custom-model-no-cost",
+                "litellm_params": {
+                    "model": "openai/my-custom-model-no-cost",
+                    "api_key": "fake",
+                    "api_base": "https://my-custom-endpoint.com",
+                },
+                "model_info": {},
+            },
+        ]
+    )
+
+    with patch.object(
+        router, "get_deployment_model_info", side_effect=Exception("not found")
+    ):
+        result = router._cached_get_model_group_info("my-custom-model-no-cost")
+        assert result is not None
+        assert result.input_cost_per_token is None
+        assert result.output_cost_per_token is None
+
+
 def test_get_model_access_groups_caching():
     """
     Test that get_model_access_groups caches the no-args result
@@ -1121,10 +1270,9 @@ def test_get_model_access_groups_cache_invalidation_upsert_deployment():
 @pytest.mark.asyncio
 async def test_acompletion_streaming_iterator():
     """Test _acompletion_streaming_iterator for normal streaming and fallback behavior."""
-    from unittest.mock import AsyncMock, MagicMock
+    from unittest.mock import MagicMock
 
     from litellm.exceptions import MidStreamFallbackError
-    from litellm.types.utils import ModelResponseStream
 
     # Helper class for creating async iterators
     class AsyncIterator:
@@ -1357,8 +1505,9 @@ async def test_acompletion_streaming_iterator_edge_cases():
         fallback_kwargs = mock_fallback_utils.call_args.kwargs["kwargs"]
         modified_messages = fallback_kwargs["messages"]
 
-        # Should have assistant message with empty content
-        assert modified_messages[2]["content"] == ""
+        # Empty content → pre-first-chunk path uses original messages
+        # (no continuation prompt added)
+        assert modified_messages == messages
         print("✓ Handles empty generated content correctly")
 
     print("✓ Edge case tests passed!")
@@ -1417,6 +1566,179 @@ async def test_acompletion_streaming_iterator_preserves_hidden_params():
     )
     assert result._hidden_params.get("litellm_call_id") == "test-call-id"
     assert result._hidden_params.get("_response_ms") == 500.0
+
+
+def test_completion_streaming_iterator_fallback_on_429():
+    """Sync streaming: MidStreamFallbackError (429 pre-first-chunk) triggers fallback.
+
+    This is the sync counterpart of test_acompletion_streaming_iterator.
+    Before this fix, __next__ raised RateLimitError directly and the Router
+    never got a chance to fall back.
+    """
+    from unittest.mock import MagicMock
+
+    from litellm.exceptions import MidStreamFallbackError
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "gpt-4", "api_key": "fake-key"},
+            }
+        ],
+    )
+
+    messages = [{"role": "user", "content": "Test"}]
+    initial_kwargs = {"model": "gpt-4", "stream": True}
+
+    rate_limit_error = MidStreamFallbackError(
+        message="Resource exhausted",
+        model="gpt-4",
+        llm_provider="vertex_ai",
+        generated_content="",
+        is_pre_first_chunk=True,
+    )
+
+    class SyncIteratorImmediateError:
+        def __init__(self):
+            self.model = "gpt-4"
+            self.custom_llm_provider = "openai"
+            self.logging_obj = MagicMock()
+            self.chunks = []
+
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            raise rate_limit_error
+
+    mock_response = SyncIteratorImmediateError()
+
+    # Fallback returns a simple non-streaming response (fallback may not stream)
+    mock_fallback_response = MagicMock()
+    mock_fallback_response.__iter__ = MagicMock(return_value=iter([]))
+
+    with patch.object(
+        router,
+        "function_with_fallbacks",
+        return_value=mock_fallback_response,
+    ) as mock_fallback:
+        result = router._completion_streaming_iterator(
+            model_response=mock_response,
+            messages=messages,
+            initial_kwargs=initial_kwargs,
+        )
+
+        collected_chunks = list(result)
+
+        assert mock_fallback.called
+        call_kwargs = mock_fallback.call_args
+        # Pre-first-chunk: should use original messages, no continuation prompt
+        assert call_kwargs.kwargs.get("messages") == messages
+        # Verify original_function is _completion (sync)
+        assert call_kwargs.kwargs.get("original_function") == router._completion
+
+
+def test_completion_streaming_iterator_preserves_hidden_params():
+    """SyncFallbackStreamWrapper must copy _hidden_params from original response."""
+    from unittest.mock import MagicMock
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "gpt-4", "api_key": "fake-key"},
+            }
+        ],
+    )
+
+    mock_response = MagicMock()
+    mock_response.model = "gpt-4"
+    mock_response.custom_llm_provider = "openai"
+    mock_response.logging_obj = MagicMock()
+    mock_response._hidden_params = {
+        "litellm_overhead_time_ms": 42.0,
+        "litellm_call_id": "test-sync-call",
+    }
+    mock_response.__iter__ = MagicMock(return_value=iter([]))
+
+    result = router._completion_streaming_iterator(
+        model_response=mock_response,
+        messages=[{"role": "user", "content": "hi"}],
+        initial_kwargs={"model": "gpt-4", "stream": True},
+    )
+
+    assert hasattr(result, "_hidden_params")
+    assert result._hidden_params.get("litellm_overhead_time_ms") == 42.0
+    assert result._hidden_params.get("litellm_call_id") == "test-sync-call"
+
+
+@pytest.mark.asyncio
+async def test_acompletion_streaming_iterator_pre_first_chunk_skips_continuation():
+    """When MidStreamFallbackError has is_pre_first_chunk=True, use original messages."""
+    from unittest.mock import MagicMock
+
+    from litellm.exceptions import MidStreamFallbackError
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "gpt-4", "api_key": "fake-key"},
+            }
+        ],
+    )
+
+    messages = [{"role": "user", "content": "Hello"}]
+    initial_kwargs = {"model": "gpt-4", "stream": True}
+
+    pre_first_chunk_error = MidStreamFallbackError(
+        message="429 Resource exhausted",
+        model="gpt-4",
+        llm_provider="vertex_ai",
+        generated_content="",
+        is_pre_first_chunk=True,
+    )
+
+    class AsyncIteratorPreFirstChunkError:
+        def __init__(self):
+            self.model = "gpt-4"
+            self.custom_llm_provider = "openai"
+            self.logging_obj = MagicMock()
+            self.chunks = []
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            raise pre_first_chunk_error
+
+    mock_response = AsyncIteratorPreFirstChunkError()
+
+    class EmptyAsyncIterator:
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            raise StopAsyncIteration
+
+    with patch.object(
+        router,
+        "async_function_with_fallbacks_common_utils",
+        return_value=EmptyAsyncIterator(),
+    ) as mock_fallback_utils:
+        iterator = await router._acompletion_streaming_iterator(
+            model_response=mock_response,
+            messages=messages,
+            initial_kwargs=initial_kwargs,
+        )
+        async for _ in iterator:
+            pass
+
+        assert mock_fallback_utils.called
+        fallback_kwargs = mock_fallback_utils.call_args.kwargs["kwargs"]
+        # Pre-first-chunk: should use original messages, no continuation prompt
+        assert fallback_kwargs["messages"] == messages
 
 
 @pytest.mark.asyncio
@@ -1805,7 +2127,7 @@ def test_add_deployment_model_to_endpoint_for_llm_passthrough_route():
             {
                 "model_name": "special-bedrock-model",
                 "litellm_params": {
-                    "model": "bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0",
+                    "model": "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
                 },
             }
         ],
@@ -1819,12 +2141,12 @@ def test_add_deployment_model_to_endpoint_for_llm_passthrough_route():
     result = router._add_deployment_model_to_endpoint_for_llm_passthrough_route(
         kwargs=kwargs,
         model="special-bedrock-model",
-        model_name="bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0",
+        model_name="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
     )
     assert (
         result["endpoint"]
-        == "/model/us.anthropic.claude-3-5-sonnet-20240620-v1:0/invoke"
-    ), f"Expected '/model/us.anthropic.claude-3-5-sonnet-20240620-v1:0/invoke', got '{result['endpoint']}'"
+        == "/model/us.anthropic.claude-haiku-4-5-20251001-v1:0/invoke"
+    ), f"Expected '/model/us.anthropic.claude-haiku-4-5-20251001-v1:0/invoke', got '{result['endpoint']}'"
 
     # Test Case 2: Bedrock invoke-with-response-stream endpoint
     kwargs = {
@@ -1834,11 +2156,11 @@ def test_add_deployment_model_to_endpoint_for_llm_passthrough_route():
     result = router._add_deployment_model_to_endpoint_for_llm_passthrough_route(
         kwargs=kwargs,
         model="special-bedrock-model",
-        model_name="bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0",
+        model_name="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
     )
     assert (
         result["endpoint"]
-        == "/model/us.anthropic.claude-3-5-sonnet-20240620-v1:0/invoke-with-response-stream"
+        == "/model/us.anthropic.claude-haiku-4-5-20251001-v1:0/invoke-with-response-stream"
     ), f"Expected streaming endpoint with stripped prefix, got '{result['endpoint']}'"
 
     # Test Case 3: Bedrock converse endpoint
@@ -1952,7 +2274,7 @@ def test_get_deployment_credentials_with_provider_aws_bedrock_runtime_endpoint()
             {
                 "model_name": "bedrock-claude-model",
                 "litellm_params": {
-                    "model": "bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0",
+                    "model": "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
                     "aws_access_key_id": "test-access-key",
                     "aws_secret_access_key": "test-secret-key",
                     "aws_region_name": "us-east-1",
@@ -1967,7 +2289,10 @@ def test_get_deployment_credentials_with_provider_aws_bedrock_runtime_endpoint()
     )
 
     assert credentials is not None
-    assert credentials["aws_bedrock_runtime_endpoint"] == "https://bedrock-runtime.us-east-1.amazonaws.com"
+    assert (
+        credentials["aws_bedrock_runtime_endpoint"]
+        == "https://bedrock-runtime.us-east-1.amazonaws.com"
+    )
     assert credentials["aws_access_key_id"] == "test-access-key"
     assert credentials["aws_secret_access_key"] == "test-secret-key"
     assert credentials["aws_region_name"] == "us-east-1"
@@ -1989,11 +2314,11 @@ def test_get_deployment_credentials_with_provider_resolves_credential_name():
             credential_values={
                 "api_key": "resolved-api-key",
                 "api_base": "https://resolved.openai.azure.com",
-                "api_version": "2024-02-01"
-            }
+                "api_version": "2024-02-01",
+            },
         )
     ]
-    
+
     router = litellm.Router(
         model_list=[
             {
@@ -2017,7 +2342,7 @@ def test_get_deployment_credentials_with_provider_resolves_credential_name():
     assert credentials["custom_llm_provider"] == "azure"
     # Ensure credential name is removed after resolution
     assert "litellm_credential_name" not in credentials
-    
+
     # Cleanup
     litellm.credential_list = []
 
@@ -2122,7 +2447,10 @@ async def test_aguardrail_helper():
 
     # Mock the original function
     async def mock_original_function(**kwargs):
-        return {"result": "success", "selected_guardrail": kwargs.get("selected_guardrail")}
+        return {
+            "result": "success",
+            "selected_guardrail": kwargs.get("selected_guardrail"),
+        }
 
     result = await router._aguardrail_helper(
         model="content-filter",
@@ -2156,7 +2484,10 @@ async def test_aguardrail():
 
     # Mock the original function
     async def mock_original_function(**kwargs):
-        return {"result": "success", "selected_guardrail": kwargs.get("selected_guardrail")}
+        return {
+            "result": "success",
+            "selected_guardrail": kwargs.get("selected_guardrail"),
+        }
 
     result = await router.aguardrail(
         guardrail_name="content-filter",
@@ -2165,6 +2496,7 @@ async def test_aguardrail():
 
     assert result["result"] == "success"
     assert result["selected_guardrail"]["id"] == "guardrail-1"
+
 
 @pytest.mark.asyncio
 async def test_anthropic_messages_call_type_is_cached():
@@ -2237,36 +2569,33 @@ async def test_anthropic_messages_call_type_is_cached():
                 additional_headers=None,
             ),
         )
-    
+
     cache = DualCache()
     deployment_check = PromptCachingDeploymentCheck(cache=cache)
     prompt_cache = PromptCachingCache(cache=cache)
-    
+
     # Create messages with enough tokens to pass the caching threshold
     test_messages = [
         {
-            "role": "user", 
+            "role": "user",
             "content": [
                 {
-                    "type": "text", 
+                    "type": "text",
                     "text": "test long message here" * 1024,
-                    "cache_control": {
-                        "type": "ephemeral",
-                        "ttl": "5m"
-                    }
+                    "cache_control": {"type": "ephemeral", "ttl": "5m"},
                 }
-            ]
+            ],
         }
     ]
     test_model_id = "test-model-id-123"
-    
+
     # Create a payload with anthropic_messages call type
     payload = create_standard_logging_payload()
     payload["call_type"] = CallTypes.anthropic_messages.value
     payload["messages"] = test_messages
     payload["model"] = "anthropic/claude-3-5-sonnet-20240620"
     payload["model_id"] = test_model_id
-    
+
     # Log the success event (should cache the model_id)
     await deployment_check.async_log_success_event(
         kwargs={"standard_logging_object": payload},
@@ -2274,19 +2603,23 @@ async def test_anthropic_messages_call_type_is_cached():
         start_time=1234567890.0,
         end_time=1234567891.0,
     )
-    
+
     # Small delay to ensure cache write completes
     await asyncio.sleep(0.1)
-    
+
     # Verify that the model_id was actually cached
     cached_result = await prompt_cache.async_get_model_id(
         messages=test_messages,
         tools=None,
     )
-    
+
     # This assertion will FAIL if anthropic_messages is filtered out
-    assert cached_result is not None, "Model ID should be cached for anthropic_messages call type"
-    assert cached_result["model_id"] == test_model_id, f"Expected {test_model_id}, got {cached_result['model_id']}"
+    assert (
+        cached_result is not None
+    ), "Model ID should be cached for anthropic_messages call type"
+    assert (
+        cached_result["model_id"] == test_model_id
+    ), f"Expected {test_model_id}, got {cached_result['model_id']}"
 
 
 def test_update_kwargs_with_deployment_propagates_model_tags():
@@ -2502,9 +2835,7 @@ def test_credential_name_injected_as_tag():
     )
 
     kwargs: dict = {"metadata": {"tags": ["A.101"]}}
-    deployment = router.get_deployment_by_model_group_name(
-        model_group_name="xai-model"
-    )
+    deployment = router.get_deployment_by_model_group_name(model_group_name="xai-model")
     router._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
 
     assert "Credential: xAI" in kwargs["metadata"]["tags"]
@@ -2529,9 +2860,7 @@ def test_credential_name_not_duplicated_in_tags():
     )
 
     kwargs: dict = {"metadata": {"tags": ["Credential: xAI", "A.101"]}}
-    deployment = router.get_deployment_by_model_group_name(
-        model_group_name="xai-model"
-    )
+    deployment = router.get_deployment_by_model_group_name(model_group_name="xai-model")
     router._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
 
     assert kwargs["metadata"]["tags"].count("Credential: xAI") == 1
@@ -2553,9 +2882,388 @@ def test_credential_name_not_injected_when_absent():
     )
 
     kwargs: dict = {"metadata": {"tags": ["A.101"]}}
-    deployment = router.get_deployment_by_model_group_name(
-        model_group_name="gpt-model"
-    )
+    deployment = router.get_deployment_by_model_group_name(model_group_name="gpt-model")
     router._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
 
     assert kwargs["metadata"]["tags"] == ["A.101"]
+
+
+def test_update_kwargs_with_deployment_model_info_in_litellm_metadata():
+    """For generic_api_call, model_info with pricing must go to litellm_metadata.
+
+    Routes like /messages and /responses use generic_api_call which stores
+    model_info under litellm_metadata. Regression test for #23185.
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "claude-sonnet-4",
+                "litellm_params": {
+                    "model": "anthropic/claude-sonnet-4-20250514",
+                    "api_key": "fake-key",
+                },
+                "model_info": {
+                    "id": "custom-pricing-id",
+                    "input_cost_per_token": 0.0003,
+                    "output_cost_per_token": 0.0015,
+                },
+            },
+        ],
+    )
+
+    kwargs: dict = {}
+    deployment = router.get_deployment_by_model_group_name(
+        model_group_name="claude-sonnet-4"
+    )
+    router._update_kwargs_with_deployment(
+        deployment=deployment, kwargs=kwargs, function_name="generic_api_call"
+    )
+
+    assert "litellm_metadata" in kwargs
+    model_info = kwargs["litellm_metadata"]["model_info"]
+    assert model_info["id"] == "custom-pricing-id"
+    assert model_info["input_cost_per_token"] == 0.0003
+    assert model_info["output_cost_per_token"] == 0.0015
+
+
+def test_update_kwargs_with_deployment_model_info_in_metadata():
+    """For acompletion (function_name=None), model_info goes to metadata.
+
+    /chat/completions uses acompletion which stores model_info under metadata.
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "claude-sonnet-4",
+                "litellm_params": {
+                    "model": "anthropic/claude-sonnet-4-20250514",
+                    "api_key": "fake-key",
+                },
+                "model_info": {
+                    "id": "custom-pricing-id",
+                    "input_cost_per_token": 0.0003,
+                    "output_cost_per_token": 0.0015,
+                },
+            },
+        ],
+    )
+
+    kwargs: dict = {}
+    deployment = router.get_deployment_by_model_group_name(
+        model_group_name="claude-sonnet-4"
+    )
+    router._update_kwargs_with_deployment(
+        deployment=deployment, kwargs=kwargs, function_name=None
+    )
+
+    assert "metadata" in kwargs
+    model_info = kwargs["metadata"]["model_info"]
+    assert model_info["id"] == "custom-pricing-id"
+    assert model_info["input_cost_per_token"] == 0.0003
+    assert model_info["output_cost_per_token"] == 0.0015
+
+
+def test_combine_fallback_usage():
+    """Test that _combine_fallback_usage merges partial and fallback usage."""
+    from litellm.router import Router
+    from litellm.types.utils import Usage
+
+    # Create a stream chunk with usage
+    chunk = litellm.ModelResponseStream(
+        id="test",
+        model="gpt-4o",
+        choices=[],
+        usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15),
+    )
+
+    # Call _combine_fallback_usage with no extra usage
+    Router._combine_fallback_usage(chunk, None)
+    assert chunk.usage is not None
+    assert chunk.usage.prompt_tokens == 10
+    assert chunk.usage.completion_tokens == 5
+    assert chunk.usage.total_tokens == 15
+
+
+@pytest.mark.asyncio
+async def test_team_scoped_model_fallback():
+    """
+    Test that fallback works correctly for team-scoped models.
+
+    When a team-scoped model fails and the fallback model is also team-scoped,
+    the router should find the fallback deployment by matching team_public_model_name.
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "team-a-primary-internal",
+                "litellm_params": {"model": "gpt-3.5-turbo", "api_key": "fake"},
+                "model_info": {
+                    "team_id": "team-a",
+                    "team_public_model_name": "primary-model",
+                },
+            },
+            {
+                "model_name": "team-a-fallback-internal",
+                "litellm_params": {
+                    "model": "gpt-4",
+                    "api_key": "fake",
+                    "mock_response": "fallback success from team-a",
+                },
+                "model_info": {
+                    "team_id": "team-a",
+                    "team_public_model_name": "fallback-model",
+                },
+            },
+        ],
+        fallbacks=[{"primary-model": ["fallback-model"]}],
+    )
+
+    response = await router.acompletion(
+        model="primary-model",
+        messages=[{"role": "user", "content": "Hello"}],
+        metadata={"user_api_key_team_id": "team-a"},
+        mock_testing_fallbacks=True,
+    )
+    assert response is not None
+    assert response.choices[0].message.content == "fallback success from team-a"
+
+
+@pytest.mark.asyncio
+async def test_team_scoped_model_fallback_to_global():
+    """
+    Test that a team-scoped model can fall back to a global (non-team) model.
+
+    Global models (no team_id on deployment) should be accessible as fallback
+    targets for team-scoped requests.
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "team-a-primary-internal",
+                "litellm_params": {"model": "gpt-3.5-turbo", "api_key": "fake"},
+                "model_info": {
+                    "team_id": "team-a",
+                    "team_public_model_name": "primary-model",
+                },
+            },
+            {
+                "model_name": "global-fallback",
+                "litellm_params": {
+                    "model": "gpt-4",
+                    "api_key": "fake",
+                    "mock_response": "global fallback success",
+                },
+            },
+        ],
+        fallbacks=[{"primary-model": ["global-fallback"]}],
+    )
+
+    response = await router.acompletion(
+        model="primary-model",
+        messages=[{"role": "user", "content": "Hello"}],
+        metadata={"user_api_key_team_id": "team-a"},
+        mock_testing_fallbacks=True,
+    )
+    assert response is not None
+    assert response.choices[0].message.content == "global fallback success"
+
+
+@pytest.mark.asyncio
+async def test_team_scoped_model_fallback_cross_team_blocked():
+    """
+    Test that cross-team fallback is correctly blocked.
+
+    When team-a's model fails and the fallback target is scoped to team-b,
+    the router should NOT use it (team isolation).
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "team-a-primary-internal",
+                "litellm_params": {"model": "gpt-3.5-turbo", "api_key": "fake"},
+                "model_info": {
+                    "team_id": "team-a",
+                    "team_public_model_name": "primary-model",
+                },
+            },
+            {
+                "model_name": "team-b-fallback-internal",
+                "litellm_params": {
+                    "model": "gpt-4",
+                    "api_key": "fake",
+                    "mock_response": "team-b response - should not reach here",
+                },
+                "model_info": {
+                    "team_id": "team-b",
+                    "team_public_model_name": "fallback-model",
+                },
+            },
+        ],
+        fallbacks=[{"primary-model": ["fallback-model"]}],
+    )
+
+    with pytest.raises(Exception):
+        await router.acompletion(
+            model="primary-model",
+            messages=[{"role": "user", "content": "Hello"}],
+            metadata={"user_api_key_team_id": "team-a"},
+            mock_testing_fallbacks=True,
+        )
+
+
+def test_get_all_deployments_with_team_id():
+    """
+    Test that _get_all_deployments with team_id can find deployments
+    by team_public_model_name when the model_name is not in the index.
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "internal-team-deployment",
+                "litellm_params": {"model": "gpt-4", "api_key": "fake"},
+                "model_info": {
+                    "team_id": "team-x",
+                    "team_public_model_name": "gpt-4",
+                },
+            },
+        ],
+    )
+
+    # Without team_id: "gpt-4" is not in the model_name index (internal name is different)
+    deployments = router._get_all_deployments(model_name="gpt-4")
+    assert len(deployments) == 0
+
+    # With correct team_id: should find via O(n) scan matching team_public_model_name
+    deployments = router._get_all_deployments(model_name="gpt-4", team_id="team-x")
+    assert len(deployments) == 1
+    assert deployments[0]["model_name"] == "internal-team-deployment"
+
+    # With wrong team_id: should find nothing
+    deployments = router._get_all_deployments(model_name="gpt-4", team_id="team-y")
+    assert len(deployments) == 0
+
+
+def test_multiregion_team_deployments_unique_model_names():
+    """
+    Simulates athenahealth's exact setup: unique model_names per deployment,
+    same team_public_model_name, multiple regions.
+
+    Verifies that _get_all_deployments returns ALL regional deployments
+    for a team when queried by team_public_model_name.
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "metis-claude-us-east-1",
+                "litellm_params": {
+                    "model": "bedrock/anthropic.claude-3-sonnet",
+                    "aws_region_name": "us-east-1",
+                    "api_key": "fake",
+                },
+                "model_info": {
+                    "team_id": "metis-team",
+                    "team_public_model_name": "claude-sonnet",
+                },
+            },
+            {
+                "model_name": "metis-claude-us-west-2",
+                "litellm_params": {
+                    "model": "bedrock/anthropic.claude-3-sonnet",
+                    "aws_region_name": "us-west-2",
+                    "api_key": "fake",
+                },
+                "model_info": {
+                    "team_id": "metis-team",
+                    "team_public_model_name": "claude-sonnet",
+                },
+            },
+        ],
+    )
+
+    # "claude-sonnet" is NOT in the model_name index
+    assert "claude-sonnet" not in router.model_names
+
+    # Without team_id: returns nothing (no model_name="claude-sonnet" in index, no O(n) scan)
+    deployments = router._get_all_deployments(model_name="claude-sonnet")
+    assert len(deployments) == 0
+
+    # With team_id: O(n) scan finds BOTH regional deployments
+    deployments = router._get_all_deployments(
+        model_name="claude-sonnet", team_id="metis-team"
+    )
+    assert len(deployments) == 2
+    deployment_names = {d["model_name"] for d in deployments}
+    assert deployment_names == {"metis-claude-us-east-1", "metis-claude-us-west-2"}
+
+    # Each deployment has a unique ID (critical for cooldown/retry to work)
+    deployment_ids = {d["model_info"]["id"] for d in deployments}
+    assert (
+        len(deployment_ids) == 2
+    ), "Each deployment must have a unique ID for cooldown tracking"
+
+    # Wrong team: returns nothing
+    deployments = router._get_all_deployments(
+        model_name="claude-sonnet", team_id="other-team"
+    )
+    assert len(deployments) == 0
+
+
+@pytest.mark.asyncio
+async def test_multiregion_team_failover_between_regions():
+    """
+    Simulates athenahealth's multiregion failover scenario:
+    - Two Bedrock deployments (us-east-1 and us-west-2) with unique model_names
+    - Same team_public_model_name ("claude-sonnet")
+    - Primary region fails → router should failover to second region
+
+    This is the exact scenario Sean Glover from athenahealth will demonstrate.
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "metis-claude-us-east-1",
+                "litellm_params": {
+                    "model": "bedrock/anthropic.claude-3-sonnet",
+                    "api_key": "fake",
+                    "mock_response": "response from us-east-1",
+                },
+                "model_info": {
+                    "team_id": "metis-team",
+                    "team_public_model_name": "claude-sonnet",
+                },
+            },
+            {
+                "model_name": "metis-claude-us-west-2",
+                "litellm_params": {
+                    "model": "bedrock/anthropic.claude-3-sonnet",
+                    "api_key": "fake",
+                    "mock_response": "response from us-west-2",
+                },
+                "model_info": {
+                    "team_id": "metis-team",
+                    "team_public_model_name": "claude-sonnet",
+                },
+            },
+        ],
+        num_retries=1,
+    )
+
+    # Verify the router finds both deployments for the team
+    deployments = router._get_all_deployments(
+        model_name="claude-sonnet", team_id="metis-team"
+    )
+    assert (
+        len(deployments) == 2
+    ), "Router must find both regional deployments by team_public_model_name"
+
+    # Make a normal request — should succeed from one of the regions
+    response = await router.acompletion(
+        model="claude-sonnet",
+        messages=[{"role": "user", "content": "Hello"}],
+        metadata={"user_api_key_team_id": "metis-team"},
+    )
+    assert response is not None
+    assert response.choices[0].message.content in [
+        "response from us-east-1",
+        "response from us-west-2",
+    ]

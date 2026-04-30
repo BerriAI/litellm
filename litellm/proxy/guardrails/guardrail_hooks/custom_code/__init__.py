@@ -12,8 +12,10 @@ from typing import TYPE_CHECKING
 from litellm.types.guardrails import SupportedGuardrailIntegrations
 
 from .custom_code_guardrail import CustomCodeGuardrail
-from .response_rejection_code import (DEFAULT_REJECTION_PHRASES,
-                                      RESPONSE_REJECTION_GUARDRAIL_CODE)
+from .response_rejection_code import (
+    DEFAULT_REJECTION_PHRASES,
+    RESPONSE_REJECTION_GUARDRAIL_CODE,
+)
 
 if TYPE_CHECKING:
     from litellm.types.guardrails import Guardrail, LitellmParams

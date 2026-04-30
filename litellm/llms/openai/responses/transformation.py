@@ -32,6 +32,32 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
     def custom_llm_provider(self) -> LlmProviders:
         return LlmProviders.OPENAI
 
+    def supports_native_file_search(self) -> bool:
+        return True
+
+    @staticmethod
+    def _is_gpt_5_model(model: str) -> bool:
+        """Return True only for actual OpenAI GPT-5 models.
+
+        Excludes pass-through models from other providers that happen to
+        reference gpt-5 in their name (e.g. perplexity/openai/gpt-5.2).
+        """
+        parts = model.split("/")
+        if len(parts) > 1 and parts[0] not in ("openai",):
+            return False
+        return "gpt-5" in model and "gpt-5-chat" not in model
+
+    @staticmethod
+    def _supports_reasoning_effort_none(model: str) -> bool:
+        """Return True if the model supports reasoning.effort='none'."""
+        from litellm.utils import _supports_factory
+
+        return _supports_factory(
+            model=model,
+            custom_llm_provider=None,
+            key="supports_none_reasoning_effort",
+        )
+
     def get_supported_openai_params(self, model: str) -> list:
         """
         All OpenAI Responses API params are supported
@@ -57,8 +83,39 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         model: str,
         drop_params: bool,
     ) -> Dict:
-        """No mapping applied since inputs are in OpenAI spec already"""
-        return dict(response_api_optional_params)
+        """No mapping applied since inputs are in OpenAI spec already.
+
+        GPT-5 models have restrictions on temperature (only temperature=1
+        is accepted unless reasoning_effort='none' on models that support it).
+        Apply the same validation used by the chat completions path.
+        """
+        params = dict(response_api_optional_params)
+
+        if self._is_gpt_5_model(model=model):
+            temperature = params.get("temperature")
+            if temperature is not None and temperature != 1:
+                reasoning = params.get("reasoning") or {}
+                effort = (
+                    reasoning.get("effort") if isinstance(reasoning, dict) else None
+                )
+                supports_none = self._supports_reasoning_effort_none(model=model)
+                if supports_none and (effort == "none" or effort is None):
+                    pass  # flexible temperature allowed
+                elif drop_params or litellm.drop_params:
+                    params.pop("temperature", None)
+                else:
+                    raise litellm.UnsupportedParamsError(
+                        message=(
+                            "gpt-5 models don't support temperature={}. "
+                            "Only temperature=1 is supported. "
+                            "For models like gpt-5.1/5.4, temperature is supported "
+                            "when reasoning.effort='none' (or not specified). "
+                            "To drop unsupported params set `litellm.drop_params = True`"
+                        ).format(temperature),
+                        status_code=400,
+                    )
+
+        return params
 
     def transform_responses_api_request(
         self,
@@ -181,7 +238,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
                 f"Error constructing ResponsesAPIResponse: {raw_response_json}, using model_construct"
             )
             response = ResponsesAPIResponse.model_construct(**raw_response_json)
-        
+
         # Store processed headers in additional_headers so they get returned to the client
         response._hidden_params["additional_headers"] = processed_headers
         response._hidden_params["headers"] = raw_response_headers
@@ -344,6 +401,10 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
                 )
         return False
 
+    def supports_native_websocket(self) -> bool:
+        """OpenAI supports native WebSocket for Responses API"""
+        return True
+
     #########################################################
     ########## DELETE RESPONSE API TRANSFORMATION ##############
     #########################################################
@@ -407,7 +468,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
     ) -> ResponsesAPIResponse:
         """
         Transform the get response API response into a ResponsesAPIResponse
-        """        
+        """
         try:
             raw_response_json = raw_response.json()
         except Exception:
@@ -419,7 +480,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         response = ResponsesAPIResponse(**raw_response_json)
         response._hidden_params["additional_headers"] = processed_headers
         response._hidden_params["headers"] = raw_response_headers
-        
+
         return response
 
     #########################################################
@@ -499,11 +560,11 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
             )
         raw_response_headers = dict(raw_response.headers)
         processed_headers = process_response_headers(raw_response_headers)
-        
+
         response = ResponsesAPIResponse(**raw_response_json)
         response._hidden_params["additional_headers"] = processed_headers
         response._hidden_params["headers"] = raw_response_headers
-        
+
         return response
 
     #########################################################
@@ -524,15 +585,18 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         OpenAI API expects the following request
         - POST /v1/responses/compact
         """
-        url = f"{api_base}/compact"
-        
+        # Preserve query params (e.g., api-version) while appending /compact.
+        parsed_url = httpx.URL(api_base)
+        compact_path = parsed_url.path.rstrip("/") + "/compact"
+        url = str(parsed_url.copy_with(path=compact_path))
+
         input = self._validate_input_param(input)
         data = dict(
             ResponsesAPIRequestParams(
                 model=model, input=input, **response_api_optional_request_params
             )
         )
-        
+
         return url, data
 
     def transform_compact_response_api_response(
@@ -558,7 +622,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
             )
         raw_response_headers = dict(raw_response.headers)
         processed_headers = process_response_headers(raw_response_headers)
-        
+
         try:
             response = ResponsesAPIResponse(**raw_response_json)
         except Exception:
@@ -566,8 +630,8 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
                 f"Error constructing ResponsesAPIResponse: {raw_response_json}, using model_construct"
             )
             response = ResponsesAPIResponse.model_construct(**raw_response_json)
-        
+
         response._hidden_params["additional_headers"] = processed_headers
         response._hidden_params["headers"] = raw_response_headers
-        
+
         return response
