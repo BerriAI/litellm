@@ -81,6 +81,7 @@ def test_map_developer_role_converts_later_developer_messages_in_place():
 def test_map_developer_role_converts_later_developer_without_leading_system():
     messages = [
         {"role": "user", "content": "Hello!"},
+        {"role": "system", "content": "Keep later system messages in place."},
         {"role": "developer", "content": "Prefer concise answers."},
     ]
 
@@ -88,6 +89,7 @@ def test_map_developer_role_converts_later_developer_without_leading_system():
 
     assert result == [
         {"role": "user", "content": "Hello!"},
+        {"role": "system", "content": "Keep later system messages in place."},
         {"role": "system", "content": "Prefer concise answers."},
     ]
 
