@@ -1306,6 +1306,12 @@ async def _get_health_readiness_details() -> Dict[str, Any]:
         raise HTTPException(status_code=503, detail=f"Service Unhealthy ({str(e)})")
 
 
+def _allow_public_health_readiness_details() -> bool:
+    from litellm.proxy.proxy_server import general_settings
+
+    return general_settings.get("allow_public_health_readiness_details") is True
+
+
 @router.get(
     "/health/readiness",
     tags=["health"],
@@ -1313,8 +1319,11 @@ async def _get_health_readiness_details() -> Dict[str, Any]:
 async def health_readiness():
     """
     Public readiness probe. Keep this low-detail for unauthenticated load
-    balancers while preserving the existing unauthenticated probe contract.
+    balancers by default. Admins can opt into the legacy detailed public
+    payload with general_settings.allow_public_health_readiness_details.
     """
+    if _allow_public_health_readiness_details():
+        return await _get_health_readiness_details()
     return {"status": "healthy"}
 
 

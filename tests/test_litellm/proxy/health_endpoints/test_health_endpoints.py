@@ -643,6 +643,30 @@ def test_health_readiness_details_returns_diagnostic_fields(monkeypatch):
     assert "cache" in response_data
 
 
+def test_health_readiness_allows_explicit_legacy_public_details(monkeypatch):
+    """
+    Operators can explicitly preserve the legacy public readiness payload.
+    """
+    app = FastAPI()
+    app.include_router(_health_endpoints_module.router)
+    client = TestClient(app)
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.general_settings",
+        {"allow_public_health_readiness_details": True},
+    )
+
+    response = client.get("/health/readiness")
+
+    assert response.status_code == 200, response.text
+    response_data = response.json()
+    assert response_data["status"] == "healthy"
+    assert "litellm_version" in response_data
+    assert "success_callbacks" in response_data
+    assert "cache" in response_data
+
+
 def test_get_callback_identifier_string_and_object_with_callback_name():
     """
     Test get_callback_identifier with string callbacks and objects with callback_name attribute.
