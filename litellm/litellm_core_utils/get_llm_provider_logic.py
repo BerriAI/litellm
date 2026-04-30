@@ -1,4 +1,4 @@
-from typing import Optional, Tuple
+from typing import Optional, Tuple, cast
 
 import litellm
 from litellm.constants import REPLICATE_MODEL_NAME_WITH_ID_LENGTH
@@ -34,8 +34,8 @@ def _is_azure_claude_model(model: str) -> bool:
 
 
 def handle_cohere_chat_model_custom_llm_provider(
-    model: str, custom_llm_provider: Optional[str] = None
-) -> Tuple[str, Optional[str]]:
+    model: Optional[str], custom_llm_provider: Optional[str] = None
+) -> Tuple[Optional[str], Optional[str]]:
     """
     if user sets model = "cohere/command-r" -> use custom_llm_provider = "cohere_chat"
 
@@ -48,7 +48,7 @@ def handle_cohere_chat_model_custom_llm_provider(
     """
 
     if custom_llm_provider:
-        if custom_llm_provider == "cohere" and model in litellm.cohere_chat_models:
+        if custom_llm_provider == "cohere" and model and model in litellm.cohere_chat_models:
             return model, "cohere_chat"
 
     if model and "/" in model:
@@ -64,8 +64,8 @@ def handle_cohere_chat_model_custom_llm_provider(
 
 
 def handle_anthropic_text_model_custom_llm_provider(
-    model: str, custom_llm_provider: Optional[str] = None
-) -> Tuple[str, Optional[str]]:
+    model: Optional[str], custom_llm_provider: Optional[str] = None
+) -> Tuple[Optional[str], Optional[str]]:
     """
     if user sets model = "anthropic/claude-2" -> use custom_llm_provider = "anthropic_text"
 
@@ -80,6 +80,7 @@ def handle_anthropic_text_model_custom_llm_provider(
     if custom_llm_provider:
         if (
             custom_llm_provider == "anthropic"
+            and model
             and litellm.AnthropicTextConfig._is_anthropic_text_model(model)
         ):
             return model, "anthropic_text"
@@ -145,13 +146,19 @@ def get_llm_provider(  # noqa: PLR0915
                 return model, custom_llm_provider, dynamic_api_key, api_base
 
         ### Handle cases when custom_llm_provider is set to cohere/command-r-plus but it should use cohere_chat route
-        model, custom_llm_provider = handle_cohere_chat_model_custom_llm_provider(
+        _model, _custom_llm_provider = handle_cohere_chat_model_custom_llm_provider(
             model, custom_llm_provider
         )
+        # model is validated at function entry and handlers preserve it
+        model = cast(str, _model)
+        custom_llm_provider = _custom_llm_provider
 
-        model, custom_llm_provider = handle_anthropic_text_model_custom_llm_provider(
+        _model, _custom_llm_provider = handle_anthropic_text_model_custom_llm_provider(
             model, custom_llm_provider
         )
+        # model is validated at function entry and handlers preserve it
+        model = cast(str, _model)
+        custom_llm_provider = _custom_llm_provider
 
         if custom_llm_provider and (
             model.split("/")[0] != custom_llm_provider
