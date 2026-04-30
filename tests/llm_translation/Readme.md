@@ -4,15 +4,24 @@ Name of the test file is the name of the LLM provider - e.g. `test_openai.py` is
 
 ## VCR-backed tests
 
-Files matching `*_vcr.py` (e.g. `test_anthropic_completion_vcr.py`) replay
-recorded HTTP traffic from `cassettes/` instead of calling the real provider.
-They run offline by default — no API keys required, no per-PR cost.
+Tests decorated with `@pytest.mark.vcr` (typically in `*_vcr.py` files,
+e.g. `test_anthropic_completion_vcr.py`) replay recorded HTTP traffic from
+`cassettes/` via [`pytest-recording`](https://github.com/kiwicom/pytest-recording)
+instead of calling the real provider. They run offline by default — no API
+keys required, no per-PR cost.
 
-To re-record against the live API:
+To re-record every marked test in one sweep:
+
+```bash
+ANTHROPIC_API_KEY=sk-ant-... OPENAI_API_KEY=sk-... \
+  make test-llm-translation-record
+```
+
+To scope to a single file:
 
 ```bash
 ANTHROPIC_API_KEY=sk-ant-... \
-  make test-llm-translation-record FILE=test_anthropic_completion_vcr.py
+  make test-llm-translation-record TARGET=test_anthropic_completion_vcr.py
 ```
 
 See [`cassettes/README.md`](./cassettes/README.md) for the full workflow,

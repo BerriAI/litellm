@@ -18,6 +18,94 @@ import litellm
 
 import asyncio
 
+
+# ---------------------------------------------------------------------------
+# VCR cassette infrastructure (pytest-recording)
+# ---------------------------------------------------------------------------
+# Tests marked with ``@pytest.mark.vcr`` replay HTTP traffic from a cassette
+# under ``cassettes/<test_module>/<test_name>.yaml`` instead of hitting the
+# live provider. Default record mode is ``none`` (replay only) so CI never
+# accidentally calls a real LLM. To re-record every marked test in one sweep::
+#
+#     ANTHROPIC_API_KEY=sk-ant-... \
+#         uv run pytest tests/llm_translation -m vcr --record-mode=once
+#
+# See ``tests/llm_translation/cassettes/README.md`` for the full workflow.
+
+# Headers that must never be persisted to a cassette. Matched
+# case-insensitively by vcrpy.
+_FILTERED_REQUEST_HEADERS = (
+    "authorization",
+    "x-api-key",
+    "anthropic-api-key",
+    "openai-api-key",
+    "azure-api-key",
+    "api-key",
+    "cookie",
+    "x-amz-security-token",
+    "x-amz-date",
+    "x-amz-content-sha256",
+    "amz-sdk-invocation-id",
+    "amz-sdk-request",
+    "x-goog-api-key",
+    "x-goog-user-project",
+)
+
+# Per-request response headers we strip so cassettes diff cleanly across
+# re-records.
+_FILTERED_RESPONSE_HEADERS = (
+    "set-cookie",
+    "x-request-id",
+    "request-id",
+    "cf-ray",
+    "anthropic-organization-id",
+    "openai-organization",
+    "x-amzn-requestid",
+    "x-amzn-trace-id",
+    "date",
+)
+
+
+def _scrub_response(response):
+    """Strip per-request response headers we don't want in the cassette."""
+    if not isinstance(response, dict):
+        return response
+    headers = response.get("headers") or {}
+    if isinstance(headers, dict):
+        for header in list(headers):
+            if header.lower() in _FILTERED_RESPONSE_HEADERS:
+                headers.pop(header, None)
+    return response
+
+
+@pytest.fixture(scope="module")
+def vcr_config():
+    """Shared VCR config consumed by ``pytest-recording``.
+
+    Applied to every ``@pytest.mark.vcr`` test in this directory.
+    """
+    return {
+        "filter_headers": list(_FILTERED_REQUEST_HEADERS),
+        "decode_compressed_response": True,
+        # Match on full request shape so streaming vs non-streaming and
+        # different prompts produce distinct cassettes.
+        "match_on": (
+            "method",
+            "scheme",
+            "host",
+            "port",
+            "path",
+            "query",
+            "body",
+        ),
+        "before_record_response": _scrub_response,
+    }
+
+
+# pytest-recording's default cassette dir is
+# ``<test_dir>/cassettes/<test_module>``. Keep that — it gives every test its
+# own file and avoids name collisions across modules.
+
 # ---------------------------------------------------------------------------
 # Capture TRUE defaults at conftest import time (before test modules pollute).
 # ---------------------------------------------------------------------------

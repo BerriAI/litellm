@@ -11,70 +11,105 @@ and producing flaky CI on outages. Recording the HTTP exchange once and
 replaying it on subsequent runs gives us realistic provider responses
 (streaming, headers, edge-case payloads) at zero per-PR cost.
 
-## How to add a new cassette-backed test
+## Layout
+
+We use [`pytest-recording`](https://github.com/kiwicom/pytest-recording),
+which auto-resolves the cassette path from the test location:
+
+```
+tests/llm_translation/
+  cassettes/
+    <test_module>/
+      <test_name>.yaml
+  test_<provider>_completion_vcr.py
+  conftest.py        # provides the shared vcr_config fixture
+```
+
+For example, a test
+`tests/llm_translation/test_anthropic_completion_vcr.py::test_basic` is backed by
+`tests/llm_translation/cassettes/test_anthropic_completion_vcr/test_basic.yaml`.
+
+## Adding a new cassette-backed test
 
 1. Pick a small, deterministic call. Avoid prompts whose output depends on
    wall-clock time, randomness, or live web data.
-2. Add a test in a `*_vcr.py` file under `tests/llm_translation/`. Wrap it
-   with `@litellm_vcr.use_cassette("<some_name>.yaml")` from
-   `tests/llm_translation/vcr_config.py`.
-3. Record the cassette once:
+2. Write the test as you normally would and decorate it with
+   `@pytest.mark.vcr`. No imports beyond `pytest` are needed — the
+   `vcr_config` fixture in `conftest.py` is applied automatically.
+3. Run the sweep recorder once with the credentials you need. Recording is
+   strictly opt-in via `--record-mode=once`; the default replay mode never
+   touches the network.
 
-   ```bash
-   LITELLM_VCR_RECORD_MODE=once \
-     ANTHROPIC_API_KEY=sk-ant-... \
-     uv run pytest tests/llm_translation/test_my_provider_vcr.py::test_my_case -v
-   ```
+## Bulk re-record (the common path)
 
-   or, equivalently:
-
-   ```bash
-   ANTHROPIC_API_KEY=sk-ant-... \
-     make test-llm-translation-record FILE=test_my_provider_vcr.py
-   ```
-
-4. Inspect the resulting YAML file:
-   - **Strip any secrets** that survived `vcr_config.py`'s header filter.
-     `vcr_config.py` already removes the common ones (`Authorization`,
-     `x-api-key`, `cookie`, AWS sigv4 headers, etc.) — but a request *body*
-     might contain a token if your test passed one inline.
-   - Trim very large response bodies if they aren't load-bearing for the
-     assertion.
-5. Commit the cassette alongside the test.
-
-## Re-recording
-
-Run the same `make test-llm-translation-record` command. vcrpy's `once` mode
-will *not* overwrite an existing cassette — delete the file first if you're
-intentionally refreshing it:
+A single sweep replays every `@pytest.mark.vcr` test under
+`tests/llm_translation`, hitting the live provider only for tests that don't
+yet have a cassette:
 
 ```bash
-rm tests/llm_translation/cassettes/anthropic_basic_completion.yaml
-ANTHROPIC_API_KEY=sk-ant-... make test-llm-translation-record \
-    FILE=test_anthropic_completion_vcr.py
+ANTHROPIC_API_KEY=sk-ant-... \
+OPENAI_API_KEY=sk-... \
+AWS_ACCESS_KEY_ID=... AWS_SECRET_ACCESS_KEY=... \
+  make test-llm-translation-record
 ```
 
-## Refreshing the canned Anthropic fixtures
+Or scope it to a single file:
 
-The two Anthropic cassettes in this directory
-(`anthropic_basic_completion.yaml` and `anthropic_streaming_completion.yaml`)
-are recorded against an in-process mock so contributors can regenerate them
-without an `ANTHROPIC_API_KEY`:
+```bash
+ANTHROPIC_API_KEY=sk-ant-... \
+  make test-llm-translation-record TARGET=test_anthropic_completion_vcr.py
+```
+
+vcrpy's `once` record mode does **not** overwrite an existing cassette —
+delete the file first if you're intentionally refreshing it:
+
+```bash
+rm tests/llm_translation/cassettes/test_anthropic_completion_vcr/test_basic.yaml
+ANTHROPIC_API_KEY=sk-ant-... \
+  make test-llm-translation-record TARGET=test_anthropic_completion_vcr.py
+```
+
+To force a full refresh of every cassette in one shot:
+
+```bash
+rm -rf tests/llm_translation/cassettes/test_*
+ANTHROPIC_API_KEY=... OPENAI_API_KEY=... AWS_* \
+  uv run pytest tests/llm_translation -m vcr --record-mode=all -v
+```
+
+## Refreshing the canned Anthropic fixtures (no API key)
+
+The two Anthropic cassettes shipped with this directory are recorded against
+an in-process mock so contributors can regenerate them without an
+`ANTHROPIC_API_KEY`:
 
 ```bash
 uv run python tests/llm_translation/cassettes/_record_anthropic_fixtures.py
 ```
 
 For a full refresh against the real API, delete the cassettes first and use
-the `LITELLM_VCR_RECORD_MODE=once` path with a real key.
+the bulk-record sweep above.
+
+## Cassette hygiene
+
+After recording, **always inspect the YAML before committing**:
+
+- The `vcr_config` fixture in `conftest.py` already filters the common
+  request headers (`Authorization`, `x-api-key`, `anthropic-api-key`, AWS
+  sigv4 headers, cookies, GCP keys, …) and per-request response headers
+  (`set-cookie`, `cf-ray`, request IDs, org IDs, dates).
+- A request *body* might still contain a token if your test passed one
+  inline — scrub it manually.
+- Quick sanity check: `grep -i 'sk-\|bearer\|api-key' cassettes/<dir>/*.yaml`
+  should be clean.
+- Trim unhelpful response bodies if they're megabytes large but the
+  assertion only needs a few fields.
 
 ## Don't
 
-- Don't commit cassettes containing real API keys, OAuth tokens, or PII.
-  When in doubt, `grep -i 'sk-\|bearer\|api-key' cassettes/*.yaml` after
-  recording.
+- Don't commit cassettes with real API keys, OAuth tokens, or PII.
 - Don't rely on cassettes for tests of *non-deterministic* behavior
-  (rate-limit retries, timeouts, the model itself making a creative choice).
-  Mock those at the LiteLLM layer instead.
-- Don't record both real and mock host names into the same cassette without
-  rewriting the URL — vcrpy matches on host/port by default.
+  (rate-limit retries, timeouts, model creativity). Mock those at the
+  LiteLLM layer instead.
+- Don't manually edit cassette YAML beyond scrubbing — the format is
+  byte-sensitive (e.g. content-length headers must match the body).

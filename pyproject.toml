@@ -150,6 +150,7 @@ dev = [
     "openapi-core==0.22.0; python_version < '3.14'",
     "pytest-timeout==2.4.0",
     "vcrpy==8.1.1",
+    "pytest-recording==0.13.4",
 ]
 proxy-dev = [
     "prisma==0.11.0",

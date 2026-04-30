@@ -1,21 +1,21 @@
 """
-VCR-backed Anthropic completion tests.
+Cassette-replayed Anthropic completion tests.
 
-These tests exercise the same end-to-end ``litellm.completion`` code paths
-as ``test_anthropic_completion.py`` but replay HTTP traffic from cassettes
-under ``cassettes/`` instead of calling ``api.anthropic.com``. CI can run
-them with no API key and zero cost.
+These tests exercise the same end-to-end ``litellm.completion`` code paths as
+``test_anthropic_completion.py`` but replay HTTP traffic from cassettes under
+``cassettes/test_anthropic_completion_vcr/`` instead of calling
+``api.anthropic.com``. CI runs them with no API key and zero cost.
 
-To re-record after a deliberate change to request shape (or to refresh
-against the live API), set ``LITELLM_VCR_RECORD_MODE=once`` and provide a
-real ``ANTHROPIC_API_KEY``::
+Add a new test by writing it normally and decorating with ``@pytest.mark.vcr``.
+The cassette path is resolved automatically from the test module + test name
+by ``pytest-recording`` (see ``conftest.py``).
 
-    LITELLM_VCR_RECORD_MODE=once \\
-        ANTHROPIC_API_KEY=sk-ant-... \\
-        uv run pytest tests/llm_translation/test_anthropic_completion_vcr.py -v
+To re-record every marked test in one sweep::
 
-See ``tests/llm_translation/vcr_config.py`` and ``tests/llm_translation/cassettes/README.md``
-for the full workflow.
+    ANTHROPIC_API_KEY=sk-ant-... \\
+        uv run pytest tests/llm_translation -m vcr --record-mode=once
+
+See ``tests/llm_translation/cassettes/README.md`` for the full workflow.
 """
 
 import os
@@ -24,39 +24,35 @@ import sys
 import pytest
 
 sys.path.insert(0, os.path.abspath("../.."))
-sys.path.insert(0, os.path.dirname(__file__))
 
 import litellm  # noqa: E402
 
-from vcr_config import litellm_vcr  # noqa: E402
-
-
-# A non-secret placeholder API key. We never want a real key written to a
-# cassette, and ``vcr_config`` filters Authorization / x-api-key headers
-# anyway. Using a deterministic placeholder also stops the SDK from raising
-# when ``ANTHROPIC_API_KEY`` is unset (the common CI case).
+# A non-secret placeholder API key. The vcr_config fixture in conftest.py
+# filters Authorization / x-api-key headers from cassettes, so this value
+# never lands on disk; it only stops the SDK from raising when
+# ``ANTHROPIC_API_KEY`` is unset (the common CI case).
 PLACEHOLDER_ANTHROPIC_API_KEY = "sk-ant-vcr-placeholder"
 
 
 @pytest.fixture(autouse=True)
 def _placeholder_anthropic_key(monkeypatch):
-    """Provide a placeholder key when none is set so replay works offline.
+    """Ensure an API key is set so replay works offline.
 
-    If a real key is present in the environment (e.g. when re-recording),
-    we leave it untouched.
+    If a real key is present (e.g. when re-recording with
+    ``--record-mode=once``), we leave it untouched.
     """
     if not os.environ.get("ANTHROPIC_API_KEY"):
         monkeypatch.setenv("ANTHROPIC_API_KEY", PLACEHOLDER_ANTHROPIC_API_KEY)
 
 
-@litellm_vcr.use_cassette("anthropic_basic_completion.yaml")
+@pytest.mark.vcr
 def test_anthropic_basic_completion_replay():
     """Smoke-test that a vanilla Anthropic completion replays from a cassette.
 
-    This is the canonical example for the cassette-based testing pattern:
-    no API key required at runtime, deterministic output, and the full
-    LiteLLM transformation pipeline (request shaping + response parsing)
-    runs against a real-shape Anthropic payload.
+    This is the canonical example for the cassette-based testing pattern: no
+    API key required at runtime, deterministic output, and the full LiteLLM
+    transformation pipeline (request shaping + response parsing) runs against
+    a real-shape Anthropic payload.
     """
     response = litellm.completion(
         model="anthropic/claude-sonnet-4-5-20250929",
@@ -71,13 +67,14 @@ def test_anthropic_basic_completion_replay():
     assert response.choices[0].finish_reason == "stop"
 
 
-@litellm_vcr.use_cassette("anthropic_streaming_completion.yaml")
+@pytest.mark.vcr
 def test_anthropic_streaming_completion_replay():
     """Replay a streaming Anthropic completion from a cassette.
 
     Exercises the SSE chunk parser and the public streaming surface. The
     underlying cassette captures every ``content_block_delta`` event Anthropic
-    emits, so any regression in the streaming transformation will surface here.
+    emits, so any regression in the streaming transformation will surface
+    here.
     """
     stream = litellm.completion(
         model="anthropic/claude-sonnet-4-5-20250929",

@@ -1,9 +1,8 @@
 """Helper script that records Anthropic-shaped cassettes against a local mock.
 
-This is a *one-shot* utility, not a test. It exists so we can deterministically
-regenerate the canned Anthropic cassettes shipped under
-``tests/llm_translation/cassettes/`` without spending real provider credits and
-without needing an ``ANTHROPIC_API_KEY``.
+This is a *one-shot* utility, not a test. It exists so contributors can
+regenerate the canned Anthropic cassettes shipped with this PR without
+spending real provider credits and without needing an ``ANTHROPIC_API_KEY``.
 
 Run it with::
 
@@ -17,9 +16,14 @@ The script:
 3. Rewrites the cassette URL/Host so replay matches genuine
    ``https://api.anthropic.com/v1/messages`` traffic.
 
-If you want to refresh against the *real* Anthropic API instead, use the
-``LITELLM_VCR_RECORD_MODE=once`` workflow described in
-``tests/llm_translation/vcr_config.py`` — that path needs a real API key.
+The cassettes are written to the per-test paths that ``pytest-recording``
+expects (``cassettes/<test_module>/<test_name>.yaml``) so the existing tests
+in ``test_anthropic_completion_vcr.py`` pick them up unchanged.
+
+For a refresh against the *real* Anthropic API, use the
+``--record-mode=once`` sweep described in
+``tests/llm_translation/cassettes/README.md`` — that path needs a real
+``ANTHROPIC_API_KEY``.
 """
 
 from __future__ import annotations
@@ -40,7 +44,7 @@ sys.path.insert(0, str(REPO_ROOT))
 
 import litellm  # noqa: E402
 
-CASSETTE_DIR = Path(__file__).parent
+CASSETTE_DIR = Path(__file__).parent / "test_anthropic_completion_vcr"
 MOCK_HOST = "127.0.0.1"
 NON_STREAM_PORT = 18765
 STREAM_PORT = 18766
@@ -201,14 +205,18 @@ def _consume(iterable: Iterable[Any]) -> None:
 
 
 def record_non_streaming() -> None:
-    cassette = CASSETTE_DIR / "anthropic_basic_completion.yaml"
+    cassette = CASSETTE_DIR / "test_anthropic_basic_completion_replay.yaml"
     if cassette.exists():
         cassette.unlink()
     server = _serve(NON_STREAM_PORT, "json")
     try:
         my_vcr = vcr.VCR(
             record_mode="all",
-            filter_headers=["authorization", "x-api-key", "anthropic-version"],
+            filter_headers=[
+                "authorization",
+                "x-api-key",
+                "anthropic-version",
+            ],
         )
         with my_vcr.use_cassette(str(cassette)):
             response = litellm.completion(
@@ -224,14 +232,18 @@ def record_non_streaming() -> None:
 
 
 def record_streaming() -> None:
-    cassette = CASSETTE_DIR / "anthropic_streaming_completion.yaml"
+    cassette = CASSETTE_DIR / "test_anthropic_streaming_completion_replay.yaml"
     if cassette.exists():
         cassette.unlink()
     server = _serve(STREAM_PORT, "stream")
     try:
         my_vcr = vcr.VCR(
             record_mode="all",
-            filter_headers=["authorization", "x-api-key", "anthropic-version"],
+            filter_headers=[
+                "authorization",
+                "x-api-key",
+                "anthropic-version",
+            ],
         )
         with my_vcr.use_cassette(str(cassette)):
             stream = litellm.completion(
@@ -249,6 +261,7 @@ def record_streaming() -> None:
 
 def main() -> None:
     os.environ.setdefault("LITELLM_LOG", "WARNING")
+    CASSETTE_DIR.mkdir(parents=True, exist_ok=True)
     record_non_streaming()
     record_streaming()
     print(f"Wrote cassettes to {CASSETTE_DIR}")
