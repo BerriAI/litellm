@@ -1271,6 +1271,66 @@ async def test_available_team_self_join_blocks_admin_role_in_member_list():
 
 
 @pytest.mark.asyncio
+async def test_update_team_member_permissions_blocks_non_admin_via_available_team(
+    mock_db_client,
+):
+    """A non-admin caller invoking /team/permissions_update on an available
+    team must be rejected.  The previous code path delegated to
+    ``_is_available_team`` and accepted the write; this PR removes that
+    bypass entirely so the result is 403 even with the bypass mocked True."""
+    test_team_id = "public-team"
+    update_payload = {
+        "team_id": test_team_id,
+        "team_member_permissions": ["/key/generate"],
+    }
+
+    existing_row = MagicMock(spec=LiteLLM_TeamTable)
+    existing_row.model_dump.return_value = {
+        "team_id": test_team_id,
+        "team_alias": "Public Team",
+        "team_member_permissions": [],
+        "spend": 0.0,
+        "models": [],
+    }
+    existing_row.team_id = test_team_id
+    existing_row.members_with_roles = []
+    existing_row.organization_id = None
+
+    non_admin_auth = UserAPIKeyAuth(
+        user_id="alice",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+    )
+
+    with (
+        patch(
+            "litellm.proxy.management_endpoints.team_endpoints.get_team_object",
+            new_callable=AsyncMock,
+            return_value=existing_row,
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.team_endpoints._is_user_team_admin",
+            return_value=False,
+        ),
+        patch(
+            # Even with the available-team bypass mocked True, the endpoint
+            # must NOT consult it any more — the gate should reject the
+            # non-admin caller outright.
+            "litellm.proxy.management_endpoints.team_endpoints._is_available_team",
+            return_value=True,
+        ),
+    ):
+        app.dependency_overrides[user_api_key_auth] = lambda: non_admin_auth
+        try:
+            response = client.post("/team/permissions_update", json=update_payload)
+        finally:
+            app.dependency_overrides = {}
+
+    assert response.status_code == 403
+    body = response.json()
+    assert "permissions_update" in str(body) or "not proxy admin" in str(body)
+
+
+@pytest.mark.asyncio
 async def test_process_team_members_single_member():
     """
     Test _process_team_members with a single member
