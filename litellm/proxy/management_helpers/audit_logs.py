@@ -23,6 +23,15 @@ from litellm.types.utils import StandardAuditLogPayload
 _audit_log_callback_cache: Dict[str, CustomLogger] = {}
 
 
+def get_audit_log_changed_by(
+    *,
+    litellm_changed_by: Optional[str],
+    user_api_key_dict: UserAPIKeyAuth,
+    litellm_proxy_admin_name: Optional[str],
+) -> Optional[str]:
+    return user_api_key_dict.user_id or litellm_changed_by or litellm_proxy_admin_name
+
+
 def _resolve_audit_log_callback(name: str) -> Optional[CustomLogger]:
     """Resolve a string callback name to a CustomLogger instance, with caching."""
     if name in _audit_log_callback_cache:
@@ -143,8 +152,10 @@ async def create_object_audit_log(
     if _store_audit_logs is not True:
         return
 
-    _changed_by = (
-        litellm_changed_by or user_api_key_dict.user_id or litellm_proxy_admin_name
+    _changed_by = get_audit_log_changed_by(
+        litellm_changed_by=litellm_changed_by,
+        user_api_key_dict=user_api_key_dict,
+        litellm_proxy_admin_name=litellm_proxy_admin_name,
     )
 
     await create_audit_log_for_update(

@@ -750,7 +750,7 @@ def test_redact_msgs_from_logs_with_dynamic_params():
     In all tests litellm.turn_off_message_logging is True
 
 
-    1. When standard_callback_dynamic_params.turn_off_message_logging is False (or not set): No redaction should occur. User has opted out of redaction.
+    1. When standard_callback_dynamic_params.turn_off_message_logging is False: global redaction still wins.
     2. When standard_callback_dynamic_params.turn_off_message_logging is True: Redaction should occur. User has opted in to redaction.
     3. standard_callback_dynamic_params.turn_off_message_logging not set, litellm.turn_off_message_logging is True: Redaction should occur.
     """
@@ -784,7 +784,7 @@ def test_redact_msgs_from_logs_with_dynamic_params():
         function_id="1234",
     )
 
-    # Test Case 1: standard_callback_dynamic_params = False (or not set)
+    # Test Case 1: standard_callback_dynamic_params = False
     standard_callback_dynamic_params = StandardCallbackDynamicParams(
         turn_off_message_logging=False
     )
@@ -795,8 +795,8 @@ def test_redact_msgs_from_logs_with_dynamic_params():
         result=response_obj,
         model_call_details=litellm_logging_obj.model_call_details,
     )
-    # Assert no redaction occurred
-    assert _redacted_response_obj.choices[0].message.content == test_content
+    # Assert global redaction still occurred
+    assert _redacted_response_obj.choices[0].message.content == "redacted-by-litellm"
 
     # Test Case 2: standard_callback_dynamic_params = True
     standard_callback_dynamic_params = StandardCallbackDynamicParams(

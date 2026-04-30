@@ -29,6 +29,7 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.callback_utils import (
+    TRUSTED_PILLAR_RESPONSE_HEADERS_METADATA_KEY,
     add_guardrail_to_applied_guardrails_header,
     get_metadata_variable_name_from_kwargs,
 )
@@ -144,6 +145,7 @@ def build_pillar_response_headers(metadata_store: Dict[str, Any]) -> Dict[str, s
 
     if headers:
         metadata_store["pillar_response_headers"] = headers
+        metadata_store[TRUSTED_PILLAR_RESPONSE_HEADERS_METADATA_KEY] = True
 
     return headers
 

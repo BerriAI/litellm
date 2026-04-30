@@ -2162,8 +2162,8 @@ async def delete_user(
                     request_data=LiteLLM_AuditLogs(
                         id=str(uuid.uuid4()),
                         updated_at=datetime.now(timezone.utc),
-                        changed_by=litellm_changed_by
-                        or user_api_key_dict.user_id
+                        changed_by=user_api_key_dict.user_id
+                        or litellm_changed_by
                         or litellm_proxy_admin_name,
                         changed_by_api_key=user_api_key_dict.api_key,
                         table_name=LitellmTableNames.USER_TABLE_NAME,
