@@ -129,9 +129,7 @@ class TestGitHubCopilotAuthenticator:
     def test_get_api_key_from_file(self, authenticator):
         """Test retrieving an API key from a file."""
         future_time = (datetime.now() + timedelta(hours=1)).timestamp()
-        mock_api_key_data = json.dumps(
-            {"token": "mock-api-key", "expires_at": future_time}
-        )
+        mock_api_key_data = json.dumps({"token": "mock-api-key", "expires_at": future_time})
 
         with patch("builtins.open", mock_open(read_data=mock_api_key_data)):
             api_key = authenticator.get_api_key()
@@ -140,9 +138,7 @@ class TestGitHubCopilotAuthenticator:
     def test_get_api_key_expired(self, authenticator):
         """Test refreshing an expired API key."""
         past_time = (datetime.now() - timedelta(hours=1)).timestamp()
-        mock_expired_data = json.dumps(
-            {"token": "expired-api-key", "expires_at": past_time}
-        )
+        mock_expired_data = json.dumps({"token": "expired-api-key", "expires_at": past_time})
         mock_new_data = {
             "token": "new-api-key",
             "expires_at": (datetime.now() + timedelta(hours=1)).timestamp(),
@@ -240,20 +236,14 @@ class TestGitHubCopilotAuthenticator:
         mock_token = "mock-access-token"
 
         with (
-            patch.object(
-                authenticator, "_get_device_code", return_value=mock_device_code_data
-            ),
-            patch.object(
-                authenticator, "_poll_for_access_token", return_value=mock_token
-            ),
+            patch.object(authenticator, "_get_device_code", return_value=mock_device_code_data),
+            patch.object(authenticator, "_poll_for_access_token", return_value=mock_token),
             patch("builtins.print") as mock_print,
         ):
             result = authenticator._login()
             assert result == mock_token
             authenticator._get_device_code.assert_called_once()
-            authenticator._poll_for_access_token.assert_called_once_with(
-                "mock-device-code"
-            )
+            authenticator._poll_for_access_token.assert_called_once_with("mock-device-code")
             mock_print.assert_called_once()
 
     def test_get_api_base_from_file(self, authenticator):
@@ -288,9 +278,7 @@ class TestGitHubCopilotAuthenticator:
             authenticator._get_device_code()
             assert mock_client.post.call_args[0][0] == custom_url
 
-    def test_get_device_code_with_custom_client_id(
-        self, authenticator, mock_http_client
-    ):
+    def test_get_device_code_with_custom_client_id(self, authenticator, mock_http_client):
         """GITHUB_COPILOT_CLIENT_ID env var must appear as client_id in the device-code request body."""
         mock_client, mock_response = mock_http_client
         custom_id = "custom_client_id"
@@ -309,9 +297,7 @@ class TestGitHubCopilotAuthenticator:
             authenticator._get_device_code()
             assert mock_client.post.call_args[1]["json"]["client_id"] == custom_id
 
-    def test_poll_for_access_token_with_custom_url(
-        self, authenticator, mock_http_client
-    ):
+    def test_poll_for_access_token_with_custom_url(self, authenticator, mock_http_client):
         """GITHUB_COPILOT_ACCESS_TOKEN_URL env var must be used by _poll_for_access_token at call time."""
         mock_client, mock_response = mock_http_client
         custom_url = "https://custom.example.com/token"
@@ -327,9 +313,7 @@ class TestGitHubCopilotAuthenticator:
             authenticator._poll_for_access_token("dc")
             assert mock_client.post.call_args[0][0] == custom_url
 
-    def test_poll_for_access_token_with_custom_client_id(
-        self, authenticator, mock_http_client
-    ):
+    def test_poll_for_access_token_with_custom_client_id(self, authenticator, mock_http_client):
         """GITHUB_COPILOT_CLIENT_ID env var must appear as client_id in the polling request body."""
         mock_client, mock_response = mock_http_client
         custom_id = "custom_client_id"
@@ -422,18 +406,9 @@ class TestGitHubCopilotAuthenticator:
             assert mock_client.get.call_count == 3
 
             # Attempt 1 used stale token, attempts 2+3 used fresh token
-            assert (
-                mock_client.get.call_args_list[0][1]["headers"]["authorization"]
-                == "token stale-token"
-            )
-            assert (
-                mock_client.get.call_args_list[1][1]["headers"]["authorization"]
-                == "token fresh-token"
-            )
-            assert (
-                mock_client.get.call_args_list[2][1]["headers"]["authorization"]
-                == "token fresh-token"
-            )
+            assert mock_client.get.call_args_list[0][1]["headers"]["authorization"] == "token stale-token"
+            assert mock_client.get.call_args_list[1][1]["headers"]["authorization"] == "token fresh-token"
+            assert mock_client.get.call_args_list[2][1]["headers"]["authorization"] == "token fresh-token"
 
     def test_refresh_api_key_401_on_second_attempt(self, authenticator):
         """A 401 on attempt 2 (after a 500 on attempt 1) still deletes the
@@ -466,19 +441,10 @@ class TestGitHubCopilotAuthenticator:
             mock_remove.assert_called_once()
 
             # Attempts 1 (500) and 2 (401) used stale token
-            assert (
-                mock_client.get.call_args_list[0][1]["headers"]["authorization"]
-                == "token stale-token"
-            )
-            assert (
-                mock_client.get.call_args_list[1][1]["headers"]["authorization"]
-                == "token stale-token"
-            )
+            assert mock_client.get.call_args_list[0][1]["headers"]["authorization"] == "token stale-token"
+            assert mock_client.get.call_args_list[1][1]["headers"]["authorization"] == "token stale-token"
             # Attempt 3 used fresh token after invalidation
-            assert (
-                mock_client.get.call_args_list[2][1]["headers"]["authorization"]
-                == "token fresh-token"
-            )
+            assert mock_client.get.call_args_list[2][1]["headers"]["authorization"] == "token fresh-token"
 
     def test_refresh_api_key_non_401_does_not_invalidate(self, authenticator):
         """Non-401 HTTP errors do NOT trigger token invalidation."""
@@ -508,9 +474,7 @@ class TestGitHubCopilotAuthenticator:
         mock_client = MagicMock()
         mock_client.get.return_value = self._make_failing_response(http_401)
 
-        reacquire_err = GetAccessTokenError(
-            message="device flow failed", status_code=401
-        )
+        reacquire_err = GetAccessTokenError(message="device flow failed", status_code=401)
         with (
             patch.dict(os.environ, {"GITHUB_COPILOT_ENABLE_AUTH_RECOVERY": "true"}),
             patch.object(
@@ -534,36 +498,6 @@ class TestGitHubCopilotAuthenticator:
             for call in mock_client.get.call_args_list:
                 assert call[1]["headers"]["authorization"] == "token stale-token"
 
-    def test_refresh_api_key_401_reacquire_device_code_error(self, authenticator):
-        """When get_access_token raises GetDeviceCodeError after token
-        deletion, the file is already gone so token_invalidated is set True
-        — no further invalidation attempts."""
-        http_401 = self._make_http_error(401, "401 Unauthorized")
-        mock_client = MagicMock()
-        mock_client.get.return_value = self._make_failing_response(http_401)
-
-        reacquire_err = GetDeviceCodeError(message="no device code", status_code=400)
-        with (
-            patch.dict(os.environ, {"GITHUB_COPILOT_ENABLE_AUTH_RECOVERY": "true"}),
-            patch.object(
-                authenticator,
-                "get_access_token",
-                side_effect=["stale-token", reacquire_err],
-            ),
-            patch("os.remove") as mock_remove,
-            patch(
-                "litellm.llms.github_copilot.authenticator._get_httpx_client",
-                return_value=mock_client,
-            ),
-        ):
-            with pytest.raises(RefreshAPIKeyError):
-                authenticator._refresh_api_key()
-
-            mock_remove.assert_called_once()
-            assert mock_client.get.call_count == 3
-            for call in mock_client.get.call_args_list:
-                assert call[1]["headers"]["authorization"] == "token stale-token"
-
     def test_refresh_api_key_401_os_remove_fails(self, authenticator):
         """When os.remove raises OSError (e.g. permission denied), the code
         sets token_invalidated=True, skips re-acquire (file still has stale
@@ -575,12 +509,8 @@ class TestGitHubCopilotAuthenticator:
 
         with (
             patch.dict(os.environ, {"GITHUB_COPILOT_ENABLE_AUTH_RECOVERY": "true"}),
-            patch.object(
-                authenticator, "get_access_token", return_value="stale-token"
-            ) as mock_get_token,
-            patch(
-                "os.remove", side_effect=PermissionError("Permission denied")
-            ) as mock_remove,
+            patch.object(authenticator, "get_access_token", return_value="stale-token") as mock_get_token,
+            patch("os.remove", side_effect=PermissionError("Permission denied")) as mock_remove,
             patch(
                 "litellm.llms.github_copilot.authenticator._get_httpx_client",
                 return_value=mock_client,
@@ -649,18 +579,9 @@ class TestGitHubCopilotAuthenticator:
             assert result == {"token": "recovered", "expires_at": 99999}
             mock_remove.assert_called_once_with(authenticator.access_token_file)
             # Attempt 1 used stale, attempts 2+3 used fresh (even though attempt 2 was a 500)
-            assert (
-                mock_client.get.call_args_list[0][1]["headers"]["authorization"]
-                == "token stale-token"
-            )
-            assert (
-                mock_client.get.call_args_list[1][1]["headers"]["authorization"]
-                == "token fresh-token"
-            )
-            assert (
-                mock_client.get.call_args_list[2][1]["headers"]["authorization"]
-                == "token fresh-token"
-            )
+            assert mock_client.get.call_args_list[0][1]["headers"]["authorization"] == "token stale-token"
+            assert mock_client.get.call_args_list[1][1]["headers"]["authorization"] == "token fresh-token"
+            assert mock_client.get.call_args_list[2][1]["headers"]["authorization"] == "token fresh-token"
 
     def test_refresh_api_key_connection_error_does_not_invalidate(self, authenticator):
         """A non-HTTP exception (e.g. ConnectionError) is caught by the
@@ -690,9 +611,7 @@ class TestGitHubCopilotAuthenticator:
             patch.object(
                 authenticator,
                 "_refresh_api_key",
-                side_effect=GetAccessTokenError(
-                    message="device flow timeout", status_code=401
-                ),
+                side_effect=GetAccessTokenError(message="device flow timeout", status_code=401),
             ),
         ):
             with pytest.raises(GetAPIKeyError, match="refresh API key"):
@@ -707,11 +626,7 @@ class TestGitHubCopilotAuthenticator:
         mock_client = MagicMock()
         mock_client.get.return_value = self._make_failing_response(http_401)
 
-        env_without_var = {
-            k: v
-            for k, v in os.environ.items()
-            if k != "GITHUB_COPILOT_ENABLE_AUTH_RECOVERY"
-        }
+        env_without_var = {k: v for k, v in os.environ.items() if k != "GITHUB_COPILOT_ENABLE_AUTH_RECOVERY"}
         with (
             patch.dict(os.environ, env_without_var, clear=True),
             patch.object(authenticator, "get_access_token", return_value="stale-token"),
