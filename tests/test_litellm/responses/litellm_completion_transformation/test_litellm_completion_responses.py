@@ -992,6 +992,58 @@ class TestContentTypeTransformation:
         assert result[0]["text"] == "valid text"
         assert result[1]["text"] == "another valid"
 
+    def test_cache_control_propagated_to_content_block(self):
+        """
+        Test that a cache_control field on a Responses API content item is
+        propagated onto the Chat Completion content block.
+        """
+        cache_control = {"type": "ephemeral"}
+        content = [
+            {"type": "text", "text": "cached text", "cache_control": cache_control},
+            {"type": "text", "text": "uncached text"},
+        ]
+        result = LiteLLMCompletionResponsesConfig._transform_responses_api_content_to_chat_completion_content(
+            content
+        )
+        assert len(result) == 2
+        assert result[0]["text"] == "cached text"
+        assert result[0]["cache_control"] == cache_control
+        assert result[1]["text"] == "uncached text"
+        assert "cache_control" not in result[1]
+
+    def test_cache_control_propagated_to_message(self):
+        """
+        Test that a cache_control field on a Responses API input item is
+        propagated onto the resulting GenericChatCompletionMessage.
+        """
+        cache_control = {"type": "ephemeral"}
+        input_item = {
+            "role": "user",
+            "content": [{"type": "input_text", "text": "hello"}],
+            "cache_control": cache_control,
+        }
+        result = LiteLLMCompletionResponsesConfig._transform_responses_api_input_item_to_chat_completion_message(
+            input_item
+        )
+        assert len(result) == 1
+        assert result[0]["role"] == "user"
+        assert result[0]["cache_control"] == cache_control
+
+    def test_cache_control_absent_when_not_provided(self):
+        """
+        Test that no cache_control key is added when the input item does not
+        carry one.
+        """
+        input_item = {
+            "role": "user",
+            "content": [{"type": "input_text", "text": "hello"}],
+        }
+        result = LiteLLMCompletionResponsesConfig._transform_responses_api_input_item_to_chat_completion_message(
+            input_item
+        )
+        assert len(result) == 1
+        assert "cache_control" not in result[0]
+
 
 class TestToolTransformation:
     """Test cases for tool transformation from Responses API to Chat Completion format"""

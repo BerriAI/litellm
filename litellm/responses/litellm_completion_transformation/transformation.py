@@ -988,14 +988,16 @@ class LiteLLMCompletionResponsesConfig:
             # Since guardrails skip None content anyway, we return empty list to exclude it from structured messages
             if content is None:
                 return []
-            return [
-                GenericChatCompletionMessage(
-                    role=input_item.get("role") or "user",
-                    content=LiteLLMCompletionResponsesConfig._transform_responses_api_content_to_chat_completion_content(
-                        content
-                    ),
-                )
-            ]
+            message = GenericChatCompletionMessage(
+                role=input_item.get("role") or "user",
+                content=LiteLLMCompletionResponsesConfig._transform_responses_api_content_to_chat_completion_content(
+                    content
+                ),
+            )
+            cache_control = input_item.get("cache_control")
+            if cache_control is not None:
+                message["cache_control"] = cache_control  # type: ignore[typeddict-unknown-key]
+            return [message]
 
     @staticmethod
     def _is_input_item_tool_call_output(input_item: Any) -> bool:
@@ -1294,14 +1296,16 @@ class LiteLLMCompletionResponsesConfig:
                         text_value = item.get("text")
                         if text_value is None:
                             continue
-                        content_list.append(
-                            {
-                                "type": LiteLLMCompletionResponsesConfig._get_chat_completion_request_content_type(
-                                    item.get("type") or "text"
-                                ),
-                                "text": text_value,
-                            }
-                        )
+                        block = {
+                            "type": LiteLLMCompletionResponsesConfig._get_chat_completion_request_content_type(
+                                item.get("type") or "text"
+                            ),
+                            "text": text_value,
+                        }
+                        cache_control = item.get("cache_control")
+                        if cache_control is not None:
+                            block["cache_control"] = cache_control
+                        content_list.append(block)
             return content_list
         else:
             raise ValueError(f"Invalid content type: {type(content)}")
