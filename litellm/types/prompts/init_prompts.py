@@ -13,6 +13,7 @@ class SupportedPromptIntegrations(str, Enum):
     GITLAB = "gitlab"
     GENERIC_PROMPT_MANAGEMENT = "generic_prompt_management"
     ARIZE_PHOENIX = "arize_phoenix"
+    QUALIFIRE = "qualifire"
 
 
 class PromptInfo(BaseModel):
