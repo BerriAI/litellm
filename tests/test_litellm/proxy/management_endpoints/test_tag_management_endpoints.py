@@ -445,6 +445,7 @@ async def test_list_tags_without_date_range_omits_date_filter():
             response = client.get("/tag/list", headers=headers)
 
             assert response.status_code == 200
+            group_by_mock.assert_awaited_once()
             where = group_by_mock.await_args.kwargs["where"]
             assert "date" not in where
 

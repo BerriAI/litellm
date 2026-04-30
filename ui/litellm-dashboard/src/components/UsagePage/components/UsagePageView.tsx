@@ -162,14 +162,20 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
     if (!accessToken) return;
     let cancelled = false;
     (async () => {
-      const tags = await tagListCall(accessToken, startTime, endTime);
-      if (cancelled) return;
-      setAllTags(
-        Object.values(tags).map((tag: Tag) => ({
-          label: tag.name,
-          value: tag.name,
-        })),
-      );
+      try {
+        const tags = await tagListCall(accessToken, startTime, endTime);
+        if (cancelled) return;
+        setAllTags(
+          Object.values(tags).map((tag: Tag) => ({
+            label: tag.name,
+            value: tag.name,
+          })),
+        );
+      } catch (e) {
+        if (!cancelled) {
+          console.error("Failed to fetch tag list", e);
+        }
+      }
     })();
     return () => {
       cancelled = true;
