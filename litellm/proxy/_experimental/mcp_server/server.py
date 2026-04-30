@@ -2745,6 +2745,47 @@ if MCP_AVAILABLE:
             # set_auth_context here is a no-op for actual tool execution since the SDK
             # processes messages in background tasks that don't inherit this ContextVar.
             # Authentication must be recovered from the session-auth-storage during execution.
+
+            # P1 Security: Bind POST auth to the existing SSE session
+            session_id_param = request.query_params.get(
+                "sessionId"
+            ) or request.query_params.get("session_id")
+            if session_id_param:
+                import uuid
+
+                try:
+                    session_id = uuid.UUID(hex=session_id_param)
+                    writer = getattr(sse, "_read_stream_writers", {}).get(session_id)
+                    if writer:
+                        session_auth = None
+                        for read_stream, auth in _session_auth_storage.items():
+                            if getattr(
+                                read_stream, "_state", id(read_stream)
+                            ) is getattr(writer, "_state", id(writer)):
+                                session_auth = auth
+                                break
+
+                        if (
+                            session_auth
+                            and session_auth.user_api_key_auth
+                            and user_api_key_auth
+                        ):
+                            session_api_key = getattr(
+                                session_auth.user_api_key_auth, "api_key", None
+                            )
+                            post_api_key = getattr(user_api_key_auth, "api_key", None)
+                            if (
+                                session_api_key
+                                and post_api_key
+                                and session_api_key != post_api_key
+                            ):
+                                raise HTTPException(
+                                    status_code=403,
+                                    detail="Authentication mismatch: POST auth does not match the session owner.",
+                                )
+                except ValueError:
+                    pass
+
         except HTTPException:
             raise
         except Exception as e:

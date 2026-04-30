@@ -525,6 +525,24 @@ async def handle_sampling_create_message(
         )
         return result
     except Exception as e:
+        from litellm.exceptions import (
+            AuthenticationError,
+            BudgetExceededError,
+            PermissionDeniedError,
+            RateLimitError,
+        )
+
+        if isinstance(
+            e,
+            (
+                BudgetExceededError,
+                RateLimitError,
+                AuthenticationError,
+                PermissionDeniedError,
+            ),
+        ):
+            raise
+
         verbose_logger.exception("MCP sampling handler failed: %s", e)
         return ErrorData(
             code=-1,
