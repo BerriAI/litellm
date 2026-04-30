@@ -4073,10 +4073,10 @@ async def test_get_image_custom_local_logo_bypasses_cache(monkeypatch, tmp_path)
 
 
 @pytest.mark.asyncio
-async def test_get_image_default_logo_still_uses_cache(monkeypatch, tmp_path):
+async def test_get_image_default_logo_ignores_stale_cache(monkeypatch, tmp_path):
     """
-    Test that when UI_LOGO_PATH is NOT set (default logo), the cache
-    optimization still works — cached_logo.jpg is returned if it exists.
+    Test that when UI_LOGO_PATH is NOT set, stale pre-fix cached_logo.jpg
+    files are ignored and the default logo is served.
     """
     from unittest.mock import patch
 
@@ -4105,7 +4105,8 @@ async def test_get_image_default_logo_still_uses_cache(monkeypatch, tmp_path):
         len(calls_to_file_response) == 1
     ), "FileResponse should be called exactly once"
     served_path = calls_to_file_response[0]
-    assert served_path == str(cache_path.resolve())
+    assert served_path != str(cache_path.resolve())
+    assert served_path.endswith("logo.jpg")
 
 
 @pytest.mark.asyncio
@@ -4114,14 +4115,12 @@ async def test_get_image_custom_logo_missing_falls_through_to_default(
 ):
     """
     Test that when UI_LOGO_PATH points to a non-existent local file,
-    get_image falls through to the cache/default logo instead of failing.
+    get_image falls through to the default logo instead of failing.
     """
     from unittest.mock import patch
 
     from litellm.proxy.proxy_server import get_image
 
-    cache_path = tmp_path / "cached_logo.jpg"
-    cache_path.write_bytes(b"\xff\xd8\xff cached logo")
     custom_logo_path = tmp_path / "nonexistent_logo.jpg"
     monkeypatch.setenv("UI_LOGO_PATH", str(custom_logo_path))
     monkeypatch.delenv("LITELLM_NON_ROOT", raising=False)
@@ -4147,7 +4146,7 @@ async def test_get_image_custom_logo_missing_falls_through_to_default(
     assert served_path != str(
         custom_logo_path
     ), "Should not attempt to serve a non-existent custom logo"
-    assert served_path == str(cache_path.resolve())
+    assert served_path.endswith("logo.jpg")
 
 
 @pytest.mark.asyncio
@@ -4156,8 +4155,8 @@ async def test_get_image_custom_logo_missing_no_cache_serves_default(
 ):
     """
     Test that when UI_LOGO_PATH points to a non-existent file AND there is no
-    cached_logo.jpg, get_image serves the default logo instead of the
-    non-existent custom path.
+    cached_logo.jpg, get_image serves the default logo instead of the non-existent
+    custom path.
     """
     from unittest.mock import patch
 
