@@ -150,6 +150,12 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                     # (e.g. xAI, Gemini) include tool arguments in the same streaming
                     # chunk as the function name/id.
 
+                    # 0. Flush any held delta from the peek so it lands inside its
+                    # content block rather than after content_block_stop.
+                    if self.holding_chunk is not None:
+                        self.chunk_queue.append(self.holding_chunk)
+                        self.holding_chunk = None
+
                     # 1. Stop current content block
                     self.chunk_queue.append(
                         {
@@ -356,6 +362,12 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                         # when it carries input_json_delta data, because some providers
                         # (e.g. xAI, Gemini) include tool arguments in the same streaming
                         # chunk as the function name/id.
+
+                        # 0. Flush any held delta from the peek so it lands inside its
+                        # content block rather than after content_block_stop.
+                        if self.holding_chunk is not None:
+                            self.chunk_queue.append(self.holding_chunk)
+                            self.holding_chunk = None
 
                         # 1. Stop current content block
                         self.chunk_queue.append(

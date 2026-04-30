@@ -441,5 +441,151 @@ class TestAsyncToolUseStream:
         assert cbs["index"] == 0
 
 
+class TestSingleChunkBeforeBlockTransition:
+    """
+    When the peeked first chunk is the only delta before a block transition
+    (e.g. exactly one thinking chunk immediately followed by text), the held
+    delta must land *inside* the first content block — not after content_block_stop.
+    """
+
+    def _assert_ordering(self, events: list) -> None:
+        """
+        Assert that for every content block:
+        - all content_block_delta events for that block appear between
+          content_block_start and content_block_stop with the same index.
+        """
+        types = [e.get("type") for e in events]
+
+        start_indices = [i for i, t in enumerate(types) if t == "content_block_start"]
+        stop_indices = [i for i, t in enumerate(types) if t == "content_block_stop"]
+
+        assert len(start_indices) == len(stop_indices), (
+            f"Mismatched content_block_start/stop counts. Types: {types}"
+        )
+
+        for start_pos, stop_pos in zip(start_indices, stop_indices):
+            block_idx = events[start_pos]["index"]
+            # Every delta between start and stop must belong to this block index
+            for ev in events[start_pos + 1 : stop_pos]:
+                if ev.get("type") == "content_block_delta":
+                    assert ev.get("index") == block_idx, (
+                        f"Delta at wrong block index. Expected {block_idx}, "
+                        f"got {ev.get('index')}. Types: {types}"
+                    )
+
+    def test_sync_single_thinking_chunk_then_text(self):
+        """
+        Exactly one thinking chunk followed immediately by text. The thinking
+        delta from the peek must be flushed before content_block_stop, not after.
+        """
+        thinking_block = [{"type": "thinking", "thinking": "One thought."}]
+        chunks = [
+            make_chunk(content="", thinking_blocks=thinking_block),
+            make_chunk(content="Answer"),
+            make_finish_chunk(),
+        ]
+        events = collect_events(make_wrapper(chunks))
+        self._assert_ordering(events)
+
+        types = [e.get("type") for e in events]
+        # Must have two content blocks
+        starts = [e for e in events if e.get("type") == "content_block_start"]
+        assert len(starts) == 2, f"Expected 2 content blocks. Types: {types}"
+        assert starts[0]["content_block"]["type"] == "thinking"
+        assert starts[1]["content_block"]["type"] == "text"
+
+    def test_sync_thinking_delta_precedes_content_block_stop(self):
+        """
+        The thinking_delta should appear before the content_block_stop for the
+        thinking block — verifying the holding_chunk flush ordering.
+        """
+        thinking_block = [{"type": "thinking", "thinking": "Only thought."}]
+        chunks = [
+            make_chunk(content="", thinking_blocks=thinking_block),
+            make_chunk(content="Response"),
+            make_finish_chunk(),
+        ]
+        events = collect_events(make_wrapper(chunks))
+        types = [e.get("type") for e in events]
+
+        # Find the first content_block_stop
+        stop_idx = next(i for i, t in enumerate(types) if t == "content_block_stop")
+        # There must be at least one thinking_delta before the first stop
+        thinking_deltas_before_stop = [
+            e for e in events[:stop_idx]
+            if e.get("type") == "content_block_delta"
+            and isinstance(e.get("delta"), dict)
+            and e["delta"].get("type") == "thinking_delta"
+        ]
+        assert len(thinking_deltas_before_stop) >= 1, (
+            f"No thinking_delta before content_block_stop. Types: {types}"
+        )
+
+
+@pytest.mark.asyncio
+class TestAsyncSingleChunkBeforeBlockTransition:
+    """Async counterpart to TestSingleChunkBeforeBlockTransition."""
+
+    def _assert_ordering(self, events: list) -> None:
+        types = [e.get("type") for e in events]
+        start_indices = [i for i, t in enumerate(types) if t == "content_block_start"]
+        stop_indices = [i for i, t in enumerate(types) if t == "content_block_stop"]
+
+        assert len(start_indices) == len(stop_indices), (
+            f"Mismatched content_block_start/stop counts. Types: {types}"
+        )
+        for start_pos, stop_pos in zip(start_indices, stop_indices):
+            block_idx = events[start_pos]["index"]
+            for ev in events[start_pos + 1 : stop_pos]:
+                if ev.get("type") == "content_block_delta":
+                    assert ev.get("index") == block_idx, (
+                        f"Delta at wrong block index. Expected {block_idx}, "
+                        f"got {ev.get('index')}. Types: {types}"
+                    )
+
+    async def test_async_single_thinking_chunk_then_text(self):
+        """
+        Async: exactly one thinking chunk immediately followed by text.
+        The thinking delta must land inside the thinking block.
+        """
+        thinking_block = [{"type": "thinking", "thinking": "One thought."}]
+        chunks = [
+            make_chunk(content="", thinking_blocks=thinking_block),
+            make_chunk(content="Answer"),
+            make_finish_chunk(),
+        ]
+        events = await collect_events_async(make_async_wrapper(chunks))
+        self._assert_ordering(events)
+
+        starts = [e for e in events if e.get("type") == "content_block_start"]
+        assert len(starts) == 2
+        assert starts[0]["content_block"]["type"] == "thinking"
+        assert starts[1]["content_block"]["type"] == "text"
+
+    async def test_async_thinking_delta_precedes_content_block_stop(self):
+        """
+        Async: thinking_delta must appear before content_block_stop.
+        """
+        thinking_block = [{"type": "thinking", "thinking": "Only thought."}]
+        chunks = [
+            make_chunk(content="", thinking_blocks=thinking_block),
+            make_chunk(content="Response"),
+            make_finish_chunk(),
+        ]
+        events = await collect_events_async(make_async_wrapper(chunks))
+        types = [e.get("type") for e in events]
+
+        stop_idx = next(i for i, t in enumerate(types) if t == "content_block_stop")
+        thinking_deltas_before_stop = [
+            e for e in events[:stop_idx]
+            if e.get("type") == "content_block_delta"
+            and isinstance(e.get("delta"), dict)
+            and e["delta"].get("type") == "thinking_delta"
+        ]
+        assert len(thinking_deltas_before_stop) >= 1, (
+            f"No thinking_delta before content_block_stop. Types: {types}"
+        )
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
