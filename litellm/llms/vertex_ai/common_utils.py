@@ -69,7 +69,7 @@ def pop_vertex_request_labels(
         raw = optional_params.pop("labels")
         if isinstance(raw, dict):
             labels = {k: v for k, v in raw.items() if isinstance(v, str)}
-    if labels is None:
+    if not labels:
         labels = vertex_request_labels_from_litellm_params(litellm_params)
     return labels if labels else None
 

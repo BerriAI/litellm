@@ -1482,6 +1482,9 @@ def test_pop_vertex_request_labels_prefers_explicit_labels_then_metadata():
     optional2: dict = {}
     assert pop_vertex_request_labels(optional2, litellm_params) == {"team": "x"}
 
+    optional3 = {"labels": {"team": 123}}
+    assert pop_vertex_request_labels(optional3, litellm_params) == {"team": "x"}
+
 
 def test_pop_vertex_request_labels_uses_litellm_metadata_when_metadata_absent():
     optional: dict = {}
