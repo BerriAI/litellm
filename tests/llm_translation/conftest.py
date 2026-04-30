@@ -197,17 +197,6 @@ def setup_and_teardown(event_loop):  # Add event_loop as a dependency
         event_loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
 
 
-_VCR_RECORD_RETRIES = 3
-
-
-@pytest.fixture(autouse=True)
-def _vcr_record_retries(setup_and_teardown, request):
-    # Depends on setup_and_teardown so this runs after litellm is reloaded.
-    if request.node.get_closest_marker("vcr") is None:
-        return
-    litellm.num_retries = _VCR_RECORD_RETRIES
-
-
 def pytest_collection_modifyitems(config, items):
     if not _vcr_disabled():
         for item in items:
