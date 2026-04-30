@@ -2230,10 +2230,13 @@ if MCP_AVAILABLE:
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail={"error": "Only proxy admins can create MCP toolsets."},
             )
-        touched_by = get_audit_log_changed_by(
-            litellm_changed_by=litellm_changed_by,
-            user_api_key_dict=user_api_key_dict,
-            litellm_proxy_admin_name=LITELLM_PROXY_ADMIN_NAME,
+        touched_by = (
+            get_audit_log_changed_by(
+                litellm_changed_by=litellm_changed_by,
+                user_api_key_dict=user_api_key_dict,
+                litellm_proxy_admin_name=LITELLM_PROXY_ADMIN_NAME,
+            )
+            or LITELLM_PROXY_ADMIN_NAME
         )
         try:
             result = await create_mcp_toolset(prisma_client, payload, touched_by)
@@ -2323,10 +2326,13 @@ if MCP_AVAILABLE:
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail={"error": "Only proxy admins can update MCP toolsets."},
             )
-        touched_by = get_audit_log_changed_by(
-            litellm_changed_by=litellm_changed_by,
-            user_api_key_dict=user_api_key_dict,
-            litellm_proxy_admin_name=LITELLM_PROXY_ADMIN_NAME,
+        touched_by = (
+            get_audit_log_changed_by(
+                litellm_changed_by=litellm_changed_by,
+                user_api_key_dict=user_api_key_dict,
+                litellm_proxy_admin_name=LITELLM_PROXY_ADMIN_NAME,
+            )
+            or LITELLM_PROXY_ADMIN_NAME
         )
         try:
             result = await update_mcp_toolset(prisma_client, payload, touched_by)
