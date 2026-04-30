@@ -11,6 +11,7 @@ from litellm.proxy.client.cli.commands.auth import (
     _normalize_teams,
     _poll_for_ready_data,
     _poll_for_authentication,
+    _start_cli_sso_flow,
 )
 
 
@@ -55,6 +56,18 @@ async def test_normalize_teams_with_details_with_aliases():
         {"team_id": "2", "team_alias": "B"},
         {"team_id": "3", "team_alias": "C"},
     ]
+
+
+@patch("litellm.proxy.client.cli.commands.auth.requests.post")
+def test_start_cli_sso_flow_rejects_invalid_response(request_mock):
+    """Test CLI SSO start rejects malformed server responses"""
+    response = Mock()
+    response.raise_for_status = Mock()
+    response.json.return_value = {"login_id": "cli-session", "user_code": "ABCD-EFGH"}
+    request_mock.return_value = response
+
+    with pytest.raises(ValueError, match="Invalid CLI SSO start response"):
+        _start_cli_sso_flow("https://litellm.com")
 
 
 @pytest.mark.asyncio
