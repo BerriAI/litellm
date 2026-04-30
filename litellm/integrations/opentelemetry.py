@@ -1794,15 +1794,13 @@ class OpenTelemetry(CustomLogger):
                     # _tool_calls_kv_pair.
                     tool_calls = []
                     for out_item in output_items:
-                        if (
-                            hasattr(out_item, "get")
-                            and out_item.get("type") == "function_call"
-                        ):
+                        item_d = self._to_dict(out_item)
+                        if item_d and item_d.get("type") == "function_call":
                             tool_calls.append(
                                 {
                                     "function": {
-                                        "name": out_item.get("name", ""),
-                                        "arguments": out_item.get("arguments", ""),
+                                        "name": item_d.get("name", ""),
+                                        "arguments": item_d.get("arguments", ""),
                                     }
                                 }
                             )
@@ -1919,6 +1917,31 @@ class OpenTelemetry(CustomLogger):
             transformed.append(transformed_msg)
         return transformed
 
+    @staticmethod
+    def _to_dict(obj) -> Optional[dict]:
+        """Normalize an object to a plain dict.
+
+        Handles three forms that appear in practice:
+
+        1. Plain ``dict`` — returned as-is.
+        2. LiteLLM's ``BaseLiteLLMOpenAIResponseObject`` — exposes a
+           ``.get()`` method that delegates to ``__dict__``.
+        3. Raw Pydantic v2 models from the ``openai`` SDK (e.g.
+           ``ResponseOutputMessage``, ``ResponseOutputText``) — these do
+           **not** have ``.get()`` but do have ``.model_dump()``.
+
+        Returns ``None`` for anything else so callers can skip it.
+        """
+        if isinstance(obj, dict):
+            return obj
+        if hasattr(obj, "get"):
+            # BaseLiteLLMOpenAIResponseObject duck-type
+            return obj  # type: ignore[return-value]
+        if hasattr(obj, "model_dump"):
+            # Raw Pydantic v2 model (e.g. openai SDK types)
+            return obj.model_dump()  # type: ignore[union-attr]
+        return None
+
     def _transform_responses_api_output_to_otel(self, output: List) -> List[dict]:
         """
         Transform Responses API output items into OTEL GenAI 1.38 format.
@@ -1928,24 +1951,25 @@ class OpenTelemetry(CustomLogger):
         ``content`` list of ``OutputText`` objects with ``type="output_text"``
         and ``text`` fields.
 
-        Items may be plain dicts or Pydantic model instances (e.g.
-        ``ResponseOutputMessage``, ``ResponseFunctionToolCall``).  Both
-        expose a ``.get()`` method via ``BaseLiteLLMOpenAIResponseObject``,
-        so we use ``hasattr(item, "get")`` rather than ``isinstance(item,
-        dict)`` to accept either form.
+        Items may be plain dicts, LiteLLM wrapper objects (with ``.get()``),
+        or raw Pydantic v2 models from the ``openai`` SDK (with
+        ``.model_dump()``).  We normalize each item to a dict via
+        ``_to_dict`` before processing.
 
         This method converts them to the same ``{"role": ..., "parts": [...]}``
         format used by ``_transform_choices_to_otel_semantic_conventions``.
         """
         transformed = []
-        for item in output:
-            if not hasattr(item, "get"):
+        for raw_item in output:
+            item = self._to_dict(raw_item)
+            if item is None:
                 continue
             if item.get("type") == "message":
                 role = item.get("role", "assistant")
                 parts = []
-                for content in item.get("content", []):
-                    if not hasattr(content, "get"):
+                for raw_content in item.get("content", []):
+                    content = self._to_dict(raw_content)
+                    if content is None:
                         continue
                     if content.get("type") == "output_text":
                         text = content.get("text", "")
