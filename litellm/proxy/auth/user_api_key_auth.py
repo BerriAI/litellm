@@ -1266,6 +1266,19 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                     )
                     user_obj = None
 
+                # Defense in depth for SCIM-deprovisioned users: even if a
+                # cached key snuck past the blocked-flag check, refuse the
+                # request when the owning user has been marked inactive by
+                # the SCIM provider.
+                if (
+                    user_obj is not None
+                    and isinstance(user_obj.metadata, dict)
+                    and user_obj.metadata.get("scim_active") is False
+                ):
+                    raise Exception(
+                        f"User={valid_token.user_id} has been deactivated via SCIM. Keys owned by this user cannot be used."
+                    )
+
             # Check 2a. Check if model has zero cost - if so, skip all budget checks
             model = get_model_from_request(request_data, route)
             skip_budget_checks = False
