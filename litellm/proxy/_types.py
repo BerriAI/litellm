@@ -17,6 +17,9 @@ from typing_extensions import Required, TypedDict
 
 from litellm._uuid import uuid
 from litellm.constants import MCP_STDIO_ALLOWED_COMMANDS
+from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
+    validate_no_callback_env_reference,
+)
 from litellm.types.integrations.slack_alerting import AlertType
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -1870,6 +1873,10 @@ class AddTeamCallback(LiteLLMPydanticObjectBase):
                 )
             if not isinstance(value, str):
                 callback_vars[key] = str(value)
+                value = callback_vars[key]
+            validate_no_callback_env_reference(
+                key, value, source="key/team callback metadata"
+            )
         return values
 
 
