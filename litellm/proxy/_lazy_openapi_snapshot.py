@@ -40,7 +40,7 @@ def generate_snapshot() -> Dict[str, Dict]:
             module = importlib.import_module(feat.module_path)
             feat.register_fn(app, module)
         except Exception as exc:
-            print(f"warning: skip {feat.name}: {exc}", file=sys.stderr)
+            sys.stderr.write(f"warning: skip {feat.name}: {exc}\n")
 
     fragments: Dict[str, Dict] = {}
     for feat in LAZY_FEATURES:
@@ -67,4 +67,4 @@ def generate_snapshot() -> Dict[str, Dict]:
 if __name__ == "__main__":
     fragments = generate_snapshot()
     SNAPSHOT_FILE.write_text(json.dumps(fragments, indent=2, sort_keys=True) + "\n")
-    print(f"wrote {len(fragments)} feature fragments to {SNAPSHOT_FILE}")
+    sys.stdout.write(f"wrote {len(fragments)} feature fragments to {SNAPSHOT_FILE}\n")

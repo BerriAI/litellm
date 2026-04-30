@@ -17,7 +17,7 @@ from starlette.types import Receive, Scope, Send
 from litellm._logging import verbose_proxy_logger
 
 if TYPE_CHECKING:
-    from fastapi import FastAPI
+    from fastapi import APIRouter, FastAPI
 
 
 def _include_router(attr_name: str = "router") -> Callable[["FastAPI", object], None]:
