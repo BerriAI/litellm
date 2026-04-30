@@ -345,7 +345,7 @@ async def _fetch_global_spend_with_event_coordination(
 
     return await _global_spend_coordinator.get_or_load(
         cache_key=cache_key,
-        cache=user_api_key_cache,
+        cache=user_api_key_cache,  # pyright: ignore[reportArgumentType]
         load_fn=_load_global_spend,
     )
 
