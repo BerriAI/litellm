@@ -206,11 +206,13 @@ class TestDefaultImageCostCalculator:
         expected = 40 * 5e-6 + 160 * 1.25e-6 + 600 * 3e-5
         assert abs(cost - expected) < 1e-9
 
-    def test_token_fallback_uses_image_cache_rate_when_declared(self, monkeypatch):
-        """Image-edit responses report a single ``cached_tokens`` count;
-        when the model declares ``cache_read_input_image_token_cost`` and
-        image input tokens are present, that rate is used (and text input
-        is billed in full).
+    def test_token_fallback_splits_cached_tokens_between_text_and_image(
+        self, monkeypatch
+    ):
+        """Image-edit responses report a single ``cached_tokens`` count.
+        Charge text input first against the standard cache rate; the
+        remainder is billed at the dedicated image cache rate. Avoids
+        double-billing the text portion at the image cache rate.
         """
         monkeypatch.setitem(
             litellm.model_cost,
@@ -226,6 +228,8 @@ class TestDefaultImageCostCalculator:
             },
         )
 
+        # cached_in (300) > text_in (10) so 10 are charged at the text cache
+        # rate and the remaining 290 at the image cache rate.
         cost = default_image_cost_calculator(
             model="openai/synthetic-image-cache-model",
             custom_llm_provider="openai",
@@ -233,11 +237,11 @@ class TestDefaultImageCostCalculator:
             n=1,
             size="1280x720",
             image_response=_image_response(
-                text_in=510, image_in=1452, cached_in=300, image_out=5488
+                text_in=10, image_in=1452, cached_in=300, image_out=5488
             ),
         )
-        # text fully uncached, cached_tokens charged at image cache rate
-        expected = 510 * 5e-6 + 300 * 2e-6 + 1452 * 8e-6 + 5488 * 3e-5
+        # text uncached: 0, text cache: 10, image uncached: 1162, image cache: 290
+        expected = 0 * 5e-6 + 10 * 1.25e-6 + 1162 * 8e-6 + 290 * 2e-6 + 5488 * 3e-5
         assert abs(cost - expected) < 1e-9
 
     def test_token_fallback_returns_zero_for_free_model(self, monkeypatch):

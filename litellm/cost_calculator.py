@@ -1925,17 +1925,14 @@ def _image_cost_from_token_usage(
     image_in = _detail("prompt_tokens_details", "image_tokens")
     image_out = _detail("completion_tokens_details", "image_tokens")
 
-    if image_in > 0 and cost_info.get("cache_read_input_image_token_cost") is not None:
-        text_in_uncached = text_in
-        cache_rate_key = "cache_read_input_image_token_cost"
-    else:
-        text_in_uncached = max(text_in - cached_in, 0)
-        cache_rate_key = "cache_read_input_token_cost"
+    text_cached = min(text_in, cached_in)
+    image_cached = cached_in - text_cached
 
     rates: List[Tuple[str, int]] = [
-        ("input_cost_per_token", text_in_uncached),
-        (cache_rate_key, cached_in),
-        ("input_cost_per_image_token", image_in),
+        ("input_cost_per_token", text_in - text_cached),
+        ("cache_read_input_token_cost", text_cached),
+        ("input_cost_per_image_token", image_in - image_cached),
+        ("cache_read_input_image_token_cost", image_cached),
         ("output_cost_per_image_token", image_out),
     ]
     if not any(cost_info.get(key) is not None for key, _ in rates):
