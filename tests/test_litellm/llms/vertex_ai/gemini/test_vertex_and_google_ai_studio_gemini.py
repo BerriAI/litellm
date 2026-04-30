@@ -3499,7 +3499,12 @@ def test_video_metadata_supported_for_all_gemini_models():
         }
     ]
 
-    for model in ["gemini-1.5-pro", "gemini-2.5-flash", "gemini-2.5-pro", "gemini-3-pro-preview"]:
+    for model in [
+        "gemini-1.5-pro",
+        "gemini-2.5-flash",
+        "gemini-2.5-pro",
+        "gemini-3-pro-preview",
+    ]:
         contents = _gemini_convert_messages_with_history(messages=messages, model=model)
 
         file_part = None
@@ -3509,19 +3514,25 @@ def test_video_metadata_supported_for_all_gemini_models():
                 break
 
         assert file_part is not None, f"{model}: file part should exist"
-        assert "video_metadata" in file_part, f"{model}: video_metadata should be present"
+        assert (
+            "video_metadata" in file_part
+        ), f"{model}: video_metadata should be present"
         assert file_part["video_metadata"]["fps"] == 5, f"{model}: fps should be 5"
 
     # Per-part media_resolution is Gemini 3+ only; 2.x uses generation_config global
     for model in ["gemini-3-pro-preview"]:
         contents = _gemini_convert_messages_with_history(messages=messages, model=model)
         file_part = next(p for p in contents[0]["parts"] if "file_data" in p)
-        assert "media_resolution" in file_part, f"{model}: media_resolution should be present"
+        assert (
+            "media_resolution" in file_part
+        ), f"{model}: media_resolution should be present"
 
     for model in ["gemini-1.5-pro", "gemini-2.5-flash", "gemini-2.5-pro"]:
         contents = _gemini_convert_messages_with_history(messages=messages, model=model)
         file_part = next(p for p in contents[0]["parts"] if "file_data" in p)
-        assert "media_resolution" not in file_part, f"{model}: per-part media_resolution should not be set"
+        assert (
+            "media_resolution" not in file_part
+        ), f"{model}: per-part media_resolution should not be set"
 
 
 def test_chunk_parser_handles_prompt_feedback_block():
@@ -3905,6 +3916,142 @@ def test_vertex_ai_web_search_options_in_map_openai_params():
     ), "web_search_options should be removed after transformation"
 
 
+def test_vertex_ai_web_search_options_dropped_when_function_declarations_present():
+    """
+    Regression test for: web_search_options + function tools → Vertex AI 400.
+
+    When a request contains both function declarations (tools) and
+    web_search_options (e.g. Codex CLI sending {"type": "web_search"} alongside
+    function tools via the Responses API), the web_search_options-derived
+    googleSearch Tool must be dropped — Vertex AI rejects mixing function
+    declarations with search tools in the same request.
+
+    Bug path:
+      1. tools=[{function declarations}] processed first → optional_params["tools"]
+         gets a function_declarations Tool
+      2. web_search_options={} processed next → blindly appends googleSearch Tool
+      3. Final request = [function_declarations Tool] + [googleSearch Tool] → 400
+
+    Expected: googleSearch Tool is dropped with a warning; only the
+    function_declarations Tool remains.
+    """
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        VertexGeminiConfig,
+    )
+
+    v = VertexGeminiConfig()
+
+    function_tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "description": "Get the weather for a location",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"location": {"type": "string"}},
+                    "required": ["location"],
+                },
+            },
+        }
+    ]
+
+    result = v.map_openai_params(
+        non_default_params={
+            "tools": function_tools,
+            "web_search_options": {},
+        },
+        optional_params={},
+        model="gemini-2.0-flash",
+        drop_params=True,
+    )
+
+    tools = result.get("tools", [])
+    assert (
+        len(tools) == 1
+    ), f"Expected 1 tool (function declarations only), got {len(tools)}: {tools}"
+    assert (
+        "function_declarations" in tools[0]
+    ), "Expected function_declarations tool to be kept"
+    assert not any(
+        "googleSearch" in t for t in tools
+    ), "googleSearch Tool must be dropped when function declarations are present"
+
+
+def test_vertex_ai_web_search_options_kept_without_function_declarations():
+    """
+    web_search_options alone (no function tools) must still produce a googleSearch Tool.
+    """
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        VertexGeminiConfig,
+    )
+
+    v = VertexGeminiConfig()
+
+    result = v.map_openai_params(
+        non_default_params={"web_search_options": {}},
+        optional_params={},
+        model="gemini-2.0-flash",
+        drop_params=True,
+    )
+
+    tools = result.get("tools", [])
+    assert len(tools) == 1, f"Expected 1 tool, got {len(tools)}"
+    assert "googleSearch" in tools[0], "Expected googleSearch tool"
+
+
+def test_vertex_ai_streaming_usage_merge_into_finish_chunk():
+    """
+    Gemini sends finish_reason and usage in separate consecutive chunks.
+    ModelResponseIterator must merge them so consumers only see one final chunk
+    with both finish_reason and usage set (Codex CLI compatibility).
+    """
+    import json
+    from unittest.mock import MagicMock
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        ModelResponseIterator,
+    )
+
+    finish_chunk = json.dumps(
+        {
+            "candidates": [
+                {
+                    "content": {"parts": [{"text": "done"}], "role": "model"},
+                    "finishReason": "STOP",
+                    "index": 0,
+                }
+            ]
+        }
+    )
+    usage_chunk = json.dumps(
+        {
+            "usageMetadata": {
+                "promptTokenCount": 10,
+                "candidatesTokenCount": 5,
+                "totalTokenCount": 15,
+            }
+        }
+    )
+
+    mock_logging = MagicMock()
+    mock_logging.model = "gemini-2.0-flash"
+    mock_logging.stream_options = None
+
+    iterator = ModelResponseIterator(
+        streaming_response=iter([finish_chunk, usage_chunk]),
+        sync_stream=True,
+        logging_obj=mock_logging,
+    )
+
+    chunks = list(iterator)
+    # The two raw chunks must be collapsed into exactly one emitted chunk
+    assert len(chunks) == 1, f"Expected 1 merged chunk, got {len(chunks)}: {chunks}"
+    merged = chunks[0]
+    assert merged.choices[0].finish_reason is not None, "finish_reason must be set"
+    assert merged.usage is not None, "usage must be merged into the finish chunk"
+    assert merged.usage.total_tokens == 15
+
+
 def test_vertex_ai_service_tier_in_map_openai_params():
     """Test that service_tier is correctly mapped to optional_params."""
     from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
@@ -4154,8 +4301,9 @@ def test_vertex_ai_usage_metadata_with_document_tokens_in_prompt():
 
     # DOCUMENT tokens should be included in text_tokens: 8 (TEXT) + 774 (DOCUMENT) = 782
     assert result.prompt_tokens_details is not None
-    assert result.prompt_tokens_details.text_tokens == 782, \
-        "DOCUMENT modality tokens should be added to text_tokens (8 TEXT + 774 DOCUMENT = 782)"
+    assert (
+        result.prompt_tokens_details.text_tokens == 782
+    ), "DOCUMENT modality tokens should be added to text_tokens (8 TEXT + 774 DOCUMENT = 782)"
 
     # Verify completion token details
     assert result.completion_tokens_details is not None
@@ -4190,8 +4338,9 @@ def test_vertex_ai_usage_metadata_with_document_tokens_cached():
 
     # DOCUMENT cached tokens map to cached_text_tokens, so:
     # text_tokens = (8 TEXT + 774 DOCUMENT) - 400 cached = 382
-    assert result.prompt_tokens_details.text_tokens == 382, \
-        "text_tokens should be (8 + 774) - 400 cached = 382"
+    assert (
+        result.prompt_tokens_details.text_tokens == 382
+    ), "text_tokens should be (8 + 774) - 400 cached = 382"
     assert result.prompt_tokens_details.cached_tokens == 400
 
 

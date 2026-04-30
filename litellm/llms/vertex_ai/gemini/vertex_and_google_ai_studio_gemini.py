@@ -1199,10 +1199,21 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 response_modalities = self.map_response_modalities(value)
                 optional_params["responseModalities"] = response_modalities
             elif param == "web_search_options" and isinstance(value, dict):
-                _tools = self._map_web_search_options(value)
-                optional_params = self._add_tools_to_optional_params(
-                    optional_params, [_tools]
+                existing_tools = optional_params.get("tools", [])
+                has_function_declarations = any(
+                    isinstance(t, dict) and "function_declarations" in t
+                    for t in existing_tools
                 )
+                if not has_function_declarations:
+                    _tools = self._map_web_search_options(value)
+                    optional_params = self._add_tools_to_optional_params(
+                        optional_params, [_tools]
+                    )
+                else:
+                    verbose_logger.warning(
+                        "Vertex AI: dropping web_search_options — cannot mix search tools "
+                        "with function declarations (Vertex AI constraint)."
+                    )
             elif param == "service_tier" and isinstance(value, str):
                 self._map_service_tier_param(value, optional_params)
             elif param == "include_server_side_tool_invocations" and value is True:
@@ -3145,6 +3156,7 @@ class ModelResponseIterator:
         self.is_function_call = check_is_function_call(logging_obj)
         self.cumulative_tool_call_index: int = 0
         self.has_seen_tool_calls: bool = False
+        self.pending_stop_chunk: Optional["ModelResponseStream"] = None
 
     def _apply_stream_candidates(
         self,
@@ -3355,30 +3367,74 @@ class ModelResponseIterator:
                 - if valid - continue
                 """
                 if self.chunk_type == "valid_json":
-                    return self.handle_valid_json_chunk(chunk=chunk)
+                    result = self.handle_valid_json_chunk(chunk=chunk)
                 elif self.chunk_type == "accumulated_json":
-                    return self.handle_accumulated_json_chunk(chunk=chunk)
+                    result = self.handle_accumulated_json_chunk(chunk=chunk)
+                else:
+                    return None
+
+                if result is None:
+                    return None
+
+                # Gemini sends a trailing usage-only chunk after finish_reason.
+                # Strict OpenAI parsers (e.g. Codex CLI) finalize on finish_reason
+                # and choke on the unexpected extra event. Merge them into one.
+                choices = getattr(result, "choices", [])
+                has_finish_reason = (
+                    choices and getattr(choices[0], "finish_reason", None) is not None
+                )
+                usage = getattr(result, "usage", None)
+
+                if has_finish_reason and usage is None:
+                    self.pending_stop_chunk = result
+                    return None
+
+                if (
+                    self.pending_stop_chunk is not None
+                    and usage is not None
+                    and not has_finish_reason
+                ):
+                    self.pending_stop_chunk.usage = usage
+                    res = self.pending_stop_chunk
+                    self.pending_stop_chunk = None
+                    return res
+
+                if self.pending_stop_chunk is not None:
+                    # Unexpected chunk while waiting for usage — discard buffer,
+                    # current chunk supersedes it.
+                    self.pending_stop_chunk = None
+
+                return result
 
             return None
         except Exception:
             raise
 
     def __next__(self):
-        try:
-            chunk = self.response_iterator.__next__()
-        except StopIteration:
-            if self.chunk_type == "accumulated_json" and self.accumulated_json:
-                return self.handle_accumulated_json_chunk(chunk="")
-            raise StopIteration
-        except ValueError as e:
-            raise RuntimeError(f"Error receiving chunk from stream: {e}")
+        while True:
+            try:
+                chunk = self.response_iterator.__next__()
+            except StopIteration:
+                if self.chunk_type == "accumulated_json" and self.accumulated_json:
+                    return self.handle_accumulated_json_chunk(chunk="")
+                if self.pending_stop_chunk is not None:
+                    res = self.pending_stop_chunk
+                    self.pending_stop_chunk = None
+                    return res
+                raise StopIteration
+            except ValueError as e:
+                raise RuntimeError(f"Error receiving chunk from stream: {e}")
 
-        try:
-            return self._common_chunk_parsing_logic(chunk=chunk)
-        except StopIteration:
-            raise StopIteration
-        except ValueError as e:
-            raise RuntimeError(f"Error parsing chunk: {e},\nReceived chunk: {chunk}")
+            try:
+                result = self._common_chunk_parsing_logic(chunk=chunk)
+                if result is not None:
+                    return result
+            except StopIteration:
+                raise StopIteration
+            except ValueError as e:
+                raise RuntimeError(
+                    f"Error parsing chunk: {e},\nReceived chunk: {chunk}"
+                )
 
     # Async iterator
     def __aiter__(self):
@@ -3386,18 +3442,27 @@ class ModelResponseIterator:
         return self
 
     async def __anext__(self):
-        try:
-            chunk = await self.async_response_iterator.__anext__()
-        except StopAsyncIteration:
-            if self.chunk_type == "accumulated_json" and self.accumulated_json:
-                return self.handle_accumulated_json_chunk(chunk="")
-            raise StopAsyncIteration
-        except ValueError as e:
-            raise RuntimeError(f"Error receiving chunk from stream: {e}")
+        while True:
+            try:
+                chunk = await self.async_response_iterator.__anext__()
+            except StopAsyncIteration:
+                if self.chunk_type == "accumulated_json" and self.accumulated_json:
+                    return self.handle_accumulated_json_chunk(chunk="")
+                if self.pending_stop_chunk is not None:
+                    res = self.pending_stop_chunk
+                    self.pending_stop_chunk = None
+                    return res
+                raise StopAsyncIteration
+            except ValueError as e:
+                raise RuntimeError(f"Error receiving chunk from stream: {e}")
 
-        try:
-            return self._common_chunk_parsing_logic(chunk=chunk)
-        except StopAsyncIteration:
-            raise StopAsyncIteration
-        except ValueError as e:
-            raise RuntimeError(f"Error parsing chunk: {e},\nReceived chunk: {chunk}")
+            try:
+                result = self._common_chunk_parsing_logic(chunk=chunk)
+                if result is not None:
+                    return result
+            except StopAsyncIteration:
+                raise StopAsyncIteration
+            except ValueError as e:
+                raise RuntimeError(
+                    f"Error parsing chunk: {e},\nReceived chunk: {chunk}"
+                )
