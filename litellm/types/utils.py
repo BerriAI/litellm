@@ -3601,6 +3601,11 @@ class DynamicPromptManagementParamLiteral(str, Enum):
         return [param.value for param in cls]
 
 
+DYNAMIC_PROMPT_MANAGEMENT_PARAMS: frozenset[str] = frozenset(
+    param.value for param in DynamicPromptManagementParamLiteral
+)
+
+
 class CallbacksByType(TypedDict):
     success: List[str]
     failure: List[str]
