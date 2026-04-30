@@ -794,8 +794,15 @@ class LangFuseLogger:
                         "completion_tokens": completion_tokens,
                         "total_cost": cost if self._supports_costs() else None,
                     }
-                    # According to langfuse documentation: "the input value must be reduced by the number of cache_read_input_tokens"
-                    input_tokens = prompt_tokens - cache_read_input_tokens
+                    # Langfuse expects `input` to be the count of fresh (non-cached) input
+                    # tokens. Anthropic's `prompt_tokens` includes both cache_read_input_tokens
+                    # AND cache_creation_input_tokens, so both must be subtracted to avoid
+                    # double-counting the cache portions in the Langfuse cost breakdown.
+                    input_tokens = (
+                        prompt_tokens
+                        - cache_read_input_tokens
+                        - cache_creation_input_tokens
+                    )
                     usage_details = LangfuseUsageDetails(
                         input=input_tokens,
                         output=completion_tokens,
