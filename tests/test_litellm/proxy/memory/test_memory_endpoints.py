@@ -88,18 +88,30 @@ class _InMemoryMemoryTable:
         return [r for r in self.rows if self._matches(r, where)]
 
     async def create(self, data: Dict[str, Any]) -> MagicMock:
+        import json as _json
+
         # Key is globally unique.
         for r in self.rows:
             if r.key == data["key"]:
                 raise Exception("UniqueViolation: duplicate key")
         self._counter += 1
+        # Mirror real Prisma read-side behavior for `Json?` columns: writes
+        # come in as JSON strings (the endpoint pre-processes via
+        # `_serialize_metadata_for_prisma`), and Prisma deserializes them
+        # back to Python values on read.
+        metadata = data.get("metadata")
+        if isinstance(metadata, str):
+            try:
+                metadata = _json.loads(metadata)
+            except ValueError:
+                pass
         row = _make_row(
             memory_id=f"mem-{self._counter}",
             key=data["key"],
             value=data["value"],
             user_id=data.get("user_id"),
             team_id=data.get("team_id"),
-            metadata=data.get("metadata"),
+            metadata=metadata,
         )
         row.created_by = data.get("created_by")
         row.updated_by = data.get("updated_by")
@@ -125,9 +137,20 @@ class _InMemoryMemoryTable:
         return out
 
     async def update(self, where: Dict[str, Any], data: Dict[str, Any]) -> MagicMock:
+        import json as _json
+
         for r in self.rows:
             if r.memory_id == where["memory_id"]:
                 for k, v in data.items():
+                    # Mirror real Prisma's read behavior for `Json?` columns:
+                    # the endpoint sends JSON strings via
+                    # `_serialize_metadata_for_prisma`, and Prisma
+                    # round-trips them back to Python values.
+                    if k == "metadata" and isinstance(v, str):
+                        try:
+                            v = _json.loads(v)
+                        except ValueError:
+                            pass
                     setattr(r, k, v)
                 return r
         raise Exception("Not found")
@@ -217,6 +240,172 @@ class TestMemoryEndpoints:
         assert body["value"] == "hello"
         assert body["user_id"] == "user-a"
         assert body["team_id"] == "team-a"
+
+    def test_create_memory_with_metadata_jsonifies_for_prisma(self):
+        """
+        Regression: prisma-client-python rejects bare dicts / None on `Json?`
+        columns with `DataError: metadata should be of any of the following
+        types: NullableJsonNullValueInput, Json`. The endpoint follows the
+        rest of the proxy's pattern (`jsonify_object`) and JSON-encodes dict
+        metadata to a string before handing it to Prisma.
+        """
+        import json as _json
+
+        table = self.prisma.db.litellm_memorytable
+        original_create = table.create
+        captured: Dict[str, Any] = {}
+
+        async def spy_create(data: Dict[str, Any]):
+            captured["data"] = dict(data)
+            return await original_create(data)
+
+        table.create = spy_create  # type: ignore[assignment]
+
+        client = _make_client(_user_auth("user-a", "team-a"))
+        with _patch_prisma(self.prisma):
+            resp = client.post(
+                "/v1/memory",
+                json={
+                    "key": "agent_memory_id",
+                    "value": "hello world",
+                    "metadata": {"key": "value"},
+                },
+            )
+        assert resp.status_code == 200, resp.text
+        sent_metadata = captured["data"]["metadata"]
+        assert isinstance(sent_metadata, str)
+        assert _json.loads(sent_metadata) == {"key": "value"}
+        assert resp.json()["metadata"] == {"key": "value"}
+
+    def test_create_memory_with_list_metadata_jsonifies_for_prisma(self):
+        """
+        `metadata` is typed `Optional[Any]` — callers may legitimately send
+        a JSON array (e.g. a list of tag objects). Lists must also be
+        JSON-stringified before reaching Prisma; otherwise prisma-client-
+        python raises the same `DataError` this PR is meant to fix.
+        """
+        import json as _json
+
+        table = self.prisma.db.litellm_memorytable
+        original_create = table.create
+        captured: Dict[str, Any] = {}
+
+        async def spy_create(data: Dict[str, Any]):
+            captured["data"] = dict(data)
+            return await original_create(data)
+
+        table.create = spy_create  # type: ignore[assignment]
+
+        client = _make_client(_user_auth("user-a", "team-a"))
+        with _patch_prisma(self.prisma):
+            resp = client.post(
+                "/v1/memory",
+                json={
+                    "key": "agent_memory_id",
+                    "value": "hello world",
+                    "metadata": [{"tag": "work"}, {"tag": "shared"}],
+                },
+            )
+        assert resp.status_code == 200, resp.text
+        sent_metadata = captured["data"]["metadata"]
+        assert isinstance(sent_metadata, str)
+        assert _json.loads(sent_metadata) == [{"tag": "work"}, {"tag": "shared"}]
+        assert resp.json()["metadata"] == [{"tag": "work"}, {"tag": "shared"}]
+
+    def test_put_memory_with_list_metadata_jsonifies_for_prisma(self):
+        """Same regression as the POST list-metadata test, but for PUT-create."""
+        import json as _json
+
+        table = self.prisma.db.litellm_memorytable
+        original_create = table.create
+        captured: Dict[str, Any] = {}
+
+        async def spy_create(data: Dict[str, Any]):
+            captured["data"] = dict(data)
+            return await original_create(data)
+
+        table.create = spy_create  # type: ignore[assignment]
+
+        client = _make_client(_user_auth("user-a", "team-a"))
+        with _patch_prisma(self.prisma):
+            resp = client.put(
+                "/v1/memory/notes",
+                json={"value": "v", "metadata": [1, 2, 3]},
+            )
+        assert resp.status_code == 200, resp.text
+        sent_metadata = captured["data"]["metadata"]
+        assert isinstance(sent_metadata, str)
+        assert _json.loads(sent_metadata) == [1, 2, 3]
+        assert resp.json()["metadata"] == [1, 2, 3]
+
+    def test_put_memory_update_with_list_metadata_jsonifies_for_prisma(self):
+        """Same regression as the POST list-metadata test, but for PUT-update."""
+        import json as _json
+
+        table = self.prisma.db.litellm_memorytable
+        table.rows.append(
+            _make_row(
+                memory_id="m1",
+                key="notes",
+                value="old",
+                user_id="user-a",
+                team_id="team-a",
+                metadata={"tag": "old"},
+            )
+        )
+
+        original_update = table.update
+        captured: Dict[str, Any] = {}
+
+        async def spy_update(where, data):
+            captured["data"] = dict(data)
+            return await original_update(where, data)
+
+        table.update = spy_update  # type: ignore[assignment]
+
+        client = _make_client(_user_auth("user-a", "team-a"))
+        with _patch_prisma(self.prisma):
+            resp = client.put(
+                "/v1/memory/notes",
+                json={"metadata": [{"a": 1}]},
+            )
+        assert resp.status_code == 200, resp.text
+        sent_metadata = captured["data"]["metadata"]
+        assert isinstance(sent_metadata, str)
+        assert _json.loads(sent_metadata) == [{"a": 1}]
+        assert resp.json()["metadata"] == [{"a": 1}]
+
+    def test_create_memory_with_string_metadata_jsonifies_for_prisma(self):
+        """
+        `metadata: Optional[Any]` permits JSON scalars too (string, number,
+        bool). A bare Python string like `"hello"` is NOT valid JSON for
+        Postgres `jsonb` — it must be JSON-encoded as `"\"hello\""`.
+        Without that encoding Prisma still raises `DataError`.
+        """
+        import json as _json
+
+        table = self.prisma.db.litellm_memorytable
+        original_create = table.create
+        captured: Dict[str, Any] = {}
+
+        async def spy_create(data: Dict[str, Any]):
+            captured["data"] = dict(data)
+            return await original_create(data)
+
+        table.create = spy_create  # type: ignore[assignment]
+
+        client = _make_client(_user_auth("user-a", "team-a"))
+        with _patch_prisma(self.prisma):
+            resp = client.post(
+                "/v1/memory",
+                json={"key": "k", "value": "v", "metadata": "hello"},
+            )
+        assert resp.status_code == 200, resp.text
+        sent_metadata = captured["data"]["metadata"]
+        assert isinstance(sent_metadata, str)
+        # Encoded as JSON string literal — `_json.loads` round-trips back.
+        assert _json.loads(sent_metadata) == "hello"
+        assert resp.json()["metadata"] == "hello"
 
     def test_create_memory_duplicate_key_returns_409(self):
         client = _make_client(_user_auth("user-a", "team-a"))
@@ -460,7 +649,44 @@ class TestMemoryEndpoints:
         assert len(table.rows) == 1
 
     def test_put_memory_explicit_null_metadata_clears_field(self):
-        """PUT with `metadata: null` should clear the metadata column (not silently drop the field)."""
+        """
+        prisma-client-python can't write a true SQL NULL to a `Json?` column
+        (no `JsonNull`/`DbNull` sentinel — see
+        RobertCraigie/prisma-client-py#714). We instead encode an explicit
+        `metadata: null` as the JSON literal `null` (Postgres `jsonb 'null'`).
+        prisma deserializes that back to Python `None` on read, so from a
+        caller's perspective the field is cleared — matching the natural
+        expectation of `PUT {"metadata": null}`.
+        """
+        table = self.prisma.db.litellm_memorytable
+        table.rows.append(
+            _make_row(
+                memory_id="m1",
+                key="notes",
+                value="v",
+                user_id="user-a",
+                team_id="team-a",
+                metadata={"tag": "old"},
+            )
+        )
+        client = _make_client(_user_auth("user-a", "team-a"))
+        with _patch_prisma(self.prisma):
+            resp = client.put(
+                "/v1/memory/notes", json={"value": "new", "metadata": None}
+            )
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["value"] == "new"
+        assert body["metadata"] is None
+        assert table.rows[0].metadata is None
+
+    def test_put_memory_null_metadata_alone_clears_field(self):
+        """
+        A payload that ONLY carries `metadata: null` should clear the
+        column — the field is effective, not skipped. (Earlier iterations
+        of this PR treated explicit-null as a no-op and surfaced 400; we
+        now write JSON `null` so the column reads back as None.)
+        """
         table = self.prisma.db.litellm_memorytable
         table.rows.append(
             _make_row(
@@ -476,8 +702,7 @@ class TestMemoryEndpoints:
         with _patch_prisma(self.prisma):
             resp = client.put("/v1/memory/notes", json={"metadata": None})
         assert resp.status_code == 200, resp.text
-        body = resp.json()
-        assert body["metadata"] is None
+        assert resp.json()["metadata"] is None
         assert table.rows[0].metadata is None
 
     def test_put_memory_omitted_metadata_preserves_field(self):

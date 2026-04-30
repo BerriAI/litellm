@@ -474,6 +474,10 @@ async def retrieve_batch(  # noqa: PLR0915
             )
             # Fix: The helper sets "file_id" but we need "batch_id"
             data["batch_id"] = data.pop("file_id", original_batch_id)
+            # Provider-config providers (e.g. bedrock) require `model` in kwargs
+            # so litellm.aretrieve_batch can load BedrockBatchesConfig. Without
+            # it the call falls into the legacy provider switch and 400s.
+            data["model"] = model_from_id
 
             # Retrieve batch using model credentials
             response = await litellm.aretrieve_batch(

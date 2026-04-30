@@ -6,9 +6,11 @@ from typing import Any, List, Optional, Tuple
 
 from fastapi import HTTPException, Request, status
 
+import litellm
 from litellm import Router, provider_list
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import STANDARD_CUSTOMER_ID_HEADERS
+from litellm.litellm_core_utils.url_utils import SSRFError, validate_url
 from litellm.proxy._types import *
 from litellm.types.router import CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS
 
@@ -53,6 +55,12 @@ def _check_valid_ip(
 def check_complete_credentials(request_body: dict) -> bool:
     """
     if 'api_base' in request body. Check if complete credentials given. Prevent malicious attacks.
+
+    Supplying an ``api_key`` is necessary but not sufficient: even with
+    credentials supplied, an ``api_base`` / ``base_url`` that resolves to a
+    private/internal/cloud-metadata address would still allow the proxy to
+    be used as an SSRF pivot. Validate any URL fields here so the gate
+    can't be bypassed with ``api_key=anything`` plus a malicious target.
     """
     given_model: Optional[str] = None
 
@@ -70,10 +78,27 @@ def check_complete_credentials(request_body: dict) -> bool:
         return False
 
     api_key_value = request_body.get("api_key")
-    if api_key_value and isinstance(api_key_value, str) and api_key_value.strip():
-        return True
+    if not (api_key_value and isinstance(api_key_value, str) and api_key_value.strip()):
+        return False
 
-    return False
+    # ``validate_url`` itself doesn't consult the toggle; ``safe_get`` /
+    # ``async_safe_get`` do. Mirror that here so admins who explicitly
+    # disabled URL validation (e.g. for an internal Ollama endpoint they
+    # accept the SSRF risk for) aren't blocked at the proxy boundary.
+    if getattr(litellm, "user_url_validation", False):
+        for url_field in ("api_base", "base_url"):
+            url_value = request_body.get(url_field)
+            if not url_value or not isinstance(url_value, str):
+                continue
+            try:
+                validate_url(url_value)
+            except SSRFError as e:
+                raise ValueError(
+                    f"Rejected request: client-side {url_field}={url_value!r} "
+                    f"is rejected by the SSRF guard ({e})."
+                )
+
+    return True
 
 
 def check_regex_or_str_match(request_body_value: Any, regex_str: str) -> bool:
@@ -159,15 +184,42 @@ def is_request_body_safe(
         "aws_web_identity_token",
         "aws_role_name",
         "vertex_credentials",
+        # Endpoint-targeting fields that retarget the outbound request or
+        # an observability callback. An attacker-controlled value either
+        # exfiltrates the request payload (incl. messages + admin-set
+        # tokens) to the attacker's host, or coerces the proxy into
+        # authenticating against the attacker's host with admin secrets.
+        "aws_bedrock_runtime_endpoint",
+        "langsmith_base_url",
+        "langfuse_host",
+        "posthog_host",
+        "braintrust_host",
+        "slack_webhook_url",
+        # Provider-specific endpoint overrides that flow into the outbound
+        # request via ``optional_params``. Same threat as ``api_base``:
+        # ``s3_endpoint_url`` redirects Bedrock file uploads to attacker
+        # S3; ``sagemaker_base_url`` redirects all SageMaker traffic;
+        # ``deployment_url`` redirects SAP deployments.
+        "s3_endpoint_url",
+        "sagemaker_base_url",
+        "deployment_url",
     ]
 
+    # The blocklist is enforced unconditionally. Legitimate clientside
+    # credential / endpoint passthrough goes through one of the two
+    # explicit admin opt-ins (``general_settings.allow_client_side_credentials``
+    # proxy-wide or ``configurable_clientside_auth_params`` per deployment).
+    # Historically there was a third, *implicit*, *caller-controlled* path:
+    # ``check_complete_credentials`` returned True when the caller supplied
+    # any non-empty ``api_key``, which made the entire blocklist a no-op.
+    # That bypass turned every missing entry on the blocklist into an
+    # exploitable SSRF / credential-exfil hole — see GHSA-jh89-88fc-qrfp,
+    # GHSA-3frq-6r6h-7j64, and the chain of veria-admin findings (Dv_m860l,
+    # b_yRJeQ5, stN90yjP, LBlyOAc8, U2TD78kg). Removed: the blocklist now
+    # has a single, predictable failure mode for missing entries (a 400),
+    # not a credential leak.
     for param in banned_params:
-        if (
-            param in request_body
-            and not check_complete_credentials(  # allow client-credentials to be passed to proxy
-                request_body=request_body
-            )
-        ):
+        if param in request_body:
             if general_settings.get("allow_client_side_credentials") is True:
                 return True
             elif (
@@ -182,7 +234,10 @@ def is_request_body_safe(
                 return True
             raise ValueError(
                 f"Rejected Request: {param} is not allowed in request body. "
-                "Enable with `general_settings::allow_client_side_credentials` on proxy config.yaml. "
+                "Clientside passthrough requires explicit admin opt-in via "
+                "either `general_settings.allow_client_side_credentials = true` "
+                "(proxy-wide) or `configurable_clientside_auth_params` on the "
+                "deployment in your proxy config.yaml. "
                 "Relevant Issue: https://huntr.com/bounties/4001e1a2-7b7a-4776-a3ae-e6692ec3d997",
             )
 
