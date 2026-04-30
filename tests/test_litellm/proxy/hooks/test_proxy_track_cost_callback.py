@@ -320,6 +320,54 @@ async def test_update_database_and_spend_counters_releases_reservation_when_db_u
 
 
 @pytest.mark.asyncio
+async def test_update_database_and_spend_counters_preserves_db_exception_when_release_fails():
+    proxy_logging_obj = MagicMock()
+    db_exception = RuntimeError("db unavailable")
+    proxy_logging_obj.db_spend_update_writer.update_database = AsyncMock(
+        side_effect=db_exception
+    )
+    increment_spend_counters = AsyncMock()
+    budget_reservation = {"reserved_cost": 0.5, "entries": []}
+
+    with (
+        patch(
+            "litellm.proxy.spend_tracking.budget_reservation.release_budget_reservation",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("release unavailable"),
+        ) as mock_release_budget_reservation,
+        patch(
+            "litellm.proxy.hooks.proxy_track_cost_callback.verbose_proxy_logger.exception",
+        ) as mock_log_exception,
+    ):
+        with pytest.raises(RuntimeError) as exc_info:
+            await _update_database_and_spend_counters(
+                proxy_logging_obj=proxy_logging_obj,
+                increment_spend_counters=increment_spend_counters,
+                user_api_key="test_api_key",
+                user_id="test_user_id",
+                end_user_id=None,
+                team_id="test_team_id",
+                org_id="test_org_id",
+                kwargs={},
+                completion_response=None,
+                start_time=datetime.now(),
+                end_time=datetime.now(),
+                response_cost=0.2,
+                budget_reservation=budget_reservation,
+            )
+
+        assert exc_info.value is db_exception
+        mock_release_budget_reservation.assert_awaited_once_with(
+            budget_reservation=budget_reservation,
+        )
+        mock_log_exception.assert_called_once_with(
+            "Failed to release budget reservation after database update failed"
+        )
+
+    increment_spend_counters.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_update_database_and_spend_counters_updates_counters_after_db_update():
     proxy_logging_obj = MagicMock()
     proxy_logging_obj.db_spend_update_writer.update_database = AsyncMock()

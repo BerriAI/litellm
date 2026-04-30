@@ -437,7 +437,12 @@ async def _update_database_and_spend_counters(
         )
     except Exception:
         if budget_reservation is not None:
-            await _release_budget_reservation(budget_reservation=budget_reservation)
+            try:
+                await _release_budget_reservation(budget_reservation=budget_reservation)
+            except Exception:
+                verbose_proxy_logger.exception(
+                    "Failed to release budget reservation after database update failed"
+                )
         raise
 
     try:
