@@ -1412,6 +1412,112 @@ jobs:
       # Store test results
       - store_test_results:
           path: test-results
+  
+  e2e_claude_code_integrations:
+    machine:
+      image: ubuntu-2204:2024.04.1
+    resource_class: large
+    working_directory: ~/project
+    steps:
+      - checkout
+      - setup_google_dns
+      - start_postgres
+      - attach_workspace:
+          at: ~/project
+      - run:
+          name: Load Docker Database Image
+          command: |
+            zstd -d litellm-docker-database.tar.zst --stdout | docker load
+            docker images | grep litellm-docker-database
+      - run:
+          name: Run Proxy Docker container
+          command: |
+            docker run -d \
+              -p 4000:4000 \
+              -e DATABASE_URL=postgresql://postgres:postgres@host.docker.internal:5432/circle_test \
+              -e DATABASE_URL=postgresql://postgres:postgres@host.docker.internal:5432/circle_test \
+              -e AZURE_API_KEY=$AZURE_API_KEY \
+              -e AZURE_API_BASE=$AZURE_API_BASE \
+              -e AZURE_API_VERSION="2024-05-01-preview" \
+              -e REDIS_HOST=$REDIS_HOST \
+              -e REDIS_PASSWORD=$REDIS_PASSWORD \
+              -e REDIS_PORT=$REDIS_PORT \
+              -e AZURE_FRANCE_API_KEY=$AZURE_FRANCE_API_KEY \
+              -e AZURE_EUROPE_API_KEY=$AZURE_EUROPE_API_KEY \
+              -e MISTRAL_API_KEY=$MISTRAL_API_KEY \
+              -e AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID \
+              -e GROQ_API_KEY=$GROQ_API_KEY \
+              -e ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY \
+              -e COHERE_API_KEY=$COHERE_API_KEY \
+              -e AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY \
+              -e AWS_REGION_NAME=$AWS_REGION_NAME \
+              -e AUTO_INFER_REGION=True \
+              -e USE_DDTRACE=True \
+              -e DD_API_KEY=$DD_API_KEY \
+              -e DD_SITE=$DD_SITE \
+              -e OPENAI_API_KEY=$OPENAI_API_KEY \
+              -e LITELLM_LICENSE=$LITELLM_LICENSE \
+              -e LANGFUSE_PROJECT1_PUBLIC=$LANGFUSE_PROJECT1_PUBLIC \
+              -e LANGFUSE_PROJECT2_PUBLIC=$LANGFUSE_PROJECT2_PUBLIC \
+              -e LANGFUSE_PROJECT1_SECRET=$LANGFUSE_PROJECT1_SECRET \
+              -e LANGFUSE_PROJECT2_SECRET=$LANGFUSE_PROJECT2_SECRET \
+              --add-host host.docker.internal:host-gateway \
+              --name proxy \
+              -v $(pwd)/litellm/proxy/example_config_yaml/oai_misc_config.yaml:/app/config.yaml \
+              litellm-docker-database:ci \
+              --config /app/config.yaml \
+              --port 4000 \
+              --detailed_debug \
+      - run:
+          name: Start outputting logs
+          command: docker logs -f proxy 2>&1 | sed 's/^/proxy >> /'
+          background: true
+      - run:
+          name: Build Claude Code Image
+          command: |
+            docker build \
+              -t litellm-claude-code:ci \
+              -f docker/Dockerfile.claude_code .
+      - wait_for_service:
+          url: http://localhost:4000
+          timeout: "300"
+      - run:
+          name: Run Claude Code Docker container
+          command: |
+            mkdir -p test-results
+            set +e
+            OUTPUT=$(timeout 120s docker run --rm \
+              --name claude \
+              --network host \
+              -e ANTHROPIC_BASE_URL="http://localhost:4000" \
+              -e ANTHROPIC_AUTH_TOKEN="sk-1234" \
+              litellm-claude-code:ci \
+              --print "Reply with exactly: gateway-ok" \
+              --model gpt-3.5-turbo-end-user-test 2>&1)
+            EXIT_CODE=$?
+            set -e
+            echo "$OUTPUT"
+            if [ "$EXIT_CODE" -eq 0 ] && echo "$OUTPUT" | grep -q "gateway-ok"; then
+              cat > test-results/junit.xml << EOF
+            <testsuite name="claude_code_gateway_e2e" tests="1" failures="0">
+              <testcase classname="claude_code_gateway_e2e" name="claude_code_can_call_litellm_gateway"/>
+            </testsuite>
+            EOF
+            else
+              ESCAPED_OUTPUT=$(printf '%s' "$OUTPUT" | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g')
+              cat > test-results/junit.xml << EOF
+            <testsuite name="claude_code_gateway_e2e" tests="1" failures="1">
+              <testcase classname="claude_code_gateway_e2e" name="claude_code_can_call_litellm_gateway">
+                <failure message="Claude Code gateway smoke test failed">${ESCAPED_OUTPUT}</failure>
+              </testcase>
+            </testsuite>
+            EOF
+              exit 1
+            fi
+      # Store test results
+      - store_test_results:
+          path: test-results
+
   proxy_logging_guardrails_model_info_tests:
     machine:
       image: ubuntu-2204:2024.04.1
@@ -2247,7 +2353,6 @@ jobs:
           paths:
             - litellm-docker-database.tar.zst
 
-
   test_bad_database_url:
     machine:
       image: ubuntu-2204:2024.04.1
@@ -2327,6 +2432,10 @@ workflows:
             - build_docker_database_image
           filters: *main_branches
       - e2e_openai_endpoints:
+          requires:
+            - build_docker_database_image
+          filters: *main_branches
+      - e2e_claude_code_integrations:
           requires:
             - build_docker_database_image
           filters: *main_branches
