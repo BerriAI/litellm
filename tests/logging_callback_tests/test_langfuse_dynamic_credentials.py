@@ -3,6 +3,7 @@ from types import ModuleType, SimpleNamespace
 
 import litellm
 from litellm.integrations.langfuse.langfuse import resolve_langfuse_credentials
+from litellm.integrations.langfuse.langfuse_handler import LangFuseHandler
 
 
 def test_resolve_langfuse_credentials_does_not_use_env_for_dynamic_host(monkeypatch):
@@ -81,3 +82,48 @@ def test_upstream_langfuse_debug_env_is_passed(monkeypatch):
 
     assert logger.upstream_langfuse_debug == "true"
     assert FakeLangfuse.instances[-1].kwargs["debug"] is True
+
+
+def test_langfuse_handler_accepts_secret_key_alias(monkeypatch):
+    captured = {}
+
+    class FakeLangFuseLogger:
+        def __init__(
+            self,
+            *,
+            langfuse_public_key=None,
+            langfuse_secret=None,
+            langfuse_host=None,
+            allow_env_credentials=True,
+        ):
+            captured["langfuse_public_key"] = langfuse_public_key
+            captured["langfuse_secret"] = langfuse_secret
+            captured["langfuse_host"] = langfuse_host
+            captured["allow_env_credentials"] = allow_env_credentials
+
+    class FakeDynamicLoggingCache:
+        def set_cache(self, *, credentials, service_name, logging_obj):
+            captured["cached_credentials"] = credentials
+            captured["cached_service_name"] = service_name
+            captured["cached_logging_obj"] = logging_obj
+
+    monkeypatch.setattr(
+        "litellm.integrations.langfuse.langfuse_handler.LangFuseLogger",
+        FakeLangFuseLogger,
+    )
+
+    logger = LangFuseHandler._create_langfuse_logger_from_credentials(
+        credentials={
+            "langfuse_public_key": "dynamic-public",
+            "langfuse_secret_key": "dynamic-secret",
+            "langfuse_host": "https://langfuse.example",
+        },
+        in_memory_dynamic_logger_cache=FakeDynamicLoggingCache(),
+    )
+
+    assert captured["langfuse_public_key"] == "dynamic-public"
+    assert captured["langfuse_secret"] == "dynamic-secret"
+    assert captured["langfuse_host"] == "https://langfuse.example"
+    assert captured["allow_env_credentials"] is False
+    assert captured["cached_service_name"] == "langfuse"
+    assert captured["cached_logging_obj"] is logger
