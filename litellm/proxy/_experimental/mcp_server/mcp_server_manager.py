@@ -12,7 +12,6 @@ import hashlib
 import json
 import os
 import re
-import socket
 from typing import Any, Callable, Dict, List, Literal, Optional, Set, Tuple, Union, cast
 from urllib.parse import urlparse
 
@@ -42,7 +41,7 @@ from litellm.constants import (
     MCP_TOOL_LISTING_TIMEOUT,
 )
 from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
-from litellm.litellm_core_utils.url_utils import _is_blocked_ip
+from litellm.litellm_core_utils.url_utils import SSRFError, async_safe_get
 from litellm.experimental_mcp_client.client import MCPClient, MCPSigV4Auth
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
@@ -1502,27 +1501,15 @@ class MCPServerManager:
         return await client.get_prompt(get_prompt_request_params)
 
     @staticmethod
-    def _is_safe_metadata_url(url: str, server_url: str) -> bool:
+    def _is_same_authority_metadata_url(url: str, server_url: str) -> bool:
         """
-        Whether ``url`` is safe to fetch during OAuth discovery for ``server_url``.
+        Whether ``url`` shares scheme, host, and port with ``server_url``.
 
-        OAuth metadata discovery follows attacker-influenceable URLs from a
-        WWW-Authenticate header and from the protected-resource-metadata JSON.
-        Without a guard those become an SSRF primitive: a malicious MCP server
-        can point the proxy at cloud metadata services, internal admin panels,
-        or loopback debug endpoints.
-
-        A URL is allowed when:
-          - it shares (scheme, host, port) with ``server_url`` — well-known
-            endpoints constructed from the admin's URL, and PRM published at
-            the resource server itself per RFC 9728 §3.3, OR
-          - it resolves to one or more public IPs only — covers federated
-            authorization servers (Azure Entra, Google, Okta, GitHub) hosted
-            cross-origin from the resource.
-
-        URLs that resolve to private / loopback / link-local / cloud-metadata
-        addresses, or that don't resolve at all, are rejected. ``http`` and
-        ``https`` are the only schemes accepted.
+        Same-authority metadata URLs are produced by our well-known discovery
+        construction and by resource servers that publish protected-resource
+        metadata on the resource origin. These must keep working for
+        administrator-configured internal MCP servers, so they are fetched
+        directly. Cross-origin URLs are fetched through ``async_safe_get``.
         """
         try:
             target = urlparse(url)
@@ -1535,37 +1522,24 @@ class MCPServerManager:
 
         target_port = target.port or (443 if target.scheme == "https" else 80)
         base_port = base.port or (443 if base.scheme == "https" else 80)
-        same_authority = (
+        return (
             base.scheme == target.scheme
             and (base.hostname or "").lower() == target.hostname.lower()
             and base_port == target_port
         )
-        if same_authority:
-            return True
 
-        try:
-            infos = socket.getaddrinfo(
-                target.hostname, target_port, type=socket.SOCK_STREAM
-            )
-        except socket.gaierror:
-            return False
-
-        if not infos:
-            return False
-
-        # Reuse the proxy-wide outbound block list (private / loopback /
-        # link-local / multicast / reserved / cloud-fabric IPs).  Defence
-        # in depth only — the resolution here and the one httpx performs at
-        # request time leave a small DNS-rebinding window; an attacker who
-        # also controls the resource server is already in scope, so the
-        # primary mitigation is the same-authority pin above.
-        for info in infos:
-            sockaddr_host = info[4][0]
-            if not isinstance(sockaddr_host, str):
-                return False
-            if _is_blocked_ip(sockaddr_host):
-                return False
-        return True
+    async def _fetch_oauth_discovery_url(self, url: str, server_url: str) -> Any:
+        client = get_async_httpx_client(
+            llm_provider=httpxSpecialProvider.MCP,
+            params={"timeout": MCP_METADATA_TIMEOUT},
+        )
+        if self._is_same_authority_metadata_url(url, server_url):
+            # Same-authority URLs may point at administrator-configured
+            # internal MCP servers. Do not run them through user URL
+            # validation, but also do not follow redirects because the
+            # redirect target would not inherit the same-authority guarantee.
+            return await client.get(url, follow_redirects=False)
+        return await async_safe_get(client, url)
 
     async def _descovery_metadata(
         self,
@@ -1689,26 +1663,21 @@ class MCPServerManager:
         if not resource_metadata_url:
             return [], None
 
-        if not self._is_safe_metadata_url(resource_metadata_url, server_url):
-            verbose_logger.warning(
-                "MCP OAuth discovery: refusing to fetch resource metadata from %s "
-                "(rejected by SSRF guard for server %s)",
-                resource_metadata_url,
-                server_url,
-            )
-            return [], None
-
         try:
-            client = get_async_httpx_client(
-                llm_provider=httpxSpecialProvider.MCP,
-                params={"timeout": MCP_METADATA_TIMEOUT},
+            response = await self._fetch_oauth_discovery_url(
+                resource_metadata_url, server_url
             )
-            # Redirects bypass the SSRF guard (the new ``Location`` is not
-            # re-checked against ``server_url``), so refuse to follow them.
-            # Spec-compliant OAuth metadata endpoints serve the JSON directly.
-            response = await client.get(resource_metadata_url, follow_redirects=False)
             response.raise_for_status()
             data = response.json()
+        except SSRFError as exc:
+            verbose_logger.warning(
+                "MCP OAuth discovery: refusing to fetch resource metadata from %s "
+                "(rejected by SSRF guard for server %s): %s",
+                resource_metadata_url,
+                server_url,
+                exc,
+            )
+            return [], None
         except Exception as exc:  # pragma: no cover - network issues
             verbose_logger.debug(
                 "Failed to fetch MCP OAuth metadata from %s: %s",
@@ -1802,26 +1771,19 @@ class MCPServerManager:
         candidate_urls.append(issuer_url.rstrip("/"))
 
         for url in candidate_urls:
-            if not self._is_safe_metadata_url(url, server_url):
-                verbose_logger.warning(
-                    "MCP OAuth discovery: refusing to fetch authorization-server "
-                    "metadata from %s (rejected by SSRF guard for server %s)",
-                    url,
-                    server_url,
-                )
-                continue
             try:
-                client = get_async_httpx_client(
-                    llm_provider=httpxSpecialProvider.MCP,
-                    params={"timeout": MCP_METADATA_TIMEOUT},
-                )
-                # Disable redirects: a redirect to a private IP would bypass
-                # the SSRF guard (the ``Location`` target is not re-checked
-                # against ``server_url``).  Spec-compliant OAuth/OIDC
-                # metadata endpoints serve the JSON directly.
-                response = await client.get(url, follow_redirects=False)
+                response = await self._fetch_oauth_discovery_url(url, server_url)
                 response.raise_for_status()
                 data = response.json()
+            except SSRFError as exc:
+                verbose_logger.warning(
+                    "MCP OAuth discovery: refusing to fetch authorization-server "
+                    "metadata from %s (rejected by SSRF guard for server %s): %s",
+                    url,
+                    server_url,
+                    exc,
+                )
+                continue
             except Exception as exc:  # pragma: no cover - network issues
                 verbose_logger.debug(
                     "Failed to fetch authorization metadata from %s: %s",
