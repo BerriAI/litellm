@@ -540,6 +540,41 @@ def _decode_oauth_payload(stored: str) -> Optional[Dict[str, Any]]:
     return None
 
 
+async def rotate_mcp_user_credentials_master_key(
+    prisma_client: PrismaClient, new_master_key: str
+):
+    """Re-encrypt every ``LiteLLM_MCPUserCredentials`` row with ``new_master_key``.
+
+    Reads each ``credential_b64`` with the current salt key (falling back to
+    legacy plain base64 for unmigrated rows) and writes it back encrypted
+    under the new master key.  Rows that are unreadable under both paths
+    are logged and skipped so one corrupt row does not abort the rotation.
+    """
+    rows = await prisma_client.db.litellm_mcpusercredentials.find_many()
+    for row in rows:
+        plaintext = _decode_user_credential(row.credential_b64)
+        if plaintext is None:
+            verbose_proxy_logger.warning(
+                "rotate_mcp_user_credentials_master_key: could not decode "
+                "credential for user_id=%s server_id=%s, skipping",
+                row.user_id,
+                row.server_id,
+            )
+            continue
+        re_encrypted = encrypt_value_helper(
+            plaintext, new_encryption_key=new_master_key
+        )
+        await prisma_client.db.litellm_mcpusercredentials.update(
+            where={
+                "user_id_server_id": {
+                    "user_id": row.user_id,
+                    "server_id": row.server_id,
+                }
+            },
+            data={"credential_b64": re_encrypted},
+        )
+
+
 async def store_user_credential(
     prisma_client: PrismaClient,
     user_id: str,
