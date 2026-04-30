@@ -8,19 +8,21 @@ from .base import GuardrailConfigModel
 
 
 class WonderFenceGuardrailConfigModel(GuardrailConfigModel):
-    """Configuration parameters for the Alice WonderFence guardrail."""
+    """Configuration parameters for the Alice WonderFence guardrail.
+
+    Per-request ``api_key`` and ``app_id`` are read from request / API-key /
+    team metadata using these keys: ``alice_wonderfence_api_key``,
+    ``alice_wonderfence_app_id``. ``api_id`` has no default. ``api_key`` falls
+    back to the value below or the ``ALICE_API_KEY`` env var.
+    """
 
     api_key: Optional[str] = Field(
         default=None,
-        description="API key for WonderFence. Can also be set via ALICE_API_KEY.",
+        description="Default API key for WonderFence (overridable per request via metadata.alice_wonderfence_api_key). Env: ALICE_API_KEY.",
     )
     api_base: Optional[str] = Field(
         default=None,
         description="Override for WonderFence API base URL.",
-    )
-    app_name: Optional[str] = Field(
-        default=None,
-        description="Application name for WonderFence. Can also be set via ALICE_APP_NAME env var.",
     )
     api_timeout: Optional[float] = Field(
         default=20.0,
@@ -32,7 +34,23 @@ class WonderFenceGuardrailConfigModel(GuardrailConfigModel):
     )
     fail_open: Optional[bool] = Field(
         default=False,
-        description="When True, proceed with the request/response if WonderFence is unreachable. Default: False (fail closed).",
+        description="When True, proceed with the request/response if WonderFence is unreachable. BLOCK actions are always enforced. Default: False (fail closed).",
+    )
+    block_message: Optional[str] = Field(
+        default="Content violates our policies and has been blocked",
+        description="User-facing error message returned when content is blocked.",
+    )
+    debug: Optional[bool] = Field(
+        default=False,
+        description="Set guardrail logger to DEBUG level.",
+    )
+    max_cached_clients: Optional[int] = Field(
+        default=10,
+        description="Max SDK clients cached per guardrail (LRU, keyed by api_key). Env: ALICE_MAX_CACHED_CLIENTS.",
+    )
+    connection_pool_limit: Optional[int] = Field(
+        default=None,
+        description="Max connections per SDK client HTTP pool. Env: ALICE_CONNECTION_POOL_LIMIT.",
     )
 
     @staticmethod

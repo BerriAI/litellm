@@ -25,16 +25,20 @@ def initialize_guardrail(
 
     wonderfence_guardrail = WonderFenceGuardrail(
         guardrail_name=guardrail_name,
-        api_key=litellm_params.api_key or "",
-        api_base=getattr(litellm_params, "api_base", None),
-        app_name=getattr(litellm_params, "app_name", None),
-        api_timeout=getattr(litellm_params, "api_timeout", None) or 20.0,
-        platform=getattr(litellm_params, "platform", None),
+        api_key=litellm_params.api_key,
+        api_base=litellm_params.api_base,
+        api_timeout=litellm_params.api_timeout or 20.0,
+        platform=litellm_params.platform,
+        fail_open=litellm_params.fail_open or False,
+        block_message=litellm_params.block_message
+        or "Content violates our policies and has been blocked",
+        debug=litellm_params.debug or False,
+        max_cached_clients=litellm_params.max_cached_clients,
+        connection_pool_limit=litellm_params.connection_pool_limit,
         event_hook=litellm_params.mode,  # type: ignore[arg-type]
         default_on=(
             litellm_params.default_on if litellm_params.default_on is not None else True
         ),
-        fail_open=getattr(litellm_params, "fail_open", False),
     )
 
     litellm.logging_callback_manager.add_litellm_callback(wonderfence_guardrail)

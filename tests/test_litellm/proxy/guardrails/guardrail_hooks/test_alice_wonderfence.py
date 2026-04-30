@@ -1,638 +1,831 @@
-"""Tests for Alice WonderFence guardrail integration."""
+"""Tests for Alice WonderFence guardrail integration (V2 client + dynamic params)."""
 
+import sys
 from unittest.mock import AsyncMock, Mock
 
 import pytest
 from fastapi import HTTPException
 
-from litellm.proxy.guardrails.guardrail_hooks.alice_wonderfence.alice_wonderfence import (
-    WonderFenceGuardrail,
-    WonderFenceMissingSecrets,
-)
-from litellm.types.guardrails import GuardrailEventHooks
-from litellm.types.proxy.guardrails.guardrail_hooks.alice_wonderfence import (
-    WonderFenceGuardrailConfigModel,
-)
+
+def _install_sdk_stub(monkeypatch, client_factory=None):
+    """Install a stub `wonderfence_sdk` module so the guardrail can import it."""
+    sdk = Mock()
+    client_pkg = Mock()
+    models_pkg = Mock()
+
+    factory = client_factory or (lambda **kwargs: Mock(close=AsyncMock()))
+    client_pkg.WonderFenceV2Client = Mock(side_effect=factory)
+    sdk.client = client_pkg
+
+    models_pkg.AnalysisContext = Mock(return_value=Mock())
+    sdk.models = models_pkg
+
+    monkeypatch.setitem(sys.modules, "wonderfence_sdk", sdk)
+    monkeypatch.setitem(sys.modules, "wonderfence_sdk.client", client_pkg)
+    monkeypatch.setitem(sys.modules, "wonderfence_sdk.models", models_pkg)
+    return sdk
 
 
-@pytest.fixture
-def mock_wonderfence_client():
-    """Create a mock WonderFence client."""
+def _make_guardrail(monkeypatch, **overrides):
+    """Build a WonderFenceGuardrail with stubbed SDK and a mock V2 client."""
+    from litellm.types.guardrails import GuardrailEventHooks
+
     mock_client = Mock()
     mock_client.evaluate_prompt = AsyncMock()
     mock_client.evaluate_response = AsyncMock()
-    return mock_client
+    mock_client.close = AsyncMock()
+
+    _install_sdk_stub(monkeypatch, client_factory=lambda **kwargs: mock_client)
+
+    from litellm.proxy.guardrails.guardrail_hooks.alice_wonderfence.alice_wonderfence import (
+        WonderFenceGuardrail,
+    )
+
+    kwargs = dict(
+        guardrail_name="wonderfence-test",
+        api_key="default-api-key",
+        event_hook=[
+            GuardrailEventHooks.pre_call,
+            GuardrailEventHooks.post_call,
+        ],
+        default_on=True,
+    )
+    kwargs.update(overrides)
+    guardrail = WonderFenceGuardrail(**kwargs)
+    return guardrail, mock_client
+
+
+def _request_data(**overrides):
+    metadata = overrides.pop("metadata", None)
+    if metadata is None:
+        metadata = {"alice_wonderfence_app_id": "test-app"}
+    base = {"model": "gpt-4", "metadata": metadata}
+    base.update(overrides)
+    return base
+
+
+# ----------------------------- resolver tests -----------------------------
+
+
+def test_resolve_app_id_from_request_metadata(monkeypatch):
+    guardrail, _ = _make_guardrail(monkeypatch)
+    data = _request_data(metadata={"alice_wonderfence_app_id": "from-req"})
+    assert guardrail._resolve_app_id(data) == "from-req"
+
+
+def test_resolve_app_id_from_key_metadata(monkeypatch):
+    guardrail, _ = _make_guardrail(monkeypatch)
+    data = _request_data(
+        metadata={
+            "user_api_key_metadata": {"alice_wonderfence_app_id": "from-key"},
+        }
+    )
+    assert guardrail._resolve_app_id(data) == "from-key"
+
+
+def test_resolve_app_id_from_team_metadata(monkeypatch):
+    guardrail, _ = _make_guardrail(monkeypatch)
+    data = _request_data(
+        metadata={
+            "user_api_key_team_metadata": {"alice_wonderfence_app_id": "from-team"},
+        }
+    )
+    assert guardrail._resolve_app_id(data) == "from-team"
+
+
+def test_resolve_app_id_priority_request_over_key_over_team(monkeypatch):
+    guardrail, _ = _make_guardrail(monkeypatch)
+    data = _request_data(
+        metadata={
+            "alice_wonderfence_app_id": "from-req",
+            "user_api_key_metadata": {"alice_wonderfence_app_id": "from-key"},
+            "user_api_key_team_metadata": {"alice_wonderfence_app_id": "from-team"},
+        }
+    )
+    assert guardrail._resolve_app_id(data) == "from-req"
+
+
+def test_resolve_app_id_priority_key_over_team(monkeypatch):
+    guardrail, _ = _make_guardrail(monkeypatch)
+    data = _request_data(
+        metadata={
+            "user_api_key_metadata": {"alice_wonderfence_app_id": "from-key"},
+            "user_api_key_team_metadata": {"alice_wonderfence_app_id": "from-team"},
+        }
+    )
+    assert guardrail._resolve_app_id(data) == "from-key"
+
+
+def test_resolve_app_id_missing_raises(monkeypatch):
+    guardrail, _ = _make_guardrail(monkeypatch)
+    data = _request_data(metadata={})
+    with pytest.raises(ValueError, match="alice_wonderfence_app_id"):
+        guardrail._resolve_app_id(data)
+
+
+def test_resolve_api_key_from_request_metadata(monkeypatch):
+    guardrail, _ = _make_guardrail(monkeypatch, api_key="default")
+    data = _request_data(metadata={"alice_wonderfence_api_key": "from-req"})
+    assert guardrail._resolve_api_key(data) == "from-req"
+
+
+def test_resolve_api_key_from_key_metadata(monkeypatch):
+    guardrail, _ = _make_guardrail(monkeypatch, api_key="default")
+    data = _request_data(
+        metadata={
+            "user_api_key_metadata": {"alice_wonderfence_api_key": "from-key"},
+        }
+    )
+    assert guardrail._resolve_api_key(data) == "from-key"
+
+
+def test_resolve_api_key_from_team_metadata(monkeypatch):
+    guardrail, _ = _make_guardrail(monkeypatch, api_key="default")
+    data = _request_data(
+        metadata={
+            "user_api_key_team_metadata": {"alice_wonderfence_api_key": "from-team"},
+        }
+    )
+    assert guardrail._resolve_api_key(data) == "from-team"
+
+
+def test_resolve_api_key_falls_back_to_default(monkeypatch):
+    guardrail, _ = _make_guardrail(monkeypatch, api_key="default-key")
+    data = _request_data(metadata={})
+    assert guardrail._resolve_api_key(data) == "default-key"
+
+
+def test_resolve_api_key_missing_everywhere_raises(monkeypatch):
+    monkeypatch.delenv("ALICE_API_KEY", raising=False)
+    guardrail, _ = _make_guardrail(monkeypatch, api_key=None)
+    data = _request_data(metadata={})
+    from litellm.proxy.guardrails.guardrail_hooks.alice_wonderfence.alice_wonderfence import (
+        WonderFenceMissingSecrets,
+    )
+
+    with pytest.raises(WonderFenceMissingSecrets):
+        guardrail._resolve_api_key(data)
+
+
+def test_resolve_reads_litellm_metadata_when_metadata_absent(monkeypatch):
+    guardrail, _ = _make_guardrail(monkeypatch)
+    data = {
+        "model": "gpt-4",
+        "litellm_metadata": {"alice_wonderfence_app_id": "from-litellm-md"},
+    }
+    assert guardrail._resolve_app_id(data) == "from-litellm-md"
+
+
+# ----------------------------- LRU cache tests -----------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_client_caches_per_api_key(monkeypatch):
+    from litellm.types.guardrails import GuardrailEventHooks
+
+    instances = []
+
+    def factory(**kwargs):
+        inst = Mock(close=AsyncMock())
+        inst._kwargs = kwargs
+        instances.append(inst)
+        return inst
+
+    _install_sdk_stub(monkeypatch, client_factory=factory)
+    from litellm.proxy.guardrails.guardrail_hooks.alice_wonderfence.alice_wonderfence import (
+        WonderFenceGuardrail,
+    )
+
+    g = WonderFenceGuardrail(
+        guardrail_name="t",
+        api_key="default",
+        event_hook=[GuardrailEventHooks.pre_call],
+    )
+    c1 = await g._get_client("key-A")
+    c1_again = await g._get_client("key-A")
+    c2 = await g._get_client("key-B")
+    assert c1 is c1_again
+    assert c1 is not c2
+    assert len(instances) == 2
+
+
+@pytest.mark.asyncio
+async def test_get_client_lru_evicts_oldest(monkeypatch):
+    from litellm.types.guardrails import GuardrailEventHooks
+
+    def factory(**kwargs):
+        return Mock(close=AsyncMock(), _api_key=kwargs["api_key"])
+
+    _install_sdk_stub(monkeypatch, client_factory=factory)
+    from litellm.proxy.guardrails.guardrail_hooks.alice_wonderfence.alice_wonderfence import (
+        WonderFenceGuardrail,
+    )
+
+    g = WonderFenceGuardrail(
+        guardrail_name="t",
+        api_key="default",
+        max_cached_clients=2,
+        event_hook=[GuardrailEventHooks.pre_call],
+    )
+    a = await g._get_client("A")
+    b = await g._get_client("B")
+    # Touching A makes B the LRU candidate.
+    await g._get_client("A")
+    c = await g._get_client("C")  # should evict B
+
+    assert "A" in g._client_cache
+    assert "C" in g._client_cache
+    assert "B" not in g._client_cache
+    b.close.assert_awaited_once()
+    assert a is g._client_cache["A"]
+    assert c is g._client_cache["C"]
+
+
+@pytest.mark.asyncio
+async def test_get_client_eviction_swallows_close_error(monkeypatch):
+    from litellm.types.guardrails import GuardrailEventHooks
+
+    def factory(**kwargs):
+        m = Mock(_api_key=kwargs["api_key"])
+        m.close = AsyncMock(side_effect=RuntimeError("nope"))
+        return m
+
+    _install_sdk_stub(monkeypatch, client_factory=factory)
+    from litellm.proxy.guardrails.guardrail_hooks.alice_wonderfence.alice_wonderfence import (
+        WonderFenceGuardrail,
+    )
+
+    g = WonderFenceGuardrail(
+        guardrail_name="t",
+        api_key="default",
+        max_cached_clients=1,
+        event_hook=[GuardrailEventHooks.pre_call],
+    )
+    await g._get_client("A")
+    # Eviction must not propagate the close() exception.
+    await g._get_client("B")
+    assert "B" in g._client_cache
+    assert "A" not in g._client_cache
+
+
+@pytest.mark.asyncio
+async def test_get_client_forwards_config_to_v2_client(monkeypatch):
+    from litellm.types.guardrails import GuardrailEventHooks
+
+    captured = []
+
+    def factory(**kwargs):
+        captured.append(kwargs)
+        return Mock(close=AsyncMock())
+
+    _install_sdk_stub(monkeypatch, client_factory=factory)
+    from litellm.proxy.guardrails.guardrail_hooks.alice_wonderfence.alice_wonderfence import (
+        WonderFenceGuardrail,
+    )
+
+    g = WonderFenceGuardrail(
+        guardrail_name="t",
+        api_key="default",
+        api_base="https://wf.example.com",
+        api_timeout=15.4,
+        platform="aws",
+        connection_pool_limit=42,
+        event_hook=[GuardrailEventHooks.pre_call],
+    )
+    await g._get_client("resolved-key")
+
+    assert captured[0]["api_key"] == "resolved-key"
+    assert captured[0]["base_url"] == "https://wf.example.com"
+    assert captured[0]["api_timeout"] == 15  # rounded to int
+    assert captured[0]["platform"] == "aws"
+    assert captured[0]["connection_pool_limit"] == 42
+
+
+# ----------------------------- apply_guardrail flow -----------------------------
 
 
 @pytest.fixture
-def wonderfence_guardrail(monkeypatch, mock_wonderfence_client):
-    """Create a WonderFence guardrail with mocked client."""
-    # Mock the WonderFence SDK import
-    mock_sdk = Mock()
-    mock_sdk.WonderFenceClient = Mock(return_value=mock_wonderfence_client)
-    mock_sdk.models = Mock()
-    mock_sdk.models.AnalysisContext = Mock(return_value=Mock())
-
-    monkeypatch.setitem(__import__("sys").modules, "wonderfence_sdk", mock_sdk)
-    monkeypatch.setitem(__import__("sys").modules, "wonderfence_sdk.client", mock_sdk)
-    monkeypatch.setitem(__import__("sys").modules, "wonderfence_sdk.models", mock_sdk.models)
-
-    guardrail = WonderFenceGuardrail(
-        guardrail_name="wonderfence-test",
-        api_key="test-api-key",
-        app_name="test-app",
-        event_hook=[GuardrailEventHooks.pre_call, GuardrailEventHooks.post_call],
-        default_on=True,
-    )
-
-    # Replace the client with our mock
-    guardrail.client = mock_wonderfence_client
-
-    return guardrail
-
-
-
-
-def test_initialization_without_api_key(monkeypatch):
-    """Test that initialization fails without API key."""
-    # Mock the SDK so we get past the import check
-    mock_sdk = Mock()
-    mock_sdk.WonderFenceClient = Mock()
-    mock_sdk.models = Mock()
-    mock_sdk.models.AnalysisContext = Mock()
-    monkeypatch.setitem(__import__("sys").modules, "wonderfence_sdk", mock_sdk)
-    monkeypatch.setitem(__import__("sys").modules, "wonderfence_sdk.client", mock_sdk)
-    monkeypatch.setitem(__import__("sys").modules, "wonderfence_sdk.models", mock_sdk.models)
-
-    monkeypatch.delenv("ALICE_API_KEY", raising=False)
-
-    with pytest.raises(WonderFenceMissingSecrets) as exc:
-        WonderFenceGuardrail(
-            guardrail_name="test",
-            event_hook=GuardrailEventHooks.pre_call,
-        )
-
-    assert "Alice WonderFence API key not found" in str(exc.value)
-
-
-def test_initialization_with_env_var(monkeypatch):
-    """Test that initialization uses environment variable."""
-    # Mock the SDK
-    mock_sdk = Mock()
-    mock_client = Mock()
-    mock_sdk.WonderFenceClient = Mock(return_value=mock_client)
-    mock_sdk.models = Mock()
-    mock_sdk.models.AnalysisContext = Mock()
-
-    monkeypatch.setitem(__import__("sys").modules, "wonderfence_sdk", mock_sdk)
-    monkeypatch.setitem(__import__("sys").modules, "wonderfence_sdk.client", mock_sdk)
-    monkeypatch.setitem(__import__("sys").modules, "wonderfence_sdk.models", mock_sdk.models)
-
-    monkeypatch.setenv("ALICE_API_KEY", "env-api-key")
-    monkeypatch.setenv("ALICE_APP_NAME", "env-app-name")
-
-    guardrail = WonderFenceGuardrail(
-        guardrail_name="test",
-        event_hook=GuardrailEventHooks.pre_call,
-    )
-
-    assert guardrail.api_key == "env-api-key"
-    assert guardrail.app_name == "env-app-name"
+def guardrail_and_client(monkeypatch):
+    g, c = _make_guardrail(monkeypatch)
+    # Pre-seed cache so apply_guardrail uses our mock without rebuilding.
+    g._client_cache["default-api-key"] = c
+    return g, c
 
 
 @pytest.mark.asyncio
-async def test_pre_call_hook_block_action(
-    wonderfence_guardrail, mock_wonderfence_client
-):
-    """Test that BLOCK action raises HTTPException in apply_guardrail."""
-    # Mock the evaluation result
-    mock_result = Mock()
-    mock_result.action = "BLOCK"
-    detection_dict = {
-        "policy_name": "test-policy",
-        "confidence": 0.95,
-        "message": "Violation detected",
-    }
-    mock_detection = Mock()
-    mock_detection.model_dump = Mock(return_value=detection_dict)
-    mock_result.detections = [mock_detection]
-    mock_wonderfence_client.evaluate_prompt.return_value = mock_result
-
-    inputs = {"texts": ["test message"]}
-    request_data = {
-        "model": "gpt-4",
-        "metadata": {},
-    }
+async def test_apply_guardrail_block_action(guardrail_and_client):
+    guardrail, client = guardrail_and_client
+    result_obj = Mock()
+    result_obj.action = "BLOCK"
+    detection = Mock()
+    detection.model_dump = Mock(return_value={"policy_name": "x", "confidence": 0.9})
+    result_obj.detections = [detection]
+    result_obj.correlation_id = "corr-1"
+    client.evaluate_prompt.return_value = result_obj
 
     with pytest.raises(HTTPException) as exc:
-        await wonderfence_guardrail.apply_guardrail(
-            inputs=inputs,
-            request_data=request_data,
+        await guardrail.apply_guardrail(
+            inputs={"texts": ["hi"]},
+            request_data=_request_data(),
             input_type="request",
         )
-
     assert exc.value.status_code == 400
-    assert "Blocked by Alice WonderFence guardrail" in exc.value.detail["error"]
     assert exc.value.detail["action"] == "BLOCK"
-    assert len(exc.value.detail["detections"]) == 1
-    assert exc.value.detail["detections"][0] == detection_dict
-
-
-@pytest.mark.asyncio
-async def test_pre_call_hook_mask_action(
-    wonderfence_guardrail, mock_wonderfence_client
-):
-    """Test that MASK action replaces content in apply_guardrail."""
-    # Mock the evaluation result
-    mock_result = Mock()
-    mock_result.action = "MASK"
-    mock_result.action_text = "[REDACTED]"
-    mock_result.detections = []
-    mock_wonderfence_client.evaluate_prompt.return_value = mock_result
-
-    inputs = {"texts": ["sensitive content"]}
-    request_data = {
-        "model": "gpt-4",
-        "metadata": {},
-    }
-
-    result = await wonderfence_guardrail.apply_guardrail(
-        inputs=inputs,
-        request_data=request_data,
-        input_type="request",
+    assert exc.value.detail["wonderfence_correlation_id"] == "corr-1"
+    assert exc.value.detail["error"] == (
+        "Content violates our policies and has been blocked"
     )
-
-    # Check that the content was masked
-    assert result["texts"][0] == "[REDACTED]"
+    assert exc.value.detail["detections"][0]["policy_name"] == "x"
 
 
 @pytest.mark.asyncio
-async def test_pre_call_hook_detect_action(
-    wonderfence_guardrail, mock_wonderfence_client
-):
-    """Test that DETECT action logs but continues in apply_guardrail."""
-    # Mock the evaluation result
-    mock_result = Mock()
-    mock_result.action = "DETECT"
-    mock_result.detections = [Mock(policy_name="test-policy")]
-    mock_wonderfence_client.evaluate_prompt.return_value = mock_result
-
-    inputs = {"texts": ["test message"]}
-    request_data = {
-        "model": "gpt-4",
-        "metadata": {},
-    }
-
-    result = await wonderfence_guardrail.apply_guardrail(
-        inputs=inputs,
-        request_data=request_data,
-        input_type="request",
+async def test_apply_guardrail_block_uses_custom_block_message(monkeypatch):
+    guardrail, client = _make_guardrail(
+        monkeypatch, block_message="custom blocked text"
     )
-
-    # Should return inputs unchanged
-    assert result["texts"][0] == "test message"
-
-
-@pytest.mark.asyncio
-async def test_pre_call_hook_no_action(
-    wonderfence_guardrail, mock_wonderfence_client
-):
-    """Test that NO_ACTION passes through unchanged."""
-    # Mock the evaluation result
-    mock_result = Mock()
-    mock_result.action = "NO_ACTION"
-    mock_result.detections = []
-    mock_wonderfence_client.evaluate_prompt.return_value = mock_result
-
-    inputs = {"texts": ["safe content"]}
-    request_data = {
-        "model": "gpt-4",
-        "metadata": {},
-    }
-
-    result = await wonderfence_guardrail.apply_guardrail(
-        inputs=inputs,
-        request_data=request_data,
-        input_type="request",
-    )
-
-    assert result["texts"][0] == "safe content"
-
-
-@pytest.mark.asyncio
-async def test_post_call_hook_block_action(
-    wonderfence_guardrail, mock_wonderfence_client
-):
-    """Test that BLOCK action raises HTTPException in apply_guardrail for response."""
-    # Mock the evaluation result
-    mock_result = Mock()
-    mock_result.action = "BLOCK"
-    detection_dict = {
-        "policy_name": "test-policy",
-        "confidence": 0.9,
-        "message": "Bad response",
-    }
-    mock_detection = Mock()
-    mock_detection.model_dump = Mock(return_value=detection_dict)
-    mock_result.detections = [mock_detection]
-    mock_wonderfence_client.evaluate_response.return_value = mock_result
-
-    inputs = {"texts": ["test response"]}
-    request_data = {
-        "model": "gpt-4",
-        "metadata": {},
-    }
+    guardrail._client_cache["default-api-key"] = client
+    result_obj = Mock()
+    result_obj.action = "BLOCK"
+    result_obj.detections = []
+    result_obj.correlation_id = None
+    client.evaluate_prompt.return_value = result_obj
 
     with pytest.raises(HTTPException) as exc:
-        await wonderfence_guardrail.apply_guardrail(
-            inputs=inputs,
-            request_data=request_data,
-            input_type="response",
+        await guardrail.apply_guardrail(
+            inputs={"texts": ["hi"]},
+            request_data=_request_data(),
+            input_type="request",
         )
-
-    assert exc.value.status_code == 400
-    assert "Blocked by Alice WonderFence guardrail" in exc.value.detail["error"]
-    assert len(exc.value.detail["detections"]) == 1
-    assert exc.value.detail["detections"][0] == detection_dict
+    assert exc.value.detail["error"] == "custom blocked text"
 
 
 @pytest.mark.asyncio
-async def test_post_call_hook_mask_action(
-    wonderfence_guardrail, mock_wonderfence_client
-):
-    """Test that MASK action replaces response content in apply_guardrail."""
-    # Mock the evaluation result
-    mock_result = Mock()
-    mock_result.action = "MASK"
-    mock_result.action_text = "[RESPONSE BLOCKED]"
-    mock_result.detections = []
-    mock_wonderfence_client.evaluate_response.return_value = mock_result
+async def test_apply_guardrail_mask_replaces_last_text(guardrail_and_client):
+    guardrail, client = guardrail_and_client
+    result_obj = Mock()
+    result_obj.action = "MASK"
+    result_obj.action_text = "[REDACTED]"
+    result_obj.detections = []
+    result_obj.correlation_id = None
+    client.evaluate_prompt.return_value = result_obj
 
-    inputs = {"texts": ["sensitive response"]}
-    request_data = {
-        "model": "gpt-4",
-        "metadata": {},
-    }
+    out = await guardrail.apply_guardrail(
+        inputs={"texts": ["a", "b", "c"]},
+        request_data=_request_data(),
+        input_type="request",
+    )
+    assert out["texts"] == ["a", "b", "[REDACTED]"]
 
-    result = await wonderfence_guardrail.apply_guardrail(
-        inputs=inputs,
-        request_data=request_data,
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_no_action_passthrough(guardrail_and_client):
+    guardrail, client = guardrail_and_client
+    result_obj = Mock()
+    result_obj.action = "NO_ACTION"
+    result_obj.detections = []
+    result_obj.correlation_id = None
+    client.evaluate_prompt.return_value = result_obj
+
+    out = await guardrail.apply_guardrail(
+        inputs={"texts": ["safe"]},
+        request_data=_request_data(),
+        input_type="request",
+    )
+    assert out["texts"] == ["safe"]
+    client.evaluate_prompt.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_passes_app_id_per_call(guardrail_and_client):
+    guardrail, client = guardrail_and_client
+    result_obj = Mock()
+    result_obj.action = "NO_ACTION"
+    result_obj.detections = []
+    result_obj.correlation_id = None
+    client.evaluate_prompt.return_value = result_obj
+
+    await guardrail.apply_guardrail(
+        inputs={"texts": ["hi"]},
+        request_data=_request_data(metadata={"alice_wonderfence_app_id": "tenant-A"}),
+        input_type="request",
+    )
+    kwargs = client.evaluate_prompt.call_args.kwargs
+    assert kwargs["app_id"] == "tenant-A"
+    assert kwargs["prompt"] == "hi"
+    assert kwargs["custom_fields"] is None
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_response_path_passes_app_id(monkeypatch):
+    guardrail, client = _make_guardrail(monkeypatch)
+    guardrail._client_cache["default-api-key"] = client
+    result_obj = Mock()
+    result_obj.action = "NO_ACTION"
+    result_obj.detections = []
+    result_obj.correlation_id = None
+    client.evaluate_response.return_value = result_obj
+
+    await guardrail.apply_guardrail(
+        inputs={"texts": ["resp"]},
+        request_data=_request_data(metadata={"alice_wonderfence_app_id": "tenant-B"}),
         input_type="response",
     )
-
-    # Check that the content was masked
-    assert result["texts"][0] == "[RESPONSE BLOCKED]"
+    kwargs = client.evaluate_response.call_args.kwargs
+    assert kwargs["app_id"] == "tenant-B"
+    assert kwargs["response"] == "resp"
 
 
 @pytest.mark.asyncio
-async def test_error_fail_closed_default(
-    wonderfence_guardrail, mock_wonderfence_client
+async def test_apply_guardrail_missing_app_id_fail_closed_returns_500(
+    guardrail_and_client,
 ):
-    """Test that errors block requests by default (fail-closed)."""
-    # Mock the evaluation to raise an exception
-    mock_wonderfence_client.evaluate_prompt.side_effect = Exception("API Error")
-
-    inputs = {"texts": ["test"]}
-    request_data = {
-        "model": "gpt-4",
-        "metadata": {},
-    }
-
-    # Should raise HTTPException
+    """Missing app_id follows the fail_open pattern: fail_open=False → HTTP 500."""
+    guardrail, _ = guardrail_and_client
     with pytest.raises(HTTPException) as exc:
-        await wonderfence_guardrail.apply_guardrail(
-            inputs=inputs,
-            request_data=request_data,
+        await guardrail.apply_guardrail(
+            inputs={"texts": ["hi"]},
+            request_data=_request_data(metadata={}),
             input_type="request",
         )
+    assert exc.value.status_code == 500
+    assert "Error in Alice WonderFence Guardrail" in exc.value.detail["error"]
+    assert "alice_wonderfence_app_id" in exc.value.detail["exception"]
 
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_missing_api_key_fail_closed_returns_500(monkeypatch):
+    """Missing api_key follows the fail_open pattern: fail_open=False → HTTP 500."""
+    monkeypatch.delenv("ALICE_API_KEY", raising=False)
+    guardrail, _ = _make_guardrail(monkeypatch, api_key=None)
+    with pytest.raises(HTTPException) as exc:
+        await guardrail.apply_guardrail(
+            inputs={"texts": ["hi"]},
+            request_data=_request_data(),
+            input_type="request",
+        )
+    assert exc.value.status_code == 500
+    assert "Error in Alice WonderFence Guardrail" in exc.value.detail["error"]
+    assert "alice_wonderfence_api_key" in exc.value.detail["exception"]
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_missing_app_id_fail_open_swallows(monkeypatch):
+    """Missing app_id with fail_open=True returns inputs unchanged."""
+    guardrail, _ = _make_guardrail(monkeypatch, fail_open=True)
+    inputs = {"texts": ["hi"]}
+    out = await guardrail.apply_guardrail(
+        inputs=inputs,
+        request_data=_request_data(metadata={}),
+        input_type="request",
+    )
+    assert out["texts"] == ["hi"]
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_missing_api_key_fail_open_swallows(monkeypatch):
+    """Missing api_key with fail_open=True returns inputs unchanged."""
+    monkeypatch.delenv("ALICE_API_KEY", raising=False)
+    guardrail, _ = _make_guardrail(monkeypatch, api_key=None, fail_open=True)
+    inputs = {"texts": ["hi"]}
+    out = await guardrail.apply_guardrail(
+        inputs=inputs,
+        request_data=_request_data(),
+        input_type="request",
+    )
+    assert out["texts"] == ["hi"]
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_fail_open_swallows_transport_error(monkeypatch):
+    guardrail, client = _make_guardrail(monkeypatch, fail_open=True)
+    guardrail._client_cache["default-api-key"] = client
+    client.evaluate_prompt.side_effect = RuntimeError("network down")
+
+    inputs = {"texts": ["original"]}
+    out = await guardrail.apply_guardrail(
+        inputs=inputs,
+        request_data=_request_data(),
+        input_type="request",
+    )
+    assert out["texts"] == ["original"]
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_fail_closed_returns_500(guardrail_and_client):
+    guardrail, client = guardrail_and_client
+    client.evaluate_prompt.side_effect = RuntimeError("network down")
+
+    with pytest.raises(HTTPException) as exc:
+        await guardrail.apply_guardrail(
+            inputs={"texts": ["hi"]},
+            request_data=_request_data(),
+            input_type="request",
+        )
     assert exc.value.status_code == 500
     assert "Error in Alice WonderFence Guardrail" in exc.value.detail["error"]
 
 
 @pytest.mark.asyncio
-async def test_error_fail_open_request(monkeypatch, mock_wonderfence_client):
-    """Test that errors allow requests through when fail_open=True."""
-    mock_sdk = Mock()
-    mock_sdk.WonderFenceClient = Mock(return_value=mock_wonderfence_client)
-    mock_sdk.models = Mock()
-    mock_sdk.models.AnalysisContext = Mock(return_value=Mock())
-
-    monkeypatch.setitem(__import__("sys").modules, "wonderfence_sdk", mock_sdk)
-    monkeypatch.setitem(__import__("sys").modules, "wonderfence_sdk.client", mock_sdk)
-    monkeypatch.setitem(__import__("sys").modules, "wonderfence_sdk.models", mock_sdk.models)
-
-    guardrail = WonderFenceGuardrail(
-        guardrail_name="wonderfence-test",
-        api_key="test-api-key",
-        app_name="test-app",
-        event_hook=[GuardrailEventHooks.pre_call],
-        default_on=True,
-        fail_open=True,
-    )
-    guardrail.client = mock_wonderfence_client
-    mock_wonderfence_client.evaluate_prompt.side_effect = Exception("Connection timeout")
-
-    inputs = {"texts": ["test message"]}
-    request_data = {"model": "gpt-4", "metadata": {}}
-
-    result = await guardrail.apply_guardrail(
-        inputs=inputs, request_data=request_data, input_type="request"
-    )
-
-    assert result["texts"][0] == "test message"
-
-
-@pytest.mark.asyncio
-async def test_error_fail_open_response(monkeypatch, mock_wonderfence_client):
-    """Test that errors allow responses through when fail_open=True."""
-    mock_sdk = Mock()
-    mock_sdk.WonderFenceClient = Mock(return_value=mock_wonderfence_client)
-    mock_sdk.models = Mock()
-    mock_sdk.models.AnalysisContext = Mock(return_value=Mock())
-
-    monkeypatch.setitem(__import__("sys").modules, "wonderfence_sdk", mock_sdk)
-    monkeypatch.setitem(__import__("sys").modules, "wonderfence_sdk.client", mock_sdk)
-    monkeypatch.setitem(__import__("sys").modules, "wonderfence_sdk.models", mock_sdk.models)
-
-    guardrail = WonderFenceGuardrail(
-        guardrail_name="wonderfence-test",
-        api_key="test-api-key",
-        app_name="test-app",
-        event_hook=[GuardrailEventHooks.post_call],
-        default_on=True,
-        fail_open=True,
-    )
-    guardrail.client = mock_wonderfence_client
-    mock_wonderfence_client.evaluate_response.side_effect = Exception("Service unavailable")
-
-    inputs = {"texts": ["response text"]}
-    request_data = {"model": "gpt-4", "metadata": {}}
-
-    result = await guardrail.apply_guardrail(
-        inputs=inputs, request_data=request_data, input_type="response"
-    )
-
-    assert result["texts"][0] == "response text"
-
-
-@pytest.mark.asyncio
-async def test_block_not_affected_by_fail_open(monkeypatch, mock_wonderfence_client):
-    """Test that BLOCK action still raises HTTPException even with fail_open=True."""
-    mock_sdk = Mock()
-    mock_sdk.WonderFenceClient = Mock(return_value=mock_wonderfence_client)
-    mock_sdk.models = Mock()
-    mock_sdk.models.AnalysisContext = Mock(return_value=Mock())
-
-    monkeypatch.setitem(__import__("sys").modules, "wonderfence_sdk", mock_sdk)
-    monkeypatch.setitem(__import__("sys").modules, "wonderfence_sdk.client", mock_sdk)
-    monkeypatch.setitem(__import__("sys").modules, "wonderfence_sdk.models", mock_sdk.models)
-
-    guardrail = WonderFenceGuardrail(
-        guardrail_name="wonderfence-test",
-        api_key="test-api-key",
-        app_name="test-app",
-        event_hook=[GuardrailEventHooks.pre_call],
-        default_on=True,
-        fail_open=True,
-    )
-    guardrail.client = mock_wonderfence_client
-
-    mock_result = Mock()
-    mock_result.action = "BLOCK"
-    detection_dict = {"policy_name": "test-policy"}
-    mock_detection = Mock()
-    mock_detection.model_dump = Mock(return_value=detection_dict)
-    mock_result.detections = [mock_detection]
-    mock_wonderfence_client.evaluate_prompt.return_value = mock_result
-
-    inputs = {"texts": ["harmful content"]}
-    request_data = {"model": "gpt-4", "metadata": {}}
+async def test_block_not_bypassed_by_fail_open(monkeypatch):
+    guardrail, client = _make_guardrail(monkeypatch, fail_open=True)
+    guardrail._client_cache["default-api-key"] = client
+    result_obj = Mock()
+    result_obj.action = "BLOCK"
+    result_obj.detections = []
+    result_obj.correlation_id = None
+    client.evaluate_prompt.return_value = result_obj
 
     with pytest.raises(HTTPException) as exc:
         await guardrail.apply_guardrail(
-            inputs=inputs, request_data=request_data, input_type="request"
+            inputs={"texts": ["bad"]},
+            request_data=_request_data(),
+            input_type="request",
         )
-
     assert exc.value.status_code == 400
-    assert "Blocked by Alice WonderFence guardrail" in exc.value.detail["error"]
-    assert len(exc.value.detail["detections"]) == 1
-    assert exc.value.detail["detections"][0] == detection_dict
 
 
 @pytest.mark.asyncio
-async def test_apply_guardrail_normal_operation(
-    wonderfence_guardrail, mock_wonderfence_client
-):
-    """Test that apply_guardrail processes texts and returns inputs unchanged for NO_ACTION."""
-    mock_result = Mock()
-    mock_result.action = "NO_ACTION"
-    mock_result.detections = []
-    mock_wonderfence_client.evaluate_prompt.return_value = mock_result
+async def test_apply_guardrail_evaluates_only_last_text(guardrail_and_client):
+    guardrail, client = guardrail_and_client
+    result_obj = Mock()
+    result_obj.action = "NO_ACTION"
+    result_obj.detections = []
+    result_obj.correlation_id = None
+    client.evaluate_prompt.return_value = result_obj
 
-    inputs = {"texts": ["test"]}
-    request_data = {
-        "model": "gpt-4",
-        "metadata": {},
-    }
-
-    result = await wonderfence_guardrail.apply_guardrail(
-        inputs=inputs,
-        request_data=request_data,
+    await guardrail.apply_guardrail(
+        inputs={"texts": ["t1", "t2", "t3"]},
+        request_data=_request_data(),
         input_type="request",
     )
+    assert client.evaluate_prompt.call_count == 1
+    assert client.evaluate_prompt.call_args.kwargs["prompt"] == "t3"
 
-    # Should process normally
-    assert result["texts"][0] == "test"
-    mock_wonderfence_client.evaluate_prompt.assert_called_once()
+
+# ----------------------------- post_call logging_obj bridge -----------------------------
+
+
+def _make_logging_obj() -> Mock:
+    """Mock the LiteLLMLoggingObj surface we use: only model_call_details."""
+    obj = Mock()
+    obj.model_call_details = {}
+    return obj
 
 
 @pytest.mark.asyncio
-async def test_multiple_texts(
-    wonderfence_guardrail, mock_wonderfence_client
-):
-    """Test that apply_guardrail processes only the last text (latest message)."""
-    mock_result = Mock()
-    mock_result.action = "NO_ACTION"
-    mock_result.detections = []
-    mock_wonderfence_client.evaluate_prompt.return_value = mock_result
+async def test_post_call_recovers_app_id_via_logging_obj_stash(monkeypatch):
+    """Reproduces the framework gap: request body metadata is dropped before
+    post_call. The logging_obj stash from the prior `input_type="request"`
+    call must be used to resolve app_id."""
+    guardrail, client = _make_guardrail(monkeypatch)
+    guardrail._client_cache["default-api-key"] = client
+    request_obj = Mock()
+    request_obj.action = "NO_ACTION"
+    request_obj.detections = []
+    request_obj.correlation_id = None
+    client.evaluate_prompt.return_value = request_obj
+    response_obj = Mock()
+    response_obj.action = "NO_ACTION"
+    response_obj.detections = []
+    response_obj.correlation_id = None
+    client.evaluate_response.return_value = response_obj
 
-    inputs = {"texts": ["text1", "text2", "text3"]}
-    request_data = {
-        "model": "gpt-4",
-        "metadata": {},
-    }
+    logging_obj = _make_logging_obj()
 
-    result = await wonderfence_guardrail.apply_guardrail(
-        inputs=inputs,
-        request_data=request_data,
+    # Step 1: simulate pre_call / during_call with full request body
+    # metadata — this is where the stash happens.
+    await guardrail.apply_guardrail(
+        inputs={"texts": ["hello"]},
+        request_data=_request_data(metadata={"alice_wonderfence_app_id": "tenant-X"}),
         input_type="request",
+        logging_obj=logging_obj,
     )
 
-    # Should only be called once for the last text (latest message)
-    assert mock_wonderfence_client.evaluate_prompt.call_count == 1
-    # Should evaluate only the last text
-    mock_wonderfence_client.evaluate_prompt.assert_called_once()
-    call_args = mock_wonderfence_client.evaluate_prompt.call_args
-    assert call_args.kwargs["prompt"] == "text3"
-    assert result["texts"] == ["text1", "text2", "text3"]
-
-
-@pytest.mark.asyncio
-async def test_mask_multiple_texts_request(
-    wonderfence_guardrail, mock_wonderfence_client
-):
-    """Test that MASK action only masks the last text in request (latest user message)."""
-    mock_result = Mock()
-    mock_result.action = "MASK"
-    mock_result.action_text = "[USER MESSAGE REDACTED]"
-    mock_result.detections = []
-    mock_wonderfence_client.evaluate_prompt.return_value = mock_result
-
-    # Simulate multiple messages in conversation history
-    inputs = {"texts": ["Hello", "How are you?", "Tell me a secret"]}
-    request_data = {
-        "model": "gpt-4",
-        "metadata": {},
-    }
-
-    result = await wonderfence_guardrail.apply_guardrail(
-        inputs=inputs,
-        request_data=request_data,
-        input_type="request",
-    )
-
-    # Should only evaluate the last text (most recent user message)
-    assert mock_wonderfence_client.evaluate_prompt.call_count == 1
-    call_args = mock_wonderfence_client.evaluate_prompt.call_args
-    assert call_args.kwargs["prompt"] == "Tell me a secret"
-
-    # Should only mask the last text, leaving others unchanged
-    assert result["texts"] == ["Hello", "How are you?", "[USER MESSAGE REDACTED]"]
-
-
-@pytest.mark.asyncio
-async def test_mask_multiple_texts_response(
-    wonderfence_guardrail, mock_wonderfence_client
-):
-    """Test that MASK action only masks the last text in response (latest assistant message)."""
-    mock_result = Mock()
-    mock_result.action = "MASK"
-    mock_result.action_text = "[ASSISTANT RESPONSE REDACTED]"
-    mock_result.detections = []
-    mock_wonderfence_client.evaluate_response.return_value = mock_result
-
-    # Simulate multiple response texts
-    inputs = {"texts": ["Here's some info", "Let me add more", "Here's sensitive data"]}
-    request_data = {
-        "model": "gpt-4",
-        "metadata": {},
-    }
-
-    result = await wonderfence_guardrail.apply_guardrail(
-        inputs=inputs,
-        request_data=request_data,
+    # Step 2: simulate post_call as the framework actually invokes it —
+    # the request body's metadata is gone (only litellm_metadata.user_api_key_*
+    # would normally be present, neither populated here). Without the
+    # bridge this raises; with it, we recover from logging_obj.
+    out = await guardrail.apply_guardrail(
+        inputs={"texts": ["llm response"]},
+        request_data={"model": "gpt-4", "metadata": {}},
         input_type="response",
+        logging_obj=logging_obj,
     )
-
-    # Should only evaluate the last text (most recent assistant response)
-    assert mock_wonderfence_client.evaluate_response.call_count == 1
-    call_args = mock_wonderfence_client.evaluate_response.call_args
-    assert call_args.kwargs["response"] == "Here's sensitive data"
-
-    # Should only mask the last text, leaving others unchanged
-    assert result["texts"] == ["Here's some info", "Let me add more", "[ASSISTANT RESPONSE REDACTED]"]
+    assert out["texts"] == ["llm response"]
+    assert client.evaluate_response.call_args.kwargs["app_id"] == "tenant-X"
 
 
 @pytest.mark.asyncio
-async def test_mask_with_structured_messages_request(
-    wonderfence_guardrail, mock_wonderfence_client
-):
-    """Test that MASK action works correctly with structured_messages in request."""
-    mock_result = Mock()
-    mock_result.action = "MASK"
-    mock_result.action_text = "[REDACTED]"
-    mock_result.detections = []
-    mock_wonderfence_client.evaluate_prompt.return_value = mock_result
+async def test_post_call_prefers_request_data_over_stash(monkeypatch):
+    """If post_call's request_data still resolves (e.g. app_id from key/team
+    metadata), use it — don't fall back to the stash."""
+    guardrail, client = _make_guardrail(monkeypatch)
+    guardrail._client_cache["default-api-key"] = client
+    request_obj = Mock()
+    request_obj.action = "NO_ACTION"
+    request_obj.detections = []
+    request_obj.correlation_id = None
+    client.evaluate_prompt.return_value = request_obj
+    response_obj = Mock()
+    response_obj.action = "NO_ACTION"
+    response_obj.detections = []
+    response_obj.correlation_id = None
+    client.evaluate_response.return_value = response_obj
 
-    # Simulate conversation with structured messages
-    structured_messages = [
-        {"role": "user", "content": "Hello"},
-        {"role": "assistant", "content": "Hi there!"},
-        {"role": "user", "content": "What's my password?"},
-    ]
-    inputs = {
-        "texts": ["Hello", "Hi there!", "What's my password?"],
-        "structured_messages": structured_messages,
-    }
-    request_data = {
-        "model": "gpt-4",
-        "metadata": {},
-    }
+    logging_obj = _make_logging_obj()
 
-    result = await wonderfence_guardrail.apply_guardrail(
-        inputs=inputs,
-        request_data=request_data,
+    # Stash a different app_id during the request phase.
+    await guardrail.apply_guardrail(
+        inputs={"texts": ["hi"]},
+        request_data=_request_data(
+            metadata={"alice_wonderfence_app_id": "stashed-app"}
+        ),
         input_type="request",
+        logging_obj=logging_obj,
     )
 
-    # Should evaluate only the last user message
-    assert mock_wonderfence_client.evaluate_prompt.call_count == 1
-    call_args = mock_wonderfence_client.evaluate_prompt.call_args
-    assert call_args.kwargs["prompt"] == "What's my password?"
-
-    # Should mask only the last text
-    assert result["texts"] == ["Hello", "Hi there!", "[REDACTED]"]
-
-
-@pytest.mark.asyncio
-async def test_mask_with_multipart_content_request(
-    wonderfence_guardrail, mock_wonderfence_client
-):
-    """Test that MASK action works with multi-part content (text + images)."""
-    mock_result = Mock()
-    mock_result.action = "MASK"
-    mock_result.action_text = "[REDACTED MULTIPART]"
-    mock_result.detections = []
-    mock_wonderfence_client.evaluate_prompt.return_value = mock_result
-
-    # Simulate multi-part content message with assistant message to separate user messages
-    structured_messages = [
-        {"role": "user", "content": "Previous message"},
-        {"role": "assistant", "content": "I understand"},
-        {
-            "role": "user",
-            "content": [
-                {"type": "text", "text": "Describe this image"},
-                {"type": "image_url", "image_url": {"url": "https://example.com/img.jpg"}},
-            ],
+    # Post_call request_data resolves via key metadata to a DIFFERENT app_id.
+    # The resolver path must win over the stash.
+    await guardrail.apply_guardrail(
+        inputs={"texts": ["resp"]},
+        request_data={
+            "model": "gpt-4",
+            "metadata": {
+                "user_api_key_metadata": {"alice_wonderfence_app_id": "key-app"}
+            },
         },
-    ]
-    inputs = {
-        "texts": ["Previous message", "I understand", "Describe this image"],
-        "structured_messages": structured_messages,
-    }
-    request_data = {
-        "model": "gpt-4",
-        "metadata": {},
-    }
+        input_type="response",
+        logging_obj=logging_obj,
+    )
+    assert client.evaluate_response.call_args.kwargs["app_id"] == "key-app"
 
-    result = await wonderfence_guardrail.apply_guardrail(
-        inputs=inputs,
-        request_data=request_data,
+
+@pytest.mark.asyncio
+async def test_post_call_without_prior_stash_raises(monkeypatch):
+    """If neither request_data nor logging_obj has the app_id (e.g. mode is
+    post_call only and app_id was supplied only in the request body), the
+    error path must still fire — not silently allow."""
+    guardrail, client = _make_guardrail(monkeypatch)
+    guardrail._client_cache["default-api-key"] = client
+
+    logging_obj = _make_logging_obj()  # empty model_call_details
+
+    with pytest.raises(HTTPException) as exc:
+        await guardrail.apply_guardrail(
+            inputs={"texts": ["resp"]},
+            request_data={"model": "gpt-4", "metadata": {}},
+            input_type="response",
+            logging_obj=logging_obj,
+        )
+    assert exc.value.status_code == 500
+    assert "alice_wonderfence_app_id" in exc.value.detail["exception"]
+
+
+@pytest.mark.asyncio
+async def test_post_call_recovers_via_sibling_stash(monkeypatch):
+    """When two alice_wonderfence instances are listed in one request's
+    `guardrails` array, LiteLLM only invokes one's during_call — but every
+    instance runs post_call. The instance whose during_call did NOT fire
+    must recover the stash written by the sibling that did."""
+    g_writer, c_writer = _make_guardrail(monkeypatch, guardrail_name="writer")
+    g_writer._client_cache["default-api-key"] = c_writer
+    g_reader, c_reader = _make_guardrail(monkeypatch, guardrail_name="reader")
+    g_reader._client_cache["default-api-key"] = c_reader
+    for c in (c_writer, c_reader):
+        result = Mock()
+        result.action = "NO_ACTION"
+        result.detections = []
+        result.correlation_id = None
+        c.evaluate_prompt.return_value = result
+        c.evaluate_response.return_value = result
+
+    logging_obj = _make_logging_obj()
+
+    # Only the writer's during_call fires (simulating LiteLLM's
+    # data["guardrail_to_apply"] last-write-wins behavior).
+    await g_writer.apply_guardrail(
+        inputs={"texts": ["hi"]},
+        request_data=_request_data(metadata={"alice_wonderfence_app_id": "shared-app"}),
         input_type="request",
+        logging_obj=logging_obj,
     )
 
-    # Should evaluate only the last user message (text part extracted from multipart content)
-    assert mock_wonderfence_client.evaluate_prompt.call_count == 1
-    call_args = mock_wonderfence_client.evaluate_prompt.call_args
-    assert call_args.kwargs["prompt"] == "Describe this image"
+    # Reader's post_call: own name not in stash, must fall back to writer's.
+    await g_reader.apply_guardrail(
+        inputs={"texts": ["resp"]},
+        request_data={"model": "gpt-4", "metadata": {}},
+        input_type="response",
+        logging_obj=logging_obj,
+    )
+    assert c_reader.evaluate_response.call_args.kwargs["app_id"] == "shared-app"
 
-    # Should mask only the last text
-    assert result["texts"] == ["Previous message", "I understand", "[REDACTED MULTIPART]"]
+
+@pytest.mark.asyncio
+async def test_stash_keyed_per_guardrail_name(monkeypatch):
+    """Two alice_wonderfence instances on the same logging_obj must not
+    overwrite each other's stash — they're keyed by guardrail_name."""
+    g1, c1 = _make_guardrail(monkeypatch, guardrail_name="alice-a")
+    g1._client_cache["default-api-key"] = c1
+    g2, c2 = _make_guardrail(monkeypatch, guardrail_name="alice-b")
+    g2._client_cache["default-api-key"] = c2
+    for c in (c1, c2):
+        result = Mock()
+        result.action = "NO_ACTION"
+        result.detections = []
+        result.correlation_id = None
+        c.evaluate_prompt.return_value = result
+        c.evaluate_response.return_value = result
+
+    logging_obj = _make_logging_obj()
+
+    # Both instances stash under the SAME logging_obj using DIFFERENT
+    # request app_ids.
+    await g1.apply_guardrail(
+        inputs={"texts": ["hi"]},
+        request_data=_request_data(metadata={"alice_wonderfence_app_id": "app-a"}),
+        input_type="request",
+        logging_obj=logging_obj,
+    )
+    await g2.apply_guardrail(
+        inputs={"texts": ["hi"]},
+        request_data=_request_data(metadata={"alice_wonderfence_app_id": "app-b"}),
+        input_type="request",
+        logging_obj=logging_obj,
+    )
+
+    # Each must recover its own value on post_call.
+    await g1.apply_guardrail(
+        inputs={"texts": ["resp"]},
+        request_data={"model": "gpt-4", "metadata": {}},
+        input_type="response",
+        logging_obj=logging_obj,
+    )
+    await g2.apply_guardrail(
+        inputs={"texts": ["resp"]},
+        request_data={"model": "gpt-4", "metadata": {}},
+        input_type="response",
+        logging_obj=logging_obj,
+    )
+    assert c1.evaluate_response.call_args.kwargs["app_id"] == "app-a"
+    assert c2.evaluate_response.call_args.kwargs["app_id"] == "app-b"
 
 
-def test_get_config_model():
-    """Test that get_config_model returns the correct model."""
-    config_model = WonderFenceGuardrail.get_config_model()
-    assert config_model == WonderFenceGuardrailConfigModel
+# ----------------------------- misc -----------------------------
+
+
+def test_get_config_model(monkeypatch):
+    from litellm.types.proxy.guardrails.guardrail_hooks.alice_wonderfence import (
+        WonderFenceGuardrailConfigModel,
+    )
+
+    guardrail, _ = _make_guardrail(monkeypatch)
+    assert guardrail.get_config_model() is WonderFenceGuardrailConfigModel
+
+
+def test_initialization_falls_back_to_env(monkeypatch):
+    monkeypatch.setenv("ALICE_API_KEY", "env-key")
+    guardrail, _ = _make_guardrail(monkeypatch, api_key=None)
+    assert guardrail.api_key == "env-key"
+
+
+def test_initialization_no_default_api_key_does_not_raise(monkeypatch):
+    """V2 model resolves api_key per-request — init must NOT require it."""
+    monkeypatch.delenv("ALICE_API_KEY", raising=False)
+    guardrail, _ = _make_guardrail(monkeypatch, api_key=None)
+    assert guardrail.api_key is None
+
+
+def test_initialize_guardrail_forwards_all_params(monkeypatch):
+    """The package-level initializer must forward every typed config field."""
+    _install_sdk_stub(monkeypatch)
+    from litellm.proxy.guardrails.guardrail_hooks.alice_wonderfence import (
+        initialize_guardrail,
+    )
+    from litellm.types.guardrails import LitellmParams
+
+    params = LitellmParams(
+        guardrail="alice_wonderfence",
+        mode="pre_call",
+        api_key="cfg-key",
+        api_base="https://wf.example.com",
+        api_timeout=12.0,
+        platform="aws",
+        fail_open=True,
+        block_message="custom block",
+        debug=True,
+        max_cached_clients=5,
+        connection_pool_limit=20,
+        default_on=True,
+    )
+    guardrail = {"guardrail_name": "wf-init-test"}
+
+    g = initialize_guardrail(params, guardrail)  # type: ignore[arg-type]
+
+    assert g.api_key == "cfg-key"
+    assert g.api_base == "https://wf.example.com"
+    assert g.api_timeout == 12.0
+    assert g.platform == "aws"
+    assert g.fail_open is True
+    assert g.block_message == "custom block"
+    assert g._client_cache_maxsize == 5
+    assert g._connection_pool_limit == 20
