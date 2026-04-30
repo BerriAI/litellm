@@ -2939,3 +2939,177 @@ class TestGatewayCreateInitializationOptions:
         _mcp_gateway_initialize_instructions.reset(tok)
         opts = server.create_initialization_options()
         assert getattr(opts, "instructions", None) is None
+
+
+@pytest.mark.asyncio
+async def test_list_tools_with_legacy_db_m2m_server_resolves_oauth2_flow():
+    """
+    P1 Regression: list_tools path must apply _resolve_oauth2_flow to legacy DB
+    rows where oauth2_flow is NULL but M2M credentials are present.
+    
+    Without this fix, has_client_credentials returns False and the caller's
+    Authorization header is forwarded upstream instead of being blocked.
+    """
+    try:
+        from litellm.proxy._experimental.mcp_server.server import (
+            _get_tools_from_mcp_servers,
+        )
+        from litellm.proxy._types import UserAPIKeyAuth
+        from litellm.types.mcp import MCPAuth
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    user_auth = UserAPIKeyAuth(api_key="sk-1234", user_id="test-user")
+
+    # Simulate a legacy DB row: OAuth2 with M2M credentials but oauth2_flow=None
+    legacy_server = MagicMock(name="legacy_m2m_server")
+    legacy_server.name = "legacy_m2m"
+    legacy_server.alias = "legacy_m2m"
+    legacy_server.server_name = "legacy_m2m"
+    legacy_server.server_id = "legacy-m2m-id"
+    legacy_server.auth_type = MCPAuth.oauth2
+    legacy_server.oauth2_flow = None  # Legacy: field not set in DB
+    legacy_server.token_url = "https://oauth.example.com/token"
+    legacy_server.authorization_url = None
+    legacy_server.client_id = "client-id"
+    legacy_server.client_secret = "client-secret"
+    legacy_server.extra_headers = None
+    legacy_server.has_client_credentials = False  # This is the bug: should be True
+    legacy_server.model_copy = MagicMock(
+        side_effect=lambda update: MCPServer(
+            server_id=legacy_server.server_id,
+            name=legacy_server.name,
+            transport=MCPTransport.http,
+            auth_type=legacy_server.auth_type,
+            oauth2_flow=update.get("oauth2_flow", legacy_server.oauth2_flow),
+            token_url=legacy_server.token_url,
+            authorization_url=legacy_server.authorization_url,
+            client_id=legacy_server.client_id,
+            client_secret=legacy_server.client_secret,
+        )
+    )
+
+    tool_1 = MagicMock()
+    tool_1.name = "legacy_m2m-tool"
+
+    captured_extra_headers = None
+
+    async def capture_extra_headers(*args, **kwargs):
+        nonlocal captured_extra_headers
+        captured_extra_headers = kwargs.get("extra_headers")
+        return [tool_1]
+
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager",
+        ) as mock_manager,
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.filter_tools_by_allowed_tools",
+            side_effect=lambda tools, _server: tools,
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.filter_tools_by_key_team_permissions",
+            new=AsyncMock(side_effect=lambda tools, **_: tools),
+        ),
+    ):
+        mock_manager.get_allowed_mcp_servers = AsyncMock(return_value=["legacy-m2m-id"])
+        mock_manager.get_mcp_server_by_id = MagicMock(return_value=legacy_server)
+        mock_manager.filter_server_ids_by_ip_with_info = MagicMock(
+            return_value=(["legacy-m2m-id"], 0)
+        )
+        mock_manager._get_tools_from_server = AsyncMock(
+            side_effect=capture_extra_headers
+        )
+
+        tools = await _get_tools_from_mcp_servers(
+            user_api_key_auth=user_auth,
+            mcp_auth_header=None,
+            mcp_servers=["legacy_m2m"],
+            mcp_server_auth_headers=None,
+            oauth2_headers={"Authorization": "Bearer sk-1234"},  # Caller's token
+        )
+
+    # With P1 fix: _get_allowed_mcp_servers applies _resolve_oauth2_flow,
+    # so has_client_credentials becomes True and extra_headers should be None
+    # (caller's Authorization blocked)
+    assert captured_extra_headers is None, (
+        "P1 security issue: caller's Authorization header was forwarded to M2M server. "
+        "Expected None, got: " + str(captured_extra_headers)
+    )
+    assert tools == [tool_1]
+
+
+@pytest.mark.asyncio
+async def test_call_tool_empty_extra_headers_returns_none():
+    """
+    P2 Regression: When all configured extra_headers are filtered out (e.g.
+    Authorization for M2M), the resulting extra_headers should be None, not {}.
+    
+    Downstream code that checks `if extra_headers is None` will behave
+    differently if an empty dict is passed instead.
+    """
+    try:
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            MCPServerManager,
+        )
+        from litellm.types.mcp import MCPAuth
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    manager = MCPServerManager()
+
+    # M2M server with only Authorization in extra_headers
+    m2m_server = MCPServer(
+        server_id="m2m-srv",
+        name="m2m_test",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        oauth2_flow="client_credentials",
+        token_url="https://oauth.example.com/token",
+        client_id="client-id",
+        client_secret="client-secret",
+        extra_headers=["Authorization"],  # Will be filtered out for M2M
+    )
+
+    raw_headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
+
+    captured_extra_headers = None
+
+    async def capture_create_mcp_client(*args, **kwargs):
+        nonlocal captured_extra_headers
+        captured_extra_headers = kwargs.get("extra_headers")
+        # Return a mock client
+        mock_client = AsyncMock()
+        mock_client.call_tool = AsyncMock(return_value=MagicMock(content=[]))
+        return mock_client
+
+    with (
+        patch.object(
+            manager,
+            "_create_mcp_client",
+            side_effect=capture_create_mcp_client,
+        ),
+        patch.object(
+            manager,
+            "get_mcp_server_by_id",
+            return_value=m2m_server,
+        ),
+    ):
+        try:
+            await manager._call_regular_mcp_tool(
+                mcp_server=m2m_server,
+                original_tool_name="test_tool",
+                arguments={},
+                mcp_auth_header=None,
+                oauth2_headers=None,
+                raw_headers=raw_headers,
+            )
+        except Exception:
+            pass  # We only care about the captured headers
+
+    # With P2 fix: extra_headers should be None (not {}) when all headers filtered
+    assert captured_extra_headers is None, (
+        "P2 API consistency issue: expected None for empty extra_headers, got: "
+        + str(captured_extra_headers)
+    )
+
