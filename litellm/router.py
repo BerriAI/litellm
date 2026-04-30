@@ -5278,12 +5278,12 @@ class Router:
             original_id = decoded.get("response_id", container_id)
             if original_id != container_id:
                 kwargs["container_id"] = original_id
+            decoded_provider = decoded.get("custom_llm_provider")
+            if decoded_provider and kwargs.get("custom_llm_provider") == "openai":
+                kwargs["custom_llm_provider"] = decoded_provider
             model_id = decoded.get("model_id")
             if model_id:
                 kwargs["model"] = model_id
-                decoded_provider = decoded.get("custom_llm_provider")
-                if decoded_provider and kwargs.get("custom_llm_provider") == "openai":
-                    kwargs["custom_llm_provider"] = decoded_provider
                 return await self._ageneric_api_call_with_fallbacks(
                     original_function=original_function,
                     **kwargs,
