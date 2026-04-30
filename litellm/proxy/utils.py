@@ -36,6 +36,7 @@ from litellm.proxy._types import (
     SpendLogsMetadata,
     SpendLogsPayload,
 )
+from litellm.proxy.spend_tracking.spend_log_error_logger import spend_log_error
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import CallTypes, CallTypesLiteral
 
@@ -5102,7 +5103,7 @@ async def update_daily_tag_spend(
                 proxy_logging_obj=proxy_logging_obj,
             )
     except Exception as e:
-        verbose_proxy_logger.error(f"Error updating daily tag spend: {e}")
+        spend_log_error("Error updating daily tag spend: %s", str(e), exc=e)
 
 
 async def update_spend_logs_job(
@@ -5234,9 +5235,7 @@ async def _monitor_spend_logs_queue(
 
             await asyncio.sleep(current_interval)
         except Exception as e:
-            verbose_proxy_logger.error(
-                f"Error in spend logs queue monitor: {str(e)}\n{traceback.format_exc()}"
-            )
+            spend_log_error("Error in spend logs queue monitor: %s", str(e), exc=e)
             # Continue monitoring even if there's an error, with exponential backoff
             current_interval = min(current_interval * backoff_multiplier, max_backoff)
             await asyncio.sleep(current_interval)
