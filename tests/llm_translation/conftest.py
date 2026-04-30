@@ -38,6 +38,9 @@ _FILTERED_REQUEST_HEADERS = (
     "authorization",
     "x-api-key",
     "anthropic-api-key",
+    # Strip ``anthropic-version`` so live-recorded and mock-recorded cassettes
+    # have the same shape (the local mock helper drops it too).
+    "anthropic-version",
     "openai-api-key",
     "azure-api-key",
     "api-key",
