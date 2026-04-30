@@ -489,6 +489,9 @@ async def test_sse_mcp_handler_mock():
             AsyncMock(return_value=mock_auth_context),
         ),
         patch(
+            "litellm.proxy._experimental.mcp_server.server._gateway_initialize_instructions_request_scope",
+        ),
+        patch(
             "litellm.proxy._experimental.mcp_server.server.set_auth_context",
         ),
     ):

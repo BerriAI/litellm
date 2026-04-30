@@ -110,6 +110,7 @@ try:
     _session_auth_storage: "weakref.WeakKeyDictionary[Any, MCPAuthenticatedUser]" = (
         weakref.WeakKeyDictionary()
     )
+    _session_id_auth_storage: Dict[uuid.UUID, "MCPAuthenticatedUser"] = {}
 
     active_mcp_session_var: contextvars.ContextVar[Optional[_McpServerSession]] = (
         contextvars.ContextVar("active_mcp_session", default=None)
@@ -2676,16 +2677,24 @@ if MCP_AVAILABLE:
             ):
                 verbose_logger.info("Initializing SSE session...")
                 options = server.create_initialization_options()
+                # Capture existing session IDs to find the newly created one
+                old_session_ids = set(getattr(sse, "_read_stream_writers", {}).keys())
                 async with sse.connect_sse(scope, receive, send) as streams:
                     verbose_logger.info(
                         "SSE connection established, running server loop..."
                     )
 
+                    new_session_ids = set(
+                        getattr(sse, "_read_stream_writers", {}).keys()
+                    )
+                    diff = new_session_ids - old_session_ids
+                    session_id = diff.pop() if diff else None
+
                     # ContextVars are lost when the MCP SDK spawns internal tasks
                     # (e.g. _receive_loop), so tool handlers can't read auth_context_var reliably.
                     # Storing it in session-isolated storage ensures it's isolated per SSE session.
                     # We store it before calling server.run so it's available for the session's lifespan.
-                    _session_auth_storage[streams[0]] = MCPAuthenticatedUser(  # type: ignore
+                    auth = MCPAuthenticatedUser(  # type: ignore
                         user_api_key_auth=user_api_key_auth,
                         mcp_auth_header=mcp_auth_header,
                         mcp_servers=mcp_servers,
@@ -2694,6 +2703,10 @@ if MCP_AVAILABLE:
                         raw_headers=raw_headers,
                         client_ip=_sse_client_ip,
                     )
+                    _session_auth_storage[streams[0]] = auth
+                    if session_id:
+                        _session_id_auth_storage[session_id] = auth
+
                     try:
                         # Capture the session for propagation to sampling/elicitation callbacks
                         # Since server.run doesn't return the session, we use a middleware-like
@@ -2702,6 +2715,9 @@ if MCP_AVAILABLE:
                         await server.run(streams[0], streams[1], options)
                     except Exception as session_e:
                         verbose_logger.exception(f"Error in SSE session: {session_e}")
+                    finally:
+                        if session_id:
+                            _session_id_auth_storage.pop(session_id, None)
 
         except HTTPException:
             raise
@@ -2757,13 +2773,7 @@ if MCP_AVAILABLE:
                     session_id = uuid.UUID(hex=session_id_param)
                     writer = getattr(sse, "_read_stream_writers", {}).get(session_id)
                     if writer:
-                        session_auth = None
-                        for read_stream, auth in _session_auth_storage.items():
-                            if getattr(
-                                read_stream, "_state", id(read_stream)
-                            ) == getattr(writer, "_state", id(writer)):
-                                session_auth = auth
-                                break
+                        session_auth = _session_id_auth_storage.get(session_id)
 
                         if (
                             session_auth
