@@ -3,7 +3,6 @@ import os
 import sys
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
-from contextlib import asynccontextmanager
 
 sys.path.insert(
     0, os.path.abspath("../../..")
@@ -15,7 +14,8 @@ from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
     MCPTransport,
 )
 from litellm.proxy._types import LiteLLM_ObjectPermissionTable
-from mcp.types import Tool as MCPTool, CallToolResult, ListToolsResult
+from litellm.types.mcp_server.mcp_server_manager import MCPOAuthMetadata
+from mcp.types import Tool as MCPTool, CallToolResult
 from mcp.types import TextContent
 
 
@@ -395,7 +395,6 @@ async def test_mcp_http_transport_tool_not_found():
 @pytest.mark.asyncio
 async def test_streamable_http_mcp_handler_mock():
     """Test the streamable HTTP MCP handler functionality"""
-    from litellm.proxy._types import UserAPIKeyAuth
 
     # Mock the session manager and its methods
     mock_session_manager = AsyncMock()
@@ -661,9 +660,7 @@ async def test_list_tools_rest_api_server_not_found():
     """Test the list_tools REST API when server is not found"""
     from litellm.proxy._experimental.mcp_server.rest_endpoints import (
         list_tool_rest_api,
-        global_mcp_server_manager,
     )
-    from fastapi import Query
     from litellm.proxy._types import UserAPIKeyAuth
 
     # Mock UserAPIKeyAuth with explicit permission to access the requested server id
@@ -719,7 +716,6 @@ async def test_list_tools_rest_api_success():
     from litellm.proxy._experimental.mcp_server.server import (
         ListMCPToolsRestAPIResponseObject,
     )
-    from fastapi import Query
     from litellm.proxy._types import UserAPIKeyAuth
 
     # Mock successful tools
@@ -1067,7 +1063,6 @@ async def test_mcp_server_manager_access_groups_from_config():
     mcp_server_manager_mod.global_mcp_server_manager = test_manager
     try:
         # Should find config_server for group-a, both for group-b, other_server for group-c
-        import asyncio
 
         server_ids_a = await MCPRequestHandler._get_mcp_servers_from_access_groups(
             ["group-a"]
@@ -2837,3 +2832,140 @@ async def test_call_mcp_tool_resolves_unprefixed_tool_name_and_checks_permission
     assert mock_get_server.call_args_list[0][0][0] == "gmail_send_email"
     # Permissions check should be invoked with the resolved server name
     mock_is_allowed.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_discovery_metadata_timeout():
+    """Test that _descovery_metadata passes timeout to httpx client."""
+    from unittest.mock import AsyncMock, patch
+    from litellm.constants import MCP_METADATA_TIMEOUT
+
+    manager = MCPServerManager()
+
+    # Mock httpx client
+    mock_client = AsyncMock()
+    mock_response = AsyncMock()
+    mock_response.status_code = 200
+    mock_response.raise_for_status = AsyncMock()
+    mock_client.get = AsyncMock(return_value=mock_response)
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.mcp_server_manager.get_async_httpx_client",
+        return_value=mock_client,
+    ) as mock_get_client:
+        with patch.object(
+            manager, "_attempt_well_known_discovery", return_value=([], None)
+        ):
+            with patch.object(
+                manager, "_fetch_authorization_server_metadata", return_value=None
+            ):
+                await manager._descovery_metadata("https://example.com")
+
+                # Verify timeout was passed
+                mock_get_client.assert_called_once_with(
+                    llm_provider="mcp", params={"timeout": MCP_METADATA_TIMEOUT}
+                )
+                mock_client.get.assert_called_once_with("https://example.com")
+
+
+@pytest.mark.asyncio
+async def test_discovery_metadata_success():
+    """Test successful OAuth metadata discovery."""
+    from unittest.mock import AsyncMock, patch
+
+    manager = MCPServerManager()
+
+    # Mock httpx client
+    mock_client = AsyncMock()
+    mock_response = AsyncMock()
+    mock_response.status_code = 200
+    mock_response.raise_for_status = AsyncMock()
+    mock_client.get = AsyncMock(return_value=mock_response)
+
+    expected_metadata = MCPOAuthMetadata(scopes=["read", "write"])
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.mcp_server_manager.get_async_httpx_client",
+        return_value=mock_client,
+    ):
+        with patch.object(
+            manager,
+            "_attempt_well_known_discovery",
+            return_value=(["https://auth.example.com"], ["read"]),
+        ):
+            with patch.object(
+                manager,
+                "_fetch_authorization_server_metadata",
+                return_value=expected_metadata,
+            ):
+                result = await manager._descovery_metadata("https://example.com")
+
+                assert result == expected_metadata
+
+
+@pytest.mark.asyncio
+async def test_discovery_metadata_http_error():
+    """Test handling of HTTP status errors during discovery."""
+    from unittest.mock import AsyncMock, patch
+    from httpx import HTTPStatusError
+
+    manager = MCPServerManager()
+
+    # Mock HTTPStatusError
+    mock_response = AsyncMock()
+    mock_response.status_code = 401
+    mock_response.headers = {
+        "WWW-Authenticate": 'Bearer realm="example" scope="read write"'
+    }
+    http_error = HTTPStatusError(
+        "Unauthorized", request=AsyncMock(), response=mock_response
+    )
+
+    # Mock httpx client to raise HTTPStatusError
+    mock_client = AsyncMock()
+    mock_client.get = AsyncMock(side_effect=http_error)
+
+    expected_metadata = MCPOAuthMetadata(scopes=["read", "write"])
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.mcp_server_manager.get_async_httpx_client",
+        return_value=mock_client,
+    ):
+        with patch.object(
+            manager,
+            "_parse_www_authenticate_header",
+            return_value=(None, ["read", "write"]),
+        ):
+            with patch.object(
+                manager,
+                "_attempt_well_known_discovery",
+                return_value=(["https://auth.example.com"], None),
+            ):
+                with patch.object(
+                    manager,
+                    "_fetch_authorization_server_metadata",
+                    return_value=expected_metadata,
+                ):
+                    result = await manager._descovery_metadata("https://example.com")
+
+                    assert result == expected_metadata
+
+
+@pytest.mark.asyncio
+async def test_discovery_metadata_general_exception():
+    """Test handling of general exceptions during discovery."""
+    from unittest.mock import AsyncMock, patch
+
+    manager = MCPServerManager()
+
+    # Mock httpx client to raise general exception
+    mock_client = AsyncMock()
+    mock_client.get = AsyncMock(side_effect=Exception("Network error"))
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.mcp_server_manager.get_async_httpx_client",
+        return_value=mock_client,
+    ):
+        result = await manager._descovery_metadata("https://example.com")
+
+        assert result is None
