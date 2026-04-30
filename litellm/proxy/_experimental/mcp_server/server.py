@@ -2761,7 +2761,7 @@ if MCP_AVAILABLE:
                         for read_stream, auth in _session_auth_storage.items():
                             if getattr(
                                 read_stream, "_state", id(read_stream)
-                            ) is getattr(writer, "_state", id(writer)):
+                            ) == getattr(writer, "_state", id(writer)):
                                 session_auth = auth
                                 break
 
