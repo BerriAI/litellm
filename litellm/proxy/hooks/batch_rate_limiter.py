@@ -264,6 +264,16 @@ class _PROXY_BatchRateLimiter(CustomLogger):
         Returns:
             BatchFileUsage with total_tokens and request_count
         """
+        skip_providers = litellm.skip_batch_token_counting_providers or []
+        if custom_llm_provider in skip_providers:
+            verbose_proxy_logger.debug(
+                f"Skipping batch token counting for provider: {custom_llm_provider}"
+            )
+            return BatchFileUsage(
+                total_tokens=0,
+                request_count=0,
+            )
+
         try:
             # Check if this is a managed file (base64 encoded unified file ID)
             from litellm.proxy.openai_files_endpoints.common_utils import (
