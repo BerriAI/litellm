@@ -254,32 +254,48 @@ async def test_run_reconnect_cycle_uses_heavy_path_when_confirmed_dead(
 
 
 @pytest.mark.asyncio
-async def test_run_reconnect_cycle_uses_lightweight_path_when_engine_alive(
+async def test_run_reconnect_cycle_uses_direct_path_when_engine_alive(
     engine_client,
 ) -> None:
-    """_run_reconnect_cycle uses disconnect/connect when engine is alive."""
-    engine_client._engine_pid = 1234
+    """Direct reconnect (engine alive) calls recreate_prisma_client + SELECT 1.
 
-    with patch.object(engine_client, "_is_engine_alive", return_value=True):
+    The old "lightweight" path called `disconnect()` + `connect()`, which
+    blocks the event loop on the sync `process.wait()` inside aclose().
+    The fix routes both engine-alive and engine-dead paths through
+    `recreate_prisma_client`, which non-blockingly kills the old engine.
+    """
+    engine_client._engine_pid = 1234
+    engine_client._start_engine_watcher = AsyncMock()
+
+    with (
+        patch.object(engine_client, "_is_engine_alive", return_value=True),
+        patch.dict(os.environ, {"DATABASE_URL": "postgresql://test"}),
+    ):
         await engine_client._run_reconnect_cycle(timeout_seconds=5.0)
 
-    engine_client.db.connect.assert_awaited_once()
+    engine_client.db.recreate_prisma_client.assert_awaited_once_with(
+        "postgresql://test"
+    )
     engine_client.db.query_raw.assert_awaited_once_with("SELECT 1")
-    engine_client.db.recreate_prisma_client.assert_not_awaited()
+    engine_client.db.disconnect.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_run_reconnect_cycle_uses_lightweight_path_when_pid_unknown(
+async def test_run_reconnect_cycle_uses_direct_path_when_pid_unknown(
     engine_client,
 ) -> None:
-    """_run_reconnect_cycle uses lightweight path when engine PID is not tracked."""
+    """When the engine PID is not tracked, direct reconnect still runs."""
     engine_client._engine_pid = 0
+    engine_client._start_engine_watcher = AsyncMock()
 
-    await engine_client._run_reconnect_cycle(timeout_seconds=5.0)
+    with patch.dict(os.environ, {"DATABASE_URL": "postgresql://test"}):
+        await engine_client._run_reconnect_cycle(timeout_seconds=5.0)
 
-    engine_client.db.connect.assert_awaited_once()
+    engine_client.db.recreate_prisma_client.assert_awaited_once_with(
+        "postgresql://test"
+    )
     engine_client.db.query_raw.assert_awaited_once_with("SELECT 1")
-    engine_client.db.recreate_prisma_client.assert_not_awaited()
+    engine_client.db.disconnect.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -473,36 +489,38 @@ def test_on_engine_death_from_thread_ignores_stale_pid(engine_client):
 
 
 @pytest.mark.asyncio
-async def test_escalation_after_consecutive_lightweight_failures(engine_client):
-    """After N consecutive lightweight reconnect failures, _engine_confirmed_dead
+async def test_escalation_after_consecutive_direct_reconnect_failures(engine_client):
+    """After N consecutive direct reconnect failures, _engine_confirmed_dead
     is set to True so _run_reconnect_cycle takes the heavy reconnect path."""
     engine_client._reconnect_escalation_threshold = 3
     engine_client._consecutive_reconnect_failures = 0
     engine_client._db_reconnect_cooldown_seconds = 0  # disable cooldown for test
+    engine_client._start_engine_watcher = AsyncMock(return_value=None)
 
-    # Make lightweight reconnect fail every time
-    engine_client.db.disconnect = AsyncMock(return_value=None)
-    engine_client.db.connect = AsyncMock(side_effect=Exception("connect failed"))
+    # Make direct reconnect fail every time
+    engine_client.db.recreate_prisma_client = AsyncMock(
+        side_effect=Exception("recreate failed")
+    )
 
     # Run 3 failed reconnect attempts
-    for i in range(3):
-        result = await engine_client._attempt_reconnect_inside_lock(
-            force=True, reason="test", timeout_seconds=5.0
-        )
-        assert result is False
+    with patch.dict(os.environ, {"DATABASE_URL": "postgresql://test"}):
+        for _ in range(3):
+            result = await engine_client._attempt_reconnect_inside_lock(
+                force=True, reason="test", timeout_seconds=5.0
+            )
+            assert result is False
 
     assert engine_client._consecutive_reconnect_failures == 3
 
-    # Next attempt should escalate: _engine_confirmed_dead set to True before _run_reconnect_cycle
+    # Next attempt should escalate to the heavy path (recreate_prisma_client still
+    # the call, but via the _engine_confirmed_dead branch that also re-arms the watcher).
     engine_client.db.recreate_prisma_client = AsyncMock(return_value=None)
-    engine_client._start_engine_watcher = AsyncMock(return_value=None)
 
     with patch.dict(os.environ, {"DATABASE_URL": "postgresql://test"}):
         result = await engine_client._attempt_reconnect_inside_lock(
             force=True, reason="test_escalation", timeout_seconds=5.0
         )
 
-    # Heavy reconnect should have been attempted (recreate_prisma_client called)
     engine_client.db.recreate_prisma_client.assert_awaited_once()
 
 
@@ -511,15 +529,16 @@ async def test_successful_reconnect_resets_failure_counter(engine_client):
     """A successful reconnect resets _consecutive_reconnect_failures to 0."""
     engine_client._consecutive_reconnect_failures = 2
     engine_client._db_reconnect_cooldown_seconds = 0
+    engine_client._start_engine_watcher = AsyncMock()
 
     # Make reconnect succeed
-    engine_client.db.disconnect = AsyncMock(return_value=None)
-    engine_client.db.connect = AsyncMock(return_value=None)
+    engine_client.db.recreate_prisma_client = AsyncMock(return_value=None)
     engine_client.db.query_raw = AsyncMock(return_value=[{"result": 1}])
 
-    result = await engine_client._attempt_reconnect_inside_lock(
-        force=True, reason="test", timeout_seconds=5.0
-    )
+    with patch.dict(os.environ, {"DATABASE_URL": "postgresql://test"}):
+        result = await engine_client._attempt_reconnect_inside_lock(
+            force=True, reason="test", timeout_seconds=5.0
+        )
 
     assert result is True
     assert engine_client._consecutive_reconnect_failures == 0
