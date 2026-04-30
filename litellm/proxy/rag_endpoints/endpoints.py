@@ -15,6 +15,7 @@ from fastapi.responses import ORJSONResponse
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_auth
 from litellm.proxy.common_utils.http_parsing_utils import (
@@ -31,10 +32,17 @@ router = APIRouter()
 
 def _collect_vector_store_ids_from_payload(payload: Any) -> set[str]:
     vector_store_ids: set[str] = set()
-    payload_stack = [payload]
+    payload_stack = [(payload, 0)]
 
     while payload_stack:
-        current_payload = payload_stack.pop()
+        current_payload, depth = payload_stack.pop()
+        if depth > DEFAULT_MAX_RECURSE_DEPTH:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": f"Max depth of {DEFAULT_MAX_RECURSE_DEPTH} exceeded while scanning vector_store_id values"
+                },
+            )
 
         if isinstance(current_payload, dict):
             for key, value in current_payload.items():
@@ -49,9 +57,9 @@ def _collect_vector_store_ids_from_payload(payload: Any) -> set[str]:
                     vector_store_ids.add(value)
                     continue
                 if isinstance(value, (dict, list)):
-                    payload_stack.append(value)
+                    payload_stack.append((value, depth + 1))
         elif isinstance(current_payload, list):
-            payload_stack.extend(current_payload)
+            payload_stack.extend((item, depth + 1) for item in current_payload)
 
     return vector_store_ids
 

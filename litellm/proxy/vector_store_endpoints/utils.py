@@ -158,11 +158,15 @@ async def get_litellm_managed_vector_store(
             if vector_store is not None:
                 return _normalize_litellm_params(vector_store)
         except Exception as e:
-            verbose_proxy_logger.debug(
+            verbose_proxy_logger.warning(
                 "Failed to resolve vector store id=%s from registry: %s",
                 vector_store_id,
                 e,
             )
+            raise HTTPException(
+                status_code=500,
+                detail="Unable to validate vector store access",
+            ) from e
 
     try:
         from litellm.proxy.auth.auth_checks import (
@@ -188,12 +192,15 @@ async def get_litellm_managed_vector_store(
             LiteLLM_ManagedVectorStore(**rows[0].model_dump())
         )
     except Exception as e:
-        verbose_proxy_logger.debug(
+        verbose_proxy_logger.warning(
             "Failed to resolve vector store id=%s from shared cache: %s",
             vector_store_id,
             e,
         )
-        return None
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to validate vector store access",
+        ) from e
 
 
 async def assert_user_can_access_vector_store(
