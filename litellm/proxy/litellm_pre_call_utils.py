@@ -149,9 +149,16 @@ _UNTRUSTED_REQUEST_HEADER_CONTROL_FIELDS = frozenset(
 )
 _CLIENT_MOCK_CONTROL_FIELDS = frozenset({"mock_response", "mock_tool_calls"})
 _ALLOW_CLIENT_MOCK_RESPONSE_METADATA_KEY = "allow_client_mock_response"
+_ALLOW_CLIENT_MESSAGE_REDACTION_OPT_OUT_METADATA_KEY = (
+    "allow_client_message_redaction_opt_out"
+)
 
 
-def _strip_untrusted_request_header_controls(headers: Any) -> None:
+def _strip_untrusted_request_header_controls(
+    headers: Any,
+    *,
+    allow_client_message_redaction_opt_out: bool = False,
+) -> None:
     if not isinstance(headers, dict):
         return
 
@@ -160,6 +167,8 @@ def _strip_untrusted_request_header_controls(headers: Any) -> None:
             isinstance(header_name, str)
             and header_name.lower() in _UNTRUSTED_REQUEST_HEADER_CONTROL_FIELDS
         ):
+            if allow_client_message_redaction_opt_out:
+                continue
             headers.pop(header_name, None)
 
 
@@ -171,16 +180,35 @@ def _is_false_like(value: Any) -> bool:
     return False
 
 
-def _key_or_team_allows_client_mock_response(
+def _key_or_team_metadata_flag_is_true(
     user_api_key_dict: UserAPIKeyAuth,
+    metadata_key: str,
 ) -> bool:
     for admin_metadata in (user_api_key_dict.metadata, user_api_key_dict.team_metadata):
         if (
             isinstance(admin_metadata, dict)
-            and admin_metadata.get(_ALLOW_CLIENT_MOCK_RESPONSE_METADATA_KEY) is True
+            and admin_metadata.get(metadata_key) is True
         ):
             return True
     return False
+
+
+def _key_or_team_allows_client_mock_response(
+    user_api_key_dict: UserAPIKeyAuth,
+) -> bool:
+    return _key_or_team_metadata_flag_is_true(
+        user_api_key_dict=user_api_key_dict,
+        metadata_key=_ALLOW_CLIENT_MOCK_RESPONSE_METADATA_KEY,
+    )
+
+
+def _key_or_team_allows_client_message_redaction_opt_out(
+    user_api_key_dict: UserAPIKeyAuth,
+) -> bool:
+    return _key_or_team_metadata_flag_is_true(
+        user_api_key_dict=user_api_key_dict,
+        metadata_key=_ALLOW_CLIENT_MESSAGE_REDACTION_OPT_OUT_METADATA_KEY,
+    )
 
 
 def _get_metadata_variable_name(request: Request) -> str:
@@ -1043,6 +1071,9 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
     _allow_client_mock_response = _key_or_team_allows_client_mock_response(
         user_api_key_dict
     )
+    _allow_client_message_redaction_opt_out = (
+        _key_or_team_allows_client_message_redaction_opt_out(user_api_key_dict)
+    )
     for _internal_key in _UNTRUSTED_ROOT_CONTROL_FIELDS:
         if _allow_client_mock_response and _internal_key in _CLIENT_MOCK_CONTROL_FIELDS:
             continue
@@ -1086,9 +1117,13 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
         forward_llm_provider_auth_headers=forward_llm_auth,
         authenticated_with_header=authenticated_with_header,
     )
-    _strip_untrusted_request_header_controls(_headers)
+    _strip_untrusted_request_header_controls(
+        _headers,
+        allow_client_message_redaction_opt_out=_allow_client_message_redaction_opt_out,
+    )
     if (
-        litellm.turn_off_message_logging is True
+        not _allow_client_message_redaction_opt_out
+        and litellm.turn_off_message_logging is True
         and "turn_off_message_logging" in data
         and _is_false_like(data["turn_off_message_logging"])
     ):
@@ -1230,7 +1265,12 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
     for _meta_key in ("metadata", "litellm_metadata"):
         _user_meta = data.get(_meta_key)
         if isinstance(_user_meta, dict):
-            _strip_untrusted_request_header_controls(_user_meta.get("headers"))
+            _strip_untrusted_request_header_controls(
+                _user_meta.get("headers"),
+                allow_client_message_redaction_opt_out=(
+                    _allow_client_message_redaction_opt_out
+                ),
+            )
             for _k in [
                 k
                 for k in _user_meta
