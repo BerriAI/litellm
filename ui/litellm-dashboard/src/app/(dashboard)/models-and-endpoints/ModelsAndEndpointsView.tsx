@@ -17,7 +17,7 @@ import { RefreshIcon } from "@heroicons/react/outline";
 import { useQueryClient } from "@tanstack/react-query";
 import { Col, Grid, Icon, Tab, TabGroup, TabList, TabPanel, TabPanels } from "@tremor/react";
 import type { UploadProps } from "antd";
-import { Form, Typography } from "antd";
+import { Form } from "antd";
 import { PlusCircleOutlined } from "@ant-design/icons";
 import React, { useEffect, useMemo, useState } from "react";
 import AddModelTab from "../../../components/add_model/add_model_tab";
@@ -229,15 +229,9 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({ premiumUser, te
 
   const isLoading = isLoadingModels || isLoadingModelCostMap || isLoadingCredentials || isLoadingUISettings;
 
-  if (userRole && userRole == "Admin Viewer") {
-    const { Title, Paragraph } = Typography;
-    return (
-      <div>
-        <Title level={1}>Access Denied</Title>
-        <Paragraph>Ask your proxy admin for access to view all models</Paragraph>
-      </div>
-    );
-  }
+  // Admin Viewer can view all models read-only — page render proceeds; the
+  // individual write-action tabs (Add Model, LLM Credentials, etc.) are
+  // gated separately below.
 
   const handleOk = async () => {
     try {

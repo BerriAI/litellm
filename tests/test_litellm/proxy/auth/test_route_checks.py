@@ -1325,6 +1325,15 @@ ADMIN_VIEWER_SETTINGS_ROUTES = [
     "/budget/settings",
     # Invitation viewing (admin viewer cannot create/delete; can read)
     "/invitation/info",
+    # Guardrails / Policies pages (read-only views)
+    "/guardrails/list",
+    "/v2/guardrails/list",
+    "/guardrails/submissions",
+    "/guardrails/submissions/some-guardrail-id",
+    "/guardrails/usage/overview",
+    "/policies/attachments/list",
+    # MCP semantic filter settings (read)
+    "/get/mcp_semantic_filter_settings",
     # Model cost map (read-only status / source)
     "/schedule/model_cost_map_reload/status",
     "/model/cost_map/source",
