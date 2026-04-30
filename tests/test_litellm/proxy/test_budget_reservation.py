@@ -495,6 +495,82 @@ async def test_should_seed_malformed_window_counter_from_parent_authoritative_sp
 
 
 @pytest.mark.asyncio
+async def test_should_coalesce_malformed_window_counter_initialization(
+    spend_counter_state,
+):
+    import asyncio as _asyncio
+
+    counter_cache, key_cache = spend_counter_state
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=key_cache)
+    token = "key-budget-malformed-window-concurrent"
+    malformed_window_counter_key = f"spend:key:{token}:window:not-a-duration"
+    valid_token = UserAPIKeyAuth(
+        token=token,
+        spend=0.0,
+        budget_limits=[
+            {
+                "budget_duration": "not-a-duration",
+                "max_budget": 1.0,
+            }
+        ],
+    )
+
+    import litellm.proxy.proxy_server as ps
+
+    db_call_count = 0
+
+    async def slow_find_unique(**kwargs):
+        nonlocal db_call_count
+        db_call_count += 1
+        await _asyncio.sleep(0.05)
+        db_row = MagicMock()
+        db_row.spend = 0.35
+        return db_row
+
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(
+        side_effect=slow_find_unique
+    )
+    ps.prisma_client = prisma_client
+
+    with patch(
+        "litellm.proxy.spend_tracking.budget_reservation.estimate_request_max_cost",
+        return_value=0.2,
+    ):
+        results = await _asyncio.gather(
+            *[
+                reserve_budget_for_request(
+                    request_body=_request_body(),
+                    route="/chat/completions",
+                    llm_router=None,
+                    valid_token=valid_token,
+                    team_object=None,
+                    user_object=None,
+                    prisma_client=prisma_client,
+                    user_api_key_cache=key_cache,
+                    proxy_logging_obj=proxy_logging_obj,
+                )
+                for _ in range(2)
+            ],
+            return_exceptions=True,
+        )
+
+    assert not any(isinstance(result, Exception) for result in results), results
+    assert all(result is not None for result in results)
+    assert db_call_count == 1
+    assert counter_cache.in_memory_cache.get_cache(
+        key=malformed_window_counter_key
+    ) == pytest.approx(0.75)
+
+    for reservation in results:
+        await release_budget_reservation(reservation)
+
+    assert counter_cache.in_memory_cache.get_cache(
+        key=malformed_window_counter_key
+    ) == pytest.approx(0.35)
+
+
+@pytest.mark.asyncio
 async def test_should_not_re_read_uncapped_budget_after_reservation_fallback(
     spend_counter_state,
     monkeypatch,
