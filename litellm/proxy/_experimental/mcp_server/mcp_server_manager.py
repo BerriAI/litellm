@@ -1229,13 +1229,13 @@ class MCPServerManager:
             if server.command:
                 base_command = os.path.basename(server.command)
                 # Strip .exe/.cmd/.bat/.com suffix for Windows compatibility
-                base_command_no_ext = base_command
+                base_command_no_ext = base_command.lower()
                 for ext in [".exe", ".cmd", ".bat", ".com"]:
                     if base_command.lower().endswith(ext):
                         base_command_no_ext = base_command[: -len(ext)].lower()
                         break
                 if (
-                    base_command not in MCP_STDIO_ALLOWED_COMMANDS
+                    base_command.lower() not in MCP_STDIO_ALLOWED_COMMANDS
                     and base_command_no_ext not in MCP_STDIO_ALLOWED_COMMANDS
                 ):
                     raise HTTPException(

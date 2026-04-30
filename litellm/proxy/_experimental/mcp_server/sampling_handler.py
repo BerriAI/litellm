@@ -88,8 +88,13 @@ def _resolve_model_from_preferences(
     # Fall back to first available model
     if available_model_names:
         return available_model_names[0]
-    # Last resort - use LiteLLM default or return None
-    return getattr(litellm, "default_mcp_sampling_model", None) or "gpt-4o-mini"
+    # Last resort - use LiteLLM default or raise error
+    default_sampling_model = getattr(litellm, "default_mcp_sampling_model", None)
+    if default_sampling_model:
+        return default_sampling_model
+    raise ValueError(
+        "No model could be resolved for MCP sampling. Please configure 'default_mcp_sampling_model' in your LiteLLM configuration."
+    )
 
 
 def _convert_mcp_content_to_openai(

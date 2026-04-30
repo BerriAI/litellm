@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 from litellm.proxy._experimental.mcp_server.server import (
     handle_sse_mcp_endpoint,
     handle_sse_post_messages,
-    _captured_session_id_var,
+    _captured_session_id_container_var,
     _session_id_auth_storage,
 )
 from litellm.proxy._types import UserAPIKeyAuth
@@ -29,7 +29,9 @@ async def test_session_id_capture_and_binding():
     @asynccontextmanager
     async def mock_connect_sse(scope, receive, send):
         # Directly set the ContextVar to simulate our capturing dict's behavior
-        _captured_session_id_var.set(session_id)
+        container = _captured_session_id_container_var.get()
+        if container is not None:
+            container["session_id"] = session_id
         yield (AsyncMock(), AsyncMock())
 
     mock_sse.connect_sse = MagicMock(side_effect=mock_connect_sse)
@@ -174,7 +176,9 @@ async def test_anonymous_session_still_works():
 
     @asynccontextmanager
     async def mock_connect_sse(scope, receive, send):
-        _captured_session_id_var.set(session_id)
+        container = _captured_session_id_container_var.get()
+        if container is not None:
+            container["session_id"] = session_id
         yield (AsyncMock(), AsyncMock())
 
     mock_sse.connect_sse = MagicMock(side_effect=mock_connect_sse)
