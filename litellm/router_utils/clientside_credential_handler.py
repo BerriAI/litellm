@@ -69,7 +69,7 @@ def is_clientside_credential(request_kwargs: dict) -> bool:
     """
     Check if the credential is a clientside credential.
     """
-    return any(key in request_kwargs for key in clientside_credential_keys)
+    return any(request_kwargs.get(key) is not None for key in clientside_credential_keys)
 
 
 def get_dynamic_litellm_params(litellm_params: dict, request_kwargs: dict) -> dict:
@@ -83,7 +83,7 @@ def get_dynamic_litellm_params(litellm_params: dict, request_kwargs: dict) -> di
     """
     # update litellm_params with clientside credentials
     for key in clientside_credential_keys:
-        if key in request_kwargs:
+        if request_kwargs.get(key) is not None:
             litellm_params[key] = request_kwargs[key]
 
     # If the caller redirected api_base/base_url to a client-controlled value,
@@ -95,10 +95,13 @@ def get_dynamic_litellm_params(litellm_params: dict, request_kwargs: dict) -> di
     # field name (with any value, including an empty string) to keep the
     # admin's value in ``litellm_params`` and have it forwarded to the
     # redirected upstream.
-    if "api_base" in request_kwargs or "base_url" in request_kwargs:
+    if (
+        request_kwargs.get("api_base") is not None
+        or request_kwargs.get("base_url") is not None
+    ):
         for field in _ADMIN_CONFIG_FIELDS_TO_CLEAR_ON_BASE_OVERRIDE:
             litellm_params.pop(field, None)
-            if field in request_kwargs:
+            if request_kwargs.get(field) is not None:
                 litellm_params[field] = request_kwargs[field]
 
     return litellm_params

@@ -54,6 +54,89 @@ def test_update_kwargs_does_not_mutate_defaults_and_merges_metadata():
     assert kwargs["litellm_metadata"] == {"baz": 123}
 
 
+@pytest.mark.asyncio
+async def test_router_preserves_deployment_credentials_when_request_values_are_none():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "GPT-5.4",
+                "litellm_params": {
+                    "model": "azure/gpt-5.4",
+                    "api_base": "https://example-resource.cognitiveservices.azure.com",
+                    "api_key": "test-key",
+                    "api_version": "2025-04-01-preview",
+                    "base_model": "gpt-5.4",
+                },
+            }
+        ],
+    )
+
+    with patch("litellm.acompletion", new_callable=AsyncMock) as mock_acompletion:
+        mock_acompletion.return_value = {"choices": []}
+
+        await router.acompletion(
+            model="GPT-5.4",
+            messages=[{"role": "user", "content": "hi"}],
+            api_base=None,
+            api_key=None,
+            reasoning_effort="medium",
+            tools=[
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "search",
+                        "description": "Search for information.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "query": {"type": "string"},
+                            },
+                            "required": ["query"],
+                        },
+                    },
+                }
+            ],
+        )
+
+    call_kwargs = mock_acompletion.call_args.kwargs
+    assert (
+        call_kwargs["api_base"]
+        == "https://example-resource.cognitiveservices.azure.com"
+    )
+    assert call_kwargs["api_key"] == "test-key"
+    assert call_kwargs["api_version"] == "2025-04-01-preview"
+
+
+def test_router_keeps_non_none_request_credentials_as_clientside_override():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "GPT-5.4",
+                "litellm_params": {
+                    "model": "azure/gpt-5.4",
+                    "api_base": "https://deployment-resource.cognitiveservices.azure.com",
+                    "api_key": "deployment-key",
+                },
+            }
+        ],
+    )
+
+    with patch("litellm.completion", return_value={"choices": []}) as mock_completion:
+        router.completion(
+            model="GPT-5.4",
+            messages=[{"role": "user", "content": "hi"}],
+            api_base="https://request-resource.cognitiveservices.azure.com",
+            api_key="request-key",
+        )
+
+    call_kwargs = mock_completion.call_args.kwargs
+    assert (
+        call_kwargs["api_base"]
+        == "https://request-resource.cognitiveservices.azure.com"
+    )
+    assert call_kwargs["api_key"] == "request-key"
+
+
 def test_router_with_model_info_and_model_group():
     """
     Test edge case where user specifies model_group in model_info
