@@ -320,9 +320,7 @@ class TestGoogleAIStudioFilesTransformation:
             litellm_params=litellm_params,
         )
 
-        # Verify URL extraction
-        assert "files/test123" in url
-        assert "generativelanguage.googleapis.com" in url
+        assert url == "https://generativelanguage.googleapis.com/v1beta/files/test123"
 
         # Params should be empty (API key goes in header via validate_environment)
         assert params == {}
