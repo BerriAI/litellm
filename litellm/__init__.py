@@ -258,6 +258,7 @@ aleph_alpha_key: Optional[str] = None
 nlp_cloud_key: Optional[str] = None
 novita_api_key: Optional[str] = None
 snowflake_key: Optional[str] = None
+soniox_api_key: Optional[str] = None
 gradient_ai_api_key: Optional[str] = None
 nebius_key: Optional[str] = None
 wandb_key: Optional[str] = None
@@ -586,6 +587,7 @@ sambanova_embedding_models: Set = set()
 novita_models: Set = set()
 assemblyai_models: Set = set()
 snowflake_models: Set = set()
+soniox_models: Set = set()
 gradient_ai_models: Set = set()
 llama_models: Set = set()
 nscale_models: Set = set()
@@ -825,6 +827,8 @@ def add_known_models(model_cost_map: Optional[Dict] = None):
             jina_ai_models.add(key)
         elif value.get("litellm_provider") == "snowflake":
             snowflake_models.add(key)
+        elif value.get("litellm_provider") == "soniox":
+            soniox_models.add(key)
         elif value.get("litellm_provider") == "gradient_ai":
             gradient_ai_models.add(key)
         elif value.get("litellm_provider") == "featherless_ai":
@@ -972,6 +976,7 @@ model_list = list(
     | assemblyai_models
     | jina_ai_models
     | snowflake_models
+    | soniox_models
     | gradient_ai_models
     | llama_models
     | featherless_ai_models
@@ -1069,6 +1074,7 @@ models_by_provider: dict = {
     "assemblyai": assemblyai_models,
     "jina_ai": jina_ai_models,
     "snowflake": snowflake_models,
+    "soniox": soniox_models,
     "gradient_ai": gradient_ai_models,
     "meta_llama": llama_models,
     "nscale": nscale_models,
@@ -1612,6 +1618,9 @@ if TYPE_CHECKING:
     )
     from .llms.deepgram.audio_transcription.transformation import (
         DeepgramAudioTranscriptionConfig as DeepgramAudioTranscriptionConfig,
+    )
+    from .llms.soniox.audio_transcription.transformation import (
+        SonioxAudioTranscriptionConfig as SonioxAudioTranscriptionConfig,
     )
     from .llms.topaz.image_variations.transformation import (
         TopazImageVariationConfig as TopazImageVariationConfig,

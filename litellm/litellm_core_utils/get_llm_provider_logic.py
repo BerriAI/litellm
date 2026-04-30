@@ -890,6 +890,14 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
         ) = litellm.MoonshotChatConfig()._get_openai_compatible_provider_info(
             api_base, api_key
         )
+    elif custom_llm_provider == "soniox":
+        from litellm.llms.soniox.common_utils import (
+            SONIOX_API_BASE,
+            get_soniox_api_key,
+        )
+
+        api_base = api_base or SONIOX_API_BASE
+        dynamic_api_key = api_key or get_soniox_api_key(api_key=None)
     # publicai is now handled by JSON config (see litellm/llms/openai_like/providers.json)
     elif custom_llm_provider == "docker_model_runner":
         (
