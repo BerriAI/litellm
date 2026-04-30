@@ -1174,12 +1174,23 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                 else:
                     if all_chunks:
                         # Flush buffered chunks and switch to transparent passthrough for this stream shape.
+                        # NOTE: these buffered chunks are emitted unmasked because this
+                        # stream mixed chunk types and cannot be safely reconstructed.
+                        verbose_proxy_logger.warning(
+                            "Presidio apply_to_output: mixed stream detected (ModelResponseStream + unknown event). "
+                            "Flushing %d buffered chunks without PII masking and switching to transparent passthrough.",
+                            len(all_chunks),
+                        )
                         for buffered_chunk in all_chunks:
                             yield buffered_chunk
                         all_chunks = []
                     passthrough_due_to_unknown_stream_shape = True
                     yield chunk
             if passthrough_due_to_unknown_stream_shape:
+                verbose_proxy_logger.warning(
+                    "Presidio apply_to_output: streaming response contained unknown event objects "
+                    "(e.g. /v1/responses events). Output PII masking was skipped for this response."
+                )
                 return
             if not all_chunks:
                 verbose_proxy_logger.warning(
