@@ -1100,8 +1100,13 @@ if MCP_AVAILABLE:
 
         extra_headers: Optional[Dict[str, str]] = None
         if server.auth_type == MCPAuth.oauth2:
-            # Copy to avoid mutating the original dict (important for parallel fetching)
-            extra_headers = oauth2_headers.copy() if oauth2_headers else None
+            # For OAuth2 M2M servers, upstream Authorization must come from
+            # client_credentials token fetch, never from caller headers.
+            if server.has_client_credentials:
+                extra_headers = None
+            else:
+                # Copy to avoid mutating the original dict (important for parallel fetching)
+                extra_headers = oauth2_headers.copy() if oauth2_headers else None
 
         if server.extra_headers and raw_headers:
             if extra_headers is None:
@@ -1113,6 +1118,8 @@ if MCP_AVAILABLE:
 
             for header in server.extra_headers:
                 if not isinstance(header, str):
+                    continue
+                if server.has_client_credentials and header.lower() == "authorization":
                     continue
                 header_value = normalized_raw_headers.get(header.lower())
                 if header_value is None:
@@ -1377,11 +1384,19 @@ if MCP_AVAILABLE:
                     spend_meta["per_server_tool_counts"] = per_server_tool_counts
 
                 end_time = datetime.now()
-                await litellm_logging_obj.async_success_handler(
-                    result=all_tools,
-                    start_time=list_tools_start_time,
-                    end_time=end_time,
-                )
+                try:
+                    await litellm_logging_obj.async_success_handler(
+                        result=all_tools,
+                        start_time=list_tools_start_time,
+                        end_time=end_time,
+                    )
+                except Exception as log_exc:
+                    # list_tools responses must not be dropped due to non-blocking
+                    # observability/serialization failures.
+                    verbose_logger.warning(
+                        "MCP list_tools success logging failed (continuing): %s",
+                        log_exc,
+                    )
 
             verbose_logger.info(
                 f"Successfully fetched {len(all_tools)} tools total from all MCP servers"
