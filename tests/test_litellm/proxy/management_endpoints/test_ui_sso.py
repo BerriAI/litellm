@@ -2,6 +2,7 @@ import asyncio
 import json
 import os
 import sys
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -1998,6 +1999,18 @@ class TestCustomUISSO:
 class TestCLIKeyRegenerationFlow:
     """Test the end-to-end CLI key regeneration flow"""
 
+    def test_cli_sso_login_id_validation_restricts_charset(self):
+        """Test CLI SSO login IDs only allow the generated character set"""
+        from litellm.proxy.management_endpoints.ui_sso import (
+            _is_valid_cli_sso_login_id,
+        )
+
+        assert _is_valid_cli_sso_login_id("cli-test_1234567890")
+        assert not _is_valid_cli_sso_login_id("cli-session")
+        assert not _is_valid_cli_sso_login_id("cli-test\n1234567890")
+        assert not _is_valid_cli_sso_login_id("cli-test\x001234567890")
+        assert not _is_valid_cli_sso_login_id("sk-test1234567890")
+
     @pytest.mark.asyncio
     async def test_cli_sso_start_creates_bound_flow(self):
         """Test CLI SSO start creates a polling secret bound flow"""
@@ -2007,15 +2020,21 @@ class TestCLIKeyRegenerationFlow:
             cli_sso_start,
         )
 
+        mock_request = MagicMock(spec=Request)
+        mock_request.client = SimpleNamespace(host="127.0.0.1")
+        mock_request.headers = {}
         mock_cache = MagicMock()
+        mock_cache.increment_cache.return_value = 1
 
         with patch("litellm.proxy.proxy_server.user_api_key_cache", mock_cache):
-            result = await cli_sso_start()
+            result = await cli_sso_start(request=mock_request)
 
         assert result["login_id"].startswith("cli-")
         assert result["poll_secret"]
         assert result["user_code"]
 
+        mock_cache.increment_cache.assert_called_once()
+        assert mock_cache.increment_cache.call_args.kwargs["ttl"] == 60
         mock_cache.set_cache.assert_called_once()
         flow_data = mock_cache.set_cache.call_args.kwargs["value"]
         assert flow_data["poll_secret_hash"] == _hash_cli_sso_secret(
@@ -2026,6 +2045,24 @@ class TestCLIKeyRegenerationFlow:
         )
         assert flow_data["poll_secret_hash"] != result["poll_secret"]
         assert flow_data["user_code_hash"] != result["user_code"]
+
+    @pytest.mark.asyncio
+    async def test_cli_sso_start_rate_limits_by_client_ip(self):
+        """Test CLI SSO start enforces a coarse per-client rate limit"""
+        from litellm.proxy.management_endpoints.ui_sso import cli_sso_start
+
+        mock_request = MagicMock(spec=Request)
+        mock_request.client = SimpleNamespace(host="127.0.0.1")
+        mock_request.headers = {}
+        mock_cache = MagicMock()
+        mock_cache.increment_cache.return_value = 31
+
+        with patch("litellm.proxy.proxy_server.user_api_key_cache", mock_cache):
+            with pytest.raises(HTTPException) as exc_info:
+                await cli_sso_start(request=mock_request)
+
+        assert exc_info.value.status_code == 429
+        mock_cache.set_cache.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_cli_sso_complete_verifies_user_code(self):
@@ -2097,6 +2134,41 @@ class TestCLIKeyRegenerationFlow:
                 )
 
         assert exc_info.value.status_code == 400
+        mock_cache.set_cache.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_cli_sso_complete_waits_for_callback_before_token_checks(self):
+        """Test CLI SSO complete returns not-ready before verification checks"""
+        from litellm.proxy.management_endpoints.ui_sso import (
+            _hash_cli_sso_secret,
+            _normalize_cli_sso_user_code,
+            cli_sso_complete,
+        )
+
+        mock_request = MagicMock(spec=Request)
+        mock_request.body = AsyncMock(
+            return_value=b"user_code=ABCD-EFGH&browser_complete_token=browser-token"
+        )
+        mock_cache = MagicMock()
+        mock_cache.get_cache.return_value = {
+            "poll_secret_hash": _hash_cli_sso_secret("poll-secret"),
+            "user_code_hash": _hash_cli_sso_secret(
+                _normalize_cli_sso_user_code("ABCD-EFGH")
+            ),
+            "sso_complete": False,
+            "user_code_verified": False,
+            "session_data": None,
+        }
+
+        with patch("litellm.proxy.proxy_server.user_api_key_cache", mock_cache):
+            with pytest.raises(HTTPException) as exc_info:
+                await cli_sso_complete(
+                    request=mock_request, login_id="cli-session-4567890"
+                )
+
+        assert exc_info.value.status_code == 400
+        assert exc_info.value.detail == "CLI login is not ready"
+        mock_request.body.assert_not_awaited()
         mock_cache.set_cache.assert_not_called()
 
     @pytest.mark.asyncio

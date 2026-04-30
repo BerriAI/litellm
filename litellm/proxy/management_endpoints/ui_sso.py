@@ -13,6 +13,7 @@ import base64
 import hashlib
 import inspect
 import os
+import re
 import secrets
 from html import escape
 from copy import deepcopy
@@ -74,7 +75,7 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.auth_checks import ExperimentalUIJWTToken, get_user_object
-from litellm.proxy.auth.auth_utils import _has_user_setup_sso
+from litellm.proxy.auth.auth_utils import _get_request_ip_address, _has_user_setup_sso
 from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.admin_ui_utils import (
@@ -128,7 +129,13 @@ router = APIRouter()
 # response convertors see the same fields in the PKCE path as in the non-PKCE path.
 _OAUTH_TOKEN_FIELDS = frozenset({"access_token", "id_token", "refresh_token"})
 _CLI_SSO_FLOW_CACHE_KEY_PREFIX = f"{CLI_SSO_SESSION_CACHE_KEY_PREFIX}:flow"
+_CLI_SSO_START_RATE_LIMIT_CACHE_KEY_PREFIX = (
+    f"{_CLI_SSO_FLOW_CACHE_KEY_PREFIX}:start_rate_limit"
+)
+_CLI_SSO_START_RATE_LIMIT_WINDOW_SECONDS = 60
+_CLI_SSO_START_RATE_LIMIT_MAX_ATTEMPTS = 30
 _CLI_SSO_USER_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+_CLI_SSO_LOGIN_ID_RE = re.compile(r"^cli-[A-Za-z0-9_-]{12,124}$")
 
 
 def _hash_cli_sso_secret(secret: str) -> str:
@@ -149,11 +156,40 @@ def _get_cli_sso_flow_cache_key(login_id: str) -> str:
 
 
 def _is_valid_cli_sso_login_id(login_id: Optional[str]) -> bool:
-    return (
-        isinstance(login_id, str)
-        and login_id.startswith("cli-")
-        and 16 <= len(login_id) <= 128
+    return isinstance(login_id, str) and bool(_CLI_SSO_LOGIN_ID_RE.fullmatch(login_id))
+
+
+def _get_cli_sso_start_rate_limit_cache_key(
+    request: Request, use_x_forwarded_for: Optional[bool] = False
+) -> str:
+    client_ip = (
+        _get_request_ip_address(
+            request=request, use_x_forwarded_for=use_x_forwarded_for
+        )
+        or "unknown"
     )
+    client_ip_hash = _hash_cli_sso_secret(client_ip)
+    return f"{_CLI_SSO_START_RATE_LIMIT_CACHE_KEY_PREFIX}:{client_ip_hash}"
+
+
+def _check_cli_sso_start_rate_limit(
+    request: Request,
+    cache: DualCache,
+    use_x_forwarded_for: Optional[bool] = False,
+) -> None:
+    rate_limit_cache_key = _get_cli_sso_start_rate_limit_cache_key(
+        request=request, use_x_forwarded_for=use_x_forwarded_for
+    )
+    current_attempts = cache.increment_cache(
+        key=rate_limit_cache_key,
+        value=1,
+        ttl=_CLI_SSO_START_RATE_LIMIT_WINDOW_SECONDS,
+    )
+    if current_attempts > _CLI_SSO_START_RATE_LIMIT_MAX_ATTEMPTS:
+        raise HTTPException(
+            status_code=429,
+            detail="Too many CLI login attempts. Try again later.",
+        )
 
 
 def _get_cli_sso_flow_or_raise(login_id: Optional[str], cache: DualCache) -> dict:
@@ -257,8 +293,16 @@ def _render_cli_sso_verification_page(
 
 
 @router.post("/sso/cli/start", tags=["experimental"], include_in_schema=False)
-async def cli_sso_start():
-    from litellm.proxy.proxy_server import user_api_key_cache
+async def cli_sso_start(request: Request):
+    from litellm.proxy.proxy_server import general_settings, user_api_key_cache
+
+    _check_cli_sso_start_rate_limit(
+        request=request,
+        cache=user_api_key_cache,
+        use_x_forwarded_for=bool(
+            (general_settings or {}).get("use_x_forwarded_for", False)
+        ),
+    )
 
     login_id = f"cli-{secrets.token_urlsafe(24)}"
     poll_secret = secrets.token_urlsafe(32)
@@ -293,6 +337,9 @@ async def cli_sso_complete(request: Request, login_id: str):
     from litellm.proxy.proxy_server import user_api_key_cache
 
     flow = _get_cli_sso_flow_or_raise(login_id=login_id, cache=user_api_key_cache)
+    if not flow.get("sso_complete") or not flow.get("session_data"):
+        raise HTTPException(status_code=400, detail="CLI login is not ready")
+
     body = (await request.body()).decode("utf-8")
     form_values = parse_qs(body)
     supplied_user_code = (form_values.get("user_code") or [""])[0]
@@ -319,9 +366,6 @@ async def cli_sso_complete(request: Request, login_id: str):
         supplied_browser_complete_token_hash, expected_browser_complete_token_hash
     ):
         raise HTTPException(status_code=400, detail="Invalid verification code")
-
-    if not flow.get("sso_complete") or not flow.get("session_data"):
-        raise HTTPException(status_code=400, detail="CLI login is not ready")
 
     flow["user_code_verified"] = True
     _set_cli_sso_flow(login_id=login_id, cache=user_api_key_cache, flow=flow)
