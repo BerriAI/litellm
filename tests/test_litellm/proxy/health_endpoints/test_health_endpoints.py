@@ -925,17 +925,23 @@ async def test_health_endpoint_filters_background_cache_by_user_access():
     ):
         result = await health_endpoint(user_api_key_dict=user_api_key_dict)
 
-    returned_ids = {ep.get("model_id") for ep in result.get("healthy_endpoints", [])}
-    returned_bases = {
-        ep.get("api_base")
-        for ep in result.get("healthy_endpoints", [])
-        if ep.get("api_base")
-    }
-    assert returned_ids == {
-        "id-a"
-    }, f"caller saw deployments outside their model scope: {returned_ids}"
+    # Sanity: the source cache had two entries before scoping; the scoping
+    # step is what reduces it to one. (This guards against the test passing
+    # vacuously when the cache filter drops everything because cached
+    # entries lack the model_id key — both entries carry model_id above.)
+    assert len(cached_results["healthy_endpoints"]) == 2
+    assert all(
+        ep.get("model_id") for ep in cached_results["healthy_endpoints"]
+    ), "test fixture invariant: every cached entry must carry a model_id"
+
+    returned = result.get("healthy_endpoints", [])
+    assert (
+        len(returned) == 1
+    ), f"expected exactly one cached entry after scoping, got {len(returned)}"
+    assert returned[0]["model_id"] == "id-a"
+    assert returned[0]["api_base"] == "https://example-a.test"
     assert result["healthy_count"] == 1
-    assert "https://example-b.test" not in returned_bases
+    assert result["unhealthy_count"] == 0
 
 
 def test_clean_endpoint_data_drops_routing_fields():
