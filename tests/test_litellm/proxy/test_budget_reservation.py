@@ -14,6 +14,7 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.spend_tracking.budget_reservation import (
     estimate_request_max_cost,
+    invalidate_budget_reservation_counters,
     release_budget_reservation,
     reserve_budget_for_request,
 )
@@ -48,6 +49,20 @@ def _request_body() -> dict:
         "messages": [{"role": "user", "content": "hello"}],
         "max_tokens": 10,
     }
+
+
+def test_should_not_serialize_budget_reservation_on_user_api_key_auth():
+    auth = UserAPIKeyAuth(
+        token="key-budget-runtime-state",
+        budget_reservation={
+            "reserved_cost": 0.5,
+            "entries": [{"counter_key": "spend:key:key-budget-runtime-state"}],
+        },
+    )
+
+    assert "budget_reservation" not in auth.model_dump()
+    assert "budget_reservation" not in auth.model_dump(exclude_none=True)
+    assert "budget_reservation" not in auth.model_dump_json()
 
 
 @pytest.mark.asyncio
@@ -465,6 +480,40 @@ async def test_should_retry_partial_release_without_double_decrement(
     assert counter_cache.in_memory_cache.get_cache(
         key="spend:team:team-budget-partial-release"
     ) == pytest.approx(0.0)
+
+
+@pytest.mark.asyncio
+async def test_should_invalidate_reserved_counters_after_persisted_spend_failure(
+    spend_counter_state,
+):
+    counter_cache, _ = spend_counter_state
+    await counter_cache.async_increment_cache(
+        key="spend:key:key-budget-invalidate",
+        value=0.4,
+    )
+    await counter_cache.async_increment_cache(
+        key="spend:team:team-budget-invalidate",
+        value=0.4,
+    )
+
+    await invalidate_budget_reservation_counters(
+        {
+            "reserved_cost": 0.4,
+            "entries": [
+                {"counter_key": "spend:key:key-budget-invalidate"},
+                {"counter_key": "spend:team:team-budget-invalidate"},
+            ],
+        }
+    )
+
+    assert (
+        counter_cache.in_memory_cache.get_cache(key="spend:key:key-budget-invalidate")
+        is None
+    )
+    assert (
+        counter_cache.in_memory_cache.get_cache(key="spend:team:team-budget-invalidate")
+        is None
+    )
 
 
 @pytest.mark.asyncio

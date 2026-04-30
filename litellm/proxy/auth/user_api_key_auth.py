@@ -1894,6 +1894,7 @@ async def _reserve_budget_after_common_checks(
     proxy_logging_obj: ProxyLogging,
     skip_budget_checks: bool,
 ) -> None:
+    user_api_key_auth_obj.budget_reservation = None
     if skip_budget_checks:
         return
 
@@ -1962,6 +1963,7 @@ async def user_api_key_auth(
         request_data=request_data,
         custom_litellm_key_header=custom_litellm_key_header,
     )
+    user_api_key_auth_obj.budget_reservation = None
 
     ## ENSURE DISABLE ROUTE WORKS ACROSS ALL USER AUTH FLOWS ##
     RouteChecks.should_call_route(route=route, valid_token=user_api_key_auth_obj)

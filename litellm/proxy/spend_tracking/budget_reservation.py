@@ -153,6 +153,18 @@ async def release_budget_reservation(budget_reservation: Optional[dict]) -> None
     )
 
 
+async def invalidate_budget_reservation_counters(
+    budget_reservation: Optional[dict],
+) -> None:
+    if budget_reservation is None:
+        return
+
+    from litellm.proxy.proxy_server import _invalidate_spend_counter
+
+    for counter_key in get_reserved_counter_keys(budget_reservation=budget_reservation):
+        await _invalidate_spend_counter(counter_key=counter_key)
+
+
 async def _get_budget_counters(
     valid_token: UserAPIKeyAuth,
     team_object: Optional[LiteLLM_TeamTable],
