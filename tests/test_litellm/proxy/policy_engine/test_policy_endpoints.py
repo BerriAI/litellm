@@ -2,6 +2,7 @@ import json
 
 import pytest
 from fastapi.encoders import jsonable_encoder
+from pydantic import BaseModel
 
 from litellm.proxy.policy_engine.policy_endpoints import (
     _dump_pipeline_result_for_response,
@@ -17,6 +18,10 @@ class OpaqueSpan:
 
     def __str__(self) -> str:
         return "opaque-span"
+
+
+class NestedPolicyPayload(BaseModel):
+    value: str
 
 
 def test_pipeline_test_response_removes_internal_non_json_values():
@@ -58,3 +63,16 @@ def test_pipeline_test_response_removes_internal_non_json_values():
         dumped["step_results"][0]["modified_data"]["non_internal_object"]
         == "opaque-span"
     )
+
+
+def test_pipeline_test_response_preserves_nested_pydantic_models():
+    result = PipelineExecutionResult(
+        terminal_action="allow",
+        step_results=[],
+        modified_data={"nested": NestedPolicyPayload(value="kept")},
+    )
+
+    dumped = _dump_pipeline_result_for_response(result)
+
+    json.dumps(dumped)
+    assert dumped["modified_data"]["nested"] == {"value": "kept"}
