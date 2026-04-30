@@ -8,9 +8,10 @@ any drift as a neutral check.
 """
 
 import json
+import re
 import sys
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, Iterable, Optional
 
 SNAPSHOT_FILE = Path(__file__).parent / "_lazy_openapi_snapshot.json"
 
@@ -23,6 +24,24 @@ def load_snapshot() -> Optional[Dict[str, Dict]]:
             return json.load(f)
     except (json.JSONDecodeError, OSError):
         return None
+
+
+def _stable_generate_unique_id(route) -> str:
+    operation_id = f"{route.name}{route.path_format}"
+    operation_id = re.sub(r"\W", "_", operation_id)
+    methods = sorted(route.methods or [])
+    if not methods:
+        return operation_id
+    return f"{operation_id}_{methods[0].lower()}"
+
+
+def _set_stable_operation_ids(routes: Iterable) -> None:
+    for route in routes:
+        if getattr(route, "operation_id", None) is not None:
+            continue
+        if getattr(route, "methods", None) is None:
+            continue
+        route.operation_id = _stable_generate_unique_id(route)
 
 
 def generate_snapshot() -> Dict[str, Dict]:
@@ -51,6 +70,7 @@ def generate_snapshot() -> Dict[str, Dict]:
         ]
         if not feat_routes:
             continue
+        _set_stable_operation_ids(feat_routes)
         full = get_openapi(title=app.title, version=app.version, routes=feat_routes)
         # Group all of a feature's routes under one tag.
         for path_ops in full.get("paths", {}).values():
