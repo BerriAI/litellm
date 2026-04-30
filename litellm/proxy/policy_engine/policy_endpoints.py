@@ -38,31 +38,77 @@ _PIPELINE_RESPONSE_INTERNAL_KEYS = {
     "parent_otel_span",
     "user_api_key_auth",
 }
+_JSON_SCALAR_TYPES = (str, int, float, bool)
 
 
-def _sanitize_pipeline_response_value(value: Any) -> Any:
-    if isinstance(value, dict):
-        return {
-            str(key): _sanitize_pipeline_response_value(item)
-            for key, item in value.items()
-            if str(key) not in _PIPELINE_RESPONSE_INTERNAL_KEYS
-        }
-
-    if isinstance(value, (list, tuple, set)):
-        return [_sanitize_pipeline_response_value(item) for item in value]
-
-    if value is None or isinstance(value, (str, int, float, bool)):
+def _prepare_pipeline_response_item(value: Any) -> Any:
+    if value is None or isinstance(value, _JSON_SCALAR_TYPES):
         return value
 
     if hasattr(value, "model_dump"):
         try:
-            return _sanitize_pipeline_response_value(
-                value.model_dump(mode="json", fallback=str)
-            )
+            return value.model_dump(mode="json", fallback=str)
         except Exception:
-            pass
+            return str(value)
 
-    return str(value)
+    return value
+
+
+def _store_pipeline_response_item(
+    target: Any,
+    key: Optional[str],
+    item: Any,
+    stack: list[tuple[Any, Any]],
+) -> None:
+    item = _prepare_pipeline_response_item(item)
+
+    if isinstance(item, dict):
+        child: Any = {}
+        stack.append((item, child))
+    elif isinstance(item, (list, tuple, set)):
+        child = []
+        stack.append((item, child))
+    elif item is None or isinstance(item, _JSON_SCALAR_TYPES):
+        child = item
+    else:
+        child = str(item)
+
+    if key is None:
+        target.append(child)
+    else:
+        target[key] = child
+
+
+def _sanitize_pipeline_response_value(value: Any) -> Any:
+    value = _prepare_pipeline_response_item(value)
+
+    if value is None or isinstance(value, _JSON_SCALAR_TYPES):
+        return value
+
+    if isinstance(value, dict):
+        root: Any = {}
+    elif isinstance(value, (list, tuple, set)):
+        root = []
+    else:
+        return str(value)
+
+    stack: list[tuple[Any, Any]] = [(value, root)]
+
+    while stack:
+        source, target = stack.pop()
+
+        if isinstance(source, dict):
+            for key, raw_item in source.items():
+                key_str = str(key)
+                if key_str in _PIPELINE_RESPONSE_INTERNAL_KEYS:
+                    continue
+
+                _store_pipeline_response_item(target, key_str, raw_item, stack)
+        else:
+            for raw_item in source:
+                _store_pipeline_response_item(target, None, raw_item, stack)
+
+    return root
 
 
 def _dump_pipeline_result_for_response(
