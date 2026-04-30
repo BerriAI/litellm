@@ -1905,7 +1905,8 @@ def _image_cost_from_token_usage(
 ) -> Optional[float]:
     """Token-based image cost from ``cost_info`` + ``image_response.usage``.
 
-    Returns ``None`` when no token-cost keys match any non-zero token count.
+    Returns ``None`` only when ``cost_info`` declares no recognised per-token
+    rate keys; zero-cost models that explicitly declare zero rates return ``0.0``.
     """
     usage = getattr(image_response, "usage", None)
     if usage is None:
@@ -1923,16 +1924,23 @@ def _image_cost_from_token_usage(
     cached_in = _detail("prompt_tokens_details", "cached_tokens")
     image_in = _detail("prompt_tokens_details", "image_tokens")
     image_out = _detail("completion_tokens_details", "image_tokens")
-    text_in_uncached = max(text_in - cached_in, 0)
+
+    if image_in > 0 and cost_info.get("cache_read_input_image_token_cost") is not None:
+        text_in_uncached = text_in
+        cache_rate_key = "cache_read_input_image_token_cost"
+    else:
+        text_in_uncached = max(text_in - cached_in, 0)
+        cache_rate_key = "cache_read_input_token_cost"
 
     rates: List[Tuple[str, int]] = [
         ("input_cost_per_token", text_in_uncached),
-        ("cache_read_input_token_cost", cached_in),
+        (cache_rate_key, cached_in),
         ("input_cost_per_image_token", image_in),
         ("output_cost_per_image_token", image_out),
     ]
-    cost = sum((cost_info.get(key) or 0) * tokens for key, tokens in rates)
-    return cost if cost > 0 else None
+    if not any(cost_info.get(key) is not None for key, _ in rates):
+        return None
+    return sum((cost_info.get(key) or 0) * tokens for key, tokens in rates)
 
 
 def default_image_cost_calculator(

@@ -206,6 +206,65 @@ class TestDefaultImageCostCalculator:
         expected = 40 * 5e-6 + 160 * 1.25e-6 + 600 * 3e-5
         assert abs(cost - expected) < 1e-9
 
+    def test_token_fallback_uses_image_cache_rate_when_declared(self, monkeypatch):
+        """Image-edit responses report a single ``cached_tokens`` count;
+        when the model declares ``cache_read_input_image_token_cost`` and
+        image input tokens are present, that rate is used (and text input
+        is billed in full).
+        """
+        monkeypatch.setitem(
+            litellm.model_cost,
+            "synthetic-image-cache-model",
+            {
+                "input_cost_per_token": 5e-6,
+                "cache_read_input_token_cost": 1.25e-6,
+                "input_cost_per_image_token": 8e-6,
+                "cache_read_input_image_token_cost": 2e-6,
+                "output_cost_per_image_token": 3e-5,
+                "litellm_provider": "openai",
+                "mode": "image_generation",
+            },
+        )
+
+        cost = default_image_cost_calculator(
+            model="openai/synthetic-image-cache-model",
+            custom_llm_provider="openai",
+            quality="high",
+            n=1,
+            size="1280x720",
+            image_response=_image_response(
+                text_in=510, image_in=1452, cached_in=300, image_out=5488
+            ),
+        )
+        # text fully uncached, cached_tokens charged at image cache rate
+        expected = 510 * 5e-6 + 300 * 2e-6 + 1452 * 8e-6 + 5488 * 3e-5
+        assert abs(cost - expected) < 1e-9
+
+    def test_token_fallback_returns_zero_for_free_model(self, monkeypatch):
+        """A model that declares zero per-token rates is genuinely free —
+        the fallback must return ``0.0`` rather than raising.
+        """
+        monkeypatch.setitem(
+            litellm.model_cost,
+            "synthetic-free-image-model",
+            {
+                "input_cost_per_token": 0.0,
+                "output_cost_per_image_token": 0.0,
+                "litellm_provider": "openai",
+                "mode": "image_generation",
+            },
+        )
+
+        cost = default_image_cost_calculator(
+            model="openai/synthetic-free-image-model",
+            custom_llm_provider="openai",
+            quality="low",
+            n=1,
+            size="2048x768",
+            image_response=_image_response(text_in=25, image_out=772),
+        )
+        assert cost == 0.0
+
     def test_unmapped_model_without_image_response_raises(self):
         """Negative: cost map miss + no ``image_response`` to fall back on
         — preserve the original behaviour of raising rather than silently
