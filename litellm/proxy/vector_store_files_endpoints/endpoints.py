@@ -17,6 +17,7 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
     prepare_data_with_credentials,
 )
 from litellm.proxy.vector_store_endpoints.utils import (
+    assert_user_can_access_vector_store_id,
     is_allowed_to_call_vector_store_files_endpoint,
 )
 from litellm.types.utils import LlmProviders
@@ -363,8 +364,11 @@ async def vector_store_file_create(
     )
 
     data = await _read_request_body(request=request)
-    if "vector_store_id" not in data:
-        data["vector_store_id"] = vector_store_id
+    data["vector_store_id"] = vector_store_id
+    await assert_user_can_access_vector_store_id(
+        vector_store_id=vector_store_id,
+        user_api_key_dict=user_api_key_dict,
+    )
 
     # Handle managed file IDs if present in request body
     original_managed_file_id = None
@@ -459,6 +463,11 @@ async def vector_store_file_list(
     query_params = dict(request.query_params)
     data: Dict[str, Optional[str]] = {"vector_store_id": vector_store_id}
     data.update(query_params)
+    data["vector_store_id"] = vector_store_id
+    await assert_user_can_access_vector_store_id(
+        vector_store_id=vector_store_id,
+        user_api_key_dict=user_api_key_dict,
+    )
 
     data = _update_request_data_with_litellm_managed_vector_store_registry(
         data=data, vector_store_id=vector_store_id, llm_router=llm_router
@@ -541,6 +550,10 @@ async def vector_store_file_retrieve(
         "vector_store_id": vector_store_id,
         "file_id": file_id,
     }
+    await assert_user_can_access_vector_store_id(
+        vector_store_id=vector_store_id,
+        user_api_key_dict=user_api_key_dict,
+    )
 
     # Handle managed file IDs first
     data, original_managed_file_id = _update_request_data_with_managed_file_id(
@@ -635,6 +648,10 @@ async def vector_store_file_content(
         "vector_store_id": vector_store_id,
         "file_id": file_id,
     }
+    await assert_user_can_access_vector_store_id(
+        vector_store_id=vector_store_id,
+        user_api_key_dict=user_api_key_dict,
+    )
 
     # Handle managed file IDs first
     data, original_managed_file_id = _update_request_data_with_managed_file_id(
@@ -729,6 +746,10 @@ async def vector_store_file_update(
     data = await _read_request_body(request=request)
     data["vector_store_id"] = vector_store_id
     data["file_id"] = file_id
+    await assert_user_can_access_vector_store_id(
+        vector_store_id=vector_store_id,
+        user_api_key_dict=user_api_key_dict,
+    )
 
     # Handle managed file IDs first
     data, original_managed_file_id = _update_request_data_with_managed_file_id(
@@ -823,6 +844,10 @@ async def vector_store_file_delete(
         "vector_store_id": vector_store_id,
         "file_id": file_id,
     }
+    await assert_user_can_access_vector_store_id(
+        vector_store_id=vector_store_id,
+        user_api_key_dict=user_api_key_dict,
+    )
 
     # Handle managed file IDs first
     data, original_managed_file_id = _update_request_data_with_managed_file_id(

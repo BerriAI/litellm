@@ -47,6 +47,7 @@ from litellm.types.passthrough_endpoints.pass_through_endpoints import (
 )
 from litellm.proxy.utils import is_known_model
 from litellm.proxy.vector_store_endpoints.utils import (
+    assert_user_can_access_vector_store,
     is_allowed_to_call_vector_store_endpoint,
 )
 from litellm.secret_managers.main import get_secret_str
@@ -533,6 +534,10 @@ async def milvus_proxy_route(
     )
     if vector_store is None:
         raise Exception(f"Vector store not found for {vector_store_name}")
+    await assert_user_can_access_vector_store(
+        vector_store=vector_store,
+        user_api_key_dict=user_api_key_dict,
+    )
     litellm_params = vector_store.get("litellm_params") or {}
     auth_credentials = provider_config.get_auth_credentials(
         litellm_params=litellm_params
@@ -1438,6 +1443,10 @@ async def azure_proxy_route(
                 )
                 if vector_store is None:
                     raise Exception(f"Vector store not found for {vector_store_name}")
+                await assert_user_can_access_vector_store(
+                    vector_store=vector_store,
+                    user_api_key_dict=user_api_key_dict,
+                )
                 litellm_params = vector_store.get("litellm_params") or {}
                 auth_credentials = provider_config.get_auth_credentials(
                     litellm_params=litellm_params
@@ -1777,6 +1786,11 @@ async def _base_vertex_proxy_route(
             request=request,
             api_key=api_key_to_use,
         )
+    if router_credentials is not None:
+        await assert_user_can_access_vector_store(
+            vector_store=router_credentials,
+            user_api_key_dict=user_api_key_dict,
+        )
 
     vertex_project: Optional[str] = get_vertex_project_id_from_url(endpoint)
     vertex_location: Optional[str] = get_vertex_location_from_url(endpoint)
@@ -1928,6 +1942,10 @@ async def vertex_discovery_proxy_route(
             verbose_proxy_logger.warning(
                 "Vector store ID %s found in endpoint but no credentials found in registry",
                 vector_store_id,
+            )
+            raise HTTPException(
+                status_code=403,
+                detail="Access denied: You do not have permission to access this vector store",
             )
 
     discovery_handler = get_vertex_pass_through_handler(call_type="discovery")
