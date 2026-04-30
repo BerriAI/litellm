@@ -14,9 +14,18 @@ import pytest
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
+# Make sibling helper modules under tests/llm_translation/ importable regardless
+# of the directory pytest is invoked from.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
 import litellm
 
 import asyncio
+
+from _vcr_redis_persister import (  # noqa: E402  (sibling module under conftest dir)
+    filter_non_2xx_response,
+    make_redis_persister,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -81,6 +90,16 @@ def _scrub_response(response):
     return response
 
 
+def _before_record_response(response):
+    """Compose per-request scrubbing with the 2xx-only cache policy.
+
+    Order matters: we scrub headers first so we don't leak request IDs even
+    on responses we end up dropping from the cassette mid-development.
+    """
+    response = _scrub_response(response)
+    return filter_non_2xx_response(response)
+
+
 @pytest.fixture(scope="module")
 def vcr_config():
     """Shared VCR config consumed by ``pytest-recording``.
@@ -101,8 +120,20 @@ def vcr_config():
             "query",
             "body",
         ),
-        "before_record_response": _scrub_response,
+        "before_record_response": _before_record_response,
     }
+
+
+def pytest_recording_configure(config, vcr):
+    """Swap vcrpy's default filesystem persister for a Redis-backed one.
+
+    Opt-in via ``LITELLM_VCR_REDIS=1`` so local dev keeps the YAML-on-disk
+    behaviour and CI (which sets the flag) gets a 24h-TTL cache that
+    auto-refreshes against live providers without manual ``make`` runs.
+    """
+    if os.environ.get("LITELLM_VCR_REDIS") != "1":
+        return
+    vcr.register_persister(make_redis_persister())
 
 
 # pytest-recording's default cassette dir is
@@ -185,6 +216,26 @@ def setup_and_teardown(event_loop):  # Add event_loop as a dependency
     # Run the event loop until all tasks are cancelled
     if pending:
         event_loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+
+
+# Number of attempts a vcr-marked test gets when recording against a live
+# provider. Replay-only runs never reach the network so this only matters on
+# cache miss / record mode. Tenacity-style exponential backoff is provided by
+# the underlying provider SDKs (openai, anthropic) when they see 429/5xx, so
+# bumping num_retries propagates retry-with-backoff for free.
+_VCR_RECORD_RETRIES = 3
+
+
+@pytest.fixture(autouse=True)
+def _vcr_record_retries(setup_and_teardown, request):
+    """Configure record-time retries for ``@pytest.mark.vcr`` tests.
+
+    Depends on ``setup_and_teardown`` so this runs *after* the per-test
+    ``importlib.reload(litellm)`` resets ``num_retries`` back to None.
+    """
+    if request.node.get_closest_marker("vcr") is None:
+        return
+    litellm.num_retries = _VCR_RECORD_RETRIES
 
 
 def pytest_collection_modifyitems(config, items):
