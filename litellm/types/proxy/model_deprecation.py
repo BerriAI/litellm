@@ -8,27 +8,23 @@ alerting. These types describe the response payload and the alert payload.
 
 from __future__ import annotations
 
-import os
 from datetime import date, datetime
 from typing import List, Optional
 
 from pydantic import BaseModel, Field
 
 
-DEFAULT_DEPRECATION_WARN_DAYS = int(
-    os.getenv("LITELLM_MODEL_DEPRECATION_WARN_DAYS", "30")
-)
-"""Number of days before the deprecation date to start raising warnings.
+DEFAULT_DEPRECATION_WARN_DAYS = 30
+"""Default warning window (in days) for the ``imminent`` bucket.
 
-Configurable via the ``LITELLM_MODEL_DEPRECATION_WARN_DAYS`` environment
-variable. Defaults to 30 days, matching the typical migration window most
-LLM providers offer between announcement and removal.
+Matches the typical migration window most LLM providers offer between
+deprecation announcement and removal. Callers of ``/model/deprecations``
+can override this per-request via the ``?warn_within_days=N`` query
+parameter without restarting the proxy.
 """
 
-DEFAULT_DEPRECATION_CHECK_INTERVAL_SECONDS = int(
-    os.getenv("LITELLM_MODEL_DEPRECATION_CHECK_INTERVAL", str(24 * 60 * 60))
-)
-"""How often the periodic background check runs. Defaults to once per day."""
+DEFAULT_DEPRECATION_CHECK_INTERVAL_SECONDS = 24 * 60 * 60
+"""How often the periodic background check runs. Once per day."""
 
 
 DeprecationStatusLiteral = str
