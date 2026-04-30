@@ -2492,7 +2492,10 @@ class MCPServerManager:
             for header in mcp_server.extra_headers:
                 if not isinstance(header, str):
                     continue
-                if mcp_server.has_client_credentials and header.lower() == "authorization":
+                if (
+                    mcp_server.has_client_credentials
+                    and header.lower() == "authorization"
+                ):
                     continue
                 header_value = normalized_raw_headers.get(header.lower())
                 if header_value is None:
