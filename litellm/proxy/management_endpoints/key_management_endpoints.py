@@ -5254,6 +5254,9 @@ async def block_key(
         proxy_logging_obj,
         user_api_key_cache,
     )
+    from litellm.proxy.management_helpers.audit_logs import (
+        get_audit_log_changed_by,
+    )
 
     if prisma_client is None:
         raise Exception("{}".format(CommonProxyErrors.db_not_connected_error.value))
@@ -5297,9 +5300,11 @@ async def block_key(
                 request_data=LiteLLM_AuditLogs(
                     id=str(uuid.uuid4()),
                     updated_at=datetime.now(timezone.utc),
-                    changed_by=litellm_changed_by
-                    or user_api_key_dict.user_id
-                    or litellm_proxy_admin_name,
+                    changed_by=get_audit_log_changed_by(
+                        litellm_changed_by=litellm_changed_by,
+                        user_api_key_dict=user_api_key_dict,
+                        litellm_proxy_admin_name=litellm_proxy_admin_name,
+                    ),
                     changed_by_api_key=user_api_key_dict.api_key,
                     table_name=LitellmTableNames.KEY_TABLE_NAME,
                     object_id=hashed_token,
@@ -5363,6 +5368,9 @@ async def unblock_key(
         proxy_logging_obj,
         user_api_key_cache,
     )
+    from litellm.proxy.management_helpers.audit_logs import (
+        get_audit_log_changed_by,
+    )
 
     if prisma_client is None:
         raise Exception("{}".format(CommonProxyErrors.db_not_connected_error.value))
@@ -5406,9 +5414,11 @@ async def unblock_key(
                 request_data=LiteLLM_AuditLogs(
                     id=str(uuid.uuid4()),
                     updated_at=datetime.now(timezone.utc),
-                    changed_by=litellm_changed_by
-                    or user_api_key_dict.user_id
-                    or litellm_proxy_admin_name,
+                    changed_by=get_audit_log_changed_by(
+                        litellm_changed_by=litellm_changed_by,
+                        user_api_key_dict=user_api_key_dict,
+                        litellm_proxy_admin_name=litellm_proxy_admin_name,
+                    ),
                     changed_by_api_key=user_api_key_dict.api_key,
                     table_name=LitellmTableNames.KEY_TABLE_NAME,
                     object_id=hashed_token,
@@ -5589,7 +5599,6 @@ async def test_key_logging(
                     "content": "Hello, this is a test from litellm /key/health. No LLM API call was made for this",
                 }
             ],
-            "mock_response": "test response",
         }
         data = await add_litellm_data_to_request(
             data=data,
@@ -5598,6 +5607,7 @@ async def test_key_logging(
             general_settings=general_settings,
             request=request,
         )
+        data["mock_response"] = "test response"
         await litellm.acompletion(
             **data
         )  # make mock completion call to trigger key based callbacks
