@@ -93,3 +93,51 @@ async def test_max_budget_from_config_yaml_env_var(tmp_path):
             os.environ.pop("TEST_MAX_BUDGET_REGRESSION", None)
         else:
             os.environ["TEST_MAX_BUDGET_REGRESSION"] = original_env
+
+
+@pytest.mark.parametrize(
+    "key,attr",
+    [
+        ("max_user_budget", "max_user_budget"),
+        ("max_end_user_budget", "max_end_user_budget"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_user_budget_settings_from_config_yaml_env_var(tmp_path, key, attr):
+    """
+    Regression test for the symmetric defect to #26696: `max_user_budget`
+    and `max_end_user_budget` are also typed as Optional[float] and are
+    compared numerically downstream (e.g. budget enforcement in
+    litellm/proxy/utils.py), so they must be coerced from str when loaded
+    via os.environ in config.yaml.
+    """
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    env_name = f"TEST_{key.upper()}_REGRESSION"
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        "model_list: []\n"
+        "litellm_settings:\n"
+        f"  {key}: os.environ/{env_name}\n"
+    )
+
+    original_value = getattr(litellm, attr)
+    original_env = os.environ.get(env_name)
+    os.environ[env_name] = "25"
+    try:
+        proxy_config = ProxyConfig()
+        await proxy_config.load_config(router=None, config_file_path=str(config_path))
+
+        actual = getattr(litellm, attr)
+        assert isinstance(actual, float), (
+            f"{attr} should be float after config load, got "
+            f"{type(actual).__name__}"
+        )
+        assert actual == 25.0
+        assert actual > 0
+    finally:
+        setattr(litellm, attr, original_value)
+        if original_env is None:
+            os.environ.pop(env_name, None)
+        else:
+            os.environ[env_name] = original_env

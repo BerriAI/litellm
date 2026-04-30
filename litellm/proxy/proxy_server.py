@@ -3327,11 +3327,19 @@ class ProxyConfig:
                         f"litellm.post_call_rules: {litellm.post_call_rules}"
                     )
                 elif key == "max_budget":
-                    # `max_budget` may arrive as a string when loaded from
-                    # `os.environ/MAX_BUDGET` in config.yaml. Coerce to float
-                    # so downstream comparisons (e.g. `litellm.max_budget > 0`)
+                    # Numeric budget settings may arrive as strings when loaded
+                    # via `os.environ/...` in config.yaml. Coerce to float so
+                    # downstream comparisons (e.g. `litellm.max_budget > 0`)
                     # don't raise TypeError. See GitHub issue #26696.
                     litellm.max_budget = float(value) if value is not None else 0.0
+                elif key == "max_user_budget":
+                    litellm.max_user_budget = (
+                        float(value) if value is not None else None
+                    )
+                elif key == "max_end_user_budget":
+                    litellm.max_end_user_budget = (
+                        float(value) if value is not None else None
+                    )
                 elif key == "max_internal_user_budget":
                     litellm.max_internal_user_budget = float(value)  # type: ignore
                 elif key == "default_max_internal_user_budget":
