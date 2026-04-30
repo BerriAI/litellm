@@ -41,8 +41,9 @@ export function OnboardingForm({ variant }: OnboardingFormProps) {
     claimToken(
       { accessToken, inviteId, userId, password: formValues.password },
       {
-        onSuccess: () => {
-          document.cookie = `token=${jwtToken}; path=/; SameSite=Lax`;
+        onSuccess: (data: { token?: string }) => {
+          const finalToken = data?.token ?? jwtToken;
+          document.cookie = `token=${finalToken}; path=/; SameSite=Lax`;
           const proxyBaseUrl = getProxyBaseUrl();
           window.location.href = proxyBaseUrl
             ? `${proxyBaseUrl}/ui/?login=success`
