@@ -33,10 +33,12 @@ def get_request_base_url(request: Request) -> str:
     """
     Get the base URL for the request, considering X-Forwarded-* headers.
 
-    When behind a proxy (like nginx), the proxy may set:
-    - X-Forwarded-Proto: The original protocol (http/https)
-    - X-Forwarded-Host: The original host (may include port)
-    - X-Forwarded-Port: The original port (if not in Host header)
+    X-Forwarded-Proto / X-Forwarded-Host / X-Forwarded-Port are only honoured
+    when the request comes from a configured trusted proxy
+    (``use_x_forwarded_for`` enabled AND caller in ``mcp_trusted_proxy_ranges``).
+    Otherwise the request's literal ``base_url`` is returned, so an
+    untrusted caller cannot poison OAuth-discovery / redirect_uri values
+    by injecting headers.
 
     Args:
         request: FastAPI Request object
@@ -47,34 +49,28 @@ def get_request_base_url(request: Request) -> str:
     base_url = str(request.base_url).rstrip("/")
     parsed = urlparse(base_url)
 
-    # Get forwarded headers
+    if not IPAddressUtils.is_request_from_trusted_proxy(request):
+        return base_url
+
     x_forwarded_proto = request.headers.get("X-Forwarded-Proto")
     x_forwarded_host = request.headers.get("X-Forwarded-Host")
     x_forwarded_port = request.headers.get("X-Forwarded-Port")
 
-    # Start with the original scheme
     scheme = x_forwarded_proto if x_forwarded_proto else parsed.scheme
 
-    # Handle host and port
     if x_forwarded_host:
         # X-Forwarded-Host may already include port (e.g., "example.com:8080")
         if ":" in x_forwarded_host and not x_forwarded_host.startswith("["):
-            # Host includes port
             netloc = x_forwarded_host
         elif x_forwarded_port:
-            # Port is separate
             netloc = f"{x_forwarded_host}:{x_forwarded_port}"
         else:
-            # Just host, no explicit port
             netloc = x_forwarded_host
     else:
-        # No X-Forwarded-Host, use original netloc
         netloc = parsed.netloc
         if x_forwarded_port and ":" not in netloc:
-            # Add forwarded port if not already in netloc
             netloc = f"{netloc}:{x_forwarded_port}"
 
-    # Reconstruct the URL
     return urlunparse((scheme, netloc, parsed.path, "", "", ""))
 
 

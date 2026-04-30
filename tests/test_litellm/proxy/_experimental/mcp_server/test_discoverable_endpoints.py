@@ -23,6 +23,21 @@ def mock_mcp_client_ip():
         yield
 
 
+@pytest.fixture
+def trust_xff():
+    """Force ``IPAddressUtils.is_request_from_trusted_proxy`` to True.
+
+    Tests that exercise X-Forwarded-* parsing logic opt into this fixture.
+    The trust gate's own behaviour is covered by
+    ``test_get_request_base_url_xff_trust_gate``.
+    """
+    with patch(
+        "litellm.proxy._experimental.mcp_server.discoverable_endpoints.IPAddressUtils.is_request_from_trusted_proxy",
+        return_value=True,
+    ):
+        yield
+
+
 @pytest.mark.asyncio
 async def test_authorize_endpoint_includes_response_type():
     """Test that authorize endpoint includes response_type=code parameter (fixes #15684)"""
@@ -506,6 +521,7 @@ async def test_register_client_remote_registration_success():
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("trust_xff")
 async def test_authorize_endpoint_respects_x_forwarded_proto():
     """Test that authorize endpoint uses X-Forwarded-Proto header to construct correct redirect_uri"""
     try:
@@ -573,6 +589,7 @@ async def test_authorize_endpoint_respects_x_forwarded_proto():
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("trust_xff")
 async def test_token_endpoint_respects_x_forwarded_proto():
     """Test that token endpoint uses X-Forwarded-Proto header for redirect_uri"""
     try:
@@ -652,6 +669,7 @@ async def test_token_endpoint_respects_x_forwarded_proto():
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("trust_xff")
 async def test_oauth_protected_resource_respects_x_forwarded_proto():
     """Test that oauth_protected_resource_mcp uses X-Forwarded-Proto for URLs"""
     try:
@@ -706,6 +724,7 @@ async def test_oauth_protected_resource_respects_x_forwarded_proto():
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("trust_xff")
 async def test_oauth_authorization_server_respects_x_forwarded_proto():
     """Test that oauth_authorization_server_mcp uses X-Forwarded-Proto for URLs"""
     try:
@@ -761,6 +780,7 @@ async def test_oauth_authorization_server_respects_x_forwarded_proto():
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("trust_xff")
 async def test_register_client_respects_x_forwarded_proto():
     """Test that register_client uses X-Forwarded-Proto for redirect_uris"""
     try:
@@ -798,6 +818,7 @@ async def test_register_client_respects_x_forwarded_proto():
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("trust_xff")
 async def test_authorize_endpoint_respects_x_forwarded_host():
     """Test that authorize endpoint uses X-Forwarded-Host and X-Forwarded-Proto to construct correct redirect_uri"""
     try:
@@ -871,6 +892,7 @@ async def test_authorize_endpoint_respects_x_forwarded_host():
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("trust_xff")
 async def test_token_endpoint_respects_x_forwarded_host():
     """Test that token endpoint uses X-Forwarded-Host and X-Forwarded-Proto for redirect_uri"""
     try:
@@ -1074,7 +1096,12 @@ async def test_token_endpoint_respects_x_forwarded_host():
 def test_get_request_base_url_comprehensive(
     base_url, x_forwarded_proto, x_forwarded_host, x_forwarded_port, expected_url
 ):
-    """Comprehensive test for get_request_base_url with various header combinations"""
+    """Comprehensive test for get_request_base_url with various header combinations.
+
+    These cases exercise the X-Forwarded-* parsing logic, so the trust gate
+    is patched True; the gate's own behaviour is covered by the
+    ``test_get_request_base_url_xff_trust_gate`` matrix below.
+    """
     try:
         from fastapi import Request
 
@@ -1084,11 +1111,9 @@ def test_get_request_base_url_comprehensive(
     except ImportError:
         pytest.skip("MCP discoverable endpoints not available")
 
-    # Create mock request
     mock_request = MagicMock(spec=Request)
     mock_request.base_url = base_url
 
-    # Build headers dict
     headers = {}
     if x_forwarded_proto:
         headers["X-Forwarded-Proto"] = x_forwarded_proto
@@ -1097,16 +1122,17 @@ def test_get_request_base_url_comprehensive(
     if x_forwarded_port:
         headers["X-Forwarded-Port"] = x_forwarded_port
 
-    # Mock headers.get() to return our test values
     def mock_get(header_name, default=None):
         return headers.get(header_name, default)
 
     mock_request.headers.get = mock_get
 
-    # Test the function
-    result = get_request_base_url(mock_request)
+    with patch(
+        "litellm.proxy._experimental.mcp_server.discoverable_endpoints.IPAddressUtils.is_request_from_trusted_proxy",
+        return_value=True,
+    ):
+        result = get_request_base_url(mock_request)
 
-    # Verify result
     assert result == expected_url, (
         f"Expected '{expected_url}' but got '{result}'\n"
         f"Input: base_url={base_url}, "
@@ -1114,6 +1140,86 @@ def test_get_request_base_url_comprehensive(
         f"X-Forwarded-Host={x_forwarded_host}, "
         f"X-Forwarded-Port={x_forwarded_port}"
     )
+
+
+@pytest.mark.parametrize(
+    "general_settings,direct_ip,expect_xff_honoured",
+    [
+        # Default: use_x_forwarded_for not set -> ignore X-Forwarded-* entirely.
+        ({}, "127.0.0.1", False),
+        # XFF enabled, no trusted ranges -> still ignored (no way to tell a trusted
+        # reverse proxy from a direct attacker).
+        ({"use_x_forwarded_for": True}, "127.0.0.1", False),
+        # XFF enabled, ranges set, but caller IP outside any range -> ignored.
+        (
+            {
+                "use_x_forwarded_for": True,
+                "mcp_trusted_proxy_ranges": ["10.0.0.0/8"],
+            },
+            "203.0.113.5",
+            False,
+        ),
+        # XFF enabled, caller in trusted range -> headers honoured.
+        (
+            {
+                "use_x_forwarded_for": True,
+                "mcp_trusted_proxy_ranges": ["10.0.0.0/8"],
+            },
+            "10.0.0.7",
+            True,
+        ),
+        # Loopback example (common dev / single-host deploy).
+        (
+            {
+                "use_x_forwarded_for": True,
+                "mcp_trusted_proxy_ranges": ["127.0.0.0/8"],
+            },
+            "127.0.0.1",
+            True,
+        ),
+    ],
+)
+def test_get_request_base_url_xff_trust_gate(
+    general_settings, direct_ip, expect_xff_honoured
+):
+    """Verify the X-Forwarded-* trust gate.
+
+    With XFF poisoning attempted, the helper must return either the literal
+    base_url (gate denies) or the forwarded URL (gate allows), never the
+    forwarded URL when the gate denies.
+    """
+    try:
+        from fastapi import Request
+
+        from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+            get_request_base_url,
+        )
+    except ImportError:
+        pytest.skip("MCP discoverable endpoints not available")
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "http://localhost:4000/"
+    mock_request.client = MagicMock()
+    mock_request.client.host = direct_ip
+
+    headers = {
+        "X-Forwarded-Proto": "https",
+        "X-Forwarded-Host": "attacker.example.com",
+    }
+    mock_request.headers.get = lambda name, default=None: headers.get(name, default)
+    mock_request.headers.__contains__ = lambda self_, name: name in headers
+
+    with patch(
+        "litellm.proxy.proxy_server.general_settings",
+        general_settings,
+        create=True,
+    ):
+        result = get_request_base_url(mock_request)
+
+    if expect_xff_honoured:
+        assert result == "https://attacker.example.com"
+    else:
+        assert result == "http://localhost:4000"
 
 
 # -------------------------------------------------------------------
