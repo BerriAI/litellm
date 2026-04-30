@@ -19082,6 +19082,34 @@
         "supports_vision": true,
         "supports_pdf_input": true
     },
+    "gpt-image-2": {
+        "cache_read_input_image_token_cost": 2e-06,
+        "cache_read_input_token_cost": 1.25e-06,
+        "input_cost_per_token": 5e-06,
+        "litellm_provider": "openai",
+        "mode": "image_generation",
+        "input_cost_per_image_token": 8e-06,
+        "output_cost_per_image_token": 3e-05,
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "supports_vision": true,
+        "supports_pdf_input": true
+    },
+    "gpt-image-2-2026-04-21": {
+        "cache_read_input_image_token_cost": 2e-06,
+        "cache_read_input_token_cost": 1.25e-06,
+        "input_cost_per_token": 5e-06,
+        "litellm_provider": "openai",
+        "mode": "image_generation",
+        "input_cost_per_image_token": 8e-06,
+        "output_cost_per_image_token": 3e-05,
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "supports_vision": true,
+        "supports_pdf_input": true
+    },
     "gpt-image-1.5-2025-12-16": {
         "cache_read_input_image_token_cost": 2e-06,
         "cache_read_input_token_cost": 1.25e-06,

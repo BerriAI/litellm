@@ -303,5 +303,62 @@ class TestCompletionCostIntegration:
         assert abs(cost - expected_cost) < 1e-6, f"Expected {expected_cost}, got {cost}"
 
 
+class TestGPTImage2Cost:
+    """
+    Regression test for GitHub issue #26863:
+    https://github.com/BerriAI/litellm/issues/26863
+
+    gpt-image-2 cost was always reported as 0 because the model was
+    missing from the cost map. Pricing (per OpenAI docs,
+    https://developers.openai.com/api/docs/pricing):
+    - Text Input: $5.00 / 1M tokens   (5e-06)
+    - Image Input: $8.00 / 1M tokens  (8e-06)
+    - Image Output: $30.00 / 1M tokens (3e-05)
+    """
+
+    def test_gpt_image_2_cost(self):
+        """Test that gpt-image-2 cost is calculated correctly (non-zero)."""
+        usage = Usage(
+            prompt_tokens=169,
+            completion_tokens=4160,
+            total_tokens=4329,
+            prompt_tokens_details=PromptTokensDetailsWrapper(
+                text_tokens=169,
+                image_tokens=0,
+            ),
+            completion_tokens_details=CompletionTokensDetailsWrapper(
+                text_tokens=0,
+                image_tokens=4160,
+            ),
+        )
+
+        image_response = ImageResponse(
+            created=1234567890,
+            data=[ImageObject(b64_json="test")],
+        )
+        image_response.usage = usage
+        image_response._hidden_params = {"custom_llm_provider": "openai"}
+
+        cost = litellm.completion_cost(
+            completion_response=image_response,
+            model="gpt-image-2",
+            call_type="image_generation",
+            custom_llm_provider="openai",
+        )
+
+        # gpt-image-2 pricing (per OpenAI docs):
+        # - input_cost_per_token: 5e-06 ($5/1M for text input)
+        # - output_cost_per_image_token: 3e-05 ($30/1M for image output)
+        #
+        # Expected cost:
+        # Input text: 169 * $5/1M = $0.000845
+        # Output image: 4160 * $30/1M = $0.1248
+        expected_cost = 169 * 5e-06 + 4160 * 3e-05
+        assert cost > 0, "gpt-image-2 cost should not be zero (issue #26863)"
+        assert abs(cost - expected_cost) < 1e-6, (
+            f"Expected {expected_cost}, got {cost}."
+        )
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
