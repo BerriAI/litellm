@@ -411,6 +411,82 @@ class WonderFenceGuardrail(CustomGuardrail):
         texts = inputs.get("texts", [])
         return texts[-1] if texts else None
 
+    def _resolve_credentials(
+        self,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional["LiteLLMLoggingObj"],
+    ) -> Tuple[str, str]:
+        """Resolve (api_key, app_id) for this call.
+
+        For ``request``: read from request_data (canonical pre_call path) and
+        stash on logging_obj so post_call can recover.
+
+        For ``response`` (post_call): try synthesized request_data first
+        (works when supplied via virtual key or team metadata, which the
+        framework preserves as ``litellm_metadata.user_api_key_metadata`` /
+        ``user_api_key_team_metadata``); fall back to the per-request
+        logging_obj stash for values supplied in the original request body's
+        metadata, which the framework drops before post_call.
+        """
+        if input_type == "request":
+            api_key = self._resolve_api_key(request_data)
+            app_id = self._resolve_app_id(request_data)
+            self._stash_resolved(logging_obj, api_key, app_id)
+            return api_key, app_id
+        try:
+            return self._resolve_api_key(request_data), self._resolve_app_id(
+                request_data
+            )
+        except (WonderFenceMissingSecrets, ValueError):
+            recovered = self._recover_resolved(logging_obj)
+            if recovered is None:
+                raise
+            return recovered
+
+    def _handle_action(
+        self,
+        result: Any,
+        inputs: GenericGuardrailAPIInputs,
+    ) -> None:
+        """Dispatch BLOCK/MASK/DETECT/NO_ACTION. Raises WonderFenceBlockedError on BLOCK."""
+        action = (
+            result.action.value if hasattr(result.action, "value") else result.action
+        )
+        correlation_id = getattr(result, "correlation_id", None)
+
+        if action == "BLOCK":
+            detail: dict = {
+                "error": self.block_message,
+                "type": "alice_wonderfence_content_policy_violation",
+                "guardrail_name": self.guardrail_name,
+                "action": "BLOCK",
+                "wonderfence_correlation_id": correlation_id,
+            }
+            if hasattr(result, "detections") and result.detections:
+                detail["detections"] = [
+                    d.model_dump() if hasattr(d, "model_dump") else str(d)
+                    for d in result.detections
+                ]
+            raise WonderFenceBlockedError(detail)
+        if action == "MASK":
+            masked_text = result.action_text or "[MASKED]"
+            texts = inputs.get("texts", [])
+            if texts:
+                texts[-1] = masked_text
+                inputs["texts"] = texts
+            logger.info(
+                "Alice WonderFence (apply_guardrail): MASK applied guardrail=%s correlation_id=%s",
+                self.guardrail_name,
+                correlation_id,
+            )
+        elif action == "DETECT":
+            logger.warning(
+                "Alice WonderFence (apply_guardrail): DETECT guardrail=%s correlation_id=%s",
+                self.guardrail_name,
+                correlation_id,
+            )
+
     @log_guardrail_information
     async def apply_guardrail(
         self,
@@ -429,32 +505,9 @@ class WonderFenceGuardrail(CustomGuardrail):
             return inputs
 
         try:
-            if input_type == "request":
-                # Canonical path for pre_call / during_call: read from the
-                # original request_data (still has the request body's
-                # metadata at this stage).
-                api_key = self._resolve_api_key(request_data)
-                app_id = self._resolve_app_id(request_data)
-                # Stash so post_call can recover when the framework drops
-                # the request body's metadata before invoking us again.
-                self._stash_resolved(logging_obj, api_key, app_id)
-            else:
-                # input_type == "response" (post_call). Try the synthesized
-                # request_data first — works for app_id/api_key supplied
-                # via virtual key or team metadata, which the framework
-                # preserves into post_call as
-                # litellm_metadata.user_api_key_metadata /
-                # user_api_key_team_metadata. Fall back to the per-request
-                # logging_obj stash for values supplied in the original
-                # request body's metadata, which the framework drops.
-                try:
-                    api_key = self._resolve_api_key(request_data)
-                    app_id = self._resolve_app_id(request_data)
-                except (WonderFenceMissingSecrets, ValueError):
-                    recovered = self._recover_resolved(logging_obj)
-                    if recovered is None:
-                        raise
-                    api_key, app_id = recovered
+            api_key, app_id = self._resolve_credentials(
+                request_data, input_type, logging_obj
+            )
             client = await self._get_client(api_key)
             context = self._build_analysis_context(request_data)
 
@@ -483,46 +536,7 @@ class WonderFenceGuardrail(CustomGuardrail):
                     custom_fields=None,
                 )
 
-            action = (
-                result.action.value
-                if hasattr(result.action, "value")
-                else result.action
-            )
-            correlation_id = getattr(result, "correlation_id", None)
-
-            if action == "BLOCK":
-                detail: dict = {
-                    "error": self.block_message,
-                    "type": "alice_wonderfence_content_policy_violation",
-                    "guardrail_name": self.guardrail_name,
-                    "action": "BLOCK",
-                    "wonderfence_correlation_id": correlation_id,
-                }
-                if hasattr(result, "detections") and result.detections:
-                    detail["detections"] = [
-                        d.model_dump() if hasattr(d, "model_dump") else str(d)
-                        for d in result.detections
-                    ]
-                raise WonderFenceBlockedError(detail)
-
-            elif action == "MASK":
-                masked_text = result.action_text or "[MASKED]"
-                texts = inputs.get("texts", [])
-                if texts:
-                    texts[-1] = masked_text
-                    inputs["texts"] = texts
-                logger.info(
-                    "Alice WonderFence (apply_guardrail): MASK applied guardrail=%s correlation_id=%s",
-                    self.guardrail_name,
-                    correlation_id,
-                )
-
-            elif action == "DETECT":
-                logger.warning(
-                    "Alice WonderFence (apply_guardrail): DETECT guardrail=%s correlation_id=%s",
-                    self.guardrail_name,
-                    correlation_id,
-                )
+            self._handle_action(result, inputs)
 
         except WonderFenceBlockedError as e:
             raise HTTPException(status_code=400, detail=e.detail)
