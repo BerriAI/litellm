@@ -279,7 +279,7 @@ def test_reasoning_with_forced_tool_choice_switches_to_auto():
     }
 
     optional_params = config.map_openai_params(
-        model="bedrock/us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+        model="bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
         non_default_params=non_default_params,
         optional_params={},
         drop_params=False,
@@ -2797,7 +2797,7 @@ def test_thinking_with_max_completion_tokens():
     result = config.map_openai_params(
         non_default_params=non_default_params_with_max_completion,
         optional_params=optional_params,
-        model="us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+        model="us.anthropic.claude-sonnet-4-5-20250929-v1:0",
         drop_params=False,
     )
 
@@ -2819,7 +2819,7 @@ def test_thinking_with_max_completion_tokens():
     result = config.map_openai_params(
         non_default_params=non_default_params_with_max_tokens,
         optional_params=optional_params,
-        model="us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+        model="us.anthropic.claude-sonnet-4-5-20250929-v1:0",
         drop_params=False,
     )
 
@@ -2842,7 +2842,7 @@ def test_thinking_with_max_completion_tokens():
     result = config.map_openai_params(
         non_default_params=non_default_params_without_max,
         optional_params=optional_params,
-        model="us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+        model="us.anthropic.claude-sonnet-4-5-20250929-v1:0",
         drop_params=False,
     )
 
@@ -3617,7 +3617,7 @@ class TestBedrockMinThinkingBudgetTokens:
     """Test that thinking.budget_tokens is clamped to the Bedrock minimum (1024)."""
 
     def _map_params(
-        self, thinking_value, model="anthropic.claude-3-7-sonnet-20250219-v1:0"
+        self, thinking_value, model="anthropic.claude-sonnet-4-5-20250929-v1:0"
     ):
         """Helper to call map_openai_params with the given thinking value."""
         config = AmazonConverseConfig()
@@ -3651,7 +3651,7 @@ class TestBedrockMinThinkingBudgetTokens:
         result = config.map_openai_params(
             non_default_params={},
             optional_params={},
-            model="anthropic.claude-3-7-sonnet-20250219-v1:0",
+            model="anthropic.claude-sonnet-4-5-20250929-v1:0",
             drop_params=False,
         )
         assert "thinking" not in result or result.get("thinking") is None
@@ -4146,3 +4146,39 @@ def test_transform_response_finish_reason_stop_when_json_mode_filters_all_tools(
 
     # finish_reason must be "stop", not "tool_calls"
     assert result.choices[0].finish_reason == "stop"
+
+
+def test_transform_response_does_not_leak_body_on_parse_failure():
+    from litellm.llms.bedrock.common_utils import BedrockError
+
+    leaky_body = {"output": {"message": {"content": [{"text": "secret content"}]}}}
+
+    class MockResponse:
+        def json(self):
+            return leaky_body
+
+        @property
+        def text(self):
+            return json.dumps(leaky_body)
+
+    with patch(
+        "litellm.llms.bedrock.chat.converse_transformation.ConverseResponseBlock",
+        side_effect=KeyError("missing required field"),
+    ):
+        with pytest.raises(BedrockError) as exc_info:
+            AmazonConverseConfig()._transform_response(
+                model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+                response=MockResponse(),
+                model_response=ModelResponse(),
+                stream=False,
+                logging_obj=None,
+                optional_params={},
+                api_key=None,
+                data=None,
+                messages=[],
+                encoding=None,
+            )
+
+    msg = str(exc_info.value)
+    assert "secret content" not in msg
+    assert "Error converting to valid response block" in msg
