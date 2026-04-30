@@ -1,5 +1,5 @@
 FROM node:22-slim
 
-RUN npm install -g @anthropic-ai/claude-code
+RUN npm install -g @anthropic-ai/claude-code@2.1.121
 
 WORKDIR /workspace
