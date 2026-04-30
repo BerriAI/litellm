@@ -5275,9 +5275,11 @@ class Router:
         container_id = kwargs.get("container_id")
         if isinstance(container_id, str):
             decoded = ResponsesAPIRequestUtils._decode_container_id(container_id)
+            original_id = decoded.get("response_id", container_id)
+            if original_id != container_id:
+                kwargs["container_id"] = original_id
             model_id = decoded.get("model_id")
             if model_id:
-                kwargs["container_id"] = decoded.get("response_id", container_id)
                 kwargs["model"] = model_id
                 decoded_provider = decoded.get("custom_llm_provider")
                 if decoded_provider and kwargs.get("custom_llm_provider") == "openai":
