@@ -31,6 +31,56 @@ from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
 router = APIRouter()
 
 
+_CALLBACK_VARS_REDACTED = "***REDACTED***"
+
+
+def _redact_callback_secrets(metadata: Any) -> Any:
+    """Strip secret values out of a team-metadata snapshot before audit logging.
+
+    Both ``team_metadata["logging"]`` (list of ``AddTeamCallback`` dicts) and
+    ``team_metadata["callback_settings"]["callback_vars"]`` carry provider
+    credentials such as ``langfuse_secret_key``, ``langsmith_api_key``, and
+    ``gcs_path_service_account``.  Persisting them verbatim into
+    ``LiteLLM_AuditLogs`` would let anyone with read access to the audit
+    table harvest team callback credentials, so we replace each value with
+    a fixed marker.  The keys themselves are kept so the audit reader can
+    still see *which* fields changed.
+    """
+    if not isinstance(metadata, dict):
+        return metadata
+    redacted = copy.deepcopy(metadata)
+    logging_entries = redacted.get("logging")
+    if isinstance(logging_entries, list):
+        for entry in logging_entries:
+            if isinstance(entry, dict) and isinstance(entry.get("callback_vars"), dict):
+                entry["callback_vars"] = {
+                    k: _CALLBACK_VARS_REDACTED for k in entry["callback_vars"]
+                }
+    callback_settings = redacted.get("callback_settings")
+    if isinstance(callback_settings, dict) and isinstance(
+        callback_settings.get("callback_vars"), dict
+    ):
+        callback_settings["callback_vars"] = {
+            k: _CALLBACK_VARS_REDACTED for k in callback_settings["callback_vars"]
+        }
+    return redacted
+
+
+def _log_audit_task_exception(task: "asyncio.Task[None]") -> None:
+    """Surface a fire-and-forget audit-log task failure.
+
+    ``asyncio.create_task`` swallows exceptions silently — if the audit
+    write fails (transient DB error etc.) we'd otherwise lose the row
+    without any signal.  Log at warning level so the operator sees there's
+    a gap in the audit trail.
+    """
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        verbose_proxy_logger.warning("Failed to write team-callback audit log: %s", exc)
+
+
 async def _emit_team_callback_audit_log(
     *,
     team_id: str,
@@ -46,6 +96,9 @@ async def _emit_team_callback_audit_log(
     when audit logging is not enabled on the proxy.  Captured under
     ``LitellmTableNames.TEAM_TABLE_NAME`` so the row co-locates with other
     team mutations in the audit table.
+
+    Callback secrets are redacted before serialization so the audit table
+    cannot itself become a credential-harvest sink.
     """
     if litellm.store_audit_logs is not True:
         return
@@ -55,7 +108,10 @@ async def _emit_team_callback_audit_log(
     )
     from litellm.proxy.proxy_server import litellm_proxy_admin_name
 
-    asyncio.create_task(
+    redacted_before = _redact_callback_secrets(before_metadata)
+    redacted_after = _redact_callback_secrets(after_metadata)
+
+    task = asyncio.create_task(
         create_audit_log_for_update(
             request_data=LiteLLM_AuditLogs(
                 id=str(uuid.uuid4()),
@@ -67,11 +123,12 @@ async def _emit_team_callback_audit_log(
                 table_name=LitellmTableNames.TEAM_TABLE_NAME,
                 object_id=team_id,
                 action="updated",
-                updated_values=json.dumps({"metadata": after_metadata}, default=str),
-                before_value=json.dumps({"metadata": before_metadata}, default=str),
+                updated_values=json.dumps({"metadata": redacted_after}, default=str),
+                before_value=json.dumps({"metadata": redacted_before}, default=str),
             )
         )
     )
+    task.add_done_callback(_log_audit_task_exception)
 
 
 @router.post(
