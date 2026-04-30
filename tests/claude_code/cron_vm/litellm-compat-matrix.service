@@ -1,0 +1,67 @@
+# systemd service for the Claude Code compatibility-matrix populator.
+#
+# Triggered by `litellm-compat-matrix.timer`; not started directly. The
+# unit is a `Type=oneshot` so the timer's `OnCalendar=` semantics
+# describe "run once per day" cleanly — there's no long-lived daemon to
+# supervise; each invocation runs the populator end-to-end and exits.
+#
+# Install
+# -------
+#
+#   sudo cp tests/claude_code/cron_vm/litellm-compat-matrix.service /etc/systemd/system/
+#   sudo cp tests/claude_code/cron_vm/litellm-compat-matrix.timer   /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now litellm-compat-matrix.timer
+#
+# The %h specifier expands to the runtime user's home directory, which
+# avoids hard-coding /home/mateo into a unit that should be portable
+# across operator handoffs. The runtime user (`User=mateo`) must:
+#
+#   * have a checkout of `BerriAI/litellm` at `~/litellm/litellm` so the
+#     publisher module is importable;
+#   * have a uv venv at `~/litellm/litellm/.venv` (created by
+#     `uv sync --frozen` inside that checkout once);
+#   * have `gh` already authenticated against an account with
+#     `pull-requests: write` on `BerriAI/litellm-docs`;
+#   * have provider credentials exported in `/etc/litellm-compat-matrix.env`
+#     (see `litellm-compat-matrix.env.example` in this directory).
+
+[Unit]
+Description=Claude Code compatibility-matrix populator (oneshot)
+Documentation=file://%h/litellm/litellm/tests/claude_code/cron_vm/README.md
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=mateo
+Group=mateo
+
+# Provider credentials + any gh/PROXY_PORT overrides live here. Format
+# is the standard `KEY=value` one line per env var.
+EnvironmentFile=-/etc/litellm-compat-matrix.env
+
+WorkingDirectory=%h/litellm/litellm
+
+ExecStart=%h/litellm/litellm/tests/claude_code/cron_vm/run_daily.sh
+
+# 90 minutes is generous: cold runs do `git clone` + `uv sync` of a new
+# tag's lockfile, which can take a couple of minutes on a 2-vCPU VM,
+# plus 30 cells of pytest hitting four cloud providers.
+TimeoutStartSec=90min
+
+# A failed run shouldn't restart automatically — the next timer fire is
+# the right retry. Reruns of the same day's matrix are idempotent.
+Restart=no
+
+# Security hardening: the populator only reads the litellm checkout and
+# the env-file; everything else it writes lives in either the worktree
+# (managed) or `/tmp` (cleaned up by tempfile).
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=%h/litellm-cron-worktree %h/.cache /tmp
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
