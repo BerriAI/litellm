@@ -91,6 +91,7 @@ from litellm.proxy._types import (
     TeamDefaultSettings,
     TokenCountRequest,
     TransformRequestBody,
+    UI_TEAM_ID,
     UserAPIKeyAuth,
 )
 from litellm.proxy.common_utils.callback_utils import (
@@ -12032,7 +12033,7 @@ async def onboarding(invite_link: str, request: Request):
     """
     - Get the invite link
     - Validate it's still 'valid'
-    - Invalidate the link (prevents abuse)
+    - Return a short-lived onboarding token
     - Get user from db
     - Pass in user_email if set
     """
@@ -12070,7 +12071,7 @@ async def onboarding(invite_link: str, request: Request):
         )
 
     #### CHECK IF ALREADY USED
-    if invite_obj.is_accepted is True:
+    if invite_obj.is_accepted is True or invite_obj.accepted_at is not None:
         raise HTTPException(
             status_code=401,
             detail={"error": "Invitation link has already been used."},
@@ -12086,24 +12087,6 @@ async def onboarding(invite_link: str, request: Request):
             status_code=401, detail={"error": "User does not exist in db."}
         )
 
-    user_email = user_obj.user_email
-
-    response = await generate_key_helper_fn(
-        request_type="key",
-        **{
-            "user_role": user_obj.user_role,
-            "duration": LITELLM_UI_SESSION_DURATION,
-            "key_max_budget": litellm.max_ui_session_budget,
-            "models": [],
-            "aliases": {},
-            "config": {},
-            "spend": 0,
-            "user_id": user_obj.user_id,
-            "team_id": "litellm-dashboard",
-        },  # type: ignore
-    )
-    key = response["token"]  # type: ignore
-
     litellm_dashboard_ui = get_custom_url(str(request.base_url))
     if litellm_dashboard_ui.endswith("/"):
         litellm_dashboard_ui += "ui/onboarding"
@@ -12111,13 +12094,24 @@ async def onboarding(invite_link: str, request: Request):
         litellm_dashboard_ui += "/ui/onboarding"
     import jwt
 
+    user_email = user_obj.user_email
+    onboarding_token = jwt.encode(  # type: ignore
+        {
+            "token_type": "litellm_onboarding",
+            "invitation_link": invite_link,
+            "user_id": user_obj.user_id,
+            "exp": litellm.utils.get_utc_datetime() + timedelta(minutes=15),
+        },
+        master_key,
+        algorithm="HS256",
+    )
     disabled_non_admin_personal_key_creation = (
         get_disabled_non_admin_personal_key_creation()
     )
 
     returned_ui_token_object = ReturnedUITokenObject(
         user_id=user_obj.user_id,
-        key=key,
+        key=onboarding_token,
         user_email=user_obj.user_email,
         user_role=user_obj.user_role,
         login_method="username_password",
@@ -12142,8 +12136,117 @@ async def onboarding(invite_link: str, request: Request):
     }
 
 
+def _get_onboarding_claims_from_request(request: Request) -> dict:
+    global master_key, general_settings
+
+    if master_key is None:
+        raise ProxyException(
+            message="Master Key not set for Proxy. Please set Master Key to use Admin UI. Set `LITELLM_MASTER_KEY` in .env or set general_settings:master_key in config.yaml.  https://docs.litellm.ai/docs/proxy/virtual_keys. If set, use `--detailed_debug` to debug issue.",
+            type=ProxyErrorTypes.auth_error,
+            param="master_key",
+            code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+    auth_header_name = general_settings.get("litellm_key_header_name", "Authorization")
+    onboarding_auth_header = request.headers.get(auth_header_name)
+    if onboarding_auth_header is None:
+        raise HTTPException(
+            status_code=401,
+            detail={"error": "Missing onboarding session for invitation link."},
+        )
+    onboarding_token = onboarding_auth_header
+    if onboarding_token.lower().startswith("bearer "):
+        onboarding_token = onboarding_token.split(" ", 1)[1]
+
+    import jwt
+
+    try:
+        return jwt.decode(
+            onboarding_token,
+            master_key,
+            algorithms=["HS256"],
+        )
+    except Exception:
+        raise HTTPException(
+            status_code=401,
+            detail={"error": "Invalid onboarding session for invitation link."},
+        )
+
+
+async def _rollback_onboarding_invite_claim(
+    invitation_link: str,
+    user_id: str,
+) -> None:
+    global prisma_client
+
+    if prisma_client is None:
+        return
+
+    try:
+        await prisma_client.db.litellm_invitationlink.update_many(
+            where={"id": invitation_link, "is_accepted": True},
+            data={
+                "accepted_at": None,
+                "is_accepted": False,
+                "updated_at": litellm.utils.get_utc_datetime(),
+                "updated_by": user_id,
+            },
+        )
+    except Exception:
+        verbose_proxy_logger.exception(
+            "Failed to roll back onboarding invitation after session key mint failed."
+        )
+
+
+async def _generate_onboarding_ui_session_token(user_obj: Any) -> str:
+    global master_key, general_settings
+
+    response = await generate_key_helper_fn(
+        request_type="key",
+        **{
+            "user_role": user_obj.user_role,
+            "duration": LITELLM_UI_SESSION_DURATION,
+            "key_max_budget": litellm.max_ui_session_budget,
+            "models": [],
+            "aliases": {},
+            "config": {},
+            "spend": 0,
+            "user_id": user_obj.user_id,
+            "team_id": UI_TEAM_ID,
+        },  # type: ignore
+    )
+    key = response["token"]  # type: ignore
+
+    from litellm.types.proxy.ui_sso import ReturnedUITokenObject
+
+    import jwt
+
+    disabled_non_admin_personal_key_creation = (
+        get_disabled_non_admin_personal_key_creation()
+    )
+    returned_ui_token_object = ReturnedUITokenObject(
+        user_id=user_obj.user_id,
+        key=key,
+        user_email=user_obj.user_email,
+        user_role=user_obj.user_role,
+        login_method="username_password",
+        premium_user=premium_user,
+        auth_header_name=general_settings.get(
+            "litellm_key_header_name", "Authorization"
+        ),
+        disabled_non_admin_personal_key_creation=disabled_non_admin_personal_key_creation,
+        server_root_path=get_server_root_path(),
+    )
+    assert master_key is not None
+    return jwt.encode(  # type: ignore
+        cast(dict, returned_ui_token_object),
+        master_key,
+        algorithm="HS256",
+    )
+
+
 @app.post("/onboarding/claim_token", include_in_schema=False)
-async def claim_onboarding_link(data: InvitationClaim):
+async def claim_onboarding_link(data: InvitationClaim, request: Request):
     """
     Special route. Allows UI link share user to update their password.
 
@@ -12155,7 +12258,7 @@ async def claim_onboarding_link(data: InvitationClaim):
 
     This route can only update user password.
     """
-    global prisma_client
+    global prisma_client, master_key, general_settings
     ### VALIDATE INVITE LINK ###
     if prisma_client is None:
         raise HTTPException(
@@ -12180,7 +12283,7 @@ async def claim_onboarding_link(data: InvitationClaim):
         )
 
     #### CHECK IF ALREADY USED
-    if invite_obj.is_accepted is True:
+    if invite_obj.is_accepted is True or invite_obj.accepted_at is not None:
         raise HTTPException(
             status_code=401,
             detail={"error": "Invitation link has already been used."},
@@ -12196,32 +12299,87 @@ async def claim_onboarding_link(data: InvitationClaim):
                 )
             },
         )
-    ### UPDATE USER OBJECT ###
-    hashed_pw = hash_password(data.password)
-    user_obj = await prisma_client.db.litellm_usertable.update(
-        where={"user_id": invite_obj.user_id}, data={"password": hashed_pw}
-    )
 
-    if user_obj is None:
+    onboarding_claims = _get_onboarding_claims_from_request(request=request)
+    if (
+        onboarding_claims.get("token_type") != "litellm_onboarding"
+        or onboarding_claims.get("invitation_link") != data.invitation_link
+        or onboarding_claims.get("user_id") != data.user_id
+    ):
         raise HTTPException(
-            status_code=401, detail={"error": "User does not exist in db."}
+            status_code=401,
+            detail={"error": "Invalid onboarding session for invitation link."},
         )
 
-    #### MARK LINK AS USED
+    hashed_pw = hash_password(data.password)
     current_time = litellm.utils.get_utc_datetime()
-    await prisma_client.db.litellm_invitationlink.update(
-        where={"id": data.invitation_link},
-        data={
-            "accepted_at": current_time,
-            "updated_at": current_time,
-            "is_accepted": True,
-            "updated_by": invite_obj.user_id,  # type: ignore
-        },
-    )
+    async with prisma_client.db.tx() as tx:
+        updated_count = await tx.litellm_invitationlink.update_many(
+            where={"id": data.invitation_link, "is_accepted": False},
+            data={
+                "is_accepted": True,
+                "updated_at": current_time,
+                "updated_by": invite_obj.user_id,  # type: ignore
+            },
+        )
+        if updated_count == 0:
+            raise HTTPException(
+                status_code=401,
+                detail={"error": "Invitation link has already been used."},
+            )
+
+        ### UPDATE USER OBJECT ###
+        user_obj = await tx.litellm_usertable.update(
+            where={"user_id": invite_obj.user_id}, data={"password": hashed_pw}
+        )
+
+        if user_obj is None:
+            raise HTTPException(
+                status_code=401, detail={"error": "User does not exist in db."}
+            )
+
+        #### MARK LINK AS USED
+        current_time = litellm.utils.get_utc_datetime()
+        await tx.litellm_invitationlink.update(
+            where={"id": data.invitation_link},
+            data={
+                "accepted_at": current_time,
+                "updated_at": current_time,
+                "updated_by": invite_obj.user_id,  # type: ignore
+            },
+        )
 
     if user_obj and hasattr(user_obj, "__dict__"):
         user_obj.__dict__.pop("password", None)
-    return user_obj
+
+    try:
+        jwt_token = await _generate_onboarding_ui_session_token(user_obj=user_obj)
+    except Exception as e:
+        await _rollback_onboarding_invite_claim(
+            invitation_link=data.invitation_link,
+            user_id=data.user_id,
+        )
+        if isinstance(e, HTTPException):
+            raise e
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "Failed to create onboarding session. Please retry the invitation link."
+            },
+        ) from e
+
+    litellm_dashboard_ui = get_custom_url(str(request.base_url))
+    if litellm_dashboard_ui.endswith("/"):
+        litellm_dashboard_ui += "ui/"
+    else:
+        litellm_dashboard_ui += "/ui/"
+    litellm_dashboard_ui += "?login=success"
+    return {
+        "login_url": litellm_dashboard_ui,
+        "token": jwt_token,
+        "user_email": user_obj.user_email,
+        "user": user_obj,
+    }
 
 
 @app.get("/get_logo_url", include_in_schema=False)
