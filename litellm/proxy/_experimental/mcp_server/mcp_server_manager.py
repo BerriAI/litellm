@@ -177,22 +177,27 @@ class MCPServerManager:
         authorization_url: Optional[str],
         client_id: Optional[str],
         client_secret: Optional[str],
-    ) -> Optional[str]:
+    ) -> Optional[Literal["client_credentials", "authorization_code"]]:
         """Infer oauth2_flow for legacy records that omit the field.
 
         DB rows created before oauth2_flow support may have OAuth2 client
         credentials + token_url but a null oauth2_flow. Treat these as M2M,
         unless authorization_url is present (interactive OAuth).
         """
+        if oauth2_flow in ("client_credentials", "authorization_code"):
+            return cast(
+                Literal["client_credentials", "authorization_code"], oauth2_flow
+            )
         if oauth2_flow:
-            return oauth2_flow
+            # Ignore unknown/untyped values and continue legacy inference.
+            return None
         if auth_type != MCPAuth.oauth2:
-            return oauth2_flow
+            return None
         if authorization_url:
-            return oauth2_flow
+            return None
         if token_url and client_id and client_secret:
             return "client_credentials"
-        return oauth2_flow
+        return None
 
     def __init__(self):
         self.registry: Dict[str, MCPServer] = {}
