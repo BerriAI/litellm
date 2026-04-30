@@ -112,6 +112,15 @@ try:
     )
     _session_id_auth_storage: Dict[uuid.UUID, "MCPAuthenticatedUser"] = {}
 
+    _captured_session_id_var: contextvars.ContextVar[Optional[uuid.UUID]] = (
+        contextvars.ContextVar("captured_session_id", default=None)
+    )
+
+    class _SessionIdCapturingDict(dict):
+        def __setitem__(self, key, value):
+            _captured_session_id_var.set(key)
+            super().__setitem__(key, value)
+
     active_mcp_session_var: contextvars.ContextVar[Optional[_McpServerSession]] = (
         contextvars.ContextVar("active_mcp_session", default=None)
     )
@@ -245,6 +254,8 @@ if MCP_AVAILABLE:
     from mcp.server.sse import SseServerTransport as _McpSseServerTransport
 
     sse = _McpSseServerTransport("/mcp/messages")
+    # Wrap the dict to capture session IDs race-free during connect_sse
+    sse._read_stream_writers = _SessionIdCapturingDict(sse._read_stream_writers)  # type: ignore
     # Create session managers (StreamableHTTP — stateless by default)
     session_manager = StreamableHTTPSessionManager(
         app=server,
@@ -2678,17 +2689,13 @@ if MCP_AVAILABLE:
                 verbose_logger.info("Initializing SSE session...")
                 options = server.create_initialization_options()
                 # Capture existing session IDs to find the newly created one
-                old_session_ids = set(getattr(sse, "_read_stream_writers", {}).keys())
+                _captured_session_id_var.set(None)
                 async with sse.connect_sse(scope, receive, send) as streams:
                     verbose_logger.info(
                         "SSE connection established, running server loop..."
                     )
 
-                    new_session_ids = set(
-                        getattr(sse, "_read_stream_writers", {}).keys()
-                    )
-                    diff = new_session_ids - old_session_ids
-                    session_id = diff.pop() if diff else None
+                    session_id = _captured_session_id_var.get()
 
                     # ContextVars are lost when the MCP SDK spawns internal tasks
                     # (e.g. _receive_loop), so tool handlers can't read auth_context_var reliably.
@@ -2759,10 +2766,6 @@ if MCP_AVAILABLE:
             ) = await extract_mcp_auth_context(scope, path)
             _sse_client_ip = IPAddressUtils.get_mcp_client_ip(request)
             # set_auth_context here is a no-op for actual tool execution since the SDK
-            # processes messages in background tasks that don't inherit this ContextVar.
-            # Authentication must be recovered from the session-auth-storage during execution.
-
-            # P1 Security: Bind POST auth to the existing SSE session
             session_id_param = request.query_params.get(
                 "sessionId"
             ) or request.query_params.get("session_id")
@@ -2771,31 +2774,64 @@ if MCP_AVAILABLE:
 
                 try:
                     session_id = uuid.UUID(hex=session_id_param)
-                    writer = getattr(sse, "_read_stream_writers", {}).get(session_id)
-                    if writer:
-                        session_auth = _session_id_auth_storage.get(session_id)
+                    # Look up auth associated with this session ID
+                    session_auth = _session_id_auth_storage.get(session_id)
 
-                        if (
-                            session_auth
-                            and session_auth.user_api_key_auth
-                            and user_api_key_auth
-                        ):
-                            session_api_key = getattr(
-                                session_auth.user_api_key_auth, "api_key", None
+                    if session_auth is not None:
+                        # P1 Security: Bind POST auth to the existing SSE session
+                        session_api_key = getattr(
+                            session_auth.user_api_key_auth, "api_key", None
+                        )
+                        session_has_auth = (
+                            session_api_key is not None or session_auth.oauth2_headers
+                        )
+
+                        if session_has_auth:
+                            post_api_key = (
+                                getattr(user_api_key_auth, "api_key", None)
+                                if user_api_key_auth
+                                else None
                             )
-                            post_api_key = getattr(user_api_key_auth, "api_key", None)
-                            if (
-                                session_api_key
-                                and post_api_key
-                                and session_api_key != post_api_key
-                            ):
+
+                            # Match by API Key
+                            if session_api_key is not None:
+                                if session_api_key != post_api_key:
+                                    raise HTTPException(
+                                        status_code=403,
+                                        detail="Authentication mismatch: POST auth does not match the session owner.",
+                                    )
+                            # Match by OAuth2 Token if no API key
+                            elif session_auth.oauth2_headers:
+                                if (
+                                    not oauth2_headers
+                                    or session_auth.oauth2_headers.get("Authorization")
+                                    != oauth2_headers.get("Authorization")
+                                ):
+                                    raise HTTPException(
+                                        status_code=403,
+                                        detail="Authentication mismatch: POST OAuth2 token does not match the session owner.",
+                                    )
+                            # If session was authenticated but POST has no auth, deny.
+                            elif user_api_key_auth is None and not oauth2_headers:
                                 raise HTTPException(
                                     status_code=403,
-                                    detail="Authentication mismatch: POST auth does not match the session owner.",
+                                    detail="Authentication required: Target session is authenticated but POST lacks credentials.",
                                 )
                 except ValueError:
+                    # Invalid UUID format in session_id_param
                     pass
 
+            # Set auth context for this POST request (important for SDK background tasks)
+            set_auth_context(
+                user_api_key_auth=user_api_key_auth,
+                mcp_auth_header=mcp_auth_header,
+                mcp_servers=mcp_servers,
+                mcp_server_auth_headers=mcp_server_auth_headers,
+                oauth2_headers=oauth2_headers,
+                raw_headers=raw_headers,
+                client_ip=_sse_client_ip,
+            )
+            await sse.handle_post_message(scope, receive, send)
         except HTTPException:
             raise
         except Exception as e:
@@ -2822,7 +2858,17 @@ if MCP_AVAILABLE:
 
     def get_active_mcp_session() -> Optional[_McpServerSession]:
         """Get the active downstream MCP session from the current context."""
-        return active_mcp_session_var.get()
+        # Try context var first
+        session = active_mcp_session_var.get()
+        if session:
+            return session
+        # Fallback to request_ctx (available in SDK request handlers)
+        try:
+            from mcp.server.lowlevel.server import request_ctx
+
+            return request_ctx.get().session
+        except Exception:
+            return None
 
     def get_active_auth_context() -> Optional[MCPAuthenticatedUser]:
         """Get the active auth context from the server object or context var."""
@@ -2832,7 +2878,7 @@ if MCP_AVAILABLE:
             return auth
         elif auth:
             return cast(MCPAuthenticatedUser, auth)
-        # Fallback to session read_stream
+        # Fallback to session read_stream (available in SDK request handlers)
         try:
             from mcp.server.lowlevel.server import request_ctx
 

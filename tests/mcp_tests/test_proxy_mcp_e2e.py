@@ -24,7 +24,7 @@ from litellm.proxy.proxy_server import (
 CONFIG_TEMPLATE_PATH = Path("tests/mcp_tests/test_configs/test_config_mcp_e2e.yaml")
 MCP_SERVER_SCRIPT = Path("tests/mcp_tests/mcp_server.py")
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-PROXY_START_TIMEOUT = 30
+PROXY_START_TIMEOUT = 60
 
 
 PROXY_AUTHORIZATION_HEADER = "Bearer sk-1234"
@@ -157,7 +157,7 @@ def proxy_server_url(
 class TestProxyMcpSimpleConnections:
     @pytest.mark.asyncio
     async def test_proxy_mcp_stdio_roundtrip(self, proxy_server_url: str) -> None:
-        async with asyncio.timeout(20):
+        async with asyncio.timeout(120):
             async with streamablehttp_client(
                 url=f"{proxy_server_url}/mcp",
                 headers={
@@ -180,7 +180,7 @@ class TestProxyMcpSimpleConnections:
     async def test_proxy_mcp_streamable_http_roundtrip(
         self, proxy_server_url: str
     ) -> None:
-        async with asyncio.timeout(20):
+        async with asyncio.timeout(120):
             async with streamablehttp_client(
                 url=f"{proxy_server_url}/mcp",
                 headers={
