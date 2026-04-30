@@ -2,7 +2,18 @@
 Translate from OpenAI's `/v1/chat/completions` to VLLM's `/v1/chat/completions`
 """
 
-from typing import Any, Coroutine, Dict, List, Literal, Optional, Tuple, Union, cast, overload
+from typing import (
+    Any,
+    Coroutine,
+    Dict,
+    List,
+    Literal,
+    Optional,
+    Tuple,
+    Union,
+    cast,
+    overload,
+)
 
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     _get_image_mime_type_from_url,
@@ -42,7 +53,9 @@ class HostedVLLMChatConfig(OpenAIGPTConfig):
             if not isinstance(custom_tool, dict):
                 custom_tool = {}
 
-            tool_name = custom_tool.get("name") or tool.get("name") or f"custom_tool_{idx}"
+            tool_name = (
+                custom_tool.get("name") or tool.get("name") or f"custom_tool_{idx}"
+            )
             tool_description = custom_tool.get("description") or tool.get("description")
             tool_parameters = custom_tool.get("input_schema")
 
