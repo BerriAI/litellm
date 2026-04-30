@@ -309,10 +309,15 @@ def test_dynamic_logging_metadata_key_and_team_metadata(callback_vars):
         assert "os.environ" not in var
 
 
-def test_dynamic_logging_metadata_rejects_env_references_from_key_metadata(
+def test_dynamic_logging_metadata_ignores_env_references_from_key_metadata(
     monkeypatch,
 ):
     monkeypatch.setenv("LANGFUSE_SECRET_KEY_TEMP", "server-side-secret")
+    monkeypatch.setattr(
+        litellm.utils,
+        "get_secret",
+        lambda *args, **kwargs: pytest.fail("get_secret should not be called"),
+    )
     from litellm.proxy.proxy_server import ProxyConfig
 
     proxy_config = ProxyConfig()
@@ -332,13 +337,11 @@ def test_dynamic_logging_metadata_rejects_env_references_from_key_metadata(
         team_metadata={},
     )
 
-    with pytest.raises(ValueError) as exc_info:
-        _get_dynamic_logging_metadata(
-            user_api_key_dict=user_api_key_dict, proxy_config=proxy_config
-        )
+    callbacks = _get_dynamic_logging_metadata(
+        user_api_key_dict=user_api_key_dict, proxy_config=proxy_config
+    )
 
-    assert "os.environ/" in str(exc_info.value)
-    assert "server-side-secret" not in str(exc_info.value)
+    assert callbacks is None
 
 
 @pytest.mark.parametrize(

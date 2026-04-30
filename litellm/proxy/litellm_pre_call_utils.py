@@ -233,6 +233,20 @@ def convert_key_logging_metadata_to_callback(
     return team_callback_settings_obj
 
 
+def _get_validated_callback_metadata(
+    item: dict, *, source: str
+) -> Optional[AddTeamCallback]:
+    try:
+        return AddTeamCallback(**item)
+    except ValueError as e:
+        verbose_proxy_logger.warning(
+            "Ignoring invalid %s callback metadata: %s",
+            source,
+            _sanitize_for_log(str(e)),
+        )
+        return None
+
+
 class KeyAndTeamLoggingSettings:
     """
     Helper class to get the dynamic logging settings for the key and team
@@ -272,8 +286,11 @@ def _get_dynamic_logging_metadata(
     #########################################################################################
     if key_dynamic_logging_settings is not None:
         for item in key_dynamic_logging_settings:
+            callback = _get_validated_callback_metadata(item=item, source="key-level")
+            if callback is None:
+                continue
             callback_settings_obj = convert_key_logging_metadata_to_callback(
-                data=AddTeamCallback(**item),
+                data=callback,
                 team_callback_settings_obj=callback_settings_obj,
             )
     #########################################################################################
@@ -281,8 +298,11 @@ def _get_dynamic_logging_metadata(
     #########################################################################################
     elif team_dynamic_logging_settings is not None:
         for item in team_dynamic_logging_settings:
+            callback = _get_validated_callback_metadata(item=item, source="team-level")
+            if callback is None:
+                continue
             callback_settings_obj = convert_key_logging_metadata_to_callback(
-                data=AddTeamCallback(**item),
+                data=callback,
                 team_callback_settings_obj=callback_settings_obj,
             )
     #########################################################################################

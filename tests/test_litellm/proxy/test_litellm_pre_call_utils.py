@@ -10,7 +10,7 @@ from fastapi import Request
 from starlette.datastructures import Headers
 
 import litellm
-from litellm.proxy._types import TeamCallbackMetadata, UserAPIKeyAuth
+from litellm.proxy._types import AddTeamCallback, TeamCallbackMetadata, UserAPIKeyAuth
 from litellm.proxy.litellm_pre_call_utils import (
     KeyAndTeamLoggingSettings,
     LiteLLMProxyRequestSetup,
@@ -1274,10 +1274,28 @@ def test_get_dynamic_logging_metadata_with_arize_team_logging():
     assert result.callback_vars["arize_space_id"] == "test_arize_space_id"
 
 
-def test_get_dynamic_logging_metadata_rejects_env_reference_from_key_metadata(
+def test_add_team_callback_rejects_env_reference():
+    with pytest.raises(ValueError) as exc_info:
+        AddTeamCallback(
+            callback_name="langfuse",
+            callback_type="success",
+            callback_vars={
+                "langfuse_secret_key": "os.environ/LANGFUSE_SECRET_KEY_TEMP"
+            },
+        )
+
+    assert "os.environ/" in str(exc_info.value)
+
+
+def test_get_dynamic_logging_metadata_ignores_env_reference_from_key_metadata(
     monkeypatch,
 ):
     monkeypatch.setenv("LANGFUSE_SECRET_KEY_TEMP", "server-side-secret")
+    monkeypatch.setattr(
+        litellm.utils,
+        "get_secret",
+        lambda *args, **kwargs: pytest.fail("get_secret should not be called"),
+    )
     user_api_key_dict = UserAPIKeyAuth(
         api_key="test-key",
         metadata={
@@ -1294,13 +1312,11 @@ def test_get_dynamic_logging_metadata_rejects_env_reference_from_key_metadata(
         team_metadata={},
     )
 
-    with pytest.raises(ValueError) as exc_info:
-        _get_dynamic_logging_metadata(
-            user_api_key_dict=user_api_key_dict, proxy_config=MagicMock()
-        )
+    result = _get_dynamic_logging_metadata(
+        user_api_key_dict=user_api_key_dict, proxy_config=MagicMock()
+    )
 
-    assert "os.environ/" in str(exc_info.value)
-    assert "server-side-secret" not in str(exc_info.value)
+    assert result is None
 
 
 def test_get_num_retries_from_request():
