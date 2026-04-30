@@ -12229,7 +12229,7 @@ def get_logo_url():
     directly by the browser from a public/internal CDN. Local file
     paths set via ``UI_LOGO_PATH`` are NOT returned: they are admin-
     only filesystem details, the dashboard falls back to ``/get_image``
-    which serves the file (with path containment) instead. Without
+    which serves the file only when it is a supported image. Without
     this filter, the unauthenticated endpoint would disclose internal
     hostnames or filesystem paths to any caller.
     """
@@ -12275,9 +12275,6 @@ async def get_image():
     if assets_dir != current_dir and not os.path.exists(default_logo):
         default_logo = default_site_logo
 
-    cache_dir = assets_dir if os.access(assets_dir, os.W_OK) else current_dir
-    cache_path = os.path.join(cache_dir, "cached_logo.jpg")
-
     logo_path = os.getenv("UI_LOGO_PATH", default_logo)
     verbose_proxy_logger.debug("Reading logo from path: %s", logo_path)
 
@@ -12301,19 +12298,6 @@ async def get_image():
     # arbitrary admin-configured URLs server-side.
     if logo_path.startswith(("http://", "https://")):
         return RedirectResponse(url=logo_path)
-
-    # [OPTIMIZATION] For default logo, check if the cached image exists.
-    # Validate the cache before serving so stale pre-fix cache files cannot
-    # keep exposing non-image responses fetched before this hardening.
-    if os.path.exists(cache_path):
-        safe_cache = resolve_validated_local_image_path(cache_path)
-        if safe_cache is not None:
-            safe_cache_path, media_type = safe_cache
-            return FileResponse(safe_cache_path, media_type=media_type)
-        verbose_proxy_logger.warning(
-            "Ignoring cached logo at %s because it is not a supported image file",
-            cache_path,
-        )
 
     # Default logo (resolved from the bundled asset, not user-controlled).
     safe_logo = resolve_validated_local_image_path(logo_path)
