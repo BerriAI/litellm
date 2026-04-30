@@ -11,7 +11,11 @@ REDIS_KEY_PREFIX = "litellm:vcr:cassette:"
 
 
 def redis_key_for(cassette_path: str) -> str:
-    return f"{REDIS_KEY_PREFIX}{os.path.relpath(str(cassette_path))}"
+    rel = os.path.relpath(str(cassette_path))
+    if rel.endswith(".yaml"):
+        rel = rel[: -len(".yaml")]
+    rel = rel.replace("/cassettes/", "/").lstrip("./")
+    return f"{REDIS_KEY_PREFIX}{rel}"
 
 
 def _redis_url_from_env() -> Optional[str]:

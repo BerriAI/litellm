@@ -7,7 +7,7 @@ Name of the test file is the name of the LLM provider - e.g. `test_openai.py` is
 Every test in this directory is auto-decorated with `@pytest.mark.vcr` (via
 `conftest.py`). The first time a test runs we hit the live provider and
 record the HTTP exchange into Redis under
-`litellm:vcr:cassette:<rel_path>`. Every subsequent run within 24h replays
+`litellm:vcr:cassette:<test_id>`. Every subsequent run within 24h replays
 from Redis without touching the network. The 24h TTL means each new day's
 first run records again, so upstream API drift surfaces within a day.
 
