@@ -1,12 +1,3 @@
-"""Flush every VCR cassette stored in Redis.
-
-Run via ``make test-llm-translation-flush-vcr-cache``. Use when you want the
-next test run to re-record against live providers right now instead of
-waiting for the 24h TTL to expire.
-
-Reads ``REDIS_HOST``, ``REDIS_PORT``, ``REDIS_PASSWORD`` from the environment.
-"""
-
 from __future__ import annotations
 
 import os

@@ -186,11 +186,5 @@ test-llm-translation-single: install-test-deps
 		--junitxml=test-results/junit.xml \
 		-v --tb=short --maxfail=100 --timeout=300
 
-# VCR cache helpers -----------------------------------------------------------
-# Drop every Redis key under the ``litellm:vcr:cassette:*`` prefix. Use this
-# when you want the next CI run (or local run) to re-record against live
-# providers immediately instead of waiting for the 24h TTL to roll over.
-# Reads REDIS_HOST / REDIS_PORT / REDIS_PASSWORD from the environment, the
-# same vars CircleCI uses for its other Redis-backed jobs.
 test-llm-translation-flush-vcr-cache:
 	$(UV_RUN) python tests/_flush_vcr_cache.py
