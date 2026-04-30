@@ -488,6 +488,7 @@ class TestListToolsRestAPI:
             allowed_tools = None
             mcp_info = {"server_name": "stub"}
             available_on_public_internet = True
+            authentication_token = None
 
         stub_server = StubServer()
 
@@ -832,7 +833,7 @@ class TestCallToolRestAPI:
             allowed_tools = None
             mcp_info = {"server_name": "stub"}
             available_on_public_internet = True
-            auth_type = None
+
 
         stub_server = StubServer()
 
