@@ -52,12 +52,21 @@ def clear_token() -> None:
         os.remove(token_file)
 
 
-def get_stored_api_key() -> Optional[str]:
-    """Get the stored API key from token file"""
-    # Use the SDK-level utility
-    from litellm.litellm_core_utils.cli_token_utils import get_litellm_gateway_api_key
+def get_stored_api_key(expected_base_url: Optional[str] = None) -> Optional[str]:
+    """Get the stored API key from token file.
 
-    return get_litellm_gateway_api_key()
+    If expected_base_url is provided, the key is only returned when it was
+    originally issued for that URL. This prevents credential leakage when the
+    CLI is pointed at a different (possibly malicious) server.
+    """
+    token_data = load_token()
+    if not token_data or "key" not in token_data:
+        return None
+    if expected_base_url is not None:
+        stored_url = token_data.get("base_url")
+        if stored_url != expected_base_url.rstrip("/"):
+            return None
+    return token_data["key"]
 
 
 # Team selection utilities
@@ -520,20 +529,15 @@ def login(ctx: click.Context):
 
     base_url = ctx.obj["base_url"]
 
-    # Check if we have an existing key to regenerate
-    existing_key = get_stored_api_key()
-
     # Generate unique key ID for this login session
     key_id = f"sk-{str(uuid.uuid4())}"
 
     try:
-        # Construct SSO login URL with CLI source and pre-generated key
+        # Construct SSO login URL with CLI source and pre-generated key.
+        # existing_key is intentionally NOT included as a query parameter —
+        # sending it would leak the production credential via browser history
+        # and server access logs.
         sso_url = f"{base_url}/sso/key/generate?source={LITELLM_CLI_SOURCE_IDENTIFIER}&key={key_id}"
-
-        # If we have an existing key, include it as a parameter to the login endpoint
-        # The server will encode it in the OAuth state parameter for the SSO flow
-        if existing_key:
-            sso_url += f"&existing_key={existing_key}"
 
         click.echo(f"Opening browser to: {sso_url}")
         click.echo("Please complete the SSO authentication in your browser...")
@@ -551,9 +555,11 @@ def login(ctx: click.Context):
             api_key = auth_result["api_key"]
             user_id = auth_result["user_id"]
 
-            # Save token data (simplified for CLI - we just need the key)
+            # Save token data (simplified for CLI - we just need the key).
+            # base_url is stored so we can verify origin before reusing the key.
             save_token(
                 {
+                    "base_url": base_url.rstrip("/"),
                     "key": api_key,
                     "user_id": user_id or "cli-user",
                     "user_email": "unknown",
