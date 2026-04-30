@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import Request
+from pydantic import ValidationError as PydanticValidationError
 from starlette.datastructures import Headers
 
 import litellm
@@ -1275,7 +1276,7 @@ def test_get_dynamic_logging_metadata_with_arize_team_logging():
 
 
 def test_add_team_callback_rejects_env_reference():
-    with pytest.raises(ValueError) as exc_info:
+    with pytest.raises(PydanticValidationError) as exc_info:
         AddTeamCallback(
             callback_name="langfuse",
             callback_type="success",
