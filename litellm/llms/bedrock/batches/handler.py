@@ -247,6 +247,11 @@ class BedrockBatchesHandler:
         )
 
         if logging_obj is not None:
+            # Use the bare job id in the logged URL so we don't double up the
+            # `model-invocation-job/` segment when `batch_id` is a full ARN.
+            # `GetModelInvocationJob` accepts either form, but only the bare id
+            # produces a sensible-looking URL in logs.
+            url_path_id = _extract_job_id_from_arn(batch_id) or batch_id
             logging_obj.pre_call(
                 input=batch_id,
                 api_key="",
@@ -254,7 +259,7 @@ class BedrockBatchesHandler:
                     "complete_input_dict": {"jobIdentifier": batch_id},
                     "api_base": (
                         f"https://bedrock.{region}.amazonaws.com/"
-                        f"model-invocation-job/{batch_id}"
+                        f"model-invocation-job/{url_path_id}"
                     ),
                 },
             )
@@ -289,16 +294,23 @@ class BedrockBatchesHandler:
         # Bedrock returns the output *prefix* the user supplied at job creation.
         # Actual results land at <prefix>/<job-id>/<basename(input)>.out — we
         # surface that single-file URI as `output_file_id` so the OpenAI-style
-        # download flow works without an extra S3 listing call. The bare
-        # prefix is preserved in metadata for callers that want the manifest.
+        # download flow works without an extra S3 listing call. We deliberately
+        # do NOT fall back to the bare prefix when prediction fails: a prefix
+        # is not a downloadable object, so handing it back as `output_file_id`
+        # would reproduce the very NoSuchKey bug this handler exists to fix.
+        # The bare prefix is preserved in metadata for callers that want the
+        # `manifest.json.out` or want to do their own listing.
         job_arn = response.get("jobArn", batch_id)
         job_id = _extract_job_id_from_arn(job_arn)
-        output_file_uri = (
-            _predict_output_file_uri(output_prefix, input_uri, job_id) or output_prefix
-        )
+        output_file_uri = _predict_output_file_uri(output_prefix, input_uri, job_id)
 
         completed_at = _to_epoch(response.get("endTime"))
 
+        # Note: metadata uses "" (not None) for unknown URIs to satisfy the
+        # OpenAI Batch metadata schema, which is `dict[str, str]`. The
+        # `output_file_id` field on the LiteLLMBatch itself does carry None
+        # correctly (see below), so callers should branch on that, not on
+        # `metadata["output_file_uri"]`.
         openai_batch_metadata: OpenAIBatchMetadata = {
             "model_arn": response.get("modelId", ""),
             "job_arn": job_arn,
@@ -306,7 +318,7 @@ class BedrockBatchesHandler:
             "failure_message": response.get("message") or "",
             "input_s3_uri": input_uri,
             "output_s3_uri": output_prefix,
-            "output_file_uri": output_file_uri,
+            "output_file_uri": output_file_uri or "",
         }
 
         return LiteLLMBatch(
