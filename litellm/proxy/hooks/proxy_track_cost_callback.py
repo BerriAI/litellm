@@ -183,8 +183,9 @@ class _ProxyDBLogger(CustomLogger):
                 if sl_object is not None
                 else kwargs.get("response_cost", None)
             )
-            tags: Optional[List[str]] = (
-                sl_object.get("request_tags", None) if sl_object is not None else None
+            tags = _get_request_tags_for_cost_tracking(
+                sl_object=sl_object,
+                metadata=metadata,
             )
 
             if response_cost is not None:
@@ -219,6 +220,7 @@ class _ProxyDBLogger(CustomLogger):
                         end_time=end_time,
                         response_cost=response_cost,
                         budget_reservation=budget_reservation,
+                        request_tags=tags,
                     )
 
                     # update cache (fire-and-forget for backward compat:
@@ -407,6 +409,22 @@ def _get_budget_reservation_from_metadata(metadata: dict) -> Optional[dict]:
     return getattr(user_api_key_auth_obj, "budget_reservation", None)
 
 
+def _get_request_tags_for_cost_tracking(
+    sl_object: Optional[StandardLoggingPayload],
+    metadata: dict,
+) -> Optional[List[str]]:
+    if sl_object is not None:
+        request_tags = sl_object.get("request_tags", None)
+        if isinstance(request_tags, list):
+            return request_tags
+
+    metadata_tags = metadata.get("tags", None)
+    if isinstance(metadata_tags, list):
+        return metadata_tags
+
+    return None
+
+
 async def _update_database_and_spend_counters(
     proxy_logging_obj: Any,
     increment_spend_counters: Any,
@@ -421,6 +439,7 @@ async def _update_database_and_spend_counters(
     end_time: Any,
     response_cost: float,
     budget_reservation: Optional[dict],
+    request_tags: Optional[List[str]] = None,
 ) -> None:
     try:
         await proxy_logging_obj.db_spend_update_writer.update_database(
@@ -461,6 +480,8 @@ async def _update_database_and_spend_counters(
             response_cost=response_cost,
             org_id=org_id,
             budget_reservation=budget_reservation,
+            end_user_id=end_user_id,
+            tags=request_tags,
         )
     except Exception:
         if budget_reservation is not None:

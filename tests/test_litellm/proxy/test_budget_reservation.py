@@ -184,6 +184,7 @@ async def test_should_prevent_second_end_user_reservation_over_budget(
         user_id=None,
         response_cost=0.2,
         budget_reservation=reservation,
+        end_user_id="end-user-budget-race",
     )
 
     assert counter_cache.in_memory_cache.get_cache(
@@ -278,11 +279,46 @@ async def test_should_prevent_second_tag_reservation_over_budget(
         user_id=None,
         response_cost=0.2,
         budget_reservation=reservation,
+        tags=["tag-budget-race"],
     )
 
     assert counter_cache.in_memory_cache.get_cache(
         key="spend:tag:tag-budget-race"
     ) == pytest.approx(0.2)
+
+
+@pytest.mark.asyncio
+async def test_should_update_warm_end_user_and_tag_counters_without_reservation(
+    spend_counter_state,
+):
+    counter_cache, _ = spend_counter_state
+    counter_cache.in_memory_cache.set_cache(
+        key="spend:end_user:customer-1",
+        value=4.0,
+    )
+    counter_cache.in_memory_cache.set_cache(key="spend:tag:paid-tag", value=7.0)
+    counter_cache.in_memory_cache.set_cache(key="spend:tag:other-tag", value=2.0)
+
+    from litellm.proxy.proxy_server import increment_spend_counters
+
+    await increment_spend_counters(
+        token=None,
+        team_id=None,
+        user_id=None,
+        response_cost=0.50,
+        end_user_id="customer-1",
+        tags=["paid-tag", "paid-tag", "other-tag", ""],
+    )
+
+    assert counter_cache.in_memory_cache.get_cache(
+        key="spend:end_user:customer-1"
+    ) == pytest.approx(4.50)
+    assert counter_cache.in_memory_cache.get_cache(
+        key="spend:tag:paid-tag"
+    ) == pytest.approx(7.50)
+    assert counter_cache.in_memory_cache.get_cache(
+        key="spend:tag:other-tag"
+    ) == pytest.approx(2.50)
 
 
 @pytest.mark.asyncio

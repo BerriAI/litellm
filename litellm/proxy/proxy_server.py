@@ -1836,6 +1836,8 @@ async def increment_spend_counters(
     response_cost: Optional[float],
     org_id: Optional[str] = None,
     budget_reservation: Optional[dict] = None,
+    end_user_id: Optional[str] = None,
+    tags: Optional[List[str]] = None,
 ):
     """
     Atomically increment spend counters for budget enforcement.
@@ -1847,7 +1849,7 @@ async def increment_spend_counters(
     Awaited (not create_task) in the cost callback, so the counter is
     updated before the next request's auth check runs.
     """
-    reserved_counter_keys = set()
+    reserved_counter_keys: Set[str] = set()
     if budget_reservation is not None:
         from litellm.proxy.spend_tracking.budget_reservation import (
             get_reserved_counter_keys,
@@ -1970,14 +1972,91 @@ async def increment_spend_counters(
                 increment=response_cost,
             )
 
-    if org_id is not None:
-        org_counter_key = f"spend:org:{org_id}"
-        if org_counter_key not in reserved_counter_keys:
-            await _init_and_increment_spend_counter(
-                counter_key=org_counter_key,
-                source_cache_key=f"org_id:{org_id}:with_budget",
-                increment=response_cost,
-            )
+    await _increment_end_user_and_tag_spend_counters(
+        end_user_id=end_user_id,
+        tags=tags,
+        response_cost=response_cost,
+        reserved_counter_keys=reserved_counter_keys,
+    )
+
+    await _increment_org_spend_counter(
+        org_id=org_id,
+        response_cost=response_cost,
+        reserved_counter_keys=reserved_counter_keys,
+    )
+
+
+async def _increment_end_user_and_tag_spend_counters(
+    end_user_id: Optional[str],
+    tags: Optional[List[str]],
+    response_cost: float,
+    reserved_counter_keys: Set[str],
+) -> None:
+    if end_user_id is not None:
+        await _increment_warm_unreserved_spend_counter(
+            counter_key=f"spend:end_user:{end_user_id}",
+            increment=response_cost,
+            reserved_counter_keys=reserved_counter_keys,
+        )
+
+    if tags is None:
+        return
+
+    seen_tags: Set[str] = set()
+    for tag_name in tags:
+        if not tag_name or not isinstance(tag_name, str) or tag_name in seen_tags:
+            continue
+        seen_tags.add(tag_name)
+        await _increment_warm_unreserved_spend_counter(
+            counter_key=f"spend:tag:{tag_name}",
+            increment=response_cost,
+            reserved_counter_keys=reserved_counter_keys,
+        )
+
+
+async def _increment_warm_unreserved_spend_counter(
+    counter_key: str,
+    increment: float,
+    reserved_counter_keys: Set[str],
+) -> None:
+    if counter_key in reserved_counter_keys:
+        return
+    if await spend_counter_cache.async_get_cache(key=counter_key) is None:
+        return
+
+    await _increment_spend_counter_cache(counter_key=counter_key, increment=increment)
+
+
+async def _increment_org_spend_counter(
+    org_id: Optional[str],
+    response_cost: float,
+    reserved_counter_keys: Set[str],
+) -> None:
+    if org_id is None:
+        return
+
+    await _init_and_increment_unreserved_spend_counter(
+        counter_key=f"spend:org:{org_id}",
+        source_cache_key=f"org_id:{org_id}:with_budget",
+        increment=response_cost,
+        reserved_counter_keys=reserved_counter_keys,
+    )
+
+
+async def _init_and_increment_unreserved_spend_counter(
+    counter_key: str,
+    source_cache_key: str,
+    increment: float,
+    reserved_counter_keys: Set[str],
+) -> None:
+    if counter_key in reserved_counter_keys:
+        return
+
+    await _init_and_increment_spend_counter(
+        counter_key=counter_key,
+        source_cache_key=source_cache_key,
+        increment=increment,
+    )
 
 
 async def _init_and_increment_spend_counter(
