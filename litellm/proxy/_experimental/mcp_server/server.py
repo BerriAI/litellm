@@ -2808,7 +2808,7 @@ if MCP_AVAILABLE:
                 status_code=500,
                 content={
                     "error": "Authentication processing failed",
-                    "details": str(e),
+                    "details": "An internal error occurred during authentication processing.",
                 },
             )
             await error_response(scope, receive, send)
