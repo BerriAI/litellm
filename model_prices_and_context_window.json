@@ -26924,6 +26924,26 @@
         "supports_tool_choice": true,
         "supports_vision": false
     },
+    "openai/text-embedding-ada-002": {
+        "input_cost_per_token": 1e-07,
+        "litellm_provider": "openrouter",
+        "max_input_tokens": 8191,
+        "max_tokens": 8191,
+        "mode": "embedding",
+        "output_cost_per_token": 0.0,
+        "output_vector_size": 1536
+    },
+    "openai/text-embedding-3-small": {
+        "input_cost_per_token": 2e-08,
+        "input_cost_per_token_batches": null,
+        "litellm_provider": "openrouter",
+        "max_input_tokens": 8191,
+        "max_tokens": 8191,
+        "mode": "embedding",
+        "output_cost_per_token": 0.0,
+        "output_cost_per_token_batches": null,
+        "output_vector_size": 1536
+    },
     "openrouter/qwen/qwen-2.5-coder-32b-instruct": {
         "input_cost_per_token": 1.8e-07,
         "litellm_provider": "openrouter",
