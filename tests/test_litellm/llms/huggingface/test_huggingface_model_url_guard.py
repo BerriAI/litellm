@@ -2,6 +2,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+import litellm
 from litellm.llms.huggingface.chat.transformation import HuggingFaceChatConfig
 from litellm.llms.huggingface.common_utils import HuggingFaceError
 from litellm.llms.huggingface.embedding.handler import HuggingFaceEmbedding
@@ -23,6 +24,23 @@ def test_huggingface_chat_rejects_url_valued_model():
         )
 
     assert exc_info.value.status_code == 400
+
+
+def test_huggingface_chat_allows_legacy_url_model_when_rejection_disabled(
+    monkeypatch,
+):
+    monkeypatch.setattr(litellm, "reject_url_model_destinations", False)
+    config = HuggingFaceChatConfig()
+
+    complete_url = config.get_complete_url(
+        api_base=None,
+        api_key="hf-secret",
+        model="https://trusted.example",
+        optional_params={},
+        litellm_params={},
+    )
+
+    assert complete_url == "https://trusted.example/v1/chat/completions"
 
 
 def test_huggingface_chat_keeps_explicit_api_base_for_custom_endpoints():
@@ -49,6 +67,20 @@ def test_huggingface_embedding_config_rejects_url_valued_model():
         )
 
     assert exc_info.value.status_code == 400
+
+
+def test_huggingface_embedding_config_allows_legacy_url_model_when_rejection_disabled(
+    monkeypatch,
+):
+    monkeypatch.setattr(litellm, "reject_url_model_destinations", False)
+    config = HuggingFaceEmbeddingConfig()
+
+    api_base = config.get_api_base(
+        api_base=None,
+        model="https://trusted.example/embeddings",
+    )
+
+    assert api_base == "https://trusted.example/embeddings"
 
 
 def test_huggingface_embedding_handler_rejects_before_task_lookup():

@@ -25,6 +25,7 @@ from ..common_utils import (
     HuggingFaceError,
     hf_task_list,
     hf_tasks,
+    is_url_model_destination,
     output_parser,
     validate_huggingface_model_identifier,
 )
@@ -343,7 +344,9 @@ class HuggingFaceEmbeddingConfig(BaseConfig):
         Do not add the chat/embedding/rerank extension here. Let the handler do this.
         """
         validate_huggingface_model_identifier(model)
-        if api_base is not None:
+        if is_url_model_destination(model):
+            completion_url = model
+        elif api_base is not None:
             completion_url = api_base
         elif "HF_API_BASE" in os.environ:
             completion_url = os.getenv("HF_API_BASE", "")

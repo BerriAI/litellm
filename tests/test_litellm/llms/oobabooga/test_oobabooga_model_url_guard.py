@@ -2,6 +2,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+import litellm
 from litellm.llms.oobabooga.chat.oobabooga import completion, embedding
 from litellm.llms.oobabooga.common_utils import OobaboogaError
 
@@ -24,6 +25,42 @@ def test_oobabooga_completion_rejects_url_valued_model_before_request():
 
     assert exc_info.value.status_code == 400
     mock_get.assert_not_called()
+
+
+def test_oobabooga_completion_allows_legacy_url_model_when_rejection_disabled(
+    monkeypatch,
+):
+    monkeypatch.setattr(litellm, "reject_url_model_destinations", False)
+    response = MagicMock()
+    client = MagicMock()
+    client.post.return_value = response
+
+    with patch(
+        "litellm.llms.oobabooga.chat.oobabooga._get_httpx_client",
+        return_value=client,
+    ):
+        with patch(
+            "litellm.llms.oobabooga.chat.oobabooga.oobabooga_config.transform_response",
+            return_value="ok",
+        ):
+            result = completion(
+                model="https://trusted.example",
+                messages=[],
+                api_base=None,
+                model_response=MagicMock(),
+                print_verbose=MagicMock(),
+                encoding=MagicMock(),
+                api_key="ooba-secret",
+                logging_obj=MagicMock(),
+                optional_params={},
+                litellm_params={},
+            )
+
+    assert result == "ok"
+    client.post.assert_called_once()
+    assert (
+        client.post.call_args.args[0] == "https://trusted.example/v1/chat/completions"
+    )
 
 
 def test_oobabooga_embedding_rejects_url_valued_model_before_request():
