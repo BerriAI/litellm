@@ -25,9 +25,11 @@ from vcr.persisters.filesystem import CassetteNotFoundError
 from vcr.request import Request
 from vcr.serializers import yamlserializer
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# Make tests/ importable as a package so we can pull the shared persister
+# without depending on pytest's CWD.
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
 
-from _vcr_redis_persister import (  # noqa: E402
+from tests._vcr_redis_persister import (  # noqa: E402
     CASSETTE_TTL_SECONDS,
     filter_non_2xx_response,
     make_redis_persister,

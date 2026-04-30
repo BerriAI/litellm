@@ -2,28 +2,40 @@ Unit tests for individual LLM providers.
 
 Name of the test file is the name of the LLM provider - e.g. `test_openai.py` is for OpenAI.
 
-## VCR-backed tests
+## Redis-backed VCR cache
 
-Tests decorated with `@pytest.mark.vcr` (typically in `*_vcr.py` files,
-e.g. `test_anthropic_completion_vcr.py`) replay recorded HTTP traffic from
-`cassettes/` via [`pytest-recording`](https://github.com/kiwicom/pytest-recording)
-instead of calling the real provider. They run offline by default — no API
-keys required, no per-PR cost.
+Every test in this directory is auto-decorated with `@pytest.mark.vcr` (via
+`conftest.py`). The first time a test runs we hit the live provider and
+record the HTTP exchange into Redis under
+`litellm:vcr:cassette:<rel_path>`. Every subsequent run within 24h replays
+from Redis without touching the network. The 24h TTL means each new day's
+first run records again, so upstream API drift surfaces within a day.
 
-To re-record every marked test in one sweep:
+The persister, header scrubbing, and 2xx-only filtering are defined in
+`tests/_vcr_redis_persister.py`. Files that already use `respx` (which
+patches the same httpx transport vcrpy does) are excluded from the
+auto-marker — see `_RESPX_CONFLICTING_FILES` in `conftest.py`.
+
+### Required environment
+
+`REDIS_HOST`, `REDIS_PORT`, `REDIS_PASSWORD` — same vars CircleCI uses for
+its other Redis-backed jobs. Provider credentials
+(`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `AWS_*`, etc.) are needed only on
+cache-miss (the daily re-record), not on replay.
+
+### Flushing the cache
+
+When you want the next run to re-record immediately instead of waiting
+for the 24h TTL:
 
 ```bash
-ANTHROPIC_API_KEY=sk-ant-... OPENAI_API_KEY=sk-... \
-  make test-llm-translation-record
+make test-llm-translation-flush-vcr-cache
 ```
 
-To scope to a single file:
+### Disabling VCR
+
+Skip the cache entirely (every call goes live, no recording):
 
 ```bash
-ANTHROPIC_API_KEY=sk-ant-... \
-  make test-llm-translation-record TARGET=test_anthropic_completion_vcr.py
+LITELLM_VCR_DISABLE=1 uv run pytest tests/llm_translation/test_<file>.py
 ```
-
-See [`cassettes/README.md`](./cassettes/README.md) for the full workflow,
-including how to add a new cassette-backed test and what to scrub from
-recordings before committing.
