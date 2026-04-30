@@ -464,9 +464,14 @@ async def _update_database_and_spend_counters(
         )
     except Exception:
         if budget_reservation is not None:
-            await _invalidate_budget_reservation_counters(
-                budget_reservation=budget_reservation
-            )
+            try:
+                await _invalidate_budget_reservation_counters(
+                    budget_reservation=budget_reservation
+                )
+            except Exception:
+                verbose_proxy_logger.exception(
+                    "Failed to invalidate budget reservation counters after spend counter update failed"
+                )
         raise
 
 
