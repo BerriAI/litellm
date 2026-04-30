@@ -40,7 +40,7 @@ from pydantic import (
     field_validator,
     model_validator,
 )
-from typing_extensions import Required, TypedDict
+from typing_extensions import NotRequired, Required, TypedDict
 
 from litellm._uuid import uuid
 from litellm.types.llms.base import (
@@ -110,6 +110,8 @@ SupportedCacheControls = ["ttl", "s-maxage", "no-cache", "no-store"]
 class CostPerToken(TypedDict):
     input_cost_per_token: float
     output_cost_per_token: float
+    cache_creation_input_token_cost: NotRequired[float]
+    cache_read_input_token_cost: NotRequired[float]
 
 
 class ProviderField(TypedDict):
@@ -1264,7 +1266,7 @@ class Delta(SafeAttributeModel, OpenAIObject):
     reasoning_items: Optional[List[ChatCompletionReasoningItem]] = None
     provider_specific_fields: Optional[Dict[str, Any]] = Field(default=None)
 
-    def __init__(
+    def __init__(  # noqa: PLR0915
         self,
         content=None,
         role=None,
