@@ -857,10 +857,17 @@ async def project_info(
                 where={"team_id": project.team_id}
             )
             if team:
-                is_team_member = (
-                    user_api_key_dict.user_id in team.admins
-                    or user_api_key_dict.user_id in team.members
-                )
+                # Membership is stored in members_with_roles (list of {user_id, role} dicts).
+                # The scalar .members / .admins arrays are not populated by team_member_add.
+                member_ids = {
+                    (
+                        m.get("user_id")
+                        if isinstance(m, dict)
+                        else getattr(m, "user_id", None)
+                    )
+                    for m in (team.members_with_roles or [])
+                }
+                is_team_member = user_api_key_dict.user_id in member_ids
 
         if not (is_admin or is_team_member):
             raise HTTPException(
@@ -911,17 +918,13 @@ async def list_projects(
                 include={"litellm_budget_table": True, "object_permission": True}
             )
         else:
-            # Get projects for teams the user belongs to
-            user_teams = await prisma_client.db.litellm_teamtable.find_many(
-                where={
-                    "OR": [
-                        {"members": {"has": user_api_key_dict.user_id}},
-                        {"admins": {"has": user_api_key_dict.user_id}},
-                    ]
-                }
+            # Membership is stored in LiteLLM_UserTable.teams (list of team_id strings).
+            # The scalar LiteLLM_TeamTable.members / .admins arrays are not populated
+            # by team_member_add, so querying them would silently return no results.
+            user_record = await prisma_client.db.litellm_usertable.find_unique(
+                where={"user_id": user_api_key_dict.user_id}
             )
-
-            team_ids = [team.team_id for team in user_teams]
+            team_ids = user_record.teams if user_record and user_record.teams else []
 
             projects = await prisma_client.db.litellm_projecttable.find_many(
                 where={"team_id": {"in": team_ids}},
