@@ -443,6 +443,58 @@ async def test_should_reserve_remaining_budget_when_output_cap_missing(
 
 
 @pytest.mark.asyncio
+async def test_should_seed_malformed_window_counter_from_parent_authoritative_spend(
+    spend_counter_state,
+):
+    counter_cache, key_cache = spend_counter_state
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=key_cache)
+    valid_token = UserAPIKeyAuth(
+        token="key-budget-malformed-window",
+        spend=0.0,
+        budget_limits=[
+            {
+                "budget_duration": "not-a-duration",
+                "max_budget": 1.0,
+            }
+        ],
+    )
+
+    import litellm.proxy.proxy_server as ps
+
+    db_row = MagicMock()
+    db_row.spend = 0.9
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(
+        return_value=db_row
+    )
+    ps.prisma_client = prisma_client
+
+    with patch(
+        "litellm.proxy.spend_tracking.budget_reservation.estimate_request_max_cost",
+        return_value=0.2,
+    ):
+        with pytest.raises(litellm.BudgetExceededError):
+            await reserve_budget_for_request(
+                request_body=_request_body(),
+                route="/chat/completions",
+                llm_router=None,
+                valid_token=valid_token,
+                team_object=None,
+                user_object=None,
+                prisma_client=prisma_client,
+                user_api_key_cache=key_cache,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+
+    prisma_client.db.litellm_verificationtoken.find_unique.assert_awaited_once_with(
+        where={"token": "key-budget-malformed-window"}
+    )
+    assert counter_cache.in_memory_cache.get_cache(
+        key="spend:key:key-budget-malformed-window:window:not-a-duration"
+    ) == pytest.approx(0.9)
+
+
+@pytest.mark.asyncio
 async def test_should_not_re_read_uncapped_budget_after_reservation_fallback(
     spend_counter_state,
     monkeypatch,
