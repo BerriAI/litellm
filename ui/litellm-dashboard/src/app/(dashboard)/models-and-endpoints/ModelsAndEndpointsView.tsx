@@ -188,6 +188,7 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({ premiumUser, te
   const handleRefreshClick = () => {
     const currentDate = new Date();
     setLastRefreshed(currentDate.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }));
+    setHealthCurrentPage(1);
     queryClient.invalidateQueries({ queryKey: ["models", "list"] });
     refetchModels();
   };

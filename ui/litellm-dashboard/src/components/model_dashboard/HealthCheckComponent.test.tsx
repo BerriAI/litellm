@@ -104,23 +104,28 @@ describe("HealthCheckComponent", () => {
       ],
     };
 
-    render(
-      <HealthCheckComponent
-        accessToken="token"
-        modelData={modelData}
-        all_models_on_proxy={["deployment-1"]}
-        getDisplayModelName={getDisplayModelName}
-        paginationMeta={{
-          total_count: 75,
-          current_page: 1,
-          total_pages: 2,
-          size: 50,
-        }}
-        currentPage={1}
-        pageSize={50}
-        onPageChange={onPageChange}
-      />,
-    );
+    await act(async () => {
+      render(
+        <HealthCheckComponent
+          accessToken="token"
+          modelData={modelData}
+          all_models_on_proxy={["deployment-1"]}
+          getDisplayModelName={getDisplayModelName}
+          paginationMeta={{
+            total_count: 75,
+            current_page: 1,
+            total_pages: 2,
+            size: 50,
+          }}
+          currentPage={1}
+          pageSize={50}
+          onPageChange={onPageChange}
+        />,
+      );
+    });
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0));
+    });
 
     expect(screen.getByTestId("health-results-count")).toHaveTextContent("Showing 1 - 50 of 75 results");
 
