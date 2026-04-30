@@ -66,6 +66,53 @@ async def test_aiohttp_transport_response_uses_stream_not_content():
 
 
 @pytest.mark.asyncio
+async def test_aiohttp_transport_preserves_non_ascii_response_headers():
+    header_value = "视频生成成功"
+
+    class FakeSession:
+        closed = False
+
+        def __init__(self):
+            try:
+                self._loop = asyncio.get_running_loop()
+            except RuntimeError:
+                self._loop = None
+
+        def request(self, **kwargs):
+            class Resp:
+                status = 200
+                headers = {"X-Ark-Message": header_value}
+                raw_headers = (
+                    (b"Content-Type", b"text/plain"),
+                    (b"X-Ark-Message", header_value.encode("utf-8")),
+                )
+
+                async def __aenter__(self):
+                    return self
+
+                async def __aexit__(self, *args):
+                    pass
+
+                @property
+                def content(self):
+                    class C:
+                        async def iter_chunked(self, size):
+                            yield b"ok"
+
+                    return C()
+
+            return Resp()
+
+    transport = LiteLLMAiohttpTransport(client=lambda: FakeSession())  # type: ignore
+    response = await transport.handle_async_request(
+        httpx.Request("GET", "http://example.com")
+    )
+
+    assert response.headers["x-ark-message"] == header_value
+    assert await response.aread() == b"ok"
+
+
+@pytest.mark.asyncio
 async def test_aiohttp_response_stream_aclose_releases_connection():
     """AiohttpResponseStream.aclose() must call __aexit__ on the aiohttp response."""
     aexit_called = False
