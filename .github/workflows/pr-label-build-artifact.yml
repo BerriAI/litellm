@@ -10,6 +10,10 @@ permissions:
   id-token: write
   pull-requests: read
 
+concurrency:
+  group: pr-build-artifact-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
 jobs:
   build-and-push-image:
     name: Build and push LiteLLM PR artifact
