@@ -461,17 +461,21 @@ async def test_sse_mcp_handler_mock():
 
     mock_sse = MagicMock()
     mock_sse.connect_sse = MagicMock()
-    
+
     # Mock connect_sse to return an async context manager yielding dummy streams
     mock_context_manager = AsyncMock()
     mock_context_manager.__aenter__.return_value = (AsyncMock(), AsyncMock())
     mock_sse.connect_sse.return_value = mock_context_manager
-    
+
     mock_server = MagicMock()
     mock_server.run = AsyncMock()
     mock_server.create_initialization_options = MagicMock()
 
     with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.server._SESSION_MANAGERS_INITIALIZED",
+            True,
+        ),
         patch(
             "litellm.proxy._experimental.mcp_server.server.sse",
             mock_sse,
@@ -493,7 +497,9 @@ async def test_sse_mcp_handler_mock():
         )
 
         await handle_sse_mcp_endpoint(mock_scope, mock_receive, mock_send)
-        mock_sse.connect_sse.assert_called_once_with(mock_scope, mock_receive, mock_send)
+        mock_sse.connect_sse.assert_called_once_with(
+            mock_scope, mock_receive, mock_send
+        )
         mock_server.run.assert_called_once()
 
 
@@ -525,7 +531,7 @@ async def test_sse_post_messages_auth_failure():
 
         with pytest.raises(HTTPException) as exc_info:
             await handle_sse_post_messages(mock_scope, mock_receive, mock_send)
-        
+
         assert exc_info.value.status_code == 401
         assert exc_info.value.detail == "Unauthorized"
 

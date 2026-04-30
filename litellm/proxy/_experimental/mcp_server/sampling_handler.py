@@ -472,20 +472,26 @@ async def handle_sampling_create_message(
 
         # 6. Inject auth context for cost tracking
         if user_api_key_auth:
-            completion_kwargs["user"] = getattr(user_api_key_auth, "user_id", None)
+            from fastapi import Request
 
-            # Pass user_api_key_dict directly so proxy hooks can attribute the cost
-            # litellm_pre_call_utils usually checks for this in kwargs or metadata
-            if "metadata" not in completion_kwargs:
-                completion_kwargs["metadata"] = {}
+            from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+            from litellm.proxy.proxy_server import proxy_config
 
-            api_key = getattr(user_api_key_auth, "api_key", None)
-            if api_key:
-                completion_kwargs["metadata"]["user_api_key"] = api_key
-
-            team_id = getattr(user_api_key_auth, "team_id", None)
-            if team_id:
-                completion_kwargs["metadata"]["user_api_key_team_id"] = team_id
+            # We need a dummy FastAPI request object because add_litellm_data_to_request expects it
+            _dummy_request = Request(
+                scope={
+                    "type": "http",
+                    "method": "POST",
+                    "path": "/mcp/sampling/createMessage",
+                    "headers": [(b"content-type", b"application/json")],
+                }
+            )
+            completion_kwargs = await add_litellm_data_to_request(
+                data=completion_kwargs,
+                request=_dummy_request,
+                user_api_key_dict=user_api_key_auth,
+                proxy_config=proxy_config,
+            )
 
         verbose_logger.debug(
             "MCP sampling: calling litellm.acompletion with model=%s, num_messages=%d, has_tools=%s",
