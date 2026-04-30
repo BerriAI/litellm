@@ -37,6 +37,7 @@ from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._experimental.mcp_server.db import (
     rotate_mcp_server_credentials_master_key,
+    rotate_mcp_user_credentials_master_key,
 )
 from litellm.proxy._types import *
 from litellm.proxy._types import LiteLLM_VerificationToken
@@ -65,6 +66,7 @@ from litellm.proxy.management_helpers.object_permission_utils import (
     attach_object_permission_to_dict,
     handle_update_object_permission_common,
     validate_key_mcp_servers_against_team,
+    validate_key_search_tools_against_team,
 )
 from litellm.proxy.management_helpers.team_member_permission_checks import (
     TeamMemberPermissionChecks,
@@ -765,6 +767,10 @@ async def _common_key_generation_helper(  # noqa: PLR0915
 
     # Validate MCP servers in object_permission are within team scope
     await validate_key_mcp_servers_against_team(
+        object_permission=data_json.get("object_permission"),
+        team_obj=team_table,
+    )
+    await validate_key_search_tools_against_team(
         object_permission=data_json.get("object_permission"),
         team_obj=team_table,
     )
@@ -2007,6 +2013,10 @@ async def _validate_mcp_servers_for_key_update(
             else dict(data.object_permission)  # type: ignore[arg-type]
         )
     await validate_key_mcp_servers_against_team(
+        object_permission=object_permission_dict,
+        team_obj=effective_team_obj,
+    )
+    await validate_key_search_tools_against_team(
         object_permission=object_permission_dict,
         team_obj=effective_team_obj,
     )
@@ -3709,6 +3719,17 @@ async def _rotate_master_key(  # noqa: PLR0915
             "Failed to rotate MCP server credentials: %s", str(e)
         )
 
+    # 4b. process MCP user-scoped credentials table (BYOK + OAuth2 tokens)
+    try:
+        await rotate_mcp_user_credentials_master_key(
+            prisma_client=prisma_client,
+            new_master_key=new_master_key,
+        )
+    except Exception as e:
+        verbose_proxy_logger.warning(
+            "Failed to rotate MCP user credentials: %s", str(e)
+        )
+
     # 5. process credentials table
     try:
         credentials = await prisma_client.db.litellm_credentialstable.find_many()
@@ -5245,6 +5266,9 @@ async def block_key(
         proxy_logging_obj,
         user_api_key_cache,
     )
+    from litellm.proxy.management_helpers.audit_logs import (
+        get_audit_log_changed_by,
+    )
 
     if prisma_client is None:
         raise Exception("{}".format(CommonProxyErrors.db_not_connected_error.value))
@@ -5288,9 +5312,11 @@ async def block_key(
                 request_data=LiteLLM_AuditLogs(
                     id=str(uuid.uuid4()),
                     updated_at=datetime.now(timezone.utc),
-                    changed_by=litellm_changed_by
-                    or user_api_key_dict.user_id
-                    or litellm_proxy_admin_name,
+                    changed_by=get_audit_log_changed_by(
+                        litellm_changed_by=litellm_changed_by,
+                        user_api_key_dict=user_api_key_dict,
+                        litellm_proxy_admin_name=litellm_proxy_admin_name,
+                    ),
                     changed_by_api_key=user_api_key_dict.api_key,
                     table_name=LitellmTableNames.KEY_TABLE_NAME,
                     object_id=hashed_token,
@@ -5354,6 +5380,9 @@ async def unblock_key(
         proxy_logging_obj,
         user_api_key_cache,
     )
+    from litellm.proxy.management_helpers.audit_logs import (
+        get_audit_log_changed_by,
+    )
 
     if prisma_client is None:
         raise Exception("{}".format(CommonProxyErrors.db_not_connected_error.value))
@@ -5397,9 +5426,11 @@ async def unblock_key(
                 request_data=LiteLLM_AuditLogs(
                     id=str(uuid.uuid4()),
                     updated_at=datetime.now(timezone.utc),
-                    changed_by=litellm_changed_by
-                    or user_api_key_dict.user_id
-                    or litellm_proxy_admin_name,
+                    changed_by=get_audit_log_changed_by(
+                        litellm_changed_by=litellm_changed_by,
+                        user_api_key_dict=user_api_key_dict,
+                        litellm_proxy_admin_name=litellm_proxy_admin_name,
+                    ),
                     changed_by_api_key=user_api_key_dict.api_key,
                     table_name=LitellmTableNames.KEY_TABLE_NAME,
                     object_id=hashed_token,
@@ -5580,7 +5611,6 @@ async def test_key_logging(
                     "content": "Hello, this is a test from litellm /key/health. No LLM API call was made for this",
                 }
             ],
-            "mock_response": "test response",
         }
         data = await add_litellm_data_to_request(
             data=data,
@@ -5589,6 +5619,7 @@ async def test_key_logging(
             general_settings=general_settings,
             request=request,
         )
+        data["mock_response"] = "test response"
         await litellm.acompletion(
             **data
         )  # make mock completion call to trigger key based callbacks
