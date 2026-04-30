@@ -3905,6 +3905,124 @@ def test_vertex_ai_web_search_options_in_map_openai_params():
     ), "web_search_options should be removed after transformation"
 
 
+def test_vertex_ai_web_search_options_after_function_tools_drops_search():
+    """
+    web_search_options is mapped outside _map_function, so the conflict resolver
+    must also run when tools are appended to optional_params.
+    """
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        VertexGeminiConfig,
+    )
+
+    v = VertexGeminiConfig()
+    optional_params = {}
+
+    function_tools = v._map_function(
+        value=[
+            {
+                "type": "function",
+                "function": {
+                    "name": "lookup_weather",
+                    "description": "Lookup weather",
+                },
+            }
+        ],
+        optional_params=optional_params,
+    )
+    optional_params = v._add_tools_to_optional_params(
+        optional_params=optional_params, tools=function_tools
+    )
+
+    search_tool = v._map_web_search_options({})
+    optional_params = v._add_tools_to_optional_params(
+        optional_params=optional_params, tools=[search_tool]
+    )
+
+    assert len(optional_params["tools"]) == 1
+    assert "function_declarations" in optional_params["tools"][0]
+    assert optional_params["tools"][0]["function_declarations"][0]["name"] == (
+        "lookup_weather"
+    )
+
+
+def test_vertex_ai_web_search_options_before_function_tools_drops_search():
+    """
+    The same conflict can occur when web_search_options is processed before
+    function tools, depending on request parameter order.
+    """
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        VertexGeminiConfig,
+    )
+
+    v = VertexGeminiConfig()
+    optional_params = {}
+
+    search_tool = v._map_web_search_options({})
+    optional_params = v._add_tools_to_optional_params(
+        optional_params=optional_params, tools=[search_tool]
+    )
+
+    function_tools = v._map_function(
+        value=[
+            {
+                "type": "function",
+                "function": {
+                    "name": "lookup_weather",
+                    "description": "Lookup weather",
+                },
+            }
+        ],
+        optional_params=optional_params,
+    )
+    optional_params = v._add_tools_to_optional_params(
+        optional_params=optional_params, tools=function_tools
+    )
+
+    assert len(optional_params["tools"]) == 1
+    assert "function_declarations" in optional_params["tools"][0]
+    assert optional_params["tools"][0]["function_declarations"][0]["name"] == (
+        "lookup_weather"
+    )
+
+
+def test_vertex_ai_web_search_options_with_function_tools_preserved_for_server_side_invocations():
+    """
+    Gemini 3+ server-side tool invocation mode intentionally allows combining
+    function declarations with search tools.
+    """
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        VertexGeminiConfig,
+    )
+
+    v = VertexGeminiConfig()
+    optional_params = {"include_server_side_tool_invocations": True}
+
+    function_tools = v._map_function(
+        value=[
+            {
+                "type": "function",
+                "function": {
+                    "name": "lookup_weather",
+                    "description": "Lookup weather",
+                },
+            }
+        ],
+        optional_params=optional_params,
+    )
+    optional_params = v._add_tools_to_optional_params(
+        optional_params=optional_params, tools=function_tools
+    )
+
+    search_tool = v._map_web_search_options({})
+    optional_params = v._add_tools_to_optional_params(
+        optional_params=optional_params, tools=[search_tool]
+    )
+
+    tool_keys = {key for tool in optional_params["tools"] for key in tool.keys()}
+    assert "function_declarations" in tool_keys
+    assert "googleSearch" in tool_keys
+
+
 def test_vertex_ai_service_tier_in_map_openai_params():
     """Test that service_tier is correctly mapped to optional_params."""
     from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
