@@ -5,10 +5,11 @@ import Sidebar from "./leftnav";
 
 vi.mock("../utils/roles", () => {
   return {
-    all_admin_roles: ["admin"],
+    all_admin_roles: ["admin", "admin_viewer"],
     internalUserRoles: ["internal"],
     rolesWithWriteAccess: ["admin", "internal"],
-    isAdminRole: (role: string) => role === "admin",
+    rolesAllowedToViewWriteScopedPages: ["admin", "internal", "admin_viewer"],
+    isAdminRole: (role: string) => role === "admin" || role === "admin_viewer",
     isUserTeamAdminForAnyTeam: () => false,
   };
 });
@@ -133,6 +134,46 @@ describe("Sidebar (leftnav)", () => {
       keySet.add(key);
     }
     expect(duplicates).toHaveLength(0);
+  });
+
+  describe("Admin Viewer parity", () => {
+    // Admin Viewer follows a "read parity with Proxy Admin, no writes, no
+    // cost-incurring actions" rule. Playground stays hidden (incurs LLM
+    // cost); Models + Endpoints and Agents must be visible read-only.
+    const adminViewerAuth = {
+      userId: "admin-viewer-user-id",
+      accessToken: "test-access-token",
+      userRole: "admin_viewer",
+      token: "test-token",
+      userEmail: "viewer@example.com",
+      premiumUser: false,
+      disabledPersonalKeyCreation: false,
+      showSSOBanner: false,
+    };
+
+    it("hides Playground from Admin Viewer (cost-incurring action)", () => {
+      mockUseAuthorized.mockReturnValueOnce(adminViewerAuth);
+      renderWithProviders(<Sidebar {...defaultProps} />);
+      expect(screen.queryByText("Playground")).not.toBeInTheDocument();
+    });
+
+    it("shows Models + Endpoints to Admin Viewer (read-only)", () => {
+      mockUseAuthorized.mockReturnValueOnce(adminViewerAuth);
+      renderWithProviders(<Sidebar {...defaultProps} />);
+      expect(screen.getByText("Models + Endpoints")).toBeInTheDocument();
+    });
+
+    it("shows Agents to Admin Viewer (read-only)", () => {
+      mockUseAuthorized.mockReturnValueOnce(adminViewerAuth);
+      renderWithProviders(<Sidebar {...defaultProps} />);
+      expect(screen.getByText("Agents")).toBeInTheDocument();
+    });
+
+    it("shows Logs to Admin Viewer", () => {
+      mockUseAuthorized.mockReturnValueOnce(adminViewerAuth);
+      renderWithProviders(<Sidebar {...defaultProps} />);
+      expect(screen.getByText("Logs")).toBeInTheDocument();
+    });
   });
 
   it("should show Organizations tab for organization admins", () => {
