@@ -511,12 +511,19 @@ async def test_e2e_jwt_team_mcp_key_intersection(monkeypatch):
                 ) as mock_access_groups:
                     mock_access_groups.return_value = []
 
-                    allowed_servers = await MCPRequestHandler.get_allowed_mcp_servers(
-                        user_api_key_auth
-                    )
+                    with patch.object(
+                        MCPRequestHandler, "_get_allowed_mcp_servers_for_org"
+                    ) as mock_org_servers:
+                        mock_org_servers.return_value = []
 
-                    # Should be intersection: only server-2 is in both
-                    expected = ["server-2"]
-                    assert sorted(allowed_servers) == sorted(
-                        expected
-                    ), f"Expected intersection {expected}, got {allowed_servers}"
+                        allowed_servers = (
+                            await MCPRequestHandler.get_allowed_mcp_servers(
+                                user_api_key_auth
+                            )
+                        )
+
+                        # Should be intersection: only server-2 is in both
+                        expected = ["server-2"]
+                        assert sorted(allowed_servers) == sorted(
+                            expected
+                        ), f"Expected intersection {expected}, got {allowed_servers}"
