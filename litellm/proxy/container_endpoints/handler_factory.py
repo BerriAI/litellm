@@ -228,6 +228,11 @@ async def _process_binary_request(
         elif ".pdf" in file_id_lower:
             content_type = "application/pdf"
 
+        if not isinstance(content, bytes):
+            raise TypeError(
+                f"aretrieve_container_file_content expected bytes, got {type(content).__name__}"
+            )
+
         return Response(
             content=content,
             headers=dict(fastapi_response.headers),
