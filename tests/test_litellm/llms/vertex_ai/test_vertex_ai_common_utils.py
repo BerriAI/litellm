@@ -225,7 +225,11 @@ def test_build_vertex_schema():
                     "metadata": {"type": "object"},
                     "callbacks": {
                         "anyOf": [
-                            {"type": "array", "nullable": True},
+                            {
+                                "type": "array",
+                                "items": {"type": "object"},
+                                "nullable": True,
+                            },
                             {"type": "object", "nullable": True},
                         ]
                     },
@@ -287,6 +291,23 @@ def test_process_items_basic():
     }
     process_items(schema)
     assert schema["properties"]["nested"]["items"] == {"type": "object"}
+
+    # Test array with no items field at all - Vertex requires items to be present
+    schema = {"type": "array"}
+    process_items(schema)
+    assert schema["items"] == {"type": "object"}
+
+    # Test array missing items inside anyOf branch
+    schema = {
+        "type": "object",
+        "properties": {
+            "callbacks": {
+                "anyOf": [{"type": "array"}, {"type": "object"}],
+            }
+        },
+    }
+    process_items(schema)
+    assert schema["properties"]["callbacks"]["anyOf"][0]["items"] == {"type": "object"}
 
 
 def test_vertex_ai_complex_response_schema():

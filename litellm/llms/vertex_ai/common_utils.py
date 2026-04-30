@@ -599,6 +599,8 @@ def process_items(schema, depth=0):
     if isinstance(schema, dict):
         if "items" in schema and schema["items"] == {}:
             schema["items"] = {"type": "object"}
+        elif schema.get("type") == "array" and "items" not in schema:
+            schema["items"] = {"type": "object"}
         for key, value in schema.items():
             if isinstance(value, dict):
                 process_items(value, depth + 1)
