@@ -2413,7 +2413,7 @@ class MCPServerManager:
             )
         )
 
-    async def _call_regular_mcp_tool(
+    async def _call_regular_mcp_tool(  # noqa: PLR0915
         self,
         mcp_server: MCPServer,
         original_tool_name: str,
