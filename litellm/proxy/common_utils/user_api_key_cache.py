@@ -39,20 +39,22 @@ class UserApiKeyCache(DualCache):
     @overload
     def get_cache(
         self,
-        key,
-        parent_otel_span=None,
+        key: Any,
+        parent_otel_span: Any = None,
         local_only: bool = False,
-    ) -> Any: ...
+        *,
+        model_type: Type[T],
+        **kwargs: Any,
+    ) -> Optional[T]: ...
 
     @overload
     def get_cache(
         self,
-        key,
-        parent_otel_span=None,
+        key: Any,
+        parent_otel_span: Any = None,
         local_only: bool = False,
-        *,
-        model_type: Type[T],
-    ) -> Optional[T]: ...
+        **kwargs: Any,
+    ) -> Any: ...
 
     def set_cache(self, key, value, local_only: bool = False, **kwargs):  # type: ignore[override]
         model_type = cast(Optional[Type[BaseModel]], kwargs.pop("model_type", None))
@@ -86,20 +88,22 @@ class UserApiKeyCache(DualCache):
     @overload
     async def async_get_cache(
         self,
-        key,
-        parent_otel_span=None,
+        key: Any,
+        parent_otel_span: Any = None,
         local_only: bool = False,
-    ) -> Any: ...
+        *,
+        model_type: Type[T],
+        **kwargs: Any,
+    ) -> Optional[T]: ...
 
     @overload
     async def async_get_cache(
         self,
-        key,
-        parent_otel_span=None,
+        key: Any,
+        parent_otel_span: Any = None,
         local_only: bool = False,
-        *,
-        model_type: Type[T],
-    ) -> Optional[T]: ...
+        **kwargs: Any,
+    ) -> Any: ...
 
     def get_cache(  # type: ignore[override]
         self,
