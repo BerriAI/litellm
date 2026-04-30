@@ -1991,6 +1991,130 @@ async def test_get_org_id_for_user_auth_falls_back_to_team_organization():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
+    "user_api_key_auth,prisma_client_value,expected_org_id",
+    [
+        (None, object(), None),
+        (
+            UserAPIKeyAuth(
+                api_key="test-key", user_id="test-user", org_id="direct-org"
+            ),
+            object(),
+            "direct-org",
+        ),
+        (
+            UserAPIKeyAuth(api_key="test-key", user_id="test-user"),
+            object(),
+            None,
+        ),
+        (
+            UserAPIKeyAuth(api_key="test-key", user_id="test-user", team_id="team-123"),
+            None,
+            None,
+        ),
+    ],
+)
+async def test_get_org_id_for_user_auth_guard_conditions(
+    user_api_key_auth, prisma_client_value, expected_org_id
+):
+    """Org id resolution should exit early when no lookup is possible."""
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", prisma_client_value),
+        patch(
+            "litellm.proxy.auth.auth_checks.get_team_object",
+            new_callable=AsyncMock,
+        ) as mock_get_team_object,
+    ):
+        result = await MCPRequestHandler._get_org_id_for_user_auth(user_api_key_auth)
+
+    assert result == expected_org_id
+    mock_get_team_object.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_get_org_id_for_user_auth_returns_none_when_team_is_missing():
+    """Team fallback should not grant org permissions when the team cannot be loaded."""
+
+    mock_prisma = object()
+    user_api_key_auth = UserAPIKeyAuth(
+        api_key="test-key",
+        user_id="test-user",
+        team_id="team-missing",
+    )
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
+        patch(
+            "litellm.proxy.auth.auth_checks.get_team_object",
+            new_callable=AsyncMock,
+            return_value=None,
+        ) as mock_get_team_object,
+    ):
+        result = await MCPRequestHandler._get_org_id_for_user_auth(user_api_key_auth)
+
+    assert result is None
+    mock_get_team_object.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "resolved_org_id,prisma_client_value",
+    [
+        (None, object()),
+        ("org-123", None),
+    ],
+)
+async def test_get_org_object_permission_guard_conditions(
+    resolved_org_id, prisma_client_value
+):
+    """Org permission lookup should return None when org or prisma state is missing."""
+
+    with (
+        patch.object(
+            MCPRequestHandler,
+            "_get_org_id_for_user_auth",
+            new_callable=AsyncMock,
+            return_value=resolved_org_id,
+        ) as mock_get_org_id,
+        patch("litellm.proxy.proxy_server.prisma_client", prisma_client_value),
+    ):
+        result = await MCPRequestHandler._get_org_object_permission(
+            UserAPIKeyAuth(api_key="test-key", user_id="test-user")
+        )
+
+    assert result is None
+    mock_get_org_id.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_get_org_object_permission_returns_none_when_org_is_missing():
+    """Missing organization rows should not create implicit MCP permissions."""
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_organizationtable.find_unique = AsyncMock(return_value=None)
+
+    with (
+        patch.object(
+            MCPRequestHandler,
+            "_get_org_id_for_user_auth",
+            new_callable=AsyncMock,
+            return_value="org-missing",
+        ),
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
+    ):
+        result = await MCPRequestHandler._get_org_object_permission(
+            UserAPIKeyAuth(api_key="test-key", user_id="test-user")
+        )
+
+    assert result is None
+    mock_prisma.db.litellm_organizationtable.find_unique.assert_awaited_once_with(
+        where={"organization_id": "org-missing"},
+        include={"object_permission": True},
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
     "user_api_key_auth, prisma_client_value, scenario",
     [
         (None, object(), "no_user"),
@@ -2055,6 +2179,23 @@ async def test_get_allowed_mcp_servers_for_key_returns_empty_when_db_returns_non
 
     assert result == []
     mock_get_perm.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_get_allowed_mcp_servers_for_org_returns_empty_on_lookup_failure():
+    """Org permission lookup failures should fail closed to no org MCP servers."""
+
+    with patch.object(
+        MCPRequestHandler,
+        "_get_org_object_permission",
+        new_callable=AsyncMock,
+        side_effect=Exception("lookup failed"),
+    ):
+        result = await MCPRequestHandler._get_allowed_mcp_servers_for_org(
+            UserAPIKeyAuth(api_key="test-key", user_id="test-user", org_id="org-123")
+        )
+
+    assert result == []
 
 
 @pytest.mark.asyncio
