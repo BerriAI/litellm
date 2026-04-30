@@ -316,8 +316,7 @@ class TestGPTImage2Cost:
     - Image Output: $30.00 / 1M tokens (3e-05)
     """
 
-    def test_gpt_image_2_cost(self):
-        """Test that gpt-image-2 cost is calculated correctly (non-zero)."""
+    def _build_image_response(self):
         usage = Usage(
             prompt_tokens=169,
             completion_tokens=4160,
@@ -337,6 +336,18 @@ class TestGPTImage2Cost:
             data=[ImageObject(b64_json="test")],
         )
         image_response.usage = usage
+        return image_response
+
+    def test_gpt_image_2_cost(self, monkeypatch):
+        """Test that gpt-image-2 cost is calculated correctly (non-zero).
+
+        Uses the local cost map because gpt-image-2 may not yet be in the
+        remote cost map fetched at runtime.
+        """
+        monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+        litellm.model_cost = litellm.get_model_cost_map(url="")
+
+        image_response = self._build_image_response()
         image_response._hidden_params = {"custom_llm_provider": "openai"}
 
         cost = litellm.completion_cost(
@@ -358,6 +369,26 @@ class TestGPTImage2Cost:
         assert abs(cost - expected_cost) < 1e-6, (
             f"Expected {expected_cost}, got {cost}."
         )
+
+    def test_azure_gpt_image_2_routes_to_token_calculator(self, monkeypatch):
+        """Azure-prefixed gpt-image-2 must route to the token-based calculator
+        (the `/gpt-image-` substring branch in route_image_generation_cost_calculator).
+        """
+        from litellm.litellm_core_utils.llm_cost_calc.utils import CostCalculatorUtils
+
+        monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+        litellm.model_cost = litellm.get_model_cost_map(url="")
+
+        image_response = self._build_image_response()
+
+        cost = CostCalculatorUtils.route_image_generation_cost_calculator(
+            model="azure/gpt-image-2",
+            completion_response=image_response,
+            custom_llm_provider="azure",
+        )
+
+        # Same token math as openai path; assert routing reached token calc.
+        assert cost > 0, "azure/gpt-image-2 should route to token-based calculator"
 
 
 if __name__ == "__main__":
