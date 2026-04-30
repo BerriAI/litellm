@@ -142,8 +142,33 @@ _UNTRUSTED_METADATA_CONTROL_FIELDS = (
     "_pipeline_managed_guardrails",
 )
 
+_UNTRUSTED_REQUEST_HEADER_CONTROL_FIELDS = frozenset(
+    {
+        "litellm-disable-message-redaction",
+    }
+)
 _CLIENT_MOCK_CONTROL_FIELDS = frozenset({"mock_response", "mock_tool_calls"})
 _ALLOW_CLIENT_MOCK_RESPONSE_METADATA_KEY = "allow_client_mock_response"
+
+
+def _strip_untrusted_request_header_controls(headers: Any) -> None:
+    if not isinstance(headers, dict):
+        return
+
+    for header_name in list(headers.keys()):
+        if (
+            isinstance(header_name, str)
+            and header_name.lower() in _UNTRUSTED_REQUEST_HEADER_CONTROL_FIELDS
+        ):
+            headers.pop(header_name, None)
+
+
+def _is_false_like(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value is False
+    if isinstance(value, str):
+        return value.strip().lower() in {"false", "0", "no", "off"}
+    return False
 
 
 def _key_or_team_allows_client_mock_response(
@@ -1061,6 +1086,13 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
         forward_llm_provider_auth_headers=forward_llm_auth,
         authenticated_with_header=authenticated_with_header,
     )
+    _strip_untrusted_request_header_controls(_headers)
+    if (
+        litellm.turn_off_message_logging is True
+        and "turn_off_message_logging" in data
+        and _is_false_like(data["turn_off_message_logging"])
+    ):
+        data.pop("turn_off_message_logging", None)
     verbose_proxy_logger.debug(f"Request Headers: {_headers}")
     verbose_proxy_logger.debug(f"Raw Headers: {_raw_headers}")
 
@@ -1198,6 +1230,7 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
     for _meta_key in ("metadata", "litellm_metadata"):
         _user_meta = data.get(_meta_key)
         if isinstance(_user_meta, dict):
+            _strip_untrusted_request_header_controls(_user_meta.get("headers"))
             for _k in [
                 k
                 for k in _user_meta

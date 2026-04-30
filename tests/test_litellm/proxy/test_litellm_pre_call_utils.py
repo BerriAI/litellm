@@ -629,6 +629,64 @@ async def test_add_litellm_data_to_request_allows_client_mock_response_with_admi
 
 
 @pytest.mark.asyncio
+async def test_add_litellm_data_to_request_strips_client_redaction_bypass_controls():
+    request_mock = MagicMock(spec=Request)
+    request_mock.url.path = "/v1/chat/completions"
+    request_mock.url = MagicMock()
+    request_mock.url.__str__.return_value = "http://localhost/v1/chat/completions"
+    request_mock.method = "POST"
+    request_mock.query_params = {}
+    request_mock.headers = {
+        "Content-Type": "application/json",
+        "litellm-disable-message-redaction": "true",
+    }
+    request_mock.client = MagicMock()
+    request_mock.client.host = "127.0.0.1"
+
+    original_turn_off_message_logging = litellm.turn_off_message_logging
+    litellm.turn_off_message_logging = True
+    try:
+        updated = await add_litellm_data_to_request(
+            data={
+                "model": "gpt-3.5-turbo",
+                "messages": [{"role": "user", "content": "hello"}],
+                "turn_off_message_logging": False,
+                "metadata": {"headers": {"litellm-disable-message-redaction": "true"}},
+                "litellm_metadata": json.dumps(
+                    {"headers": {"LiteLLM-Disable-Message-Redaction": "true"}}
+                ),
+            },
+            request=request_mock,
+            user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+            proxy_config=MagicMock(),
+            general_settings={},
+            version="test-version",
+        )
+    finally:
+        litellm.turn_off_message_logging = original_turn_off_message_logging
+
+    assert "turn_off_message_logging" not in updated
+    assert "litellm-disable-message-redaction" not in {
+        header.lower() for header in updated["metadata"]["headers"]
+    }
+    assert "litellm-disable-message-redaction" not in {
+        header.lower()
+        for header in updated["metadata"]["requester_metadata"].get("headers", {})
+    }
+    assert "litellm-disable-message-redaction" not in {
+        header.lower() for header in updated["proxy_server_request"]["headers"]
+    }
+    assert "litellm-disable-message-redaction" not in {
+        header.lower()
+        for header in updated["proxy_server_request"]["body"]["metadata"]["headers"]
+    }
+    assert "litellm-disable-message-redaction" not in {
+        header.lower()
+        for header in (updated.get("litellm_metadata") or {}).get("headers", {})
+    }
+
+
+@pytest.mark.asyncio
 async def test_add_litellm_data_to_request_ignores_x_litellm_tags_header_without_permission():
     """Regression: the `x-litellm-tags` header bypassed the body-metadata
     tag strip. Header tags must also be gated by `allow_client_tags`."""

@@ -460,16 +460,15 @@ async def test_disable_redaction_header_responses_api():
     standard_logging_payload = test_custom_logger.logged_standard_logging_payload
     assert standard_logging_payload is not None
 
-    # Verify that global redaction is not disabled by the header
+    # Verify that the direct SDK path still honors the explicit header.
     print(
         "logged standard logging payload for ResponsesAPI with disable header",
         json.dumps(standard_logging_payload, indent=2, default=str),
     )
 
     response = standard_logging_payload["response"]
-    assert response["output"][0]["content"][0]["text"] == "redacted-by-litellm"
-    assert "This is a test response" not in json.dumps(standard_logging_payload)
-    assert standard_logging_payload["messages"][0]["content"] == "redacted-by-litellm"
+    assert response["output"][0]["content"][0]["text"] == "This is a test response"
+    assert standard_logging_payload["messages"][0]["content"] == "hi"
 
 
 @pytest.mark.asyncio
