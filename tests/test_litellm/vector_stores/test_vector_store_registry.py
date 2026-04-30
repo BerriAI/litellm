@@ -187,3 +187,27 @@ def test_search_uses_registry_credentials():
             assert getattr(called_params, "aws_region_name") == "us-east-1"
     finally:
         litellm.vector_store_registry = original_registry
+
+def test_pg_vector_store_in_registry():
+    """Test that pg_vector stores can be added to the registry and credentials retrieved"""
+    vector_store = LiteLLM_ManagedVectorStore(
+        vector_store_id="pg_vs_1",
+        custom_llm_provider="pg_vector",
+        vector_store_name="pg_store",
+        litellm_credential_name="pg_creds",
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+
+    registry = VectorStoreRegistry([vector_store])
+
+    # Mock CredentialAccessor.get_credential_values
+    with patch(
+        "litellm.litellm_core_utils.credential_accessor.CredentialAccessor.get_credential_values"
+    ) as mock_get_creds:
+        mock_get_creds.return_value = {"api_key": "pg_key", "api_base": "http://pg-base"}
+
+        result = registry.get_credentials_for_vector_store("pg_vs_1")
+
+        assert result == {"api_key": "pg_key", "api_base": "http://pg-base"}
+        mock_get_creds.assert_called_once_with("pg_creds")

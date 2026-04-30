@@ -159,3 +159,45 @@ def test_vector_store_create_with_ragflow_provider():
     ), f"Should return RAGFlowVectorStoreConfig for RAGFlow provider, got {type(vector_store_provider_config).__name__}"
 
     print("✅ Test passed: RAGFlow provider handled correctly")
+
+def test_vector_store_create_with_pg_vector_provider():
+    """
+    Test that vector store create correctly handles PG Vector provider.
+
+    This should:
+    - Return correct PGVectorStoreConfig
+    """
+    custom_llm_provider = "pg_vector"
+
+    # Simulate the logic from vector_stores/main.py create function
+    if "/" in custom_llm_provider:
+        pytest.fail("Should not enter this branch for PG Vector provider")
+    else:
+        api_type = None
+        custom_llm_provider = custom_llm_provider  # Keep as-is
+
+    # Verify api_type is None
+    assert api_type is None, "api_type should be None for PG Vector provider"
+
+    # Verify custom_llm_provider is unchanged
+    assert (
+        custom_llm_provider == "pg_vector"
+    ), "custom_llm_provider should remain 'pg_vector'"
+
+    # Verify ProviderConfigManager returns correct config
+    vector_store_provider_config = (
+        ProviderConfigManager.get_provider_vector_stores_config(
+            provider=litellm.LlmProviders(custom_llm_provider),
+            api_type=api_type,
+        )
+    )
+
+    assert (
+        vector_store_provider_config is not None
+    ), "Should return a config for PG Vector"
+    # Use type name check instead of isinstance to avoid module identity issues
+    assert (
+        type(vector_store_provider_config).__name__ == "PGVectorStoreConfig"
+    ), f"Should return PGVectorStoreConfig for pg_vector provider, got {type(vector_store_provider_config).__name__}"
+
+    print("✅ Test passed: PG Vector provider handled correctly")
