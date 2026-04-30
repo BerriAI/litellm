@@ -12170,6 +12170,78 @@ def _get_onboarding_claims_from_request(request: Request) -> dict:
         )
 
 
+async def _rollback_onboarding_invite_claim(
+    invitation_link: str,
+    user_id: str,
+) -> None:
+    global prisma_client
+
+    if prisma_client is None:
+        return
+
+    try:
+        await prisma_client.db.litellm_invitationlink.update_many(
+            where={"id": invitation_link, "is_accepted": True},
+            data={
+                "accepted_at": None,
+                "is_accepted": False,
+                "updated_at": litellm.utils.get_utc_datetime(),
+                "updated_by": user_id,
+            },
+        )
+    except Exception:
+        verbose_proxy_logger.exception(
+            "Failed to roll back onboarding invitation after session key mint failed."
+        )
+
+
+async def _generate_onboarding_ui_session_token(user_obj: Any) -> str:
+    global master_key, general_settings
+
+    response = await generate_key_helper_fn(
+        request_type="key",
+        **{
+            "user_role": user_obj.user_role,
+            "duration": LITELLM_UI_SESSION_DURATION,
+            "key_max_budget": litellm.max_ui_session_budget,
+            "models": [],
+            "aliases": {},
+            "config": {},
+            "spend": 0,
+            "user_id": user_obj.user_id,
+            "team_id": UI_TEAM_ID,
+        },  # type: ignore
+    )
+    key = response["token"]  # type: ignore
+
+    from litellm.types.proxy.ui_sso import ReturnedUITokenObject
+
+    import jwt
+
+    disabled_non_admin_personal_key_creation = (
+        get_disabled_non_admin_personal_key_creation()
+    )
+    returned_ui_token_object = ReturnedUITokenObject(
+        user_id=user_obj.user_id,
+        key=key,
+        user_email=user_obj.user_email,
+        user_role=user_obj.user_role,
+        login_method="username_password",
+        premium_user=premium_user,
+        auth_header_name=general_settings.get(
+            "litellm_key_header_name", "Authorization"
+        ),
+        disabled_non_admin_personal_key_creation=disabled_non_admin_personal_key_creation,
+        server_root_path=get_server_root_path(),
+    )
+    assert master_key is not None
+    return jwt.encode(  # type: ignore
+        cast(dict, returned_ui_token_object),
+        master_key,
+        algorithm="HS256",
+    )
+
+
 @app.post("/onboarding/claim_token", include_in_schema=False)
 async def claim_onboarding_link(data: InvitationClaim, request: Request):
     """
@@ -12270,7 +12342,6 @@ async def claim_onboarding_link(data: InvitationClaim, request: Request):
             data={
                 "accepted_at": current_time,
                 "updated_at": current_time,
-                "is_accepted": True,
                 "updated_by": invite_obj.user_id,  # type: ignore
             },
         )
@@ -12278,48 +12349,21 @@ async def claim_onboarding_link(data: InvitationClaim, request: Request):
     if user_obj and hasattr(user_obj, "__dict__"):
         user_obj.__dict__.pop("password", None)
 
-    response = await generate_key_helper_fn(
-        request_type="key",
-        **{
-            "user_role": user_obj.user_role,
-            "duration": LITELLM_UI_SESSION_DURATION,
-            "key_max_budget": litellm.max_ui_session_budget,
-            "models": [],
-            "aliases": {},
-            "config": {},
-            "spend": 0,
-            "user_id": user_obj.user_id,
-            "team_id": UI_TEAM_ID,
-        },  # type: ignore
-    )
-    key = response["token"]  # type: ignore
-
-    from litellm.types.proxy.ui_sso import ReturnedUITokenObject
-
-    import jwt
-
-    disabled_non_admin_personal_key_creation = (
-        get_disabled_non_admin_personal_key_creation()
-    )
-    returned_ui_token_object = ReturnedUITokenObject(
-        user_id=user_obj.user_id,
-        key=key,
-        user_email=user_obj.user_email,
-        user_role=user_obj.user_role,
-        login_method="username_password",
-        premium_user=premium_user,
-        auth_header_name=general_settings.get(
-            "litellm_key_header_name", "Authorization"
-        ),
-        disabled_non_admin_personal_key_creation=disabled_non_admin_personal_key_creation,
-        server_root_path=get_server_root_path(),
-    )
-    assert master_key is not None
-    jwt_token = jwt.encode(  # type: ignore
-        cast(dict, returned_ui_token_object),
-        master_key,
-        algorithm="HS256",
-    )
+    try:
+        jwt_token = await _generate_onboarding_ui_session_token(user_obj=user_obj)
+    except Exception as e:
+        await _rollback_onboarding_invite_claim(
+            invitation_link=data.invitation_link,
+            user_id=data.user_id,
+        )
+        if isinstance(e, HTTPException):
+            raise e
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "Failed to create onboarding session. Please retry the invitation link."
+            },
+        ) from e
 
     litellm_dashboard_ui = get_custom_url(str(request.base_url))
     if litellm_dashboard_ui.endswith("/"):

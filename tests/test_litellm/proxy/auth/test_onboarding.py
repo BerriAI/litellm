@@ -459,7 +459,50 @@ async def test_claim_token_sets_accepted_at_after_password_written():
     # is_accepted was flipped to True on the invitation link
     prisma.db.litellm_invitationlink.update.assert_called_once()
     link_update_data = prisma.db.litellm_invitationlink.update.call_args.kwargs["data"]
-    assert link_update_data["is_accepted"] is True
+    assert "is_accepted" not in link_update_data
     assert link_update_data["accepted_at"] is not None
     outer_claims = jwt.decode(result["token"], "sk-test", algorithms=["HS256"])
     assert outer_claims["key"] == "sk-generated-key"
+
+
+@pytest.mark.asyncio
+async def test_claim_token_rolls_back_invite_when_session_key_mint_fails():
+    """A session key failure must not leave the invite permanently consumed."""
+    from litellm.proxy.proxy_server import claim_onboarding_link
+
+    invite = _make_invite(is_accepted=False)
+    user = _make_user()
+    prisma = _make_prisma(invite, user)
+    request = _make_claim_request(_make_onboarding_token())
+
+    data = InvitationClaim(
+        invitation_link="invite-abc",
+        user_id="user-123",
+        password="NewP@ssw0rd",
+    )
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", prisma),
+        patch("litellm.proxy.proxy_server.master_key", "sk-test"),
+        patch("litellm.proxy.proxy_server.general_settings", {}),
+        patch(
+            "litellm.proxy.proxy_server.generate_key_helper_fn",
+            new_callable=AsyncMock,
+            side_effect=Exception("key mint failed"),
+        ),
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await claim_onboarding_link(data=data, request=request)
+
+    assert exc_info.value.status_code == 500
+    assert "Failed to create onboarding session" in exc_info.value.detail["error"]
+    assert prisma.db.litellm_invitationlink.update_many.call_count == 2
+    rollback_kwargs = prisma.db.litellm_invitationlink.update_many.call_args_list[
+        1
+    ].kwargs
+    assert rollback_kwargs["where"] == {
+        "id": "invite-abc",
+        "is_accepted": True,
+    }
+    assert rollback_kwargs["data"]["accepted_at"] is None
+    assert rollback_kwargs["data"]["is_accepted"] is False
