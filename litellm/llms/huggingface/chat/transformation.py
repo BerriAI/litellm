@@ -16,7 +16,11 @@ else:
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
-from ..common_utils import HuggingFaceError, _fetch_inference_provider_mapping
+from ..common_utils import (
+    HuggingFaceError,
+    _fetch_inference_provider_mapping,
+    validate_huggingface_model_identifier,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -76,9 +80,8 @@ class HuggingFaceChatConfig(OpenAIGPTConfig):
 
         Do not add the chat/embedding/rerank extension here. Let the handler do this.
         """
-        if model.startswith(("http://", "https://")):
-            base_url = model
-        elif base_url is None:
+        validate_huggingface_model_identifier(model)
+        if base_url is None:
             base_url = os.getenv("HF_API_BASE") or os.getenv("HUGGINGFACE_API_BASE", "")
         return base_url
 
@@ -95,6 +98,7 @@ class HuggingFaceChatConfig(OpenAIGPTConfig):
         Get the complete URL for the API call.
         For provider-specific routing through huggingface
         """
+        validate_huggingface_model_identifier(model)
         # Check if api_base is provided
         if api_base is not None:
             complete_url = api_base
@@ -103,9 +107,6 @@ class HuggingFaceChatConfig(OpenAIGPTConfig):
             complete_url = str(os.getenv("HF_API_BASE")) or str(
                 os.getenv("HUGGINGFACE_API_BASE")
             )
-        elif model.startswith(("http://", "https://")):
-            complete_url = model
-            complete_url = _build_chat_completion_url(complete_url)
         # Default construction with provider
         else:
             # Parse provider and model

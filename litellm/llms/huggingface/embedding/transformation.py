@@ -21,7 +21,13 @@ from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import Choices, Message, ModelResponse, Usage
 from litellm.utils import token_counter
 
-from ..common_utils import HuggingFaceError, hf_task_list, hf_tasks, output_parser
+from ..common_utils import (
+    HuggingFaceError,
+    hf_task_list,
+    hf_tasks,
+    output_parser,
+    validate_huggingface_model_identifier,
+)
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -336,9 +342,8 @@ class HuggingFaceEmbeddingConfig(BaseConfig):
 
         Do not add the chat/embedding/rerank extension here. Let the handler do this.
         """
-        if "https" in model:
-            completion_url = model
-        elif api_base is not None:
+        validate_huggingface_model_identifier(model)
+        if api_base is not None:
             completion_url = api_base
         elif "HF_API_BASE" in os.environ:
             completion_url = os.getenv("HF_API_BASE", "")

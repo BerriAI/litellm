@@ -2,7 +2,6 @@
 Test Google AI Studio (Gemini) files transformation functionality
 """
 
-import os
 from unittest.mock import Mock, patch
 
 import httpx
@@ -92,6 +91,27 @@ class TestGoogleAIStudioFilesTransformation:
         )
         assert "key=" not in url
         assert params == {}
+
+    def test_transform_retrieve_file_request_rejects_untrusted_full_url(self):
+        file_id = "https://attacker.example/v1beta/files/test123"
+        litellm_params = {"api_key": "test-api-key"}
+
+        with pytest.raises(ValueError, match="Invalid Gemini file URL"):
+            self.handler.transform_retrieve_file_request(
+                file_id=file_id,
+                optional_params={},
+                litellm_params=litellm_params,
+            )
+
+    def test_transform_retrieve_file_request_rejects_traversal_name(self):
+        litellm_params = {"api_key": "test-api-key"}
+
+        with pytest.raises(ValueError, match="Invalid Gemini file name"):
+            self.handler.transform_retrieve_file_request(
+                file_id="files/../secrets",
+                optional_params={},
+                litellm_params=litellm_params,
+            )
 
     @patch.dict("os.environ", {}, clear=True)
     @patch("litellm.llms.gemini.common_utils.get_secret_str", return_value=None)
@@ -322,3 +342,16 @@ class TestGoogleAIStudioFilesTransformation:
         assert file_id in url
         assert "generativelanguage.googleapis.com" in url
         assert params == {}
+
+    def test_transform_delete_file_request_rejects_untrusted_full_url(self):
+        litellm_params = {
+            "api_key": "test-api-key",
+            "api_base": "https://generativelanguage.googleapis.com",
+        }
+
+        with pytest.raises(ValueError, match="Invalid Gemini file URL"):
+            self.handler.transform_delete_file_request(
+                file_id="https://attacker.example/v1beta/files/test123",
+                optional_params={},
+                litellm_params=litellm_params,
+            )
