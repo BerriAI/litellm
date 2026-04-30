@@ -40,7 +40,7 @@ router = APIRouter()
 async def public_ai_hub_auth_dependency(request: Request) -> UserAPIKeyAuth:
     from litellm.proxy.proxy_server import general_settings
 
-    if (general_settings or {}).get("require_auth_for_public_ai_hub") is True:
+    if (general_settings or {}).get("require_auth_for_public_ai_hub", True) is True:
         return await user_api_key_auth(
             request=request,
             api_key=request.headers.get(SpecialHeaders.openai_authorization.value)

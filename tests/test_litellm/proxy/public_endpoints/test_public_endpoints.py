@@ -12,7 +12,7 @@ from fastapi.testclient import TestClient
 from starlette.datastructures import URL
 from starlette.requests import Request
 
-from litellm.proxy._types import ProxyException
+from litellm.proxy._types import LitellmUserRoles, ProxyException
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.public_endpoints import router
 from litellm.proxy.public_endpoints.public_endpoints import (
@@ -97,12 +97,27 @@ def test_get_litellm_model_cost_map_returns_cost_map():
     )
 
 
-def test_public_ai_hub_info_stays_public_by_default(monkeypatch):
+def test_public_ai_hub_info_requires_auth_by_default(monkeypatch):
     app = FastAPI()
     app.include_router(router)
     client = TestClient(app)
 
     monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", "sk-master")
+
+    with pytest.raises(ProxyException):
+        client.get("/public/model_hub/info")
+
+
+def test_public_ai_hub_info_can_be_explicitly_public(monkeypatch):
+    app = FastAPI()
+    app.include_router(router)
+    client = TestClient(app)
+
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.general_settings",
+        {"require_auth_for_public_ai_hub": False},
+    )
     monkeypatch.setattr("litellm.proxy.proxy_server.master_key", "sk-master")
 
     response = client.get("/public/model_hub/info")
@@ -111,10 +126,10 @@ def test_public_ai_hub_info_stays_public_by_default(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_public_ai_hub_info_requires_auth_when_configured(monkeypatch):
+async def test_public_ai_hub_info_requires_auth_by_default_dependency(monkeypatch):
     monkeypatch.setattr(
         "litellm.proxy.proxy_server.general_settings",
-        {"require_auth_for_public_ai_hub": True},
+        {},
     )
     monkeypatch.setattr("litellm.proxy.proxy_server.master_key", "sk-master")
     request = Request(
@@ -129,6 +144,27 @@ async def test_public_ai_hub_info_requires_auth_when_configured(monkeypatch):
 
     with pytest.raises(ProxyException):
         await public_ai_hub_auth_dependency(request)
+
+
+@pytest.mark.asyncio
+async def test_public_ai_hub_info_skips_auth_when_explicitly_disabled(monkeypatch):
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.general_settings",
+        {"require_auth_for_public_ai_hub": False},
+    )
+    request = Request(
+        scope={
+            "type": "http",
+            "method": "GET",
+            "path": "/public/model_hub/info",
+            "headers": [],
+        }
+    )
+    request._url = URL(url="/public/model_hub/info")
+
+    auth = await public_ai_hub_auth_dependency(request)
+
+    assert auth.user_role == LitellmUserRoles.INTERNAL_USER_VIEW_ONLY
 
 
 def test_watsonx_provider_fields():
