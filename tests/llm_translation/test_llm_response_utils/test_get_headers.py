@@ -77,3 +77,42 @@ def test_get_llm_provider_headers():
     }
     result = _get_llm_provider_headers(input_headers)
     assert result == expected_output, "Unexpected output for _get_llm_provider_headers"
+
+def test_get_response_headers_with_retry_after():
+    """
+    When upstream provider returns retry-after header (e.g. on 429),
+    it should be forwarded as both 'retry-after' and 'llm_provider-retry-after'.
+
+    Ref: https://github.com/BerriAI/litellm/issues/21553
+    """
+    input_headers = {
+        "retry-after": "57",
+        "x-ratelimit-limit-tokens": "100000",
+        "content-type": "application/json",
+    }
+    result = get_response_headers(input_headers)
+
+    # retry-after should be preserved as a bare header
+    assert result.get("retry-after") == "57"
+    # retry-after should also be present as llm_provider-retry-after
+    assert result.get("llm_provider-retry-after") == "57"
+    # OpenAI headers should still work
+    assert result.get("x-ratelimit-limit-tokens") == "100000"
+    # Other headers should only be prefixed
+    assert result.get("llm_provider-content-type") == "application/json"
+    assert "content-type" not in result
+
+
+def test_get_response_headers_without_retry_after():
+    """
+    When upstream provider does NOT return retry-after header,
+    the output should not contain a retry-after key.
+    """
+    input_headers = {
+        "x-ratelimit-limit-tokens": "100000",
+        "content-type": "application/json",
+    }
+    result = get_response_headers(input_headers)
+
+    assert "retry-after" not in result
+    assert result.get("x-ratelimit-limit-tokens") == "100000"
