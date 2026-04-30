@@ -476,7 +476,7 @@ async def handle_sampling_create_message(
 
             from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
             from litellm.proxy.proxy_server import proxy_config
-            
+
             completion_kwargs["user"] = getattr(user_api_key_auth, "user_id", None)
 
             # We need a dummy FastAPI request object because add_litellm_data_to_request expects it
