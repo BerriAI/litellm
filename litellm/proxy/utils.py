@@ -5107,6 +5107,11 @@ async def update_daily_tag_spend(
                 proxy_logging_obj=proxy_logging_obj,
             )
     except Exception as e:
+        # NOTE: keep this as a plain ``error`` (no traceback) to match the
+        # historical behavior of this site. ``spend_log_error`` would attach
+        # the active exception's traceback whenever the suppression env var
+        # is unset, which would be a regression for operators who never saw
+        # one here before.
         verbose_proxy_logger.error(f"Error updating daily tag spend: {e}")
 
 
