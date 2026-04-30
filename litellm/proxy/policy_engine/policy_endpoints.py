@@ -4,7 +4,7 @@ CRUD ENDPOINTS FOR POLICIES
 Provides REST API endpoints for managing policies and policy attachments.
 """
 
-from typing import Optional
+from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 
@@ -16,6 +16,7 @@ from litellm.proxy.policy_engine.pipeline_executor import PipelineExecutor
 from litellm.proxy.policy_engine.policy_registry import get_policy_registry
 from litellm.types.proxy.policy_engine import (
     GuardrailPipeline,
+    PipelineExecutionResult,
     PipelineTestRequest,
     PolicyAttachmentCreateRequest,
     PolicyAttachmentDBResponse,
@@ -31,6 +32,43 @@ from litellm.types.proxy.policy_engine import (
 )
 
 router = APIRouter()
+
+_PIPELINE_RESPONSE_INTERNAL_KEYS = {
+    "litellm_parent_otel_span",
+    "parent_otel_span",
+    "user_api_key_auth",
+}
+
+
+def _sanitize_pipeline_response_value(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {
+            str(key): _sanitize_pipeline_response_value(item)
+            for key, item in value.items()
+            if str(key) not in _PIPELINE_RESPONSE_INTERNAL_KEYS
+        }
+
+    if isinstance(value, (list, tuple, set)):
+        return [_sanitize_pipeline_response_value(item) for item in value]
+
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+
+    if hasattr(value, "model_dump"):
+        try:
+            return _sanitize_pipeline_response_value(
+                value.model_dump(mode="json", fallback=str)
+            )
+        except Exception:
+            pass
+
+    return str(value)
+
+
+def _dump_pipeline_result_for_response(
+    result: PipelineExecutionResult,
+) -> Dict[str, Any]:
+    return _sanitize_pipeline_response_value(result.model_dump())
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -601,7 +639,7 @@ async def test_pipeline(
             call_type="completion",
             policy_name="test-pipeline",
         )
-        return result.model_dump()
+        return _dump_pipeline_result_for_response(result)
     except Exception as e:
         verbose_proxy_logger.exception(f"Error testing pipeline: {e}")
         raise HTTPException(status_code=500, detail=str(e))
