@@ -1274,6 +1274,35 @@ def test_get_dynamic_logging_metadata_with_arize_team_logging():
     assert result.callback_vars["arize_space_id"] == "test_arize_space_id"
 
 
+def test_get_dynamic_logging_metadata_rejects_env_reference_from_key_metadata(
+    monkeypatch,
+):
+    monkeypatch.setenv("LANGFUSE_SECRET_KEY_TEMP", "server-side-secret")
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test-key",
+        metadata={
+            "logging": [
+                {
+                    "callback_name": "langfuse",
+                    "callback_type": "success",
+                    "callback_vars": {
+                        "langfuse_secret_key": "os.environ/LANGFUSE_SECRET_KEY_TEMP",
+                    },
+                }
+            ]
+        },
+        team_metadata={},
+    )
+
+    with pytest.raises(ValueError) as exc_info:
+        _get_dynamic_logging_metadata(
+            user_api_key_dict=user_api_key_dict, proxy_config=MagicMock()
+        )
+
+    assert "os.environ/" in str(exc_info.value)
+    assert "server-side-secret" not in str(exc_info.value)
+
+
 def test_get_num_retries_from_request():
     """
     Test LiteLLMProxyRequestSetup._get_num_retries_from_request method
@@ -3326,7 +3355,9 @@ async def test_team_guardrail_merges_with_global_policy():
     policy_registry = get_policy_registry()
     policy_registry._policies = {
         "global-policy": Policy(
-            guardrails=PolicyGuardrails(add=["policy-guardrail-1", "policy-guardrail-2"]),
+            guardrails=PolicyGuardrails(
+                add=["policy-guardrail-1", "policy-guardrail-2"]
+            ),
         ),
     }
     policy_registry._initialized = True
@@ -3347,14 +3378,18 @@ async def test_team_guardrail_merges_with_global_policy():
 
         guardrails = data["metadata"].get("guardrails", [])
 
-        assert "team-direct-guardrail" in guardrails, \
-            f"Team guardrail missing from merged list: {guardrails}"
-        assert "policy-guardrail-1" in guardrails, \
-            f"policy-guardrail-1 missing: {guardrails}"
-        assert "policy-guardrail-2" in guardrails, \
-            f"policy-guardrail-2 missing: {guardrails}"
-        assert len(guardrails) == len(set(guardrails)), \
-            f"Duplicates in guardrails list: {guardrails}"
+        assert (
+            "team-direct-guardrail" in guardrails
+        ), f"Team guardrail missing from merged list: {guardrails}"
+        assert (
+            "policy-guardrail-1" in guardrails
+        ), f"policy-guardrail-1 missing: {guardrails}"
+        assert (
+            "policy-guardrail-2" in guardrails
+        ), f"policy-guardrail-2 missing: {guardrails}"
+        assert len(guardrails) == len(
+            set(guardrails)
+        ), f"Duplicates in guardrails list: {guardrails}"
 
         # Verify get_guardrail_from_metadata returns the merged list even
         # when litellm_metadata is present (the bug: it returned [] before fix)
@@ -3365,9 +3400,9 @@ async def test_team_guardrail_merges_with_global_policy():
 
         dummy = _DummyGuardrail(guardrail_name="team-direct-guardrail")
         returned = dummy.get_guardrail_from_metadata(data)
-        assert "team-direct-guardrail" in returned, (
-            f"get_guardrail_from_metadata shadowed by litellm_metadata; got: {returned}"
-        )
+        assert (
+            "team-direct-guardrail" in returned
+        ), f"get_guardrail_from_metadata shadowed by litellm_metadata; got: {returned}"
 
     finally:
         policy_registry._policies = {}
@@ -3396,9 +3431,10 @@ async def test_get_guardrail_from_metadata_prefers_metadata_over_litellm_metadat
     }
 
     result = dummy.get_guardrail_from_metadata(data)
-    assert result == ["my-guardrail", "other-guardrail"], (
-        f"Expected guardrails from metadata, got: {result}"
-    )
+    assert result == [
+        "my-guardrail",
+        "other-guardrail",
+    ], f"Expected guardrails from metadata, got: {result}"
 
 
 def test_get_guardrail_from_metadata_reads_litellm_metadata_when_no_metadata():
@@ -3419,6 +3455,6 @@ def test_get_guardrail_from_metadata_reads_litellm_metadata_when_no_metadata():
     }
 
     result = dummy.get_guardrail_from_metadata(data)
-    assert result == ["my-guardrail"], (
-        f"Expected guardrails from litellm_metadata fallback, got: {result}"
-    )
+    assert result == [
+        "my-guardrail"
+    ], f"Expected guardrails from litellm_metadata fallback, got: {result}"
