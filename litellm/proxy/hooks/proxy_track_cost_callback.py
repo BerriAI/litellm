@@ -37,9 +37,14 @@ class _ProxyDBLogger(CustomLogger):
         user_api_key_dict: UserAPIKeyAuth,
         traceback_str: Optional[str] = None,
     ):
-        await _release_budget_reservation(
-            budget_reservation=user_api_key_dict.budget_reservation
-        )
+        try:
+            await _release_budget_reservation(
+                budget_reservation=user_api_key_dict.budget_reservation
+            )
+        except Exception:
+            verbose_proxy_logger.exception(
+                "Failed to release budget reservation during failure handling"
+            )
 
         request_route = user_api_key_dict.request_route
         if _ProxyDBLogger._should_track_errors_in_db() is False:

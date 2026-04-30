@@ -160,6 +160,48 @@ async def test_async_post_call_failure_hook_releases_budget_reservation_before_r
 
 
 @pytest.mark.asyncio
+async def test_should_continue_failure_tracking_when_budget_release_fails():
+    logger = _ProxyDBLogger()
+    budget_reservation = {"reserved_cost": 0.5, "entries": []}
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test_api_key",
+        user_id="test_user_id",
+        team_id="test_team_id",
+        request_route="/chat/completions",
+        budget_reservation=budget_reservation,
+    )
+
+    with (
+        patch(
+            "litellm.proxy.spend_tracking.budget_reservation.release_budget_reservation",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("redis unavailable"),
+        ) as mock_release_budget_reservation,
+        patch(
+            "litellm.proxy.db.db_spend_update_writer.DBSpendUpdateWriter.update_database",
+            new_callable=AsyncMock,
+        ) as mock_update_database,
+        patch(
+            "litellm.proxy.hooks.proxy_track_cost_callback.verbose_proxy_logger.exception",
+        ) as mock_log_exception,
+    ):
+        await logger.async_post_call_failure_hook(
+            request_data={
+                "model": "gpt-4",
+                "messages": [{"role": "user", "content": "Hello"}],
+            },
+            original_exception=Exception("provider failed"),
+            user_api_key_dict=user_api_key_dict,
+        )
+
+        mock_release_budget_reservation.assert_awaited_once_with(
+            budget_reservation=budget_reservation,
+        )
+        mock_log_exception.assert_called_once()
+        mock_update_database.assert_called_once()
+
+
+@pytest.mark.asyncio
 async def test_track_cost_callback_releases_budget_reservation_when_spend_tracking_skips():
     logger = _ProxyDBLogger()
     budget_reservation = {"reserved_cost": 0.5, "entries": []}
