@@ -2264,6 +2264,8 @@ class MCPServerManager:
         server: MCPServer,
         tool_name: str,
         arguments: Dict[str, Any],
+        mcp_auth_header: Optional[str] = None,
+        request_extra_headers: Optional[Dict[str, str]] = None,
     ) -> CallToolResult:
         """
         Call an OpenAPI tool handler directly.
@@ -2281,6 +2283,10 @@ class MCPServerManager:
         """
         from mcp.types import TextContent
 
+        from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
+            _request_auth_header,
+            _request_extra_headers,
+        )
         from litellm.proxy._experimental.mcp_server.tool_registry import (
             global_mcp_tool_registry,
         )
@@ -2297,9 +2303,24 @@ class MCPServerManager:
             )
 
         try:
+            auth_header_value: Optional[str] = None
+            if mcp_auth_header:
+                if server.auth_type == MCPAuth.api_key:
+                    auth_header_value = f"ApiKey {mcp_auth_header}"
+                elif server.auth_type == MCPAuth.basic:
+                    auth_header_value = f"Basic {mcp_auth_header}"
+                else:
+                    auth_header_value = f"Bearer {mcp_auth_header}"
+
+            auth_token = _request_auth_header.set(auth_header_value)
+            extra_headers_token = _request_extra_headers.set(request_extra_headers)
             # Call the tool handler with the arguments
             # The handler is an async function that makes the HTTP request
-            handler_result = await tool.handler(**arguments)
+            try:
+                handler_result = await tool.handler(**arguments)
+            finally:
+                _request_extra_headers.reset(extra_headers_token)
+                _request_auth_header.reset(auth_token)
 
             # Convert the handler result (string response) to CallToolResult format
             result = CallToolResult(
@@ -2473,6 +2494,50 @@ class MCPServerManager:
                 call_type=CallTypes.call_mcp_tool.value,
             )
         )
+
+    def _build_openapi_request_extra_headers(
+        self,
+        mcp_server: MCPServer,
+        oauth2_headers: Optional[Dict[str, str]],
+        raw_headers: Optional[Dict[str, str]],
+        hook_extra_headers: Optional[Dict[str, str]],
+    ) -> Optional[Dict[str, str]]:
+        """Build per-request headers for OpenAPI-generated MCP tool handlers."""
+        extra_headers = oauth2_headers.copy() if oauth2_headers else None
+
+        if mcp_server.extra_headers and raw_headers:
+            if extra_headers is None:
+                extra_headers = {}
+
+            normalized_raw_headers = {
+                str(k).lower(): v for k, v in raw_headers.items() if isinstance(k, str)
+            }
+            for header in mcp_server.extra_headers:
+                if not isinstance(header, str):
+                    continue
+                if (
+                    mcp_server.has_client_credentials
+                    and header.lower() == "authorization"
+                ):
+                    continue
+                header_value = normalized_raw_headers.get(header.lower())
+                if header_value is None:
+                    continue
+                extra_headers[header] = header_value
+
+        if mcp_server.static_headers:
+            if extra_headers is None:
+                extra_headers = {}
+            extra_headers.update(mcp_server.static_headers)
+
+        if hook_extra_headers:
+            if extra_headers is None:
+                extra_headers = {}
+            extra_headers.update(hook_extra_headers)
+
+        if extra_headers is not None and len(extra_headers) == 0:
+            return None
+        return extra_headers
 
     async def _call_regular_mcp_tool(  # noqa: PLR0915
         self,
@@ -2746,17 +2811,21 @@ class MCPServerManager:
             verbose_logger.debug(
                 "Calling OpenAPI tool %s directly via HTTP handler", name
             )
-            if hook_result.get("extra_headers"):
-                verbose_logger.warning(
-                    "pre_mcp_call hook returned extra_headers for OpenAPI-backed "
-                    "MCP server '%s' — header injection is not supported for "
-                    "OpenAPI servers; headers will be ignored. Use SSE/HTTP "
-                    "transport to enable hook header injection.",
-                    server_name,
-                )
+            request_extra_headers = self._build_openapi_request_extra_headers(
+                mcp_server=mcp_server,
+                oauth2_headers=oauth2_headers,
+                raw_headers=raw_headers,
+                hook_extra_headers=hook_result.get("extra_headers"),
+            )
             tasks.append(
                 asyncio.create_task(
-                    self._call_openapi_tool_handler(mcp_server, name, arguments)
+                    self._call_openapi_tool_handler(
+                        mcp_server,
+                        name,
+                        arguments,
+                        mcp_auth_header=mcp_auth_header,
+                        request_extra_headers=request_extra_headers,
+                    )
                 )
             )
         else:
