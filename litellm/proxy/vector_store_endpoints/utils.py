@@ -1,7 +1,9 @@
+import json
 from typing import Any, Dict, Literal, Optional
 
 from fastapi import HTTPException, Request
 
+import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import (
     LiteLLM_ObjectPermissionTable,
@@ -11,6 +13,21 @@ from litellm.proxy._types import (
 from litellm.types.utils import LlmProviders
 from litellm.types.vector_stores import LiteLLM_ManagedVectorStore
 from litellm.utils import ProviderConfigManager
+
+
+def _normalize_litellm_params(
+    vector_store: LiteLLM_ManagedVectorStore,
+) -> LiteLLM_ManagedVectorStore:
+    litellm_params = vector_store.get("litellm_params")
+    if isinstance(litellm_params, str):
+        normalized = LiteLLM_ManagedVectorStore(**dict(vector_store))
+        try:
+            parsed = json.loads(litellm_params)
+            normalized["litellm_params"] = parsed if isinstance(parsed, dict) else {}
+        except (TypeError, ValueError):
+            normalized["litellm_params"] = {}
+        return normalized
+    return vector_store
 
 
 def _is_proxy_admin(user_api_key_dict: UserAPIKeyAuth) -> bool:
@@ -118,6 +135,85 @@ async def can_user_access_vector_store(
         return True
 
     return False
+
+
+async def get_litellm_managed_vector_store(
+    vector_store_id: str,
+) -> Optional[LiteLLM_ManagedVectorStore]:
+    """
+    Resolve a LiteLLM-managed vector store from the registry or database.
+
+    Provider-native vector store IDs will not be present in either location and
+    return None, preserving direct provider behavior while still protecting
+    LiteLLM-managed multi-tenant stores.
+    """
+    if not vector_store_id:
+        return None
+
+    if litellm.vector_store_registry is not None:
+        try:
+            vector_store = litellm.vector_store_registry.get_litellm_managed_vector_store_from_registry(
+                vector_store_id=vector_store_id
+            )
+            if vector_store is not None:
+                return _normalize_litellm_params(vector_store)
+        except Exception as e:
+            verbose_proxy_logger.debug(
+                "Failed to resolve vector store id=%s from registry: %s",
+                vector_store_id,
+                e,
+            )
+
+    try:
+        from litellm.proxy.proxy_server import prisma_client
+
+        if prisma_client is None:
+            return None
+        row = await prisma_client.db.litellm_managedvectorstorestable.find_unique(
+            where={"vector_store_id": vector_store_id}
+        )
+        if row is None:
+            return None
+        return _normalize_litellm_params(LiteLLM_ManagedVectorStore(**row.model_dump()))
+    except Exception as e:
+        verbose_proxy_logger.debug(
+            "Failed to resolve vector store id=%s from database: %s",
+            vector_store_id,
+            e,
+        )
+        return None
+
+
+async def assert_user_can_access_vector_store(
+    vector_store: LiteLLM_ManagedVectorStore,
+    user_api_key_dict: UserAPIKeyAuth,
+    detail: str = "Access denied: You do not have permission to access this vector store",
+) -> None:
+    """Raise 403 unless the caller can access the resolved vector store."""
+    if not await can_user_access_vector_store(vector_store, user_api_key_dict):
+        raise HTTPException(status_code=403, detail=detail)
+
+
+async def assert_user_can_access_vector_store_id(
+    vector_store_id: str,
+    user_api_key_dict: UserAPIKeyAuth,
+    detail: str = "Access denied: You do not have permission to access this vector store",
+) -> Optional[LiteLLM_ManagedVectorStore]:
+    """
+    Resolve a managed vector store id and enforce ownership if it exists.
+
+    Unknown ids are treated as provider-native ids and are not rejected here.
+    """
+    vector_store = await get_litellm_managed_vector_store(
+        vector_store_id=vector_store_id
+    )
+    if vector_store is not None:
+        await assert_user_can_access_vector_store(
+            vector_store=vector_store,
+            user_api_key_dict=user_api_key_dict,
+            detail=detail,
+        )
+    return vector_store
 
 
 def _does_endpoint_match(endpoint_path: str, request_path: str) -> bool:

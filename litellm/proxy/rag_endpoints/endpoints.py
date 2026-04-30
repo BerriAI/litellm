@@ -22,8 +22,43 @@ from litellm.proxy.common_utils.http_parsing_utils import (
     _safe_get_request_headers,
     get_form_data,
 )
+from litellm.proxy.vector_store_endpoints.utils import (
+    assert_user_can_access_vector_store_id,
+)
 
 router = APIRouter()
+
+
+def _collect_vector_store_ids_from_payload(payload: Any) -> set[str]:
+    vector_store_ids: set[str] = set()
+
+    if isinstance(payload, dict):
+        for key, value in payload.items():
+            if key == "vector_store_id":
+                if not isinstance(value, str) or not value:
+                    raise HTTPException(
+                        status_code=400,
+                        detail={"error": "vector_store_id must be a non-empty string"},
+                    )
+                vector_store_ids.add(value)
+                continue
+            vector_store_ids.update(_collect_vector_store_ids_from_payload(value))
+    elif isinstance(payload, list):
+        for item in payload:
+            vector_store_ids.update(_collect_vector_store_ids_from_payload(item))
+
+    return vector_store_ids
+
+
+async def _authorize_nested_vector_store_ids(
+    payload: Any,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> None:
+    for vector_store_id in sorted(_collect_vector_store_ids_from_payload(payload)):
+        await assert_user_can_access_vector_store_id(
+            vector_store_id=vector_store_id,
+            user_api_key_dict=user_api_key_dict,
+        )
 
 
 def _build_file_metadata_entry(
@@ -385,6 +420,11 @@ async def rag_ingest(
                 },
             )
 
+        await _authorize_nested_vector_store_ids(
+            payload=ingest_options,
+            user_api_key_dict=user_api_key_dict,
+        )
+
         # Add litellm data
         request_data: Dict[str, Any] = {}
         request_data = await add_litellm_data_to_request(
@@ -537,11 +577,20 @@ async def rag_query(
                 status_code=400,
                 detail={"error": "retrieval_config is required"},
             )
+        if not isinstance(retrieval_config, dict):
+            raise HTTPException(
+                status_code=400,
+                detail={"error": "retrieval_config must be an object"},
+            )
         if "vector_store_id" not in retrieval_config:
             raise HTTPException(
                 status_code=400,
                 detail={"error": "retrieval_config must contain 'vector_store_id'"},
             )
+        await _authorize_nested_vector_store_ids(
+            payload=retrieval_config,
+            user_api_key_dict=user_api_key_dict,
+        )
 
         # Add litellm data
         request_data: Dict[str, Any] = {}
