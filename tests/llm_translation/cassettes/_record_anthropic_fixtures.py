@@ -30,7 +30,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -38,6 +37,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 import vcr  # type: ignore[import-not-found]
+import yaml  # type: ignore[import-not-found]
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO_ROOT))
@@ -173,21 +173,18 @@ _NON_DETERMINISTIC_HEADERS = ("Date", "Server")
 
 
 def _strip_nondeterministic_headers(path: Path) -> None:
-    """Remove headers whose values change every run from the cassette."""
-    text = path.read_text()
-    for header in _NON_DETERMINISTIC_HEADERS:
-        # Matches a YAML block like::
-        #
-        #       Date:
-        #       - Thu, 30 Apr 2026 00:43:16 GMT
-        #
-        # under the response ``headers:`` mapping. Indentation is fixed by vcrpy.
-        pattern = re.compile(
-            rf"^      {re.escape(header)}:\n      - .*\n",
-            re.MULTILINE,
-        )
-        text = pattern.sub("", text)
-    path.write_text(text)
+    """Remove headers whose values change every run from the cassette.
+
+    Parses + rewrites the YAML rather than regex-substituting against a
+    fixed indentation, so this stays correct if vcrpy ever changes its
+    serialization style.
+    """
+    cassette = yaml.safe_load(path.read_text())
+    for interaction in cassette.get("interactions") or []:
+        headers = (interaction.get("response") or {}).get("headers") or {}
+        for header in _NON_DETERMINISTIC_HEADERS:
+            headers.pop(header, None)
+    path.write_text(yaml.safe_dump(cassette, default_flow_style=False, sort_keys=False))
 
 
 def _rewrite_cassette_to_real_host(path: Path, mock_host_port: str) -> None:
