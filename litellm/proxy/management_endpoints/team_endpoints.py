@@ -66,6 +66,7 @@ from litellm.proxy.auth.auth_checks import (
     allowed_route_check_inside_route,
     can_org_access_model,
     get_org_object,
+    get_team_membership,
     get_team_object,
     get_user_object,
 )
@@ -110,6 +111,7 @@ from litellm.types.proxy.management_endpoints.team_endpoints import (
     TeamListItem,
     TeamListResponse,
     TeamMemberAddResult,
+    TeamMemberInfoResponse,
     UpdateTeamMemberPermissionsRequest,
 )
 
@@ -158,6 +160,18 @@ async def _verify_team_access(
 
 class TeamMemberBudgetHandler:
     """Helper class to handle team member budget, RPM, and TPM limit operations"""
+
+    # Metadata keys that are owned and set by the server. Callers must not be
+    # able to inject or overwrite these via request payloads.
+    SYSTEM_MANAGED_METADATA_KEYS = ("team_member_budget_id",)
+
+    @staticmethod
+    def strip_system_managed_metadata_keys(metadata: Optional[dict]) -> None:
+        """Remove server-owned metadata keys from a caller-supplied dict."""
+        if not isinstance(metadata, dict):
+            return
+        for key in TeamMemberBudgetHandler.SYSTEM_MANAGED_METADATA_KEYS:
+            metadata.pop(key, None)
 
     @staticmethod
     def should_create_budget(
@@ -1040,6 +1054,8 @@ async def new_team(  # noqa: PLR0915
             _model_id = model_dict.id
 
         ## Create Team Member Budget Table
+        if isinstance(data.metadata, dict):
+            TeamMemberBudgetHandler.strip_system_managed_metadata_keys(data.metadata)
         data_json = data.json()
 
         ## Handle Object Permission - MCP, Vector Stores etc.
@@ -1730,6 +1746,13 @@ async def update_team(  # noqa: PLR0915
 
         updated_kv = data.json(exclude_unset=True)
 
+        # Drop server-owned metadata keys from caller input so they can only
+        # be written by the same code path that creates the underlying rows.
+        if isinstance(updated_kv.get("metadata"), dict):
+            TeamMemberBudgetHandler.strip_system_managed_metadata_keys(
+                updated_kv["metadata"]
+            )
+
         # Check budget_duration and budget_reset_at
         _set_budget_reset_at(data, updated_kv)
 
@@ -2026,8 +2049,11 @@ async def _process_team_members(
 
     # Resolve allowed_models: explicit request value, or fall back to team's default_team_member_models
     member_allowed_models = data.allowed_models
-    if member_allowed_models is None and complete_team_data.default_team_member_models:
-        member_allowed_models = complete_team_data.default_team_member_models
+    team_default_member_models = getattr(
+        complete_team_data, "default_team_member_models", None
+    )
+    if member_allowed_models is None and team_default_member_models:
+        member_allowed_models = team_default_member_models
 
     if isinstance(data.member, Member):
         try:
@@ -3397,6 +3423,126 @@ async def team_info(
             param=getattr(e, "param", "None"),
             code=status.HTTP_400_BAD_REQUEST,
         )
+
+
+@router.get(
+    "/team/{team_id}/members/me",
+    tags=["team management"],
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=TeamMemberInfoResponse,
+)
+@management_endpoint_wrapper
+async def team_member_me(
+    http_request: Request,
+    team_id: str,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Get the caller's own team-membership row for the given team.
+
+    Used by internal users to view their own spend, budget, budget reset
+    date, rate limits, and role within a team — without exposing other
+    members' data. The caller is resolved from their API key; the path
+    `/members/me` always refers to that caller.
+
+    Returns 404 if the caller is not a member of the team.
+
+    ```
+    curl --location 'http://localhost:4000/team/your_team_id/members/me' \
+    --header 'Authorization: Bearer your_api_key_here'
+    ```
+    """
+    from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
+
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={
+                "error": "Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
+            },
+        )
+
+    caller_user_id = user_api_key_dict.user_id
+    if caller_user_id is None:
+        # Team keys / service-account keys without a user_id can't resolve "me".
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "error": "API key has no associated user_id; cannot resolve 'me' for team membership."
+            },
+        )
+
+    team_table = await get_team_object(
+        team_id=team_id,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+    )
+
+    caller_user_email = user_api_key_dict.user_email
+    member_role: Optional[str] = None
+    for m in team_table.members_with_roles:
+        # Match by user_id when present, else fall back to email — members
+        # added by email may have user_id=None on the stored entry.
+        if (m.user_id is not None and m.user_id == caller_user_id) or (
+            m.user_email is not None
+            and caller_user_email is not None
+            and m.user_email == caller_user_email
+        ):
+            member_role = m.role
+            break
+
+    if member_role is None:
+        # Caller is not a member of this team. Even proxy admins get 404 here —
+        # they can use /team/info to view all members; "me" only resolves for
+        # actual members of the team.
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "error": f"User user_id={caller_user_id} is not a member of team_id={team_id}."
+            },
+        )
+
+    membership = await get_team_membership(
+        user_id=caller_user_id,
+        team_id=team_id,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+    )
+
+    user_row = await get_user_object(
+        user_id=caller_user_id,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        user_id_upsert=False,
+    )
+    user_email = getattr(user_row, "user_email", None) if user_row is not None else None
+
+    if membership is None:
+        # Member is in members_with_roles but has no membership row yet
+        # (no per-member budget/limits configured). Return defaults.
+        return TeamMemberInfoResponse(
+            user_id=caller_user_id,
+            team_id=team_id,
+            team_alias=team_table.team_alias,
+            role=member_role,
+            user_email=user_email,
+            spend=0.0,
+            total_spend=0.0,
+            budget_id=None,
+            litellm_budget_table=None,
+        )
+
+    return TeamMemberInfoResponse(
+        user_id=caller_user_id,
+        team_id=team_id,
+        team_alias=team_table.team_alias,
+        role=member_role,
+        user_email=user_email,
+        spend=membership.spend,
+        total_spend=membership.total_spend,
+        budget_id=membership.budget_id,
+        litellm_budget_table=membership.litellm_budget_table,
+    )
 
 
 @router.post(

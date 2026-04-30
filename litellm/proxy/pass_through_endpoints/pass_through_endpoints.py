@@ -2,6 +2,7 @@ import ast
 import asyncio
 import copy
 import json
+import posixpath
 import traceback
 from base64 import b64encode
 from datetime import datetime
@@ -320,7 +321,20 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         litellm_call_id: Optional[str] = None,
         custom_headers: Optional[dict] = None,
     ) -> dict:
-        excluded_headers = {"transfer-encoding", "content-encoding"}
+        # Exclude headers that uvicorn writes itself (server, date) and
+        # encoding/length headers that don't survive re-serialization.
+        # If we forward the upstream's Server header, uvicorn adds its
+        # own and strict HTTP parsers (e.g. aiohttp) reject the
+        # response with "Duplicate 'Server' header found".
+        excluded_headers = {
+            "transfer-encoding",
+            "content-encoding",
+            "content-length",
+            "server",
+            "date",
+            "connection",
+            "keep-alive",
+        }
 
         return_headers = {
             key: value
@@ -586,7 +600,45 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         if subpath.startswith("/"):
             subpath = subpath[1:]
 
-        return base_target + subpath
+        # Resolve any '..' segments in the subpath so it cannot climb above
+        # the base_target prefix that the operator configured. Preserve a
+        # trailing slash on the original subpath since some upstreams treat
+        # `/foo` and `/foo/` as different resources.
+        trailing_slash = subpath.endswith("/")
+        safe_subpath = posixpath.normpath("/" + subpath).lstrip("/")
+        if safe_subpath == ".":
+            safe_subpath = ""
+        if trailing_slash and safe_subpath and not safe_subpath.endswith("/"):
+            safe_subpath += "/"
+
+        return base_target + safe_subpath
+
+    @staticmethod
+    def join_base_and_endpoint_path(base_url: httpx.URL, endpoint_path: str) -> str:
+        """
+        Combine the path component of ``base_url`` with ``endpoint_path``.
+
+        Preserves any path prefix configured on the base URL and resolves
+        ``..`` segments in the endpoint so the result stays within the base
+        path. A trailing slash on ``endpoint_path`` is preserved.
+        """
+        trailing_slash = endpoint_path.endswith("/")
+        base_path = base_url.path or ""
+        if not base_path or base_path == "/":
+            normalized_endpoint = posixpath.normpath("/" + endpoint_path.lstrip("/"))
+            if trailing_slash and normalized_endpoint != "/":
+                normalized_endpoint += "/"
+            return normalized_endpoint
+
+        base_path = base_path.rstrip("/")
+        clean_endpoint = endpoint_path.lstrip("/")
+        combined = posixpath.normpath(base_path + "/" + clean_endpoint)
+        # If normalization climbs out of the base path, fall back to base.
+        if combined != base_path and not combined.startswith(base_path + "/"):
+            return base_path + "/"
+        if trailing_slash and not combined.endswith("/"):
+            combined += "/"
+        return combined
 
     @staticmethod
     def _update_stream_param_based_on_request_body(
@@ -635,6 +687,7 @@ async def pass_through_request(  # noqa: PLR0915
         custom_llm_provider: Optional field - custom LLM provider for the endpoint
         guardrails_config: Optional field - guardrails configuration for passthrough endpoint
     """
+    from litellm.exceptions import ModifyResponseException
     from litellm.litellm_core_utils.litellm_logging import Logging
     from litellm.proxy.pass_through_endpoints.passthrough_guardrails import (
         PassthroughGuardrailHandler,
@@ -915,8 +968,41 @@ async def pass_through_request(  # noqa: PLR0915
 
         content = await response.aread()
 
-        ## LOG SUCCESS
+        ## POST-CALL GUARDRAILS ##
+        _content_modified = False
         response_body: Optional[dict] = get_response_body(response)
+        if response_body is not None and guardrails_to_run:
+            # Build an enriched data dict: _parsed_body has been stripped of
+            # `metadata` by both pre_call_hook and _init_kwargs_for_pass_through_endpoint,
+            # so we re-attach the configured guardrails here so should_run_guardrail
+            # sees them.
+            hook_data = dict(_parsed_body or {})
+            existing_metadata = hook_data.get("metadata")
+            if not isinstance(existing_metadata, dict):
+                existing_metadata = {}
+            hook_data["metadata"] = {
+                **existing_metadata,
+                "guardrails": guardrails_to_run,
+            }
+            response_body = await proxy_logging_obj.post_call_success_hook(
+                data=hook_data,
+                user_api_key_dict=user_api_key_dict,
+                response=response_body,  # type: ignore[arg-type]
+            )
+            if isinstance(response_body, dict):
+                content = json.dumps(response_body).encode("utf-8")
+                _content_modified = True
+            else:
+                verbose_proxy_logger.debug(
+                    "pass_through_endpoint: post_call_success_hook returned %s, expected dict — using original response",
+                    type(response_body).__name__,
+                )
+        elif response_body is None:
+            verbose_proxy_logger.debug(
+                "pass_through_endpoint: response body not JSON-parseable, skipping post-call guardrails"
+            )
+
+        ## LOG SUCCESS
         passthrough_logging_payload["response_body"] = response_body
         end_time = datetime.now()
         asyncio.create_task(
@@ -944,13 +1030,47 @@ async def pass_through_request(  # noqa: PLR0915
             api_base=str(url._uri_reference),
         )
 
+        response_headers = HttpPassThroughEndpointHelpers.get_response_headers(
+            headers=response.headers,
+            custom_headers=custom_headers,
+        )
+        if _content_modified:
+            response_headers.pop("content-length", None)
+
         return Response(
             content=content,
             status_code=response.status_code,
-            headers=HttpPassThroughEndpointHelpers.get_response_headers(
-                headers=response.headers,
-                custom_headers=custom_headers,
-            ),
+            headers=response_headers,
+        )
+    except ModifyResponseException as e:
+        verbose_proxy_logger.info(
+            "pass_through_endpoint: Guardrail %s modified response: %s",
+            e.guardrail_name,
+            str(e.message or "")[:200],
+        )
+        try:
+            await proxy_logging_obj.post_call_failure_hook(
+                user_api_key_dict=user_api_key_dict,
+                original_exception=e,
+                request_data=e.request_data,
+            )
+        except Exception:
+            verbose_proxy_logger.warning(
+                "pass_through_endpoint: post_call_failure_hook raised during guardrail block",
+                exc_info=True,
+            )
+        error_body = {
+            "error": {
+                "message": e.message or "Response blocked by guardrail",
+                "type": "content_filter",
+                "guardrail_name": e.guardrail_name,
+                "model": e.model,
+            }
+        }
+        return Response(
+            content=json.dumps(error_body),
+            status_code=200,
+            media_type="application/json",
         )
     except Exception as e:
         custom_headers = ProxyBaseLLMRequestProcessing.get_custom_headers(
