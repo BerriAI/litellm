@@ -810,3 +810,99 @@ def test_initialize_guardrail_forwards_all_params(monkeypatch):
     assert g.block_message == "custom block"
     assert g._client_cache_maxsize == 5
     assert g._connection_pool_limit == 20
+
+
+def test_initialize_guardrail_missing_name_raises(monkeypatch):
+    """Initializer rejects guardrails without a guardrail_name."""
+    _install_sdk_stub(monkeypatch)
+    from litellm.proxy.guardrails.guardrail_hooks.alice_wonderfence import (
+        initialize_guardrail,
+    )
+    from litellm.types.guardrails import LitellmParams
+
+    params = LitellmParams(guardrail="alice_wonderfence", mode="pre_call")
+    with pytest.raises(ValueError, match="requires a guardrail_name"):
+        initialize_guardrail(params, {})  # type: ignore[arg-type]
+
+
+def test_init_raises_when_sdk_not_installed(monkeypatch):
+    """Constructor surfaces a clean ImportError when wonderfence_sdk missing."""
+    monkeypatch.setitem(sys.modules, "wonderfence_sdk", None)
+    from litellm.proxy.guardrails.guardrail_hooks.alice_wonderfence.alice_wonderfence import (
+        WonderFenceGuardrail,
+    )
+
+    with pytest.raises(ImportError, match="wonderfence-sdk"):
+        WonderFenceGuardrail(guardrail_name="t")
+
+
+def test_build_analysis_context_falls_back_to_slash_split(monkeypatch):
+    """When `litellm.get_llm_provider` raises, fall back to `provider/model` split."""
+    import litellm
+
+    guardrail, _ = _make_guardrail(monkeypatch)
+
+    def boom(model):
+        raise ValueError("unknown provider")
+
+    monkeypatch.setattr(litellm, "get_llm_provider", boom)
+    guardrail._build_analysis_context({"model": "myorg/custom-llm"})
+
+    AnalysisContext = sys.modules["wonderfence_sdk.models"].AnalysisContext
+    kwargs = AnalysisContext.call_args.kwargs
+    assert kwargs["provider"] == "myorg"
+    assert kwargs["model_name"] == "custom-llm"
+
+
+def test_recover_resolved_with_no_logging_obj_returns_none(monkeypatch):
+    """_recover_resolved must short-circuit on None logging_obj."""
+    guardrail, _ = _make_guardrail(monkeypatch)
+    assert guardrail._recover_resolved(None) is None
+
+
+def test_extract_relevant_text_uses_structured_messages(monkeypatch):
+    """Request path with structured_messages routes through get_last_user_message."""
+    guardrail, _ = _make_guardrail(monkeypatch)
+    inputs = {
+        "structured_messages": [
+            {"role": "user", "content": "first"},
+            {"role": "assistant", "content": "ack"},
+            {"role": "user", "content": "latest user msg"},
+        ],
+        "texts": ["unused-fallback"],
+    }
+    text = guardrail._extract_relevant_text(inputs, input_type="request")  # type: ignore[arg-type]
+    assert text == "latest user msg"
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_no_text_short_circuits(guardrail_and_client):
+    """Empty inputs must skip the SDK call and return inputs unchanged."""
+    guardrail, client = guardrail_and_client
+    out = await guardrail.apply_guardrail(
+        inputs={"texts": []},
+        request_data=_request_data(),
+        input_type="request",
+    )
+    assert out == {"texts": []}
+    client.evaluate_prompt.assert_not_awaited()
+    client.evaluate_response.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_detect_action_passes_through(guardrail_and_client):
+    """DETECT action logs a warning but does not block or mutate inputs."""
+    guardrail, client = guardrail_and_client
+    result_obj = Mock()
+    result_obj.action = "DETECT"
+    result_obj.detections = []
+    result_obj.correlation_id = "corr-detect"
+    client.evaluate_prompt.return_value = result_obj
+
+    out = await guardrail.apply_guardrail(
+        inputs={"texts": ["watch me"]},
+        request_data=_request_data(),
+        input_type="request",
+    )
+    assert out["texts"] == ["watch me"]
+    client.evaluate_prompt.assert_awaited_once()
