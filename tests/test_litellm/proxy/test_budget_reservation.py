@@ -6,7 +6,9 @@ import litellm
 from litellm.caching.dual_cache import DualCache
 from litellm.proxy._types import (
     LiteLLM_BudgetTable,
+    LiteLLM_EndUserTable,
     LiteLLM_OrganizationTable,
+    LiteLLM_TagTable,
     LiteLLM_TeamMembership,
     LiteLLM_TeamTable,
     LiteLLM_UserTable,
@@ -116,6 +118,171 @@ async def test_should_prevent_second_key_reservation_over_budget(
     )
 
     await release_budget_reservation(reservation)
+
+
+@pytest.mark.asyncio
+async def test_should_prevent_second_end_user_reservation_over_budget(
+    spend_counter_state,
+):
+    counter_cache, key_cache = spend_counter_state
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=key_cache)
+    valid_token = UserAPIKeyAuth(
+        token="key-budget-end-user",
+        end_user_id="end-user-budget-race",
+        end_user_max_budget=1.0,
+    )
+    await key_cache.async_set_cache(
+        key="end_user_id:end-user-budget-race",
+        value=LiteLLM_EndUserTable(
+            user_id="end-user-budget-race",
+            blocked=False,
+            spend=0.0,
+            litellm_budget_table=LiteLLM_BudgetTable(max_budget=1.0),
+        ).model_dump(),
+    )
+
+    with patch(
+        "litellm.proxy.spend_tracking.budget_reservation.estimate_request_max_cost",
+        return_value=0.6,
+    ):
+        reservation = await reserve_budget_for_request(
+            request_body=_request_body(),
+            route="/chat/completions",
+            llm_router=None,
+            valid_token=valid_token,
+            team_object=None,
+            user_object=None,
+            prisma_client=None,
+            user_api_key_cache=key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+        assert reservation is not None
+        assert counter_cache.in_memory_cache.get_cache(
+            key="spend:end_user:end-user-budget-race"
+        ) == pytest.approx(0.6)
+
+        with pytest.raises(litellm.BudgetExceededError):
+            await reserve_budget_for_request(
+                request_body=_request_body(),
+                route="/chat/completions",
+                llm_router=None,
+                valid_token=valid_token,
+                team_object=None,
+                user_object=None,
+                prisma_client=None,
+                user_api_key_cache=key_cache,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+
+    assert counter_cache.in_memory_cache.get_cache(
+        key="spend:end_user:end-user-budget-race"
+    ) == pytest.approx(0.6)
+
+    from litellm.proxy.proxy_server import increment_spend_counters
+
+    await increment_spend_counters(
+        token=None,
+        team_id=None,
+        user_id=None,
+        response_cost=0.2,
+        budget_reservation=reservation,
+    )
+
+    assert counter_cache.in_memory_cache.get_cache(
+        key="spend:end_user:end-user-budget-race"
+    ) == pytest.approx(0.2)
+
+
+@pytest.mark.asyncio
+async def test_should_prevent_second_tag_reservation_over_budget(
+    spend_counter_state,
+):
+    counter_cache, key_cache = spend_counter_state
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=key_cache)
+    valid_token = UserAPIKeyAuth(token="key-budget-tag")
+    request_body = _request_body()
+    request_body["metadata"] = {
+        "tags": ["tag-budget-race", "tag-without-budget", "tag-budget-race"]
+    }
+    await key_cache.async_set_cache(
+        key="tag:tag-budget-race",
+        value=LiteLLM_TagTable(
+            tag_name="tag-budget-race",
+            spend=0.0,
+            budget_id="tag-budget-id",
+            litellm_budget_table=LiteLLM_BudgetTable(max_budget=1.0),
+        ).model_dump(),
+    )
+    await key_cache.async_set_cache(
+        key="tag:tag-without-budget",
+        value=LiteLLM_TagTable(
+            tag_name="tag-without-budget",
+            spend=0.0,
+        ).model_dump(),
+    )
+
+    with patch(
+        "litellm.proxy.spend_tracking.budget_reservation.estimate_request_max_cost",
+        return_value=0.6,
+    ):
+        reservation = await reserve_budget_for_request(
+            request_body=request_body,
+            route="/chat/completions",
+            llm_router=None,
+            valid_token=valid_token,
+            team_object=None,
+            user_object=None,
+            prisma_client=None,
+            user_api_key_cache=key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+        assert reservation is not None
+        assert reservation["entries"] == [
+            {
+                "counter_key": "spend:tag:tag-budget-race",
+                "entity_type": "Tag",
+                "entity_id": "tag-budget-race",
+                "applied_adjustment": 0.0,
+            }
+        ]
+        assert counter_cache.in_memory_cache.get_cache(
+            key="spend:tag:tag-budget-race"
+        ) == pytest.approx(0.6)
+        assert (
+            counter_cache.in_memory_cache.get_cache(key="spend:tag:tag-without-budget")
+            is None
+        )
+
+        with pytest.raises(litellm.BudgetExceededError):
+            await reserve_budget_for_request(
+                request_body=request_body,
+                route="/chat/completions",
+                llm_router=None,
+                valid_token=valid_token,
+                team_object=None,
+                user_object=None,
+                prisma_client=None,
+                user_api_key_cache=key_cache,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+
+    assert counter_cache.in_memory_cache.get_cache(
+        key="spend:tag:tag-budget-race"
+    ) == pytest.approx(0.6)
+
+    from litellm.proxy.proxy_server import increment_spend_counters
+
+    await increment_spend_counters(
+        token=None,
+        team_id=None,
+        user_id=None,
+        response_cost=0.2,
+        budget_reservation=reservation,
+    )
+
+    assert counter_cache.in_memory_cache.get_cache(
+        key="spend:tag:tag-budget-race"
+    ) == pytest.approx(0.2)
 
 
 @pytest.mark.asyncio

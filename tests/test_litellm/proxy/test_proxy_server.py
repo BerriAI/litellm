@@ -5058,11 +5058,19 @@ async def test_reseed_spend_from_db_user_and_org_prefixes():
 
     user_row = MagicMock()
     user_row.spend = 17.0
+    end_user_row = MagicMock()
+    end_user_row.spend = 21.0
+    tag_row = MagicMock()
+    tag_row.spend = 8.0
     org_row = MagicMock()
     org_row.spend = 305.0
 
     fake_prisma = MagicMock()
     fake_prisma.db.litellm_usertable.find_unique = AsyncMock(return_value=user_row)
+    fake_prisma.db.litellm_endusertable.find_unique = AsyncMock(
+        return_value=end_user_row
+    )
+    fake_prisma.db.litellm_tagtable.find_unique = AsyncMock(return_value=tag_row)
     fake_prisma.db.litellm_organizationtable.find_unique = AsyncMock(
         return_value=org_row
     )
@@ -5070,6 +5078,19 @@ async def test_reseed_spend_from_db_user_and_org_prefixes():
     assert await SpendCounterReseed.from_db(fake_prisma, "spend:user:alice") == 17.0
     fake_prisma.db.litellm_usertable.find_unique.assert_awaited_once_with(
         where={"user_id": "alice"}
+    )
+
+    assert (
+        await SpendCounterReseed.from_db(fake_prisma, "spend:end_user:customer-1")
+        == 21.0
+    )
+    fake_prisma.db.litellm_endusertable.find_unique.assert_awaited_once_with(
+        where={"user_id": "customer-1"}
+    )
+
+    assert await SpendCounterReseed.from_db(fake_prisma, "spend:tag:paid-tag") == 8.0
+    fake_prisma.db.litellm_tagtable.find_unique.assert_awaited_once_with(
+        where={"tag_name": "paid-tag"}
     )
 
     assert await SpendCounterReseed.from_db(fake_prisma, "spend:org:acme") == 305.0

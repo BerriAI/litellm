@@ -13,6 +13,8 @@ import litellm.proxy.proxy_server
 from litellm.caching.dual_cache import DualCache
 from litellm.proxy._types import (
     LiteLLM_JWTAuth,
+    LiteLLM_BudgetTable,
+    LiteLLM_EndUserTable,
     LiteLLM_UserTable,
     LitellmUserRoles,
     ProxyErrorTypes,
@@ -2148,6 +2150,80 @@ async def test_centralized_common_checks_propagates_end_user_budget_error():
     finally:
         for k, v in originals.items():
             setattr(_proxy_server_mod, k, v)
+
+
+@pytest.mark.asyncio
+async def test_centralized_common_checks_reserves_request_end_user_budget():
+    """Regression: reservation runs before user_api_key_auth() copies the
+    request end-user onto the token, so centralized checks must pass the
+    locally extracted end_user_id/end_user_object into reservation."""
+    import litellm.proxy.proxy_server as _proxy_server_mod
+    from fastapi import Request
+    from starlette.datastructures import URL
+
+    token = UserAPIKeyAuth(api_key="sk-test", user_id="u")
+    request = Request(scope={"type": "http", "headers": []})
+    request._url = URL(url="/chat/completions")
+    request_data = {
+        "model": "gpt-4o",
+        "messages": [{"role": "user", "content": "hello"}],
+        "user": "alice",
+    }
+    end_user_object = LiteLLM_EndUserTable(
+        user_id="alice",
+        blocked=False,
+        spend=0.0,
+        litellm_budget_table=LiteLLM_BudgetTable(max_budget=1.0),
+    )
+
+    attrs = _proxy_attrs_for_centralized_checks(user_custom_auth=None)
+    counter_cache = DualCache()
+    attrs["spend_counter_cache"] = counter_cache
+    originals = {a: getattr(_proxy_server_mod, a, None) for a in attrs}
+    try:
+        for k, v in attrs.items():
+            setattr(_proxy_server_mod, k, v)
+        with (
+            patch(
+                "litellm.proxy.auth.user_api_key_auth.get_end_user_object",
+                new_callable=AsyncMock,
+                return_value=end_user_object,
+            ),
+            patch(
+                "litellm.proxy.auth.user_api_key_auth.common_checks",
+                new_callable=AsyncMock,
+            ),
+            patch(
+                "litellm.proxy.spend_tracking.budget_reservation.estimate_request_max_cost",
+                return_value=0.6,
+            ),
+        ):
+            assert token.end_user_id is None
+
+            await _run_centralized_common_checks(
+                user_api_key_auth_obj=token,
+                request=request,
+                request_data=request_data,
+                route="/chat/completions",
+            )
+
+    finally:
+        for k, v in originals.items():
+            setattr(_proxy_server_mod, k, v)
+
+    assert token.end_user_id is None
+    assert token.budget_reservation is not None
+    assert token.budget_reservation["entries"] == [
+        {
+            "counter_key": "spend:end_user:alice",
+            "entity_type": "EndUser",
+            "entity_id": "alice",
+            "applied_adjustment": 0.0,
+        }
+    ]
+    assert counter_cache.in_memory_cache.get_cache(
+        key="spend:end_user:alice"
+    ) == pytest.approx(0.6)
 
 
 @pytest.mark.asyncio

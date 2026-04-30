@@ -35,6 +35,8 @@ class SpendCounterReseed:
         spend:team:{team_id}              -> LiteLLM_TeamTable.spend
         spend:team_member:{uid}:{tid}     -> LiteLLM_TeamMembership.spend
         spend:user:{user_id}              -> LiteLLM_UserTable.spend
+        spend:end_user:{end_user_id}      -> LiteLLM_EndUserTable.spend
+        spend:tag:{tag_name}              -> LiteLLM_TagTable.spend
         spend:org:{org_id}                -> LiteLLM_OrganizationTable.spend
     """
 
@@ -97,6 +99,16 @@ class SpendCounterReseed:
                 user_id = counter_key[len("spend:user:") :]
                 row = await prisma_client.db.litellm_usertable.find_unique(
                     where={"user_id": user_id}
+                )
+            elif counter_key.startswith("spend:end_user:"):
+                end_user_id = counter_key[len("spend:end_user:") :]
+                row = await prisma_client.db.litellm_endusertable.find_unique(
+                    where={"user_id": end_user_id}
+                )
+            elif counter_key.startswith("spend:tag:"):
+                tag_name = counter_key[len("spend:tag:") :]
+                row = await prisma_client.db.litellm_tagtable.find_unique(
+                    where={"tag_name": tag_name}
                 )
             elif counter_key.startswith("spend:org:"):
                 org_id = counter_key[len("spend:org:") :]
