@@ -6,7 +6,7 @@ This module tests the auth commands and their associated functionality.
 
 import pytest
 import requests
-from unittest.mock import AsyncMock, patch, Mock, call
+from unittest.mock import patch, Mock, call
 from litellm.proxy.client.cli.commands.auth import (
     _normalize_teams,
     _poll_for_ready_data,
@@ -195,10 +195,11 @@ async def test_poll_for_ready_connection_failure(sleep_mock, click_mock, request
 @patch("litellm.proxy.client.cli.commands.auth.click.echo")
 async def test_poll_for_authentication_no_data(click_mock, poll_mock, handle_mock):
     """Test poll_for_authentication function"""
-    actual = _poll_for_authentication("https://litellm.com", "key-123")
+    actual = _poll_for_authentication("https://litellm.com", "key-123", "poll-secret")
     assert actual is None
     poll_mock.assert_called_once_with(
         "https://litellm.com/sso/cli/poll/key-123",
+        headers={"x-litellm-cli-poll-secret": "poll-secret"},
         pending_message="Still waiting for authentication...",
     )
     handle_mock.assert_not_called()
@@ -214,10 +215,11 @@ async def test_poll_for_authentication_no_data(click_mock, poll_mock, handle_moc
 @patch("litellm.proxy.client.cli.commands.auth.click.echo")
 async def test_poll_for_authentication_no_teams(click_mock, poll_mock, handle_mock):
     """Test poll_for_authentication function"""
-    actual = _poll_for_authentication("https://litellm.com", "key-123")
+    actual = _poll_for_authentication("https://litellm.com", "key-123", "poll-secret")
     assert actual is None
     poll_mock.assert_called_once_with(
         "https://litellm.com/sso/cli/poll/key-123",
+        headers={"x-litellm-cli-poll-secret": "poll-secret"},
         pending_message="Still waiting for authentication...",
     )
     handle_mock.assert_not_called()
@@ -243,7 +245,7 @@ async def test_poll_for_authentication_team_selection_success(
     click_mock, poll_mock, handle_mock
 ):
     """Test poll_for_authentication function"""
-    actual = _poll_for_authentication("https://litellm.com", "key-123")
+    actual = _poll_for_authentication("https://litellm.com", "key-123", "poll-secret")
     assert actual == {
         "api_key": "jwt-123",
         "user_id": "user-123",
@@ -252,11 +254,13 @@ async def test_poll_for_authentication_team_selection_success(
     }
     poll_mock.assert_called_once_with(
         "https://litellm.com/sso/cli/poll/key-123",
+        headers={"x-litellm-cli-poll-secret": "poll-secret"},
         pending_message="Still waiting for authentication...",
     )
     handle_mock.assert_called_once_with(
         base_url="https://litellm.com",
         key_id="key-123",
+        poll_secret="poll-secret",
         teams=[
             {"team_id": "1", "team_alias": None},
             {"team_id": "2", "team_alias": None},
@@ -283,15 +287,17 @@ async def test_poll_for_authentication_team_selection_cancelled(
     click_mock, poll_mock, handle_mock
 ):
     """Test poll_for_authentication function"""
-    actual = _poll_for_authentication("https://litellm.com", "key-123")
+    actual = _poll_for_authentication("https://litellm.com", "key-123", "poll-secret")
     assert actual is None
     poll_mock.assert_called_once_with(
         "https://litellm.com/sso/cli/poll/key-123",
+        headers={"x-litellm-cli-poll-secret": "poll-secret"},
         pending_message="Still waiting for authentication...",
     )
     handle_mock.assert_called_once_with(
         base_url="https://litellm.com",
         key_id="key-123",
+        poll_secret="poll-secret",
         teams=[{"team_id": "team-1", "team_alias": None}],
     )
     click_mock.assert_called_once()
@@ -314,7 +320,7 @@ async def test_poll_for_authentication_auto_assigned_team(
     click_mock, poll_mock, handle_mock
 ):
     """Test poll_for_authentication function"""
-    actual = _poll_for_authentication("https://litellm.com", "key-123")
+    actual = _poll_for_authentication("https://litellm.com", "key-123", "poll-secret")
     assert actual == {
         "api_key": "jwt-456",
         "user_id": "user-456",
@@ -323,6 +329,7 @@ async def test_poll_for_authentication_auto_assigned_team(
     }
     poll_mock.assert_called_once_with(
         "https://litellm.com/sso/cli/poll/key-123",
+        headers={"x-litellm-cli-poll-secret": "poll-secret"},
         pending_message="Still waiting for authentication...",
     )
     handle_mock.assert_not_called()

@@ -293,7 +293,10 @@ def _poll_for_ready_data(
 ) -> Optional[Dict[str, Any]]:
     for attempt in range(total_timeout // poll_interval):
         try:
-            response = requests.get(url, headers=headers, timeout=request_timeout)
+            request_kwargs: Dict[str, Any] = {"timeout": request_timeout}
+            if headers is not None:
+                request_kwargs["headers"] = headers
+            response = requests.get(url, **request_kwargs)
             if response.status_code == 200:
                 data = response.json()
                 status = data.get("status")
