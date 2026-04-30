@@ -112,13 +112,15 @@ try:
     )
     _session_id_auth_storage: Dict[uuid.UUID, "MCPAuthenticatedUser"] = {}
 
-    _captured_session_id_var: contextvars.ContextVar[Optional[uuid.UUID]] = (
-        contextvars.ContextVar("captured_session_id", default=None)
-    )
+    _captured_session_id_container_var: contextvars.ContextVar[
+        Optional[Dict[str, uuid.UUID]]
+    ] = contextvars.ContextVar("captured_session_id_container", default=None)
 
     class _SessionIdCapturingDict(dict):
         def __setitem__(self, key, value):
-            _captured_session_id_var.set(key)
+            container = _captured_session_id_container_var.get()
+            if container is not None:
+                container["session_id"] = key
             super().__setitem__(key, value)
 
     active_mcp_session_var: contextvars.ContextVar[Optional[_McpServerSession]] = (
@@ -2689,13 +2691,18 @@ if MCP_AVAILABLE:
                 verbose_logger.info("Initializing SSE session...")
                 options = server.create_initialization_options()
                 # Capture existing session IDs to find the newly created one
-                _captured_session_id_var.set(None)
-                async with sse.connect_sse(scope, receive, send) as streams:
-                    verbose_logger.info(
-                        "SSE connection established, running server loop..."
-                    )
+                # We use a mutable container because ContextVar writes are task-local
+                _capture_container: Dict[str, uuid.UUID] = {}
+                _capture_token = _captured_session_id_container_var.set(
+                    _capture_container
+                )
+                try:
+                    async with sse.connect_sse(scope, receive, send) as streams:
+                        verbose_logger.info(
+                            "SSE connection established, running server loop..."
+                        )
 
-                    session_id = _captured_session_id_var.get()
+                        session_id = _capture_container.get("session_id")
 
                     # ContextVars are lost when the MCP SDK spawns internal tasks
                     # (e.g. _receive_loop), so tool handlers can't read auth_context_var reliably.
@@ -2725,6 +2732,8 @@ if MCP_AVAILABLE:
                     finally:
                         if session_id:
                             _session_id_auth_storage.pop(session_id, None)
+                finally:
+                    _captured_session_id_container_var.reset(_capture_token)
 
         except HTTPException:
             raise

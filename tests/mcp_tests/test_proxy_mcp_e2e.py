@@ -1,5 +1,4 @@
 import asyncio
-import os
 import socket
 import subprocess
 import sys
@@ -100,7 +99,6 @@ def math_streamable_http_server() -> str:
         str(port),
     ]
 
-    env = os.environ.copy()
     server_process = subprocess.Popen(
         cmd,
         cwd=str(PROJECT_ROOT),
