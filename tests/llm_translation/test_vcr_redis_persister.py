@@ -41,10 +41,10 @@ def _persister_with_fake_redis():
 
 def test_save_then_load_roundtrips_cassette_content():
     _, persister = _persister_with_fake_redis()
-    cassette_path = "tests/llm_translation/cassettes/test_x/test_y.yaml"
+    cassette_id = "tests/llm_translation/test_x/test_y"
 
-    persister.save_cassette(cassette_path, _sample_cassette_dict(), yamlserializer)
-    requests, responses = persister.load_cassette(cassette_path, yamlserializer)
+    persister.save_cassette(cassette_id, _sample_cassette_dict(), yamlserializer)
+    requests, responses = persister.load_cassette(cassette_id, yamlserializer)
 
     assert len(requests) == 1
     assert len(responses) == 1
@@ -56,18 +56,30 @@ def test_save_then_load_roundtrips_cassette_content():
 
 def test_saved_key_has_24h_ttl():
     fake, persister = _persister_with_fake_redis()
-    cassette_path = "tests/llm_translation/cassettes/test_x/test_ttl.yaml"
+    cassette_id = "tests/llm_translation/test_x/test_ttl"
 
-    persister.save_cassette(cassette_path, _sample_cassette_dict(), yamlserializer)
+    persister.save_cassette(cassette_id, _sample_cassette_dict(), yamlserializer)
 
-    ttl = fake.ttl(redis_key_for(cassette_path))
+    ttl = fake.ttl(redis_key_for(cassette_id))
     assert CASSETTE_TTL_SECONDS - 5 <= ttl <= CASSETTE_TTL_SECONDS
 
 
 def test_load_missing_key_raises_cassette_not_found():
     _, persister = _persister_with_fake_redis()
     with pytest.raises(CassetteNotFoundError):
-        persister.load_cassette("never/recorded.yaml", yamlserializer)
+        persister.load_cassette("never/recorded", yamlserializer)
+
+
+def test_redis_key_normalizes_path_passed_by_pytest_recording():
+    # pytest-recording passes paths shaped like
+    # ``<test_dir>/cassettes/<module>/<test>.yaml``. The persister stores them
+    # under a clean test-identifier key — no extension, no ``cassettes/``
+    # directory segment — so ``redis-cli keys`` reads as test IDs.
+    raw = "tests/llm_translation/cassettes/test_anthropic/test_streaming.yaml"
+    assert (
+        redis_key_for(raw)
+        == "litellm:vcr:cassette:tests/llm_translation/test_anthropic/test_streaming"
+    )
 
 
 @pytest.mark.parametrize(
