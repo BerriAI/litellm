@@ -126,6 +126,7 @@ services = Union[
         "datadog_llm_observability",
         "generic_api",
         "arize",
+        "s3",
         "sqs",
     ],
     str,
@@ -200,6 +201,7 @@ async def health_services_endpoint(  # noqa: PLR0915
             "datadog_llm_observability",
             "generic_api",
             "arize",
+            "s3",
             "sqs",
         ]:
             raise HTTPException(
