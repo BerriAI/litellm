@@ -12698,6 +12698,9 @@ async def update_config(  # noqa: PLR0915
                     "update": {"param_value": serialized},
                 },
             )
+            # invalidate the DualCache entry so the next reader (this process
+            # or any other proxy in the cluster) goes to DB.
+            await invalidate_config_param(param_name)
 
         # general_settings: merge per-key, with the alert_to_webhook_url side
         # effect of auto-enabling slack alerting.
@@ -12740,7 +12743,6 @@ async def update_config(  # noqa: PLR0915
                 updated_litellm_settings["success_callback"] = normalize_callback_names(
                     incoming_cb
                 )
-                await invalidate_config_param(k)
 
             merged = {**existing, **updated_litellm_settings}
 
