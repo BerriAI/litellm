@@ -15,6 +15,7 @@ from contextlib import suppress
 from litellm._logging import print_verbose, verbose_logger
 
 from .base_cache import BaseCache
+from .json_utils import TimedeltaJSONEncoder
 
 
 class AzureBlobCache(BaseCache):
@@ -41,7 +42,7 @@ class AzureBlobCache(BaseCache):
 
     def set_cache(self, key, value, **kwargs) -> None:
         print_verbose(f"LiteLLM SET Cache - Azure Blob. Key={key}. Value={value}")
-        serialized_value = json.dumps(value)
+        serialized_value = json.dumps(value, cls=TimedeltaJSONEncoder)
         try:
             self.container_client.upload_blob(key, serialized_value)
         except Exception as e:
@@ -50,7 +51,7 @@ class AzureBlobCache(BaseCache):
 
     async def async_set_cache(self, key, value, **kwargs) -> None:
         print_verbose(f"LiteLLM SET Cache - Azure Blob. Key={key}. Value={value}")
-        serialized_value = json.dumps(value)
+        serialized_value = json.dumps(value, cls=TimedeltaJSONEncoder)
         try:
             await self.async_container_client.upload_blob(
                 key, serialized_value, overwrite=True
