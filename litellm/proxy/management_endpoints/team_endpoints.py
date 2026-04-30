@@ -2673,7 +2673,11 @@ def _resolve_team_member_user_id_from_request(
 ) -> str:
     if data.user_id is not None:
         return data.user_id
-    assert data.user_email is not None
+    if data.user_email is None:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "Either user_id or user_email needs to be passed in"},
+        )
     for member in returned_team_info["team_info"].members_with_roles:
         if member.user_email is not None and member.user_email == data.user_email:
             if member.user_id is None:

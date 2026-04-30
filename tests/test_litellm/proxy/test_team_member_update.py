@@ -21,6 +21,7 @@ from litellm.proxy.management_endpoints.team_endpoints import team_member_update
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _make_request():
     scope = {"type": "http", "method": "POST", "path": "/team/member_update"}
     return Request(scope)
@@ -75,6 +76,7 @@ def _mock_prisma(team_table, team_budget_duration=None):
 # Tests for budget_duration resolution logic
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_team_member_update_explicit_budget_duration():
     """
@@ -91,16 +93,18 @@ async def test_team_member_update_explicit_budget_duration():
         budget_duration="30d",
     )
 
-    with patch("litellm.proxy.proxy_server.prisma_client", prisma), \
-         patch("litellm.proxy.proxy_server.premium_user", True), \
-         patch(
-             "litellm.proxy.management_endpoints.team_endpoints.team_info",
-             new=AsyncMock(return_value=_team_info_response(team_table)),
-         ), \
-         patch(
-             "litellm.proxy.management_endpoints.team_endpoints._upsert_budget_and_membership",
-             new=AsyncMock(),
-         ) as mock_upsert:
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", prisma),
+        patch("litellm.proxy.proxy_server.premium_user", True),
+        patch(
+            "litellm.proxy.management_endpoints.team_endpoints.team_info",
+            new=AsyncMock(return_value=_team_info_response(team_table)),
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.team_endpoints._upsert_budget_and_membership",
+            new=AsyncMock(),
+        ) as mock_upsert,
+    ):
         await team_member_update(data, _make_request(), _admin_auth())
 
     mock_upsert.assert_awaited_once()
@@ -122,20 +126,27 @@ async def test_team_member_update_explicit_null_budget_duration():
     # Simulate the client sending {"budget_duration": null} by including the
     # field in the model_fields_set while keeping the value None.
     data = TeamMemberUpdateRequest.model_validate(
-        {"team_id": "team-1", "user_id": "user-A", "max_budget_in_team": 5.0, "budget_duration": None}
+        {
+            "team_id": "team-1",
+            "user_id": "user-A",
+            "max_budget_in_team": 5.0,
+            "budget_duration": None,
+        }
     )
     assert "budget_duration" in data.model_fields_set  # sanity check
 
-    with patch("litellm.proxy.proxy_server.prisma_client", prisma), \
-         patch("litellm.proxy.proxy_server.premium_user", True), \
-         patch(
-             "litellm.proxy.management_endpoints.team_endpoints.team_info",
-             new=AsyncMock(return_value=_team_info_response(team_table)),
-         ), \
-         patch(
-             "litellm.proxy.management_endpoints.team_endpoints._upsert_budget_and_membership",
-             new=AsyncMock(),
-         ) as mock_upsert:
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", prisma),
+        patch("litellm.proxy.proxy_server.premium_user", True),
+        patch(
+            "litellm.proxy.management_endpoints.team_endpoints.team_info",
+            new=AsyncMock(return_value=_team_info_response(team_table)),
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.team_endpoints._upsert_budget_and_membership",
+            new=AsyncMock(),
+        ) as mock_upsert,
+    ):
         await team_member_update(data, _make_request(), _admin_auth())
 
     mock_upsert.assert_awaited_once()
@@ -162,16 +173,18 @@ async def test_team_member_update_inherits_team_budget_duration():
     )
     assert "budget_duration" not in data.model_fields_set  # sanity check
 
-    with patch("litellm.proxy.proxy_server.prisma_client", prisma), \
-         patch("litellm.proxy.proxy_server.premium_user", True), \
-         patch(
-             "litellm.proxy.management_endpoints.team_endpoints.team_info",
-             new=AsyncMock(return_value=_team_info_response(team_table)),
-         ), \
-         patch(
-             "litellm.proxy.management_endpoints.team_endpoints._upsert_budget_and_membership",
-             new=AsyncMock(),
-         ) as mock_upsert:
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", prisma),
+        patch("litellm.proxy.proxy_server.premium_user", True),
+        patch(
+            "litellm.proxy.management_endpoints.team_endpoints.team_info",
+            new=AsyncMock(return_value=_team_info_response(team_table)),
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.team_endpoints._upsert_budget_and_membership",
+            new=AsyncMock(),
+        ) as mock_upsert,
+    ):
         await team_member_update(data, _make_request(), _admin_auth())
 
     mock_upsert.assert_awaited_once()
@@ -197,16 +210,18 @@ async def test_team_member_update_no_team_budget_duration_defaults_to_none():
         max_budget_in_team=5.0,
     )
 
-    with patch("litellm.proxy.proxy_server.prisma_client", prisma), \
-         patch("litellm.proxy.proxy_server.premium_user", True), \
-         patch(
-             "litellm.proxy.management_endpoints.team_endpoints.team_info",
-             new=AsyncMock(return_value=_team_info_response(team_table)),
-         ), \
-         patch(
-             "litellm.proxy.management_endpoints.team_endpoints._upsert_budget_and_membership",
-             new=AsyncMock(),
-         ) as mock_upsert:
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", prisma),
+        patch("litellm.proxy.proxy_server.premium_user", True),
+        patch(
+            "litellm.proxy.management_endpoints.team_endpoints.team_info",
+            new=AsyncMock(return_value=_team_info_response(team_table)),
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.team_endpoints._upsert_budget_and_membership",
+            new=AsyncMock(),
+        ) as mock_upsert,
+    ):
         await team_member_update(data, _make_request(), _admin_auth())
 
     mock_upsert.assert_awaited_once()
@@ -215,9 +230,32 @@ async def test_team_member_update_no_team_budget_duration_defaults_to_none():
     prisma.db.litellm_budgettable.find_unique.assert_not_awaited()
 
 
+def test_resolve_team_member_user_id_without_identifier_raises():
+    """
+    _resolve_team_member_user_id_from_request must not rely on ``assert`` for
+    invariants (stripped under ``python -O``); missing identifiers raise 400.
+    """
+    from litellm.proxy.management_endpoints.team_endpoints import (
+        _resolve_team_member_user_id_from_request,
+    )
+
+    team_table = _make_team_table()
+    info = _team_info_response(team_table)
+    data = TeamMemberUpdateRequest.model_construct(
+        team_id="team-1", user_id=None, user_email=None
+    )
+    with pytest.raises(HTTPException) as exc_info:
+        _resolve_team_member_user_id_from_request(data, info)
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.detail == {
+        "error": "Either user_id or user_email needs to be passed in"
+    }
+
+
 # ---------------------------------------------------------------------------
 # Role / premium-user guard tests
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_ateam_member_update_admin_requires_premium(monkeypatch):
