@@ -1237,14 +1237,9 @@ def callback_name(callback):
             return str(callback)
 
 
-@router.get(
-    "/health/readiness",
-    tags=["health"],
-    dependencies=[Depends(user_api_key_auth)],
-)
-async def health_readiness():
+async def _get_health_readiness_details() -> Dict[str, Any]:
     """
-    Unprotected endpoint for checking if worker can receive requests
+    Detailed health payload for authenticated diagnostics.
     """
     from litellm.proxy.proxy_server import prisma_client, version
 
@@ -1263,7 +1258,7 @@ async def health_readiness():
             success_callback_names = litellm.success_callback
 
         # check Cache
-        cache_type = None
+        cache_type: Any = None
         if litellm.cache is not None:
             from litellm.caching.caching import RedisSemanticCache
 
@@ -1272,6 +1267,7 @@ async def health_readiness():
             if isinstance(litellm.cache.cache, RedisSemanticCache):
                 # ping the cache
                 # TODO: @ishaan-jaff - we should probably not ping the cache on every /health/readiness check
+                index_info: Any
                 try:
                     index_info = await litellm.cache.cache._index_info()
                 except Exception as e:
@@ -1311,6 +1307,30 @@ async def health_readiness():
 
 
 @router.get(
+    "/health/readiness",
+    tags=["health"],
+)
+async def health_readiness():
+    """
+    Public readiness probe. Keep this low-detail for unauthenticated load
+    balancers while preserving the existing unauthenticated probe contract.
+    """
+    return {"status": "healthy"}
+
+
+@router.get(
+    "/health/readiness/details",
+    tags=["health"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def health_readiness_details():
+    """
+    Authenticated readiness diagnostics with DB/cache/callback metadata.
+    """
+    return await _get_health_readiness_details()
+
+
+@router.get(
     "/health/backlog",
     tags=["health"],
     dependencies=[Depends(user_api_key_auth)],
@@ -1345,7 +1365,6 @@ async def health_liveliness():
 @router.options(
     "/health/readiness",
     tags=["health"],
-    dependencies=[Depends(user_api_key_auth)],
 )
 async def health_readiness_options():
     """

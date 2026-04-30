@@ -21,12 +21,12 @@ from litellm.proxy.middleware.prometheus_auth_middleware import PrometheusAuthMi
 
 
 # Fake auth functions to simulate valid and invalid auth behavior.
-async def fake_valid_auth(request, api_key):
+async def fake_valid_auth(request, api_key, **kwargs):
     # Simulate valid authentication: do nothing (i.e. pass)
     return
 
 
-async def fake_invalid_auth(request, api_key):
+async def fake_invalid_auth(request, api_key, **kwargs):
     print("running fake invalid auth", request, api_key)
     # Simulate invalid auth by raising an exception.
     raise Exception("Invalid API key")
@@ -103,6 +103,25 @@ def test_invalid_auth_metrics(app_with_middleware, monkeypatch):
     headers = {SpecialHeaders.openai_authorization.value: "invalid"}
 
     response = client.get("/metrics", headers=headers)
+    assert response.status_code == 401, response.text
+    assert "Unauthorized access to metrics endpoint" in response.text
+
+
+def test_metrics_auth_uses_real_auth_when_route_is_public(
+    app_with_middleware, monkeypatch
+):
+    """
+    Regression: /metrics is statically public, but require_auth_for_metrics_endpoint
+    must still force the real auth path.
+    """
+    monkeypatch.setattr(litellm, "require_auth_for_metrics_endpoint", True)
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", "sk-master")
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+
+    client = TestClient(app_with_middleware)
+
+    response = client.get("/metrics")
+
     assert response.status_code == 401, response.text
     assert "Unauthorized access to metrics endpoint" in response.text
 

@@ -9,9 +9,15 @@ sys.path.insert(0, os.path.abspath("../../.."))
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from starlette.datastructures import URL
+from starlette.requests import Request
 
+from litellm.proxy._types import ProxyException
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.public_endpoints import router
+from litellm.proxy.public_endpoints.public_endpoints import (
+    public_ai_hub_auth_dependency,
+)
 from litellm.types.proxy.management_endpoints.model_management_endpoints import (
     ModelGroupInfoProxy,
 )
@@ -91,6 +97,40 @@ def test_get_litellm_model_cost_map_returns_cost_map():
     )
 
 
+def test_public_ai_hub_info_stays_public_by_default(monkeypatch):
+    app = FastAPI()
+    app.include_router(router)
+    client = TestClient(app)
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", "sk-master")
+
+    response = client.get("/public/model_hub/info")
+
+    assert response.status_code == 200, response.text
+
+
+@pytest.mark.asyncio
+async def test_public_ai_hub_info_requires_auth_when_configured(monkeypatch):
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.general_settings",
+        {"require_auth_for_public_ai_hub": True},
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", "sk-master")
+    request = Request(
+        scope={
+            "type": "http",
+            "method": "GET",
+            "path": "/public/model_hub/info",
+            "headers": [],
+        }
+    )
+    request._url = URL(url="/public/model_hub/info")
+
+    with pytest.raises(ProxyException):
+        await public_ai_hub_auth_dependency(request)
+
+
 def test_watsonx_provider_fields():
     """Test that Watsonx provider has all required credential fields including multiple auth options."""
     app = FastAPI()
@@ -166,9 +206,9 @@ def test_anthropic_provider_fields_support_byok():
         "Anthropic api_key must be optional so admins can configure BYOK models "
         "without entering a key. See BYOK tutorial."
     )
-    assert fields_by_key["api_key"].get("tooltip"), (
-        "Anthropic api_key must have a tooltip explaining the BYOK use case."
-    )
+    assert fields_by_key["api_key"].get(
+        "tooltip"
+    ), "Anthropic api_key must have a tooltip explaining the BYOK use case."
     assert "api_base" in fields_by_key, (
         "Anthropic provider form must expose api_base so cloud customers "
         "can override the upstream URL without env var access."
@@ -176,16 +216,16 @@ def test_anthropic_provider_fields_support_byok():
     api_base_field = fields_by_key["api_base"]
     assert api_base_field["required"] is False
     assert api_base_field["field_type"] == "text"
-    assert api_base_field.get("tooltip"), (
-        "api_base should have a tooltip explaining it is optional."
-    )
+    assert api_base_field.get(
+        "tooltip"
+    ), "api_base should have a tooltip explaining it is optional."
 
     # UI forms render fields in credential_fields order; api_base should come first
     # so an admin sees the URL override before the key field.
     field_order = [f["key"] for f in anthropic["credential_fields"]]
-    assert field_order.index("api_base") < field_order.index("api_key"), (
-        "api_base must appear before api_key in credential_fields (matches AI21 and ANTHROPIC_TEXT convention)."
-    )
+    assert field_order.index("api_base") < field_order.index(
+        "api_key"
+    ), "api_base must appear before api_key in credential_fields (matches AI21 and ANTHROPIC_TEXT convention)."
 
 
 def test_public_model_hub_with_healthy_model():
