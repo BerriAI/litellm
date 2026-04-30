@@ -2119,6 +2119,49 @@ async def test_streaming_unmask_path_bytes_passthrough():
     assert chunks[0] == byte_chunk
 
 
+@pytest.mark.asyncio
+async def test_apply_to_output_streaming_unknown_events_passthrough():
+    """
+    Regression test: /v1/responses-style event objects (neither bytes nor
+    ModelResponseStream) must be preserved in order and not dropped.
+    """
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        apply_to_output=True,
+    )
+
+    class FakeResponsesEvent:
+        def __init__(self, event_type: str):
+            self.type = event_type
+
+    events = [
+        FakeResponsesEvent("response.created"),
+        FakeResponsesEvent("response.output_text.delta"),
+        FakeResponsesEvent("response.completed"),
+    ]
+
+    async def mock_stream():
+        for event in events:
+            yield event
+
+    mock_user_api_key = UserAPIKeyAuth(api_key="test-key")
+    received = []
+    async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+        user_api_key_dict=mock_user_api_key,
+        response=mock_stream(),
+        request_data={},
+    ):
+        received.append(chunk)
+
+    # Preserve exact objects and ordering so clients receive full event lifecycle.
+    assert received == events
+    assert [e.type for e in received] == [
+        "response.created",
+        "response.output_text.delta",
+        "response.completed",
+    ]
+
+
 # ---------------------------------------------------------------------------
 # Fix 4: apply_guardrail unmask path for input_type="response"
 # ---------------------------------------------------------------------------
