@@ -968,6 +968,20 @@ def test_add_new_models_to_team():
     )
 
 
+def _make_team_member_add_request(
+    member_user_id: Optional[str] = "regular-user",
+    role: str = "user",
+    team_id: str = "test-team-123",
+):
+    """Build a TeamMemberAddRequest with one Member entry for tests below."""
+    from litellm.proxy._types import Member, TeamMemberAddRequest
+
+    return TeamMemberAddRequest(
+        team_id=team_id,
+        member=Member(role=role, user_id=member_user_id),
+    )
+
+
 @pytest.mark.asyncio
 async def test_validate_team_member_add_permissions_admin():
     """
@@ -977,17 +991,15 @@ async def test_validate_team_member_add_permissions_admin():
         _validate_team_member_add_permissions,
     )
 
-    # Create admin user
     admin_user = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
 
-    # Create mock team
     team = MagicMock(spec=LiteLLM_TeamTable)
     team.team_id = "test-team-123"
 
-    # Should not raise any exception for admin
     await _validate_team_member_add_permissions(
         user_api_key_dict=admin_user,
         complete_team_data=team,
+        data=_make_team_member_add_request(member_user_id="any-user", role="admin"),
     )
 
 
@@ -1000,20 +1012,17 @@ async def test_validate_team_member_add_permissions_non_admin():
         _validate_team_member_add_permissions,
     )
 
-    # Create non-admin user
     regular_user = UserAPIKeyAuth(
         user_id="regular-user",
         user_role=LitellmUserRoles.INTERNAL_USER,
         team_id="different-team",
     )
 
-    # Create mock team
     team = MagicMock(spec=LiteLLM_TeamTable)
     team.team_id = "test-team-123"
     team.members_with_roles = []
     team.organization_id = None
 
-    # Mock the helper functions to return False
     with (
         patch(
             "litellm.proxy.management_endpoints.team_endpoints._is_user_team_admin",
@@ -1024,15 +1033,301 @@ async def test_validate_team_member_add_permissions_non_admin():
             return_value=False,
         ),
     ):
-        # Should raise HTTPException for non-admin
         with pytest.raises(HTTPException) as exc_info:
             await _validate_team_member_add_permissions(
                 user_api_key_dict=regular_user,
                 complete_team_data=team,
+                data=_make_team_member_add_request(),
             )
 
         assert exc_info.value.status_code == 403
         assert "not proxy admin OR team admin" in str(exc_info.value.detail)
+
+
+# ── VERIA-56 regression tests for _is_available_team self-join enforcement ───
+
+
+@pytest.mark.asyncio
+async def test_available_team_self_join_with_caller_user_id_allowed():
+    """A standard user adding themselves to an available team with role=user
+    is the only legitimate use of the available-team bypass."""
+    from litellm.proxy.management_endpoints.team_endpoints import (
+        _validate_team_member_add_permissions,
+    )
+
+    user = UserAPIKeyAuth(
+        user_id="alice",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+    )
+
+    team = MagicMock(spec=LiteLLM_TeamTable)
+    team.team_id = "public-team"
+    team.members_with_roles = []
+    team.organization_id = None
+
+    with (
+        patch(
+            "litellm.proxy.management_endpoints.team_endpoints._is_user_team_admin",
+            return_value=False,
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.team_endpoints._is_available_team",
+            return_value=True,
+        ),
+    ):
+        await _validate_team_member_add_permissions(
+            user_api_key_dict=user,
+            complete_team_data=team,
+            data=_make_team_member_add_request(member_user_id="alice", role="user"),
+        )
+
+
+@pytest.mark.asyncio
+async def test_available_team_self_join_blocks_admin_role():
+    """Privesc shape from VERIA-56: caller adds themselves with role=admin
+    via the available-team bypass.  Must be rejected."""
+    from litellm.proxy.management_endpoints.team_endpoints import (
+        _validate_team_member_add_permissions,
+    )
+
+    user = UserAPIKeyAuth(user_id="alice", user_role=LitellmUserRoles.INTERNAL_USER)
+    team = MagicMock(spec=LiteLLM_TeamTable)
+    team.team_id = "public-team"
+    team.members_with_roles = []
+    team.organization_id = None
+
+    with (
+        patch(
+            "litellm.proxy.management_endpoints.team_endpoints._is_user_team_admin",
+            return_value=False,
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.team_endpoints._is_available_team",
+            return_value=True,
+        ),
+        pytest.raises(HTTPException) as exc_info,
+    ):
+        await _validate_team_member_add_permissions(
+            user_api_key_dict=user,
+            complete_team_data=team,
+            data=_make_team_member_add_request(member_user_id="alice", role="admin"),
+        )
+
+    assert exc_info.value.status_code == 403
+    assert "admin" in str(exc_info.value.detail).lower()
+
+
+@pytest.mark.asyncio
+async def test_available_team_self_join_blocks_other_user_id():
+    """Cross-user-injection shape from VERIA-56: caller adds someone else
+    via the available-team bypass.  Must be rejected."""
+    from litellm.proxy.management_endpoints.team_endpoints import (
+        _validate_team_member_add_permissions,
+    )
+
+    user = UserAPIKeyAuth(user_id="alice", user_role=LitellmUserRoles.INTERNAL_USER)
+    team = MagicMock(spec=LiteLLM_TeamTable)
+    team.team_id = "public-team"
+    team.members_with_roles = []
+    team.organization_id = None
+
+    with (
+        patch(
+            "litellm.proxy.management_endpoints.team_endpoints._is_user_team_admin",
+            return_value=False,
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.team_endpoints._is_available_team",
+            return_value=True,
+        ),
+        pytest.raises(HTTPException) as exc_info,
+    ):
+        await _validate_team_member_add_permissions(
+            user_api_key_dict=user,
+            complete_team_data=team,
+            data=_make_team_member_add_request(
+                member_user_id="bob-victim", role="user"
+            ),
+        )
+
+    assert exc_info.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_available_team_self_join_blocks_when_caller_has_no_user_id():
+    """If the auth context has no user_id we cannot prove self-join, so the
+    bypass must fail closed."""
+    from litellm.proxy.management_endpoints.team_endpoints import (
+        _validate_team_member_add_permissions,
+    )
+
+    user = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER)  # no user_id
+    team = MagicMock(spec=LiteLLM_TeamTable)
+    team.team_id = "public-team"
+    team.members_with_roles = []
+    team.organization_id = None
+
+    with (
+        patch(
+            "litellm.proxy.management_endpoints.team_endpoints._is_user_team_admin",
+            return_value=False,
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.team_endpoints._is_available_team",
+            return_value=True,
+        ),
+        pytest.raises(HTTPException) as exc_info,
+    ):
+        await _validate_team_member_add_permissions(
+            user_api_key_dict=user,
+            complete_team_data=team,
+            data=_make_team_member_add_request(member_user_id="alice", role="user"),
+        )
+
+    assert exc_info.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_available_team_self_join_blocks_email_only_member():
+    """An email-only member entry can't be safely self-join-validated; the
+    caller must use their own user_id explicitly."""
+    from litellm.proxy._types import Member, TeamMemberAddRequest
+    from litellm.proxy.management_endpoints.team_endpoints import (
+        _validate_team_member_add_permissions,
+    )
+
+    user = UserAPIKeyAuth(user_id="alice", user_role=LitellmUserRoles.INTERNAL_USER)
+    team = MagicMock(spec=LiteLLM_TeamTable)
+    team.team_id = "public-team"
+    team.members_with_roles = []
+    team.organization_id = None
+
+    data = TeamMemberAddRequest(
+        team_id="public-team",
+        member=Member(role="user", user_email="alice@example.com"),
+    )
+
+    with (
+        patch(
+            "litellm.proxy.management_endpoints.team_endpoints._is_user_team_admin",
+            return_value=False,
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.team_endpoints._is_available_team",
+            return_value=True,
+        ),
+        pytest.raises(HTTPException) as exc_info,
+    ):
+        await _validate_team_member_add_permissions(
+            user_api_key_dict=user,
+            complete_team_data=team,
+            data=data,
+        )
+
+    assert exc_info.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_available_team_self_join_blocks_admin_role_in_member_list():
+    """Bulk shape: list of members where one has role=admin must be rejected
+    even if the caller's own entry is correct."""
+    from litellm.proxy._types import Member, TeamMemberAddRequest
+    from litellm.proxy.management_endpoints.team_endpoints import (
+        _validate_team_member_add_permissions,
+    )
+
+    user = UserAPIKeyAuth(user_id="alice", user_role=LitellmUserRoles.INTERNAL_USER)
+    team = MagicMock(spec=LiteLLM_TeamTable)
+    team.team_id = "public-team"
+    team.members_with_roles = []
+    team.organization_id = None
+
+    data = TeamMemberAddRequest(
+        team_id="public-team",
+        member=[
+            Member(role="user", user_id="alice"),
+            Member(role="admin", user_id="alice"),
+        ],
+    )
+
+    with (
+        patch(
+            "litellm.proxy.management_endpoints.team_endpoints._is_user_team_admin",
+            return_value=False,
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.team_endpoints._is_available_team",
+            return_value=True,
+        ),
+        pytest.raises(HTTPException) as exc_info,
+    ):
+        await _validate_team_member_add_permissions(
+            user_api_key_dict=user,
+            complete_team_data=team,
+            data=data,
+        )
+
+    assert exc_info.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_update_team_member_permissions_blocks_non_admin_via_available_team(
+    mock_db_client,
+):
+    """A non-admin caller invoking /team/permissions_update on an available
+    team must be rejected.  The previous code path delegated to
+    ``_is_available_team`` and accepted the write; this PR removes that
+    bypass entirely so the result is 403 even with the bypass mocked True."""
+    test_team_id = "public-team"
+    update_payload = {
+        "team_id": test_team_id,
+        "team_member_permissions": ["/key/generate"],
+    }
+
+    existing_row = MagicMock(spec=LiteLLM_TeamTable)
+    existing_row.model_dump.return_value = {
+        "team_id": test_team_id,
+        "team_alias": "Public Team",
+        "team_member_permissions": [],
+        "spend": 0.0,
+        "models": [],
+    }
+    existing_row.team_id = test_team_id
+    existing_row.members_with_roles = []
+    existing_row.organization_id = None
+
+    non_admin_auth = UserAPIKeyAuth(
+        user_id="alice",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+    )
+
+    with (
+        patch(
+            "litellm.proxy.management_endpoints.team_endpoints.get_team_object",
+            new_callable=AsyncMock,
+            return_value=existing_row,
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.team_endpoints._is_user_team_admin",
+            return_value=False,
+        ),
+        patch(
+            # Even with the available-team bypass mocked True, the endpoint
+            # must NOT consult it any more — the gate should reject the
+            # non-admin caller outright.
+            "litellm.proxy.management_endpoints.team_endpoints._is_available_team",
+            return_value=True,
+        ),
+    ):
+        app.dependency_overrides[user_api_key_auth] = lambda: non_admin_auth
+        try:
+            response = client.post("/team/permissions_update", json=update_payload)
+        finally:
+            app.dependency_overrides = {}
+
+    assert response.status_code == 403
+    body = response.json()
+    assert "permissions_update" in str(body) or "not proxy admin" in str(body)
 
 
 @pytest.mark.asyncio

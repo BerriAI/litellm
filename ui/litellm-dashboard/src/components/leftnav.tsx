@@ -3,6 +3,7 @@ import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import {
   ApiOutlined,
+  ApartmentOutlined,
   AppstoreOutlined,
   AuditOutlined,
   BankOutlined,
@@ -120,11 +121,31 @@ const menuGroups: MenuGroup[] = [
         roles: rolesWithWriteAccess,
       },
       {
-        key: "agents",
-        page: "agents",
-        label: "Agents",
+        key: "agentic",
+        page: "agentic",
+        label: "Agentic",
         icon: <RobotOutlined />,
-        roles: rolesWithWriteAccess,
+        children: [
+          {
+            key: "agents",
+            page: "agents",
+            label: "Agents",
+            icon: <RobotOutlined />,
+            roles: rolesWithWriteAccess,
+          },
+          {
+            key: "workflows",
+            page: "workflows",
+            label: "Workflow Runs",
+            icon: <ApartmentOutlined />,
+          },
+          {
+            key: "memory",
+            page: "memory",
+            label: "Memory",
+            icon: <BookOutlined />,
+          },
+        ],
       },
       {
         key: "mcp-servers",
@@ -138,12 +159,6 @@ const menuGroups: MenuGroup[] = [
         label: "Skills",
         icon: <ApiOutlined />,
         roles: all_admin_roles,
-      },
-      {
-        key: "memory",
-        page: "memory",
-        label: "Memory",
-        icon: <BookOutlined />,
       },
       {
         key: "guardrails",
