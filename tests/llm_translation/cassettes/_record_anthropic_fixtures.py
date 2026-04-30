@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -161,12 +162,37 @@ def _serve(port: int, mode: str) -> ThreadingHTTPServer:
     return srv
 
 
+# Headers that vary every run (timestamps, server build) and must be stripped
+# so the cassette is byte-stable across regenerations. Replay does not depend
+# on them.
+_NON_DETERMINISTIC_HEADERS = ("Date", "Server")
+
+
+def _strip_nondeterministic_headers(path: Path) -> None:
+    """Remove headers whose values change every run from the cassette."""
+    text = path.read_text()
+    for header in _NON_DETERMINISTIC_HEADERS:
+        # Matches a YAML block like::
+        #
+        #       Date:
+        #       - Thu, 30 Apr 2026 00:43:16 GMT
+        #
+        # under the response ``headers:`` mapping. Indentation is fixed by vcrpy.
+        pattern = re.compile(
+            rf"^      {re.escape(header)}:\n      - .*\n",
+            re.MULTILINE,
+        )
+        text = pattern.sub("", text)
+    path.write_text(text)
+
+
 def _rewrite_cassette_to_real_host(path: Path, mock_host_port: str) -> None:
     """Replace mock host/port in the cassette with the real Anthropic host."""
     text = path.read_text()
     text = text.replace(f"http://{mock_host_port}", f"https://{REAL_ANTHROPIC_HOST}")
     text = text.replace(mock_host_port, REAL_ANTHROPIC_HOST)
     path.write_text(text)
+    _strip_nondeterministic_headers(path)
 
 
 def _consume(iterable: Iterable[Any]) -> None:
@@ -176,6 +202,8 @@ def _consume(iterable: Iterable[Any]) -> None:
 
 def record_non_streaming() -> None:
     cassette = CASSETTE_DIR / "anthropic_basic_completion.yaml"
+    if cassette.exists():
+        cassette.unlink()
     server = _serve(NON_STREAM_PORT, "json")
     try:
         my_vcr = vcr.VCR(
@@ -197,6 +225,8 @@ def record_non_streaming() -> None:
 
 def record_streaming() -> None:
     cassette = CASSETTE_DIR / "anthropic_streaming_completion.yaml"
+    if cassette.exists():
+        cassette.unlink()
     server = _serve(STREAM_PORT, "stream")
     try:
         my_vcr = vcr.VCR(
