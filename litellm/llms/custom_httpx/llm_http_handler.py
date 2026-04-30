@@ -188,13 +188,22 @@ class BaseLLMHTTPHandler:
             return None
         if isinstance(timeout, httpx.Timeout):
             return timeout
-        if isinstance(timeout, str):
-            if timeout.startswith("os.environ/"):
-                timeout = litellm.get_secret(timeout)  # type: ignore[assignment]
-                if timeout is None:
-                    return None
-            return float(timeout)
-        return float(timeout)
+
+        timeout_value: Any = timeout
+        if isinstance(timeout, str) and timeout.startswith("os.environ/"):
+            timeout_value = litellm.get_secret(timeout)
+            if timeout_value is None:
+                return None
+            if isinstance(timeout_value, httpx.Timeout):
+                return timeout_value
+
+        try:
+            return float(cast(Union[float, int, str], timeout_value))
+        except (TypeError, ValueError):
+            verbose_logger.warning(
+                "Invalid Anthropic /v1/messages timeout value: %s", timeout_value
+            )
+            return None
 
     @staticmethod
     def _get_anthropic_messages_timeout(

@@ -116,6 +116,7 @@ def test_fingerprint_agentic_tools_is_deterministic():
     "litellm_params,stream,expected_timeout",
     [
         (GenericLiteLLMParams(timeout=1.25), False, 1.25),
+        (GenericLiteLLMParams(timeout=1.25), True, 1.25),
         (GenericLiteLLMParams(timeout=30, stream_timeout=0.75), True, 0.75),
         (GenericLiteLLMParams(request_timeout=2.5), False, 2.5),
     ],
@@ -151,6 +152,25 @@ async def test_anthropic_messages_post_forwards_request_timeout(
     assert response == mock_response
     mock_client.post.assert_awaited_once()
     assert mock_client.post.call_args.kwargs["timeout"] == expected_timeout
+
+
+def test_coerce_http_timeout_reads_env_secret():
+    with patch("litellm.get_secret", return_value="3.5") as mock_get_secret:
+        result = BaseLLMHTTPHandler._coerce_http_timeout(
+            "os.environ/ANTHROPIC_MESSAGES_TIMEOUT"
+        )
+
+    assert result == 3.5
+    mock_get_secret.assert_called_once_with("os.environ/ANTHROPIC_MESSAGES_TIMEOUT")
+
+
+def test_coerce_http_timeout_returns_none_for_invalid_env_secret():
+    with patch("litellm.get_secret", return_value="not-a-number"):
+        result = BaseLLMHTTPHandler._coerce_http_timeout(
+            "os.environ/ANTHROPIC_MESSAGES_TIMEOUT"
+        )
+
+    assert result is None
 
 
 @pytest.mark.asyncio
