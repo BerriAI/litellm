@@ -391,7 +391,7 @@ async def test_update_database_and_spend_counters_updates_counters_after_db_upda
         increment_spend_counters=increment_spend_counters,
         user_api_key="test_api_key",
         user_id="test_user_id",
-        end_user_id=None,
+        end_user_id="test_end_user_id",
         team_id="test_team_id",
         org_id="test_org_id",
         kwargs={},
@@ -400,6 +400,7 @@ async def test_update_database_and_spend_counters_updates_counters_after_db_upda
         end_time=datetime.now(),
         response_cost=0.2,
         budget_reservation=budget_reservation,
+        request_tags=["tag-a"],
     )
 
     proxy_logging_obj.db_spend_update_writer.update_database.assert_awaited_once()
@@ -410,6 +411,8 @@ async def test_update_database_and_spend_counters_updates_counters_after_db_upda
         response_cost=0.2,
         org_id="test_org_id",
         budget_reservation=budget_reservation,
+        end_user_id="test_end_user_id",
+        tags=["tag-a"],
     )
 
 
