@@ -99,6 +99,11 @@ class UISettings(BaseModel):
         description="If true, requires authentication for accessing the public AI Hub.",
     )
 
+    allow_public_health_readiness_details: bool = Field(
+        default=False,
+        description="If true, returns the legacy detailed payload from the unauthenticated /health/readiness endpoint.",
+    )
+
     forward_client_headers_to_llm_api: bool = Field(
         default=False,
         description=(
@@ -169,6 +174,7 @@ ALLOWED_UI_SETTINGS_FIELDS = {
     "disable_team_admin_delete_team_user",
     "enabled_ui_pages_internal_users",
     "require_auth_for_public_ai_hub",
+    "allow_public_health_readiness_details",
     "forward_client_headers_to_llm_api",
     "forward_llm_provider_auth_headers",
     "disable_agents_for_internal_users",
@@ -184,6 +190,7 @@ ALLOWED_UI_SETTINGS_FIELDS = {
 # general_settings at runtime (on both read and write).
 _RUNTIME_GENERAL_SETTINGS_FLAGS = [
     "require_auth_for_public_ai_hub",
+    "allow_public_health_readiness_details",
     "forward_client_headers_to_llm_api",
     "forward_llm_provider_auth_headers",
     "disable_agents_for_internal_users",
