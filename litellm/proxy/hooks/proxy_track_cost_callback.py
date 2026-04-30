@@ -37,6 +37,10 @@ class _ProxyDBLogger(CustomLogger):
         user_api_key_dict: UserAPIKeyAuth,
         traceback_str: Optional[str] = None,
     ):
+        await _release_budget_reservation(
+            budget_reservation=user_api_key_dict.budget_reservation
+        )
+
         request_route = user_api_key_dict.request_route
         if _ProxyDBLogger._should_track_errors_in_db() is False:
             return
@@ -158,6 +162,9 @@ class _ProxyDBLogger(CustomLogger):
             litellm_params = kwargs.get("litellm_params", {}) or {}
             end_user_id = get_end_user_id_for_cost_tracking(litellm_params)
             metadata = get_litellm_metadata_from_kwargs(kwargs=kwargs)
+            budget_reservation = _get_budget_reservation_from_metadata(
+                metadata=metadata
+            )
             user_id = cast(Optional[str], metadata.get("user_api_key_user_id", None))
             team_id = cast(Optional[str], metadata.get("user_api_key_team_id", None))
             org_id = cast(Optional[str], metadata.get("user_api_key_org_id", None))
@@ -193,27 +200,20 @@ class _ProxyDBLogger(CustomLogger):
                     end_user_id=end_user_id,
                 ):
                     ## UPDATE DATABASE
-                    await proxy_logging_obj.db_spend_update_writer.update_database(
-                        token=user_api_key,
-                        response_cost=response_cost,
+                    await _update_database_and_spend_counters(
+                        proxy_logging_obj=proxy_logging_obj,
+                        increment_spend_counters=increment_spend_counters,
+                        user_api_key=user_api_key,
                         user_id=user_id,
                         end_user_id=end_user_id,
                         team_id=team_id,
+                        org_id=org_id,
                         kwargs=kwargs,
                         completion_response=completion_response,
                         start_time=start_time,
                         end_time=end_time,
-                        org_id=org_id,
-                    )
-
-                    # Atomically update spend counters (in-memory + Redis)
-                    # for cross-pod budget enforcement.
-                    await increment_spend_counters(
-                        token=user_api_key,
-                        team_id=team_id,
-                        user_id=user_id,
                         response_cost=response_cost,
-                        org_id=org_id,
+                        budget_reservation=budget_reservation,
                     )
 
                     # update cache (fire-and-forget for backward compat:
@@ -237,7 +237,12 @@ class _ProxyDBLogger(CustomLogger):
                         response_cost=response_cost,
                         max_budget=end_user_max_budget,
                     )
+                elif budget_reservation is not None:
+                    await _release_budget_reservation(
+                        budget_reservation=budget_reservation
+                    )
             else:
+                await _release_budget_reservation(budget_reservation=budget_reservation)
                 # Non-model call types (health checks, afile_delete) have no model or standard_logging_object.
                 # Use .get() for "stream" to avoid KeyError on health checks.
                 if sl_object is None and not kwargs.get("model"):
@@ -388,3 +393,71 @@ def _should_track_cost_callback(
     ):
         return True
     return False
+
+
+def _get_budget_reservation_from_metadata(metadata: dict) -> Optional[dict]:
+    user_api_key_auth_obj = metadata.get("user_api_key_auth")
+    if user_api_key_auth_obj is None:
+        return None
+    return getattr(user_api_key_auth_obj, "budget_reservation", None)
+
+
+async def _update_database_and_spend_counters(
+    proxy_logging_obj: Any,
+    increment_spend_counters: Any,
+    user_api_key: Optional[str],
+    user_id: Optional[str],
+    end_user_id: Optional[str],
+    team_id: Optional[str],
+    org_id: Optional[str],
+    kwargs: dict,
+    completion_response: Optional[Union[litellm.ModelResponse, Any]],
+    start_time: Any,
+    end_time: Any,
+    response_cost: float,
+    budget_reservation: Optional[dict],
+) -> None:
+    try:
+        await proxy_logging_obj.db_spend_update_writer.update_database(
+            token=user_api_key,
+            response_cost=response_cost,
+            user_id=user_id,
+            end_user_id=end_user_id,
+            team_id=team_id,
+            kwargs=kwargs,
+            completion_response=completion_response,
+            start_time=start_time,
+            end_time=end_time,
+            org_id=org_id,
+        )
+    except Exception:
+        if budget_reservation is not None:
+            await _release_budget_reservation(budget_reservation=budget_reservation)
+        raise
+
+    try:
+        await increment_spend_counters(
+            token=user_api_key,
+            team_id=team_id,
+            user_id=user_id,
+            response_cost=response_cost,
+            org_id=org_id,
+            budget_reservation=budget_reservation,
+        )
+    except Exception:
+        if budget_reservation is not None:
+            await _release_budget_reservation(budget_reservation=budget_reservation)
+        raise
+
+
+async def _release_budget_reservation(budget_reservation: Optional[dict]) -> None:
+    if budget_reservation is None:
+        return
+
+    from litellm.proxy.spend_tracking.budget_reservation import (
+        release_budget_reservation,
+    )
+
+    await release_budget_reservation(
+        budget_reservation=budget_reservation,
+    )

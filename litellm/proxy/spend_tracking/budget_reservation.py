@@ -1,0 +1,673 @@
+from __future__ import annotations
+
+import json
+from dataclasses import dataclass
+from typing import Any, Dict, List, Optional, Sequence, cast
+
+import litellm
+from litellm._logging import verbose_proxy_logger
+from litellm.caching import DualCache
+from litellm.proxy._types import (
+    LiteLLM_TeamMembership,
+    LiteLLM_TeamTable,
+    LiteLLM_UserTable,
+    UserAPIKeyAuth,
+)
+from litellm.proxy.auth.auth_utils import get_model_from_request
+from litellm.proxy.auth.route_checks import RouteChecks
+from litellm.proxy.utils import PrismaClient, ProxyLogging
+from litellm.router import Router
+
+
+@dataclass
+class _BudgetCounter:
+    counter_key: str
+    max_budget: float
+    fallback_spend: float
+    entity_type: str
+    entity_id: str
+    source_cache_key: Optional[str] = None
+
+
+def get_reserved_counter_keys(budget_reservation: Optional[dict]) -> set:
+    if not budget_reservation:
+        return set()
+    entries = budget_reservation.get("entries") or []
+    return {
+        entry["counter_key"]
+        for entry in entries
+        if isinstance(entry, dict) and entry.get("counter_key") is not None
+    }
+
+
+async def reserve_budget_for_request(
+    request_body: dict,
+    route: str,
+    llm_router: Optional[Router],
+    valid_token: Optional[UserAPIKeyAuth],
+    team_object: Optional[LiteLLM_TeamTable],
+    user_object: Optional[LiteLLM_UserTable],
+    prisma_client: Optional[PrismaClient],
+    user_api_key_cache: DualCache,
+    proxy_logging_obj: ProxyLogging,
+) -> Optional[dict]:
+    if valid_token is None or not RouteChecks.is_llm_api_route(route=route):
+        return None
+    if route in {"/models", "/v1/models", "/utils/token_counter"}:
+        return None
+    if get_model_from_request(request_body, route) is None:
+        return None
+
+    counters = await _get_budget_counters(
+        valid_token=valid_token,
+        team_object=team_object,
+        user_object=user_object,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+    if not counters:
+        return None
+
+    current_spend_by_counter_key: Dict[str, float] = {}
+    reservation_cost = estimate_request_max_cost(
+        request_body=request_body,
+        route=route,
+        llm_router=llm_router,
+    )
+    if reservation_cost is None:
+        reservation_cost = await _get_smallest_remaining_budget(
+            counters=counters,
+            current_spend_by_counter_key=current_spend_by_counter_key,
+        )
+    if reservation_cost is None or reservation_cost <= 0:
+        return None
+
+    applied_entries: List[Dict[str, Any]] = []
+    try:
+        for counter in counters:
+            entry = _counter_to_reservation_entry(counter)
+            reserved_value = await _reserve_counter(
+                counter=counter,
+                reservation_cost=reservation_cost,
+            )
+            applied_entries.append(entry)
+
+            if reserved_value is not None:
+                current_spend = reserved_value
+            else:
+                cached_spend = current_spend_by_counter_key.get(counter.counter_key)
+                if cached_spend is None:
+                    cached_spend = await _get_current_counter_value(counter=counter)
+                current_spend = cached_spend + reservation_cost
+            if current_spend > counter.max_budget:
+                raise litellm.BudgetExceededError(
+                    current_cost=current_spend,
+                    max_budget=counter.max_budget,
+                    message=(
+                        "Budget has been exceeded! "
+                        f"{counter.entity_type}={counter.entity_id} "
+                        f"Current cost: {current_spend}, "
+                        f"Max budget: {counter.max_budget}"
+                    ),
+                )
+    except Exception:
+        await _set_reserved_entries_adjustment(
+            entries=applied_entries,
+            target_adjustment=-reservation_cost,
+        )
+        raise
+
+    return {
+        "reserved_cost": reservation_cost,
+        "entries": applied_entries,
+        "finalized": False,
+    }
+
+
+async def reconcile_budget_reservation(
+    budget_reservation: Optional[dict],
+    actual_cost: Optional[float],
+) -> None:
+    if not budget_reservation or budget_reservation.get("finalized") is True:
+        return
+
+    reserved_cost = float(budget_reservation.get("reserved_cost") or 0.0)
+    actual = float(actual_cost or 0.0)
+    adjustment = actual - reserved_cost
+    await _set_reserved_entries_adjustment(
+        entries=budget_reservation.get("entries") or [],
+        target_adjustment=adjustment,
+    )
+    budget_reservation["finalized"] = True
+
+
+async def release_budget_reservation(budget_reservation: Optional[dict]) -> None:
+    await reconcile_budget_reservation(
+        budget_reservation=budget_reservation,
+        actual_cost=0.0,
+    )
+
+
+async def _get_budget_counters(
+    valid_token: UserAPIKeyAuth,
+    team_object: Optional[LiteLLM_TeamTable],
+    user_object: Optional[LiteLLM_UserTable],
+    prisma_client: Optional[PrismaClient],
+    user_api_key_cache: DualCache,
+    proxy_logging_obj: ProxyLogging,
+) -> List[_BudgetCounter]:
+    counters: List[_BudgetCounter] = []
+
+    if valid_token.token is not None:
+        if valid_token.max_budget is not None and valid_token.max_budget > 0:
+            counters.append(
+                _BudgetCounter(
+                    counter_key=f"spend:key:{valid_token.token}",
+                    source_cache_key=valid_token.token,
+                    max_budget=float(valid_token.max_budget),
+                    fallback_spend=float(valid_token.spend or 0.0),
+                    entity_type="Key",
+                    entity_id=valid_token.token,
+                )
+            )
+        counters.extend(
+            _get_budget_limit_counters(
+                entity_prefix=f"spend:key:{valid_token.token}",
+                entity_type="Key",
+                entity_id=valid_token.token,
+                budget_limits=valid_token.budget_limits,
+            )
+        )
+
+    if team_object is not None and team_object.team_id is not None:
+        team_id = team_object.team_id
+        if team_object.max_budget is not None and team_object.max_budget > 0:
+            counters.append(
+                _BudgetCounter(
+                    counter_key=f"spend:team:{team_id}",
+                    source_cache_key=f"team_id:{team_id}",
+                    max_budget=float(team_object.max_budget),
+                    fallback_spend=float(team_object.spend or 0.0),
+                    entity_type="Team",
+                    entity_id=team_id,
+                )
+            )
+        counters.extend(
+            _get_budget_limit_counters(
+                entity_prefix=f"spend:team:{team_id}",
+                entity_type="Team",
+                entity_id=team_id,
+                budget_limits=team_object.budget_limits,
+            )
+        )
+
+    if (
+        (team_object is None or team_object.team_id is None)
+        and user_object is not None
+        and user_object.user_id is not None
+        and user_object.max_budget is not None
+        and user_object.max_budget > 0
+    ):
+        counters.append(
+            _BudgetCounter(
+                counter_key=f"spend:user:{user_object.user_id}",
+                source_cache_key=user_object.user_id,
+                max_budget=float(user_object.max_budget),
+                fallback_spend=float(user_object.spend or 0.0),
+                entity_type="User",
+                entity_id=user_object.user_id,
+            )
+        )
+
+    team_member_counter = await _get_team_member_budget_counter(
+        valid_token=valid_token,
+        team_object=team_object,
+        user_object=user_object,
+        user_api_key_cache=user_api_key_cache,
+    )
+    if team_member_counter is not None:
+        counters.append(team_member_counter)
+
+    org_counter = await _get_org_budget_counter(
+        valid_token=valid_token,
+        team_object=team_object,
+        user_api_key_cache=user_api_key_cache,
+    )
+    if org_counter is not None:
+        counters.append(org_counter)
+
+    return counters
+
+
+async def _get_team_member_budget_counter(
+    valid_token: UserAPIKeyAuth,
+    team_object: Optional[LiteLLM_TeamTable],
+    user_object: Optional[LiteLLM_UserTable],
+    user_api_key_cache: DualCache,
+) -> Optional[_BudgetCounter]:
+    if (
+        team_object is None
+        or team_object.team_id is None
+        or user_object is None
+        or valid_token.user_id is None
+    ):
+        return None
+
+    membership_cache_key = (
+        f"team_membership:{valid_token.user_id}:{team_object.team_id}"
+    )
+    cached_team_membership = await user_api_key_cache.async_get_cache(
+        key=membership_cache_key
+    )
+    team_membership: Optional[LiteLLM_TeamMembership] = None
+    if isinstance(cached_team_membership, LiteLLM_TeamMembership):
+        team_membership = cached_team_membership
+    elif isinstance(cached_team_membership, dict):
+        team_membership = LiteLLM_TeamMembership(**cached_team_membership)
+
+    team_member_budget: Optional[float] = None
+    if team_membership is not None and team_membership.litellm_budget_table is not None:
+        team_member_budget = team_membership.litellm_budget_table.max_budget
+    else:
+        default_budget_id = (team_object.metadata or {}).get("team_member_budget_id")
+        if isinstance(default_budget_id, str):
+            default_budget = await user_api_key_cache.async_get_cache(
+                key=f"team_member_default_budget:{default_budget_id}",
+            )
+            team_member_budget = _to_float(_get_value(default_budget, "max_budget"))
+
+    if team_member_budget is None or team_member_budget <= 0:
+        return None
+
+    team_member_spend = (
+        cast(LiteLLM_TeamMembership, team_membership).spend
+        if team_membership is not None
+        else 0.0
+    )
+    return _BudgetCounter(
+        counter_key=f"spend:team_member:{valid_token.user_id}:{team_object.team_id}",
+        source_cache_key=membership_cache_key,
+        max_budget=float(team_member_budget),
+        fallback_spend=float(team_member_spend or 0.0),
+        entity_type="TeamMember",
+        entity_id=f"{valid_token.user_id}:{team_object.team_id}",
+    )
+
+
+async def _get_org_budget_counter(
+    valid_token: UserAPIKeyAuth,
+    team_object: Optional[LiteLLM_TeamTable],
+    user_api_key_cache: DualCache,
+) -> Optional[_BudgetCounter]:
+    org_id: Optional[str] = None
+    if valid_token.org_id is not None:
+        org_id = valid_token.org_id
+    elif team_object is not None and team_object.organization_id is not None:
+        org_id = team_object.organization_id
+    if org_id is None:
+        return None
+
+    org_table = await user_api_key_cache.async_get_cache(
+        key=f"org_id:{org_id}:with_budget",
+    )
+    if org_table is None:
+        return None
+
+    org_budget_table = _get_value(org_table, "litellm_budget_table")
+    if org_budget_table is None:
+        return None
+
+    org_max_budget = _to_float(_get_value(org_budget_table, "max_budget"))
+    if org_max_budget is None or org_max_budget <= 0:
+        return None
+
+    org_spend = _to_float(_get_value(org_table, "spend")) or 0.0
+    return _BudgetCounter(
+        counter_key=f"spend:org:{org_id}",
+        source_cache_key=f"org_id:{org_id}:with_budget",
+        max_budget=org_max_budget,
+        fallback_spend=org_spend,
+        entity_type="Organization",
+        entity_id=org_id,
+    )
+
+
+def _get_budget_limit_counters(
+    entity_prefix: str,
+    entity_type: str,
+    entity_id: str,
+    budget_limits: Optional[Sequence[Any]],
+) -> List[_BudgetCounter]:
+    counters: List[_BudgetCounter] = []
+    if not budget_limits:
+        return counters
+
+    for window in budget_limits:
+        window_dict = _coerce_window(window)
+        budget_duration = window_dict.get("budget_duration")
+        max_budget = window_dict.get("max_budget")
+        if not budget_duration or max_budget is None or max_budget <= 0:
+            continue
+        # Window counters intentionally have no source_cache_key: the DB stores
+        # window definitions/reset times, but not accumulated per-window spend.
+        counters.append(
+            _BudgetCounter(
+                counter_key=f"{entity_prefix}:window:{budget_duration}",
+                max_budget=float(max_budget),
+                fallback_spend=0.0,
+                entity_type=entity_type,
+                entity_id=f"{entity_id}:{budget_duration}",
+            )
+        )
+    return counters
+
+
+def _coerce_window(window: Any) -> dict:
+    if isinstance(window, dict):
+        return window
+    if isinstance(window, str):
+        try:
+            parsed = json.loads(window)
+            return parsed if isinstance(parsed, dict) else {}
+        except Exception:
+            return {}
+    if hasattr(window, "model_dump"):
+        return window.model_dump()
+    return {}
+
+
+async def _get_smallest_remaining_budget(
+    counters: List[_BudgetCounter],
+    current_spend_by_counter_key: Dict[str, float],
+) -> Optional[float]:
+    remaining_budget: Optional[float] = None
+    for counter in counters:
+        current_spend = await _get_current_counter_value(counter=counter)
+        current_spend_by_counter_key[counter.counter_key] = current_spend
+        remaining = counter.max_budget - current_spend
+        if remaining <= 0:
+            raise litellm.BudgetExceededError(
+                current_cost=current_spend,
+                max_budget=counter.max_budget,
+                message=(
+                    "Budget has been exceeded! "
+                    f"{counter.entity_type}={counter.entity_id} "
+                    f"Current cost: {current_spend}, "
+                    f"Max budget: {counter.max_budget}"
+                ),
+            )
+        remaining_budget = (
+            remaining if remaining_budget is None else min(remaining_budget, remaining)
+        )
+    return remaining_budget
+
+
+async def _reserve_counter(
+    counter: _BudgetCounter,
+    reservation_cost: float,
+) -> Optional[float]:
+    from litellm.proxy.proxy_server import (
+        _ensure_spend_counter_initialized,
+        spend_counter_cache,
+    )
+
+    if counter.source_cache_key is not None:
+        await _ensure_spend_counter_initialized(
+            counter_key=counter.counter_key,
+            source_cache_key=counter.source_cache_key,
+        )
+
+    reserved_value = await spend_counter_cache.async_increment_cache(
+        key=counter.counter_key,
+        value=reservation_cost,
+    )
+    return float(reserved_value) if reserved_value is not None else None
+
+
+async def _get_current_counter_value(counter: _BudgetCounter) -> float:
+    from litellm.proxy.proxy_server import get_current_spend
+
+    return await get_current_spend(
+        counter_key=counter.counter_key,
+        fallback_spend=counter.fallback_spend,
+    )
+
+
+async def _set_reserved_entries_adjustment(
+    entries: List[dict],
+    target_adjustment: float,
+) -> None:
+    from litellm.proxy.proxy_server import spend_counter_cache
+
+    for entry in entries:
+        counter_key = entry.get("counter_key")
+        if counter_key is None:
+            continue
+        applied_adjustment = float(entry.get("applied_adjustment") or 0.0)
+        adjustment = target_adjustment - applied_adjustment
+        if adjustment == 0:
+            continue
+        await spend_counter_cache.async_increment_cache(
+            key=counter_key,
+            value=adjustment,
+        )
+        entry["applied_adjustment"] = target_adjustment
+
+
+def _counter_to_reservation_entry(counter: _BudgetCounter) -> Dict[str, Any]:
+    return {
+        "counter_key": counter.counter_key,
+        "entity_type": counter.entity_type,
+        "entity_id": counter.entity_id,
+        "applied_adjustment": 0.0,
+    }
+
+
+def estimate_request_max_cost(
+    request_body: dict,
+    route: str,
+    llm_router: Optional[Router],
+) -> Optional[float]:
+    model = get_model_from_request(request_body, route)
+    if model is None:
+        return None
+
+    models = [model] if isinstance(model, str) else model
+    estimates = [
+        _estimate_request_max_cost_for_model(
+            request_body=request_body,
+            route=route,
+            model=model_name,
+            llm_router=llm_router,
+        )
+        for model_name in models
+    ]
+    estimates = [estimate for estimate in estimates if estimate is not None]
+    if not estimates:
+        return None
+    return max(cast(List[float], estimates))
+
+
+def _estimate_request_max_cost_for_model(
+    request_body: dict,
+    route: str,
+    model: str,
+    llm_router: Optional[Router],
+) -> Optional[float]:
+    model_info = _get_model_cost_info(model=model, llm_router=llm_router)
+    if model_info is None:
+        return None
+
+    input_cost_per_token = _to_float(model_info.get("input_cost_per_token"))
+    output_cost_per_token = _to_float(model_info.get("output_cost_per_token"))
+    input_tokens = _estimate_input_tokens(
+        request_body=request_body,
+        route=route,
+        model=model,
+        model_info=model_info,
+    )
+    output_tokens = _estimate_output_tokens(
+        request_body=request_body,
+        route=route,
+        model_info=model_info,
+    )
+    if input_tokens is None or output_tokens is None:
+        return None
+
+    cost = 0.0
+    if input_cost_per_token is not None:
+        cost += input_tokens * input_cost_per_token
+    elif input_tokens > 0:
+        return None
+
+    output_multiplier = _get_output_multiplier(request_body=request_body)
+    if output_cost_per_token is not None:
+        cost += output_tokens * output_multiplier * output_cost_per_token
+    elif output_tokens > 0:
+        return None
+
+    return cost
+
+
+def _get_model_cost_info(
+    model: str,
+    llm_router: Optional[Router],
+) -> Optional[Dict[str, Any]]:
+    if llm_router is not None:
+        try:
+            model_group_info = llm_router.get_model_group_info(model_group=model)
+            if model_group_info is not None:
+                return model_group_info.model_dump()
+        except Exception:
+            verbose_proxy_logger.debug(
+                "Unable to load router model group info for budget reservation",
+                exc_info=True,
+            )
+
+    try:
+        return dict(litellm.get_model_info(model=model))
+    except Exception:
+        return None
+
+
+def _estimate_input_tokens(
+    request_body: dict,
+    route: str,
+    model: str,
+    model_info: Dict[str, Any],
+) -> Optional[int]:
+    try:
+        if "messages" in request_body:
+            return litellm.token_counter(
+                model=model,
+                messages=request_body.get("messages") or [],
+                tools=request_body.get("tools"),
+                tool_choice=request_body.get("tool_choice"),
+            )
+        if "prompt" in request_body:
+            return _count_text_tokens(model=model, text=request_body.get("prompt"))
+        if "input" in request_body:
+            return _count_text_tokens(model=model, text=request_body.get("input"))
+        if "query" in request_body or "documents" in request_body:
+            query_tokens = _count_text_tokens(
+                model=model, text=request_body.get("query")
+            )
+            document_tokens = _count_text_tokens(
+                model=model,
+                text=request_body.get("documents"),
+            )
+            return query_tokens + document_tokens
+    except Exception:
+        verbose_proxy_logger.debug(
+            "Unable to count input tokens for budget reservation", exc_info=True
+        )
+
+    max_input_tokens = _to_int(model_info.get("max_input_tokens"))
+    if max_input_tokens is not None:
+        return max_input_tokens
+
+    return None
+
+
+def _estimate_output_tokens(
+    request_body: dict,
+    route: str,
+    model_info: Dict[str, Any],
+) -> Optional[int]:
+    if _is_input_only_route(route=route):
+        return 0
+
+    for key in ("max_completion_tokens", "max_tokens", "max_output_tokens"):
+        max_tokens = _to_int(request_body.get(key))
+        if max_tokens is not None:
+            return max_tokens
+
+    # If the caller did not cap output tokens, avoid reserving a model's
+    # theoretical maximum context. The caller can still admit one request by
+    # reserving the smallest remaining budget in reserve_budget_for_request().
+    return None
+
+
+def _count_text_tokens(model: str, text: Any) -> int:
+    if text is None:
+        return 0
+
+    token_count = 0
+    stack = [text]
+    while stack:
+        item = stack.pop()
+        if item is None:
+            continue
+        if isinstance(item, list):
+            stack.extend(item)
+            continue
+        if isinstance(item, dict):
+            token_count += litellm.token_counter(model=model, text=json.dumps(item))
+            continue
+        token_count += litellm.token_counter(model=model, text=str(item))
+    return token_count
+
+
+def _get_output_multiplier(request_body: dict) -> int:
+    output_multiplier = 1
+    for key in ("n", "best_of"):
+        value = _to_int(request_body.get(key))
+        if value is not None:
+            output_multiplier = max(output_multiplier, value)
+    return output_multiplier
+
+
+def _is_input_only_route(route: str) -> bool:
+    return any(
+        route_part in route
+        for route_part in (
+            "embeddings",
+            "rerank",
+            "moderations",
+        )
+    )
+
+
+def _to_float(value: Any) -> Optional[float]:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _to_int(value: Any) -> Optional[int]:
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _get_value(obj: Any, key: str) -> Any:
+    if isinstance(obj, dict):
+        return obj.get(key)
+    return getattr(obj, key, None)
