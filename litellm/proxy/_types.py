@@ -756,6 +756,8 @@ class LiteLLMRoutes(enum.Enum):
             "/config/field/info",
             "/budget/list",
             "/budget/settings",
+            # Invitation viewing (admin viewer cannot create/delete; can read).
+            "/invitation/info",
             # Model cost map maintenance views (read-only status / source).
             "/schedule/model_cost_map_reload/status",
             "/model/cost_map/source",
