@@ -6,6 +6,7 @@ from collections import OrderedDict
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 from fastapi import Request
+from pydantic import ValidationError as PydanticValidationError
 from starlette.datastructures import Headers
 
 import litellm
@@ -238,7 +239,7 @@ def _get_validated_callback_metadata(
 ) -> Optional[AddTeamCallback]:
     try:
         return AddTeamCallback(**item)
-    except ValueError as e:
+    except (PydanticValidationError, ValueError) as e:
         verbose_proxy_logger.warning(
             "Ignoring invalid %s callback metadata: %s",
             source,
