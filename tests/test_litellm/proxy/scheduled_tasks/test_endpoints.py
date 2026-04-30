@@ -392,6 +392,33 @@ class TestCreate:
             r = self.client.post("/v1/tasks", json=payload)
         assert r.status_code == 400
 
+    def test_once_with_iso_spec_uses_it_verbatim(self):
+        """Regression: kind='once' must honor schedule_spec, not park at year 9999."""
+        fire_at = _now() + timedelta(minutes=2)
+        payload = _create_payload(
+            schedule_kind="once",
+            schedule_spec=fire_at.isoformat(),
+        )
+        with _patch_prisma(self.prisma):
+            r = self.client.post("/v1/tasks", json=payload)
+        assert r.status_code == 200, r.text
+        body = r.json()
+        # next_run_at should match the supplied spec to the second.
+        got = datetime.fromisoformat(body["next_run_at"].replace("Z", "+00:00"))
+        assert abs((got - fire_at).total_seconds()) < 1
+        assert got.year == fire_at.year
+
+    def test_once_with_unparseable_spec_rejected(self):
+        """Regression: kind='once' with non-ISO spec must 400, not silently store."""
+        payload = _create_payload(
+            schedule_kind="once",
+            schedule_spec="1m",  # was silently parked at year 9999 prior to fix
+        )
+        with _patch_prisma(self.prisma):
+            r = self.client.post("/v1/tasks", json=payload)
+        assert r.status_code == 400
+        assert "ISO-8601" in r.json()["detail"]
+
 
 class TestListAndGet:
     def setup_method(self):

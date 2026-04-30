@@ -1,11 +1,12 @@
 """
 Schedule parsing + next-run computation for LiteLLM_ScheduledTaskTable.
 
-Ported from test_local_agent_2/task_runner.py:299-340. Three schedule kinds:
+Three schedule kinds:
   interval: '30s', '5m', '2h', '1d'
   cron:     standard 5-field crontab; honours schedule_tz (IANA)
-  once:     parked at year 9999; fire_once=True flips status='fired' after
-            first fire so we never consult next_run_at again.
+  once:     ISO-8601 absolute timestamp ('2026-04-30T00:00:00Z' or with
+            offset/microseconds). Fires once at that instant; fire_once=True
+            flips status='fired' after the first claim.
 
 All returned datetimes are UTC, timezone-aware.
 """
@@ -40,6 +41,27 @@ def _parse_interval(spec: str) -> timedelta:
     return timedelta(**{unit: n})
 
 
+def _parse_once(spec: str) -> datetime:
+    """
+    Parse an ISO-8601 timestamp for kind='once'. Accepts trailing 'Z'
+    (Python <3.11 datetime.fromisoformat doesn't), explicit offsets, and
+    naive timestamps (treated as UTC). Always returns a tz-aware UTC
+    datetime.
+    """
+    if not spec:
+        raise ValueError("schedule_spec for kind='once' must not be empty")
+    normalized = spec.strip().replace("Z", "+00:00")
+    try:
+        dt = datetime.fromisoformat(normalized)
+    except ValueError as e:
+        raise ValueError(
+            f"schedule_spec for kind='once' must be ISO-8601, got {spec!r}"
+        ) from e
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
 def validate_schedule(
     *,
     kind: str,
@@ -60,7 +82,7 @@ def validate_schedule(
             except ZoneInfoNotFoundError as e:
                 raise ValueError(f"invalid schedule_tz: {tz!r}") from e
     elif kind == "once":
-        return
+        _parse_once(spec)
     else:
         raise ValueError(f"unknown schedule_kind: {kind!r}")
 
@@ -73,9 +95,14 @@ def compute_next_run(
     from_time: datetime,
 ) -> datetime:
     """
-    Returns UTC datetime. For 'once', returns far-future sentinel.
+    Returns UTC datetime.
 
     `from_time` should be timezone-aware; if naive, treated as UTC.
+
+    For 'once', schedule_spec is an absolute ISO-8601 timestamp and is
+    returned verbatim (in UTC). This is the value the caller wants the
+    task to fire at — fire_once=True flips it to status='fired' after
+    the first claim, so we never re-consult it.
     """
     if from_time.tzinfo is None:
         from_time = from_time.replace(tzinfo=timezone.utc)
@@ -88,5 +115,5 @@ def compute_next_run(
             return _FAR_FUTURE
         return nxt.astimezone(timezone.utc)
     if kind == "once":
-        return _FAR_FUTURE
+        return _parse_once(spec)
     raise ValueError(f"unknown schedule_kind: {kind!r}")

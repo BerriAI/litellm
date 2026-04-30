@@ -39,8 +39,37 @@ class TestValidateSchedule:
         with pytest.raises(ValueError, match="invalid"):
             validate_schedule(kind="cron", spec="0 9 * * *", tz="Europe/Atlantis")
 
-    def test_once_ok(self):
-        validate_schedule(kind="once", spec="ignored", tz=None)
+    def test_once_iso_with_z(self):
+        validate_schedule(kind="once", spec="2030-06-15T12:00:00Z", tz=None)
+
+    def test_once_iso_with_offset(self):
+        validate_schedule(
+            kind="once",
+            spec="2030-06-15T12:00:00+00:00",
+            tz=None,
+        )
+
+    def test_once_iso_with_microseconds(self):
+        validate_schedule(
+            kind="once",
+            spec="2030-06-15T12:00:00.123456Z",
+            tz=None,
+        )
+
+    def test_once_naive_iso_treated_utc(self):
+        validate_schedule(kind="once", spec="2030-06-15T12:00:00", tz=None)
+
+    def test_once_rejects_relative_duration(self):
+        with pytest.raises(ValueError, match="ISO-8601"):
+            validate_schedule(kind="once", spec="1m", tz=None)
+
+    def test_once_rejects_garbage(self):
+        with pytest.raises(ValueError, match="ISO-8601"):
+            validate_schedule(kind="once", spec="not a date", tz=None)
+
+    def test_once_rejects_empty(self):
+        with pytest.raises(ValueError):
+            validate_schedule(kind="once", spec="", tz=None)
 
     def test_unknown_kind(self):
         with pytest.raises(ValueError, match="unknown schedule_kind"):
@@ -71,10 +100,54 @@ class TestComputeNextRun:
         assert nxt.utcoffset() == timedelta(0)
         assert nxt > now
 
-    def test_once_returns_far_future(self):
+    def test_once_uses_schedule_spec_verbatim(self):
+        """Regression: kind='once' must use the supplied ISO timestamp,
+        not silently park at year 9999."""
         now = datetime(2026, 4, 29, 12, 0, 0, tzinfo=timezone.utc)
-        nxt = compute_next_run(kind="once", spec="x", tz=None, from_time=now)
-        assert nxt == _FAR_FUTURE
+        fire_at = datetime(2030, 6, 15, 12, 0, 0, tzinfo=timezone.utc)
+        nxt = compute_next_run(
+            kind="once",
+            spec=fire_at.isoformat(),
+            tz=None,
+            from_time=now,
+        )
+        assert nxt == fire_at
+        assert nxt != _FAR_FUTURE
+
+    def test_once_accepts_z_suffix(self):
+        now = datetime(2026, 4, 29, 12, 0, 0, tzinfo=timezone.utc)
+        nxt = compute_next_run(
+            kind="once",
+            spec="2030-06-15T12:00:00Z",
+            tz=None,
+            from_time=now,
+        )
+        assert nxt == datetime(2030, 6, 15, 12, 0, 0, tzinfo=timezone.utc)
+
+    def test_once_accepts_microseconds(self):
+        now = datetime(2026, 4, 29, 12, 0, 0, tzinfo=timezone.utc)
+        nxt = compute_next_run(
+            kind="once",
+            spec="2030-06-15T12:00:00.500000Z",
+            tz=None,
+            from_time=now,
+        )
+        assert nxt == datetime(2030, 6, 15, 12, 0, 0, 500000, tzinfo=timezone.utc)
+
+    def test_once_naive_input_treated_utc(self):
+        now = datetime(2026, 4, 29, 12, 0, 0, tzinfo=timezone.utc)
+        nxt = compute_next_run(
+            kind="once",
+            spec="2030-06-15T12:00:00",
+            tz=None,
+            from_time=now,
+        )
+        assert nxt == datetime(2030, 6, 15, 12, 0, 0, tzinfo=timezone.utc)
+
+    def test_once_rejects_unparseable_spec(self):
+        now = datetime(2026, 4, 29, 12, 0, 0, tzinfo=timezone.utc)
+        with pytest.raises(ValueError, match="ISO-8601"):
+            compute_next_run(kind="once", spec="1m", tz=None, from_time=now)
 
     def test_unknown_kind_raises(self):
         now = datetime(2026, 4, 29, 12, 0, 0, tzinfo=timezone.utc)
