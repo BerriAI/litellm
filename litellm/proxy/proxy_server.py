@@ -12616,10 +12616,13 @@ async def update_config(  # noqa: PLR0915
                 existing[k] = encrypt_value_helper(value=v)
             await _upsert_section("environment_variables", existing)
 
-        # litellm_settings: existing-wins merge (preserving legacy behavior),
-        # except success_callback is always normalized + deduped, and unioned
-        # with any existing list. Normalizing on every write — not only when
-        # an existing entry is present — keeps the DB free of mixed-case
+        # litellm_settings: merge existing + request, request wins (matching
+        # router_settings semantics — the caller's value for any given key is
+        # what gets persisted). success_callback is special-cased: it is
+        # always normalized + deduped, and unioned with any existing list,
+        # because callbacks are additive (callers send the new entry, not
+        # the full set). Normalizing on every write — not only when an
+        # existing entry is present — keeps the DB free of mixed-case
         # entries that delete_callback (lowercase lookup) cannot find.
         if config_info.litellm_settings is not None:
             existing = await _read_section("litellm_settings")
@@ -12631,7 +12634,7 @@ async def update_config(  # noqa: PLR0915
                     incoming_cb
                 )
 
-            merged = {**updated_litellm_settings, **existing}
+            merged = {**existing, **updated_litellm_settings}
 
             incoming_cb = updated_litellm_settings.get("success_callback")
             existing_cb = existing.get("success_callback")

@@ -192,6 +192,36 @@ def test_environment_variables_encrypted_before_write(admin_auth, patched_proxy)
     assert stored == {"OPENAI_API_KEY": "enc:sk-secret"}
 
 
+def test_litellm_settings_request_wins_for_non_callback_keys(admin_auth, patched_proxy):
+    """
+    Regression: a /config/update with {"litellm_settings": {"drop_params":
+    False}} when the existing row holds drop_params: True must persist
+    drop_params: False. Previously the merge was {**incoming, **existing},
+    so existing values silently won and the request was a no-op for any
+    pre-existing key.
+
+    Untouched keys must be preserved.
+    """
+    prisma = patched_proxy(
+        initial_rows={
+            "litellm_settings": {
+                "drop_params": True,
+                "set_verbose": True,
+            }
+        }
+    )
+
+    client = TestClient(app)
+    resp = client.post(
+        "/config/update", json={"litellm_settings": {"drop_params": False}}
+    )
+
+    assert resp.status_code == 200
+    stored = prisma.db.litellm_config.rows["litellm_settings"]
+    assert stored["drop_params"] is False
+    assert stored["set_verbose"] is True
+
+
 def test_success_callback_unioned_with_existing(admin_auth, patched_proxy):
     prisma = patched_proxy(
         initial_rows={"litellm_settings": {"success_callback": ["langfuse"]}}
