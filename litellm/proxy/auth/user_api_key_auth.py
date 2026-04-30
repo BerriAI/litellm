@@ -108,10 +108,12 @@ def _route_requires_auth_despite_public(
 ) -> bool:
     normalized_route = _normalize_public_auth_route(route)
     if normalized_route == "/metrics":
-        return litellm.require_auth_for_metrics_endpoint is True
+        return litellm.require_auth_for_metrics_endpoint is not False
 
     if normalized_route in _PUBLIC_AI_HUB_ROUTES:
-        return (general_settings or {}).get("require_auth_for_public_ai_hub") is True
+        return (general_settings or {}).get(
+            "require_auth_for_public_ai_hub", True
+        ) is True
 
     return False
 
@@ -1671,7 +1673,7 @@ async def _run_centralized_common_checks(
         user_custom_auth,
     )
 
-    # Public routes (e.g. /health/liveness, /metrics) are exempt from
+    # Public routes (e.g. /health/liveness) are exempt from
     # auth in the builder — the wrapper must not retroactively apply
     # authz on top, or k8s readiness probes and other unauthenticated
     # callers get 401.

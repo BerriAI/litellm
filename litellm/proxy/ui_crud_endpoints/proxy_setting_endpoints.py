@@ -95,7 +95,7 @@ class UISettings(BaseModel):
     )
 
     require_auth_for_public_ai_hub: bool = Field(
-        default=False,
+        default=True,
         description="If true, requires authentication for accessing the public AI Hub.",
     )
 

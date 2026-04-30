@@ -65,6 +65,7 @@ def test_route_requires_auth_despite_public_for_metrics(monkeypatch):
 def test_route_requires_auth_despite_public_for_public_ai_hub():
     settings = {"require_auth_for_public_ai_hub": True}
 
+    assert _route_requires_auth_despite_public("/public/model_hub", {}) is True
     assert _route_requires_auth_despite_public("/public/model_hub", settings) is True
     assert _route_requires_auth_despite_public("/public/model_hub/", settings) is True
     assert (
@@ -74,7 +75,12 @@ def test_route_requires_auth_despite_public_for_public_ai_hub():
     assert _route_requires_auth_despite_public("/public/mcp_hub", settings) is True
     assert _route_requires_auth_despite_public("/public/skill_hub", settings) is True
 
-    assert _route_requires_auth_despite_public("/public/model_hub", {}) is False
+    assert (
+        _route_requires_auth_despite_public(
+            "/public/model_hub", {"require_auth_for_public_ai_hub": False}
+        )
+        is False
+    )
 
 
 @pytest.mark.asyncio
