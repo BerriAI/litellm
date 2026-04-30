@@ -906,6 +906,9 @@ async def new_team(  # noqa: PLR0915
             prisma_client,
             user_api_key_cache,
         )
+        from litellm.proxy.management_helpers.audit_logs import (
+            get_audit_log_changed_by,
+        )
 
         if prisma_client is None:
             raise HTTPException(status_code=500, detail={"error": "No db connected"})
@@ -1174,9 +1177,11 @@ async def new_team(  # noqa: PLR0915
                     request_data=LiteLLM_AuditLogs(
                         id=str(uuid.uuid4()),
                         updated_at=datetime.now(timezone.utc),
-                        changed_by=user_api_key_dict.user_id
-                        or litellm_changed_by
-                        or litellm_proxy_admin_name,
+                        changed_by=get_audit_log_changed_by(
+                            litellm_changed_by=litellm_changed_by,
+                            user_api_key_dict=user_api_key_dict,
+                            litellm_proxy_admin_name=litellm_proxy_admin_name,
+                        ),
                         changed_by_api_key=user_api_key_dict.api_key,
                         table_name=LitellmTableNames.TEAM_TABLE_NAME,
                         object_id=data.team_id,
@@ -1214,7 +1219,10 @@ async def _create_team_update_audit_log(
         user_api_key_dict: User API key authentication details
         litellm_proxy_admin_name: Name of the proxy admin
     """
-    from litellm.proxy.management_helpers.audit_logs import create_audit_log_for_update
+    from litellm.proxy.management_helpers.audit_logs import (
+        create_audit_log_for_update,
+        get_audit_log_changed_by,
+    )
 
     _before_value = existing_team_row.json(exclude_none=True)
     _before_value = json.dumps(_before_value, default=str)
@@ -1225,9 +1233,11 @@ async def _create_team_update_audit_log(
             request_data=LiteLLM_AuditLogs(
                 id=str(uuid.uuid4()),
                 updated_at=datetime.now(timezone.utc),
-                changed_by=user_api_key_dict.user_id
-                or litellm_changed_by
-                or litellm_proxy_admin_name,
+                changed_by=get_audit_log_changed_by(
+                    litellm_changed_by=litellm_changed_by,
+                    user_api_key_dict=user_api_key_dict,
+                    litellm_proxy_admin_name=litellm_proxy_admin_name,
+                ),
                 changed_by_api_key=user_api_key_dict.api_key,
                 table_name=LitellmTableNames.TEAM_TABLE_NAME,
                 object_id=team_id,
@@ -2995,6 +3005,9 @@ async def delete_team(
         litellm_proxy_admin_name,
         prisma_client,
     )
+    from litellm.proxy.management_helpers.audit_logs import (
+        get_audit_log_changed_by,
+    )
 
     if prisma_client is None:
         raise HTTPException(status_code=500, detail={"error": "No db connected"})
@@ -3054,9 +3067,11 @@ async def delete_team(
                     request_data=LiteLLM_AuditLogs(
                         id=str(uuid.uuid4()),
                         updated_at=datetime.now(timezone.utc),
-                        changed_by=user_api_key_dict.user_id
-                        or litellm_changed_by
-                        or litellm_proxy_admin_name,
+                        changed_by=get_audit_log_changed_by(
+                            litellm_changed_by=litellm_changed_by,
+                            user_api_key_dict=user_api_key_dict,
+                            litellm_proxy_admin_name=litellm_proxy_admin_name,
+                        ),
                         changed_by_api_key=user_api_key_dict.api_key,
                         table_name=LitellmTableNames.TEAM_TABLE_NAME,
                         object_id=team_id,
