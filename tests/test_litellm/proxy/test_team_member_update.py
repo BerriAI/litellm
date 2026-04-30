@@ -105,6 +105,7 @@ async def test_team_member_update_explicit_budget_duration():
 
     mock_upsert.assert_awaited_once()
     assert mock_upsert.call_args.kwargs["budget_duration"] == "30d"
+    assert mock_upsert.call_args.kwargs["budget_duration_explicit"] is True
     # Should NOT have fetched the team-level budget row
     prisma.db.litellm_budgettable.find_unique.assert_not_awaited()
 
@@ -139,6 +140,7 @@ async def test_team_member_update_explicit_null_budget_duration():
 
     mock_upsert.assert_awaited_once()
     assert mock_upsert.call_args.kwargs["budget_duration"] is None
+    assert mock_upsert.call_args.kwargs["budget_duration_explicit"] is True
     # Should NOT have fetched the team-level budget row
     prisma.db.litellm_budgettable.find_unique.assert_not_awaited()
 
@@ -174,6 +176,7 @@ async def test_team_member_update_inherits_team_budget_duration():
 
     mock_upsert.assert_awaited_once()
     assert mock_upsert.call_args.kwargs["budget_duration"] == "30d"
+    assert mock_upsert.call_args.kwargs["budget_duration_explicit"] is False
     prisma.db.litellm_budgettable.find_unique.assert_awaited_once_with(
         where={"budget_id": "team-bud-1"}
     )
@@ -208,6 +211,7 @@ async def test_team_member_update_no_team_budget_duration_defaults_to_none():
 
     mock_upsert.assert_awaited_once()
     assert mock_upsert.call_args.kwargs["budget_duration"] is None
+    assert mock_upsert.call_args.kwargs["budget_duration_explicit"] is False
     prisma.db.litellm_budgettable.find_unique.assert_not_awaited()
 
 

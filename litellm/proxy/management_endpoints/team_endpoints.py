@@ -2723,7 +2723,8 @@ async def team_member_update(
     ### resolve effective budget_duration
     # - Explicit value (including null) takes precedence
     # - If omitted, inherit the team's configured team_member_budget_duration
-    if "budget_duration" in data.model_fields_set:
+    budget_duration_explicit = "budget_duration" in data.model_fields_set
+    if budget_duration_explicit:
         effective_budget_duration = data.budget_duration
     else:
         if team_default_budget_id:
@@ -2750,6 +2751,7 @@ async def team_member_update(
             allowed_models=data.allowed_models,
             team_default_budget_id=team_default_budget_id,
             budget_duration=effective_budget_duration,
+            budget_duration_explicit=budget_duration_explicit,
         )
 
     ### update team member role
