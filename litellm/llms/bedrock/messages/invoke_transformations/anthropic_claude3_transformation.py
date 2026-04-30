@@ -132,7 +132,7 @@ class AmazonAnthropicClaudeMessagesConfig(
         - `scope` (e.g., "global") - always removed
         - `ttl` - removed for older models; Claude 4.5+ supports "5m" and "1h"
 
-        Processes both `system` and `messages` content blocks.
+        Processes `tools`, `system`, and `messages` content blocks.
 
         Args:
             anthropic_messages_request: The request dictionary to modify in-place
@@ -158,6 +158,12 @@ class AmazonAnthropicClaudeMessagesConfig(
             for item in content:
                 if isinstance(item, dict) and "cache_control" in item:
                     _sanitize_cache_control(item["cache_control"])
+
+        # Process tools
+        if "tools" in anthropic_messages_request:
+            for tool in anthropic_messages_request["tools"]:
+                if isinstance(tool, dict) and "cache_control" in tool:
+                    _sanitize_cache_control(tool["cache_control"])
 
         # Process system (list of content blocks)
         if "system" in anthropic_messages_request:

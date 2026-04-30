@@ -6526,6 +6526,7 @@ def validate_environment(  # noqa: PLR0915
             or model in litellm.open_ai_text_completion_models
             or model in litellm.open_ai_embedding_models
             or model in litellm.openai_image_generation_models
+            or model.startswith("gpt-image")
         ):
             if "OPENAI_API_KEY" in os.environ:
                 keys_in_environment = True
@@ -8410,6 +8411,17 @@ class ProviderConfigManager:
         model: str,
         provider: LlmProviders,
     ) -> Optional[BaseAnthropicMessagesConfig]:
+        return ProviderConfigManager._get_provider_anthropic_messages_config_cached(
+            model=model, provider=provider
+        )
+
+    @staticmethod
+    @lru_cache(maxsize=DEFAULT_MAX_LRU_CACHE_SIZE)
+    def _get_provider_anthropic_messages_config_cached(
+        model: str,
+        provider: LlmProviders,
+    ) -> Optional[BaseAnthropicMessagesConfig]:
+        model_lower = model.lower()
         if litellm.LlmProviders.ANTHROPIC == provider:
             return litellm.AnthropicMessagesConfig()
         # The 'BEDROCK' provider corresponds to Amazon's implementation of Anthropic Claude v3.
@@ -8419,14 +8431,14 @@ class ProviderConfigManager:
 
             return BedrockModelInfo.get_bedrock_provider_config_for_messages_api(model)
         elif litellm.LlmProviders.VERTEX_AI == provider:
-            if "claude" in model.lower():
+            if "claude" in model_lower:
                 from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.experimental_pass_through.transformation import (
                     VertexAIPartnerModelsAnthropicMessagesConfig,
                 )
 
                 return VertexAIPartnerModelsAnthropicMessagesConfig()
         elif litellm.LlmProviders.AZURE_AI == provider:
-            if "claude" in model.lower():
+            if "claude" in model_lower:
                 from litellm.llms.azure_ai.anthropic.messages_transformation import (
                     AzureAnthropicMessagesConfig,
                 )

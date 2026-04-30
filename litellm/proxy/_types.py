@@ -679,6 +679,7 @@ class LiteLLMRoutes(enum.Enum):
         "/team/permissions_list",
         "/team/permissions_update",
         "/team/daily/activity",
+        "/team/{team_id}/members/me",
         "/model/new",
         "/model/update",
         "/model/delete",
@@ -903,6 +904,7 @@ class LiteLLM_ObjectPermissionBase(LiteLLMPydanticObjectBase):
     agents: Optional[List[str]] = None
     agent_access_groups: Optional[List[str]] = None
     models: Optional[List[str]] = None
+    search_tools: Optional[List[str]] = None
 
 
 class BudgetLimitEntry(LiteLLMPydanticObjectBase):
@@ -1933,6 +1935,7 @@ class LiteLLM_ObjectPermissionTable(LiteLLMPydanticObjectBase):
     agent_access_groups: Optional[List[str]] = []
     mcp_toolsets: Optional[List[str]] = None
     blocked_tools: Optional[List[str]] = []
+    search_tools: Optional[List[str]] = []
 
 
 class LiteLLM_TeamTable(TeamBase):

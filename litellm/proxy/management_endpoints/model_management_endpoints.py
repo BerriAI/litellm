@@ -1190,6 +1190,9 @@ async def update_model(
                 data=_data,  # type: ignore
             )
 
+            # Clear cache and reload models (uses config setting or defaults to preserving config models for DB updates)
+            await clear_cache()
+
             ## CREATE AUDIT LOG ##
             asyncio.create_task(
                 create_object_audit_log(

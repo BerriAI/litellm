@@ -1042,14 +1042,7 @@ def convert_to_anthropic_tool_invoke_xml(tool_calls: list) -> str:
             )
         else:
             parameters = f"<result>{parsed_args}</result>\n"
-        invokes += (
-            "<invoke>\n"
-            f"<tool_name>{tool_name}</tool_name>\n"
-            "<parameters>\n"
-            f"{parameters}"
-            "</parameters>\n"
-            "</invoke>\n"
-        )
+        invokes += f"<invoke>\n<tool_name>{tool_name}</tool_name>\n<parameters>\n{parameters}</parameters>\n</invoke>\n"
 
     anthropic_tool_invoke = f"<function_calls>\n{invokes}</function_calls>"
 
@@ -1636,7 +1629,8 @@ def convert_to_gemini_tool_call_result(  # noqa: PLR0915
     # We can't determine from openai message format whether it's a successful or
     # error call result so default to the successful result template
     _function_response = VertexFunctionResponse(
-        name=name, response=response_data  # type: ignore
+        name=name,
+        response=response_data,  # type: ignore
     )
 
     # Create part with function_response, and optionally inline_data for images (Computer Use)
@@ -1665,6 +1659,20 @@ def _sanitize_anthropic_tool_use_id(tool_use_id: str) -> str:
     if not sanitized:
         sanitized = "tool_use_id"
     return sanitized
+
+
+_ANTHROPIC_DOCUMENT_BASE64_MEDIA_TYPES = {"application/pdf", "text/plain"}
+
+
+def _is_anthropic_document_data_uri(url: str) -> bool:
+    # Anthropic's base64 document source accepts only application/pdf and
+    # text/plain (see select_anthropic_content_block_type_for_file). Routing
+    # other mimes here would produce a document block the API rejects, so we
+    # leave them on the image code path.
+    match = re.match(r"data:([^;,]+)", url)
+    if not match:
+        return False
+    return match.group(1) in _ANTHROPIC_DOCUMENT_BASE64_MEDIA_TYPES
 
 
 def convert_to_anthropic_tool_result(
@@ -1704,14 +1712,24 @@ def convert_to_anthropic_tool_result(
     """
     anthropic_content: Union[
         str,
-        List[Union[AnthropicMessagesToolResultContent, AnthropicMessagesImageParam]],
+        List[
+            Union[
+                AnthropicMessagesToolResultContent,
+                AnthropicMessagesImageParam,
+                AnthropicMessagesDocumentParam,
+            ]
+        ],
     ] = ""
     if isinstance(message["content"], str):
         anthropic_content = message["content"]
     elif isinstance(message["content"], List):
         content_list = message["content"]
         anthropic_content_list: List[
-            Union[AnthropicMessagesToolResultContent, AnthropicMessagesImageParam]
+            Union[
+                AnthropicMessagesToolResultContent,
+                AnthropicMessagesImageParam,
+                AnthropicMessagesDocumentParam,
+            ]
         ] = []
         for content in content_list:
             if content["type"] == "text":
@@ -1726,21 +1744,62 @@ def convert_to_anthropic_tool_result(
                     text_content["cache_control"] = cache_control_value
                 anthropic_content_list.append(text_content)
             elif content["type"] == "image_url":
+                image_url_value = content["image_url"]
                 format = (
-                    content["image_url"].get("format")
-                    if isinstance(content["image_url"], dict)
+                    image_url_value.get("format")
+                    if isinstance(image_url_value, dict)
                     else None
                 )
-                _anthropic_image_param = create_anthropic_image_param(
-                    content["image_url"], format=format, is_bedrock_invoke=force_base64
+                url_str = (
+                    image_url_value.get("url")
+                    if isinstance(image_url_value, dict)
+                    else image_url_value
                 )
-                _anthropic_image_param = add_cache_control_to_content(
-                    anthropic_content_element=_anthropic_image_param,
+                # Data URIs with non-image mime types (e.g. application/pdf) must
+                # translate to Anthropic document blocks, not image blocks —
+                # wrapping a PDF in `type: "image"` is rejected by the API.
+                if isinstance(url_str, str) and _is_anthropic_document_data_uri(
+                    url_str
+                ):
+                    synth_file_message: ChatCompletionFileObject = {
+                        "type": "file",
+                        "file": {"file_data": url_str},
+                    }
+                    _document_block = anthropic_process_openai_file_message(
+                        synth_file_message
+                    )
+                    _document_block = add_cache_control_to_content(
+                        anthropic_content_element=cast(
+                            AnthropicMessagesDocumentParam, _document_block
+                        ),
+                        original_content_element=content,
+                    )
+                    anthropic_content_list.append(
+                        cast(AnthropicMessagesDocumentParam, _document_block)
+                    )
+                else:
+                    _anthropic_image_param = create_anthropic_image_param(
+                        image_url_value,
+                        format=format,
+                        is_bedrock_invoke=force_base64,
+                    )
+                    _anthropic_image_param = add_cache_control_to_content(
+                        anthropic_content_element=_anthropic_image_param,
+                        original_content_element=content,
+                    )
+                    anthropic_content_list.append(
+                        cast(AnthropicMessagesImageParam, _anthropic_image_param)
+                    )
+            elif content["type"] == "file":
+                file_content = cast(ChatCompletionFileObject, content)
+                _file_block = anthropic_process_openai_file_message(file_content)
+                _file_block = add_cache_control_to_content(
+                    anthropic_content_element=cast(
+                        AnthropicMessagesDocumentParam, _file_block
+                    ),
                     original_content_element=content,
                 )
-                anthropic_content_list.append(
-                    cast(AnthropicMessagesImageParam, _anthropic_image_param)
-                )
+                anthropic_content_list.append(_file_block)
 
         anthropic_content = anthropic_content_list
     anthropic_tool_result: Optional[AnthropicMessagesToolResultParam] = None
@@ -3983,6 +4042,55 @@ def _convert_to_bedrock_tool_call_result(
                     tool_result_content_blocks.append(
                         BedrockToolResultContentBlock(image=_block["image"])
                     )
+                elif "document" in _block:
+                    tool_result_content_blocks.append(
+                        BedrockToolResultContentBlock(document=_block["document"])
+                    )
+                else:
+                    verbose_logger.warning(
+                        "Bedrock Converse: unrecognized BedrockContentBlock keys "
+                        "%s for image_url tool-result block %s; dropping.",
+                        list(_block.keys()),
+                        content,
+                    )
+            elif content["type"] == "file":
+                # Match the user-message path (_process_file_message): accept
+                # either file_data (base64 data URI) or file_id (server-side
+                # reference / URL) and hand off to BedrockImageProcessor. Raise
+                # BadRequestError on both-None rather than silently dropping.
+                file_obj = content.get("file") or {}
+                file_data = file_obj.get("file_data")
+                file_id = file_obj.get("file_id")
+                if file_data is None and file_id is None:
+                    raise litellm.BadRequestError(
+                        message="file_data and file_id cannot both be None. Got={}".format(
+                            content
+                        ),
+                        model="",
+                        llm_provider="bedrock",
+                    )
+                file_format = file_obj.get("format")
+                _file_block: BedrockContentBlock = (
+                    BedrockImageProcessor.process_image_sync(
+                        image_url=cast(str, file_id or file_data),
+                        format=file_format,
+                    )
+                )
+                if "document" in _file_block:
+                    tool_result_content_blocks.append(
+                        BedrockToolResultContentBlock(document=_file_block["document"])
+                    )
+                elif "image" in _file_block:
+                    tool_result_content_blocks.append(
+                        BedrockToolResultContentBlock(image=_file_block["image"])
+                    )
+                else:
+                    verbose_logger.warning(
+                        "Bedrock Converse: unrecognized BedrockContentBlock keys "
+                        "%s for file tool-result block %s; dropping.",
+                        list(_file_block.keys()),
+                        content,
+                    )
 
     message.get("name", "")
     id = str(message.get("tool_call_id", str(uuid.uuid4())))
@@ -5097,12 +5205,25 @@ def make_valid_bedrock_tool_name(input_tool_name: str) -> str:
     return valid_string
 
 
-def add_cache_point_tool_block(tool: dict) -> Optional[BedrockToolBlock]:
+def add_cache_point_tool_block(
+    tool: dict, model: Optional[str] = None
+) -> Optional[BedrockToolBlock]:
+    from litellm.llms.bedrock.common_utils import is_claude_4_5_on_bedrock
+
     cache_control = tool.get("cache_control", None)
     if cache_control is not None:
         cache_point = cache_control.get("type", "ephemeral")
         if cache_point == "ephemeral":
-            return {"cachePoint": {"type": "default"}}
+            cache_point_block: CachePointBlock = {"type": "default"}
+            if isinstance(cache_control, dict) and "ttl" in cache_control:
+                ttl = cache_control["ttl"]
+                if (
+                    ttl in ["5m", "1h"]
+                    and model is not None
+                    and is_claude_4_5_on_bedrock(model)
+                ):
+                    cache_point_block["ttl"] = ttl
+            return {"cachePoint": cache_point_block}
     return None
 
 
@@ -5132,7 +5253,9 @@ def _is_bedrock_tool_block(tool: dict) -> bool:
     )
 
 
-def _bedrock_tools_pt(tools: List) -> List[BedrockToolBlock]:
+def _bedrock_tools_pt(
+    tools: List, model: Optional[str] = None
+) -> List[BedrockToolBlock]:
     """
     OpenAI tools looks like:
     tools = [
@@ -5248,7 +5371,7 @@ def _bedrock_tools_pt(tools: List) -> List[BedrockToolBlock]:
         tool_block_list.append(tool_block)
 
         ## ADD CACHE POINT TOOL BLOCK ##
-        cache_point_tool_block = add_cache_point_tool_block(tool)
+        cache_point_tool_block = add_cache_point_tool_block(tool, model=model)
         if cache_point_tool_block is not None:
             tool_block_list.append(cache_point_tool_block)
 

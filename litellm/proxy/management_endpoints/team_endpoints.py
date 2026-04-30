@@ -66,6 +66,7 @@ from litellm.proxy.auth.auth_checks import (
     allowed_route_check_inside_route,
     can_org_access_model,
     get_org_object,
+    get_team_membership,
     get_team_object,
     get_user_object,
 )
@@ -110,6 +111,7 @@ from litellm.types.proxy.management_endpoints.team_endpoints import (
     TeamListItem,
     TeamListResponse,
     TeamMemberAddResult,
+    TeamMemberInfoResponse,
     UpdateTeamMemberPermissionsRequest,
 )
 
@@ -2001,21 +2003,34 @@ def team_member_add_duplication_check(
 async def _validate_team_member_add_permissions(
     user_api_key_dict: UserAPIKeyAuth,
     complete_team_data: LiteLLM_TeamTable,
+    data: TeamMemberAddRequest,
 ) -> None:
-    """Validate if user has permission to add members to the team."""
+    """Validate if user has permission to add members to the team.
+
+    Standard users can self-join an *available team*, but the bypass
+    must not be allowed to escalate them to ``role=admin`` or to add
+    other users into the team.  When access is granted via the
+    available-team bypass we therefore enforce that every member in
+    the request matches the caller's own ``user_id`` and is being
+    added with ``role="user"``.
+    """
     if (
-        hasattr(user_api_key_dict, "user_role")
-        and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value
-        and not _is_user_team_admin(
-            user_api_key_dict=user_api_key_dict, team_obj=complete_team_data
-        )
-        and not await _is_user_org_admin_for_team(
-            user_api_key_dict=user_api_key_dict, team_obj=complete_team_data
-        )
-        and not _is_available_team(
-            team_id=complete_team_data.team_id,
-            user_api_key_dict=user_api_key_dict,
-        )
+        getattr(user_api_key_dict, "user_role", None)
+        == LitellmUserRoles.PROXY_ADMIN.value
+    ):
+        return
+    if _is_user_team_admin(
+        user_api_key_dict=user_api_key_dict, team_obj=complete_team_data
+    ):
+        return
+    if await _is_user_org_admin_for_team(
+        user_api_key_dict=user_api_key_dict, team_obj=complete_team_data
+    ):
+        return
+
+    if not _is_available_team(
+        team_id=complete_team_data.team_id,
+        user_api_key_dict=user_api_key_dict,
     ):
         raise HTTPException(
             status_code=403,
@@ -2026,6 +2041,34 @@ async def _validate_team_member_add_permissions(
                 )
             },
         )
+
+    # Available-team self-join: caller may add only themselves, only as a
+    # standard user.  Enforce that here so the bypass cannot be used as a
+    # privilege-escalation or cross-user-injection primitive.
+    members = data.member if isinstance(data.member, list) else [data.member]
+    caller_user_id = getattr(user_api_key_dict, "user_id", None)
+    for member in members:
+        if getattr(member, "role", "user") != "user":
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "error": (
+                        "Available-team self-join cannot assign 'admin' role. "
+                        "Only proxy/team/org admins can add admins to a team."
+                    )
+                },
+            )
+        member_user_id = getattr(member, "user_id", None)
+        if not caller_user_id or not member_user_id or member_user_id != caller_user_id:
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "error": (
+                        "Available-team self-join can only add the caller "
+                        "(user_id must match the authenticated user's user_id)."
+                    )
+                },
+            )
 
 
 async def _process_team_members(
@@ -2047,8 +2090,11 @@ async def _process_team_members(
 
     # Resolve allowed_models: explicit request value, or fall back to team's default_team_member_models
     member_allowed_models = data.allowed_models
-    if member_allowed_models is None and complete_team_data.default_team_member_models:
-        member_allowed_models = complete_team_data.default_team_member_models
+    team_default_member_models = getattr(
+        complete_team_data, "default_team_member_models", None
+    )
+    if member_allowed_models is None and team_default_member_models:
+        member_allowed_models = team_default_member_models
 
     if isinstance(data.member, Member):
         try:
@@ -2379,6 +2425,7 @@ async def team_member_add(
     await _validate_team_member_add_permissions(
         user_api_key_dict=user_api_key_dict,
         complete_team_data=complete_team_data,
+        data=data,
     )
 
     # Validate and populate user_email/user_id for members before processing
@@ -3418,6 +3465,126 @@ async def team_info(
             param=getattr(e, "param", "None"),
             code=status.HTTP_400_BAD_REQUEST,
         )
+
+
+@router.get(
+    "/team/{team_id}/members/me",
+    tags=["team management"],
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=TeamMemberInfoResponse,
+)
+@management_endpoint_wrapper
+async def team_member_me(
+    http_request: Request,
+    team_id: str,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Get the caller's own team-membership row for the given team.
+
+    Used by internal users to view their own spend, budget, budget reset
+    date, rate limits, and role within a team — without exposing other
+    members' data. The caller is resolved from their API key; the path
+    `/members/me` always refers to that caller.
+
+    Returns 404 if the caller is not a member of the team.
+
+    ```
+    curl --location 'http://localhost:4000/team/your_team_id/members/me' \
+    --header 'Authorization: Bearer your_api_key_here'
+    ```
+    """
+    from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
+
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={
+                "error": "Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
+            },
+        )
+
+    caller_user_id = user_api_key_dict.user_id
+    if caller_user_id is None:
+        # Team keys / service-account keys without a user_id can't resolve "me".
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "error": "API key has no associated user_id; cannot resolve 'me' for team membership."
+            },
+        )
+
+    team_table = await get_team_object(
+        team_id=team_id,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+    )
+
+    caller_user_email = user_api_key_dict.user_email
+    member_role: Optional[str] = None
+    for m in team_table.members_with_roles:
+        # Match by user_id when present, else fall back to email — members
+        # added by email may have user_id=None on the stored entry.
+        if (m.user_id is not None and m.user_id == caller_user_id) or (
+            m.user_email is not None
+            and caller_user_email is not None
+            and m.user_email == caller_user_email
+        ):
+            member_role = m.role
+            break
+
+    if member_role is None:
+        # Caller is not a member of this team. Even proxy admins get 404 here —
+        # they can use /team/info to view all members; "me" only resolves for
+        # actual members of the team.
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "error": f"User user_id={caller_user_id} is not a member of team_id={team_id}."
+            },
+        )
+
+    membership = await get_team_membership(
+        user_id=caller_user_id,
+        team_id=team_id,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+    )
+
+    user_row = await get_user_object(
+        user_id=caller_user_id,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        user_id_upsert=False,
+    )
+    user_email = getattr(user_row, "user_email", None) if user_row is not None else None
+
+    if membership is None:
+        # Member is in members_with_roles but has no membership row yet
+        # (no per-member budget/limits configured). Return defaults.
+        return TeamMemberInfoResponse(
+            user_id=caller_user_id,
+            team_id=team_id,
+            team_alias=team_table.team_alias,
+            role=member_role,
+            user_email=user_email,
+            spend=0.0,
+            total_spend=0.0,
+            budget_id=None,
+            litellm_budget_table=None,
+        )
+
+    return TeamMemberInfoResponse(
+        user_id=caller_user_id,
+        team_id=team_id,
+        team_alias=team_table.team_alias,
+        role=member_role,
+        user_email=user_email,
+        spend=membership.spend,
+        total_spend=membership.total_spend,
+        budget_id=membership.budget_id,
+        litellm_budget_table=membership.litellm_budget_table,
+    )
 
 
 @router.post(
@@ -4572,6 +4739,8 @@ async def update_team_member_permissions(
 
     complete_team_data = LiteLLM_TeamTable(**existing_team_row.model_dump())
 
+    # Available-team self-join must NOT grant write access to team-wide
+    # permission policies; only proxy/team/org admins can update them.
     if (
         hasattr(user_api_key_dict, "user_role")
         and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value
@@ -4581,16 +4750,12 @@ async def update_team_member_permissions(
         and not await _is_user_org_admin_for_team(
             user_api_key_dict=user_api_key_dict, team_obj=complete_team_data
         )
-        and not _is_available_team(
-            team_id=complete_team_data.team_id,
-            user_api_key_dict=user_api_key_dict,
-        )
     ):
         raise HTTPException(
             status_code=403,
             detail={
                 "error": "Call not allowed. User not proxy admin OR team admin. route={}, team_id={}".format(
-                    "/team/member_add",
+                    "/team/permissions_update",
                     complete_team_data.team_id,
                 )
             },
