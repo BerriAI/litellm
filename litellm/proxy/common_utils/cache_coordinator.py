@@ -153,7 +153,7 @@ class EventDrivenCacheCoordinator:
                 elapsed_ms,
                 value,
             )
-            
+
         await cache.async_set_cache(key=cache_key, value=value)
         if self._log_prefix:
             verbose_proxy_logger.debug("%s Result cached", self._log_prefix)

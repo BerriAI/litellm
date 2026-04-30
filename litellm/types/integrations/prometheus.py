@@ -228,8 +228,6 @@ DEFINED_PROMETHEUS_METRICS = Literal[
     "litellm_guardrail_latency_seconds",
     "litellm_guardrail_errors_total",
     "litellm_guardrail_requests_total",
-    # Auth DB diagnostic metrics
-    "litellm_auth_combined_view_queries_total",
     # Cache metrics
     "litellm_cache_hits_metric",
     "litellm_cache_misses_metric",
@@ -308,11 +306,6 @@ class PrometheusMetricLabels:
     litellm_guardrail_latency_seconds: List[str] = []
     litellm_guardrail_errors_total: List[str] = []
     litellm_guardrail_requests_total: List[str] = []
-
-    # Auth DB diagnostic - label by key so you can see which virtual key causes DB hits
-    litellm_auth_combined_view_queries_total = [
-        UserAPIKeyLabelNames.API_KEY_HASH.value,
-    ]
 
     litellm_proxy_total_requests_metric = [
         UserAPIKeyLabelNames.END_USER.value,
