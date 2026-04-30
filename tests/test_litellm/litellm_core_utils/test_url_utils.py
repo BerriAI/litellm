@@ -4,7 +4,12 @@ import pytest
 
 import litellm
 from litellm.litellm_core_utils import url_utils
-from litellm.litellm_core_utils.url_utils import SSRFError, _is_blocked_ip, validate_url
+from litellm.litellm_core_utils.url_utils import (
+    SSRFError,
+    _is_blocked_ip,
+    encode_url_path_segment,
+    validate_url,
+)
 
 
 @pytest.fixture
@@ -78,6 +83,18 @@ class TestIsBlockedIp:
     def test_blocks_ipv4_mapped_azure_wire_server(self):
         """::ffff:168.63.129.16 must be unwrapped and blocked via the exception list."""
         assert _is_blocked_ip("::ffff:168.63.129.16") is True
+
+
+class TestEncodeUrlPathSegment:
+    def test_encodes_path_delimiters_and_query_markers(self):
+        encoded = encode_url_path_segment("../../v1/files?limit=1#frag")
+
+        assert encoded == "..%2F..%2Fv1%2Ffiles%3Flimit%3D1%23frag"
+
+    @pytest.mark.parametrize("value", ["", ".", "..", None])
+    def test_rejects_empty_and_dot_segments(self, value):
+        with pytest.raises(ValueError):
+            encode_url_path_segment(value, field_name="resource_id")
 
 
 class TestValidateUrl:

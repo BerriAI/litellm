@@ -323,6 +323,29 @@ class TestAzureContainerConfig:
         assert url_fc == expected_fc
         assert url_fc.index("/content") < url_fc.index("?")
 
+    def test_transform_requests_encode_path_ids_before_query_string(self):
+        from litellm.types.router import GenericLiteLLMParams
+
+        api_base = (
+            "https://my-resource.openai.azure.com/openai/v1/containers"
+            "?api-version=v1"
+        )
+
+        url, _ = self.config.transform_container_file_content_request(
+            container_id="../../other",
+            file_id="file?download=1#frag",
+            api_base=api_base,
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        expected_url = (
+            "https://my-resource.openai.azure.com/openai/v1/containers/"
+            "..%2F..%2Fother/files/file%3Fdownload%3D1%23frag/content"
+            "?api-version=v1"
+        )
+        assert url == expected_url
+
     def test_provider_config_manager_returns_azure_config(self):
         from litellm.types.utils import LlmProviders
         from litellm.utils import ProviderConfigManager
