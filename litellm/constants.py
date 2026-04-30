@@ -1393,6 +1393,10 @@ except (ValueError, TypeError):
 LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME = "litellm-internal-health-check"
 LITTELM_CLI_SERVICE_ACCOUNT_NAME = "litellm-cli"
 LITELLM_INTERNAL_JOBS_SERVICE_ACCOUNT_NAME = "litellm_internal_jobs"
+# Stable identifier substituted in place of the master key on UserAPIKeyAuth
+# objects so the master key (or its hash) never propagates to spend logs,
+# Prometheus metrics, audit trails, or any other downstream consumer.
+LITELLM_PROXY_MASTER_KEY_ALIAS = "litellm_proxy_master_key"
 
 # Key Rotation Constants
 LITELLM_KEY_ROTATION_ENABLED = os.getenv("LITELLM_KEY_ROTATION_ENABLED", "false")
