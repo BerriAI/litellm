@@ -115,10 +115,23 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                             "AnthropicStreamWrapper: stream yielded None as first chunk"
                         )
                     self._should_start_new_content_block(first_chunk)
-                    self.holding_chunk = LiteLLMAnthropicMessagesAdapter().translate_streaming_openai_response_to_anthropic(
+                    _translated = LiteLLMAnthropicMessagesAdapter().translate_streaming_openai_response_to_anthropic(
                         response=first_chunk,
                         current_content_block_index=self.current_content_block_index,
                     )
+                    # Don't hold an empty input_json_delta: OpenAI-style tool_use
+                    # start chunks carry arguments="" which translates to a
+                    # partial_json="" delta that should not be emitted.
+                    if (
+                        isinstance(_translated, dict)
+                        and _translated.get("type") == "content_block_delta"
+                        and isinstance(_translated.get("delta"), dict)
+                        and _translated["delta"].get("type") == "input_json_delta"
+                        and not _translated["delta"].get("partial_json")
+                    ):
+                        self.holding_chunk = None
+                    else:
+                        self.holding_chunk = _translated
                     self.chunk_queue.append(
                         {
                             "type": "content_block_start",
@@ -273,10 +286,21 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                             "AnthropicStreamWrapper: stream yielded None as first chunk"
                         )
                     self._should_start_new_content_block(first_chunk)
-                    self.holding_chunk = LiteLLMAnthropicMessagesAdapter().translate_streaming_openai_response_to_anthropic(
+                    _translated = LiteLLMAnthropicMessagesAdapter().translate_streaming_openai_response_to_anthropic(
                         response=first_chunk,
                         current_content_block_index=self.current_content_block_index,
                     )
+                    # Don't hold an empty input_json_delta (see __next__ for explanation)
+                    if (
+                        isinstance(_translated, dict)
+                        and _translated.get("type") == "content_block_delta"
+                        and isinstance(_translated.get("delta"), dict)
+                        and _translated["delta"].get("type") == "input_json_delta"
+                        and not _translated["delta"].get("partial_json")
+                    ):
+                        self.holding_chunk = None
+                    else:
+                        self.holding_chunk = _translated
                     self.chunk_queue.append(
                         {
                             "type": "content_block_start",
