@@ -73,6 +73,23 @@ def test_get_audit_log_changed_by_prefers_authenticated_user():
     )
 
 
+def test_get_audit_log_changed_by_honors_header_with_admin_opt_in():
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test-key",
+        user_id="service-account",
+        metadata={"allow_litellm_changed_by_header": True},
+    )
+
+    assert (
+        get_audit_log_changed_by(
+            litellm_changed_by="delegated-user",
+            user_api_key_dict=user_api_key_dict,
+            litellm_proxy_admin_name="proxy-admin",
+        )
+        == "delegated-user"
+    )
+
+
 def test_get_audit_log_changed_by_falls_back_to_header_when_user_id_missing():
     user_api_key_dict = UserAPIKeyAuth(api_key="test-key")
 
