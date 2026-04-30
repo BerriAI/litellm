@@ -187,16 +187,15 @@ test-llm-translation-single: install-test-deps
 		-v --tb=short --maxfail=100 --timeout=300
 
 # VCR cassette helpers --------------------------------------------------------
-# Re-record a single VCR-backed translation test file against the live API.
-# Provider credentials must be exported (e.g. ANTHROPIC_API_KEY).
+# Sweep-record every @pytest.mark.vcr test under tests/llm_translation in one
+# shot. Provider credentials must be exported for the providers exercised
+# (e.g. ANTHROPIC_API_KEY, OPENAI_API_KEY, AWS_*).
 #
-# Example:
+# Examples:
+#   ANTHROPIC_API_KEY=sk-ant-... make test-llm-translation-record
 #   ANTHROPIC_API_KEY=sk-ant-... make test-llm-translation-record \
-#       FILE=test_anthropic_completion_vcr.py
+#       TARGET=test_anthropic_completion_vcr.py
+TARGET ?= .
 test-llm-translation-record: install-test-deps
-	@if [ -z "$(FILE)" ]; then \
-		echo "Usage: make test-llm-translation-record FILE=test_filename.py"; \
-		exit 1; \
-	fi
-	LITELLM_VCR_RECORD_MODE=once \
-		$(UV_RUN) pytest tests/llm_translation/$(FILE) -v --tb=short
+	$(UV_RUN) pytest tests/llm_translation/$(TARGET) \
+		-m vcr --record-mode=once -v --tb=short

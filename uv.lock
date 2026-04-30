@@ -9,7 +9,7 @@ resolution-markers = [
 ]
 
 [options]
-exclude-newer = "2026-04-27T00:38:13.673780212Z"
+exclude-newer = "2026-04-27T18:03:18.987479976Z"
 exclude-newer-span = "P3D"
 
 [manifest]
@@ -3231,6 +3231,7 @@ dev = [
     { name = "pytest-cov" },
     { name = "pytest-mock" },
     { name = "pytest-postgresql" },
+    { name = "pytest-recording" },
     { name = "pytest-rerunfailures" },
     { name = "pytest-timeout" },
     { name = "pytest-xdist" },
@@ -3385,6 +3386,7 @@ dev = [
     { name = "pytest-cov", specifier = "==5.0.0" },
     { name = "pytest-mock", specifier = "==3.15.1" },
     { name = "pytest-postgresql", specifier = "==7.0.2" },
+    { name = "pytest-recording", specifier = "==0.13.4" },
     { name = "pytest-rerunfailures", specifier = "==15.1" },
     { name = "pytest-timeout", specifier = "==2.4.0" },
     { name = "pytest-xdist", specifier = "==3.8.0" },
@@ -5920,6 +5922,19 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/18/15/b3c07d1537c7608c3f45d3ee6f778a56b1daa480221bb500abc9e44e01a0/pytest_postgresql-7.0.2.tar.gz", hash = "sha256:57c8d3f7d4e91d0ea8b2eac786d04f60080fa6ed6e66f1f94d747c71c9e5a4f4", size = 50691, upload-time = "2025-05-17T20:17:59.227Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/18/57/f2db5a80b10c3ac48ce41786cb9b14172f997509ee1b1055ab7db4238e5e/pytest_postgresql-7.0.2-py3-none-any.whl", hash = "sha256:0b0d31c51620a9c1d6be93286af354256bc58a47c379f56f4147b22da6e81fb5", size = 41447, upload-time = "2025-05-17T20:17:58.011Z" },
+]
+
+[[package]]
+name = "pytest-recording"
+version = "0.13.4"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pytest" },
+    { name = "vcrpy" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/32/9c/f4027c5f1693847b06d11caf4b4f6bb09f22c1581ada4663877ec166b8c6/pytest_recording-0.13.4.tar.gz", hash = "sha256:568d64b2a85992eec4ae0a419c855d5fd96782c5fb016784d86f18053792768c", size = 26576, upload-time = "2025-05-08T10:41:11.231Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/42/c2/ce34735972cc42d912173e79f200fe66530225190c06655c5632a9d88f1e/pytest_recording-0.13.4-py3-none-any.whl", hash = "sha256:ad49a434b51b1c4f78e85b1e6b74fdcc2a0a581ca16e52c798c6ace971f7f439", size = 13723, upload-time = "2025-05-08T10:41:09.684Z" },
 ]
 
 [[package]]
