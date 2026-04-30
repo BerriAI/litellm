@@ -1,6 +1,5 @@
 "use client";
 
-import APIReferenceView from "@/app/(dashboard)/api-reference/APIReferenceView";
 import SidebarProvider from "@/app/(dashboard)/components/SidebarProvider";
 import OldModelDashboard from "@/app/(dashboard)/models-and-endpoints/ModelsAndEndpointsView";
 import PlaygroundPage from "@/app/(dashboard)/playground/page";
@@ -9,7 +8,7 @@ import AgentsPanel from "@/components/agents";
 import BudgetPanel from "@/components/budgets/budget_panel";
 import CacheDashboard from "@/components/cache_dashboard";
 import ClaudeCodePluginsPanel from "@/components/claude_code_plugins";
-import { fetchTeams } from "@/components/common_components/fetch_teams";
+import { teamListCall as v2TeamListCall } from "@/app/(dashboard)/hooks/teams/useTeams";
 import LoadingScreen from "@/components/common_components/LoadingScreen";
 import { CostTrackingSettings } from "@/components/CostTrackingSettings";
 import GeneralSettings from "@/components/general_settings";
@@ -40,33 +39,26 @@ import { AccessGroupsPage } from "@/components/AccessGroups/AccessGroupsPage";
 import { ProjectsPage } from "@/components/Projects/ProjectsPage";
 import VectorStoreManagement from "@/components/vector_store_management";
 import ToolPoliciesView from "@/components/ToolPoliciesView";
+import { MemoryView } from "@/components/MemoryView";
 import SpendLogsTable from "@/components/view_logs";
 import ViewUserDashboard from "@/components/view_users";
 import { ThemeProvider } from "@/contexts/ThemeContext";
+import { clearTokenCookies, getCookie } from "@/utils/cookieUtils";
 import { isJwtExpired } from "@/utils/jwtUtils";
-import { buildLoginUrlWithReturn, consumeReturnUrl, normalizeUrlForCompare, storeReturnUrl } from "@/utils/returnUrlUtils";
+import { buildLoginUrlWithReturn, consumeReturnUrl, isValidReturnUrl, normalizeUrlForCompare, storeReturnUrl } from "@/utils/returnUrlUtils";
 import { formatUserRole, isAdminRole } from "@/utils/roles";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { jwtDecode } from "jwt-decode";
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { ConfigProvider, theme } from "antd";
-
-function getCookie(name: string) {
-  // Safer cookie read + decoding; handles '=' inside values
-  const match = document.cookie.split("; ").find((row) => row.startsWith(name + "="));
-  if (!match) return null;
-  const value = match.slice(name.length + 1);
-  try {
-    return decodeURIComponent(value);
-  } catch {
-    return value;
-  }
-}
 
 function deleteCookie(name: string, path = "/") {
   // Best-effort client-side clear (works for non-HttpOnly cookies without Domain)
   document.cookie = `${name}=; Max-Age=0; Path=${path}`;
+  if (name === "token") {
+    clearTokenCookies();
+  }
 }
 
 interface ProxySettings {
@@ -74,6 +66,16 @@ interface ProxySettings {
   PROXY_LOGOUT_URL: string;
   LITELLM_UI_API_DOC_BASE_URL?: string | null;
 }
+
+/**
+ * Map of legacy query-param page keys → new path-based route segments.
+ * When a user visits ?page=<key>, they are redirected to /ui/<value>.
+ * Add entries here as pages are migrated from the if/else chain to path-based routes.
+ */
+const LEGACY_REDIRECTS: Record<string, string> = {
+  api_ref: "api-reference",
+  "api-reference": "api-reference",
+};
 
 function CreateKeyPageContent() {
   const [userRole, setUserRole] = useState("");
@@ -90,6 +92,7 @@ function CreateKeyPageContent() {
   });
 
   const [showSSOBanner, setShowSSOBanner] = useState<boolean>(true);
+  const router = useRouter();
   const searchParams = useSearchParams()!;
   const [modelData, setModelData] = useState<any>({ data: [] });
   const [token, setToken] = useState<string | null>(null);
@@ -243,6 +246,15 @@ function CreateKeyPageContent() {
     }
   }, [redirectToLogin]);
 
+  // Redirect legacy query-param pages to their new path-based routes
+  const isLegacyRedirect = page in LEGACY_REDIRECTS;
+  useEffect(() => {
+    if (!authLoading && isLegacyRedirect) {
+      const base = (proxyBaseUrl || "") + "/ui";
+      router.replace(`${base}/${LEGACY_REDIRECTS[page]}`);
+    }
+  }, [authLoading, isLegacyRedirect, page, router]);
+
   // Check for a stored return URL after successful authentication
   // This handles the case where user comes back from SSO and we need to redirect to the original URL
   useEffect(() => {
@@ -257,14 +269,19 @@ function CreateKeyPageContent() {
 
     // Check for a stored return URL
     const returnUrl = consumeReturnUrl();
-    if (returnUrl) {
+    if (returnUrl && isValidReturnUrl(returnUrl)) {
+      // Inline origin check: only redirect to same-origin URLs to prevent open redirect.
+      const safeUrl = new URL(returnUrl, window.location.origin);
+      if (safeUrl.origin !== window.location.origin) {
+        return;
+      }
       const currentUrl = window.location.href;
       const normalizedReturnUrl = normalizeUrlForCompare(returnUrl);
       const normalizedCurrentUrl = normalizeUrlForCompare(currentUrl);
       // Only redirect if the return URL is different from the current URL
       // This prevents infinite redirect loops
       if (normalizedReturnUrl !== normalizedCurrentUrl) {
-        window.location.replace(returnUrl);
+        window.location.replace(safeUrl.href);
       }
     }
   }, [authLoading, token]);
@@ -339,7 +356,9 @@ function CreateKeyPageContent() {
       fetchUserModels(userID, userRole, accessToken, setUserModels);
     }
     if (accessToken && userID && userRole) {
-      fetchTeams(accessToken, userID, userRole, null, setTeams);
+      v2TeamListCall(accessToken, 1, 100, {
+        userID: userRole !== "Admin" && userRole !== "Admin Viewer" ? userID : null,
+      }).then((response) => setTeams(response.teams ?? [])).catch(console.error);
     }
     if (accessToken) {
       fetchOrganizations(accessToken, setOrganizations);
@@ -427,7 +446,7 @@ function CreateKeyPageContent() {
     setShowClaudeCodePrompt(true);
   };
 
-  if (authLoading || redirectToLogin) {
+  if (authLoading || redirectToLogin || isLegacyRedirect) {
     return <LoadingScreen />;
   }
 
@@ -536,8 +555,6 @@ function CreateKeyPageContent() {
                     <AdminPanel
                       proxySettings={proxySettings}
                     />
-                  ) : page == "api_ref" ? (
-                    <APIReferenceView proxySettings={proxySettings} />
                   ) : page == "logging-and-alerts" ? (
                     <Settings userID={userID} userRole={userRole} accessToken={accessToken} premiumUser={premiumUser} />
                   ) : page == "budgets" ? (
@@ -596,7 +613,6 @@ function CreateKeyPageContent() {
                       userRole={userRole}
                       token={token}
                       accessToken={accessToken}
-                      allTeams={(teams as Team[]) ?? []}
                       premiumUser={premiumUser}
                     />
                   ) : page == "mcp-servers" ? (
@@ -605,7 +621,7 @@ function CreateKeyPageContent() {
                     <SearchTools accessToken={accessToken} userRole={userRole} userID={userID} />
                   ) : page == "tag-management" ? (
                     <TagManagement accessToken={accessToken} userRole={userRole} userID={userID} />
-                  ) : page == "claude-code-plugins" ? (
+                  ) : page == "skills" || page == "claude-code-plugins" ? (
                     <ClaudeCodePluginsPanel accessToken={accessToken} userRole={userRole} />
                   ) : page == "access-groups" ? (
                     <AccessGroupsPage />
@@ -615,6 +631,12 @@ function CreateKeyPageContent() {
                     <VectorStoreManagement accessToken={accessToken} userRole={userRole} userID={userID} />
                   ) : page == "tool-policies" ? (
                     <ToolPoliciesView accessToken={accessToken} userRole={userRole} />
+                  ) : page == "memory" ? (
+                    <MemoryView
+                      accessToken={accessToken}
+                      userID={userID}
+                      userRole={userRole}
+                    />
                   ) : page == "guardrails-monitor" ? (
                     <GuardrailsMonitorView accessToken={accessToken} />
                   ) : page == "new_usage" ? (

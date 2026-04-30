@@ -3,6 +3,7 @@ Transformation logic from OpenAI format to Gemini format.
 
 Why separate file? Make it easy to see how transformation works
 """
+
 import json
 import os
 from typing import TYPE_CHECKING, Dict, List, Literal, Optional, Tuple, Union, cast
@@ -131,26 +132,28 @@ def _extract_max_media_resolution_from_messages(
     return max_resolution
 
 
-def _apply_gemini_3_metadata(
+def _apply_gemini_metadata(
     part: PartType,
     model: Optional[str],
     media_resolution_enum: Optional[Dict[str, str]],
     video_metadata: Optional[Dict[str, Any]],
 ) -> PartType:
     """
-    Apply the unique media_resolution and video_metadata parameters of Gemini 3+
+    Apply media_resolution and video_metadata parameters to a Gemini part.
+
+    - Per-part media_resolution: Gemini 3+ only (2.x uses generation_config global).
+    - video_metadata (fps, startOffset, endOffset): all Gemini models (1.x, 2.x, 3+).
     """
     if model is None:
         return part
 
     from .vertex_and_google_ai_studio_gemini import VertexGeminiConfig
 
-    if not VertexGeminiConfig._is_gemini_3_or_newer(model):
-        return part
-
     part_dict = dict(part)
 
-    if media_resolution_enum is not None:
+    if media_resolution_enum is not None and VertexGeminiConfig._is_gemini_3_or_newer(
+        model
+    ):
         part_dict["media_resolution"] = media_resolution_enum
 
     if video_metadata is not None:
@@ -205,7 +208,7 @@ def _process_gemini_media(
                 mime_type = format
             file_data = FileDataType(mime_type=mime_type, file_uri=image_url)
             part: PartType = {"file_data": file_data}
-            return _apply_gemini_3_metadata(
+            return _apply_gemini_metadata(
                 part, model, media_resolution_enum, video_metadata
             )
         elif (
@@ -215,14 +218,14 @@ def _process_gemini_media(
         ):
             file_data = FileDataType(mime_type=image_type, file_uri=image_url)
             part = {"file_data": file_data}
-            return _apply_gemini_3_metadata(
+            return _apply_gemini_metadata(
                 part, model, media_resolution_enum, video_metadata
             )
         elif "http://" in image_url or "https://" in image_url or "base64" in image_url:
             image = convert_to_anthropic_image_obj(image_url, format=format)
             _blob: BlobType = {"data": image["data"], "mime_type": image["media_type"]}
             part = {"inline_data": cast(BlobType, _blob)}
-            return _apply_gemini_3_metadata(
+            return _apply_gemini_metadata(
                 part, model, media_resolution_enum, video_metadata
             )
         raise Exception("Invalid image received - {}".format(image_url))
@@ -540,6 +543,41 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                             assistant_content.append(gemini_tool_call_part)
                     last_message_with_tool_calls = assistant_msg
 
+                ## HANDLE SERVER-SIDE TOOL INVOCATIONS (context circulation)
+                _psf = assistant_msg.get("provider_specific_fields")
+                if isinstance(_psf, dict):
+                    _ss_invocations = _psf.get("server_side_tool_invocations")
+                    if isinstance(_ss_invocations, list):
+                        for invocation in _ss_invocations:
+                            # Re-inject toolCall part
+                            tc_part: Dict[str, Any] = {
+                                "toolCall": {
+                                    "toolType": invocation.get("tool_type"),
+                                    "id": invocation.get("id"),
+                                    "args": invocation.get("args"),
+                                }
+                            }
+                            if "thought_signature" in invocation:
+                                tc_part["thoughtSignature"] = invocation[
+                                    "thought_signature"
+                                ]
+                            assistant_content.append(tc_part)  # type: ignore
+
+                            # Re-inject toolResponse part if response is present
+                            if "response" in invocation:
+                                tr_dict: Dict[str, Any] = {
+                                    "id": invocation.get("id"),
+                                    "response": invocation.get("response"),
+                                }
+                                if invocation.get("tool_type"):
+                                    tr_dict["toolType"] = invocation["tool_type"]
+                                tr_part: Dict[str, Any] = {"toolResponse": tr_dict}
+                                if "thought_signature" in invocation:
+                                    tr_part["thoughtSignature"] = invocation[
+                                        "thought_signature"
+                                    ]
+                                assistant_content.append(tr_part)  # type: ignore
+
                 msg_i += 1
 
             if assistant_content:
@@ -666,6 +704,9 @@ def _transform_request_body(  # noqa: PLR0915
             )
         tools: Optional[Tools] = optional_params.pop("tools", None)
         tool_choice: Optional[ToolConfig] = optional_params.pop("tool_choice", None)
+        include_server_side_tool_invocations: bool = optional_params.pop(
+            "include_server_side_tool_invocations", False
+        )
         safety_settings: Optional[List[SafetSettingsConfig]] = optional_params.pop(
             "safety_settings", None
         )  # type: ignore
@@ -694,9 +735,9 @@ def _transform_request_body(  # noqa: PLR0915
             **filtered_params
         )
 
-        # For Gemini 2.x models, add media_resolution to generation_config (global)
-        # Gemini 3+ supports per-part media_resolution, but 2.x only supports global
-        # Gemini 1.x does not support mediaResolution at all
+        # For Gemini 2.x models, also add media_resolution to generation_config (global)
+        # as a fallback, since some 2.x versions may not support per-part media_resolution.
+        # Gemini 1.x does not support mediaResolution at all.
         if "gemini-2" in model:
             max_media_resolution = _extract_max_media_resolution_from_messages(messages)
             if max_media_resolution:
@@ -715,12 +756,26 @@ def _transform_request_body(  # noqa: PLR0915
             data["tools"] = tools
         if tool_choice is not None:
             data["toolConfig"] = tool_choice
+        if include_server_side_tool_invocations:
+            if "toolConfig" not in data:
+                data["toolConfig"] = {}
+            data["toolConfig"]["includeServerSideToolInvocations"] = True
         if safety_settings is not None:
             data["safetySettings"] = safety_settings
         if generation_config is not None and len(generation_config) > 0:
             data["generationConfig"] = generation_config
         if cached_content is not None:
             data["cachedContent"] = cached_content
+
+        if service_tier := optional_params.pop("service_tier", None):
+            if isinstance(service_tier, str):
+                if service_tier.lower() == "default":
+                    data["serviceTier"] = "standard"
+                else:
+                    data["serviceTier"] = service_tier.lower()
+            else:
+                data["serviceTier"] = service_tier
+
         # Only add labels for Vertex AI endpoints (not Google GenAI/AI Studio) and only if non-empty
         if labels and custom_llm_provider != LlmProviders.GEMINI:
             data["labels"] = labels

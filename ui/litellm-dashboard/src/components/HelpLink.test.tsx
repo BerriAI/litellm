@@ -138,4 +138,18 @@ describe("DocsMenu", () => {
     await user.click(button);
     expect(button).toHaveAttribute("aria-expanded", "true");
   });
+
+  it("should close menu when clicking outside", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(
+      <div>
+        <DocsMenu items={items} />
+        <button>Outside</button>
+      </div>,
+    );
+    await user.click(screen.getByRole("button", { name: /docs/i }));
+    expect(screen.getByText("Custom pricing")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /outside/i }));
+    expect(screen.queryByText("Custom pricing")).not.toBeInTheDocument();
+  });
 });

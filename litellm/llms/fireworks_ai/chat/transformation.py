@@ -185,11 +185,16 @@ class FireworksAIConfig(OpenAIGPTConfig):
         ):  # allow user to toggle this feature.
             return content
         if isinstance(content["image_url"], str):
-            content["image_url"] = f"{content['image_url']}#transform=inline"
+            # Skip base64 data URLs — appending #transform=inline corrupts the
+            # base64 payload and causes an "Incorrect padding" decode error on
+            # the Fireworks side.  Data URLs are already inlined by definition.
+            # Lower-case before checking: URI schemes are case-insensitive (RFC 3986).
+            if not content["image_url"].lower().startswith("data:"):
+                content["image_url"] = f"{content['image_url']}#transform=inline"
         elif isinstance(content["image_url"], dict):
-            content["image_url"][
-                "url"
-            ] = f"{content['image_url']['url']}#transform=inline"
+            url = content["image_url"]["url"]
+            if not url.lower().startswith("data:"):
+                content["image_url"]["url"] = f"{url}#transform=inline"
         return content
 
     def _transform_tools(
@@ -387,11 +392,11 @@ class FireworksAIConfig(OpenAIGPTConfig):
 
         ## FIREWORKS AI sends tool calls in the content field instead of tool_calls
         for choice in response.choices:
-            cast(
-                Choices, choice
-            ).message = self._handle_message_content_with_tool_calls(
-                message=cast(Choices, choice).message,
-                tool_calls=optional_params.get("tools", None),
+            cast(Choices, choice).message = (
+                self._handle_message_content_with_tool_calls(
+                    message=cast(Choices, choice).message,
+                    tool_calls=optional_params.get("tools", None),
+                )
             )
 
         response._hidden_params = {"additional_headers": additional_headers}

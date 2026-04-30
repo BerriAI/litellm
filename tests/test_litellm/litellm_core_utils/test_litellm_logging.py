@@ -19,7 +19,7 @@ from litellm.types.utils import ModelResponse, TextCompletionResponse
 @pytest.fixture
 def logging_obj():
     return LitellmLogging(
-        model="bedrock/claude-3-5-sonnet-20240620-v1:0",
+        model="bedrock/claude-haiku-4-5-20251001-v1:0",
         messages=[{"role": "user", "content": "Hey"}],
         stream=True,
         call_type="completion",
@@ -256,6 +256,124 @@ def test_response_cost_calculator_uses_router_model_id_from_litellm_metadata():
         litellm.model_cost.pop(custom_model_id, None)
 
 
+class TestGetRouterModelId:
+    """Tests for the get_router_model_id helper method."""
+
+    def test_returns_id_from_litellm_metadata(self, logging_obj):
+        """Should extract model_info.id from litellm_metadata."""
+        logging_obj.litellm_params = {
+            "litellm_metadata": {
+                "model_info": {"id": "custom-deploy-1"},
+            },
+        }
+        assert logging_obj.get_router_model_id() == "custom-deploy-1"
+
+    def test_returns_id_from_metadata(self, logging_obj):
+        """Should fall back to metadata when litellm_metadata has no model_info."""
+        logging_obj.litellm_params = {
+            "metadata": {
+                "model_info": {"id": "custom-deploy-2"},
+            },
+        }
+        assert logging_obj.get_router_model_id() == "custom-deploy-2"
+
+    def test_prefers_litellm_metadata_over_metadata(self, logging_obj):
+        """litellm_metadata should take priority over metadata."""
+        logging_obj.litellm_params = {
+            "litellm_metadata": {
+                "model_info": {"id": "from-litellm-meta"},
+            },
+            "metadata": {
+                "model_info": {"id": "from-meta"},
+            },
+        }
+        assert logging_obj.get_router_model_id() == "from-litellm-meta"
+
+    def test_returns_none_when_no_model_info(self, logging_obj):
+        """Should return None when no model_info is present."""
+        logging_obj.litellm_params = {"api_base": ""}
+        assert logging_obj.get_router_model_id() is None
+
+    def test_returns_none_when_no_litellm_params(self):
+        """Should return None when litellm_params is not set."""
+        from litellm.litellm_core_utils.litellm_logging import (
+            Logging as LiteLLMLoggingObj,
+        )
+
+        obj = LiteLLMLoggingObj(
+            model="test",
+            messages=[],
+            stream=False,
+            call_type="completion",
+            start_time=time.time(),
+            litellm_call_id="x",
+            function_id="x",
+        )
+        # litellm_params exists but is empty by default
+        assert obj.get_router_model_id() is None
+
+
+class TestAnthropicPassthroughCustomPricing:
+    """Verify the Anthropic pass-through handler forwards custom pricing."""
+
+    def test_completion_cost_receives_custom_pricing_args(self):
+        """_create_anthropic_response_logging_payload should pass
+        custom_pricing and router_model_id to litellm.completion_cost
+        when the logging object carries custom pricing in model_info."""
+        from unittest.mock import patch
+
+        from litellm.litellm_core_utils.litellm_logging import (
+            Logging as LiteLLMLoggingObj,
+        )
+        from litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler import (
+            AnthropicPassthroughLoggingHandler,
+        )
+
+        logging_obj = LiteLLMLoggingObj(
+            model="claude-sonnet-4-20250514",
+            messages=[{"role": "user", "content": "Hi"}],
+            stream=False,
+            call_type="anthropic_messages",
+            start_time=time.time(),
+            litellm_call_id="test-456",
+            function_id="test-fn",
+        )
+        logging_obj.update_environment_variables(
+            model="claude-sonnet-4-20250514",
+            user="",
+            optional_params={},
+            litellm_params={
+                "api_base": "",
+                "litellm_metadata": {
+                    "model_info": {
+                        "id": "claude-custom-pricing",
+                        "input_cost_per_token": 0.5,
+                        "output_cost_per_token": 1.5,
+                    },
+                },
+            },
+        )
+        logging_obj.model_call_details["custom_llm_provider"] = "anthropic"
+
+        mock_response = ModelResponse()
+        mock_response.usage = {"prompt_tokens": 10, "completion_tokens": 5}  # type: ignore
+
+        with patch("litellm.completion_cost", return_value=42.0) as mock_cost:
+            AnthropicPassthroughLoggingHandler._create_anthropic_response_logging_payload(
+                litellm_model_response=mock_response,
+                model="claude-sonnet-4-20250514",
+                kwargs={},
+                start_time=time.time(),
+                end_time=time.time(),
+                logging_obj=logging_obj,
+            )
+
+            mock_cost.assert_called_once()
+            call_kwargs = mock_cost.call_args
+            assert call_kwargs.kwargs.get("custom_pricing") is True
+            assert call_kwargs.kwargs.get("router_model_id") == "claude-custom-pricing"
+
+
 class TestUpdateFromKwargs:
     """Tests for the update_from_kwargs convenience wrapper."""
 
@@ -309,7 +427,7 @@ class TestUpdateFromKwargs:
         assert logging_obj.litellm_params["litellm_metadata"] == lm_meta
 
     def test_caller_litellm_params_win_over_kwargs(self, logging_obj):
-        """Explicit litellm_params from the caller should override auto-extracted values."""
+        """Explicit litellm_params metadata merges into kwargs metadata without overwriting."""
         kwargs = {"metadata": {"from_kwargs": True}}
 
         logging_obj.update_from_kwargs(
@@ -317,7 +435,30 @@ class TestUpdateFromKwargs:
             litellm_params={"metadata": {"from_caller": True}, "litellm_call_id": "x"},
         )
 
-        assert logging_obj.litellm_params["metadata"] == {"from_caller": True}
+        # kwargs metadata is preserved, caller metadata is merged in
+        assert logging_obj.litellm_params["metadata"] == {
+            "from_kwargs": True,
+            "from_caller": True,
+        }
+
+    def test_kwargs_metadata_wins_over_caller_metadata_in_conflict(self, logging_obj):
+        """kwargs metadata takes precedence; caller litellm_params metadata is merged without overwriting."""
+        kwargs = {"metadata": {"from_kwargs": True, "shared_key": "kwargs_value"}}
+
+        logging_obj.update_from_kwargs(
+            kwargs=kwargs,
+            litellm_params={
+                "metadata": {"from_caller": True, "shared_key": "caller_value"},
+                "litellm_call_id": "x",
+            },
+        )
+
+        # kwargs metadata is preserved (shared_key keeps the kwargs value), caller-only keys are added
+        assert logging_obj.litellm_params["metadata"] == {
+            "from_kwargs": True,
+            "from_caller": True,
+            "shared_key": "kwargs_value",  # kwargs wins on conflict
+        }
 
     def test_custom_pricing_detected_via_litellm_metadata(self, logging_obj):
         """Custom pricing in litellm_metadata.model_info should set custom_pricing flag."""
@@ -1163,9 +1304,10 @@ async def test_e2e_generate_cold_storage_object_key_successful():
     response_id = "chatcmpl-test-12345"
     team_alias = "test-team"
 
-    with patch("litellm.cold_storage_custom_logger", return_value="s3"), patch(
-        "litellm.integrations.s3.get_s3_object_key"
-    ) as mock_get_s3_key:
+    with (
+        patch("litellm.cold_storage_custom_logger", return_value="s3"),
+        patch("litellm.integrations.s3.get_s3_object_key") as mock_get_s3_key,
+    ):
         # Mock the S3 object key generation to return a predictable result
         mock_get_s3_key.return_value = (
             "2025-01-15/time-10-30-45-123456_chatcmpl-test-12345.json"
@@ -1208,11 +1350,13 @@ async def test_e2e_generate_cold_storage_object_key_with_custom_logger_s3_path()
     mock_custom_logger = MagicMock()
     mock_custom_logger.s3_path = "storage"
 
-    with patch("litellm.cold_storage_custom_logger", "s3_v2"), patch(
-        "litellm.logging_callback_manager.get_active_custom_logger_for_callback_name"
-    ) as mock_get_logger, patch(
-        "litellm.integrations.s3.get_s3_object_key"
-    ) as mock_get_s3_key:
+    with (
+        patch("litellm.cold_storage_custom_logger", "s3_v2"),
+        patch(
+            "litellm.logging_callback_manager.get_active_custom_logger_for_callback_name"
+        ) as mock_get_logger,
+        patch("litellm.integrations.s3.get_s3_object_key") as mock_get_s3_key,
+    ):
         # Setup mocks
         mock_get_logger.return_value = mock_custom_logger
         mock_get_s3_key.return_value = (
@@ -1259,11 +1403,13 @@ async def test_e2e_generate_cold_storage_object_key_with_logger_no_s3_path():
     mock_custom_logger = MagicMock()
     mock_custom_logger.s3_path = None  # or could be missing attribute
 
-    with patch("litellm.cold_storage_custom_logger", "s3_v2"), patch(
-        "litellm.logging_callback_manager.get_active_custom_logger_for_callback_name"
-    ) as mock_get_logger, patch(
-        "litellm.integrations.s3.get_s3_object_key"
-    ) as mock_get_s3_key:
+    with (
+        patch("litellm.cold_storage_custom_logger", "s3_v2"),
+        patch(
+            "litellm.logging_callback_manager.get_active_custom_logger_for_callback_name"
+        ) as mock_get_logger,
+        patch("litellm.integrations.s3.get_s3_object_key") as mock_get_s3_key,
+    ):
         # Setup mocks
         mock_get_logger.return_value = mock_custom_logger
         mock_get_s3_key.return_value = (
@@ -2015,6 +2161,59 @@ def test_function_setup_metadata_takes_precedence_over_litellm_metadata():
     assert litellm_metadata.get("user_api_key_hash") == "sk-hashed-xyz"
 
 
+def test_update_from_kwargs_litellm_params_metadata_does_not_overwrite_proxy_fields():
+    """
+    Test the exact bug: when update_from_kwargs is called with litellm_params
+    containing a 'metadata' key (e.g. Anthropic's native metadata with user_id),
+    it must NOT overwrite proxy key-auth fields already merged from litellm_metadata.
+
+    This is the anthropic_messages code path where async_anthropic_messages_handler
+    passes anthropic_messages_optional_request_params (which includes metadata)
+    as litellm_params to update_from_kwargs.
+    """
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    logging_obj = Logging(
+        model="claude-3-5-sonnet",
+        messages=[{"role": "user", "content": "test"}],
+        stream=False,
+        call_type="anthropic_messages",
+        start_time=time.time(),
+        litellm_call_id="test-overwrite-bug",
+        function_id="test-function-id",
+    )
+
+    kwargs = {
+        "litellm_metadata": {
+            "user_api_key_hash": "sk-hashed-proxy",
+            "user_api_key_alias": "claude-api",
+            "user_api_key_team_id": "team-zurich",
+        },
+    }
+
+    # Simulate what async_anthropic_messages_handler does:
+    # passes Anthropic's native metadata in litellm_params
+    logging_obj.update_from_kwargs(
+        kwargs=kwargs,
+        litellm_params={
+            "preset_cache_key": None,
+            "stream_response": {},
+            "metadata": {"user_id": "anthropic-device-id"},  # Anthropic native metadata
+        },
+    )
+
+    litellm_params = logging_obj.model_call_details.get("litellm_params", {})
+    metadata = litellm_params.get("metadata")
+
+    assert metadata is not None
+    # Proxy key-auth fields must survive the litellm_params.update()
+    assert metadata.get("user_api_key_hash") == "sk-hashed-proxy"
+    assert metadata.get("user_api_key_alias") == "claude-api"
+    assert metadata.get("user_api_key_team_id") == "team-zurich"
+    # Anthropic native metadata must also be present
+    assert metadata.get("user_id") == "anthropic-device-id"
+
+
 def test_function_setup_empty_metadata_falls_back_to_litellm_metadata():
     """
     Test that when metadata is explicitly set to {} (empty dict), litellm_metadata
@@ -2110,3 +2309,366 @@ def test_failure_handler_runs_sync_callbacks_for_non_pass_through_requests(
         )
 
     dummy_logger.log_failure_event.assert_called_once()
+
+
+def test_merge_hidden_params_from_response_into_metadata_populates_metadata():
+    """Streaming completion path should mirror non-stream: metadata.hidden_params from response."""
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+
+    logging_obj = LiteLLMLoggingObj(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        call_type="acompletion",
+        start_time=time.time(),
+        litellm_call_id="merge-hp-test",
+        function_id="merge-hp-fn",
+    )
+    logging_obj.model_call_details = {
+        "litellm_params": {"metadata": {}},
+    }
+
+    class _Resp:
+        _hidden_params = {"response_cost": 0.001, "model_id": "mid-test"}
+
+    logging_obj._merge_hidden_params_from_response_into_metadata(_Resp())
+    meta = logging_obj.model_call_details["litellm_params"]["metadata"]
+    assert meta["hidden_params"]["response_cost"] == 0.001
+    assert meta["hidden_params"]["model_id"] == "mid-test"
+
+
+def test_merge_hidden_params_from_response_into_metadata_backfills_response_cost():
+    """Streaming metadata should include the already-calculated response cost."""
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+
+    logging_obj = LiteLLMLoggingObj(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        call_type="acompletion",
+        start_time=time.time(),
+        litellm_call_id="merge-hp-cost-test",
+        function_id="merge-hp-cost-fn",
+    )
+    logging_obj.model_call_details = {
+        "litellm_params": {"metadata": {}},
+        "response_cost": 0.002,
+    }
+
+    class _Resp:
+        _hidden_params = {"response_cost": None, "model_id": "mid-test"}
+
+    response = _Resp()
+    logging_obj._merge_hidden_params_from_response_into_metadata(response)
+    meta = logging_obj.model_call_details["litellm_params"]["metadata"]
+    assert meta["hidden_params"]["response_cost"] == 0.002
+    assert meta["hidden_params"]["model_id"] == "mid-test"
+    assert response._hidden_params["response_cost"] is None
+
+
+def test_standard_logging_hidden_params_backfills_response_cost_without_mutating_response():
+    """Streaming standard logging payload should expose the calculated response cost."""
+    from datetime import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.types.utils import Usage
+
+    logging_obj = LiteLLMLoggingObj(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        call_type="acompletion",
+        start_time=time.time(),
+        litellm_call_id="standard-hp-cost-test",
+        function_id="standard-hp-cost-fn",
+    )
+    logging_obj.model_call_details = {
+        "litellm_params": {"metadata": {}, "proxy_server_request": {}},
+        "litellm_call_id": "standard-hp-cost-test",
+        "call_type": "acompletion",
+        "stream": True,
+        "model": "gpt-4o-mini",
+        "custom_llm_provider": "openai",
+        "optional_params": {"stream": True},
+        "response_cost": 0.002,
+    }
+    response = ModelResponse(
+        id="standard-hp-cost-response",
+        model="gpt-4o-mini",
+        usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15),
+    )
+    response._hidden_params = {"response_cost": None, "model_id": "mid-test"}
+
+    payload = logging_obj._build_standard_logging_payload(
+        response, datetime.now(), datetime.now()
+    )
+
+    assert payload is not None
+    assert payload["hidden_params"]["response_cost"] == 0.002
+    assert response._hidden_params["response_cost"] is None
+
+
+def test_merge_hidden_params_from_response_into_metadata_preserves_response_cost():
+    """Do not overwrite provider-supplied response cost when it already exists."""
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+
+    logging_obj = LiteLLMLoggingObj(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        call_type="acompletion",
+        start_time=time.time(),
+        litellm_call_id="merge-hp-preserve-cost-test",
+        function_id="merge-hp-preserve-cost-fn",
+    )
+    logging_obj.model_call_details = {
+        "litellm_params": {"metadata": {}},
+        "response_cost": 0.002,
+    }
+
+    class _Resp:
+        _hidden_params = {"response_cost": 0.001, "model_id": "mid-test"}
+
+    logging_obj._merge_hidden_params_from_response_into_metadata(_Resp())
+    meta = logging_obj.model_call_details["litellm_params"]["metadata"]
+    assert meta["hidden_params"]["response_cost"] == 0.001
+    assert meta["hidden_params"]["model_id"] == "mid-test"
+
+
+def test_merge_hidden_params_from_response_into_metadata_no_op_when_empty():
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+
+    logging_obj = LiteLLMLoggingObj(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        call_type="acompletion",
+        start_time=time.time(),
+        litellm_call_id="merge-hp-empty",
+        function_id="merge-hp-empty-fn",
+    )
+    logging_obj.model_call_details = {
+        "litellm_params": {"metadata": {"existing": True}},
+    }
+
+    class _NoHp:
+        _hidden_params = {}
+
+    logging_obj._merge_hidden_params_from_response_into_metadata(_NoHp())
+    assert (
+        "hidden_params"
+        not in logging_obj.model_call_details["litellm_params"]["metadata"]
+    )
+
+
+# ── StandardLoggingPayloadSetup.get_additional_headers ───────────────────────
+
+
+def test_get_additional_headers_preserves_provider_request_id():
+    """llm_provider-x-request-id must survive the get_additional_headers filter."""
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    raw = {
+        "x-ratelimit-remaining-requests": "29999",
+        "x-ratelimit-remaining-tokens": "149999970",
+        "llm_provider-x-request-id": "req_85f49b546c7b4d3180755621f36631a1",
+        "llm_provider-openai-organization": "my-org",
+        "llm_provider-openai-processing-ms": "649",
+    }
+
+    result = StandardLoggingPayloadSetup.get_additional_headers(raw)
+
+    assert result is not None
+    # well-known fields parsed as ints
+    assert result["x_ratelimit_remaining_requests"] == 29999  # type: ignore
+    assert result["x_ratelimit_remaining_tokens"] == 149999970  # type: ignore
+    # provider-specific headers must be preserved verbatim
+    assert result["llm_provider-x-request-id"] == "req_85f49b546c7b4d3180755621f36631a1"  # type: ignore
+    assert result["llm_provider-openai-organization"] == "my-org"  # type: ignore
+    assert result["llm_provider-openai-processing-ms"] == "649"  # type: ignore
+
+
+def test_get_additional_headers_returns_none_for_none_input():
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    assert StandardLoggingPayloadSetup.get_additional_headers(None) is None
+
+
+def test_get_additional_headers_reset_fields_preserved():
+    """x-ratelimit-reset-* fields (added to the TypedDict) must be captured."""
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    raw = {
+        "x-ratelimit-reset-requests": "1s",
+        "x-ratelimit-reset-tokens": "100ms",
+    }
+
+    result = StandardLoggingPayloadSetup.get_additional_headers(raw)
+
+    assert result is not None
+    assert result["x_ratelimit_reset_requests"] == "1s"  # type: ignore
+    assert result["x_ratelimit_reset_tokens"] == "100ms"  # type: ignore
+
+
+# ── litellm_call_id propagation ───────────────────────────────────────────────
+
+
+def test_get_standard_logging_object_payload_includes_litellm_call_id(logging_obj):
+    """litellm_call_id from kwargs must appear in the returned StandardLoggingPayload."""
+    import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import (
+        get_standard_logging_object_payload,
+    )
+
+    call_id = "test-call-id-abc-123"
+    now = datetime.datetime.now()
+    payload = get_standard_logging_object_payload(
+        kwargs={"litellm_call_id": call_id, "model": "gpt-4o", "messages": []},
+        init_response_obj={},
+        start_time=now,
+        end_time=now,
+        logging_obj=logging_obj,
+        status="success",
+    )
+
+    assert payload is not None
+    assert payload["litellm_call_id"] == call_id
+
+
+def _make_dict_logging_obj():
+    """Build a Logging instance configured for a non-streaming dict result."""
+    obj = LitellmLogging(
+        model="claude-haiku-4-5@20251001",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="acompletion",
+        litellm_call_id="test-call-id",
+        start_time=time.time(),
+        function_id="test-fn",
+    )
+    obj.model_call_details = {
+        "model": "claude-haiku-4-5@20251001",
+        "custom_llm_provider": "vertex_ai",
+        "litellm_params": {"metadata": {}},
+        "response_cost": None,
+    }
+    return obj
+
+
+def test_success_handler_computes_cost_for_dict_response():
+    """Non-streaming dict responses run through the cost calculator."""
+    logging_obj = _make_dict_logging_obj()
+    expected_cost = 0.42
+    with (
+        patch.object(
+            logging_obj,
+            "_response_cost_calculator",
+            return_value=expected_cost,
+        ) as mock_calc,
+        patch.object(
+            logging_obj,
+            "_build_standard_logging_payload",
+            return_value={"response_cost": expected_cost},
+        ),
+        patch(
+            "litellm.litellm_core_utils.litellm_logging.emit_standard_logging_payload"
+        ),
+        patch.object(
+            logging_obj,
+            "_is_recognized_call_type_for_logging",
+            return_value=False,
+        ),
+        patch.object(
+            logging_obj,
+            "_transform_usage_objects",
+            side_effect=lambda result: result,
+        ),
+    ):
+        logging_obj.success_handler(
+            result={"id": "msg_1"},
+            start_time=time.time(),
+            end_time=time.time(),
+        )
+        mock_calc.assert_called_once()
+        assert logging_obj.model_call_details["response_cost"] == expected_cost
+
+
+def test_success_handler_preserves_precomputed_cost_for_dict_response():
+    """Precomputed response_cost on model_call_details must not be overwritten."""
+    logging_obj = _make_dict_logging_obj()
+    precomputed_cost = 1.23
+    logging_obj.model_call_details["response_cost"] = precomputed_cost
+    with (
+        patch.object(
+            logging_obj,
+            "_response_cost_calculator",
+            return_value=9.99,
+        ) as mock_calc,
+        patch.object(
+            logging_obj,
+            "_build_standard_logging_payload",
+            return_value={"response_cost": precomputed_cost},
+        ),
+        patch(
+            "litellm.litellm_core_utils.litellm_logging.emit_standard_logging_payload"
+        ),
+        patch.object(
+            logging_obj,
+            "_is_recognized_call_type_for_logging",
+            return_value=False,
+        ),
+        patch.object(
+            logging_obj,
+            "_transform_usage_objects",
+            side_effect=lambda result: result,
+        ),
+    ):
+        logging_obj.success_handler(
+            result={"id": "msg_2"},
+            start_time=time.time(),
+            end_time=time.time(),
+        )
+        mock_calc.assert_not_called()
+        assert logging_obj.model_call_details["response_cost"] == precomputed_cost
+
+
+def test_success_handler_unified_helper_runs_for_typed_results():
+    """Recognized typed responses still flow through the unified helper."""
+    logging_obj = _make_dict_logging_obj()
+    expected_cost = 0.10
+    typed_result = MagicMock()
+    typed_result._hidden_params = {}
+
+    with (
+        patch.object(
+            logging_obj,
+            "_response_cost_calculator",
+            return_value=expected_cost,
+        ) as mock_calc,
+        patch.object(
+            logging_obj,
+            "_build_standard_logging_payload",
+            return_value={"response_cost": expected_cost},
+        ),
+        patch(
+            "litellm.litellm_core_utils.litellm_logging.emit_standard_logging_payload"
+        ),
+        patch.object(
+            logging_obj,
+            "_is_recognized_call_type_for_logging",
+            return_value=True,
+        ),
+        patch.object(
+            logging_obj,
+            "_transform_usage_objects",
+            side_effect=lambda result: result,
+        ),
+    ):
+        logging_obj.success_handler(
+            result=typed_result,
+            start_time=time.time(),
+            end_time=time.time(),
+        )
+        mock_calc.assert_called_once()
+        assert logging_obj.model_call_details["response_cost"] == expected_cost

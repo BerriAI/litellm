@@ -8,6 +8,9 @@ path used for OpenAI and Azure models.
 import json
 from typing import Any, Dict, List, Optional, Union, cast
 
+from litellm.llms.anthropic.experimental_pass_through.utils import (
+    is_reasoning_auto_summary_enabled,
+)
 from litellm.types.llms.anthropic import (
     AllAnthropicToolsValues,
     AnthopicMessagesAssistantMessageParam,
@@ -94,7 +97,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                             )
                         elif btype == "image":
                             url = self._translate_anthropic_image_source_to_url(
-                                block.get("source", {})
+                                cast(dict, block.get("source", {}))
                             )
                             if url:
                                 user_parts.append(
@@ -248,26 +251,49 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
 
     @staticmethod
     def translate_thinking_to_reasoning(
-        thinking: Dict[str, Any]
+        thinking: Dict[str, Any],
+        output_config: Optional[Dict[str, Any]] = None,
     ) -> Optional[Dict[str, Any]]:
         """
         Convert Anthropic thinking param to Responses API reasoning param.
 
         thinking.budget_tokens maps to reasoning effort:
           >= 10000 -> high, >= 5000 -> medium, >= 2000 -> low, < 2000 -> minimal
+
+        For adaptive thinking, uses output_config.effort if available,
+        otherwise defaults to medium.
         """
-        if not isinstance(thinking, dict) or thinking.get("type") != "enabled":
+        if not isinstance(thinking, dict):
             return None
-        budget = thinking.get("budget_tokens", 0)
-        if budget >= 10000:
-            effort = "high"
-        elif budget >= 5000:
+
+        thinking_type = thinking.get("type")
+
+        if thinking_type == "adaptive":
+            # Use output_config.effort if available
             effort = "medium"
-        elif budget >= 2000:
-            effort = "low"
+            if isinstance(output_config, dict) and output_config.get("effort"):
+                effort = output_config["effort"]
+        elif thinking_type == "enabled":
+            budget = thinking.get("budget_tokens", 0)
+            if budget >= 10000:
+                effort = "high"
+            elif budget >= 5000:
+                effort = "medium"
+            elif budget >= 2000:
+                effort = "low"
+            else:
+                effort = "minimal"
         else:
-            effort = "minimal"
-        return {"effort": effort, "summary": "detailed"}
+            return None
+
+        auto_summary = is_reasoning_auto_summary_enabled()
+        result: Dict[str, Any] = {"effort": effort}
+        summary = thinking.get("summary")
+        if summary:
+            result["summary"] = summary
+        elif auto_summary:
+            result["summary"] = "detailed"
+        return result
 
     def translate_request(
         self,
@@ -327,16 +353,20 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         # tool_choice
         tool_choice = anthropic_request.get("tool_choice")
         if tool_choice:
-            responses_kwargs[
-                "tool_choice"
-            ] = self.translate_tool_choice_to_responses_api(
-                cast(AnthropicMessagesToolChoice, tool_choice)
+            responses_kwargs["tool_choice"] = (
+                self.translate_tool_choice_to_responses_api(
+                    cast(AnthropicMessagesToolChoice, tool_choice)
+                )
             )
 
         # thinking -> reasoning
         thinking = anthropic_request.get("thinking")
         if isinstance(thinking, dict):
-            reasoning = self.translate_thinking_to_reasoning(thinking)
+            output_config = anthropic_request.get("output_config")
+            reasoning = self.translate_thinking_to_reasoning(
+                thinking,
+                output_config=cast(Optional[Dict[str, Any]], output_config),
+            )
             if reasoning:
                 responses_kwargs["reasoning"] = reasoning
 

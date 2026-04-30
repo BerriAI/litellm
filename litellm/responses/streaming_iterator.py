@@ -130,15 +130,66 @@ class BaseResponsesAPIStreamingIterator:
                     )
                 )
 
-                # if "response" in parsed_chunk, then encode litellm specific information like custom_llm_provider
-                response_object = getattr(openai_responses_api_chunk, "response", None)
-                if response_object:
-                    response = ResponsesAPIRequestUtils._update_responses_api_response_id_with_model_id(
-                        responses_api_response=response_object,
-                        litellm_metadata=self.litellm_metadata,
-                        custom_llm_provider=self.custom_llm_provider,
+                # Only when the SSE JSON carries a response body (delta events do not).
+                # Using getattr(..., "response") alone is unsafe with Mocks: they synthesize a
+                # truthy child Mock for any attribute, which breaks tests and is wrong on stream.
+                if "response" in parsed_chunk:
+                    response_object = getattr(
+                        openai_responses_api_chunk, "response", None
                     )
-                    setattr(openai_responses_api_chunk, "response", response)
+                    if response_object is not None:
+                        response = ResponsesAPIRequestUtils._update_responses_api_response_id_with_model_id(
+                            responses_api_response=response_object,
+                            litellm_metadata=self.litellm_metadata,
+                            custom_llm_provider=self.custom_llm_provider,
+                        )
+                        setattr(openai_responses_api_chunk, "response", response)
+
+                # Encode container_id on streaming events so proxy/UI follow-ups route correctly
+                _event_type = getattr(openai_responses_api_chunk, "type", None)
+                _stream_model_id = (
+                    self.litellm_metadata.get("model_info", {}).get("id")
+                    if self.litellm_metadata
+                    else None
+                )
+                if _event_type in (
+                    ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
+                    ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
+                ):
+                    _item = getattr(openai_responses_api_chunk, "item", None)
+                    if _item is not None:
+                        ResponsesAPIRequestUtils._encode_container_id_on_output_item(
+                            item=_item,
+                            custom_llm_provider=self.custom_llm_provider,
+                            model_id=_stream_model_id,
+                        )
+                elif (
+                    _event_type == ResponsesAPIStreamEvents.OUTPUT_TEXT_ANNOTATION_ADDED
+                ):
+                    _annotation = getattr(
+                        openai_responses_api_chunk, "annotation", None
+                    )
+                    if _annotation is not None:
+                        ResponsesAPIRequestUtils._encode_container_id_on_output_item(
+                            item=_annotation,
+                            custom_llm_provider=self.custom_llm_provider,
+                            model_id=_stream_model_id,
+                        )
+                elif _event_type == ResponsesAPIStreamEvents.CONTENT_PART_DONE:
+                    _part = getattr(openai_responses_api_chunk, "part", None)
+                    if _part is not None:
+                        if isinstance(_part, dict):
+                            ResponsesAPIRequestUtils._encode_container_ids_in_annotations(
+                                _part.get("annotations"),
+                                self.custom_llm_provider,
+                                _stream_model_id,
+                            )
+                        else:
+                            ResponsesAPIRequestUtils._encode_container_ids_in_annotations(
+                                getattr(_part, "annotations", None),
+                                self.custom_llm_provider,
+                                _stream_model_id,
+                            )
 
                 # Wrap encrypted_content in streaming events (output_item.added, output_item.done)
                 if self.litellm_metadata and self.litellm_metadata.get(
@@ -166,11 +217,12 @@ class BaseResponsesAPIStreamingIterator:
                                     )
                                     setattr(item, "encrypted_content", wrapped_content)
 
-                # Store the completed response
-                if (
-                    openai_responses_api_chunk
-                    and getattr(openai_responses_api_chunk, "type", None)
-                    == ResponsesAPIStreamEvents.RESPONSE_COMPLETED
+                # Store the completed response (also for incomplete/failed so logging still fires)
+                _chunk_type = getattr(openai_responses_api_chunk, "type", None)
+                if openai_responses_api_chunk and _chunk_type in (
+                    ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+                    ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE,
+                    ResponsesAPIStreamEvents.RESPONSE_FAILED,
                 ):
                     self.completed_response = openai_responses_api_chunk
                     # Add cost to usage object if include_cost_in_streaming_usage is True
@@ -187,18 +239,20 @@ class BaseResponsesAPIStreamingIterator:
                             )
                             if usage_obj is not None:
                                 try:
-                                    cost: Optional[
-                                        float
-                                    ] = self.logging_obj._response_cost_calculator(
-                                        result=response_obj
+                                    cost: Optional[float] = (
+                                        self.logging_obj._response_cost_calculator(
+                                            result=response_obj
+                                        )
                                     )
                                     if cost is not None:
                                         setattr(usage_obj, "cost", cost)
                                 except Exception:
-                                    # If cost calculation fails, continue without cost
                                     pass
 
-                    self._handle_logging_completed_response()
+                    if _chunk_type == ResponsesAPIStreamEvents.RESPONSE_FAILED:
+                        self._handle_logging_failed_response()
+                    else:
+                        self._handle_logging_completed_response()
 
                 return openai_responses_api_chunk
 
@@ -215,6 +269,32 @@ class BaseResponsesAPIStreamingIterator:
     def _handle_logging_completed_response(self):
         """Base implementation - should be overridden by subclasses"""
         pass
+
+    def _handle_logging_failed_response(self):
+        """
+        Handle logging for RESPONSE_FAILED events by routing to failure handlers.
+
+        Unlike _handle_logging_completed_response (which calls success handlers),
+        this constructs an exception from the response error and routes to
+        async_failure_handler / failure_handler so logging integrations correctly
+        record the call as failed.
+        """
+        response_obj = (
+            getattr(self.completed_response, "response", None)
+            if self.completed_response
+            else None
+        )
+        error_info = getattr(response_obj, "error", None) if response_obj else None
+        error_message = "Response failed"
+        if isinstance(error_info, dict):
+            error_message = error_info.get("message", str(error_info))
+        exception = litellm.APIError(
+            status_code=500,
+            message=error_message,
+            llm_provider=self.custom_llm_provider or "",
+            model=self.model or "",
+        )
+        self._handle_failure(exception)
 
     async def _call_post_streaming_deployment_hook(self, chunk):
         """

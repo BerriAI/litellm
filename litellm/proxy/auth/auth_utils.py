@@ -69,7 +69,8 @@ def check_complete_credentials(request_body: dict) -> bool:
         # complex credentials - easier to make a malicious request
         return False
 
-    if "api_key" in request_body:
+    api_key_value = request_body.get("api_key")
+    if api_key_value and isinstance(api_key_value, str) and api_key_value.strip():
         return True
 
     return False
@@ -150,7 +151,15 @@ def is_request_body_safe(
     A malicious user can set the ﻿api_base to their own domain and invoke POST /chat/completions to intercept and steal the OpenAI API key.
     Relevant issue: https://huntr.com/bounties/4001e1a2-7b7a-4776-a3ae-e6692ec3d997
     """
-    banned_params = ["api_base", "base_url"]
+    banned_params = [
+        "api_base",
+        "base_url",
+        "user_config",
+        "aws_sts_endpoint",
+        "aws_web_identity_token",
+        "aws_role_name",
+        "vertex_credentials",
+    ]
 
     for param in banned_params:
         if (
@@ -539,8 +548,45 @@ def bytes_to_mb(bytes_value: int):
 
 
 # helpers used by parallel request limiter to handle model rpm/tpm limits for a given api key
+def _get_deployment_default_limit(model_name: str, field: str) -> Optional[int]:
+    """
+    Return the minimum value of `field` across all deployments for model_name,
+    or None if no deployment has the field set.
+
+    When multiple deployments share the same model name, taking the minimum is
+    the safest choice for load-balanced setups: it ensures no deployment is
+    over-consumed regardless of which one actually serves a given request.
+    """
+    from litellm.proxy.proxy_server import llm_router
+
+    if llm_router is None:
+        return None
+    deployments = llm_router.get_model_list(model_name=model_name)
+    if not deployments:
+        return None
+    limits = []
+    for deployment in deployments:
+        raw = deployment.get("litellm_params", {}).get(field)
+        if raw is not None:
+            try:
+                if isinstance(raw, (int, float, str, bytes, bytearray)):
+                    limits.append(int(raw))
+            except (ValueError, TypeError):
+                pass
+    return min(limits) if limits else None
+
+
+def _get_deployment_default_rpm_limit(model_name: str) -> Optional[int]:
+    return _get_deployment_default_limit(model_name, "default_api_key_rpm_limit")
+
+
+def _get_deployment_default_tpm_limit(model_name: str) -> Optional[int]:
+    return _get_deployment_default_limit(model_name, "default_api_key_tpm_limit")
+
+
 def get_key_model_rpm_limit(
     user_api_key_dict: UserAPIKeyAuth,
+    model_name: Optional[str] = None,
 ) -> Optional[Dict[str, int]]:
     """
     Get the model rpm limit for a given api key.
@@ -549,6 +595,7 @@ def get_key_model_rpm_limit(
     1. Key metadata (model_rpm_limit)
     2. Key model_max_budget (rpm_limit per model)
     3. Team metadata (model_rpm_limit)
+    4. Deployment default_api_key_rpm_limit (when model_name is provided)
     """
     # 1. Check key metadata first (takes priority)
     if user_api_key_dict.metadata:
@@ -567,13 +614,22 @@ def get_key_model_rpm_limit(
 
     # 3. Fallback to team metadata
     if user_api_key_dict.team_metadata:
-        return user_api_key_dict.team_metadata.get("model_rpm_limit")
+        team_limit = user_api_key_dict.team_metadata.get("model_rpm_limit")
+        if team_limit is not None:
+            return team_limit
+
+    # 4. Fallback to deployment default_api_key_rpm_limit
+    if model_name is not None:
+        default_limit = _get_deployment_default_rpm_limit(model_name)
+        if default_limit is not None:
+            return {model_name: default_limit}
 
     return None
 
 
 def get_key_model_tpm_limit(
     user_api_key_dict: UserAPIKeyAuth,
+    model_name: Optional[str] = None,
 ) -> Optional[Dict[str, int]]:
     """
     Get the model tpm limit for a given api key.
@@ -582,6 +638,7 @@ def get_key_model_tpm_limit(
     1. Key metadata (model_tpm_limit)
     2. Key model_max_budget (tpm_limit per model)
     3. Team metadata (model_tpm_limit)
+    4. Deployment default_api_key_tpm_limit (when model_name is provided)
     """
     # 1. Check key metadata first (takes priority)
     if user_api_key_dict.metadata:
@@ -600,14 +657,24 @@ def get_key_model_tpm_limit(
 
     # 3. Fallback to team metadata
     if user_api_key_dict.team_metadata:
-        return user_api_key_dict.team_metadata.get("model_tpm_limit")
+        team_limit = user_api_key_dict.team_metadata.get("model_tpm_limit")
+        if team_limit is not None:
+            return team_limit
+
+    # 4. Fallback to deployment default_api_key_tpm_limit
+    if model_name is not None:
+        default_limit = _get_deployment_default_tpm_limit(model_name)
+        if default_limit is not None:
+            return {model_name: default_limit}
 
     return None
 
 
 def get_model_rate_limit_from_metadata(
     user_api_key_dict: UserAPIKeyAuth,
-    metadata_accessor_key: Literal["team_metadata", "organization_metadata"],
+    metadata_accessor_key: Literal[
+        "team_metadata", "organization_metadata", "project_metadata"
+    ],
     rate_limit_key: Literal["model_rpm_limit", "model_tpm_limit"],
 ) -> Optional[Dict[str, int]]:
     if getattr(user_api_key_dict, metadata_accessor_key):
@@ -628,6 +695,22 @@ def get_team_model_tpm_limit(
 ) -> Optional[Dict[str, int]]:
     if user_api_key_dict.team_metadata:
         return user_api_key_dict.team_metadata.get("model_tpm_limit")
+    return None
+
+
+def get_project_model_rpm_limit(
+    user_api_key_dict: UserAPIKeyAuth,
+) -> Optional[Dict[str, int]]:
+    if user_api_key_dict.project_metadata:
+        return user_api_key_dict.project_metadata.get("model_rpm_limit")
+    return None
+
+
+def get_project_model_tpm_limit(
+    user_api_key_dict: UserAPIKeyAuth,
+) -> Optional[Dict[str, int]]:
+    if user_api_key_dict.project_metadata:
+        return user_api_key_dict.project_metadata.get("model_tpm_limit")
     return None
 
 
@@ -767,19 +850,30 @@ def get_end_user_id_from_request_body(
         user_from_body_user_field = request_body["user"]
         return str(user_from_body_user_field)
 
+    def _as_dict(value: Any) -> dict:
+        # metadata / litellm_metadata can arrive as JSON strings from
+        # multipart/form-data or extra_body; coerce so string-encoded
+        # payloads can't evade end-user attribution.
+        if isinstance(value, dict):
+            return value
+        if isinstance(value, str):
+            from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
+
+            parsed = safe_json_loads(value)
+            return parsed if isinstance(parsed, dict) else {}
+        return {}
+
     # Check 4: 'litellm_metadata.user' in request_body (commonly Anthropic)
-    litellm_metadata = request_body.get("litellm_metadata")
-    if isinstance(litellm_metadata, dict):
-        user_from_litellm_metadata = litellm_metadata.get("user")
-        if user_from_litellm_metadata is not None:
-            return str(user_from_litellm_metadata)
+    litellm_metadata = _as_dict(request_body.get("litellm_metadata"))
+    user_from_litellm_metadata = litellm_metadata.get("user")
+    if user_from_litellm_metadata is not None:
+        return str(user_from_litellm_metadata)
 
     # Check 5: 'metadata.user_id' in request_body (another common pattern)
-    metadata_dict = request_body.get("metadata")
-    if isinstance(metadata_dict, dict):
-        user_id_from_metadata_field = metadata_dict.get("user_id")
-        if user_id_from_metadata_field is not None:
-            return str(user_id_from_metadata_field)
+    metadata_dict = _as_dict(request_body.get("metadata"))
+    user_id_from_metadata_field = metadata_dict.get("user_id")
+    if user_id_from_metadata_field is not None:
+        return str(user_id_from_metadata_field)
 
     # Check 6: 'safety_identifier' in request body (OpenAI Responses API parameter)
     # SECURITY NOTE: safety_identifier can be set by any caller in the request body.

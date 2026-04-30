@@ -1,4 +1,5 @@
 import base64
+import json
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -10,9 +11,11 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     BedrockImageProcessor,
     anthropic_messages_pt,
     _convert_to_bedrock_tool_call_invoke,
+    convert_to_gemini_tool_call_result,
     ollama_pt,
     sanitize_messages_for_tool_calling,
 )
+from litellm.types.llms.openai import ChatCompletionToolMessage
 
 
 def test_ollama_pt_simple_messages():
@@ -74,7 +77,7 @@ async def test_anthropic_bedrock_thinking_blocks_with_none_content():
     # test _bedrock_converse_messages_pt_async
     result = await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
         messages=messages,
-        model="us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+        model="us.anthropic.claude-sonnet-4-5-20250929-v1:0",
         llm_provider="bedrock",
     )
 
@@ -540,7 +543,12 @@ def test_convert_gemini_tool_call_result_with_image_url():
     message_dict_format = ChatCompletionToolMessage(
         role="tool",
         tool_call_id="call_456",
-        content=[{"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,/9j/4AAQ"}}],
+        content=[
+            {
+                "type": "image_url",
+                "image_url": {"url": "data:image/jpeg;base64,/9j/4AAQ"},
+            }
+        ],
     )
     last_message_with_tool_calls["tool_calls"][0]["id"] = "call_456"
 
@@ -549,6 +557,187 @@ def test_convert_gemini_tool_call_result_with_image_url():
         last_message_with_tool_calls=last_message_with_tool_calls,
     )
     assert isinstance(result2, list) and any("inline_data" in p for p in result2)
+
+
+def test_convert_gemini_tool_call_result_with_anthropic_image_block():
+    """
+    Test that Anthropic-native image blocks in tool_result list content are
+    converted to Gemini inline_data instead of being silently dropped.
+    Fixes: https://github.com/BerriAI/litellm/issues/23712
+    """
+    tiny_png_b64 = base64.b64encode(b"PNG_PLACEHOLDER").decode()
+
+    message = ChatCompletionToolMessage(
+        role="tool",
+        tool_call_id="call_123",
+        content=[
+            {
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": "image/png",
+                    "data": tiny_png_b64,
+                },
+            }
+        ],
+    )
+    last_message_with_tool_calls = {
+        "role": "assistant",
+        "content": "",
+        "tool_calls": [
+            {
+                "id": "call_123",
+                "type": "function",
+                "index": 0,
+                "function": {"name": "read_file", "arguments": "{}"},
+            }
+        ],
+    }
+
+    result = convert_to_gemini_tool_call_result(
+        message=message,
+        last_message_with_tool_calls=last_message_with_tool_calls,
+    )
+    assert isinstance(result, list), "expected a list of parts"
+    inline_parts = [p for p in result if "inline_data" in p]
+    assert len(inline_parts) == 1, "expected exactly one inline_data part"
+    assert inline_parts[0]["inline_data"]["mime_type"] == "image/png"
+    assert inline_parts[0]["inline_data"]["data"] == tiny_png_b64
+
+
+def test_convert_gemini_tool_call_result_with_multiple_anthropic_image_blocks():
+    """
+    Test that multiple Anthropic-native image blocks in a single tool_result
+    are all preserved as separate inline_data parts instead of only the last
+    one being kept.
+    Fixes: https://github.com/BerriAI/litellm/issues/23712
+    """
+    png_b64 = base64.b64encode(b"PNG_PLACEHOLDER").decode()
+    jpeg_b64 = base64.b64encode(b"JPEG_PLACEHOLDER").decode()
+
+    message = ChatCompletionToolMessage(
+        role="tool",
+        tool_call_id="call_multi",
+        content=[
+            {"type": "text", "text": "here are two images"},
+            {
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": "image/png",
+                    "data": png_b64,
+                },
+            },
+            {
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": "image/jpeg",
+                    "data": jpeg_b64,
+                },
+            },
+        ],
+    )
+    last_message_with_tool_calls = {
+        "role": "assistant",
+        "content": "",
+        "tool_calls": [
+            {
+                "id": "call_multi",
+                "type": "function",
+                "index": 0,
+                "function": {"name": "screenshot", "arguments": "{}"},
+            }
+        ],
+    }
+
+    result = convert_to_gemini_tool_call_result(
+        message=message,
+        last_message_with_tool_calls=last_message_with_tool_calls,
+    )
+    assert isinstance(result, list), "expected a list of parts"
+    inline_parts = [p for p in result if "inline_data" in p]
+    assert (
+        len(inline_parts) == 2
+    ), f"expected 2 inline_data parts, got {len(inline_parts)}"
+    mime_types = {p["inline_data"]["mime_type"] for p in inline_parts}
+    assert mime_types == {"image/png", "image/jpeg"}
+
+
+def test_convert_gemini_tool_call_result_with_data_url_string():
+    """
+    Test that a data-URL string in tool_result content is converted to
+    Gemini inline_data instead of being passed as plain text.
+    Fixes: https://github.com/BerriAI/litellm/issues/23712
+    """
+    tiny_png_b64 = base64.b64encode(b"PNG_PLACEHOLDER").decode()
+
+    message = ChatCompletionToolMessage(
+        role="tool",
+        tool_call_id="call_456",
+        content=f"data:image/png;base64,{tiny_png_b64}",
+    )
+    last_message_with_tool_calls = {
+        "role": "assistant",
+        "content": "",
+        "tool_calls": [
+            {
+                "id": "call_456",
+                "type": "function",
+                "index": 0,
+                "function": {"name": "read_file", "arguments": "{}"},
+            }
+        ],
+    }
+
+    result = convert_to_gemini_tool_call_result(
+        message=message,
+        last_message_with_tool_calls=last_message_with_tool_calls,
+    )
+    assert isinstance(result, list), "expected a list of parts"
+    inline_parts = [p for p in result if "inline_data" in p]
+    assert (
+        len(inline_parts) == 1
+    ), "data-URL image string was not converted to inline_data"
+    assert inline_parts[0]["inline_data"]["mime_type"] == "image/png"
+    assert inline_parts[0]["inline_data"]["data"] == tiny_png_b64
+
+
+def test_convert_gemini_tool_call_result_with_data_url_extra_params():
+    """
+    Test that a data-URL with extra MIME parameters (e.g. charset) produces
+    a clean mime_type without the extra parameters.
+    """
+    tiny_png_b64 = base64.b64encode(b"PNG_PLACEHOLDER").decode()
+
+    message = ChatCompletionToolMessage(
+        role="tool",
+        tool_call_id="call_extra",
+        content=f"data:image/png;charset=UTF-8;base64,{tiny_png_b64}",
+    )
+    last_message_with_tool_calls = {
+        "role": "assistant",
+        "content": "",
+        "tool_calls": [
+            {
+                "id": "call_extra",
+                "type": "function",
+                "index": 0,
+                "function": {"name": "read_file", "arguments": "{}"},
+            }
+        ],
+    }
+
+    result = convert_to_gemini_tool_call_result(
+        message=message,
+        last_message_with_tool_calls=last_message_with_tool_calls,
+    )
+    assert isinstance(result, list), "expected a list of parts"
+    inline_parts = [p for p in result if "inline_data" in p]
+    assert len(inline_parts) == 1
+    assert (
+        inline_parts[0]["inline_data"]["mime_type"] == "image/png"
+    ), f"expected clean 'image/png', got '{inline_parts[0]['inline_data']['mime_type']}'"
 
 
 def test_bedrock_tools_unpack_defs():
@@ -835,8 +1024,14 @@ def test_bedrock_image_processor_content_type_document_formats():
     test_cases = [
         ("https://example.com/doc.pdf", "application/pdf"),
         ("https://example.com/sheet.csv", "text/csv"),
-        ("https://example.com/doc.docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"),
-        ("https://example.com/sheet.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
+        (
+            "https://example.com/doc.docx",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        ),
+        (
+            "https://example.com/sheet.xlsx",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        ),
         ("https://example.com/page.html", "text/html"),
         ("https://example.com/readme.txt", "text/plain"),
     ]
@@ -845,7 +1040,9 @@ def test_bedrock_image_processor_content_type_document_formats():
         _, content_type = BedrockImageProcessor._post_call_image_processing(
             mock_response, url
         )
-        assert content_type == expected_mime, f"Expected {expected_mime} for {url}, got {content_type}"
+        assert (
+            content_type == expected_mime
+        ), f"Expected {expected_mime} for {url}, got {content_type}"
 
 
 def test_bedrock_image_processor_content_type_s3_pdf_with_query():
@@ -911,6 +1108,7 @@ def test_bedrock_tools_pt_empty_description():
     assert tool_spec is not None
     assert tool_spec.get("name") == "get_weather"
     assert tool_spec.get("description") == "get_weather"
+
 
 def test_bedrock_create_bedrock_block_deterministic_document_hash():
     """
@@ -1111,7 +1309,9 @@ def test_bedrock_create_bedrock_block_document_name_format():
 
     # Check format: DocumentPDFmessages_{16_hex_chars}_{format}
     pattern = r"^DocumentPDFmessages_[0-9a-f]{16}_pdf$"
-    assert re.match(pattern, document_name), f"Document name format mismatch: {document_name}"
+    assert re.match(
+        pattern, document_name
+    ), f"Document name format mismatch: {document_name}"
 
 
 def test_bedrock_create_bedrock_block_different_document_formats():
@@ -1141,6 +1341,7 @@ def test_bedrock_create_bedrock_block_different_document_formats():
         assert block["document"]["name"].endswith(f"_{format_type}")
         assert block["document"]["format"] == format_type
 
+
 def test_bedrock_nova_web_search_options_mapping():
     """
     Test that web_search_options is correctly mapped to Nova grounding.
@@ -1164,8 +1365,7 @@ def test_bedrock_nova_web_search_options_mapping():
 
     # Test with search_context_size (should be ignored for Nova)
     result2 = config._map_web_search_options(
-        {"search_context_size": "high"},
-        "us.amazon.nova-premier-v1:0"
+        {"search_context_size": "high"}, "us.amazon.nova-premier-v1:0"
     )
 
     assert result2 is not None
@@ -1173,6 +1373,7 @@ def test_bedrock_nova_web_search_options_mapping():
     assert system_tool2 is not None
     assert system_tool2["name"] == "nova_grounding"
     # Nova doesn't support search_context_size, so it's just ignored
+
 
 def test_bedrock_tools_pt_does_not_handle_system_tool():
     """
@@ -1193,12 +1394,10 @@ def test_bedrock_tools_pt_does_not_handle_system_tool():
                 "description": "Get the current weather",
                 "parameters": {
                     "type": "object",
-                    "properties": {
-                        "location": {"type": "string"}
-                    },
-                    "required": ["location"]
-                }
-            }
+                    "properties": {"location": {"type": "string"}},
+                    "required": ["location"],
+                },
+            },
         }
     ]
 
@@ -1208,6 +1407,7 @@ def test_bedrock_tools_pt_does_not_handle_system_tool():
     tool_spec = result[0].get("toolSpec")
     assert tool_spec is not None
     assert tool_spec["name"] == "get_weather"
+
 
 def test_convert_to_anthropic_tool_result_image_with_cache_control():
     """
@@ -1373,6 +1573,8 @@ def test_convert_to_anthropic_tool_result_image_url_as_http():
     assert result["content"][0]["source"]["type"] == "url"
     assert result["content"][0]["source"]["url"] == "https://example.com/image.jpg"
     assert result["content"][0]["cache_control"]["type"] == "ephemeral"
+
+
 def test_anthropic_messages_pt_server_tool_use_passthrough():
     """
     Test that anthropic_messages_pt passes through server_tool_use and
@@ -1383,13 +1585,12 @@ def test_anthropic_messages_pt_server_tool_use_passthrough():
 
     Fixes: https://github.com/BerriAI/litellm/issues/XXXXX
     """
-    from litellm.litellm_core_utils.prompt_templates.factory import anthropic_messages_pt
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        anthropic_messages_pt,
+    )
 
     messages = [
-        {
-            "role": "user",
-            "content": "I need help with time information."
-        },
+        {"role": "user", "content": "I need help with time information."},
         {
             "role": "assistant",
             "content": [
@@ -1397,7 +1598,7 @@ def test_anthropic_messages_pt_server_tool_use_passthrough():
                     "type": "server_tool_use",
                     "id": "srvtoolu_01ABC123",
                     "name": "tool_search_tool_regex",
-                    "input": {"query": ".*time.*"}
+                    "input": {"query": ".*time.*"},
                 },
                 {
                     "type": "tool_search_tool_result",
@@ -1406,19 +1607,13 @@ def test_anthropic_messages_pt_server_tool_use_passthrough():
                         "type": "tool_search_tool_search_result",
                         "tool_references": [
                             {"type": "tool_reference", "tool_name": "get_time"}
-                        ]
-                    }
+                        ],
+                    },
                 },
-                {
-                    "type": "text",
-                    "text": "I found the time tool. How can I help you?"
-                }
+                {"type": "text", "text": "I found the time tool. How can I help you?"},
             ],
         },
-        {
-            "role": "user",
-            "content": "What's the time in New York?"
-        },
+        {"role": "user", "content": "What's the time in New York?"},
     ]
 
     result = anthropic_messages_pt(
@@ -1450,7 +1645,9 @@ def test_anthropic_messages_pt_server_tool_use_passthrough():
     # Verify tool_search_tool_result block is preserved
     assert "tool_search_tool_result" in content_types
     tool_result_block = next(
-        b for b in assistant_msg["content"] if b.get("type") == "tool_search_tool_result"
+        b
+        for b in assistant_msg["content"]
+        if b.get("type") == "tool_search_tool_result"
     )
     assert tool_result_block["tool_use_id"] == "srvtoolu_01ABC123"
     assert tool_result_block["content"]["type"] == "tool_search_tool_search_result"
@@ -1458,9 +1655,7 @@ def test_anthropic_messages_pt_server_tool_use_passthrough():
 
     # Verify text block is also preserved
     assert "text" in content_types
-    text_block = next(
-        b for b in assistant_msg["content"] if b.get("type") == "text"
-    )
+    text_block = next(b for b in assistant_msg["content"] if b.get("type") == "text")
     assert text_block["text"] == "I found the time tool. How can I help you?"
 
 
@@ -1491,7 +1686,10 @@ def test_bedrock_tools_unpack_defs_no_oom_with_nested_refs():
             "Expression": {
                 "type": "object",
                 "properties": {
-                    "type": {"type": "string", "enum": ["and", "or", "not", "comparison"]},
+                    "type": {
+                        "type": "string",
+                        "enum": ["and", "or", "not", "comparison"],
+                    },
                     "left": {"$ref": "#/$defs/Operand"},
                     "right": {"$ref": "#/$defs/Operand"},
                     "operator": {"$ref": "#/$defs/Operator"},
@@ -1502,7 +1700,9 @@ def test_bedrock_tools_unpack_defs_no_oom_with_nested_refs():
                 "anyOf": [
                     {"$ref": "#/$defs/Literal"},
                     {"$ref": "#/$defs/FieldRef"},
-                    {"$ref": "#/$defs/Expression"},  # Circular: Operand -> Expression -> Operand
+                    {
+                        "$ref": "#/$defs/Expression"
+                    },  # Circular: Operand -> Expression -> Operand
                 ],
             },
             "Literal": {
@@ -1636,9 +1836,9 @@ def test_anthropic_messages_pt_file_block_preserves_cache_control():
 
     file_block = content_blocks[0]
     assert file_block["type"] == "document"
-    assert "cache_control" in file_block, (
-        "cache_control should be preserved on file/document content blocks"
-    )
+    assert (
+        "cache_control" in file_block
+    ), "cache_control should be preserved on file/document content blocks"
     assert file_block["cache_control"]["type"] == "ephemeral"
 
     text_block = content_blocks[1]
@@ -1884,7 +2084,9 @@ def test_sanitize_messages_deduplicates_tool_results():
 
         # Count tool messages with this ID — should be exactly 1
         tool_results = [
-            m for m in result if m.get("role") == "tool" and m.get("tool_call_id") == "call_abc123"
+            m
+            for m in result
+            if m.get("role") == "tool" and m.get("tool_call_id") == "call_abc123"
         ]
         assert len(tool_results) == 1
         # Should keep the LAST occurrence (most complete)
@@ -2021,7 +2223,8 @@ def test_sanitize_messages_dedup_scoped_per_turn_preserves_cross_turn():
 
         # Both tool results must survive — one per turn
         tool_results = [
-            m for m in result
+            m
+            for m in result
             if m.get("role") == "tool" and m.get("tool_call_id") == "call_X"
         ]
         assert len(tool_results) == 2, (
@@ -2080,37 +2283,196 @@ def test_sanitize_messages_combined_case_a_and_case_d():
         missing_results = [
             m for m in tool_results if m.get("tool_call_id") == "call_missing"
         ]
-        assert len(missing_results) == 1, (
-            f"Expected 1 dummy result for call_missing (Case A), got {len(missing_results)}"
-        )
+        assert (
+            len(missing_results) == 1
+        ), f"Expected 1 dummy result for call_missing (Case A), got {len(missing_results)}"
 
         # Case D: call_duped should have exactly 1 result (the fresh one)
         duped_results = [
             m for m in tool_results if m.get("tool_call_id") == "call_duped"
         ]
-        assert len(duped_results) == 1, (
-            f"Expected 1 result for call_duped after dedup (Case D), got {len(duped_results)}"
-        )
-        assert duped_results[0]["content"] == "fresh_result", (
-            f"Expected last-wins 'fresh_result', got '{duped_results[0]['content']}'"
-        )
+        assert (
+            len(duped_results) == 1
+        ), f"Expected 1 result for call_duped after dedup (Case D), got {len(duped_results)}"
+        assert (
+            duped_results[0]["content"] == "fresh_result"
+        ), f"Expected last-wins 'fresh_result', got '{duped_results[0]['content']}'"
 
         # Verify tool results immediately follow the assistant message
-        asst_idx = next(
-            i for i, m in enumerate(result) if m.get("role") == "assistant"
-        )
+        asst_idx = next(i for i, m in enumerate(result) if m.get("role") == "assistant")
         tool_msgs_after_asst = [
-            m
-            for m in result[asst_idx + 1 :]
-            if m.get("role") in ("tool", "function")
+            m for m in result[asst_idx + 1 :] if m.get("role") in ("tool", "function")
         ]
-        assert len(tool_msgs_after_asst) == 2, (
-            f"Expected 2 tool results after assistant, got {len(tool_msgs_after_asst)}"
-        )
+        assert (
+            len(tool_msgs_after_asst) == 2
+        ), f"Expected 2 tool results after assistant, got {len(tool_msgs_after_asst)}"
         # Both tool_call_ids should be present (order may vary)
         tool_ids = {m["tool_call_id"] for m in tool_msgs_after_asst}
-        assert tool_ids == {"call_missing", "call_duped"}, (
-            f"Expected tool_call_ids {{call_missing, call_duped}}, got {tool_ids}"
-        )
+        assert tool_ids == {
+            "call_missing",
+            "call_duped",
+        }, f"Expected tool_call_ids {{call_missing, call_duped}}, got {tool_ids}"
     finally:
         litellm.modify_params = original
+
+
+def test_anthropic_messages_pt_file_block_preserves_cache_control():
+    """
+    Test that cache_control is preserved on file-type content blocks
+    when translated to Anthropic document params.
+    Regression test for https://github.com/BerriAI/litellm/issues/23873
+    """
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        anthropic_messages_pt,
+    )
+
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "file",
+                    "file": {
+                        "filename": "doc.pdf",
+                        "file_data": "data:application/pdf;base64,JVBERi0xLjQ=",
+                    },
+                    "cache_control": {"type": "ephemeral"},
+                },
+                {
+                    "type": "text",
+                    "text": "Summarize this document.",
+                    "cache_control": {"type": "ephemeral"},
+                },
+            ],
+        }
+    ]
+
+    result = anthropic_messages_pt(
+        messages, model="claude-sonnet-4-20250514", llm_provider="anthropic"
+    )
+
+    content_blocks = result[0]["content"]
+    assert len(content_blocks) == 2
+
+    # Document block (from file) should preserve cache_control
+    doc_block = content_blocks[0]
+    assert doc_block["type"] == "document"
+    assert (
+        "cache_control" in doc_block
+    ), "cache_control was dropped from file/document block"
+    assert doc_block["cache_control"]["type"] == "ephemeral"
+
+    # Text block should also preserve cache_control
+    text_block = content_blocks[1]
+    assert text_block["type"] == "text"
+    assert "cache_control" in text_block
+    assert text_block["cache_control"]["type"] == "ephemeral"
+
+
+def test_add_cache_point_tool_block_passes_ttl_for_claude_4_5():
+    """
+    Tools with cache_control ttl should preserve the ttl in the cachePoint
+    block for Claude 4.5+ models on Bedrock, matching the behavior of system
+    block cache_control.
+
+    Without this fix, tool cachePoint is always {"type": "default"} (5m),
+    while system blocks can have ttl="1h", violating Bedrock's non-increasing
+    TTL ordering constraint (tools -> system -> messages).
+
+    Ref: https://github.com/BerriAI/litellm/issues/XXXXX
+    """
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        add_cache_point_tool_block,
+    )
+
+    tool_with_1h = {
+        "type": "function",
+        "function": {"name": "get_weather", "parameters": {"type": "object"}},
+        "cache_control": {"type": "ephemeral", "ttl": "1h"},
+    }
+
+    # Claude 4.5 model: ttl should be preserved
+    result = add_cache_point_tool_block(
+        tool_with_1h, model="us.anthropic.claude-sonnet-4-5-20250514-v1:0"
+    )
+    assert result is not None
+    assert result["cachePoint"]["type"] == "default"
+    assert result["cachePoint"]["ttl"] == "1h"
+
+    # Claude 4.5 model with 5m ttl: also preserved
+    tool_with_5m = {
+        "cache_control": {"type": "ephemeral", "ttl": "5m"},
+    }
+    result_5m = add_cache_point_tool_block(
+        tool_with_5m, model="us.anthropic.claude-sonnet-4-5-20250514-v1:0"
+    )
+    assert result_5m is not None
+    assert result_5m["cachePoint"]["ttl"] == "5m"
+
+    # Older model: ttl should be stripped
+    result_old = add_cache_point_tool_block(
+        tool_with_1h, model="anthropic.claude-3-5-sonnet-20241022-v2:0"
+    )
+    assert result_old is not None
+    assert result_old["cachePoint"]["type"] == "default"
+    assert "ttl" not in result_old["cachePoint"]
+
+    # No model provided: ttl should be stripped (safe default)
+    result_no_model = add_cache_point_tool_block(tool_with_1h, model=None)
+    assert result_no_model is not None
+    assert "ttl" not in result_no_model["cachePoint"]
+
+    # No cache_control: returns None (unchanged behavior)
+    tool_no_cache = {
+        "type": "function",
+        "function": {"name": "get_weather", "parameters": {"type": "object"}},
+    }
+    assert add_cache_point_tool_block(tool_no_cache) is None
+
+    # cache_control without ttl: returns default cachePoint (unchanged behavior)
+    tool_no_ttl = {"cache_control": {"type": "ephemeral"}}
+    result_no_ttl = add_cache_point_tool_block(
+        tool_no_ttl, model="us.anthropic.claude-sonnet-4-5-20250514-v1:0"
+    )
+    assert result_no_ttl is not None
+    assert result_no_ttl["cachePoint"]["type"] == "default"
+    assert "ttl" not in result_no_ttl["cachePoint"]
+
+
+def test_bedrock_tools_pt_passes_ttl_for_claude_4_5():
+    """
+    End-to-end: _bedrock_tools_pt should produce cachePoint blocks with ttl
+    for Claude 4.5+ models when tools have cache_control with ttl.
+    """
+    from litellm.litellm_core_utils.prompt_templates.factory import _bedrock_tools_pt
+
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "description": "Get weather",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"city": {"type": "string"}},
+                },
+            },
+            "cache_control": {"type": "ephemeral", "ttl": "1h"},
+        }
+    ]
+
+    # Claude 4.5: cachePoint should have ttl
+    result = _bedrock_tools_pt(
+        tools, model="us.anthropic.claude-sonnet-4-5-20250514-v1:0"
+    )
+    cache_blocks = [b for b in result if "cachePoint" in b]
+    assert len(cache_blocks) == 1
+    assert cache_blocks[0]["cachePoint"]["ttl"] == "1h"
+
+    # Older model: cachePoint should not have ttl
+    result_old = _bedrock_tools_pt(
+        tools, model="anthropic.claude-3-5-sonnet-20241022-v2:0"
+    )
+    cache_blocks_old = [b for b in result_old if "cachePoint" in b]
+    assert len(cache_blocks_old) == 1
+    assert "ttl" not in cache_blocks_old[0]["cachePoint"]

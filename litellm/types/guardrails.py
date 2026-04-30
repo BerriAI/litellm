@@ -17,8 +17,17 @@ from litellm.types.proxy.guardrails.guardrail_hooks.grayswan import (
 from litellm.types.proxy.guardrails.guardrail_hooks.ibm import (
     IBMGuardrailsBaseConfigModel,
 )
+from litellm.types.proxy.guardrails.guardrail_hooks.akto import (
+    AktoConfigModel,
+)
 from litellm.types.proxy.guardrails.guardrail_hooks.litellm_content_filter import (
     ContentFilterCategoryConfig,
+)
+from litellm.types.proxy.guardrails.guardrail_hooks.promptguard import (
+    PromptGuardConfigModel,
+)
+from litellm.types.proxy.guardrails.guardrail_hooks.xecguard import (
+    XecGuardConfigModel,
 )
 from litellm.types.proxy.guardrails.guardrail_hooks.qualifire import (
     QualifireGuardrailConfigModel,
@@ -26,9 +35,11 @@ from litellm.types.proxy.guardrails.guardrail_hooks.qualifire import (
 from litellm.types.proxy.guardrails.guardrail_hooks.tool_permission import (
     ToolPermissionGuardrailConfigModel,
 )
+from litellm.types.proxy.guardrails.guardrail_hooks.hiddenlayer import (
+    HiddenlayerGuardrailConfigModel,
+)
 from litellm.types.proxy.guardrails.guardrail_hooks.alice_wonderfence import (
     WonderFenceGuardrailConfigModel,
-)
 
 """
 Pydantic object defining how to set guardrails on litellm proxy
@@ -36,7 +47,7 @@ Pydantic object defining how to set guardrails on litellm proxy
 guardrails:
   - guardrail_name: "bedrock-pre-guard"
     litellm_params:
-      guardrail: bedrock  # supported values: "aporia", "bedrock", "lakera", "zscaler_ai_guard"
+      guardrail: bedrock  # supported values: "akto", "aporia", "bedrock", "lakera", "zscaler_ai_guard"
       mode: "during_call"
       guardrailIdentifier: ff6ujrregl1q
       guardrailVersion: "DRAFT"
@@ -75,6 +86,8 @@ class SupportedGuardrailIntegrations(Enum):
     LITELLM_CONTENT_FILTER = "litellm_content_filter"
     MCP_SECURITY = "mcp_security"
     ONYX = "onyx"
+    PROMPTGUARD = "promptguard"
+    XECGUARD = "xecguard"
     PROMPT_SECURITY = "prompt_security"
     GENERIC_GUARDRAIL_API = "generic_guardrail_api"
     QUALIFIRE = "qualifire"
@@ -82,9 +95,10 @@ class SupportedGuardrailIntegrations(Enum):
     SEMANTIC_GUARD = "semantic_guard"
     MCP_END_USER_PERMISSION = "mcp_end_user_permission"
     BLOCK_CODE_EXECUTION = "block_code_execution"
+    AKTO = "akto"
     MCP_JWT_SIGNER = "mcp_jwt_signer"
+    LLM_AS_A_JUDGE = "llm_as_a_judge"
     ALICE_WONDERFENCE = "alice_wonderfence"
-
 
 class Role(Enum):
     SYSTEM = "system"
@@ -607,6 +621,16 @@ class BaseLitellmParams(
         description="When True, guardrails only receive the latest message for the relevant role (e.g., newest user input pre-call, newest assistant output post-call)",
     )
 
+    skip_system_message_in_guardrail: Optional[bool] = Field(
+        default=None,
+        description=(
+            "When True, unified guardrails skip system-role messages when building "
+            "evaluation inputs (texts and structured_messages). When False, system "
+            "messages are included even if litellm_settings sets a global skip. When "
+            "None, use the global litellm.skip_system_message_in_guardrail setting."
+        ),
+    )
+
     # Lakera specific params
     category_thresholds: Optional[LakeraCategoryThresholds] = Field(
         default=None,
@@ -739,14 +763,18 @@ class LitellmParams(
     PillarGuardrailConfigModel,
     GraySwanGuardrailConfigModel,
     NomaGuardrailConfigModel,
+    PromptGuardConfigModel,
+    XecGuardConfigModel,
     ToolPermissionGuardrailConfigModel,
     ZscalerAIGuardConfigModel,
+    AktoConfigModel,
     JavelinGuardrailConfigModel,
     BaseLitellmParams,
     EnkryptAIGuardrailConfigs,
     IBMGuardrailsBaseConfigModel,
     QualifireGuardrailConfigModel,
     BlockCodeExecutionGuardrailConfigModel,
+    HiddenlayerGuardrailConfigModel,
     WonderFenceGuardrailConfigModel,
 ):
     guardrail: str = Field(description="The type of guardrail integration to use")
@@ -867,6 +895,8 @@ class ApplyGuardrailRequest(BaseModel):
     text: str
     language: Optional[str] = None
     entities: Optional[List[PiiEntityType]] = None
+    input_type: str = "request"
+    messages: Optional[List[Dict[str, Any]]] = None
 
 
 class ApplyGuardrailResponse(BaseModel):
