@@ -1812,7 +1812,7 @@ def ocr_cost(
     cost_per_credit = None
     if model_info is not None:
         cost_per_credit = model_info.get("ocr_cost_per_credit")
-    if credits is not None and cost_per_credit:
+    if credits is not None and cost_per_credit is not None:
         return cost_per_credit * credits, 0.0
 
     pages_processed = response.usage_info.pages_processed
