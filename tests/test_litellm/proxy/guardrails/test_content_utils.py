@@ -2,6 +2,7 @@
 
 from litellm.proxy.guardrails._content_utils import (
     build_inspection_messages,
+    has_non_string_content,
     iter_message_text,
     walk_user_text,
 )
@@ -235,3 +236,30 @@ def test_build_inspection_messages_empty_data():
     assert build_inspection_messages({}) == []
     assert build_inspection_messages({"messages": []}) == []
     assert build_inspection_messages({"input": ""}) == []
+
+
+# ── has_non_string_content ────────────────────────────────────────────────────
+
+
+def test_has_non_string_content_string_messages():
+    data = {"messages": [{"role": "user", "content": "hello"}]}
+    assert has_non_string_content(data) is False
+
+
+def test_has_non_string_content_multimodal_messages():
+    data = {"messages": [{"role": "user", "content": [{"type": "text", "text": "hi"}]}]}
+    assert has_non_string_content(data) is True
+
+
+def test_has_non_string_content_responses_api_string_input():
+    assert has_non_string_content({"input": "plain string"}) is False
+
+
+def test_has_non_string_content_responses_api_list_input():
+    assert has_non_string_content({"input": ["a", "b"]}) is True
+
+
+def test_has_non_string_content_empty_data():
+    assert has_non_string_content({}) is False
+    assert has_non_string_content({"messages": []}) is False
+    assert has_non_string_content({"input": ""}) is False
