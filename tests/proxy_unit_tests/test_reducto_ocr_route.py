@@ -35,6 +35,15 @@ def client_no_auth(fake_env_vars):
     config_fp = os.path.join(filepath, "test_configs", "test_config_no_auth.yaml")
     asyncio.run(initialize(config=config_fp, debug=True))
 
+    # Passthrough of api_base in the JSON body is rejected by default
+    # (pre_db_read_auth_checks / is_request_body_safe). This test asserts
+    # api_base reaches aocr().
+    from litellm.proxy import proxy_server as _ps
+
+    if _ps.general_settings is None:
+        _ps.general_settings = {}
+    _ps.general_settings["allow_client_side_credentials"] = True
+
     try:
         yield TestClient(app)
     finally:
