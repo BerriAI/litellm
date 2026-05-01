@@ -633,12 +633,30 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
                 and "processed_time" in first_line
             )
             has_success_or_error = (
-                "candidates" in first_line.get("response", {}) or "status" in first_line
+                "candidates" in first_line.get("response", {})
+                or bool(first_line.get("status"))
             )
 
             if not (has_base_structure and has_success_or_error):
                 # Not a Vertex AI batch output, return as-is
                 return content
+
+            vertex_gemini_config = VertexGeminiConfig()
+            logging_obj = Logging(
+                model="",
+                messages=[],
+                stream=False,
+                call_type="batch_transform",
+                start_time=time.time(),
+                litellm_call_id="",
+                function_id="",
+            )
+            logging_obj.optional_params = {}
+            mock_httpx_response = httpx.Response(
+                status_code=200,
+                headers={"content-type": "application/json"},
+                request=httpx.Request(method="POST", url="https://example.com"),
+            )
 
             # Transform all lines
             transformed_lines = []
@@ -650,7 +668,10 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
                     vertex_output = json.loads(line)
                     openai_output = (
                         self._transform_single_vertex_batch_output_to_openai(
-                            vertex_output
+                            vertex_output=vertex_output,
+                            vertex_gemini_config=vertex_gemini_config,
+                            logging_obj=logging_obj,
+                            mock_httpx_response=mock_httpx_response,
                         )
                     )
                     transformed_lines.append(json.dumps(openai_output))
@@ -666,7 +687,11 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
             return content
 
     def _transform_single_vertex_batch_output_to_openai(
-        self, vertex_output: Dict[str, Any]
+        self,
+        vertex_output: Dict[str, Any],
+        vertex_gemini_config: VertexGeminiConfig,
+        logging_obj: Logging,
+        mock_httpx_response: httpx.Response,
     ) -> Dict[str, Any]:
         """
         Transform a single Vertex AI batch output line to OpenAI format.
@@ -712,29 +737,11 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
         if "@" in model:
             model = model.split("@")[0]
 
-        # Create logging object for transformation
-        logging_obj = Logging(
-            model=model,
-            messages=[],
-            stream=False,
-            call_type="batch_transform",
-            start_time=time.time(),
-            litellm_call_id="",
-            function_id="",
-        )
-        logging_obj.optional_params = {}
-
-        # Create mock httpx response for transformation
-        mock_httpx_response = httpx.Response(
-            status_code=200,
-            content=json.dumps(vertex_response).encode("utf-8"),
-            headers={"content-type": "application/json"},
-            request=httpx.Request(method="POST", url="https://example.com"),
-        )
+        logging_obj.model = model
+        logging_obj.start_time = time.time()
 
         try:
             # Use existing VertexGeminiConfig transformation
-            vertex_gemini_config = VertexGeminiConfig()
             model_response = ModelResponse()
 
             transformed_response = vertex_gemini_config._transform_google_generate_content_to_openai_model_response(
