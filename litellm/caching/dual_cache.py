@@ -392,12 +392,16 @@ class DualCache(BaseCache):
         value: float,
         parent_otel_span: Optional[Span] = None,
         local_only: bool = False,
+        refresh_ttl: bool = False,
         **kwargs,
     ) -> Optional[float]:
         """
         Key - the key in cache
 
         Value - float - the value you want to increment by
+
+        Refresh_ttl - bool - if True, resets the Redis TTL on every write.
+        Default False preserves window-style semantics.
 
         Returns - the incremented value, or None if no cache backend is
         available (in_memory_cache is None and Redis failed/is absent).
@@ -415,6 +419,7 @@ class DualCache(BaseCache):
                     value,
                     parent_otel_span=parent_otel_span,
                     ttl=kwargs.get("ttl", None),
+                    refresh_ttl=refresh_ttl,
                 )
 
             return result

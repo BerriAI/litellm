@@ -117,7 +117,10 @@ class MCPRequestHandler:
             return b"{}"
 
         request.body = mock_body  # type: ignore
-        if ".well-known" in str(request.url):  # public routes
+        # Only OAuth metadata routes registered under /.well-known/ are public.
+        # Match on request.url.path (path-only, exact prefix) so the substring
+        # cannot be smuggled via query string, hostname, or a deeper URL segment.
+        if request.url.path.startswith("/.well-known/"):
             validated_user_api_key_auth = UserAPIKeyAuth()
         elif has_explicit_litellm_key:
             # Explicit x-litellm-api-key provided - always validate normally
@@ -126,27 +129,37 @@ class MCPRequestHandler:
             )
         elif oauth2_headers:
             # No x-litellm-api-key, but Authorization header present.
-            # Could be a LiteLLM key (backward compat) OR an OAuth2 token
-            # from an upstream MCP provider (e.g. Atlassian).
-            # Try LiteLLM auth first; on auth failure, treat as OAuth2 passthrough.
+            # Could be a LiteLLM key (backward compat) OR an opaque OAuth2 token
+            # the operator wants forwarded to an upstream OAuth2-mode MCP server.
+            # Try LiteLLM auth first; on auth failure, only fall back to anonymous
+            # passthrough when the request actually targets a server whose operator
+            # configured ``auth_type=oauth2``. For any other server (api_key,
+            # bearer_token, basic, etc.), a failed LiteLLM auth is a real failure
+            # and must propagate — otherwise an attacker can exchange any garbage
+            # bearer for an anonymous session.
             try:
                 validated_user_api_key_auth = await user_api_key_auth(
                     api_key=litellm_api_key, request=request
                 )
-            except HTTPException as e:
-                if e.status_code in (401, 403):
+            except (HTTPException, ProxyException) as e:
+                # HTTPException.status_code is int; ProxyException.code is
+                # normalized to str in its __init__ but can be ``"None"`` or any
+                # non-numeric string when the caller didn't supply a numeric
+                # code, so we compare against both int and str forms rather
+                # than coercing (``int("None")`` would raise ValueError and
+                # rewrite the auth error as a 500).
+                status = e.status_code if isinstance(e, HTTPException) else e.code
+                if status in (
+                    401,
+                    403,
+                    "401",
+                    "403",
+                ) and MCPRequestHandler._target_servers_use_oauth2(
+                    path=request.url.path, mcp_servers=mcp_servers
+                ):
                     verbose_logger.debug(
-                        "MCP OAuth2: Authorization header is not a valid LiteLLM key, "
-                        "treating as OAuth2 token passthrough"
-                    )
-                    validated_user_api_key_auth = UserAPIKeyAuth()
-                else:
-                    raise
-            except ProxyException as e:
-                if str(e.code) in ("401", "403"):
-                    verbose_logger.debug(
-                        "MCP OAuth2: Authorization header is not a valid LiteLLM key, "
-                        "treating as OAuth2 token passthrough"
+                        "MCP OAuth2: target server is OAuth2-mode, treating "
+                        "Authorization as upstream OAuth2 token passthrough"
                     )
                     validated_user_api_key_auth = UserAPIKeyAuth()
                 else:
@@ -164,6 +177,62 @@ class MCPRequestHandler:
             oauth2_headers,
             dict(headers),
         )
+
+    @staticmethod
+    def _extract_target_server_names_from_path(path: str) -> List[str]:
+        """
+        Extract the target MCP server name from the standard MCP transport
+        URL patterns: ``/mcp/{server_name}[/...]`` and
+        ``/{server_name}/mcp[/...]``. Returns ``[]`` for any other path so
+        callers fail closed when the target cannot be resolved.
+
+        REST/admin endpoints, OAuth2 server endpoints
+        (``/{server_name}/authorize``, ``/token`` etc.), and ``.well-known``
+        discovery routes intentionally fall through — those flows do not need
+        OAuth2 token passthrough. Clients aggregating multiple servers should
+        use ``x-mcp-servers``, which takes precedence over path parsing.
+        """
+        segments = [s for s in path.split("/") if s]
+        if len(segments) >= 2 and segments[0] == "mcp":
+            return [segments[1]]
+        if len(segments) >= 2 and segments[1] == "mcp":
+            return [segments[0]]
+        return []
+
+    @staticmethod
+    def _target_servers_use_oauth2(path: str, mcp_servers: Optional[List[str]]) -> bool:
+        """
+        True only when EVERY MCP server the request targets is configured for
+        ``auth_type == oauth2``. If any target is non-OAuth2 — or if the target
+        cannot be resolved at all — return False so the caller fails closed.
+
+        Used to gate the "treat Authorization as opaque OAuth2 token" fallback
+        in :meth:`process_mcp_request` so a failed LiteLLM-auth cannot be
+        exchanged for an anonymous session against a non-OAuth2 server.
+        """
+        # Inline imports avoid a circular dependency: mcp_server_manager imports
+        # from this module.
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+        from litellm.types.mcp import MCPAuth
+
+        # Use the x-mcp-servers header verbatim when present (including the
+        # explicitly-empty list, which means "no targets" → fail closed).
+        # Only fall back to path parsing when the header was absent entirely.
+        target_names = (
+            mcp_servers
+            if mcp_servers is not None
+            else MCPRequestHandler._extract_target_server_names_from_path(path)
+        )
+        if not target_names:
+            return False
+
+        for name in target_names:
+            server = global_mcp_server_manager.get_mcp_server_by_name(name)
+            if server is None or server.auth_type != MCPAuth.oauth2:
+                return False
+        return True
 
     @staticmethod
     def _get_mcp_auth_header_from_headers(headers: Headers) -> Optional[str]:

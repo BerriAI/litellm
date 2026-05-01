@@ -505,6 +505,38 @@ def test_get_logging_caching_headers_pillar_metadata():
     )
 
 
+def test_get_logging_caching_headers_ignores_untrusted_pillar_headers():
+    request_data = {
+        "metadata": {
+            "pillar_response_headers": {
+                "set-cookie": "session=evil",
+                "x-pillar-flagged": "true",
+            },
+            "pillar_flagged": True,
+        }
+    }
+
+    headers = get_logging_caching_headers(request_data)
+
+    assert "set-cookie" not in headers
+    assert "x-pillar-flagged" not in headers
+
+
+def test_get_logging_caching_headers_filters_non_pillar_headers():
+    request_data = {
+        "metadata": {
+            "pillar_flagged": True,
+        }
+    }
+    build_pillar_response_headers(request_data["metadata"])
+    request_data["metadata"]["pillar_response_headers"]["set-cookie"] = "session=evil"
+
+    headers = get_logging_caching_headers(request_data)
+
+    assert headers["x-pillar-flagged"] == "true"
+    assert "set-cookie" not in headers
+
+
 def test_get_logging_caching_headers_truncates_large_evidence():
     long_text = "悪" * 6000  # multi-byte unicode to test URL encoding and truncation
     request_data = {
