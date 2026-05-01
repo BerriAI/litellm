@@ -11,7 +11,7 @@
         "litellm_provider": "one of https://docs.litellm.ai/docs/providers",
         "max_input_tokens": "max input tokens, if the provider specifies it. if not default to max_tokens",
         "max_output_tokens": "max output tokens, if the provider specifies it. if not default to max_tokens",
-        "max_tokens": "LEGACY parameter. set to max_output_tokens if provider specifies it. IF not set to max_input_tokens, if provider specifies it.",
+        "max_tokens": "max output tokens, if the provider specifies it. if not default to max_tokens",
         "mode": "one of: chat, embedding, completion, image_generation, audio_transcription, audio_speech, image_generation, moderation, rerank, search",
         "output_cost_per_reasoning_token": 0.0,
         "output_cost_per_token": 0.0,
@@ -3507,7 +3507,8 @@
         "output_cost_per_token": 5e-06,
         "supported_endpoints": [
             "/v1/audio/transcriptions"
-        ]
+        ],
+        "max_tokens": 2000
     },
     "azure/gpt-4o-mini-tts": {
         "input_cost_per_token": 2.5e-06,
@@ -3582,7 +3583,8 @@
         "output_cost_per_token": 1e-05,
         "supported_endpoints": [
             "/v1/audio/transcriptions"
-        ]
+        ],
+        "max_tokens": 2000
     },
     "azure/gpt-4o-transcribe-diarize": {
         "input_cost_per_audio_token": 6e-06,
@@ -3594,7 +3596,8 @@
         "output_cost_per_token": 1e-05,
         "supported_endpoints": [
             "/v1/audio/transcriptions"
-        ]
+        ],
+        "max_tokens": 2000
     },
     "azure/gpt-5.1-2025-11-13": {
         "cache_read_input_token_cost": 1.25e-07,
@@ -8960,7 +8963,8 @@
         "output_cost_per_token": 1e-05,
         "supported_endpoints": [
             "/v1/audio/transcriptions"
-        ]
+        ],
+        "max_tokens": 2000
     },
     "claude-haiku-4-5-20251001": {
         "cache_creation_input_token_cost": 1.25e-06,
@@ -14241,7 +14245,8 @@
             "search_context_size_low": 0.035,
             "search_context_size_medium": 0.035,
             "search_context_size_high": 0.035
-        }
+        },
+        "max_tokens": 8192
     },
     "gemini-2.0-flash-lite-001": {
         "cache_read_input_token_cost": 1.875e-08,
@@ -14282,7 +14287,8 @@
             "search_context_size_low": 0.035,
             "search_context_size_medium": 0.035,
             "search_context_size_high": 0.035
-        }
+        },
+        "max_tokens": 8192
     },
     "gemini-2.5-flash": {
         "cache_read_input_token_cost": 3e-08,
@@ -15752,7 +15758,8 @@
             "search_context_size_low": 0.035,
             "search_context_size_medium": 0.035,
             "search_context_size_high": 0.035
-        }
+        },
+        "max_tokens": 8192
     },
     "gemini/gemini-2.5-flash": {
         "cache_read_input_token_cost": 3e-08,
@@ -18968,7 +18975,8 @@
         "output_cost_per_token": 5e-06,
         "supported_endpoints": [
             "/v1/audio/transcriptions"
-        ]
+        ],
+        "max_tokens": 2000
     },
     "gpt-4o-mini-tts": {
         "input_cost_per_token": 2.5e-06,
@@ -19098,7 +19106,8 @@
         "output_cost_per_token": 1e-05,
         "supported_endpoints": [
             "/v1/audio/transcriptions"
-        ]
+        ],
+        "max_tokens": 2000
     },
     "gpt-image-1.5": {
         "cache_read_input_image_token_cost": 2e-06,
@@ -22827,7 +22836,8 @@
         "supports_reasoning": true,
         "supports_system_messages": true,
         "max_input_tokens": 1000000,
-        "max_output_tokens": 8192
+        "max_output_tokens": 8192,
+        "max_tokens": 8192
     },
     "minimax/MiniMax-M2.1-lightning": {
         "input_cost_per_token": 3e-07,
@@ -22842,7 +22852,8 @@
         "supports_reasoning": true,
         "supports_system_messages": true,
         "max_input_tokens": 1000000,
-        "max_output_tokens": 8192
+        "max_output_tokens": 8192,
+        "max_tokens": 8192
     },
     "minimax/MiniMax-M2.5": {
         "input_cost_per_token": 3e-07,
@@ -22857,7 +22868,8 @@
         "supports_reasoning": true,
         "supports_system_messages": true,
         "max_input_tokens": 1000000,
-        "max_output_tokens": 8192
+        "max_output_tokens": 8192,
+        "max_tokens": 8192
     },
     "minimax/MiniMax-M2.5-lightning": {
         "input_cost_per_token": 3e-07,
@@ -22872,7 +22884,8 @@
         "supports_reasoning": true,
         "supports_system_messages": true,
         "max_input_tokens": 1000000,
-        "max_output_tokens": 8192
+        "max_output_tokens": 8192,
+        "max_tokens": 8192
     },
     "minimax/MiniMax-M2": {
         "input_cost_per_token": 3e-07,
@@ -22887,7 +22900,8 @@
         "supports_reasoning": true,
         "supports_system_messages": true,
         "max_input_tokens": 200000,
-        "max_output_tokens": 8192
+        "max_output_tokens": 8192,
+        "max_tokens": 8192
     },
     "mistral.devstral-2-123b": {
         "input_cost_per_token": 4e-07,
@@ -34786,7 +34800,8 @@
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_tool_choice": true,
-        "source": "https://docs.z.ai/guides/overview/pricing"
+        "source": "https://docs.z.ai/guides/overview/pricing",
+        "max_tokens": 128000
     },
     "zai/glm-5-code": {
         "cache_creation_input_token_cost": 0,
@@ -34801,7 +34816,8 @@
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_tool_choice": true,
-        "source": "https://docs.z.ai/guides/overview/pricing"
+        "source": "https://docs.z.ai/guides/overview/pricing",
+        "max_tokens": 128000
     },
     "zai/glm-4.7": {
         "cache_creation_input_token_cost": 0,
@@ -34816,7 +34832,8 @@
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_tool_choice": true,
-        "source": "https://docs.z.ai/guides/overview/pricing"
+        "source": "https://docs.z.ai/guides/overview/pricing",
+        "max_tokens": 128000
     },
     "zai/glm-4.6": {
         "cache_creation_input_token_cost": 0,
@@ -34831,7 +34848,8 @@
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_tool_choice": true,
-        "source": "https://docs.z.ai/guides/overview/pricing"
+        "source": "https://docs.z.ai/guides/overview/pricing",
+        "max_tokens": 128000
     },
     "zai/glm-4.5": {
         "input_cost_per_token": 6e-07,
@@ -34842,7 +34860,8 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_tool_choice": true,
-        "source": "https://docs.z.ai/guides/overview/pricing"
+        "source": "https://docs.z.ai/guides/overview/pricing",
+        "max_tokens": 32000
     },
     "zai/glm-4.5v": {
         "input_cost_per_token": 6e-07,
@@ -34854,7 +34873,8 @@
         "supports_function_calling": true,
         "supports_tool_choice": true,
         "supports_vision": true,
-        "source": "https://docs.z.ai/guides/overview/pricing"
+        "source": "https://docs.z.ai/guides/overview/pricing",
+        "max_tokens": 32000
     },
     "zai/glm-4.5-x": {
         "input_cost_per_token": 2.2e-06,
@@ -34865,7 +34885,8 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_tool_choice": true,
-        "source": "https://docs.z.ai/guides/overview/pricing"
+        "source": "https://docs.z.ai/guides/overview/pricing",
+        "max_tokens": 32000
     },
     "zai/glm-4.5-air": {
         "input_cost_per_token": 2e-07,
@@ -34876,7 +34897,8 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_tool_choice": true,
-        "source": "https://docs.z.ai/guides/overview/pricing"
+        "source": "https://docs.z.ai/guides/overview/pricing",
+        "max_tokens": 32000
     },
     "zai/glm-4.5-airx": {
         "input_cost_per_token": 1.1e-06,
@@ -34887,7 +34909,8 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_tool_choice": true,
-        "source": "https://docs.z.ai/guides/overview/pricing"
+        "source": "https://docs.z.ai/guides/overview/pricing",
+        "max_tokens": 32000
     },
     "zai/glm-4-32b-0414-128k": {
         "input_cost_per_token": 1e-07,
@@ -34898,7 +34921,8 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_tool_choice": true,
-        "source": "https://docs.z.ai/guides/overview/pricing"
+        "source": "https://docs.z.ai/guides/overview/pricing",
+        "max_tokens": 32000
     },
     "zai/glm-4.5-flash": {
         "input_cost_per_token": 0,
@@ -34909,7 +34933,8 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_tool_choice": true,
-        "source": "https://docs.z.ai/guides/overview/pricing"
+        "source": "https://docs.z.ai/guides/overview/pricing",
+        "max_tokens": 32000
     },
     "vertex_ai/search_api": {
         "input_cost_per_query": 0.0015,
@@ -38556,7 +38581,8 @@
         "output_cost_per_token": 5e-06,
         "supported_endpoints": [
             "/v1/audio/transcriptions"
-        ]
+        ],
+        "max_tokens": 2000
     },
     "gpt-4o-mini-transcribe-2025-12-15": {
         "input_cost_per_audio_token": 3e-06,
@@ -38568,7 +38594,8 @@
         "output_cost_per_token": 5e-06,
         "supported_endpoints": [
             "/v1/audio/transcriptions"
-        ]
+        ],
+        "max_tokens": 2000
     },
     "gpt-5-search-api": {
         "cache_read_input_token_cost": 1.25e-07,
@@ -38827,7 +38854,8 @@
             "search_context_size_low": 0.035,
             "search_context_size_medium": 0.035,
             "search_context_size_high": 0.035
-        }
+        },
+        "max_tokens": 8192
     },
     "gemini-2.5-flash-native-audio-latest": {
         "input_cost_per_audio_token": 1e-06,
@@ -39601,7 +39629,7 @@
         "supports_pdf_input": true
     },
     "venice/zai-org-glm-5-1": {
-        "max_tokens": 200000,
+        "max_tokens": 8192,
         "max_input_tokens": 200000,
         "max_output_tokens": 8192,
         "input_cost_per_token": 1.75e-06,
@@ -39610,7 +39638,7 @@
         "mode": "chat"
     },
     "venice/zai-org-glm-5": {
-        "max_tokens": 198000,
+        "max_tokens": 8192,
         "max_input_tokens": 198000,
         "max_output_tokens": 8192,
         "input_cost_per_token": 1e-06,
@@ -39619,7 +39647,7 @@
         "mode": "chat"
     },
     "venice/z-ai-glm-5-turbo": {
-        "max_tokens": 200000,
+        "max_tokens": 8192,
         "max_input_tokens": 200000,
         "max_output_tokens": 8192,
         "input_cost_per_token": 1.2e-06,
@@ -39628,7 +39656,7 @@
         "mode": "chat"
     },
     "venice/z-ai-glm-5v-turbo": {
-        "max_tokens": 200000,
+        "max_tokens": 8192,
         "max_input_tokens": 200000,
         "max_output_tokens": 8192,
         "input_cost_per_token": 1.5e-06,
@@ -39638,7 +39666,7 @@
         "supports_vision": true
     },
     "venice/olafangensan-glm-4.7-flash-heretic": {
-        "max_tokens": 200000,
+        "max_tokens": 8192,
         "max_input_tokens": 200000,
         "max_output_tokens": 8192,
         "input_cost_per_token": 1.4e-07,
@@ -39647,7 +39675,7 @@
         "mode": "chat"
     },
     "venice/zai-org-glm-4.7-flash": {
-        "max_tokens": 128000,
+        "max_tokens": 8192,
         "max_input_tokens": 128000,
         "max_output_tokens": 8192,
         "input_cost_per_token": 1.25e-07,
@@ -39656,7 +39684,7 @@
         "mode": "chat"
     },
     "venice/zai-org-glm-4.6": {
-        "max_tokens": 198000,
+        "max_tokens": 8192,
         "max_input_tokens": 198000,
         "max_output_tokens": 8192,
         "input_cost_per_token": 8.5e-07,
@@ -39665,7 +39693,7 @@
         "mode": "chat"
     },
     "venice/zai-org-glm-4.7": {
-        "max_tokens": 198000,
+        "max_tokens": 8192,
         "max_input_tokens": 198000,
         "max_output_tokens": 8192,
         "input_cost_per_token": 5.5e-07,
@@ -39674,7 +39702,7 @@
         "mode": "chat"
     },
     "venice/venice-uncensored": {
-        "max_tokens": 32000,
+        "max_tokens": 8192,
         "max_input_tokens": 32000,
         "max_output_tokens": 8192,
         "input_cost_per_token": 2e-07,
@@ -39683,7 +39711,7 @@
         "mode": "chat"
     },
     "venice/venice-uncensored-1-2": {
-        "max_tokens": 128000,
+        "max_tokens": 8192,
         "max_input_tokens": 128000,
         "max_output_tokens": 8192,
         "input_cost_per_token": 2e-07,
@@ -39692,7 +39720,7 @@
         "mode": "chat"
     },
     "venice/venice-uncensored-role-play": {
-        "max_tokens": 128000,
+        "max_tokens": 8192,
         "max_input_tokens": 128000,
         "max_output_tokens": 8192,
         "input_cost_per_token": 5e-07,
@@ -39701,7 +39729,7 @@
         "mode": "chat"
     },
     "venice/qwen-3-6-plus": {
-        "max_tokens": 1000000,
+        "max_tokens": 8192,
         "max_input_tokens": 1000000,
         "max_output_tokens": 8192,
         "input_cost_per_token": 6.25e-07,
@@ -39710,7 +39738,7 @@
         "mode": "chat"
     },
     "venice/qwen3-6-27b": {
-        "max_tokens": 256000,
+        "max_tokens": 8192,
         "max_input_tokens": 256000,
         "max_output_tokens": 8192,
         "input_cost_per_token": 3.25e-07,
@@ -39719,7 +39747,7 @@
         "mode": "chat"
     },
     "venice/qwen3-5-9b": {
-        "max_tokens": 256000,
+        "max_tokens": 8192,
         "max_input_tokens": 256000,
         "max_output_tokens": 8192,
         "input_cost_per_token": 1e-07,
@@ -39728,7 +39756,7 @@
         "mode": "chat"
     },
     "venice/qwen3-5-397b-a17b": {
-        "max_tokens": 128000,
+        "max_tokens": 8192,
         "max_input_tokens": 128000,
         "max_output_tokens": 8192,
         "input_cost_per_token": 7.5e-07,
@@ -39737,7 +39765,7 @@
         "mode": "chat"
     },
     "venice/qwen3-5-35b-a3b": {
-        "max_tokens": 256000,
+        "max_tokens": 8192,
         "max_input_tokens": 256000,
         "max_output_tokens": 8192,
         "input_cost_per_token": 3.125e-07,
@@ -39746,7 +39774,7 @@
         "mode": "chat"
     },
     "venice/qwen3-235b-a22b-thinking-2507": {
-        "max_tokens": 128000,
+        "max_tokens": 8192,
         "max_input_tokens": 128000,
         "max_output_tokens": 8192,
         "input_cost_per_token": 4.5e-07,
@@ -39756,7 +39784,7 @@
         "supports_reasoning": true
     },
     "venice/qwen3-235b-a22b-instruct-2507": {
-        "max_tokens": 128000,
+        "max_tokens": 8192,
         "max_input_tokens": 128000,
         "max_output_tokens": 8192,
         "input_cost_per_token": 1.5e-07,
@@ -39765,7 +39793,7 @@
         "mode": "chat"
     },
     "venice/qwen3-next-80b": {
-        "max_tokens": 256000,
+        "max_tokens": 8192,
         "max_input_tokens": 256000,
         "max_output_tokens": 8192,
         "input_cost_per_token": 3.5e-07,
@@ -39774,7 +39802,7 @@
         "mode": "chat"
     },
     "venice/qwen3-coder-480b-a35b-instruct": {
-        "max_tokens": 256000,
+        "max_tokens": 8192,
         "max_input_tokens": 256000,
         "max_output_tokens": 8192,
         "input_cost_per_token": 7.5e-07,
@@ -39783,7 +39811,7 @@
         "mode": "chat"
     },
     "venice/qwen3-vl-235b-a22b": {
-        "max_tokens": 256000,
+        "max_tokens": 8192,
         "max_input_tokens": 256000,
         "max_output_tokens": 8192,
         "input_cost_per_token": 2.5e-07,
@@ -39793,7 +39821,7 @@
         "supports_vision": true
     },
     "venice/qwen3-coder-480b-a35b-instruct-turbo": {
-        "max_tokens": 256000,
+        "max_tokens": 8192,
         "max_input_tokens": 256000,
         "max_output_tokens": 8192,
         "input_cost_per_token": 3.5e-07,
@@ -39802,7 +39830,7 @@
         "mode": "chat"
     },
     "venice/google-gemma-4-26b-a4b-it": {
-        "max_tokens": 256000,
+        "max_tokens": 8192,
         "max_input_tokens": 256000,
         "max_output_tokens": 8192,
         "input_cost_per_token": 1.625e-07,
@@ -39811,7 +39839,7 @@
         "mode": "chat"
     },
     "venice/google-gemma-4-31b-it": {
-        "max_tokens": 256000,
+        "max_tokens": 8192,
         "max_input_tokens": 256000,
         "max_output_tokens": 8192,
         "input_cost_per_token": 1.75e-07,
@@ -39820,7 +39848,7 @@
         "mode": "chat"
     },
     "venice/gemma-4-uncensored": {
-        "max_tokens": 256000,
+        "max_tokens": 8192,
         "max_input_tokens": 256000,
         "max_output_tokens": 8192,
         "input_cost_per_token": 1.625e-07,
@@ -39829,7 +39857,7 @@
         "mode": "chat"
     },
     "venice/google-gemma-3-27b-it": {
-        "max_tokens": 198000,
+        "max_tokens": 8192,
         "max_input_tokens": 198000,
         "max_output_tokens": 8192,
         "input_cost_per_token": 1.2e-07,
@@ -39838,7 +39866,7 @@
         "mode": "chat"
     },
     "venice/arcee-trinity-large-thinking": {
-        "max_tokens": 256000,
+        "max_tokens": 8192,
         "max_input_tokens": 256000,
         "max_output_tokens": 8192,
         "input_cost_per_token": 3.125e-07,
@@ -39848,7 +39876,7 @@
         "supports_reasoning": true
     },
     "venice/grok-41-fast": {
-        "max_tokens": 1000000,
+        "max_tokens": 8192,
         "max_input_tokens": 1000000,
         "max_output_tokens": 8192,
         "input_cost_per_token": 2.3e-07,
@@ -39857,7 +39885,7 @@
         "mode": "chat"
     },
     "venice/grok-4-3": {
-        "max_tokens": 1000000,
+        "max_tokens": 8192,
         "max_input_tokens": 1000000,
         "max_output_tokens": 8192,
         "input_cost_per_token": 1.42e-06,
@@ -39866,7 +39894,7 @@
         "mode": "chat"
     },
     "venice/grok-4-20": {
-        "max_tokens": 2000000,
+        "max_tokens": 8192,
         "max_input_tokens": 2000000,
         "max_output_tokens": 8192,
         "input_cost_per_token": 2.27e-06,
@@ -39875,7 +39903,7 @@
         "mode": "chat"
     },
     "venice/grok-4-20-multi-agent": {
-        "max_tokens": 2000000,
+        "max_tokens": 8192,
         "max_input_tokens": 2000000,
         "max_output_tokens": 8192,
         "input_cost_per_token": 2.27e-06,
@@ -39884,7 +39912,7 @@
         "mode": "chat"
     },
     "venice/mistral-small-3-2-24b-instruct": {
-        "max_tokens": 256000,
+        "max_tokens": 8192,
         "max_input_tokens": 256000,
         "max_output_tokens": 8192,
         "input_cost_per_token": 9.375e-08,
@@ -39893,7 +39921,7 @@
         "mode": "chat"
     },
     "venice/mistral-small-2603": {
-        "max_tokens": 256000,
+        "max_tokens": 8192,
         "max_input_tokens": 256000,
         "max_output_tokens": 8192,
         "input_cost_per_token": 1.875e-07,
@@ -39902,7 +39930,7 @@
         "mode": "chat"
     },
     "venice/hermes-3-llama-3.1-405b": {
-        "max_tokens": 128000,
+        "max_tokens": 8192,
         "max_input_tokens": 128000,
         "max_output_tokens": 8192,
         "input_cost_per_token": 1.1e-06,
@@ -39911,7 +39939,7 @@
         "mode": "chat"
     },
     "venice/gemini-3-1-pro-preview": {
-        "max_tokens": 1000000,
+        "max_tokens": 8192,
         "max_input_tokens": 1000000,
         "max_output_tokens": 8192,
         "input_cost_per_token": 2.5e-06,
@@ -39920,7 +39948,7 @@
         "mode": "chat"
     },
     "venice/gemini-3-flash-preview": {
-        "max_tokens": 256000,
+        "max_tokens": 8192,
         "max_input_tokens": 256000,
         "max_output_tokens": 8192,
         "input_cost_per_token": 7e-07,
@@ -39929,7 +39957,7 @@
         "mode": "chat"
     },
     "venice/claude-opus-4-7": {
-        "max_tokens": 1000000,
+        "max_tokens": 8192,
         "max_input_tokens": 1000000,
         "max_output_tokens": 8192,
         "input_cost_per_token": 6e-06,
@@ -39939,7 +39967,7 @@
         "supports_vision": true
     },
     "venice/claude-opus-4-6": {
-        "max_tokens": 1000000,
+        "max_tokens": 8192,
         "max_input_tokens": 1000000,
         "max_output_tokens": 8192,
         "input_cost_per_token": 6e-06,
@@ -39949,7 +39977,7 @@
         "supports_vision": true
     },
     "venice/claude-opus-4-6-fast": {
-        "max_tokens": 1000000,
+        "max_tokens": 8192,
         "max_input_tokens": 1000000,
         "max_output_tokens": 8192,
         "input_cost_per_token": 3.6e-05,
@@ -39959,7 +39987,7 @@
         "supports_vision": true
     },
     "venice/claude-opus-4-5": {
-        "max_tokens": 198000,
+        "max_tokens": 8192,
         "max_input_tokens": 198000,
         "max_output_tokens": 8192,
         "input_cost_per_token": 6e-06,
@@ -39969,7 +39997,7 @@
         "supports_vision": true
     },
     "venice/claude-sonnet-4-6": {
-        "max_tokens": 1000000,
+        "max_tokens": 8192,
         "max_input_tokens": 1000000,
         "max_output_tokens": 8192,
         "input_cost_per_token": 3.6e-06,
@@ -39979,7 +40007,7 @@
         "supports_vision": true
     },
     "venice/claude-sonnet-4-5": {
-        "max_tokens": 198000,
+        "max_tokens": 8192,
         "max_input_tokens": 198000,
         "max_output_tokens": 8192,
         "input_cost_per_token": 3.75e-06,
@@ -39989,7 +40017,7 @@
         "supports_vision": true
     },
     "venice/openai-gpt-oss-120b": {
-        "max_tokens": 128000,
+        "max_tokens": 8192,
         "max_input_tokens": 128000,
         "max_output_tokens": 8192,
         "input_cost_per_token": 7e-08,
@@ -39998,7 +40026,7 @@
         "mode": "chat"
     },
     "venice/kimi-k2-6": {
-        "max_tokens": 256000,
+        "max_tokens": 8192,
         "max_input_tokens": 256000,
         "max_output_tokens": 8192,
         "input_cost_per_token": 8.5e-07,
@@ -40007,7 +40035,7 @@
         "mode": "chat"
     },
     "venice/kimi-k2-thinking": {
-        "max_tokens": 256000,
+        "max_tokens": 8192,
         "max_input_tokens": 256000,
         "max_output_tokens": 8192,
         "input_cost_per_token": 7.5e-07,
@@ -40017,7 +40045,7 @@
         "supports_reasoning": true
     },
     "venice/kimi-k2-5": {
-        "max_tokens": 256000,
+        "max_tokens": 8192,
         "max_input_tokens": 256000,
         "max_output_tokens": 8192,
         "input_cost_per_token": 5.6e-07,
@@ -40026,7 +40054,7 @@
         "mode": "chat"
     },
     "venice/deepseek-v4-pro": {
-        "max_tokens": 1000000,
+        "max_tokens": 8192,
         "max_input_tokens": 1000000,
         "max_output_tokens": 8192,
         "input_cost_per_token": 1.73e-06,
@@ -40035,7 +40063,7 @@
         "mode": "chat"
     },
     "venice/deepseek-v4-flash": {
-        "max_tokens": 1000000,
+        "max_tokens": 8192,
         "max_input_tokens": 1000000,
         "max_output_tokens": 8192,
         "input_cost_per_token": 1.7e-07,
@@ -40044,7 +40072,7 @@
         "mode": "chat"
     },
     "venice/deepseek-v3.2": {
-        "max_tokens": 160000,
+        "max_tokens": 8192,
         "max_input_tokens": 160000,
         "max_output_tokens": 8192,
         "input_cost_per_token": 3.3e-07,
@@ -40053,7 +40081,7 @@
         "mode": "chat"
     },
     "venice/aion-labs-aion-2-0": {
-        "max_tokens": 128000,
+        "max_tokens": 8192,
         "max_input_tokens": 128000,
         "max_output_tokens": 8192,
         "input_cost_per_token": 1e-06,
@@ -40062,7 +40090,7 @@
         "mode": "chat"
     },
     "venice/llama-3.2-3b": {
-        "max_tokens": 128000,
+        "max_tokens": 8192,
         "max_input_tokens": 128000,
         "max_output_tokens": 8192,
         "input_cost_per_token": 1.5e-07,
@@ -40071,7 +40099,7 @@
         "mode": "chat"
     },
     "venice/llama-3.3-70b": {
-        "max_tokens": 128000,
+        "max_tokens": 8192,
         "max_input_tokens": 128000,
         "max_output_tokens": 8192,
         "input_cost_per_token": 7e-07,
@@ -40080,7 +40108,7 @@
         "mode": "chat"
     },
     "venice/openai-gpt-52": {
-        "max_tokens": 256000,
+        "max_tokens": 8192,
         "max_input_tokens": 256000,
         "max_output_tokens": 8192,
         "input_cost_per_token": 2.19e-06,
@@ -40089,7 +40117,7 @@
         "mode": "chat"
     },
     "venice/openai-gpt-52-codex": {
-        "max_tokens": 256000,
+        "max_tokens": 8192,
         "max_input_tokens": 256000,
         "max_output_tokens": 8192,
         "input_cost_per_token": 2.19e-06,
@@ -40098,7 +40126,7 @@
         "mode": "chat"
     },
     "venice/openai-gpt-53-codex": {
-        "max_tokens": 400000,
+        "max_tokens": 8192,
         "max_input_tokens": 400000,
         "max_output_tokens": 8192,
         "input_cost_per_token": 2.19e-06,
@@ -40107,7 +40135,7 @@
         "mode": "chat"
     },
     "venice/openai-gpt-54": {
-        "max_tokens": 1000000,
+        "max_tokens": 8192,
         "max_input_tokens": 1000000,
         "max_output_tokens": 8192,
         "input_cost_per_token": 3.13e-06,
@@ -40116,7 +40144,7 @@
         "mode": "chat"
     },
     "venice/openai-gpt-54-pro": {
-        "max_tokens": 1000000,
+        "max_tokens": 8192,
         "max_input_tokens": 1000000,
         "max_output_tokens": 8192,
         "input_cost_per_token": 3.75e-05,
@@ -40125,7 +40153,7 @@
         "mode": "chat"
     },
     "venice/openai-gpt-54-mini": {
-        "max_tokens": 400000,
+        "max_tokens": 8192,
         "max_input_tokens": 400000,
         "max_output_tokens": 8192,
         "input_cost_per_token": 9.375e-07,
@@ -40134,7 +40162,7 @@
         "mode": "chat"
     },
     "venice/openai-gpt-55": {
-        "max_tokens": 1000000,
+        "max_tokens": 8192,
         "max_input_tokens": 1000000,
         "max_output_tokens": 8192,
         "input_cost_per_token": 6.25e-06,
@@ -40143,7 +40171,7 @@
         "mode": "chat"
     },
     "venice/openai-gpt-55-pro": {
-        "max_tokens": 1000000,
+        "max_tokens": 8192,
         "max_input_tokens": 1000000,
         "max_output_tokens": 8192,
         "input_cost_per_token": 3.75e-05,
@@ -40152,7 +40180,7 @@
         "mode": "chat"
     },
     "venice/openai-gpt-4o-2024-11-20": {
-        "max_tokens": 128000,
+        "max_tokens": 8192,
         "max_input_tokens": 128000,
         "max_output_tokens": 8192,
         "input_cost_per_token": 3.125e-06,
@@ -40161,7 +40189,7 @@
         "mode": "chat"
     },
     "venice/openai-gpt-4o-mini-2024-07-18": {
-        "max_tokens": 128000,
+        "max_tokens": 8192,
         "max_input_tokens": 128000,
         "max_output_tokens": 8192,
         "input_cost_per_token": 1.875e-07,
@@ -40170,7 +40198,7 @@
         "mode": "chat"
     },
     "venice/minimax-m25": {
-        "max_tokens": 198000,
+        "max_tokens": 8192,
         "max_input_tokens": 198000,
         "max_output_tokens": 8192,
         "input_cost_per_token": 3.4e-07,
@@ -40179,7 +40207,7 @@
         "mode": "chat"
     },
     "venice/minimax-m27": {
-        "max_tokens": 198000,
+        "max_tokens": 8192,
         "max_input_tokens": 198000,
         "max_output_tokens": 8192,
         "input_cost_per_token": 3.75e-07,
@@ -40188,7 +40216,7 @@
         "mode": "chat"
     },
     "venice/mercury-2": {
-        "max_tokens": 128000,
+        "max_tokens": 8192,
         "max_input_tokens": 128000,
         "max_output_tokens": 8192,
         "input_cost_per_token": 3.125e-07,
@@ -40197,7 +40225,7 @@
         "mode": "chat"
     },
     "venice/nvidia-nemotron-3-nano-30b-a3b": {
-        "max_tokens": 128000,
+        "max_tokens": 8192,
         "max_input_tokens": 128000,
         "max_output_tokens": 8192,
         "input_cost_per_token": 7.5e-08,
@@ -40206,7 +40234,7 @@
         "mode": "chat"
     },
     "venice/nvidia-nemotron-cascade-2-30b-a3b": {
-        "max_tokens": 256000,
+        "max_tokens": 8192,
         "max_input_tokens": 256000,
         "max_output_tokens": 8192,
         "input_cost_per_token": 1.4e-07,
@@ -40215,7 +40243,7 @@
         "mode": "chat"
     },
     "venice/e2ee-venice-uncensored-24b-p": {
-        "max_tokens": 32000,
+        "max_tokens": 8192,
         "max_input_tokens": 32000,
         "max_output_tokens": 8192,
         "input_cost_per_token": 2.5e-07,
@@ -40224,7 +40252,7 @@
         "mode": "chat"
     },
     "venice/e2ee-gemma-3-27b-p": {
-        "max_tokens": 40000,
+        "max_tokens": 8192,
         "max_input_tokens": 40000,
         "max_output_tokens": 8192,
         "input_cost_per_token": 1.4e-07,
@@ -40233,7 +40261,7 @@
         "mode": "chat"
     },
     "venice/e2ee-glm-4-7-p": {
-        "max_tokens": 128000,
+        "max_tokens": 8192,
         "max_input_tokens": 128000,
         "max_output_tokens": 8192,
         "input_cost_per_token": 1.1e-06,
@@ -40242,7 +40270,7 @@
         "mode": "chat"
     },
     "venice/e2ee-glm-4-7-flash-p": {
-        "max_tokens": 198000,
+        "max_tokens": 8192,
         "max_input_tokens": 198000,
         "max_output_tokens": 8192,
         "input_cost_per_token": 1.3e-07,
@@ -40251,7 +40279,7 @@
         "mode": "chat"
     },
     "venice/e2ee-gpt-oss-20b-p": {
-        "max_tokens": 128000,
+        "max_tokens": 8192,
         "max_input_tokens": 128000,
         "max_output_tokens": 8192,
         "input_cost_per_token": 5e-08,
@@ -40260,7 +40288,7 @@
         "mode": "chat"
     },
     "venice/e2ee-gpt-oss-120b-p": {
-        "max_tokens": 128000,
+        "max_tokens": 8192,
         "max_input_tokens": 128000,
         "max_output_tokens": 8192,
         "input_cost_per_token": 1.3e-07,
@@ -40269,7 +40297,7 @@
         "mode": "chat"
     },
     "venice/e2ee-qwen-2-5-7b-p": {
-        "max_tokens": 32000,
+        "max_tokens": 8192,
         "max_input_tokens": 32000,
         "max_output_tokens": 8192,
         "input_cost_per_token": 5e-08,
@@ -40278,7 +40306,7 @@
         "mode": "chat"
     },
     "venice/e2ee-qwen3-30b-a3b-p": {
-        "max_tokens": 256000,
+        "max_tokens": 8192,
         "max_input_tokens": 256000,
         "max_output_tokens": 8192,
         "input_cost_per_token": 1.9e-07,
@@ -40287,7 +40315,7 @@
         "mode": "chat"
     },
     "venice/e2ee-qwen3-vl-30b-a3b-p": {
-        "max_tokens": 128000,
+        "max_tokens": 8192,
         "max_input_tokens": 128000,
         "max_output_tokens": 8192,
         "input_cost_per_token": 2.5e-07,
@@ -40297,7 +40325,7 @@
         "supports_vision": true
     },
     "venice/e2ee-glm-5-1": {
-        "max_tokens": 200000,
+        "max_tokens": 8192,
         "max_input_tokens": 200000,
         "max_output_tokens": 8192,
         "input_cost_per_token": 1.1e-06,
@@ -40306,7 +40334,7 @@
         "mode": "chat"
     },
     "venice/e2ee-glm-5": {
-        "max_tokens": 198000,
+        "max_tokens": 8192,
         "max_input_tokens": 198000,
         "max_output_tokens": 8192,
         "input_cost_per_token": 1.1e-06,
@@ -40315,7 +40343,7 @@
         "mode": "chat"
     },
     "venice/e2ee-qwen3-5-122b-a10b": {
-        "max_tokens": 128000,
+        "max_tokens": 8192,
         "max_input_tokens": 128000,
         "max_output_tokens": 8192,
         "input_cost_per_token": 5e-07,
