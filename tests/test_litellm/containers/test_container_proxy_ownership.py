@@ -83,6 +83,83 @@ async def test_should_record_team_owner_for_keys_without_user_id(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_should_record_token_owner_for_keys_without_user_team_or_org(monkeypatch):
+    table = AsyncMock()
+    table.find_unique.return_value = None
+    prisma_client = SimpleNamespace(
+        db=SimpleNamespace(litellm_managedobjecttable=table)
+    )
+    monkeypatch.setattr(
+        ownership,
+        "_get_prisma_client",
+        AsyncMock(return_value=prisma_client),
+    )
+    auth = UserAPIKeyAuth(token="hashed-token")
+
+    await ownership.record_container_owner(
+        response=_container("cntr_provider"),
+        user_api_key_dict=auth,
+        custom_llm_provider="openai",
+    )
+
+    data = table.create.await_args.kwargs["data"]
+    assert data["created_by"] == "key:hashed-token"
+    assert data["updated_by"] == "key:hashed-token"
+
+
+@pytest.mark.asyncio
+async def test_should_record_unscoped_owner_for_identityless_proxy_auth(monkeypatch):
+    monkeypatch.setattr(
+        ownership,
+        "_get_prisma_client",
+        AsyncMock(return_value=None),
+    )
+    auth = UserAPIKeyAuth()
+
+    await ownership.record_container_owner(
+        response=_container("cntr_provider"),
+        user_api_key_dict=auth,
+        custom_llm_provider="openai",
+    )
+
+    assert (
+        ownership._IN_MEMORY_CONTAINER_OWNERS["container:openai:cntr_provider"]
+        == "__litellm_unscoped_proxy__"
+    )
+    original_id, provider = await ownership.assert_user_can_access_container(
+        container_id="cntr_provider",
+        user_api_key_dict=auth,
+        custom_llm_provider="openai",
+    )
+    assert original_id == "cntr_provider"
+    assert provider == "openai"
+
+
+@pytest.mark.asyncio
+async def test_should_skip_owner_record_when_provider_response_has_no_id(monkeypatch):
+    table = AsyncMock()
+    prisma_client = SimpleNamespace(
+        db=SimpleNamespace(litellm_managedobjecttable=table)
+    )
+    monkeypatch.setattr(
+        ownership,
+        "_get_prisma_client",
+        AsyncMock(return_value=prisma_client),
+    )
+    response = {"object": "container"}
+
+    returned = await ownership.record_container_owner(
+        response=response,
+        user_api_key_dict=UserAPIKeyAuth(user_id="user-1"),
+        custom_llm_provider="openai",
+    )
+
+    assert returned == response
+    table.find_unique.assert_not_awaited()
+    table.create.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_should_fallback_to_memory_when_persistent_owner_record_fails(
     monkeypatch,
 ):
@@ -171,6 +248,55 @@ async def test_should_deny_untracked_container_access_by_default(monkeypatch):
     with pytest.raises(HTTPException) as exc:
         await ownership.assert_user_can_access_container(
             container_id="cntr_untracked",
+            user_api_key_dict=auth,
+            custom_llm_provider="openai",
+        )
+
+    assert exc.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_should_fallback_to_memory_when_owner_lookup_fails(monkeypatch):
+    table = AsyncMock()
+    table.find_first.side_effect = Exception("db unavailable")
+    prisma_client = SimpleNamespace(
+        db=SimpleNamespace(litellm_managedobjecttable=table)
+    )
+    monkeypatch.setattr(
+        ownership,
+        "_get_prisma_client",
+        AsyncMock(return_value=prisma_client),
+    )
+    ownership._IN_MEMORY_CONTAINER_OWNERS["container:openai:cntr_owned"] = "user-1"
+    auth = UserAPIKeyAuth(user_id="user-1")
+
+    original_id, provider = await ownership.assert_user_can_access_container(
+        container_id="cntr_owned",
+        user_api_key_dict=auth,
+        custom_llm_provider="openai",
+    )
+
+    assert original_id == "cntr_owned"
+    assert provider == "openai"
+
+
+@pytest.mark.asyncio
+async def test_should_fail_closed_when_owner_lookup_fails_without_memory(monkeypatch):
+    table = AsyncMock()
+    table.find_first.side_effect = Exception("db unavailable")
+    prisma_client = SimpleNamespace(
+        db=SimpleNamespace(litellm_managedobjecttable=table)
+    )
+    monkeypatch.setattr(
+        ownership,
+        "_get_prisma_client",
+        AsyncMock(return_value=prisma_client),
+    )
+    auth = UserAPIKeyAuth(user_id="user-1")
+
+    with pytest.raises(HTTPException) as exc:
+        await ownership.assert_user_can_access_container(
+            container_id="cntr_owned",
             user_api_key_dict=auth,
             custom_llm_provider="openai",
         )
@@ -360,6 +486,38 @@ async def test_should_filter_container_list_with_in_memory_ownership(monkeypatch
     )
 
     assert [item.id for item in filtered.data] == ["cntr_owned"]
+
+
+@pytest.mark.asyncio
+async def test_should_filter_container_list_with_memory_when_db_lookup_fails(
+    monkeypatch,
+):
+    table = AsyncMock()
+    table.find_many.side_effect = Exception("db unavailable")
+    prisma_client = SimpleNamespace(
+        db=SimpleNamespace(litellm_managedobjecttable=table)
+    )
+    monkeypatch.setattr(
+        ownership,
+        "_get_prisma_client",
+        AsyncMock(return_value=prisma_client),
+    )
+    ownership._IN_MEMORY_CONTAINER_OWNERS["container:openai:cntr_owned"] = "user-1"
+    auth = UserAPIKeyAuth(user_id="user-1")
+    response = ContainerListResponse(
+        object="list",
+        data=[_container("cntr_owned"), _container("cntr_other")],
+        has_more=True,
+    )
+
+    filtered = await ownership.filter_container_list_response(
+        response=response,
+        user_api_key_dict=auth,
+        custom_llm_provider="openai",
+    )
+
+    assert [item.id for item in filtered.data] == ["cntr_owned"]
+    assert filtered.has_more is False
 
 
 @pytest.mark.asyncio

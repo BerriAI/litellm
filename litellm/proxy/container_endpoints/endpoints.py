@@ -122,6 +122,11 @@ async def create_container(
             user_api_base=user_api_base,
             version=version,
         )
+        return await record_container_owner(
+            response=response,
+            user_api_key_dict=user_api_key_dict,
+            custom_llm_provider=custom_llm_provider,
+        )
     except Exception as e:
         raise await processor._handle_llm_api_exception(
             e=e,
@@ -129,11 +134,6 @@ async def create_container(
             proxy_logging_obj=proxy_logging_obj,
             version=version,
         )
-    return await record_container_owner(
-        response=response,
-        user_api_key_dict=user_api_key_dict,
-        custom_llm_provider=custom_llm_provider,
-    )
 
 
 @router.get(
@@ -220,6 +220,11 @@ async def list_containers(
             user_api_base=user_api_base,
             version=version,
         )
+        return await filter_container_list_response(
+            response=response,
+            user_api_key_dict=user_api_key_dict,
+            custom_llm_provider=custom_llm_provider,
+        )
     except Exception as e:
         raise await processor._handle_llm_api_exception(
             e=e,
@@ -227,11 +232,6 @@ async def list_containers(
             proxy_logging_obj=proxy_logging_obj,
             version=version,
         )
-    return await filter_container_list_response(
-        response=response,
-        user_api_key_dict=user_api_key_dict,
-        custom_llm_provider=custom_llm_provider,
-    )
 
 
 @router.get(

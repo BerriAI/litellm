@@ -2,6 +2,8 @@ from typing import List, Optional
 
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 
+UNSCOPED_RESOURCE_OWNER_SCOPE = "__litellm_unscoped_proxy__"
+
 
 def is_proxy_admin(user_api_key_dict: Optional[UserAPIKeyAuth]) -> bool:
     if user_api_key_dict is None:
@@ -41,6 +43,10 @@ def get_resource_owner_scopes(
         _add(f"org:{user_api_key_dict.org_id}")
     if user_api_key_dict.api_key:
         _add(f"key:{user_api_key_dict.api_key}")
+    if user_api_key_dict.token:
+        _add(f"key:{user_api_key_dict.token}")
+    if not scopes:
+        _add(UNSCOPED_RESOURCE_OWNER_SCOPE)
 
     return scopes
 
@@ -59,7 +65,9 @@ def get_primary_resource_owner_scope(
         return f"org:{user_api_key_dict.org_id}"
     if user_api_key_dict.api_key:
         return f"key:{user_api_key_dict.api_key}"
-    return None
+    if user_api_key_dict.token:
+        return f"key:{user_api_key_dict.token}"
+    return UNSCOPED_RESOURCE_OWNER_SCOPE
 
 
 def user_can_access_resource_owner(
