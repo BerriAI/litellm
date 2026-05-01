@@ -414,6 +414,36 @@ class TestTranslateMessagesToResponsesInput:
             {"type": "output_text", "text": "Here is the answer."}
         ]
 
+    def test_assistant_thinking_with_tool_use_keeps_function_call(self):
+        """Thinking is dropped while adjacent tool_use blocks are still replayed."""
+        messages = [
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "thinking",
+                        "thinking": "I should call the weather tool.",
+                        "signature": "sig_abc",
+                    },
+                    {
+                        "type": "tool_use",
+                        "id": "toolu_03",
+                        "name": "get_weather",
+                        "input": {"location": "Paris"},
+                    },
+                ],
+            }
+        ]
+        result = _translate_messages(messages)
+        assert result == [
+            {
+                "type": "function_call",
+                "call_id": "toolu_03",
+                "name": "get_weather",
+                "arguments": json.dumps({"location": "Paris"}),
+            }
+        ]
+
     def test_assistant_only_thinking_block_skipped(self):
         """Assistant messages with only thinking blocks are omitted on replay."""
         messages = [
