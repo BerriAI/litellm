@@ -705,6 +705,9 @@ class LiteLLMRoutes(enum.Enum):
         # Team guardrail submissions - endpoint scopes results to caller's teams (non-admin)
         "/guardrails/submissions",
         "/guardrails/submissions/{guardrail_id}",
+        # Project routes - endpoints scope results to caller's teams (non-admin gets only their projects)
+        "/project/list",
+        "/project/info",
     ]  # routes that manage their own allowed/disallowed logic
 
     ## Org Admin Routes ##
@@ -738,6 +741,8 @@ class LiteLLMRoutes(enum.Enum):
         "/global/activity",
         "/global/activity/model",
         "/global/activity/cache_hits",
+        "/project/list",
+        "/project/info",
     ] + info_routes
 
     # All routes accesible by an Org Admin
