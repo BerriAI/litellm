@@ -295,11 +295,14 @@ async def retrieve_container(
     )
 
     # Add custom_llm_provider to data
-    _, custom_llm_provider = await assert_user_can_access_container(
+    container_access = await assert_user_can_access_container(
         container_id=container_id,
         user_api_key_dict=user_api_key_dict,
         custom_llm_provider=custom_llm_provider,
     )
+    custom_llm_provider = container_access[1]
+    # Keep the managed id in request data so downstream container utilities can
+    # preserve encoded routing metadata while decoding before the provider call.
     data["custom_llm_provider"] = custom_llm_provider
 
     # Process request using ProxyBaseLLMRequestProcessing
@@ -394,11 +397,14 @@ async def delete_container(
     )
 
     # Add custom_llm_provider to data
-    _, custom_llm_provider = await assert_user_can_access_container(
+    container_access = await assert_user_can_access_container(
         container_id=container_id,
         user_api_key_dict=user_api_key_dict,
         custom_llm_provider=custom_llm_provider,
     )
+    custom_llm_provider = container_access[1]
+    # Keep the managed id in request data so downstream container utilities can
+    # preserve encoded routing metadata while decoding before the provider call.
     data["custom_llm_provider"] = custom_llm_provider
 
     # Process request using ProxyBaseLLMRequestProcessing

@@ -283,12 +283,16 @@ async def _process_multipart_upload_request(
         or "openai"
     )
 
-    _, custom_llm_provider = await assert_user_can_access_container(
+    container_access = await assert_user_can_access_container(
         container_id=container_id,
         user_api_key_dict=user_api_key_dict,
         custom_llm_provider=custom_llm_provider,
     )
+    custom_llm_provider = container_access[1]
 
+    # Keep the managed container id in the forwarded request. The container API
+    # layer decodes it before the upstream provider call and uses embedded
+    # routing metadata to preserve model/deployment affinity.
     data["container_id"] = container_id
     data["custom_llm_provider"] = custom_llm_provider
 
@@ -355,13 +359,15 @@ async def _process_request(
         or "openai"
     )
 
-    # Decode container_id if present in path_params
+    # Validate container_id ownership if present in path_params.
     if "container_id" in path_params:
-        _, custom_llm_provider = await assert_user_can_access_container(
+        container_access = await assert_user_can_access_container(
             container_id=path_params["container_id"],
             user_api_key_dict=user_api_key_dict,
             custom_llm_provider=custom_llm_provider,
         )
+        custom_llm_provider = container_access[1]
+        # Preserve the managed id for downstream container decoding/routing.
 
     data["custom_llm_provider"] = custom_llm_provider
 

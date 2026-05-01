@@ -1,3 +1,4 @@
+import os
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from fastapi import HTTPException
@@ -13,6 +14,16 @@ from litellm.proxy.common_utils.resource_ownership import (
 from litellm.responses.utils import ResponsesAPIRequestUtils
 
 CONTAINER_OBJECT_PURPOSE = "container"
+ALLOW_UNTRACKED_CONTAINER_ACCESS_ENV = "LITELLM_ALLOW_UNTRACKED_CONTAINER_ACCESS"
+_IN_MEMORY_CONTAINER_OWNERS: Dict[str, str] = {}
+
+
+def _allow_untracked_container_access() -> bool:
+    return os.getenv(ALLOW_UNTRACKED_CONTAINER_ACCESS_ENV, "").lower() in {
+        "1",
+        "true",
+        "yes",
+    }
 
 
 def _container_model_object_id(
@@ -68,11 +79,9 @@ async def record_container_owner(
     container_id = _get_response_id(response)
     owner = get_primary_resource_owner_scope(user_api_key_dict)
     prisma_client = await _get_prisma_client()
-    if is_proxy_admin(user_api_key_dict) and (
-        container_id is None or owner is None or prisma_client is None
-    ):
+    if is_proxy_admin(user_api_key_dict) and (container_id is None or owner is None):
         return response
-    if container_id is None or owner is None or prisma_client is None:
+    if container_id is None or owner is None:
         raise HTTPException(status_code=500, detail="Unable to track container")
 
     original_container_id, resolved_provider = decode_container_id_for_ownership(
@@ -86,6 +95,15 @@ async def record_container_owner(
     file_object = _dump_response(response)
     file_object["custom_llm_provider"] = resolved_provider
     file_object["provider_container_id"] = original_container_id
+
+    if prisma_client is None:
+        existing_owner = _IN_MEMORY_CONTAINER_OWNERS.get(model_object_id)
+        if existing_owner is not None and not user_can_access_resource_owner(
+            existing_owner, user_api_key_dict
+        ):
+            raise HTTPException(status_code=403, detail="Forbidden")
+        _IN_MEMORY_CONTAINER_OWNERS[model_object_id] = owner
+        return response
 
     try:
         existing = await prisma_client.db.litellm_managedobjecttable.find_unique(
@@ -136,7 +154,12 @@ async def _get_container_owner(
 ) -> Optional[str]:
     prisma_client = await _get_prisma_client()
     if prisma_client is None:
-        return None
+        return _IN_MEMORY_CONTAINER_OWNERS.get(
+            _container_model_object_id(
+                original_container_id,
+                custom_llm_provider,
+            )
+        )
 
     row = await prisma_client.db.litellm_managedobjecttable.find_first(
         where={
@@ -164,6 +187,13 @@ async def assert_user_can_access_container(
         return original_container_id, resolved_provider
 
     owner = await _get_container_owner(original_container_id, resolved_provider)
+    if owner is None and _allow_untracked_container_access():
+        verbose_proxy_logger.warning(
+            "Allowing untracked container access because %s is enabled",
+            ALLOW_UNTRACKED_CONTAINER_ACCESS_ENV,
+        )
+        return original_container_id, resolved_provider
+
     if not user_can_access_resource_owner(owner, user_api_key_dict):
         raise HTTPException(status_code=403, detail="Forbidden")
 
@@ -203,7 +233,12 @@ async def _get_allowed_container_ids(
 ) -> Set[str]:
     prisma_client = await _get_prisma_client()
     if prisma_client is None:
-        return set()
+        owner_scopes = get_resource_owner_scopes(user_api_key_dict)
+        return {
+            model_object_id
+            for model_object_id, owner in _IN_MEMORY_CONTAINER_OWNERS.items()
+            if owner in owner_scopes
+        }
 
     owner_scopes = get_resource_owner_scopes(user_api_key_dict)
     if not owner_scopes:

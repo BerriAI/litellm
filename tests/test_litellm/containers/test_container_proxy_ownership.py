@@ -1,3 +1,4 @@
+import sys
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -6,7 +7,16 @@ from fastapi import HTTPException
 
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.container_endpoints import ownership
+from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.containers.main import ContainerListResponse, ContainerObject
+
+
+@pytest.fixture(autouse=True)
+def clear_in_memory_container_owners(monkeypatch):
+    ownership._IN_MEMORY_CONTAINER_OWNERS.clear()
+    monkeypatch.delenv(ownership.ALLOW_UNTRACKED_CONTAINER_ACCESS_ENV, raising=False)
+    yield
+    ownership._IN_MEMORY_CONTAINER_OWNERS.clear()
 
 
 def _container(container_id: str) -> ContainerObject:
@@ -73,6 +83,31 @@ async def test_should_record_team_owner_for_keys_without_user_id(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_should_track_container_owner_in_memory_without_prisma(monkeypatch):
+    monkeypatch.setattr(
+        ownership,
+        "_get_prisma_client",
+        AsyncMock(return_value=None),
+    )
+    auth = UserAPIKeyAuth(user_id="user-1")
+
+    await ownership.record_container_owner(
+        response=_container("cntr_provider"),
+        user_api_key_dict=auth,
+        custom_llm_provider="openai",
+    )
+
+    original_id, provider = await ownership.assert_user_can_access_container(
+        container_id="cntr_provider",
+        user_api_key_dict=auth,
+        custom_llm_provider="openai",
+    )
+
+    assert original_id == "cntr_provider"
+    assert provider == "openai"
+
+
+@pytest.mark.asyncio
 async def test_should_deny_container_access_for_different_owner(monkeypatch):
     table = AsyncMock()
     table.find_first.return_value = SimpleNamespace(created_by="user-2")
@@ -94,6 +129,45 @@ async def test_should_deny_container_access_for_different_owner(monkeypatch):
         )
 
     assert exc.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_should_deny_untracked_container_access_by_default(monkeypatch):
+    monkeypatch.setattr(
+        ownership,
+        "_get_prisma_client",
+        AsyncMock(return_value=None),
+    )
+    auth = UserAPIKeyAuth(user_id="user-1")
+
+    with pytest.raises(HTTPException) as exc:
+        await ownership.assert_user_can_access_container(
+            container_id="cntr_untracked",
+            user_api_key_dict=auth,
+            custom_llm_provider="openai",
+        )
+
+    assert exc.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_should_allow_untracked_container_access_when_enabled(monkeypatch):
+    monkeypatch.setattr(
+        ownership,
+        "_get_prisma_client",
+        AsyncMock(return_value=None),
+    )
+    monkeypatch.setenv(ownership.ALLOW_UNTRACKED_CONTAINER_ACCESS_ENV, "true")
+    auth = UserAPIKeyAuth(user_id="user-1")
+
+    original_id, provider = await ownership.assert_user_can_access_container(
+        container_id="cntr_untracked",
+        user_api_key_dict=auth,
+        custom_llm_provider="openai",
+    )
+
+    assert original_id == "cntr_untracked"
+    assert provider == "openai"
 
 
 @pytest.mark.asyncio
@@ -157,3 +231,163 @@ async def test_should_filter_container_list_to_owned_records(monkeypatch):
     where = table.find_many.await_args.kwargs["where"]
     assert where["file_purpose"] == ownership.CONTAINER_OBJECT_PURPOSE
     assert where["created_by"]["in"] == ["user-1", "user:user-1"]
+
+
+@pytest.mark.asyncio
+async def test_should_filter_container_list_with_in_memory_ownership(monkeypatch):
+    monkeypatch.setattr(
+        ownership,
+        "_get_prisma_client",
+        AsyncMock(return_value=None),
+    )
+    auth = UserAPIKeyAuth(user_id="user-1")
+
+    await ownership.record_container_owner(
+        response=_container("cntr_owned"),
+        user_api_key_dict=auth,
+        custom_llm_provider="openai",
+    )
+
+    response = ContainerListResponse(
+        object="list",
+        data=[_container("cntr_owned"), _container("cntr_other")],
+        has_more=False,
+    )
+
+    filtered = await ownership.filter_container_list_response(
+        response=response,
+        user_api_key_dict=auth,
+        custom_llm_provider="openai",
+    )
+
+    assert [item.id for item in filtered.data] == ["cntr_owned"]
+
+
+@pytest.mark.asyncio
+async def test_should_preserve_managed_container_id_for_proxy_forwarding(monkeypatch):
+    from litellm.proxy.container_endpoints import handler_factory
+
+    proxy_server_stub = SimpleNamespace(
+        general_settings={},
+        llm_router=None,
+        proxy_config=None,
+        proxy_logging_obj=None,
+        select_data_generator=None,
+        user_api_base=None,
+        user_max_tokens=None,
+        user_model=None,
+        user_request_timeout=None,
+        user_temperature=None,
+        version="test",
+    )
+    monkeypatch.setitem(sys.modules, "litellm.proxy.proxy_server", proxy_server_stub)
+
+    captured = {}
+
+    class FakeProcessor:
+        def __init__(self, data):
+            captured["data"] = data
+
+        async def base_process_llm_request(self, **kwargs):
+            return captured["data"]
+
+        async def _handle_llm_api_exception(self, **kwargs):
+            raise kwargs["e"]
+
+    monkeypatch.setattr(
+        handler_factory,
+        "ProxyBaseLLMRequestProcessing",
+        FakeProcessor,
+    )
+    monkeypatch.setattr(
+        handler_factory,
+        "assert_user_can_access_container",
+        AsyncMock(return_value=("cntr_provider", "azure")),
+    )
+    encoded_id = ResponsesAPIRequestUtils._build_container_id(
+        custom_llm_provider="azure",
+        model_id="router-gpt",
+        container_id="cntr_provider",
+    )
+
+    result = await handler_factory._process_request(
+        request=SimpleNamespace(query_params={}, headers={}),
+        fastapi_response=SimpleNamespace(),
+        user_api_key_dict=UserAPIKeyAuth(user_id="user-1"),
+        route_type="alist_container_files",
+        path_params={"container_id": encoded_id},
+    )
+
+    assert result["container_id"] == encoded_id
+    assert result["custom_llm_provider"] == "azure"
+
+
+@pytest.mark.asyncio
+async def test_should_preserve_managed_container_id_for_multipart_upload(monkeypatch):
+    from litellm.proxy.common_utils import http_parsing_utils
+    from litellm.proxy.container_endpoints import handler_factory
+
+    proxy_server_stub = SimpleNamespace(
+        general_settings={},
+        llm_router=None,
+        proxy_config=None,
+        proxy_logging_obj=None,
+        select_data_generator=None,
+        user_api_base=None,
+        user_max_tokens=None,
+        user_model=None,
+        user_request_timeout=None,
+        user_temperature=None,
+        version="test",
+    )
+    monkeypatch.setitem(sys.modules, "litellm.proxy.proxy_server", proxy_server_stub)
+
+    captured = {}
+
+    class FakeProcessor:
+        def __init__(self, data):
+            captured["data"] = data
+
+        async def base_process_llm_request(self, **kwargs):
+            return captured["data"]
+
+        async def _handle_llm_api_exception(self, **kwargs):
+            raise kwargs["e"]
+
+    monkeypatch.setattr(
+        handler_factory,
+        "ProxyBaseLLMRequestProcessing",
+        FakeProcessor,
+    )
+    monkeypatch.setattr(
+        handler_factory,
+        "assert_user_can_access_container",
+        AsyncMock(return_value=("cntr_provider", "azure")),
+    )
+    monkeypatch.setattr(
+        http_parsing_utils,
+        "get_form_data",
+        AsyncMock(return_value={}),
+    )
+    monkeypatch.setattr(
+        http_parsing_utils,
+        "convert_upload_files_to_file_data",
+        AsyncMock(return_value={"file": ["file-data"]}),
+    )
+    encoded_id = ResponsesAPIRequestUtils._build_container_id(
+        custom_llm_provider="azure",
+        model_id="router-gpt",
+        container_id="cntr_provider",
+    )
+
+    result = await handler_factory._process_multipart_upload_request(
+        request=SimpleNamespace(query_params={}, headers={}),
+        fastapi_response=SimpleNamespace(),
+        user_api_key_dict=UserAPIKeyAuth(user_id="user-1"),
+        route_type="aupload_container_file",
+        container_id=encoded_id,
+    )
+
+    assert result["container_id"] == encoded_id
+    assert result["custom_llm_provider"] == "azure"
+    assert result["file"] == "file-data"
