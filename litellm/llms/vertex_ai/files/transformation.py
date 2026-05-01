@@ -1,8 +1,9 @@
+import base64
 import json
 import os
 import re
 import time
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import httpx
 from httpx import Headers, Response
@@ -39,8 +40,8 @@ from litellm.types.utils import ExtractedFileData, LlmProviders, ModelResponse
 from ..common_utils import VertexAIError
 from ..vertex_llm_base import VertexBase
 
-
 _GCP_LABEL_VALUE_MAX_LEN = 63
+_CUSTOM_ID_RAW_LABEL_PREFIX = "b32_"
 
 
 def _sanitize_gcp_label_value(value: str) -> str:
@@ -62,25 +63,93 @@ def _sanitize_gcp_label_value(value: str) -> str:
     return sanitized[:_GCP_LABEL_VALUE_MAX_LEN]
 
 
+def _encode_gcp_label_value(value: str) -> str:
+    """Encode arbitrary text into a GCP-label-safe value."""
+    max_encoded_len = _GCP_LABEL_VALUE_MAX_LEN - len(_CUSTOM_ID_RAW_LABEL_PREFIX)
+    max_raw_bytes = (max_encoded_len * 5) // 8
+    raw_bytes = value.encode("utf-8")[:max_raw_bytes]
+    while raw_bytes:
+        try:
+            raw_bytes.decode("utf-8")
+            break
+        except UnicodeDecodeError:
+            raw_bytes = raw_bytes[:-1]
+    encoded = base64.b32encode(raw_bytes).decode("ascii").rstrip("=").lower()
+    return f"{_CUSTOM_ID_RAW_LABEL_PREFIX}{encoded}"
+
+
+def _decode_gcp_label_value(value: str) -> Optional[str]:
+    """Decode values produced by _encode_gcp_label_value."""
+    if not value.startswith(_CUSTOM_ID_RAW_LABEL_PREFIX):
+        return None
+    encoded = value[len(_CUSTOM_ID_RAW_LABEL_PREFIX) :].upper()
+    padding = "=" * (-len(encoded) % 8)
+    try:
+        return base64.b32decode(encoded + padding).decode("utf-8")
+    except Exception:
+        return None
+
+
 def _set_litellm_batch_custom_id_labels(labels: Dict[str, str], custom_id: Any) -> None:
     """
     Store OpenAI batch custom_id for Vertex batch correlation.
 
     ``litellm_custom_id`` is GCP-label-safe (may alter casing and characters).
-    ``litellm_custom_id_raw`` preserves the original string (truncated) for
+    ``litellm_custom_id_raw`` encodes the original string (truncated) for
     round-trip correlation in batch output transforms.
     """
     custom_id_str = str(custom_id)
     labels["litellm_custom_id"] = _sanitize_gcp_label_value(custom_id_str)
-    labels["litellm_custom_id_raw"] = custom_id_str[:_GCP_LABEL_VALUE_MAX_LEN]
+    labels["litellm_custom_id_raw"] = _encode_gcp_label_value(custom_id_str)
 
 
 def _get_litellm_batch_custom_id_from_labels(labels: Dict[str, Any]) -> str:
-    """Prefer unsanitized custom_id when present (see _set_litellm_batch_custom_id_labels)."""
+    """Prefer encoded custom_id when present (see _set_litellm_batch_custom_id_labels)."""
     raw = labels.get("litellm_custom_id_raw")
     if raw:
+        decoded = _decode_gcp_label_value(str(raw))
+        if decoded is not None:
+            return decoded
         return str(raw)
     return str(labels.get("litellm_custom_id", "unknown"))
+
+
+def _transform_openai_jsonl_content_to_vertex_ai_jsonl_content(
+    openai_jsonl_content: List[Dict[str, Any]],
+    map_openai_to_vertex_params: Callable[[Dict[str, Any]], Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """
+    Transforms OpenAI JSONL content to VertexAI JSONL content
+
+    jsonl body for vertex is {"request": <request_body>}
+    Example Vertex jsonl
+    {"request":{"contents": [{"role": "user", "parts": [{"text": "What is the relation between the following video and image samples?"}, {"fileData": {"fileUri": "gs://cloud-samples-data/generative-ai/video/animals.mp4", "mimeType": "video/mp4"}}, {"fileData": {"fileUri": "gs://cloud-samples-data/generative-ai/image/cricket.jpeg", "mimeType": "image/jpeg"}}]}]}}
+    {"request":{"contents": [{"role": "user", "parts": [{"text": "Describe what is happening in this video."}, {"fileData": {"fileUri": "gs://cloud-samples-data/generative-ai/video/another_video.mov", "mimeType": "video/mov"}}]}]}}
+    """
+
+    vertex_jsonl_content = []
+    for _openai_jsonl_content in openai_jsonl_content:
+        openai_request_body = _openai_jsonl_content.get("body") or {}
+        vertex_request_body = _transform_request_body(
+            messages=openai_request_body.get("messages", []),
+            model=openai_request_body.get("model", ""),
+            optional_params=map_openai_to_vertex_params(openai_request_body),
+            custom_llm_provider="vertex_ai",
+            litellm_params={},
+            cached_content=None,
+        )
+
+        # Add custom_id as a label for correlation in batch outputs
+        custom_id = _openai_jsonl_content.get("custom_id")
+        if custom_id:
+            if "labels" not in vertex_request_body:
+                vertex_request_body["labels"] = {}
+            _set_litellm_batch_custom_id_labels(
+                vertex_request_body["labels"], custom_id
+            )
+
+        vertex_jsonl_content.append({"request": vertex_request_body})
+    return vertex_jsonl_content
 
 
 class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
@@ -273,38 +342,10 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
     def _transform_openai_jsonl_content_to_vertex_ai_jsonl_content(
         self, openai_jsonl_content: List[Dict[str, Any]]
     ) -> List[Dict[str, Any]]:
-        """
-        Transforms OpenAI JSONL content to VertexAI JSONL content
-
-        jsonl body for vertex is {"request": <request_body>}
-        Example Vertex jsonl
-        {"request":{"contents": [{"role": "user", "parts": [{"text": "What is the relation between the following video and image samples?"}, {"fileData": {"fileUri": "gs://cloud-samples-data/generative-ai/video/animals.mp4", "mimeType": "video/mp4"}}, {"fileData": {"fileUri": "gs://cloud-samples-data/generative-ai/image/cricket.jpeg", "mimeType": "image/jpeg"}}]}]}}
-        {"request":{"contents": [{"role": "user", "parts": [{"text": "Describe what is happening in this video."}, {"fileData": {"fileUri": "gs://cloud-samples-data/generative-ai/video/another_video.mov", "mimeType": "video/mov"}}]}]}}
-        """
-
-        vertex_jsonl_content = []
-        for _openai_jsonl_content in openai_jsonl_content:
-            openai_request_body = _openai_jsonl_content.get("body") or {}
-            vertex_request_body = _transform_request_body(
-                messages=openai_request_body.get("messages", []),
-                model=openai_request_body.get("model", ""),
-                optional_params=self._map_openai_to_vertex_params(openai_request_body),
-                custom_llm_provider="vertex_ai",
-                litellm_params={},
-                cached_content=None,
-            )
-
-            # Add custom_id as a label for correlation in batch outputs
-            custom_id = _openai_jsonl_content.get("custom_id")
-            if custom_id:
-                if "labels" not in vertex_request_body:
-                    vertex_request_body["labels"] = {}
-                _set_litellm_batch_custom_id_labels(
-                    vertex_request_body["labels"], custom_id
-                )
-
-            vertex_jsonl_content.append({"request": vertex_request_body})
-        return vertex_jsonl_content
+        return _transform_openai_jsonl_content_to_vertex_ai_jsonl_content(
+            openai_jsonl_content=openai_jsonl_content,
+            map_openai_to_vertex_params=self._map_openai_to_vertex_params,
+        )
 
     def transform_create_file_request(
         self,
@@ -779,39 +820,11 @@ class VertexAIJsonlFilesTransformation(VertexGeminiConfig):
 
     def _transform_openai_jsonl_content_to_vertex_ai_jsonl_content(
         self, openai_jsonl_content: List[Dict[str, Any]]
-    ):
-        """
-        Transforms OpenAI JSONL content to VertexAI JSONL content
-
-        jsonl body for vertex is {"request": <request_body>}
-        Example Vertex jsonl
-        {"request":{"contents": [{"role": "user", "parts": [{"text": "What is the relation between the following video and image samples?"}, {"fileData": {"fileUri": "gs://cloud-samples-data/generative-ai/video/animals.mp4", "mimeType": "video/mp4"}}, {"fileData": {"fileUri": "gs://cloud-samples-data/generative-ai/image/cricket.jpeg", "mimeType": "image/jpeg"}}]}]}}
-        {"request":{"contents": [{"role": "user", "parts": [{"text": "Describe what is happening in this video."}, {"fileData": {"fileUri": "gs://cloud-samples-data/generative-ai/video/another_video.mov", "mimeType": "video/mov"}}]}]}}
-        """
-
-        vertex_jsonl_content = []
-        for _openai_jsonl_content in openai_jsonl_content:
-            openai_request_body = _openai_jsonl_content.get("body") or {}
-            vertex_request_body = _transform_request_body(
-                messages=openai_request_body.get("messages", []),
-                model=openai_request_body.get("model", ""),
-                optional_params=self._map_openai_to_vertex_params(openai_request_body),
-                custom_llm_provider="vertex_ai",
-                litellm_params={},
-                cached_content=None,
-            )
-
-            # Add custom_id as a label for correlation in batch outputs
-            custom_id = _openai_jsonl_content.get("custom_id")
-            if custom_id:
-                if "labels" not in vertex_request_body:
-                    vertex_request_body["labels"] = {}
-                _set_litellm_batch_custom_id_labels(
-                    vertex_request_body["labels"], custom_id
-                )
-
-            vertex_jsonl_content.append({"request": vertex_request_body})
-        return vertex_jsonl_content
+    ) -> List[Dict[str, Any]]:
+        return _transform_openai_jsonl_content_to_vertex_ai_jsonl_content(
+            openai_jsonl_content=openai_jsonl_content,
+            map_openai_to_vertex_params=self._map_openai_to_vertex_params,
+        )
 
     def _get_gcs_object_name(
         self,
