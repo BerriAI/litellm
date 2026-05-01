@@ -1798,12 +1798,16 @@ async def get_current_spend(counter_key: str, fallback_spend: float) -> float:
     3. Reseed from authoritative DB spend (counter expired, cross-pod stale)
     4. Caller-supplied fallback (DB unavailable, cold start)
     """
-    # 1. Try Redis first (cross-pod authoritative)
+    # 1. Redis first (cross-pod authoritative). On clean miss, skip
+    # in-memory: per-pod in-memory only has this pod's writes, so it
+    # would mask cross-pod increments.
+    redis_clean_miss = False
     if spend_counter_cache.redis_cache is not None:
         try:
             val = await spend_counter_cache.redis_cache.async_get_cache(key=counter_key)
             if val is not None:
                 return float(val)
+            redis_clean_miss = True
         except Exception as e:
             verbose_proxy_logger.debug(
                 "get_current_spend: Redis read failed for %s, falling back to in-memory: %s",
@@ -1811,10 +1815,11 @@ async def get_current_spend(counter_key: str, fallback_spend: float) -> float:
                 e,
             )
 
-    # 2. Fall back to in-memory counter (single-instance or Redis failure)
-    val = spend_counter_cache.in_memory_cache.get_cache(key=counter_key)
-    if val is not None:
-        return float(val)
+    # 2. In-memory only when Redis is unreachable.
+    if not redis_clean_miss:
+        val = spend_counter_cache.in_memory_cache.get_cache(key=counter_key)
+        if val is not None:
+            return float(val)
 
     # 3. Reseed from DB - fallback_spend lags cross-pod, would allow bypass.
     db_spend = await SpendCounterReseed.coalesced(
@@ -1976,10 +1981,12 @@ async def _init_and_increment_spend_counter(
                     base_spend = getattr(source, "spend", 0.0) or 0.0
             if base_spend > 0:
                 await spend_counter_cache.async_increment_cache(
-                    key=counter_key, value=base_spend
+                    key=counter_key, value=base_spend, refresh_ttl=True
                 )
 
-    await spend_counter_cache.async_increment_cache(key=counter_key, value=increment)
+    await spend_counter_cache.async_increment_cache(
+        key=counter_key, value=increment, refresh_ttl=True
+    )
 
 
 async def update_cache(  # noqa: PLR0915
