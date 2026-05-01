@@ -1909,7 +1909,7 @@ async def _reserve_budget_after_common_checks(
     end_user_object: Optional[LiteLLM_EndUserTable] = None,
 ) -> None:
     user_api_key_auth_obj.budget_reservation = None
-    if skip_budget_checks or _is_budget_reservation_disabled():
+    if skip_budget_checks:
         return
 
     from litellm.proxy.spend_tracking.budget_reservation import (
@@ -1929,10 +1929,6 @@ async def _reserve_budget_after_common_checks(
         end_user_id=end_user_id,
         end_user_object=end_user_object,
     )
-
-
-def _is_budget_reservation_disabled() -> bool:
-    return get_secret_bool("LITELLM_DISABLE_BUDGET_RESERVATION", False) is True
 
 
 def _should_skip_budget_checks(
