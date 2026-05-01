@@ -3242,10 +3242,15 @@ class Logging(LiteLLMLoggingBaseClass):
                     ),
                     langfuse_secret=self.standard_callback_dynamic_params.get(
                         "langfuse_secret"
-                    ),
+                    )
+                    or self.standard_callback_dynamic_params.get("langfuse_secret_key"),
                     langfuse_host=self.standard_callback_dynamic_params.get(
                         "langfuse_host"
                     ),
+                    allow_env_credentials=self.standard_callback_dynamic_params.get(
+                        "langfuse_host"
+                    )
+                    is None,
                 )
             return langFuseLogger
 
