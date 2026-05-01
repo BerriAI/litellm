@@ -5,6 +5,7 @@ Pre-call hook that filters MCP tools semantically before LLM inference.
 Reduces context window size and improves tool selection accuracy.
 """
 
+from collections import Counter
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 from litellm._logging import verbose_proxy_logger
@@ -177,6 +178,30 @@ class SemanticToolFilterHook(CustomLogger):
 
         return native_tools, mcp_tools
 
+    def _merge_filtered_tools_preserving_request_order(
+        self,
+        tools: List[Any],
+        filtered_mcp_tools: List[Any],
+    ) -> List[Any]:
+        filtered_mcp_tool_counts = Counter(
+            tool_name
+            for tool in filtered_mcp_tools
+            if (tool_name := self._get_tool_name(tool))
+        )
+        filtered_tools: List[Any] = []
+
+        for tool in tools:
+            if not self._is_mcp_router_tool(tool):
+                filtered_tools.append(tool)
+                continue
+
+            tool_name = self._get_tool_name(tool)
+            if filtered_mcp_tool_counts[tool_name] > 0:
+                filtered_tools.append(tool)
+                filtered_mcp_tool_counts[tool_name] -= 1
+
+        return filtered_tools
+
     async def async_pre_call_hook(
         self,
         user_api_key_dict: "UserAPIKeyAuth",
@@ -272,7 +297,7 @@ class SemanticToolFilterHook(CustomLogger):
                 f"with query: '{user_query[:50]}...'"
             )
 
-            native_tools, mcp_tools = self._partition_mcp_router_tools(tools)
+            _, mcp_tools = self._partition_mcp_router_tools(tools)
             if not mcp_tools:
                 verbose_proxy_logger.debug(
                     "No MCP router tools in request, skipping semantic filter"
@@ -284,7 +309,9 @@ class SemanticToolFilterHook(CustomLogger):
                 query=user_query,
                 available_tools=mcp_tools,  # type: ignore
             )
-            filtered_tools = native_tools + filtered_mcp_tools
+            filtered_tools = self._merge_filtered_tools_preserving_request_order(
+                tools, filtered_mcp_tools
+            )
 
             # Always update tools and emit header (even if count unchanged)
             data["tools"] = filtered_tools

@@ -559,6 +559,65 @@ async def test_semantic_filter_hook_preserves_native_openai_tools():
 
 
 @pytest.mark.asyncio
+async def test_semantic_filter_hook_preserves_remaining_tool_order():
+    """
+    Filtering MCP router tools should not reorder caller-owned native tools
+    around the MCP tools that survive semantic filtering.
+    """
+    from litellm.proxy._experimental.mcp_server.semantic_tool_filter import (
+        SemanticMCPToolFilter,
+    )
+    from litellm.proxy.hooks.mcp_semantic_filter import SemanticToolFilterHook
+
+    filter_instance = SemanticMCPToolFilter(
+        embedding_model="text-embedding-3-small",
+        litellm_router_instance=Mock(),
+        top_k=3,
+        similarity_threshold=0.3,
+        enabled=True,
+    )
+    mcp_search_tool = {"name": "github-search", "description": "Search GitHub"}
+    mcp_issue_tool = {"name": "github-issue", "description": "Create GitHub issue"}
+    filter_instance._tool_map = {
+        mcp_search_tool["name"]: mcp_search_tool,
+        mcp_issue_tool["name"]: mcp_issue_tool,
+    }
+    filter_instance.filter_tools = AsyncMock(  # type: ignore[method-assign]
+        return_value=[mcp_issue_tool, mcp_search_tool]
+    )
+
+    native_tool = {
+        "type": "function",
+        "function": {
+            "name": "weather_lookup",
+            "description": "Look up weather for a city",
+            "parameters": {"type": "object"},
+        },
+    }
+    hook = SemanticToolFilterHook(filter_instance)
+    data = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "Search GitHub"}],
+        "tools": [mcp_search_tool, native_tool, mcp_issue_tool],
+        "metadata": {},
+    }
+
+    result = await hook.async_pre_call_hook(
+        user_api_key_dict=Mock(),
+        cache=Mock(),
+        data=data,
+        call_type="completion",
+    )
+
+    assert result is data
+    assert result["tools"] == [mcp_search_tool, native_tool, mcp_issue_tool]
+    assert (
+        result["metadata"]["litellm_semantic_filter_tools"]
+        == "github-search,weather_lookup,github-issue"
+    )
+
+
+@pytest.mark.asyncio
 async def test_semantic_filter_hook_skips_all_native_openai_tools():
     """
     If a request contains only caller-owned native tools, the MCP semantic
