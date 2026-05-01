@@ -23,6 +23,7 @@ from litellm.proxy._types import (
     JWTRoutingOverride,
 )
 from litellm.proxy.auth.handle_jwt import JWTHandler
+from litellm.proxy.auth.auth_checks import get_key_object, _cache_key_object
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.auth.user_api_key_auth import (
     _reserve_budget_after_common_checks,
@@ -74,6 +75,48 @@ async def test_should_clear_stale_budget_reservation_when_budget_checks_skip():
     )
 
     assert user_api_key_auth_obj.budget_reservation is None
+
+
+@pytest.mark.asyncio
+async def test_should_not_reuse_cached_key_object_for_request_state():
+    key_cache = DualCache()
+    cached_key = UserAPIKeyAuth(
+        token="cached-token",
+        request_route="/old-route",
+        budget_reservation={
+            "reserved_cost": 0.5,
+            "entries": [{"counter_key": "spend:key:cached-token"}],
+        },
+    )
+
+    await _cache_key_object(
+        hashed_token="cached-token",
+        user_api_key_obj=cached_key,
+        user_api_key_cache=key_cache,
+        proxy_logging_obj=None,
+    )
+
+    first_request_key = await get_key_object(
+        hashed_token="cached-token",
+        prisma_client=MagicMock(),
+        user_api_key_cache=key_cache,
+    )
+    first_request_key.budget_reservation = {
+        "reserved_cost": 0.9,
+        "entries": [{"counter_key": "spend:key:cached-token"}],
+    }
+    first_request_key.request_route = "/chat/completions"
+
+    second_request_key = await get_key_object(
+        hashed_token="cached-token",
+        prisma_client=MagicMock(),
+        user_api_key_cache=key_cache,
+    )
+
+    assert first_request_key is not cached_key
+    assert second_request_key is not first_request_key
+    assert second_request_key.budget_reservation is None
+    assert second_request_key.request_route is None
 
 
 @pytest.mark.asyncio

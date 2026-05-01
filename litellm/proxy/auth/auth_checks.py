@@ -1592,9 +1592,12 @@ async def _cache_key_object(
     ## CACHE REFRESH TIME
     user_api_key_obj.last_refreshed_at = time.time()
 
+    cached_key_obj = _copy_user_api_key_auth_for_cache(
+        user_api_key_obj=user_api_key_obj
+    )
     await _cache_management_object(
         key=key,
-        value=user_api_key_obj,
+        value=cached_key_obj,
         user_api_key_cache=user_api_key_cache,
         proxy_logging_obj=proxy_logging_obj,
     )
@@ -2318,9 +2321,11 @@ async def get_key_object(
 
     if cached_key_obj is not None:
         if isinstance(cached_key_obj, dict):
-            return UserAPIKeyAuth(**cached_key_obj)
+            return _copy_user_api_key_auth_for_cache(
+                user_api_key_obj=UserAPIKeyAuth(**cached_key_obj)
+            )
         elif isinstance(cached_key_obj, UserAPIKeyAuth):
-            return cached_key_obj
+            return _copy_user_api_key_auth_for_cache(user_api_key_obj=cached_key_obj)
 
     if check_cache_only:
         raise Exception(
@@ -2371,6 +2376,16 @@ async def get_key_object(
     )
 
     return _response
+
+
+def _copy_user_api_key_auth_for_cache(
+    user_api_key_obj: UserAPIKeyAuth,
+) -> UserAPIKeyAuth:
+    copied_key_obj = user_api_key_obj.model_copy()
+    copied_key_obj.budget_reservation = None
+    copied_key_obj.parent_otel_span = None
+    copied_key_obj.request_route = None
+    return copied_key_obj
 
 
 @log_db_metrics

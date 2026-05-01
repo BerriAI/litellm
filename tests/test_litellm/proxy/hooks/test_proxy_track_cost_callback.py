@@ -153,8 +153,10 @@ async def test_async_post_call_failure_hook_releases_budget_reservation_before_r
             user_api_key_dict=user_api_key_dict,
         )
 
-        mock_release_budget_reservation.assert_awaited_once_with(
-            budget_reservation=budget_reservation,
+        assert mock_release_budget_reservation.await_count == 1
+        assert (
+            mock_release_budget_reservation.await_args.kwargs["budget_reservation"]
+            is user_api_key_dict.budget_reservation
         )
         mock_update_database.assert_not_called()
 
@@ -178,6 +180,10 @@ async def test_should_continue_failure_tracking_when_budget_release_fails():
             side_effect=RuntimeError("redis unavailable"),
         ) as mock_release_budget_reservation,
         patch(
+            "litellm.proxy.hooks.proxy_track_cost_callback._invalidate_budget_reservation_counters",
+            new_callable=AsyncMock,
+        ) as mock_invalidate_budget_reservation_counters,
+        patch(
             "litellm.proxy.db.db_spend_update_writer.DBSpendUpdateWriter.update_database",
             new_callable=AsyncMock,
         ) as mock_update_database,
@@ -194,9 +200,19 @@ async def test_should_continue_failure_tracking_when_budget_release_fails():
             user_api_key_dict=user_api_key_dict,
         )
 
-        mock_release_budget_reservation.assert_awaited_once_with(
-            budget_reservation=budget_reservation,
+        assert mock_release_budget_reservation.await_count == 1
+        assert (
+            mock_release_budget_reservation.await_args.kwargs["budget_reservation"]
+            is user_api_key_dict.budget_reservation
         )
+        assert mock_invalidate_budget_reservation_counters.await_count == 1
+        assert (
+            mock_invalidate_budget_reservation_counters.await_args.kwargs[
+                "budget_reservation"
+            ]
+            is user_api_key_dict.budget_reservation
+        )
+        assert user_api_key_dict.budget_reservation["finalized"] is True
         mock_log_exception.assert_called_once()
         mock_update_database.assert_called_once()
 

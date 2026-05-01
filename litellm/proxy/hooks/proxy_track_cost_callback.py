@@ -45,6 +45,16 @@ class _ProxyDBLogger(CustomLogger):
             verbose_proxy_logger.exception(
                 "Failed to release budget reservation during failure handling"
             )
+            try:
+                await _invalidate_budget_reservation_counters(
+                    budget_reservation=user_api_key_dict.budget_reservation
+                )
+                if user_api_key_dict.budget_reservation is not None:
+                    user_api_key_dict.budget_reservation["finalized"] = True
+            except Exception:
+                verbose_proxy_logger.exception(
+                    "Failed to invalidate budget reservation counters after failure release failed"
+                )
 
         request_route = user_api_key_dict.request_route
         if _ProxyDBLogger._should_track_errors_in_db() is False:
