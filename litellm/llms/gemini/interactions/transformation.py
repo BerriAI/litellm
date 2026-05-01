@@ -15,6 +15,7 @@ import httpx
 
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.core_helpers import process_response_headers
+from litellm.litellm_core_utils.url_utils import encode_url_path_segment
 from litellm.llms.base_llm.interactions.transformation import BaseInteractionsAPIConfig
 from litellm.llms.gemini.common_utils import GeminiError, GeminiModelInfo
 from litellm.types.interactions import (
@@ -205,8 +206,11 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
         resolved_api_base = GeminiModelInfo.get_api_base(api_base)
         if not GeminiModelInfo.get_api_key(litellm_params.api_key):
             raise ValueError("Google API key is required")
+        encoded_interaction_id = encode_url_path_segment(
+            interaction_id, field_name="interaction_id"
+        )
         return (
-            f"{resolved_api_base}/{self.api_version}/interactions/{interaction_id}",
+            f"{resolved_api_base}/{self.api_version}/interactions/{encoded_interaction_id}",
             {},
         )
 
@@ -238,8 +242,11 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
         resolved_api_base = GeminiModelInfo.get_api_base(api_base)
         if not GeminiModelInfo.get_api_key(litellm_params.api_key):
             raise ValueError("Google API key is required")
+        encoded_interaction_id = encode_url_path_segment(
+            interaction_id, field_name="interaction_id"
+        )
         return (
-            f"{resolved_api_base}/{self.api_version}/interactions/{interaction_id}",
+            f"{resolved_api_base}/{self.api_version}/interactions/{encoded_interaction_id}",
             {},
         )
 
@@ -268,8 +275,11 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
         resolved_api_base = GeminiModelInfo.get_api_base(api_base)
         if not GeminiModelInfo.get_api_key(litellm_params.api_key):
             raise ValueError("Google API key is required")
+        encoded_interaction_id = encode_url_path_segment(
+            interaction_id, field_name="interaction_id"
+        )
         return (
-            f"{resolved_api_base}/{self.api_version}/interactions/{interaction_id}:cancel",
+            f"{resolved_api_base}/{self.api_version}/interactions/{encoded_interaction_id}:cancel",
             {},
         )
 

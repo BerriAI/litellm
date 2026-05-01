@@ -252,6 +252,64 @@ class TestEnterpriseRouteChecksModelListExemption:
         )
 
 
+@patch("litellm.proxy.proxy_server.premium_user", True)
+class TestEnterpriseRouteChecksMcpManagement:
+    """Regression tests: MCP management routes (/v1/mcp/server*) must remain
+    reachable when DISABLE_LLM_API_ENDPOINTS is set on admin nodes, but must be
+    blocked when DISABLE_ADMIN_ENDPOINTS is set. Uses the real is_llm_api_route
+    / is_management_route classifiers (not mocks)."""
+
+    @pytest.mark.parametrize(
+        "route",
+        [
+            "/v1/mcp/server",
+            "/v1/mcp/server/abc-123",
+            "/v1/mcp/server/abc-123/approve",
+        ],
+    )
+    def test_mcp_management_allowed_when_llm_api_disabled(self, route):
+        with patch.dict(os.environ, {"DISABLE_LLM_API_ENDPOINTS": "true"}, clear=False):
+            os.environ.pop("DISABLE_ADMIN_ENDPOINTS", None)
+            # Should not raise — MCP management is a management route, not llm_api.
+            EnterpriseRouteChecks.should_call_route(route)
+
+    @pytest.mark.parametrize(
+        "route",
+        [
+            "/v1/mcp/server",
+            "/v1/mcp/server/abc-123",
+        ],
+    )
+    def test_mcp_management_blocked_when_admin_disabled(self, route):
+        with patch.dict(os.environ, {"DISABLE_ADMIN_ENDPOINTS": "true"}, clear=False):
+            os.environ.pop("DISABLE_LLM_API_ENDPOINTS", None)
+            with pytest.raises(HTTPException) as exc_info:
+                EnterpriseRouteChecks.should_call_route(route)
+
+            assert exc_info.value.status_code == 403
+            assert "Management routes are disabled for this instance." in str(
+                exc_info.value.detail
+            )
+
+    @pytest.mark.parametrize(
+        "route",
+        [
+            "/mcp/tools/call",
+            "/mcp-rest/tools/call",
+        ],
+    )
+    def test_mcp_inference_still_blocked_when_llm_api_disabled(self, route):
+        with patch.dict(os.environ, {"DISABLE_LLM_API_ENDPOINTS": "true"}, clear=False):
+            os.environ.pop("DISABLE_ADMIN_ENDPOINTS", None)
+            with pytest.raises(HTTPException) as exc_info:
+                EnterpriseRouteChecks.should_call_route(route)
+
+            assert exc_info.value.status_code == 403
+            assert "LLM API routes are disabled for this instance." in str(
+                exc_info.value.detail
+            )
+
+
 class TestEnterpriseRouteChecksErrorMessages:
     """Test that error messages correctly identify which feature requires Enterprise license"""
 

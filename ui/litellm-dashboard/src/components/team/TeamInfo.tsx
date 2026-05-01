@@ -42,10 +42,12 @@ import { fetchMCPAccessGroups } from "../networking";
 import ObjectPermissionsView from "../object_permissions_view";
 import NumericalInput from "../shared/numerical_input";
 import VectorStoreSelector from "../vector_store_management/VectorStoreSelector";
+import SearchToolSelector from "../SearchTools/SearchToolSelector";
 import EditLoggingSettings from "./EditLoggingSettings";
 import RouterSettingsAccordion, { RouterSettingsAccordionRef } from "../common_components/RouterSettingsAccordion";
 import MemberModal from "./EditMembership";
 import MemberPermissions from "./member_permissions";
+import MyUserTab from "./MyUserTab";
 import {
   getTeamInfoDefaultTab,
   getTeamInfoVisibleTabs,
@@ -60,6 +62,7 @@ export interface TeamMembership {
   team_id: string;
   budget_id: string;
   spend: number;
+  total_spend: number | null;
   litellm_budget_table: {
     budget_id: string;
     soft_budget: number | null;
@@ -69,6 +72,7 @@ export interface TeamMembership {
     rpm_limit: number | null;
     model_max_budget: Record<string, number> | null;
     budget_duration: string | null;
+    budget_reset_at: string | null;
     allowed_models?: string[] | null;
   };
 }
@@ -115,6 +119,7 @@ export interface TeamData {
       vector_stores: string[];
       agents?: string[];
       agent_access_groups?: string[];
+      search_tools?: string[];
     };
     team_member_budget_table: {
       max_budget: number;
@@ -590,6 +595,10 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         updateData.object_permission.vector_stores = values.vector_stores;
       }
 
+      if (Array.isArray(values.object_permission_search_tools)) {
+        updateData.object_permission.search_tools = values.object_permission_search_tools;
+      }
+
       // Pass access_group_ids to the update request
       if (values.access_group_ids !== undefined) {
         updateData.access_group_ids = values.access_group_ids;
@@ -852,6 +861,11 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
             ),
           },
           {
+            key: TEAM_INFO_TAB_KEYS.MY_USER,
+            label: TEAM_INFO_TAB_LABELS[TEAM_INFO_TAB_KEYS.MY_USER],
+            children: <MyUserTab teamId={teamId} />,
+          },
+          {
             key: TEAM_INFO_TAB_KEYS.VIRTUAL_KEYS,
             label: TEAM_INFO_TAB_LABELS[TEAM_INFO_TAB_KEYS.VIRTUAL_KEYS],
             children: (
@@ -918,6 +932,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                       models: info.models,
                       tpm_limit: info.tpm_limit,
                       rpm_limit: info.rpm_limit,
+                      object_permission_search_tools: info.object_permission?.search_tools || [],
                       modelLimits: Array.from(
                         new Set([
                           ...Object.keys(info.metadata?.model_tpm_limit ?? {}),
@@ -1371,6 +1386,26 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                       />
                     </Form.Item>
 
+                    <Accordion className="mt-4 mb-4">
+                      <AccordionHeader>
+                        <b>Search Tool Settings</b>
+                      </AccordionHeader>
+                      <AccordionBody>
+                        <Form.Item
+                          label="Allowed Search Tools"
+                          name="object_permission_search_tools"
+                          tooltip="Select which search tools this team can access. Leave empty to allow all search tools."
+                        >
+                          <SearchToolSelector
+                            onChange={(vals: string[]) => form.setFieldValue("object_permission_search_tools", vals)}
+                            value={form.getFieldValue("object_permission_search_tools")}
+                            accessToken={accessToken || ""}
+                            placeholder="Select search tools (optional, empty = all allowed)"
+                          />
+                        </Form.Item>
+                      </AccordionBody>
+                    </Accordion>
+
                     <Form.Item label="Organization" name="organization_id">
                       <Select
                         allowClear
@@ -1606,6 +1641,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                         </pre>
                       </div>
                     )}
+
                   </div>
                 )}
               </Card>

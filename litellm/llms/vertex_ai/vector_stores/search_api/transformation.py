@@ -3,6 +3,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 import httpx
 
 from litellm import get_model_info
+from litellm.litellm_core_utils.url_utils import encode_url_path_segment
 from litellm.llms.base_llm.vector_store.transformation import BaseVectorStoreConfig
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.types.router import GenericLiteLLMParams
@@ -91,12 +92,18 @@ class VertexSearchAPIVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
             raise ValueError("vector_store_id is required")
         if api_base:
             return api_base.rstrip("/")
+        encoded_collection_id = encode_url_path_segment(
+            collection_id, field_name="vertex_collection_id"
+        )
+        encoded_datastore_id = encode_url_path_segment(
+            datastore_id, field_name="vector_store_id"
+        )
 
         # Vertex AI Search API endpoint for search
         return (
             f"https://discoveryengine.googleapis.com/v1/"
             f"projects/{vertex_project}/locations/{vertex_location}/"
-            f"collections/{collection_id}/dataStores/{datastore_id}/servingConfigs/default_config"
+            f"collections/{encoded_collection_id}/dataStores/{encoded_datastore_id}/servingConfigs/default_config"
         )
 
     def transform_search_vector_store_request(
@@ -107,6 +114,7 @@ class VertexSearchAPIVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
         api_base: str,
         litellm_logging_obj: LiteLLMLoggingObj,
         litellm_params: dict,
+        extra_body: Optional[Dict[str, Any]] = None,
     ) -> Tuple[str, Dict[str, Any]]:
         """
         Transform search request for Vertex AI RAG API
