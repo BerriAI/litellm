@@ -1,17 +1,21 @@
 import asyncio
-from dataclasses import fields as _dc_fields
 from typing import TYPE_CHECKING, Any, Literal, Optional
 
 from fastapi import HTTPException, status
 
 import litellm
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.types.router import MockRouterTestingParams
 
-# Router-internal mock_testing_* flag names. Single source of truth so a
-# new flag added to ``MockRouterTestingParams`` is automatically stripped.
-_MOCK_TESTING_KWARG_NAMES: tuple = tuple(
-    f.name for f in _dc_fields(MockRouterTestingParams)
+# Router-internal mock_testing_* flag names — kept in sync with
+# ``litellm.types.router.MockRouterTestingParams`` by the test
+# ``test_mock_testing_kwarg_names_matches_dataclass``. Hardcoding (rather
+# than deriving via ``dataclasses.fields(MockRouterTestingParams)`` at
+# import time) avoids a cyclic import: ``litellm.types.router`` imports
+# back into proxy modules before this module finishes loading.
+_MOCK_TESTING_KWARG_NAMES: tuple = (
+    "mock_testing_fallbacks",
+    "mock_testing_context_fallbacks",
+    "mock_testing_content_policy_fallbacks",
 )
 
 if TYPE_CHECKING:

@@ -241,6 +241,21 @@ async def test_route_request_with_router_settings_override_preserves_existing():
     assert call_kwargs["timeout"] == 30
 
 
+def test_mock_testing_kwarg_names_matches_dataclass():
+    """``_MOCK_TESTING_KWARG_NAMES`` is hardcoded to avoid a cyclic import
+    against ``litellm.types.router``. This test guards against drift —
+    if a new ``mock_testing_*`` field is added to ``MockRouterTestingParams``
+    the strip list must be updated to keep covering it."""
+    from dataclasses import fields
+
+    from litellm.proxy.route_llm_request import _MOCK_TESTING_KWARG_NAMES
+    from litellm.types.router import MockRouterTestingParams
+
+    assert set(_MOCK_TESTING_KWARG_NAMES) == {
+        f.name for f in fields(MockRouterTestingParams)
+    }
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "mock_flag",
