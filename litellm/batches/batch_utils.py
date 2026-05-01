@@ -387,6 +387,27 @@ def _get_batch_job_total_usage_from_file_content(
     )
 
 
+def _get_models_from_batch_input_file_content(
+    file_content_dictionary: List[dict],
+) -> List[str]:
+    """Extract the distinct ``body.model`` values from a batch *input* file.
+
+    Used by the proxy's batch pre-call hook to enforce that the caller is
+    authorized for every model named inside the JSONL — not just the one
+    on the outer request — so the proxy's per-key model allowlist isn't
+    bypassed by smuggling expensive models into the batch file.
+    """
+    models: List[str] = []
+    seen: set = set()
+    for _item in file_content_dictionary:
+        body = _item.get("body") or {}
+        model = body.get("model")
+        if model and model not in seen:
+            seen.add(model)
+            models.append(model)
+    return models
+
+
 def _get_batch_job_input_file_usage(
     file_content_dictionary: List[dict],
     custom_llm_provider: Literal["openai", "azure", "vertex_ai"] = "openai",
@@ -403,11 +424,34 @@ def _get_batch_job_input_file_usage(
     for _item in file_content_dictionary:
         body = _item.get("body", {})
         model = body.get("model", model_name or "")
-        messages = body.get("messages", [])
 
+        # Chat completion payloads.
+        messages = body.get("messages")
         if messages:
-            item_tokens = token_counter(model=model, messages=messages)
-            prompt_tokens += item_tokens
+            prompt_tokens += token_counter(model=model, messages=messages)
+            continue
+
+        # Text completion payloads (`prompt` may be a string or a list of
+        # strings/tokens).
+        prompt = body.get("prompt")
+        if prompt:
+            if isinstance(prompt, list):
+                for chunk in prompt:
+                    if isinstance(chunk, str):
+                        prompt_tokens += token_counter(model=model, text=chunk)
+            elif isinstance(prompt, str):
+                prompt_tokens += token_counter(model=model, text=prompt)
+            continue
+
+        # Embedding payloads (`input` may be a string or a list of strings).
+        input_data = body.get("input")
+        if input_data:
+            if isinstance(input_data, list):
+                for chunk in input_data:
+                    if isinstance(chunk, str):
+                        prompt_tokens += token_counter(model=model, text=chunk)
+            elif isinstance(input_data, str):
+                prompt_tokens += token_counter(model=model, text=input_data)
 
     return Usage(
         total_tokens=prompt_tokens + completion_tokens,
