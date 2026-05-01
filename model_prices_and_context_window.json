@@ -12603,6 +12603,28 @@
         "output_cost_per_token": 0.0,
         "output_vector_size": 2560
     },
+    "openai/doubao-seedream-4-5-251128": {
+        "input_cost_per_image": 0.0345,
+        "litellm_provider": "openai",
+        "metadata": {
+            "notes": "Volcengine ark doubao-seedream-4-5 image generation, served through an OpenAI-compatible endpoint (https://ark.cn-beijing.volces.com/api/v3). Price converted from 0.25 CNY/image."
+        },
+        "mode": "image_generation",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+    "openai/doubao-seedream-5-0-260128": {
+        "input_cost_per_image": 0.2272727273,
+        "litellm_provider": "openai",
+        "metadata": {
+            "notes": "Volcengine ark doubao-seedream-5-0 image generation, served through an OpenAI-compatible endpoint (https://ark.cn-beijing.volces.com/api/v3)."
+        },
+        "mode": "image_generation",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
     "doubao-embedding-large": {
         "input_cost_per_token": 0.0,
         "litellm_provider": "volcengine",
