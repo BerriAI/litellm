@@ -234,6 +234,76 @@ async def test_should_filter_container_list_to_owned_records(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_should_clear_has_more_when_filtered_container_list_is_empty(
+    monkeypatch,
+):
+    table = AsyncMock()
+    table.find_many.return_value = [
+        SimpleNamespace(model_object_id="container:openai:cntr_owned"),
+    ]
+    prisma_client = SimpleNamespace(
+        db=SimpleNamespace(litellm_managedobjecttable=table)
+    )
+    monkeypatch.setattr(
+        ownership,
+        "_get_prisma_client",
+        AsyncMock(return_value=prisma_client),
+    )
+    auth = UserAPIKeyAuth(user_id="user-1")
+    response = ContainerListResponse(
+        object="list",
+        data=[_container("cntr_other")],
+        has_more=True,
+    )
+
+    filtered = await ownership.filter_container_list_response(
+        response=response,
+        user_api_key_dict=auth,
+        custom_llm_provider="openai",
+    )
+
+    assert filtered.data == []
+    assert filtered.first_id is None
+    assert filtered.last_id is None
+    assert filtered.has_more is False
+
+
+@pytest.mark.asyncio
+async def test_should_clear_dict_has_more_when_filtered_container_list_is_empty(
+    monkeypatch,
+):
+    table = AsyncMock()
+    table.find_many.return_value = [
+        SimpleNamespace(model_object_id="container:openai:cntr_owned"),
+    ]
+    prisma_client = SimpleNamespace(
+        db=SimpleNamespace(litellm_managedobjecttable=table)
+    )
+    monkeypatch.setattr(
+        ownership,
+        "_get_prisma_client",
+        AsyncMock(return_value=prisma_client),
+    )
+    auth = UserAPIKeyAuth(user_id="user-1")
+    response = {
+        "object": "list",
+        "data": [{"id": "cntr_other"}],
+        "has_more": True,
+    }
+
+    filtered = await ownership.filter_container_list_response(
+        response=response,
+        user_api_key_dict=auth,
+        custom_llm_provider="openai",
+    )
+
+    assert filtered["data"] == []
+    assert filtered["first_id"] is None
+    assert filtered["last_id"] is None
+    assert filtered["has_more"] is False
+
+
+@pytest.mark.asyncio
 async def test_should_filter_container_list_with_in_memory_ownership(monkeypatch):
     monkeypatch.setattr(
         ownership,
