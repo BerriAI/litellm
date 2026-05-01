@@ -2,7 +2,8 @@
 GitHub Copilot Responses API Configuration.
 
 This module provides the configuration for GitHub Copilot's Responses API,
-which is required for models like gpt-5.1-codex that only support the /responses endpoint.
+which is required for models like gpt-5.1-codex that only support the
+/responses endpoint.
 
 Implementation based on analysis of the copilot-api project by caozhiyuan:
 https://github.com/caozhiyuan/copilot-api
@@ -27,11 +28,14 @@ from ..authenticator import Authenticator
 from ..common_utils import (
     DEFAULT_GITHUB_COPILOT_API_BASE,
     GetAPIKeyError,
+    determine_x_initiator,
     get_copilot_default_headers,
 )
 
 if TYPE_CHECKING:
-    from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+    from litellm.litellm_core_utils.litellm_logging import (
+        Logging as _LiteLLMLoggingObj,
+    )
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
@@ -86,6 +90,42 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
         """
         return dict(response_api_optional_params)
 
+    def transform_responses_api_request(
+        self,
+        model: str,
+        input: Union[str, ResponseInputParam],
+        response_api_optional_request_params: Dict,
+        litellm_params: GenericLiteLLMParams,
+        headers: dict,
+    ) -> Dict:
+        """
+        Transform the Responses API request and set X-Initiator header.
+
+        GitHub Copilot requires X-Initiator header based on input analysis.
+        This is set here (not in validate_environment) because only this method
+        has access to the input parameter.
+        """
+        # Add X-Initiator header based on input analysis
+        initiator = self._get_initiator(input)
+        headers["X-Initiator"] = initiator
+        verbose_logger.debug(
+            f"GitHub Copilot Responses API: Set X-Initiator={initiator}"
+        )
+
+        # Add vision header if input contains images
+        if self._has_vision_input(input):
+            headers["copilot-vision-request"] = "true"
+            verbose_logger.debug("GitHub Copilot Responses API: Enabled vision request")
+
+        # Call parent to get request body (validates input, handles reasoning items)
+        return super().transform_responses_api_request(
+            model=model,
+            input=input,
+            response_api_optional_request_params=response_api_optional_request_params,
+            litellm_params=litellm_params,
+            headers=headers,
+        )
+
     def validate_environment(
         self,
         headers: dict,
@@ -113,35 +153,36 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
                 raise AuthenticationError(
                     model=model,
                     llm_provider="github_copilot",
-                    message="GitHub Copilot API key is required. Please authenticate via OAuth Device Flow.",
+                    message=(
+                        "GitHub Copilot API key is required. "
+                        "Please authenticate via OAuth Device Flow."
+                    ),
                 )
 
+            # Extract optional conversation key for session-scoped billing
+            conversation_key: Optional[str] = None
+            if litellm_params is not None:
+                lp_metadata = (
+                    litellm_params.get("metadata")
+                    if isinstance(litellm_params, dict)
+                    else getattr(litellm_params, "metadata", None)
+                ) or {}
+                conversation_key = lp_metadata.get("copilot_conversation_id")
+
             # Get default headers (from copilot-api configuration)
-            default_headers = get_copilot_default_headers(api_key)
+            default_headers = get_copilot_default_headers(
+                api_key, conversation_key=conversation_key
+            )
 
             # Merge with existing headers (user's extra_headers take priority)
             merged_headers = {**default_headers, **headers}
 
-            # Analyze input to determine additional headers
-            input_param = self._get_input_from_params(litellm_params)
-
-            # Add X-Initiator header based on input analysis
-            if input_param is not None:
-                initiator = self._get_initiator(input_param)
-                merged_headers["X-Initiator"] = initiator
-                verbose_logger.debug(
-                    f"GitHub Copilot Responses API: Set X-Initiator={initiator}"
-                )
-
-                # Add vision header if input contains images
-                if self._has_vision_input(input_param):
-                    merged_headers["copilot-vision-request"] = "true"
-                    verbose_logger.debug(
-                        "GitHub Copilot Responses API: Enabled vision request"
-                    )
+            # X-Initiator and vision headers are set in transform_responses_api_request
+            # where we have access to the input parameter
 
             verbose_logger.debug(
-                f"GitHub Copilot Responses API: Successfully configured headers for model {model}"
+                f"GitHub Copilot Responses API: Successfully configured headers"
+                f" for model {model}"
             )
 
             return merged_headers
@@ -208,68 +249,22 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
                     filtered_item[k] = v
 
             verbose_logger.debug(
-                f"GitHub Copilot reasoning item processed, encrypted_content preserved: {encrypted_content is not None}"
+                f"GitHub Copilot reasoning item processed, encrypted_content"
+                f" preserved: {encrypted_content is not None}"
             )
             return filtered_item
         return item
 
     # ==================== Helper Methods ====================
 
-    def _get_input_from_params(
-        self, litellm_params: Optional[GenericLiteLLMParams]
-    ) -> Optional[Union[str, ResponseInputParam]]:
-        """
-        Extract input parameter from litellm_params.
-
-        The input parameter contains the conversation history and is needed
-        for vision detection and initiator determination.
-        """
-        if litellm_params is None:
-            return None
-
-        # Try to get input from litellm_params
-        # This might be in different locations depending on how LiteLLM structures it
-        if hasattr(litellm_params, "input"):
-            return litellm_params.input
-
-        # If not found, return None and let the API handle it
-        return None
-
     def _get_initiator(self, input_param: Union[str, ResponseInputParam]) -> str:
         """
         Determine X-Initiator header value based on input analysis.
 
-        Based on copilot-api's hasAgentInitiator logic:
-        - Returns "agent" if input contains assistant role or items without role
-        - Returns "user" otherwise
-
-        Args:
-            input_param: The input parameter (string or list of input items)
-
-        Returns:
-            "agent" or "user"
+        Delegates to the shared determine_x_initiator() helper in common_utils.py.
+        See that function for full logic documentation (FIX-03).
         """
-        # If input is a string, it's user-initiated
-        if isinstance(input_param, str):
-            return "user"
-
-        # If input is a list, analyze items
-        if isinstance(input_param, list):
-            for item in input_param:
-                if not isinstance(item, dict):
-                    continue
-
-                # Check if item has no role (agent-initiated)
-                if "role" not in item or not item.get("role"):
-                    return "agent"
-
-                # Check if role is assistant (agent-initiated)
-                role = item.get("role")
-                if isinstance(role, str) and role.lower() == "assistant":
-                    return "agent"
-
-        # Default to user-initiated
-        return "user"
+        return determine_x_initiator(input_param)
 
     def _has_vision_input(self, input_param: Union[str, ResponseInputParam]) -> bool:
         """
@@ -296,7 +291,8 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
         """
         if depth > max_depth:
             verbose_logger.warning(
-                f"[GitHub Copilot] Max recursion depth {max_depth} reached while checking for vision content"
+                f"[GitHub Copilot] Max recursion depth {max_depth} reached"
+                f" while checking for vision content"
             )
             return False
 

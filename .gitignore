@@ -3,6 +3,7 @@
 .venv_policy_test
 .env
 .claude
+.claude_review_state.json
 .newenv
 newenv/*
 litellm/proxy/myenv/*
@@ -101,3 +102,6 @@ STABILIZATION_TODO.md
 **/playwright-report
 **/*.storageState.json
 **/coverage
+# GSD agent
+.gsd/
+.bg-shell/
