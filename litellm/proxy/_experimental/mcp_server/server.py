@@ -2842,7 +2842,11 @@ if MCP_AVAILABLE:
                     pass
 
             # Reuse existing session auth if available to ensure identity stability for cleanup
-            if session_id_param and 'session_auth' in locals() and session_auth is not None:
+            if (
+                session_id_param
+                and "session_auth" in locals()
+                and session_auth is not None
+            ):
                 auth_context_var.set(session_auth)
             else:
                 set_auth_context(
