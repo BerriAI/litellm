@@ -20,8 +20,10 @@ import litellm  # noqa: E402
 
 from tests._vcr_redis_persister import (  # noqa: E402
     filter_non_2xx_response,
+    format_vcr_verdict,
     make_redis_persister,
     patch_vcrpy_aiohttp_record_path,
+    vcr_verbose_enabled,
 )
 
 
@@ -124,6 +126,24 @@ def pytest_recording_configure(config, vcr):
         return
     vcr.register_persister(make_redis_persister())
     patch_vcrpy_aiohttp_record_path()
+
+
+@pytest.fixture(autouse=True)
+def _vcr_hit_miss_report(request, vcr):
+    """When LITELLM_VCR_VERBOSE=1, print a one-line cassette verdict per test.
+
+    Runs after the `vcr` fixture (which yields the active Cassette), so we can
+    inspect play_count / dirty / len in teardown."""
+    yield
+    if not vcr_verbose_enabled():
+        return
+    verdict = format_vcr_verdict(vcr)
+    reporter = request.config.pluginmanager.get_plugin("terminalreporter")
+    line = f"{verdict} :: {request.node.nodeid}"
+    if reporter is not None:
+        reporter.write_line(line)
+    else:  # pragma: no cover - reporter is always present in normal runs
+        print(line)
 
 
 # ---------------------------------------------------------------------------
