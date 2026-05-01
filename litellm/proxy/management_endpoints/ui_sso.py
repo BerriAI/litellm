@@ -1559,6 +1559,19 @@ async def auth_callback(request: Request, state: Optional[str] = None):  # noqa:
     """Verify login"""
     verbose_proxy_logger.info(f"Starting SSO callback with state: {state}")
 
+    oauth_error = request.query_params.get("error")
+    oauth_error_description = request.query_params.get("error_description")
+    if oauth_error:
+        oauth_error_detail = f"OAuth error: {oauth_error}"
+        if oauth_error_description:
+            oauth_error_detail += (
+                f", error_description: {oauth_error_description}"
+            )
+        raise HTTPException(
+            status_code=400,
+            detail=oauth_error_detail,
+        )
+
     # Check if this is a CLI login (state starts with our CLI prefix)
     from litellm.constants import LITELLM_CLI_SESSION_TOKEN_PREFIX
     from litellm.proxy._types import LiteLLM_JWTAuth
