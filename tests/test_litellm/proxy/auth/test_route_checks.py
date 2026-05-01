@@ -1484,6 +1484,63 @@ def test_proxy_admin_viewer_post_blocked_outside_allowlists(route):
     assert exc_info.value.status_code == 403
 
 
+# ── Admin Viewer: management_routes write endpoints stay blocked ─────────────
+#
+# `management_routes` is a mix of reads (info/list, handled via the safe-method
+# branch — GET) and writes. The route_checks layer must NOT blanket-allow the
+# whole set on POST — that would let Admin Viewer mutate teams, JWT mappings,
+# and bulk-update keys, violating the "no writes, ever" rule.
+#
+# These cases pin the gap closed (Greptile P1 review, 2026-04-30).
+ADMIN_VIEWER_MANAGEMENT_ROUTE_WRITES = [
+    # Team writes
+    "/team/block",
+    "/team/unblock",
+    "/team/permissions_update",
+    # JWT key mapping writes
+    "/jwt/key/mapping/new",
+    "/jwt/key/mapping/update",
+    "/jwt/key/mapping/delete",
+    # Key writes (existing _ADMIN_VIEWER_BLOCKED_WRITE_ROUTES doesn't list bulk
+    # update or per-key reset-spend, so the management_routes fallback was the
+    # only thing keeping them out — and it was permissive, not restrictive).
+    "/key/bulk_update",
+    "/key/some-key-id/reset_spend",
+]
+
+
+@pytest.mark.parametrize("route", ADMIN_VIEWER_MANAGEMENT_ROUTE_WRITES)
+def test_proxy_admin_viewer_post_blocked_for_management_route_writes(route):
+    """
+    Admin Viewer must be blocked on POST to write endpoints in
+    `management_routes`, even when the specific route is not in
+    `_ADMIN_VIEWER_BLOCKED_WRITE_ROUTES`.
+    """
+    user_obj = LiteLLM_UserTable(
+        user_id="viewer_user",
+        user_email="viewer@example.com",
+        user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
+    )
+    valid_token = UserAPIKeyAuth(
+        user_id="viewer_user",
+        user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
+    )
+    request = MagicMock(spec=Request)
+    request.method = "POST"
+    request.query_params = {}
+
+    with pytest.raises(HTTPException) as exc_info:
+        RouteChecks.non_proxy_admin_allowed_routes_check(
+            user_obj=user_obj,
+            _user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
+            route=route,
+            request=request,
+            valid_token=valid_token,
+            request_data={},
+        )
+    assert exc_info.value.status_code == 403
+
+
 class TestModelsRouteExemptFromDisableLLMEndpoints:
     """
     Test that /models and /v1/models are exempt from DISABLE_LLM_API_ENDPOINTS.
