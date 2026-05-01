@@ -340,11 +340,11 @@ async def update_hashicorp_vault_config(
     # Mutating the proxy's KMS config affects every secret retrieval going
     # forward — emit an audit-log row so the action is traceable even
     # though the secret_manager_client itself was just swapped under us.
-    # ``existing_decrypted`` is only set when the DB row had a non-null
-    # ``config_value`` (the same branch that ran the merge above);
-    # otherwise fall back to whatever env vars were in scope.
+    # Action keys off row existence (a row with NULL ``config_value`` is
+    # still an update). ``before_config`` falls back to env vars when the
+    # row was absent or its ``config_value`` was NULL.
     before_config = existing_decrypted if existing_decrypted is not None else env_values
-    action: AUDIT_ACTIONS = "updated" if existing_decrypted is not None else "created"
+    action: AUDIT_ACTIONS = "updated" if existing_record is not None else "created"
     await _emit_hashicorp_vault_audit_log(
         action=action,
         before_config=before_config,

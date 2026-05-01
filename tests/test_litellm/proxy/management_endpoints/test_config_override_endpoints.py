@@ -1,6 +1,7 @@
+import asyncio
 import json
 import os
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -297,8 +298,6 @@ class TestHashicorpVaultAuditLog:
         async def capture(request_data):
             audit_calls.append(request_data)
 
-        from unittest.mock import patch
-
         try:
             with patch(
                 "litellm.proxy.management_helpers.audit_logs.create_audit_log_for_update",
@@ -312,8 +311,6 @@ class TestHashicorpVaultAuditLog:
                     },
                 )
                 assert r.status_code == 200
-                import asyncio
-
                 for _ in range(3):
                     await asyncio.sleep(0)
 
@@ -328,6 +325,52 @@ class TestHashicorpVaultAuditLog:
             after = json.loads(log.updated_values)
             assert "vault_token" in after["config"]
             assert "vault_addr" in after["config"]
+        finally:
+            _cleanup()
+
+    @pytest.mark.asyncio
+    async def test_post_action_is_updated_when_row_exists_with_null_config_value(
+        self, client, monkeypatch
+    ):
+        """A row can exist in ``litellm_configoverrides`` with a NULL
+        ``config_value`` (e.g. an earlier failed write left a stub).
+        Re-POSTing must label the audit row as ``updated`` — the row
+        already exists — not ``created``."""
+        monkeypatch.setattr(litellm, "store_audit_logs", True)
+        mock_prisma, mock_db = _make_mock_db()
+        mock_cfg = _make_mock_proxy_config()
+        monkeypatch.setattr(ps, "prisma_client", mock_prisma)
+        monkeypatch.setattr(ps, "proxy_config", mock_cfg)
+        _set_admin()
+
+        # Row exists but ``config_value`` is NULL.
+        null_record = MagicMock()
+        null_record.config_value = None
+        mock_db.find_unique = AsyncMock(return_value=null_record)
+
+        audit_calls = []
+
+        async def capture(request_data):
+            audit_calls.append(request_data)
+
+        try:
+            with patch(
+                "litellm.proxy.management_helpers.audit_logs.create_audit_log_for_update",
+                new=capture,
+            ):
+                r = client.post(
+                    VAULT_URL,
+                    json={
+                        "vault_addr": "https://vault.example.com",
+                        "vault_token": "tok",
+                    },
+                )
+                assert r.status_code == 200
+                for _ in range(3):
+                    await asyncio.sleep(0)
+
+            assert len(audit_calls) == 1
+            assert audit_calls[0].action == "updated"
         finally:
             _cleanup()
 
@@ -347,8 +390,6 @@ class TestHashicorpVaultAuditLog:
         async def capture(request_data):
             audit_calls.append(request_data)
 
-        from unittest.mock import patch
-
         try:
             with patch(
                 "litellm.proxy.management_helpers.audit_logs.create_audit_log_for_update",
@@ -359,8 +400,6 @@ class TestHashicorpVaultAuditLog:
                 mock_db.delete = AsyncMock(side_effect=RecordNotFoundError(MagicMock()))
                 r = client.delete(VAULT_URL)
                 assert r.status_code == 200
-                import asyncio
-
                 for _ in range(3):
                     await asyncio.sleep(0)
                 assert audit_calls == []
@@ -402,8 +441,6 @@ class TestHashicorpVaultAuditLog:
 
         async def capture(request_data):
             audit_calls.append(request_data)
-
-        from unittest.mock import patch
 
         try:
             with patch(
