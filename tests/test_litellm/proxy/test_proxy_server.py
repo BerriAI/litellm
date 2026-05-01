@@ -5261,8 +5261,15 @@ async def test_window_spend_counter_redis_clean_miss_skips_stale_in_memory():
         redis_store[key] = (redis_store.get(key) or 0.0) + value
         return redis_store[key]
 
+    async def redis_set_cache(key, value, **_):
+        if key in redis_store:
+            return False
+        redis_store[key] = value
+        return True
+
     fake_redis = AsyncMock()
     fake_redis.async_get_cache = AsyncMock(return_value=None)
+    fake_redis.async_set_cache = AsyncMock(side_effect=redis_set_cache)
     fake_redis.async_increment = AsyncMock(side_effect=redis_increment)
     counter_cache.redis_cache = fake_redis
 
@@ -5297,6 +5304,69 @@ async def test_window_spend_counter_redis_clean_miss_skips_stale_in_memory():
         assert counter_cache.in_memory_cache.get_cache(
             key=counter_key
         ) == pytest.approx(2.75)
+    finally:
+        ps.spend_counter_cache = orig_counter
+        ps.prisma_client = orig_prisma
+
+
+@pytest.mark.asyncio
+async def test_window_spend_counter_redis_concurrent_seed_does_not_double_seed():
+    from litellm.caching.dual_cache import DualCache
+    from litellm.proxy.proxy_server import _init_and_increment_window_spend_counter
+
+    counter_cache = DualCache()
+    counter_key = "spend:key:key-window-concurrent-seed:window:1h"
+    window_start = datetime.now(timezone.utc) - timedelta(hours=1)
+    redis_store = {counter_key: 2.75}
+    redis_reads = 0
+
+    async def redis_get_cache(key):
+        nonlocal redis_reads
+        redis_reads += 1
+        if redis_reads <= 2:
+            return None
+        return redis_store.get(key)
+
+    async def redis_increment(key, value, **_):
+        redis_store[key] = (redis_store.get(key) or 0.0) + value
+        return redis_store[key]
+
+    fake_redis = AsyncMock()
+    fake_redis.async_get_cache = AsyncMock(side_effect=redis_get_cache)
+    fake_redis.async_set_cache = AsyncMock(return_value=False)
+    fake_redis.async_increment = AsyncMock(side_effect=redis_increment)
+    counter_cache.redis_cache = fake_redis
+
+    fake_prisma = MagicMock()
+    fake_prisma.db.litellm_spendlogs.group_by = AsyncMock(
+        return_value=[
+            {"api_key": "key-window-concurrent-seed", "_sum": {"spend": 2.25}}
+        ]
+    )
+
+    import litellm.proxy.proxy_server as ps
+
+    orig_counter, orig_prisma = ps.spend_counter_cache, ps.prisma_client
+    ps.spend_counter_cache = counter_cache
+    ps.prisma_client = fake_prisma
+    try:
+        await _init_and_increment_window_spend_counter(
+            counter_key=counter_key,
+            entity_type="Key",
+            entity_id="key-window-concurrent-seed",
+            window_start=window_start,
+            increment=0.5,
+        )
+
+        fake_redis.async_set_cache.assert_awaited_once_with(
+            key=counter_key,
+            value=2.25,
+            nx=True,
+        )
+        assert redis_store[counter_key] == pytest.approx(3.25)
+        assert counter_cache.in_memory_cache.get_cache(
+            key=counter_key
+        ) == pytest.approx(3.25)
     finally:
         ps.spend_counter_cache = orig_counter
         ps.prisma_client = orig_prisma
@@ -5346,13 +5416,14 @@ async def test_window_spend_counter_does_not_seed_zero_when_db_unavailable():
     ps.spend_counter_cache = counter_cache
     ps.prisma_client = None
     try:
-        await _ensure_window_spend_counter_initialized(
+        initialized = await _ensure_window_spend_counter_initialized(
             counter_key=counter_key,
             entity_type="Key",
             entity_id="key-window-db-unavailable",
             window_start=datetime.now(timezone.utc) - timedelta(hours=1),
         )
 
+        assert initialized is False
         assert counter_cache.in_memory_cache.get_cache(key=counter_key) is None
     finally:
         ps.spend_counter_cache = orig_counter
